@@ -89,7 +89,7 @@ mod tests {
 
     fn open() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("wisp.sqlite3")).unwrap();
+        let store = Store::open(dir.path().join("wisp.sqlite3")).unwrap();
         (dir, store)
     }
 

@@ -158,12 +158,20 @@ const NO_DIFF_DRIVERS: &[&str] = &["--no-ext-diff", "--no-textconv"];
 pub enum WorktreeError {
     /// `repo_path` doesn't exist or isn't inside a git repository.
     #[error("{} is not a git repository: {detail}", .path.display())]
-    NotAGitRepo { path: PathBuf, detail: String },
+    NotAGitRepo {
+        /// The path as given.
+        path: PathBuf,
+        /// What git or the filesystem said.
+        detail: String,
+    },
     /// `base` didn't resolve to a commit.
     #[error("could not resolve {reference:?} to a commit in {}: {detail}", .repo.display())]
     UnknownRevision {
+        /// The repository.
         repo: PathBuf,
+        /// The reference as given.
         reference: String,
+        /// What git said.
         detail: String,
     },
     /// The default base (the repo's current branch `HEAD`) has uncommitted changes, which a new
@@ -172,17 +180,24 @@ pub enum WorktreeError {
         "{} has uncommitted changes that a new worktree would not include; commit or stash them, or create the worktree from an explicit base",
         .repo.display()
     )]
-    DirtyBase { repo: PathBuf },
+    DirtyBase {
+        /// The repository.
+        repo: PathBuf,
+    },
     /// [`WorktreeManager::commit_all`] found changes to commit, but the repository has no
     /// `user.name` or `user.email` configured.
     #[error(
         "{} has no git identity configured (user.name and user.email); set one before an agent can commit there",
         .repo.display()
     )]
-    MissingIdentity { repo: PathBuf },
+    MissingIdentity {
+        /// The repository (or worktree) that lacks an identity.
+        repo: PathBuf,
+    },
     /// A git command exited with a non-zero status.
     #[error("`git {}` in {} failed: {detail}", .args.join(" "), .cwd.display())]
     GitFailed {
+        /// Where it ran.
         cwd: PathBuf,
         /// The arguments after `git`.
         args: Vec<String>,
@@ -193,8 +208,11 @@ pub enum WorktreeError {
     /// was killed.
     #[error("`git {}` in {} timed out after {timeout:?}", .args.join(" "), .cwd.display())]
     Timeout {
+        /// Where it ran.
         cwd: PathBuf,
+        /// The arguments after `git`.
         args: Vec<String>,
+        /// The timeout that elapsed.
         timeout: Duration,
     },
     /// git could not be started.
@@ -203,7 +221,9 @@ pub enum WorktreeError {
     /// A filesystem operation other than running git failed.
     #[error("could not use {}: {source}", .path.display())]
     Io {
+        /// The path involved.
         path: PathBuf,
+        /// The underlying error.
         #[source]
         source: io::Error,
     },
