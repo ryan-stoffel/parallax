@@ -347,7 +347,7 @@ async fn existing(
     run_id: RunId,
     project: ProjectId,
     prompt: &str,
-    (requested, coordinator_thread): (Option<&str>, Option<Uuid>),
+    (requested, coordinator_thread): (Option<&str>, Option<CoordinatorThreadId>),
 ) -> Result<Option<AgentRun>, ErrorObject> {
     let found = store(daemon, move |db| {
         let Some(row) = db.get_run(run_id.into()).map_err(|e| store_error(&e))? else {
@@ -366,7 +366,7 @@ async fn existing(
         && row.fields.prompt == prompt
         && row.fields.policy == WORKSPACE_WRITE
         && row.fields.requested_account.as_deref() == requested
-        && row.fields.coordinator_thread == coordinator_thread;
+        && row.fields.coordinator_thread == coordinator_thread.map(Uuid::from);
     if !same {
         return Err(ErrorObject::wisp(
             ErrorKind::IdConflict,
@@ -529,7 +529,6 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
     } = new;
     let _starting = agents.start_guard(run_id).await;
     let requested = requested_account(account.as_ref());
-    let coordinator_thread = coordinator_thread.map(Uuid::from);
 
     if let Some(run) = existing(
         &daemon,
@@ -561,7 +560,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         requested_account: requested,
         policy: WORKSPACE_WRITE.to_owned(),
         backend: prepared.resolved.backend().name().to_owned(),
-        coordinator_thread,
+        coordinator_thread: coordinator_thread.map(Uuid::from),
     };
     let state = RunState {
         status: STARTING.to_owned(),

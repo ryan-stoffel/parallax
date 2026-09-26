@@ -8,6 +8,7 @@ mod context;
 mod events;
 mod handshake;
 mod lifecycle;
+mod mcp;
 mod projects;
 mod requests;
 mod support;

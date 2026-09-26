@@ -534,6 +534,7 @@ impl Actor {
             },
             resume,
             model: None,
+            coordinator_tools: None,
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
             Ok(started) => {
