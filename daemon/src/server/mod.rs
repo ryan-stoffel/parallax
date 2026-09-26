@@ -23,13 +23,18 @@ pub use setup::prepare_data_dir;
 use setup::{InstanceLock, Socket};
 
 use crate::VERSION;
+use crate::agents::{self, Agents};
+use crate::backend::claude::ClaudeBackend;
 use crate::backend::process::{Environment, Launcher};
+use crate::context::ContextIndex;
 use crate::detect::CliDetector;
 use crate::event_log::EventLog;
 use crate::keystore::{KeyStore, KeychainStore};
 use crate::methods;
 use crate::paths::DataDir;
+use crate::routing::BackendRegistry;
 use crate::store::StoreHandle;
+use crate::worktree::WorktreeManager;
 
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
@@ -50,13 +55,39 @@ pub struct Config {
     pub socket_check_interval: Duration,
     /// How long a shutdown waits for in-flight requests before it cancels them. 10 s by default.
     pub shutdown_grace: Duration,
-    /// How many of the newest events the log keeps for replay. 10,000 by default.
+    /// How many of the newest events the log keeps in memory for `events/subscribe` replay.
+    /// 10,000 by default.
     pub event_retention: usize,
+    /// The in-memory replay window's byte bound (#187): even within `event_retention`, evicts
+    /// older events once the total size of their JSON (not their in-memory heap size, which is
+    /// somewhat larger) exceeds this many bytes. 64 MiB by default, since a run's `agent.output`
+    /// batches (up to about 256 KiB each) can otherwise hold far more memory than
+    /// `event_retention` alone was sized for. Applied on every append and, defensively, right
+    /// after a restart reloads the table too.
+    pub event_retention_bytes: usize,
+    /// How many of the newest host and project events (not tied to a run, such as
+    /// `project.created` and `context.changed`) the stored event log keeps; older ones are
+    /// pruned (#187). An agent run's events are never pruned this way: they stay as long as the
+    /// run's own row does, and nothing removes a run's row yet. 10,000 by default, the same
+    /// figure as `event_retention`.
+    ///
+    /// Must be at least `event_retention` (`EventLog::with` clamps it if not): a restart only
+    /// reloads the newest `event_retention` events, and every host or project event among them is
+    /// necessarily among the newest `event_retention` host and project events too, so a smaller
+    /// `host_event_retention` could prune one the reload still expects — a gap `resyncRequired`
+    /// would never notice (0016).
+    pub host_event_retention: usize,
     /// Requests one connection may have in flight before the server stops reading from it.
     /// 32 by default.
     pub max_requests_in_flight: usize,
     /// Replies one connection may have waiting to be written. 32 by default.
     pub outbound_queue: usize,
+    /// The backends workers run on (#156). `None`, the default, registers Claude Code for
+    /// Anthropic accounts; tests register a fake.
+    pub backends: Option<BackendRegistry>,
+    /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
+    /// default, is wispd's own with the usual install folders on `PATH` (#96, decision 0014).
+    pub agent_environment: Option<Environment>,
 }
 
 impl Config {
@@ -69,8 +100,12 @@ impl Config {
             socket_check_interval: Duration::from_secs(60),
             shutdown_grace: Duration::from_secs(10),
             event_retention: 10_000,
+            event_retention_bytes: 64 * 1024 * 1024,
+            host_event_retention: 10_000,
             max_requests_in_flight: 32,
             outbound_queue: 32,
+            backends: None,
+            agent_environment: None,
         }
     }
 }
@@ -163,6 +198,13 @@ pub(crate) struct Daemon {
     pub cli_detector: CliDetector,
     /// Where key accounts' API keys live (#117): the real login Keychain, except in tests.
     pub keys: Arc<dyn KeyStore>,
+    /// wispd's data folder, so `context/*` (#155) and the runner (#156) can find a project's
+    /// shared context folder.
+    pub data_dir: DataDir,
+    /// In-memory bookkeeping for shared context writes (#155): idempotency and `lastWriter`.
+    pub context: ContextIndex,
+    /// Agent runs (#156).
+    pub agents: Agents,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -173,13 +215,26 @@ pub(crate) struct Limits {
 }
 
 /// A started server, bound to its socket and holding the instance lock.
-#[derive(Debug)]
 pub struct Server {
     config: Config,
     daemon: Arc<Daemon>,
     lock: InstanceLock,
     socket: Socket,
     listener: StdUnixListener,
+    /// Kept alive for as long as the server runs; dropping it stops the watch (#155).
+    context_watcher: Option<notify::RecommendedWatcher>,
+}
+
+impl std::fmt::Debug for Server {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Server")
+            .field("config", &self.config)
+            .field("daemon", &self.daemon)
+            .field("lock", &self.lock)
+            .field("socket", &self.socket)
+            .field("listener", &self.listener)
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for Daemon {
@@ -214,11 +269,30 @@ impl Server {
             );
         }
         let (socket, listener) = Socket::bind(&socket_path.path)?;
-        let launcher = Launcher::new(data_dir.clone(), Environment::inherited());
+        let environment = config
+            .agent_environment
+            .clone()
+            .unwrap_or_else(agents::worker::agent_environment);
+        let launcher = Launcher::new(data_dir.clone(), environment);
+        let backends = config.backends.clone().unwrap_or_else(|| {
+            let mut backends = BackendRegistry::new();
+            backends.register(
+                wisp_protocol::Provider::Anthropic,
+                Arc::new(ClaudeBackend::new(launcher.clone())),
+            );
+            backends
+        });
+        let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
+        let store = StoreHandle::open(&data_dir.store_file());
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
-            log: Arc::new(EventLog::new(config.event_retention)),
-            store: StoreHandle::open(&data_dir.store_file()),
+            log: Arc::new(EventLog::open(
+                &data_dir.store_file(),
+                config.event_retention,
+                config.event_retention_bytes,
+                config.host_event_retention,
+            )),
+            store,
             os: methods::os_version(),
             cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
             limits: Limits {
@@ -227,7 +301,23 @@ impl Server {
                 outbound_queue: config.outbound_queue.max(1),
             },
             keys: Arc::new(KeychainStore::new()),
+            data_dir: data_dir.clone(),
+            context: ContextIndex::default(),
+            agents: Agents::new(backends, worktrees),
         });
+        // Best effort: a project's context folder is also ensured lazily on its first
+        // `context/*` call (#155), so a watcher that fails to start only loses live updates for
+        // agents' own writes, not the feature.
+        if let Err(error) = std::fs::create_dir_all(data_dir.context_root()) {
+            warn!(%error, "could not create the shared context folder");
+        }
+        let context_watcher = match crate::context::watcher::start(Arc::clone(&daemon)) {
+            Ok(watcher) => Some(watcher),
+            Err(error) => {
+                warn!(%error, "could not watch the shared context folder for agents' own writes");
+                None
+            }
+        };
         info!(
             version = VERSION,
             pid = std::process::id(),
@@ -242,6 +332,7 @@ impl Server {
             lock,
             socket,
             listener,
+            context_watcher,
         })
     }
 
@@ -266,7 +357,10 @@ impl Server {
             lock,
             mut socket,
             listener,
+            context_watcher,
         } = self;
+        // Kept alive to the end of `run`, so the watch lasts exactly as long as the server does.
+        let _context_watcher = context_watcher;
         let mut listener = match UnixListener::from_std(listener) {
             Ok(listener) => listener,
             Err(error) => {
@@ -276,6 +370,7 @@ impl Server {
                 return Err(error);
             }
         };
+        agents::recover(&daemon).await;
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
         let euid = rustix::process::geteuid().as_raw();
@@ -327,6 +422,7 @@ impl Server {
             abort.cancel();
             connections.wait().await;
         }
+        daemon.agents.shutdown().await;
         daemon.store.stop().await;
         lock.release();
         info!("stopped");
@@ -397,10 +493,17 @@ impl Daemon {
             DataDir::new(dir.join("cli-detect")).expect("resolve a data folder for the launcher"),
             Environment::empty(),
         );
+        let worktrees = WorktreeManager::new(launcher.clone(), dir);
+        let store = StoreHandle::open(&dir.join("wispd.sqlite3"));
         Arc::new(Self {
             started: Instant::now(),
-            log: Arc::new(EventLog::new(event_retention)),
-            store: StoreHandle::open(&dir.join("wispd.sqlite3")),
+            log: Arc::new(EventLog::open(
+                &dir.join("wispd.sqlite3"),
+                event_retention,
+                usize::MAX,
+                usize::MAX,
+            )),
+            store,
             os: "test".to_owned(),
             cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
             limits: Limits {
@@ -409,6 +512,9 @@ impl Daemon {
                 outbound_queue: 32,
             },
             keys: Arc::new(crate::keystore::MemoryKeyStore::new()),
+            data_dir: DataDir::new(dir).unwrap(),
+            context: ContextIndex::default(),
+            agents: Agents::new(BackendRegistry::new(), worktrees),
         })
     }
 }

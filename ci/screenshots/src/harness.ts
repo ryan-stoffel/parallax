@@ -28,6 +28,8 @@ export interface Scenario {
   args?: (dir: string) => Promise<readonly string[]>;
   /** User settings to start with, written to the throwaway profile's settings.json. */
   settings?: Readonly<Record<string, unknown>>;
+  /** Environment variables the app starts with, on top of the harness's own, such as a PATH with a fake CLI. */
+  env?: (dir: string) => Readonly<Record<string, string>>;
   run(context: ScenarioContext): Promise<Buffer | NotAvailable>;
 }
 
@@ -35,6 +37,8 @@ export type LaunchOptions = NonNullable<Parameters<typeof _electron.launch>[0]>;
 
 export interface Session extends ScenarioContext {
   close(): Promise<void>;
+  /** wispd's data folder for this run (`WISPD_DATA_DIR`, daemon/src/paths.rs), so a caller can find its `wispd.lock` pid or drive it directly. */
+  readonly wispdDataDir: string;
 }
 
 export const TIMEOUT_MS = 60_000;
@@ -89,7 +93,7 @@ export async function appLaunchOptions(): Promise<LaunchOptions> {
   }
 }
 
-export async function launch(options: LaunchOptions, scenario: Pick<Scenario, 'args' | 'settings'> = {}): Promise<Session> {
+export async function launch(options: LaunchOptions, scenario: Pick<Scenario, 'args' | 'settings' | 'env'> = {}): Promise<Session> {
   const root = await mkdtemp(join(tmpdir(), 'wisp-screenshots-'));
   const wispdDataDir = join(root, 'wispd');
   const files = join(root, 'files');
@@ -122,7 +126,7 @@ export async function launch(options: LaunchOptions, scenario: Pick<Scenario, 'a
       ],
       // The app's bundled wispd starts on demand (0010). Its own data folder keeps it away from
       // the machine's real wispd, and lets close() stop the one this run started.
-      env: { ...inheritedEnv(), ...options.env, [WISPD_DATA_DIR_ENV]: wispdDataDir },
+      env: { ...inheritedEnv(), ...options.env, ...scenario.env?.(files), [WISPD_DATA_DIR_ENV]: wispdDataDir },
       timeout: TIMEOUT_MS,
     });
     app = started;
@@ -132,6 +136,7 @@ export async function launch(options: LaunchOptions, scenario: Pick<Scenario, 'a
       app: started,
       window,
       dir: files,
+      wispdDataDir,
       close,
       relaunch: async () => {
         await quit();
@@ -156,7 +161,8 @@ export async function launch(options: LaunchOptions, scenario: Pick<Scenario, 'a
   }
 }
 
-const entryPointUrl = /\/(workbench|sessions)\.html(?:[?#]|$)/;
+// The development build loads the -dev variants, so a local run of a check can drive it too.
+const entryPointUrl = /\/(workbench|sessions)(?:-dev)?\.html(?:[?#]|$)/;
 
 // app.firstWindow() trusts whichever BrowserWindow Electron creates first, at whatever URL it has at that
 // instant (usually still about:blank). On a cold launch that first window can be a transient page that closes
@@ -234,18 +240,24 @@ async function fitWindow(app: ElectronApplication, window: Page): Promise<void> 
   }
 }
 
+/** The pid in a data folder's `wispd.lock` (daemon/src/paths.rs), or `undefined` if there is none to read. */
+export async function readWispdPid(dataDir: string): Promise<number | undefined> {
+  let pid: number;
+  try {
+    pid = Number.parseInt((await readFile(join(dataDir, 'wispd.lock'), 'utf8')).trim(), 10);
+  } catch {
+    return undefined;
+  }
+  return Number.isSafeInteger(pid) && pid > 1 ? pid : undefined;
+}
+
 /**
  * Stops the `wispd serve` that `wispd attach` started for this run. It outlives the app by design
  * (0007: a disconnect never stops agents), and its lock file holds its pid.
  */
 async function stopWispd(dataDir: string): Promise<void> {
-  let pid: number;
-  try {
-    pid = Number.parseInt((await readFile(join(dataDir, 'wispd.lock'), 'utf8')).trim(), 10);
-  } catch {
-    return;
-  }
-  if (!Number.isSafeInteger(pid) || pid <= 1) {
+  const pid = await readWispdPid(dataDir);
+  if (pid === undefined) {
     return;
   }
   try {

@@ -1,4 +1,5 @@
-//! SQLite-backed storage for wisp projects and key accounts.
+//! SQLite-backed storage for wisp projects, key accounts, agent runs, normal threads and their
+//! repo entries, and wispd's event log.
 //!
 //! [`Store`] owns one SQLite connection and applies its own versioned
 //! migrations on open. The caller chooses the database path; this crate
@@ -8,11 +9,17 @@
 //! in this database (#117).
 
 mod accounts;
+mod defaults;
 mod error;
+mod events;
 mod migrations;
 mod project;
+mod runs;
+mod threads;
 mod timestamp;
+mod turns;
 mod usage;
+mod worktree;
 
 use std::fs;
 use std::path::Path;
@@ -22,9 +29,14 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, Error as SqliteError, ErrorCode};
 
 pub use accounts::{Account, AccountFields};
+pub use defaults::RoleDefault;
 pub use error::StoreError;
+pub use events::StoredEvent;
 pub use project::{Project, ProjectFields};
+pub use runs::{Run, RunAccept, RunFields, RunState};
+pub use threads::{Repo, RepoFields, Thread};
 pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageSummary};
+pub use worktree::{Worktree, WorktreeFields};
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const WAL_RETRY_INTERVAL: Duration = Duration::from_millis(20);

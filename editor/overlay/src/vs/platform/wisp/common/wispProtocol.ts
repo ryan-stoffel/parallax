@@ -84,6 +84,102 @@ export type WispRequests = {
 	 * host), and the latest limit windows.
 	 */
 	"usage/get": { params: UsageGetParams, result: UsageGetResult },
+	/**
+	 * `accounts/defaults/get`: this host's default account for the coordinator role and for
+	 * a worker role, absent where none is set (#119).
+	 */
+	"accounts/defaults/get": { params: AccountsDefaultsGetParams, result: AccountsDefaultsGetResult },
+	/**
+	 * `accounts/defaults/set`: sets or clears one role's default account, and returns both
+	 * roles' defaults as they stand after the change.
+	 */
+	"accounts/defaults/set": { params: AccountsDefaultsSetParams, result: AccountsDefaultsGetResult },
+	/**
+	 * `context/list`: a project's shared context files (0005), each with its size, when it
+	 * was last modified, and who last wrote it, if known.
+	 */
+	"context/list": { params: ContextListParams, result: ContextListResult },
+	/**
+	 * `context/read`: one shared context file's content. Fails with `contextNotFound` if it
+	 * does not exist.
+	 */
+	"context/read": { params: ContextReadParams, result: ContextReadResult },
+	/**
+	 * `context/write`: writes a shared context file in full, idempotent on its
+	 * client-generated id. The last write to a path wins when two race.
+	 */
+	"context/write": { params: ContextWriteParams, result: ContextWriteResult },
+	/**
+	 * `agent/start`: starts a worker in its own worktree of the project's repository, with
+	 * the worker sandbox (0013) and the shared context folder, idempotent on its
+	 * client-generated run id. Gated on the `agents` capability, like every `agent/*`
+	 * method.
+	 */
+	"agent/start": { params: AgentStartParams, result: AgentRunResult },
+	/**
+	 * `agent/send`: a message to a run (0011): its next turn while it runs, or a resumed
+	 * session once it has ended. Idempotent on the message's client-generated turn id.
+	 */
+	"agent/send": { params: AgentSendParams, result: AgentRunResult },
+	/**
+	 * `agent/cancel`: stops a running agent. Does nothing to a run that isn't running.
+	 */
+	"agent/cancel": { params: AgentCancelParams, result: AgentRunResult },
+	/**
+	 * `agent/list`: every run, or one project's, and the `seq` the list reflects.
+	 */
+	"agent/list": { params: AgentListParams, result: AgentListResult },
+	/**
+	 * `agent/events`: one run's events from wispd's log, a page at a time.
+	 */
+	"agent/events": { params: AgentEventsParams, result: AgentEventsResult },
+	/**
+	 * `agent/diff`: the files that differ between a run's base and its latest commit, each
+	 * with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
+	 * capability, like every review method.
+	 */
+	"agent/diff": { params: AgentDiffParams, result: AgentDiffResult },
+	/**
+	 * `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
+	 * size-capped, for a diff editor.
+	 */
+	"agent/file": { params: AgentFileParams, result: AgentFileResult },
+	/**
+	 * `agent/accept`: merges a run's commit into the project repository's current branch on
+	 * the host, fast-forward when possible, then removes its worktree and branch. Never
+	 * pushes. Idempotent on its client-generated id.
+	 */
+	"agent/accept": { params: AgentAcceptParams, result: AgentAcceptResult },
+	/**
+	 * `agent/requestChanges`: the reviewer's follow-up to a run, sent as `agent/send` sends
+	 * a message. Idempotent on its client-generated turn id.
+	 */
+	"agent/requestChanges": { params: AgentRequestChangesParams, result: AgentRunResult },
+	/**
+	 * `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
+	 * (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
+	 */
+	"thread/list": { params: ThreadListParams, result: ThreadListResult },
+	/**
+	 * `repo/add`: registers a repository on the host for normal threads, idempotent on its
+	 * client-generated id and on its path.
+	 */
+	"repo/add": { params: RepoAddParams, result: RepoAddResult },
+	/**
+	 * `thread/start`: starts a normal thread's agent in a worktree of a repo entry, or in a
+	 * scratch repository of its own when no repo is given. Idempotent on its
+	 * client-generated run id.
+	 */
+	"thread/start": { params: ThreadStartParams, result: ThreadStartResult },
+	/**
+	 * `thread/archive`: archives a normal thread or brings it back.
+	 */
+	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
+	/**
+	 * `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
+	 * stopping its CLI first if it runs.
+	 */
+	"thread/delete": { params: ThreadDeleteParams, result: ThreadDeleteResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -705,6 +801,1201 @@ export type UsagePeriod = {
 };
 
 /**
+ * Params of `accounts/defaults/get`.
+ */
+export type AccountsDefaultsGetParams = Record<symbol, never>;
+
+/**
+ * Result of `accounts/defaults/get`, and of `accounts/defaults/set`: this host's default account
+ * for each role, absent where none is set.
+ */
+export type AccountsDefaultsGetResult = {
+	/**
+	 * The coordinator's default account.
+	 */
+	coordinator?: AccountChoice,
+	/**
+	 * A worker's default account.
+	 */
+	worker?: AccountChoice,
+};
+
+/**
+ * An account a task can be routed to: the user's own login in a vendor CLI, or a stored key.
+ *
+ * A newer wispd may send a kind this version does not know. Treat that as absent rather than end
+ * a `switch` over this type in an exhaustiveness assertion.
+ */
+export type AccountChoice = { "kind": "subscription",
+	/**
+	 * The backend's name, as `host/health`'s running agents and wispd's logs use it.
+	 */
+	backend: string, } | { "kind": "key",
+	/**
+	 * The key account's id.
+	 */
+	id: AccountId,
+};
+
+/**
+ * Params of `accounts/defaults/set`.
+ */
+export type AccountsDefaultsSetParams = {
+	/**
+	 * The role to set the default for.
+	 */
+	role: Role,
+	/**
+	 * The new default, or `None` to clear it.
+	 */
+	account?: AccountChoice,
+};
+
+/**
+ * Which kind of run an account is chosen for (0004).
+ */
+export type Role = "coordinator" | "worker";
+
+/**
+ * Params of `context/list`.
+ */
+export type ContextListParams = {
+	/**
+	 * The project whose shared context to list.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Result of `context/list`.
+ */
+export type ContextListResult = {
+	/**
+	 * Every file in the project's shared context, ordered by path.
+	 */
+	files: Array<ContextFile>,
+};
+
+/**
+ * One shared context file, without its content.
+ */
+export type ContextFile = {
+	/**
+	 * The file's name, relative to the project's context folder.
+	 */
+	path: string,
+	/**
+	 * Its size in bytes.
+	 */
+	size: number,
+	/**
+	 * When it was last modified, in RFC 3339 UTC.
+	 */
+	modifiedAt: string,
+	/**
+	 * Who wrote it last, such as `"editor"` or an agent's run id, when wispd knows. Absent for a
+	 * file wispd has not seen written since it started, such as one already on disk at startup.
+	 */
+	lastWriter?: string,
+};
+
+/**
+ * Params of `context/read`.
+ */
+export type ContextReadParams = {
+	/**
+	 * The file's project.
+	 */
+	project: ProjectId,
+	/**
+	 * The file's path. Fails with `contextNotFound` if it does not exist.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `context/read`.
+ */
+export type ContextReadResult = {
+	/**
+	 * The file's metadata.
+	 */
+	file: ContextFile,
+	/**
+	 * Its content.
+	 */
+	content: string,
+};
+
+/**
+ * Params of `context/write`.
+ *
+ * It is idempotent on `id`: writing the same id again with the same `project`, `path`,
+ * `content`, and `writer` returns the same result instead of writing twice or emitting a second
+ * `context.changed` event; with different params it fails with `idConflict`. A write to a path
+ * with existing content replaces it; the last write to a path wins when two race (0005).
+ */
+export type ContextWriteParams = {
+	/**
+	 * The write's id, a version 7 UUID generated by the client.
+	 */
+	id: ContextWriteId,
+	/**
+	 * The file's project.
+	 */
+	project: ProjectId,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+	/**
+	 * The file's new content, in full: `context/write` replaces a file, it does not patch one.
+	 */
+	content: string,
+	/**
+	 * A label for who is writing, such as `"editor"` or an agent's run id, shown later in
+	 * `context/list` and in the `context.changed` event as `lastWriter`. Omitted when the caller
+	 * has none to give.
+	 */
+	writer?: string,
+};
+
+/**
+ * A `context/write`'s id: a version 7 UUID that the client generates once and sends again on
+ * every retry, so a retry never applies the write twice or emits a duplicate `context.changed`
+ * event.
+ */
+export type ContextWriteId = string;
+
+/**
+ * Result of `context/write`.
+ */
+export type ContextWriteResult = {
+	/**
+	 * The written file's metadata.
+	 */
+	file: ContextFile,
+};
+
+/**
+ * Params of `agent/start`.
+ *
+ * Idempotent on `runId`: starting the same id again with the same params returns the run
+ * instead of starting another; with different params it fails with `idConflict`.
+ */
+export type AgentStartParams = {
+	/**
+	 * The new run's id, a version 7 UUID generated by the client.
+	 */
+	runId: RunId,
+	/**
+	 * The project whose repository the run works in.
+	 */
+	project: ProjectId,
+	/**
+	 * The task.
+	 */
+	prompt: string,
+	/**
+	 * What the run's tools may do. Only `workspaceWrite` exists.
+	 */
+	policy: AgentPolicy,
+	/**
+	 * The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
+	 */
+	account?: AccountChoice,
+};
+
+/**
+ * What a run's tools may do. Only workers run through `agent/start`.
+ *
+ * A newer wispd may send a policy this version does not know; treat it as unknown.
+ */
+export type AgentPolicy = "workspaceWrite";
+
+/**
+ * An agent run's id: a version 7 UUID that the client generates once and sends again on every
+ * retry of `agent/start`, so a retry never starts a second agent.
+ */
+export type RunId = string;
+
+/**
+ * Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
+ */
+export type AgentRunResult = {
+	/**
+	 * The run.
+	 */
+	run: AgentRun,
+};
+
+/**
+ * One agent run.
+ */
+export type AgentRun = {
+	/**
+	 * The run's id.
+	 */
+	id: RunId,
+	/**
+	 * Its project.
+	 */
+	project: ProjectId,
+	/**
+	 * The task it was started with.
+	 */
+	prompt: string,
+	/**
+	 * What its tools may do.
+	 */
+	policy: AgentPolicy,
+	/**
+	 * Where it is.
+	 */
+	status: AgentStatus,
+	/**
+	 * The backend running it, such as `claude`.
+	 */
+	backend: string,
+	/**
+	 * The account it is charged to now: the backend's name for a subscription, or a key
+	 * account's id. It changes on `agent.accountFallback`.
+	 */
+	accountId: string,
+	/**
+	 * Its worktree's branch, such as `wisp/1a2b3c4d`, once the worktree exists.
+	 */
+	branch?: string,
+	/**
+	 * Its worktree's absolute path on the host, once it exists.
+	 */
+	worktreePath?: string,
+	/**
+	 * The vendor's session id, once the CLI reported it.
+	 */
+	sessionId?: string,
+	/**
+	 * Why it failed, for people.
+	 */
+	error?: string,
+	/**
+	 * Its latest commit, once wispd made one.
+	 */
+	diff?: DiffSummary,
+	/**
+	 * When it was created, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+	/**
+	 * When it last changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+};
+
+/**
+ * Where a run is.
+ *
+ * A newer wispd may send a status this version does not know; treat it as unknown, and don't
+ * end a `switch` over this type in an exhaustiveness assertion.
+ */
+export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "accepted";
+
+/**
+ * The commit wispd made for a run, compared with the commit its worktree was created from.
+ */
+export type DiffSummary = {
+	/**
+	 * The commit's full sha, on the run's branch.
+	 */
+	commit: string,
+	/**
+	 * Files changed.
+	 */
+	files: number,
+	/**
+	 * Lines added.
+	 */
+	insertions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
+};
+
+/**
+ * Params of `agent/send`: a message to a run (0011).
+ *
+ * A running agent gets it as its next turn. An agent that ended with a `sessionId` resumes
+ * that session in its worktree, with the message as the prompt. Idempotent on `turnId` while
+ * wispd runs.
+ */
+export type AgentSendParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The message's id, a version 7 UUID generated by the client.
+	 */
+	turnId: TurnId,
+	/**
+	 * The message.
+	 */
+	text: string,
+};
+
+/**
+ * A follow-up turn's id: a version 7 UUID that the client generates once and sends again on
+ * every retry of `agent/send`, so a retry never sends the message twice.
+ */
+export type TurnId = string;
+
+/**
+ * Params of `agent/cancel`: stops a running agent, which ends as `cancelled`. Cancelling a run
+ * that isn't running does nothing.
+ */
+export type AgentCancelParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Params of `agent/list`.
+ */
+export type AgentListParams = {
+	/**
+	 * Only this project's runs. Absent lists every run on the host.
+	 */
+	project?: ProjectId,
+};
+
+/**
+ * Result of `agent/list`.
+ */
+export type AgentListResult = {
+	/**
+	 * The runs, oldest first.
+	 */
+	runs: Array<AgentRun>,
+	/**
+	 * The `seq` of the last event the list reflects, to subscribe after.
+	 */
+	seq: number,
+};
+
+/**
+ * Params of `agent/events`: one run's events from wispd's log, for rebuilding its transcript
+ * after `resyncRequired` or a restart.
+ */
+export type AgentEventsParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * Return the events whose `seq` is greater than this; 0 for the first page.
+	 */
+	after: number,
+	/**
+	 * The most events to return: 500 by default, and at most 1000.
+	 */
+	limit?: number,
+};
+
+/**
+ * Result of `agent/events`.
+ */
+export type AgentEventsResult = {
+	/**
+	 * The events, oldest first.
+	 */
+	events: Array<LoggedEvent>,
+	/**
+	 * Whether more events follow the last one returned. Ask again after its `seq`.
+	 */
+	more: boolean,
+};
+
+/**
+ * An event from wispd's log, as `agent/events` returns it.
+ */
+export type LoggedEvent = {
+	/**
+	 * The event's position in the log.
+	 */
+	seq: number,
+	/**
+	 * When it happened, in RFC 3339 UTC.
+	 */
+	time: string,
+	/**
+	 * Its project. Absent for host-level events.
+	 */
+	project?: ProjectId,
+	/**
+	 * What happened.
+	 */
+	event: WispEvent,
+};
+
+/**
+ * What happened, by `kind`.
+ *
+ * A newer wispd may send kinds that are not listed here. Skip those events but still count their
+ * `seq` as received, and don't end a `switch` over this type in an exhaustiveness assertion.
+ */
+export type WispEvent = { "kind": "project.created",
+	/**
+	 * The new project.
+	 */
+	project: Project, } | { "kind": "context.changed",
+	/**
+	 * The changed file.
+	 */
+	file: ContextFile, } | { "kind": "agent.started",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * The run as it was created. wispd always sends it.
+	 */
+	run?: AgentRun, } | { "kind": "agent.updated",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * The run's changing fields as they stand now.
+	 */
+	state: AgentRunState, } | { "kind": "agent.output",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * What happened, in order.
+	 */
+	items: Array<AgentOutputItem>, } | { "kind": "agent.accountFallback",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * The account it was on.
+	 */
+	fromAccount: string,
+	/**
+	 * The account it is on now.
+	 */
+	toAccount: string,
+	/**
+	 * Why it moved.
+	 */
+	reason: AgentFailureKind, } | { "kind": "agent.finished",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * How it ended.
+	 */
+	outcome: AgentOutcome, } | { "kind": "agent.diffReady",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * The commit and its stats against the worktree's base.
+	 */
+	diff: DiffSummary, } | { "kind": "agent.accepted",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * What happened to the project's repository.
+	 */
+	merge: AgentMerge, } | { "kind": "repo.added",
+	/**
+	 * The entry.
+	 */
+	repo: Repo, } | { "kind": "thread.started",
+	/**
+	 * The thread.
+	 */
+	thread: Thread, } | { "kind": "thread.updated",
+	/**
+	 * The thread as it stands.
+	 */
+	thread: Thread, } | { "kind": "thread.deleted",
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * Its repo entry.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Why a run failed, for code to match on.
+ *
+ * A newer wispd may send a kind this version does not know; treat it as unknown.
+ */
+export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation" | "unexpectedApiKey" | "vendorError" | "crashed" | "spawnFailed" | "commitFailed" | "internal";
+
+/**
+ * What `agent/accept` did to the project's repository.
+ */
+export type AgentMerge = {
+	/**
+	 * The commit the branch points at now: the run's commit, or wispd's merge commit.
+	 */
+	commit: string,
+	/**
+	 * The branch it went into, such as `main`: the repository's current branch when the run
+	 * was accepted.
+	 */
+	into: string,
+	/**
+	 * How.
+	 */
+	how: AgentMergeKind,
+};
+
+/**
+ * How `agent/accept` brought a run's commit into the project's branch.
+ *
+ * A newer wispd may send a value this version does not know; treat it as unknown.
+ */
+export type AgentMergeKind = "fastForward" | "merge" | "upToDate";
+
+/**
+ * How one CLI process of a run ended.
+ *
+ * A newer wispd may send a status this version does not know; treat it as unknown.
+ */
+export type AgentOutcome = { "status": "completed",
+	/**
+	 * The last turn's final text, when the vendor reports one.
+	 */
+	result?: string, } | { "status": "cancelled" } | { "status": "failed",
+	/**
+	 * What went wrong.
+	 */
+	failure: AgentFailureKind,
+	/**
+	 * A description for people.
+	 */
+	message: string, } | { "status": "interrupted"
+};
+
+/**
+ * One thing in a run's transcript: a normalized event from its CLI (0004), by `kind`.
+ *
+ * A newer wispd may send kinds that are not listed here; skip them.
+ */
+export type AgentOutputItem = { "kind": "sessionStarted",
+	/**
+	 * The vendor's session id.
+	 */
+	sessionId: string,
+	/**
+	 * The model, when the CLI says.
+	 */
+	model?: string, } | { "kind": "turnStarted",
+	/**
+	 * The turn's id, when the caller gave one.
+	 */
+	turnId?: TurnId, } | { "kind": "textDelta",
+	/**
+	 * The vendor's id for the message, when it has one.
+	 */
+	messageId?: string,
+	/**
+	 * The new text.
+	 */
+	text: string, } | { "kind": "text",
+	/**
+	 * The vendor's id for the message, when it has one.
+	 */
+	messageId?: string,
+	/**
+	 * The text.
+	 */
+	text: string, } | { "kind": "toolCall",
+	/**
+	 * The call's id, which its `toolResult` repeats.
+	 */
+	callId: string,
+	/**
+	 * The tool, in the vendor's naming, such as `Edit`.
+	 */
+	name: string,
+	/**
+	 * The tool's input as the vendor sent it, or `{"truncated": true, "bytes": n}` when it
+	 * was too large to forward.
+	 */
+	input: JsonValue, } | { "kind": "toolResult",
+	/**
+	 * The call's id.
+	 */
+	callId: string,
+	/**
+	 * How it ended.
+	 */
+	status: AgentToolStatus,
+	/**
+	 * What the tool returned, when the vendor includes it, cut short when it is long.
+	 */
+	output?: string, } | { "kind": "reasoning",
+	/**
+	 * The vendor's id for the message, when it has one.
+	 */
+	messageId?: string,
+	/**
+	 * The text.
+	 */
+	text: string, } | { "kind": "todoList",
+	/**
+	 * The items, in order.
+	 */
+	items: Array<AgentTodoItem>, } | { "kind": "notice",
+	/**
+	 * The message.
+	 */
+	detail: string, } | { "kind": "turnFinished",
+	/**
+	 * The turn's id, as its `turnStarted` had it.
+	 */
+	turnId?: TurnId,
+	/**
+	 * The turn's final text, when the vendor reports one.
+	 */
+	result?: string, } | { "kind": "followUpDropped",
+	/**
+	 * The follow-up's turn id.
+	 */
+	turnId: TurnId, } | { "kind": "usage",
+	/**
+	 * The model, when the vendor breaks usage down by model.
+	 */
+	model?: string,
+	/**
+	 * Input tokens, not counting cache reads and writes.
+	 */
+	inputTokens: number,
+	/**
+	 * Output tokens.
+	 */
+	outputTokens: number,
+	/**
+	 * Input tokens read from the prompt cache.
+	 */
+	cacheReadTokens: number,
+	/**
+	 * Input tokens written to the prompt cache.
+	 */
+	cacheWriteTokens: number,
+	/**
+	 * The cost the vendor reported, in millionths of a US dollar, when it reports one.
+	 */
+	costUsdMicros?: number, } | { "kind": "warning",
+	/**
+	 * A short description.
+	 */
+	detail: string,
+};
+
+/**
+ * One item of an agent's checklist.
+ */
+export type AgentTodoItem = {
+	/**
+	 * What to do.
+	 */
+	text: string,
+	/**
+	 * How far along it is.
+	 */
+	status: AgentTodoStatus,
+};
+
+/**
+ * How far along a checklist item is.
+ *
+ * A newer wispd may send a status this version does not know; treat it as unknown.
+ */
+export type AgentTodoStatus = "pending" | "inProgress" | "completed";
+
+/**
+ * How a tool call ended.
+ *
+ * A newer wispd may send a status this version does not know; treat it as unknown.
+ */
+export type AgentToolStatus = "ok" | "error" | "denied";
+
+/**
+ * The part of a run that changes while it runs, as `agent.updated` reports it. The rest of
+ * [`AgentRun`], including its prompt, never changes after `agent.started`.
+ */
+export type AgentRunState = {
+	/**
+	 * Where the run is.
+	 */
+	status: AgentStatus,
+	/**
+	 * The account it is charged to now.
+	 */
+	accountId: string,
+	/**
+	 * The vendor's session id, once the CLI reported it.
+	 */
+	sessionId?: string,
+	/**
+	 * Why it failed, for people. Absent once it runs again.
+	 */
+	error?: string,
+	/**
+	 * Its latest commit, once wispd made one.
+	 */
+	diff?: DiffSummary,
+	/**
+	 * When it changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+};
+
+/**
+ * A repository on the host that normal threads run in.
+ */
+export type Repo = {
+	/**
+	 * The entry's id.
+	 */
+	id: RepoId,
+	/**
+	 * The name shown in the editor: the repository folder's name.
+	 */
+	name: string,
+	/**
+	 * The absolute, canonical path of the repository on the host.
+	 */
+	path: string,
+	/**
+	 * True for wispd's scratch entry, which holds the threads with no repo. Its `path` is the
+	 * folder that holds each such thread's own scratch repository.
+	 */
+	scratch?: boolean,
+	/**
+	 * When the entry was created, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * A repo entry's id: a version 7 UUID that the client generates once and sends again on
+ * every retry of `repo/add`. wispd generates the scratch entry's.
+ */
+export type RepoId = string;
+
+/**
+ * A normal thread: what threads add to its run.
+ */
+export type Thread = {
+	/**
+	 * The thread's run id.
+	 */
+	id: RunId,
+	/**
+	 * Its repo entry: the scratch entry for a thread with no repo.
+	 */
+	repo: RepoId,
+	/**
+	 * Whether the user archived it.
+	 */
+	archived?: boolean,
+	/**
+	 * When it was created, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Params of `agent/diff`.
+ */
+export type AgentDiffParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `agent/diff`.
+ */
+export type AgentDiffResult = {
+	/**
+	 * The commit the run's worktree was created from: the `base` side.
+	 */
+	base: string,
+	/**
+	 * The run's latest commit: the `head` side, and what `agent/accept` merges. Equal to `base`
+	 * until wispd has committed something for the run.
+	 */
+	head: string,
+	/**
+	 * The files that differ, ordered by path.
+	 */
+	files: Array<AgentDiffFile>,
+	/**
+	 * Totals over every changed file.
+	 */
+	stats: AgentDiffStats,
+	/**
+	 * Whether `files` was cut short because the run changed more files than one answer lists.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * One file that differs between the run's base and its latest commit.
+ */
+export type AgentDiffFile = {
+	/**
+	 * Its path on the head side, relative to the repository root. For a deleted file, its path
+	 * on the base side.
+	 */
+	path: string,
+	/**
+	 * Its path on the base side, for a rename or a copy.
+	 */
+	oldPath?: string,
+	/**
+	 * How it changed.
+	 */
+	status: AgentFileStatus,
+	/**
+	 * Lines added. 0 for a binary file.
+	 */
+	insertions: number,
+	/**
+	 * Lines removed. 0 for a binary file.
+	 */
+	deletions: number,
+	/**
+	 * Whether git treats it as binary. A binary file has no `diff`.
+	 */
+	binary: boolean,
+	/**
+	 * Its unified diff, starting at its `diff --git` line. Absent for a binary file, and for
+	 * every file after the result's diffs reached their total size cap; read those files with
+	 * `agent/file` instead.
+	 */
+	diff?: string,
+	/**
+	 * Whether `diff` was cut short at the per-file size cap.
+	 */
+	diffTruncated: boolean,
+};
+
+/**
+ * How a file differs from the base.
+ *
+ * A newer wispd may send a status this version does not know; treat it as modified.
+ */
+export type AgentFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "typeChanged";
+
+/**
+ * Totals of an `agent/diff`, over every file, including files left out of `files`.
+ */
+export type AgentDiffStats = {
+	/**
+	 * Files changed.
+	 */
+	files: number,
+	/**
+	 * Lines added.
+	 */
+	insertions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
+};
+
+/**
+ * Params of `agent/file`.
+ */
+export type AgentFileParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The file's path, relative to the repository root, as `agent/diff` lists it: no leading
+	 * `/`, no `.` or `..` or empty component, no backslash, and nothing under `.git`.
+	 */
+	path: string,
+	/**
+	 * Which side to read.
+	 */
+	side: AgentFileSide,
+	/**
+	 * Whether to leave the content out and answer only `exists` and `size`, as a file system's
+	 * `stat` needs. Absent means false.
+	 */
+	sizeOnly?: boolean,
+};
+
+/**
+ * Which side of a run's diff to read.
+ *
+ * A newer client may send a side this version does not know; wispd refuses it.
+ */
+export type AgentFileSide = "base" | "head";
+
+/**
+ * Result of `agent/file`.
+ */
+export type AgentFileResult = {
+	/**
+	 * The path as asked.
+	 */
+	path: string,
+	/**
+	 * The side as asked.
+	 */
+	side: AgentFileSide,
+	/**
+	 * The commit it was read from.
+	 */
+	commit: string,
+	/**
+	 * Whether the file exists on that side. An added file has no base side, and a deleted file
+	 * no head side.
+	 */
+	exists: boolean,
+	/**
+	 * Its size in bytes, when it exists.
+	 */
+	size?: number,
+	/**
+	 * Its exact content, base64-encoded, when it exists, is not too large, and `sizeOnly` was not
+	 * asked. A symlink's
+	 * content is its target, as git stores it; it is never followed.
+	 */
+	content?: string,
+	/**
+	 * Whether it is over `agent/file`'s size cap, so `content` is absent.
+	 */
+	tooLarge: boolean,
+};
+
+/**
+ * Params of `agent/accept`.
+ *
+ * Idempotent on `id`: accepting an accepted run again with the same id returns the same result;
+ * with another id it fails with `runAccepted`.
+ */
+export type AgentAcceptParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The accept's id, a version 7 UUID generated by the client.
+	 */
+	id: AcceptId,
+	/**
+	 * The commit the user reviewed, `agent/diff`'s `head`. When it is given and the run has
+	 * committed since, the accept fails with `mergeRefused` instead of merging changes nobody
+	 * reviewed.
+	 */
+	commit?: string,
+};
+
+/**
+ * An `agent/accept`'s id: a version 7 UUID that the client generates once and sends again on
+ * every retry, so a retry after a lost connection gets the same answer.
+ */
+export type AcceptId = string;
+
+/**
+ * Result of `agent/accept`.
+ */
+export type AgentAcceptResult = {
+	/**
+	 * The run, now `accepted`.
+	 */
+	run: AgentRun,
+	/**
+	 * What happened to the project's repository.
+	 */
+	merge: AgentMerge,
+};
+
+/**
+ * Params of `agent/requestChanges`: the reviewer's follow-up to a run, sent to it as
+ * `agent/send` sends a message, and idempotent on `turnId` the same way.
+ */
+export type AgentRequestChangesParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The message's id, a version 7 UUID generated by the client.
+	 */
+	turnId: TurnId,
+	/**
+	 * What to change.
+	 */
+	text: string,
+};
+
+/**
+ * Params of `thread/list`.
+ */
+export type ThreadListParams = Record<symbol, never>;
+
+/**
+ * Result of `thread/list`: every repo entry and every thread. The threads' runs come from
+ * `agent/list` with each entry's id.
+ */
+export type ThreadListResult = {
+	/**
+	 * Every repo entry, oldest first.
+	 */
+	repos: Array<Repo>,
+	/**
+	 * Every thread, oldest first.
+	 */
+	threads: Array<Thread>,
+	/**
+	 * The `seq` of the last event the snapshot reflects. Subscribe to host-level events with
+	 * `after` set to it.
+	 */
+	seq: number,
+};
+
+/**
+ * Params of `repo/add`: registers a repository for normal threads.
+ *
+ * Idempotent on `id`, and failing with `idConflict` if the same id comes with another path. A
+ * path that is already registered returns its existing entry, whatever `id` says. The path must
+ * be the top folder of a git working tree on the host, or it fails with `notARepository`.
+ */
+export type RepoAddParams = {
+	/**
+	 * The new entry's id, a version 7 UUID generated by the client.
+	 */
+	id: RepoId,
+	/**
+	 * The absolute path of the repository on the host.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `repo/add`.
+ */
+export type RepoAddResult = {
+	/**
+	 * The entry, new or existing.
+	 */
+	repo: Repo,
+};
+
+/**
+ * Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
+ * starts a worker, with the same sandbox (0013).
+ *
+ * Idempotent on `runId`: the same id with the same params returns the run; with different
+ * params it fails with `idConflict`.
+ */
+export type ThreadStartParams = {
+	/**
+	 * The new run's id, a version 7 UUID generated by the client.
+	 */
+	runId: RunId,
+	/**
+	 * The repo entry to work in. Absent starts a thread with no repo, in a scratch repository
+	 * of its own.
+	 */
+	repo?: RepoId,
+	/**
+	 * The first message.
+	 */
+	prompt: string,
+	/**
+	 * The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
+	 */
+	account?: AccountChoice,
+};
+
+/**
+ * Result of `thread/start`.
+ */
+export type ThreadStartResult = {
+	/**
+	 * The thread.
+	 */
+	thread: Thread,
+	/**
+	 * Its run, as it stands.
+	 */
+	run: AgentRun,
+};
+
+/**
+ * Params of `thread/archive`: archives a thread or brings it back.
+ */
+export type ThreadArchiveParams = {
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * True to archive it, false to bring it back.
+	 */
+	archived: boolean,
+};
+
+/**
+ * Result of `thread/archive`.
+ */
+export type ThreadArchiveResult = {
+	/**
+	 * The thread as it stands.
+	 */
+	thread: Thread,
+};
+
+/**
+ * Params of `thread/delete`: deletes a thread, its run, its worktree and branch, a thread with
+ * no repo's scratch repository, and its stored events.
+ *
+ * A running CLI is cancelled first, and the delete answers once it has exited and its changes
+ * were committed. Deleting a thread that doesn't exist fails with `threadNotFound`.
+ */
+export type ThreadDeleteParams = {
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `thread/delete`.
+ */
+export type ThreadDeleteResult = Record<symbol, never>;
+
+/**
  * Params of `$/cancelRequest`.
  */
 export type CancelRequestParams = {
@@ -747,19 +2038,6 @@ export type EventsEventParams = {
 };
 
 /**
- * What happened, by `kind`.
- *
- * A newer wispd may send kinds that are not listed here. Skip those events but still count their
- * `seq` as received, and don't end a `switch` over this type in an exhaustiveness assertion.
- */
-export type WispEvent = { "kind": "project.created",
-	/**
-	 * The new project.
-	 */
-	project: Project,
-};
-
-/**
  * The `data` of a wisp error (code -32000).
  */
 export type ErrorData = {
@@ -779,7 +2057,7 @@ export type ErrorData = {
  * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "notARepository";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every editor can read it

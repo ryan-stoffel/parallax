@@ -1,13 +1,18 @@
 //! The methods wispd answers, one module per group, routed through `wisp_protocol`'s method
 //! table so every params and result type is the protocol's own.
 //!
-//! Later milestones add a module here for each capability (M3 `agents`: agents and context; M4
-//! `coordinator`), and `host.rs` advertises the capability in `initialize`.
+//! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
+//! `coordinator`; #110 `threads`: `thread.rs`), and `host.rs` advertises the capability in
+//! `initialize`.
 
 mod accounts;
+mod agent;
+mod context;
+mod defaults;
 mod events;
 mod host;
 mod project;
+mod thread;
 mod usage;
 
 use std::future::{Future, ready};
@@ -18,12 +23,15 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
 use wisp_protocol::methods::{
-    AccountsKeysAdd, AccountsKeysList, AccountsKeysRemove, AccountsList, AccountsRefresh,
-    EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion, Initialize, ProjectCreate,
-    ProjectList, RequestMethod, UsageGet,
+    AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
+    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
+    AgentEvents, AgentFile, AgentList, AgentRequestChanges, AgentSend, AgentStart, ContextList,
+    ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
+    Initialize, ProjectCreate, ProjectList, RequestMethod, UsageGet,
 };
 use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
+pub(crate) use defaults::read_defaults;
 pub(crate) use events::{Cursor, Cursors};
 pub(crate) use host::{Session, initialize, os_version};
 
@@ -88,6 +96,25 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
                 .await
         }
         UsageGet::NAME => handle::<UsageGet, _, _>(&request, |p| usage::get(&context, p)).await,
+        AccountsDefaultsGet::NAME => {
+            handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
+        }
+        AccountsDefaultsSet::NAME => {
+            handle::<AccountsDefaultsSet, _, _>(&request, |p| defaults::set(&context, p)).await
+        }
+        ContextList::NAME => {
+            handle::<ContextList, _, _>(&request, |p| context::list(&context, p)).await
+        }
+        ContextRead::NAME => {
+            handle::<ContextRead, _, _>(&request, |p| context::read(&context, p)).await
+        }
+        ContextWrite::NAME => {
+            handle::<ContextWrite, _, _>(&request, |p| context::write(&context, p)).await
+        }
+        name if name.starts_with("agent/") => agent_method(&context, &request)
+            .await
+            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
+        name if thread::handles(name) => thread::dispatch(&context, &request).await,
         EventsSubscribe::NAME => {
             let subscribed = match request.params() {
                 Ok(params) => events::subscribe(&context, params).await,
@@ -124,6 +151,31 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     Reply::Response(Response {
         id: Some(id),
         result,
+    })
+}
+
+/// Answers an `agent/*` method (#156, #157), or `None` if there is no such method.
+async fn agent_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        AgentStart::NAME => handle::<AgentStart, _, _>(request, |p| agent::start(context, p)).await,
+        AgentSend::NAME => handle::<AgentSend, _, _>(request, |p| agent::send(context, p)).await,
+        AgentCancel::NAME => {
+            handle::<AgentCancel, _, _>(request, |p| agent::cancel(context, p)).await
+        }
+        AgentList::NAME => handle::<AgentList, _, _>(request, |p| agent::list(context, p)).await,
+        AgentEvents::NAME => {
+            handle::<AgentEvents, _, _>(request, |p| agent::events(context, p)).await
+        }
+        AgentDiff::NAME => handle::<AgentDiff, _, _>(request, |p| agent::diff(context, p)).await,
+        AgentFile::NAME => handle::<AgentFile, _, _>(request, |p| agent::file(context, p)).await,
+        AgentAccept::NAME => {
+            handle::<AgentAccept, _, _>(request, |p| agent::accept(context, p)).await
+        }
+        AgentRequestChanges::NAME => {
+            handle::<AgentRequestChanges, _, _>(request, |p| agent::request_changes(context, p))
+                .await
+        }
+        _ => return None,
     })
 }
 

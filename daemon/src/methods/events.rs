@@ -31,10 +31,16 @@ pub(crate) async fn subscribe(
             .daemon
             .store
             .run(&context.cancel, move |store| {
-                store
+                // A normal thread's events go to its repo entry's id (#110).
+                let is_project = store
                     .get_project(project.into())
-                    .map(|row| row.is_some())
-                    .map_err(|error| store_error(&error))
+                    .map_err(|error| store_error(&error))?
+                    .is_some();
+                Ok(is_project
+                    || store
+                        .get_repo(project.into())
+                        .map_err(|error| store_error(&error))?
+                        .is_some())
             })
             .await?;
         if !exists {
@@ -142,7 +148,7 @@ mod tests {
         let log = EventLog::new(10);
         let project = ProjectId::generate();
         for owner in [None, Some(project), None] {
-            log.append(Timestamp::now(), owner, WispEvent::Unknown);
+            log.append_blocking(Timestamp::now(), owner, WispEvent::Unknown);
         }
         let host = cursor(None, 0);
         let (host_id, late_id) = (host.subscription, SubscriptionId::generate());
@@ -163,7 +169,7 @@ mod tests {
         expected.sort_by_key(|&(subscription, seq)| (seq, subscription));
         assert_eq!(delivered, expected);
 
-        log.append(Timestamp::now(), None, WispEvent::Unknown);
+        log.append_blocking(Timestamp::now(), None, WispEvent::Unknown);
         cursors.remove(host_id);
         assert_eq!(drain(&mut cursors, &log), [(late_id, 4)]);
     }
@@ -171,8 +177,8 @@ mod tests {
     #[test]
     fn a_cursor_behind_the_retention_is_reported() {
         let log = EventLog::new(1);
-        log.append(Timestamp::now(), None, WispEvent::Unknown);
-        log.append(Timestamp::now(), None, WispEvent::Unknown);
+        log.append_blocking(Timestamp::now(), None, WispEvent::Unknown);
+        log.append_blocking(Timestamp::now(), None, WispEvent::Unknown);
         let lagging = cursor(None, 0);
         let id = lagging.subscription;
         let mut cursors = Cursors::default();
