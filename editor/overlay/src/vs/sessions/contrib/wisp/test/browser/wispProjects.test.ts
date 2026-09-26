@@ -4,7 +4,7 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../../../base/browser/window.js';
-import { Emitter } from '../../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import Severity from '../../../../../base/common/severity.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -19,7 +19,9 @@ import type { ProjectCreateParams } from '../../../../../platform/wisp/common/wi
 import { IViewContainersRegistry, IViewsRegistry, ViewContainerLocation, Extensions as ViewExtensions, WindowEnablement } from '../../../../../workbench/common/views.js';
 import { IChatSessionContentProvider, IChatSessionsExtensionPoint, IChatSessionsService } from '../../../../../workbench/contrib/chat/common/chatSessionsService.js';
 import { ChatInteractivity, SessionStatus } from '../../../../services/sessions/common/session.js';
+import { ISessionsProvidersService } from '../../../../services/sessions/browser/sessionsProvidersService.js';
 import { ISessionsProvider } from '../../../../services/sessions/common/sessionsProvider.js';
+import { ISessionsManagementService } from '../../../../services/sessions/common/sessionsManagement.js';
 import { WispCoordinatorChat } from '../../../providers/wisp/browser/wispCoordinatorChat.js';
 import { WISP_PROJECT_CAPABILITIES } from '../../../providers/wisp/browser/wispProjectSession.js';
 import { WISP_SESSIONS_PROVIDER_ID } from '../../../providers/wisp/browser/wispSessionsProvider.js';
@@ -30,7 +32,7 @@ import { factAriaLabel, WISP_PROJECT_CONTAINER_ID, WISP_PROJECT_VIEW_ID, project
 import '../../browser/wispProject.contribution.js';
 import { searchPicks } from '../../browser/wispSearch.js';
 import { WISP_THREADS_VIEW_ID, WispThreadsView } from '../../browser/wispThreadsView.js';
-import { agentsWindowServices, IAgentsWindowServices, settle } from './wispAgentsTestServices.js';
+import { agentsWindowServices, IAgentsWindowServices, settle, TestSessionsProvidersService } from './wispAgentsTestServices.js';
 import { connected, connecting, disconnected, project, SSH_COMMAND } from './wispHostTestUtils.js';
 
 const ONE = '0192f0c4-0000-7000-8000-000000000001';
@@ -473,6 +475,29 @@ suite('wisp: projects', () => {
 			assert.strictEqual(creates.length, 2);
 			assert.strictEqual(creates[0], creates[1], 'the retry sends the same id');
 			assert.strictEqual(created?.id, creates[0]);
+		});
+
+		test('opens the project once its session is listed, though wisp\'s provider registers after the create (#249)', async () => {
+			const { instantiationService, wispd, provider, opened } = services();
+			wispd.setState(connected());
+			await settle();
+			// The window restored, but upstream hasn't created wisp's provider contribution yet.
+			const providers = disposables.add(new TestSessionsProvidersService());
+			instantiationService.stub(ISessionsProvidersService, providers);
+			instantiationService.stub(ISessionsManagementService, {
+				onDidChangeSessions: Event.None,
+				getSession: (resource: URI) => providers.getProviders().flatMap(p => p.getSessions()).find(s => s.resource.toString() === resource.toString()),
+			} as unknown as ISessionsManagementService);
+			instantiationService.stub(IFileDialogService, { showOpenDialog: async () => [URI.file('/Users/ryan/src/billing-service')] } as unknown as IFileDialogService);
+			instantiationService.stub(IQuickInputService, quickInput(['billing-service'], []));
+			const run = instantiationService.createInstance(WispNewProjectFlow).run();
+			await settle();
+			assert.strictEqual(wispd.requests.filter(([method]) => method === 'project/create').length, 1);
+			assert.deepStrictEqual(opened, [], 'nothing to open yet: no provider lists the project');
+
+			disposables.add(providers.registerProvider(provider));
+			const created = await run;
+			assert.deepStrictEqual(opened.map(uri => projectIdOf(uri)), [created?.id]);
 		});
 
 		test('paths with . or .. segments are refused before wispd sees them', () => {

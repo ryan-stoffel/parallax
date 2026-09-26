@@ -2,9 +2,11 @@
  *  wisp: not part of Code - OSS. Edit editor/overlay in the wisp repo, not this copy.
  *--------------------------------------------------------------------------------------------*/
 
+import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/path.js';
 import Severity from '../../../../base/common/severity.js';
+import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
@@ -15,7 +17,9 @@ import { generateUuidV7 } from '../../../../platform/wisp/common/uuidv7.js';
 import { WispdError, WispdUnavailableError } from '../../../../platform/wisp/common/wispd.js';
 import { isLocalHost } from '../../../../platform/wisp/common/wispdConfiguration.js';
 import type { Project } from '../../../../platform/wisp/common/wispProtocol.js';
+import { ISessionsProvidersService } from '../../../services/sessions/browser/sessionsProvidersService.js';
 import { ISessionsService } from '../../../services/sessions/browser/sessionsService.js';
+import { ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
 import { IWispProjectsService } from '../../providers/wisp/browser/wispProjectsService.js';
 import { projectResource } from '../../providers/wisp/common/wispProjects.js';
 import { IWispHostStatusService } from './wispHostStatusService.js';
@@ -62,6 +66,8 @@ export class WispNewProjectFlow {
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@ISessionsService private readonly sessionsService: ISessionsService,
+		@ISessionsManagementService private readonly sessionsManagementService: ISessionsManagementService,
+		@ISessionsProvidersService private readonly sessionsProvidersService: ISessionsProvidersService,
 	) { }
 
 	async run(): Promise<Project | undefined> {
@@ -109,8 +115,22 @@ export class WispNewProjectFlow {
 				}
 				return undefined;
 			}
-			await this.sessionsService.openSession(projectResource(project.id));
+			const resource = projectResource(project.id);
+			await this.whenListed(resource);
+			await this.sessionsService.openSession(resource);
 			return project;
+		}
+	}
+
+	/**
+	 * Resolves once a sessions provider lists `resource`. wisp's provider registers only after the
+	 * window restores, when the workbench is idle, so on a busy machine New Project can create the
+	 * project before there is a provider to open it with (#249).
+	 */
+	private async whenListed(resource: URI): Promise<void> {
+		const listed = () => !!this.sessionsManagementService.getSession(resource);
+		if (!listed()) {
+			await Event.toPromise(Event.filter(Event.any<unknown>(this.sessionsManagementService.onDidChangeSessions, this.sessionsProvidersService.onDidChangeProviders), listed));
 		}
 	}
 
