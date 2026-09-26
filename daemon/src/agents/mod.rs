@@ -32,7 +32,8 @@ use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentOutcome, AgentRun, AgentRunState,
-    AgentSendParams, AgentStartParams, ErrorKind, ProjectId, Role, RunId, TurnId, WispEvent,
+    AgentSendParams, AgentStartParams, CoordinatorThreadId, ErrorKind, ProjectId, Role, RunId,
+    TurnId, WispEvent,
 };
 use wisp_store::{RunFields, RunState, StoreError, WorktreeFields};
 
@@ -346,7 +347,7 @@ async fn existing(
     run_id: RunId,
     project: ProjectId,
     prompt: &str,
-    requested: Option<&str>,
+    (requested, coordinator_thread): (Option<&str>, Option<Uuid>),
 ) -> Result<Option<AgentRun>, ErrorObject> {
     let found = store(daemon, move |db| {
         let Some(row) = db.get_run(run_id.into()).map_err(|e| store_error(&e))? else {
@@ -364,11 +365,15 @@ async fn existing(
     let same = row.fields.project_id == Uuid::from(project)
         && row.fields.prompt == prompt
         && row.fields.policy == WORKSPACE_WRITE
-        && row.fields.requested_account.as_deref() == requested;
+        && row.fields.requested_account.as_deref() == requested
+        && row.fields.coordinator_thread == coordinator_thread;
     if !same {
         return Err(ErrorObject::wisp(
             ErrorKind::IdConflict,
-            format!("run {run_id} exists with a different project, prompt, account, or policy"),
+            format!(
+                "run {run_id} exists with a different project, prompt, account, policy, or \
+                 coordinator thread"
+            ),
         ));
     }
     agent_run(&row, worktree.as_ref()).map(Some)
@@ -471,6 +476,7 @@ pub(crate) async fn start(
         project,
         prompt,
         account,
+        coordinator_thread,
         ..
     } = params;
     let new = NewRun {
@@ -478,6 +484,7 @@ pub(crate) async fn start(
         scope: project,
         prompt,
         account,
+        coordinator_thread,
         thread: None,
     };
     Ok(create(daemon, new).await?.run)
@@ -491,6 +498,8 @@ pub(crate) struct NewRun {
     pub scope: ProjectId,
     pub prompt: String,
     pub account: Option<AccountChoice>,
+    /// The coordinator thread starting the run through `wispd mcp` (#195).
+    pub coordinator_thread: Option<CoordinatorThreadId>,
     pub thread: Option<NewThread>,
 }
 
@@ -515,12 +524,22 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         scope: project,
         prompt,
         account,
+        coordinator_thread,
         thread,
     } = new;
     let _starting = agents.start_guard(run_id).await;
     let requested = requested_account(account.as_ref());
+    let coordinator_thread = coordinator_thread.map(Uuid::from);
 
-    if let Some(run) = existing(&daemon, run_id, project, &prompt, requested.as_deref()).await? {
+    if let Some(run) = existing(
+        &daemon,
+        run_id,
+        project,
+        &prompt,
+        (requested.as_deref(), coordinator_thread),
+    )
+    .await?
+    {
         let row = if thread.is_some() {
             Some(crate::threads::existing_thread(&daemon, run_id).await?)
         } else {
@@ -542,6 +561,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         requested_account: requested,
         policy: WORKSPACE_WRITE.to_owned(),
         backend: prepared.resolved.backend().name().to_owned(),
+        coordinator_thread,
     };
     let state = RunState {
         status: STARTING.to_owned(),

@@ -22,9 +22,9 @@ use wisp_protocol::{
     AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFailureKind,
     AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentListParams, AgentMerge,
     AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRequestChangesParams,
-    AgentRun, AgentSendParams, AgentStartParams, AgentStatus, DiffSummary, ErrorKind,
-    EventsEventParams, EventsSubscribeParams, HostHealthParams, InitializeResult, Project,
-    ProjectCreateParams, ProjectId, Provider, RunId, TurnId, UsageGetParams, WispEvent,
+    AgentRun, AgentSendParams, AgentStartParams, AgentStatus, CoordinatorThreadId, DiffSummary,
+    ErrorKind, EventsEventParams, EventsSubscribeParams, HostHealthParams, InitializeResult,
+    Project, ProjectCreateParams, ProjectId, Provider, RunId, TurnId, UsageGetParams, WispEvent,
 };
 use wispd::backend::fake::{FakeBackend, Script, Step};
 use wispd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -116,6 +116,7 @@ fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams {
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
         }),
+        coordinator_thread: None,
     }
 }
 
@@ -702,6 +703,14 @@ async fn agent_start_is_idempotent_on_its_run_id() {
         .await
         .unwrap_err();
     assert_eq!(kind(&conflict), ErrorKind::IdConflict);
+    let tagged = client
+        .call::<AgentStart>(AgentStartParams {
+            coordinator_thread: Some(CoordinatorThreadId::generate()),
+            ..params.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&tagged), ErrorKind::IdConflict);
     assert_eq!(list(&mut client).await.len(), 1);
     assert_eq!(
         worktree_count(host.dir.path()),
