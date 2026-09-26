@@ -26,12 +26,20 @@ use ts_rs::TS;
 
 use crate::jsonrpc::CancelRequestParams;
 use crate::{
+    AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
-    AccountsRefreshParams, AccountsRefreshResult, EventsEventParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, HostHealthParams,
-    HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams, InitializeResult,
-    ProjectCreateParams, ProjectCreateResult, ProjectListParams, ProjectListResult, UsageGetParams,
+    AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
+    AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult,
+    AgentFileParams, AgentFileResult, AgentListParams, AgentListResult, AgentRequestChangesParams,
+    AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams, ContextListResult,
+    ContextReadParams, ContextReadResult, ContextWriteParams, ContextWriteResult,
+    EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
+    EventsUnsubscribeResult, HostHealthParams, HostHealthResult, HostVersionParams,
+    HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
+    ProjectCreateResult, ProjectListParams, ProjectListResult, RepoAddParams, RepoAddResult,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
     UsageGetResult,
 };
 
@@ -141,6 +149,64 @@ method_table! {
         /// `usage/get`: per-account tokens and cost for today and this week (local time on this
         /// host), and the latest limit windows.
         UsageGet = "usage/get": UsageGetParams => UsageGetResult;
+        /// `accounts/defaults/get`: this host's default account for the coordinator role and for
+        /// a worker role, absent where none is set (#119).
+        AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
+        /// `accounts/defaults/set`: sets or clears one role's default account, and returns both
+        /// roles' defaults as they stand after the change.
+        AccountsDefaultsSet = "accounts/defaults/set": AccountsDefaultsSetParams => AccountsDefaultsGetResult;
+        /// `context/list`: a project's shared context files (0005), each with its size, when it
+        /// was last modified, and who last wrote it, if known.
+        ContextList = "context/list": ContextListParams => ContextListResult;
+        /// `context/read`: one shared context file's content. Fails with `contextNotFound` if it
+        /// does not exist.
+        ContextRead = "context/read": ContextReadParams => ContextReadResult;
+        /// `context/write`: writes a shared context file in full, idempotent on its
+        /// client-generated id. The last write to a path wins when two race.
+        ContextWrite = "context/write": ContextWriteParams => ContextWriteResult;
+        /// `agent/start`: starts a worker in its own worktree of the project's repository, with
+        /// the worker sandbox (0013) and the shared context folder, idempotent on its
+        /// client-generated run id. Gated on the `agents` capability, like every `agent/*`
+        /// method.
+        AgentStart = "agent/start": AgentStartParams => AgentRunResult;
+        /// `agent/send`: a message to a run (0011): its next turn while it runs, or a resumed
+        /// session once it has ended. Idempotent on the message's client-generated turn id.
+        AgentSend = "agent/send": AgentSendParams => AgentRunResult;
+        /// `agent/cancel`: stops a running agent. Does nothing to a run that isn't running.
+        AgentCancel = "agent/cancel": AgentCancelParams => AgentRunResult;
+        /// `agent/list`: every run, or one project's, and the `seq` the list reflects.
+        AgentList = "agent/list": AgentListParams => AgentListResult;
+        /// `agent/events`: one run's events from wispd's log, a page at a time.
+        AgentEvents = "agent/events": AgentEventsParams => AgentEventsResult;
+        /// `agent/diff`: the files that differ between a run's base and its latest commit, each
+        /// with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
+        /// capability, like every review method.
+        AgentDiff = "agent/diff": AgentDiffParams => AgentDiffResult;
+        /// `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
+        /// size-capped, for a diff editor.
+        AgentFile = "agent/file": AgentFileParams => AgentFileResult;
+        /// `agent/accept`: merges a run's commit into the project repository's current branch on
+        /// the host, fast-forward when possible, then removes its worktree and branch. Never
+        /// pushes. Idempotent on its client-generated id.
+        AgentAccept = "agent/accept": AgentAcceptParams => AgentAcceptResult;
+        /// `agent/requestChanges`: the reviewer's follow-up to a run, sent as `agent/send` sends
+        /// a message. Idempotent on its client-generated turn id.
+        AgentRequestChanges = "agent/requestChanges": AgentRequestChangesParams => AgentRunResult;
+        /// `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
+        /// (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
+        ThreadList = "thread/list": ThreadListParams => ThreadListResult;
+        /// `repo/add`: registers a repository on the host for normal threads, idempotent on its
+        /// client-generated id and on its path.
+        RepoAdd = "repo/add": RepoAddParams => RepoAddResult;
+        /// `thread/start`: starts a normal thread's agent in a worktree of a repo entry, or in a
+        /// scratch repository of its own when no repo is given. Idempotent on its
+        /// client-generated run id.
+        ThreadStart = "thread/start": ThreadStartParams => ThreadStartResult;
+        /// `thread/archive`: archives a normal thread or brings it back.
+        ThreadArchive = "thread/archive": ThreadArchiveParams => ThreadArchiveResult;
+        /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
+        /// stopping its CLI first if it runs.
+        ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -192,6 +258,25 @@ mod tests {
                 "accounts/list",
                 "accounts/refresh",
                 "usage/get",
+                "accounts/defaults/get",
+                "accounts/defaults/set",
+                "context/list",
+                "context/read",
+                "context/write",
+                "agent/start",
+                "agent/send",
+                "agent/cancel",
+                "agent/list",
+                "agent/events",
+                "agent/diff",
+                "agent/file",
+                "agent/accept",
+                "agent/requestChanges",
+                "thread/list",
+                "repo/add",
+                "thread/start",
+                "thread/archive",
+                "thread/delete",
                 "$/cancelRequest",
                 "events/event",
             ]

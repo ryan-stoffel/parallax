@@ -29,9 +29,42 @@ pub enum ErrorKind {
     KeychainUnavailable,
     /// A create reused an existing id with different params.
     IdConflict,
+    /// No shared context file has the given path (#155).
+    ContextNotFound,
+    /// The content would be over `context/write`'s per-file or per-project size cap (#155).
+    ContextTooLarge,
     /// A new project's `repoPath` is not the top folder of a git working tree on this host. The
     /// message says what is wrong with it.
     NotARepository,
+    /// No agent run has the given id (#156).
+    RunNotFound,
+    /// `agent/send` can't resume the run: it ended before its CLI reported a session, or it is
+    /// still starting.
+    RunNotResumable,
+    /// wispd won't start a worker as asked: its backend doesn't implement the worker sandbox
+    /// (0013), the CLI is missing or older than the version the sandbox needs, or a path it would
+    /// sandbox holds `*`, `?`, `[`, or `]`. The message says which, and for an old CLI names both
+    /// versions.
+    WorkerUnavailable,
+    /// wispd could not create the run's worktree, for example because the project's repository
+    /// has uncommitted changes. The message says what to do.
+    WorktreeFailed,
+    /// The run was accepted (#157): its worktree and branch are gone, so there is nothing left to
+    /// review, and it takes no more messages.
+    RunAccepted,
+    /// `agent/accept` refused before changing anything: the run is still running or has no
+    /// commit, the repository's HEAD is detached or a merge or rebase is in progress there,
+    /// uncommitted changes in the user's checkout touch files the merge would change, or the run
+    /// has committed since the reviewed commit. The message says which.
+    MergeRefused,
+    /// `agent/accept` refused because the run's commit conflicts with the project's branch, which
+    /// has moved on since the run started. The message names the conflicting files. Nothing was
+    /// changed.
+    MergeConflict,
+    /// No repo entry has the given id (#110).
+    RepoNotFound,
+    /// No normal thread has the given run id (#110).
+    ThreadNotFound,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -124,7 +157,18 @@ mod tests {
             (ErrorKind::AccountNotFound, "accountNotFound"),
             (ErrorKind::KeychainUnavailable, "keychainUnavailable"),
             (ErrorKind::IdConflict, "idConflict"),
+            (ErrorKind::ContextNotFound, "contextNotFound"),
+            (ErrorKind::ContextTooLarge, "contextTooLarge"),
             (ErrorKind::NotARepository, "notARepository"),
+            (ErrorKind::RunNotFound, "runNotFound"),
+            (ErrorKind::RunNotResumable, "runNotResumable"),
+            (ErrorKind::WorkerUnavailable, "workerUnavailable"),
+            (ErrorKind::WorktreeFailed, "worktreeFailed"),
+            (ErrorKind::RunAccepted, "runAccepted"),
+            (ErrorKind::MergeRefused, "mergeRefused"),
+            (ErrorKind::MergeConflict, "mergeConflict"),
+            (ErrorKind::RepoNotFound, "repoNotFound"),
+            (ErrorKind::ThreadNotFound, "threadNotFound"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

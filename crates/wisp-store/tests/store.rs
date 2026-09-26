@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 use uuid::Uuid;
-use wisp_store::{AccountFields, ProjectFields, Store, StoreError, UsageDelta};
+use wisp_store::{
+    AccountFields, ProjectFields, Store, StoreError, StoredEvent, UsageDelta, WorktreeFields,
+};
 
 fn temp_db_path() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -25,6 +27,18 @@ fn sample_account_fields() -> AccountFields {
         provider: "anthropic".to_string(),
         label: "Personal".to_string(),
         masked_key: "sk-ant-...abcd".to_string(),
+    }
+}
+
+fn sample_worktree_fields() -> WorktreeFields {
+    WorktreeFields {
+        repo_path: "/Users/ryan/dev/wisp".to_string(),
+        path: "/Users/ryan/Library/Application Support/wisp/worktrees/wisp-abcd1234/\
+               0199-run"
+            .to_string(),
+        branch: "wisp/abcd1234".to_string(),
+        base: "b7e1f2a3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9".to_string(),
+        git_dir: "/Users/ryan/dev/wisp/.git/worktrees/0199-run".to_string(),
     }
 }
 
@@ -427,8 +441,10 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 4,
-        "migrations 3 (accounts, #117) and 4 (usage, #120) also apply"
+        version, 10,
+        "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
+         defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
+         #110), and 10 (turns, #190) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -444,8 +460,8 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
 }
 
 /// A database as `develop` (schema version 3, `accounts` but no usage tables) leaves it, opened by
-/// a build that also knows migration 4 (#120). Both the pre-existing `accounts` row and the new
-/// usage tables must be intact afterward.
+/// a build that also knows migrations 4 (#120), 5 (worktrees, #154), and 6 (role defaults, #119).
+/// Both the pre-existing `accounts` row and the new usage tables must be intact afterward.
 #[test]
 fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_account() {
     let (_dir, path) = temp_db_path();
@@ -480,7 +496,7 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
     .expect("write a version 3 database, as develop's #117 leaves it");
     drop(conn);
 
-    let store = Store::open(&path).expect("open should migrate to version 4");
+    let store = Store::open(&path).expect("open should migrate to the latest version");
     let account = store
         .get_account(account_id)
         .expect("get")
@@ -516,7 +532,11 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
             row.get(0)
         })
         .expect("read schema version");
-    assert_eq!(version, 4);
+    assert_eq!(
+        version, 10,
+        "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
+         8 (accepted runs, #157), 9 (threads, #110), and 10 (turns, #190) also apply"
+    );
 }
 
 #[test]
@@ -640,4 +660,126 @@ fn account_rows_never_hold_more_than_the_masked_key() {
         )
         .expect("read the stored masked_key");
     assert_ne!(stored, secret, "the real key must never be stored");
+}
+
+#[test]
+fn creating_a_worktree_with_the_same_id_and_fields_is_idempotent() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+
+    let first = store
+        .create_worktree(id, &sample_worktree_fields())
+        .expect("first create should succeed");
+    let second = store
+        .create_worktree(id, &sample_worktree_fields())
+        .expect("repeat create with identical fields should succeed");
+
+    assert_eq!(first, second);
+    assert_eq!(first.branch, "wisp/abcd1234");
+    assert_eq!(store.list_worktrees().expect("list").len(), 1);
+}
+
+#[test]
+fn creating_a_worktree_with_the_same_id_and_different_fields_conflicts() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let mut other = sample_worktree_fields();
+    other.branch = "wisp/deadbeef".to_string();
+
+    store
+        .create_worktree(id, &sample_worktree_fields())
+        .expect("first create should succeed");
+    let err = store
+        .create_worktree(id, &other)
+        .expect_err("repeat create with different fields should fail");
+
+    match err {
+        StoreError::IdConflict { id: conflicting } => assert_eq!(conflicting, id),
+        other => panic!("expected IdConflict, got {other:?}"),
+    }
+    assert_eq!(
+        store.list_worktrees().expect("list").len(),
+        1,
+        "a rejected conflicting create must not change the stored row"
+    );
+}
+
+#[test]
+fn worktrees_list_oldest_first_and_delete_removes_them_idempotently() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let first_id = Uuid::now_v7();
+    store
+        .create_worktree(first_id, &sample_worktree_fields())
+        .expect("create first");
+    let second_id = Uuid::now_v7();
+    let mut second_fields = sample_worktree_fields();
+    second_fields.branch = "wisp/12345678".to_string();
+    store
+        .create_worktree(second_id, &second_fields)
+        .expect("create second");
+
+    let listed: Vec<Uuid> = store
+        .list_worktrees()
+        .expect("list")
+        .into_iter()
+        .map(|w| w.id)
+        .collect();
+    assert_eq!(listed, [first_id, second_id]);
+
+    let deleted_first = store.delete_worktree(first_id).expect("delete");
+    let deleted_second = store
+        .delete_worktree(first_id)
+        .expect("deleting twice should not error");
+    assert!(deleted_first, "the first delete should report a removal");
+    assert!(
+        !deleted_second,
+        "the second delete should report nothing removed"
+    );
+    assert_eq!(store.get_worktree(first_id).expect("get"), None);
+    assert_eq!(store.list_worktrees().expect("list").len(), 1);
+}
+
+fn stored_event(seq: u64, run_id: Option<Uuid>) -> StoredEvent {
+    StoredEvent {
+        seq,
+        time: "2026-09-25T12:00:00Z".parse().unwrap(),
+        project_id: None,
+        run_id,
+        kind: if run_id.is_some() {
+            "agent.output".to_string()
+        } else {
+            "context.changed".to_string()
+        },
+        payload: "{}".to_string(),
+    }
+}
+
+#[test]
+fn pruning_host_events_keeps_the_newest_and_leaves_run_events_alone() {
+    let (_dir, path) = temp_db_path();
+    let store = Store::open(&path).expect("open");
+    let run = Uuid::now_v7();
+    // Interleave host events (no run_id) with run events, so pruning has to pick them out by
+    // `run_id IS NULL` rather than by a contiguous range of `seq`.
+    for seq in 1..=6 {
+        let run_id = if seq % 2 == 0 { Some(run) } else { None };
+        store.append_event(&stored_event(seq, run_id)).unwrap();
+    }
+
+    let deleted = store.prune_host_events(1).expect("prune");
+    assert_eq!(deleted, 2, "keeps only the newest of the 3 host events");
+
+    let remaining = store.latest_events(usize::MAX, usize::MAX).expect("latest");
+    let seqs: Vec<u64> = remaining.iter().map(|event| event.seq).collect();
+    assert_eq!(
+        seqs,
+        [2, 4, 5, 6],
+        "the run's events (2, 4, 6) all survive; only the newest host event (5) does"
+    );
+
+    let again = store.prune_host_events(1).expect("prune again");
+    assert_eq!(again, 0, "already within the retention");
 }

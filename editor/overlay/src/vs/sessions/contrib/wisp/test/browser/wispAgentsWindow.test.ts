@@ -8,6 +8,7 @@ import { setARIAContainer } from '../../../../../base/browser/ui/aria/aria.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IChatSessionsService } from '../../../../../workbench/contrib/chat/common/chatSessionsService.js';
+import { IChatAgentService } from '../../../../../workbench/contrib/chat/common/participants/chatAgents.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { Registry } from '../../../../../platform/registry/common/platform.js';
 import { WISP_HOST_SETTING } from '../../../../../platform/wisp/common/wispdConfiguration.js';
@@ -78,7 +79,7 @@ suite('wisp: Agents window', () => {
 			return { ...context, view };
 		}
 
-		test('shows the actions, with New Chat and Customize disabled and no Automations', () => {
+		test('shows the actions, with New Chat disabled, Customize enabled, and no Automations', () => {
 			const { view } = renderSidebar();
 			const actions = query<HTMLElement>(view.element, '.wisp-threads-actions');
 			assert.strictEqual(actions.getAttribute('role'), 'group');
@@ -86,15 +87,15 @@ suite('wisp: Agents window', () => {
 			assert.deepStrictEqual(buttons.map(button => [button.textContent, button.getAttribute('aria-disabled')]), [
 				['New Chat', 'true'],
 				['Search', null],
-				['Customize', 'true'],
+				['Customize', null],
 			]);
 			assert.strictEqual(buttons[0].disabled, false, 'a disabled button would leave the tab order');
-			assert.strictEqual(buttons[0].getAttribute('aria-description'), 'Chats outside a project are not available yet.');
+			assert.strictEqual(buttons[0].getAttribute('aria-description'), 'Connect to a host to start a chat.');
 		});
 
 		test('shows Projects with its empty copy, and hides Repositories and No Repo', () => {
 			const { view } = renderSidebar();
-			const sections = [...view.element.querySelectorAll<HTMLElement>('section.wisp-threads-section')];
+			const sections = [...view.element.querySelectorAll<HTMLElement>('section.wisp-threads-section')].filter(section => !section.hidden);
 			assert.deepStrictEqual(sections.map(section => section.querySelector('h2')?.textContent), ['Projects']);
 			const projects = sections[0];
 			assert.strictEqual(projects.getAttribute('aria-labelledby'), projects.querySelector('h2')?.id);
@@ -167,8 +168,13 @@ suite('wisp: Agents window', () => {
 				registerChatSessionContribution: (contribution: { type: string }) => { chatTypes.push(contribution.type); return Disposable.None; },
 				registerChatSessionContentProvider: (scheme: string) => { chatTypes.push(`content:${scheme}`); return Disposable.None; },
 			} as unknown as IChatSessionsService);
+			const agents: string[] = [];
+			instantiationService.stub(IChatAgentService, {
+				registerDynamicAgent: (data: { id: string; isDefault?: boolean; modes: readonly string[] }) => { agents.push(`${data.id}:${data.isDefault}:${data.modes.join(',')}`); return Disposable.None; },
+			} as unknown as IChatAgentService);
 			disposables.add(instantiationService.createInstance(WispSessionsProviderContribution));
-			assert.deepStrictEqual(chatTypes, ['wisp.project', 'content:wisp.project'], 'the coordinator\'s chat type registers in process');
+			assert.deepStrictEqual(chatTypes, ['wisp.project', 'content:wisp.project', 'wisp.agent', 'content:wisp.agent'], 'the coordinator\'s and the subagents\' chat types register in process');
+			assert.deepStrictEqual(agents, ['wisp.agent:true:agent'], 'the subagents\' chat agent is the default for agent mode, since upstream sends nothing without one');
 
 			const provider = providers.getProvider<WispSessionsProvider>(WISP_SESSIONS_PROVIDER_ID);
 			assert.ok(provider instanceof WispSessionsProvider);
@@ -182,10 +188,11 @@ suite('wisp: Agents window', () => {
 			assert.deepStrictEqual(provider.getModelsSnapshot('any').models, []);
 		});
 
-		test('refuses to create sessions, quick chats, or requests', async () => {
+		test('refuses to create sessions, quick chats, or requests until the host runs threads', async () => {
 			const { provider } = services(true);
-			assert.throws(() => provider.createNewSession(URI.file('/repo'), 'wisp.thread'), /doesn't support this yet/);
-			assert.throws(() => provider.createQuickChat('wisp.thread'), /doesn't support this yet/);
+			assert.throws(() => provider.createNewSession(URI.file('/repo'), 'wisp.project'), /doesn't support this yet/);
+			assert.throws(() => provider.createNewSession(URI.file('/repo'), 'wisp.thread'), /can't run chats yet/);
+			assert.throws(() => provider.createQuickChat('wisp.thread'), /can't run chats yet/);
 			await assert.rejects(provider.sendRequest('a', URI.file('/chat'), { query: 'hi' }), /can't take messages yet/);
 		});
 	});
