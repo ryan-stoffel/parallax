@@ -485,11 +485,47 @@ suite('wisp: agents', () => {
 			assert.strictEqual(follow.complete, false);
 			assert.strictEqual(built.filesCommit(), undefined);
 
-			assert.deepStrictEqual(built.acceptListed('abc', listedDiff()), [], 'the late list is not applied');
+			assert.deepStrictEqual(built.acceptListed('abc', listedDiff()), [], 'the late list does not close the follow-up');
 			assert.strictEqual(follow.complete, false, 'the follow-up stays open');
 			built.accept(logged(22, { kind: 'agent.output', runId: RUN, items: [{ kind: 'text', text: 'still going' }] }, '2026-09-25T10:01:01Z'));
 			assert.strictEqual(follow.complete, false);
 			assert.deepStrictEqual(describe(follow.parts), ['text: still going']);
+		});
+
+		test('a follow-up that changes nothing closes without waiting to list the same commit again', () => {
+			const built = transcript(() => 'also add tests', () => undefined);
+			for (const event of firstTurn()) {
+				built.accept(event);
+			}
+			assert.strictEqual(built.filesCommit(), 'abc', 'the first line is waiting on agent/diff');
+			built.accept(followUp()[0]);
+			built.accept(followUp()[1]);
+			assert.strictEqual(built.turns[0].complete, true, 'the next message closes the previous line');
+			assert.ok(describe(built.turns[0].parts).some(line => line.includes('Done in')));
+
+			for (const event of followUp().slice(2)) {
+				built.accept(event);
+			}
+			assert.strictEqual(built.filesCommit(), undefined, 'the follow-up does not wait on the previous commit');
+			assert.strictEqual(built.turns[1].complete, true);
+			assert.deepStrictEqual(describe(built.turns[1].parts), [
+				'text: Fake agent heard: also add tests',
+				`text: $(check) Done in 2s · 1 file changed +1 -0 · committed to ${BRANCH}`,
+			]);
+		});
+
+		test('a follow-up that commits again waits for that commit\'s file list', () => {
+			const built = transcript(() => 'also add tests', () => undefined);
+			for (const event of firstTurn()) {
+				built.accept(event);
+			}
+			for (const event of followUp().slice(0, 4)) {
+				built.accept(event);
+			}
+			built.accept(logged(24, { kind: 'agent.diffReady', runId: RUN, diff: { commit: 'def', files: 2, insertions: 3, deletions: 1 } }, '2026-09-25T10:01:03Z'));
+			built.accept(logged(25, { kind: 'agent.updated', runId: RUN, state: { status: 'completed', accountId: 'claude', updatedAt: '2026-09-25T10:01:03Z' } }, '2026-09-25T10:01:03Z'));
+			assert.strictEqual(built.turns[1].complete, false);
+			assert.strictEqual(built.filesCommit(), 'def');
 		});
 
 		test('a dropped message is a quiet line with Send again, and a run that stops without finishing closes', () => {
@@ -618,7 +654,36 @@ suite('wisp: agents', () => {
 			assert.strictEqual(closed, true);
 			const text = sent.flat().filter(part => part.kind === 'markdownContent').map(part => part.kind === 'markdownContent' ? part.content.value : '');
 			assert.ok(text.some(value => value.includes('Fake agent heard: also add tests')), 'later parts of the follow-up still arrive');
+			assert.ok(text.some(value => value.replace(/&nbsp;/g, ' ').includes('Done in')), 'the follow-up still closes');
 			expected.dispose();
+		});
+
+		test('a follow-up that changes nothing closes while agent/diff for the first commit never returns', async () => {
+			const built = new WispAgentTranscript(run({ branch: BRANCH, status: 'completed', diff: { commit: 'abc', files: 1, insertions: 1, deletions: 0 } }), {
+				sentText: turnId => turnId === TURN ? 'also add tests' : undefined,
+				branch: () => BRANCH,
+			});
+			for (const event of firstTurn()) {
+				built.accept(event);
+			}
+			const session = disposables.add(new WispAgentChatSession(
+				agentChatResource(PROJECT, RUN),
+				built,
+				constObservable(run({ branch: BRANCH, status: 'completed', diff: { commit: 'abc', files: 1, insertions: 1, deletions: 0 } })),
+				async () => { },
+				() => new Promise<IWispListedDiff>(() => { }),
+			));
+			const sent: IChatProgress[][] = [];
+			const token = disposables.add(new CancellationTokenSource());
+			const expected = session.expect(TURN, parts => sent.push(parts), token.token);
+			for (const event of followUp()) {
+				session.accept(event);
+			}
+			await expected.done;
+			expected.dispose();
+			const text = sent.flat().filter(part => part.kind === 'markdownContent').map(part => part.kind === 'markdownContent' ? part.content.value : '');
+			assert.ok(text.some(value => value.replace(/&nbsp;/g, ' ').includes('Done in')), 'the request closes on the summary, not on agent/diff');
+			assert.strictEqual(built.turns[1].complete, true);
 		});
 
 		test('a turn this window didn\'t send starts a server request; one it sent streams to its request', async () => {

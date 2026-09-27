@@ -59,7 +59,8 @@ export async function chatShowsCount(window: Page, text: string, count: number, 
   await window.waitForFunction(
     ({ needle, needed }) => {
       const roots = document.querySelectorAll('.interactive-session');
-      return [...roots].some(root => root.textContent.split(needle).length - 1 >= needed);
+      // Quiet lines store spaces as nbsp, so textContent has U+00A0 where the line reads "Done in".
+      return [...roots].some(root => root.textContent.replace(/\u00a0/g, ' ').split(needle).length - 1 >= needed);
     },
     { needle: text, needed: count },
     { timeout },

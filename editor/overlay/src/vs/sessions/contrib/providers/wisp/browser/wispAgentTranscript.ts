@@ -82,7 +82,8 @@ interface IPendingToolCall {
  *   with a quiet line (docs/design/chat-v2.md, Finished): how long it took, the files from
  *   `agent/diff`, and no info or warning card. It waits for the run's new status, since wispd
  *   reports the commit (`agent.diffReady`) after `agent.finished`, and for the file list when
- *   that commit changed something.
+ *   that commit is new. A later turn that does not change the commit closes on the summary
+ *   already shown; it does not wait to list those files again.
  */
 export class WispAgentTranscript {
 
@@ -101,6 +102,12 @@ export class WispAgentTranscript {
 	/** Files supplied for `listedCommit` by `acceptListed`, after `agent/diff`. */
 	private listed: IWispListedDiff | undefined;
 	private listedCommit: string | undefined;
+	/**
+	 * The commit a closing line already showed. A later turn whose diff is still this commit
+	 * closes without waiting on `agent/diff` again: a follow-up that changes nothing emits no
+	 * new `agent.diffReady`, and the previous commit's file list is not that turn's gate.
+	 */
+	private settledCommit: string | undefined;
 
 	constructor(
 		private readonly run: Pick<AgentRun, 'id' | 'prompt' | 'createdAt' | 'diff' | 'branch'>,
@@ -182,10 +189,15 @@ export class WispAgentTranscript {
 	/**
 	 * Supplies the file list `agent/diff` returned for `commit` (the value of `filesCommit`) and
 	 * closes the turn that was waiting for it. A list that arrives after that wait has ended,
-	 * because the next message already started, is ignored, so the new turn keeps streaming.
+	 * because the next message already started, is kept for this commit but does not close the
+	 * turn that is streaming now.
 	 */
 	acceptListed(commit: string, listed: IWispListedDiff, time?: number): WispTranscriptChange[] {
 		if (this.filesCommit() !== commit) {
+			if (this.diff?.commit === commit) {
+				this.listed = listed;
+				this.listedCommit = commit;
+			}
 			return [];
 		}
 		const waiting = this.current;
@@ -308,11 +320,18 @@ export class WispAgentTranscript {
 		if (!outcome) {
 			return [];
 		}
-		if (waitForFiles && this.waitsForFiles(outcome) && !this.currentFiles()) {
+		const commit = this.diff?.commit;
+		// The same commit already has a closing line. This turn did not change it (wispd emits
+		// no `agent.diffReady` when there is nothing new to commit), so it must not stay open
+		// waiting to list those files again.
+		const alreadySettled = !!commit && commit === this.settledCommit;
+		if (waitForFiles && this.waitsForFiles(outcome) && !this.currentFiles() && !alreadySettled) {
 			return [{ kind: 'needsFiles' }];
 		}
 		this.outcome = undefined;
-		return [...this.closeTools(time), ...this.append(this.ending(outcome, time))];
+		const changes = [...this.closeTools(time), ...this.append(this.ending(outcome, time))];
+		this.settledCommit = commit;
+		return changes;
 	}
 
 	/**
