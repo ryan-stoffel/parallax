@@ -1,0 +1,30 @@
+{
+	"name": "theme-wisp",
+	"displayName": "Wisp Themes",
+	"description": "Wisp Dark and Wisp Light, built on Dark Modern and Light Modern.",
+	"publisher": "wisp",
+	"version": "1.0.0",
+	"license": "MIT",
+	"engines": {
+		"vscode": "*"
+	},
+	"categories": [
+		"Themes"
+	],
+	"contributes": {
+		"themes": [
+			{
+				"id": "Wisp Dark",
+				"label": "Wisp Dark",
+				"uiTheme": "vs-dark",
+				"path": "./themes/wisp-dark.json"
+			},
+			{
+				"id": "Wisp Light",
+				"label": "Wisp Light",
+				"uiTheme": "vs",
+				"path": "./themes/wisp-light.json"
+			}
+		]
+	}
+}
