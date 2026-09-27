@@ -52,7 +52,7 @@ export const threadsChecks = [
 
       step = 'the row is still there, with the thread\'s title';
       const label = await row.getAttribute('aria-label');
-      if (!label?.startsWith(`${threadTask}, chat in ${projectName}, updated`)) {
+      if (!label?.startsWith(`${threadTask}, chat in ${projectName}, Needs review, updated`)) {
         throw new Error(`the row is labeled ${JSON.stringify(label)}`);
       }
     } catch (error) {
