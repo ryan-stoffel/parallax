@@ -2,9 +2,12 @@
  *  wisp: not part of Code - OSS. Edit editor/overlay in the wisp repo, not this copy.
  *--------------------------------------------------------------------------------------------*/
 
+import { raceTimeout } from '../../../../base/common/async.js';
+import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/path.js';
 import Severity from '../../../../base/common/severity.js';
+import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
@@ -15,7 +18,9 @@ import { generateUuidV7 } from '../../../../platform/wisp/common/uuidv7.js';
 import { WispdError, WispdUnavailableError } from '../../../../platform/wisp/common/wispd.js';
 import { isLocalHost } from '../../../../platform/wisp/common/wispdConfiguration.js';
 import type { Project } from '../../../../platform/wisp/common/wispProtocol.js';
+import { ISessionsProvidersService } from '../../../services/sessions/browser/sessionsProvidersService.js';
 import { ISessionsService } from '../../../services/sessions/browser/sessionsService.js';
+import { ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
 import { IWispProjectsService } from '../../providers/wisp/browser/wispProjectsService.js';
 import { projectResource } from '../../providers/wisp/common/wispProjects.js';
 import { IWispHostStatusService } from './wispHostStatusService.js';
@@ -27,6 +32,9 @@ const MAX_NAME_BYTES = 256;
 const MAX_PATH_BYTES = 1024;
 
 const encoder = new TextEncoder();
+
+/** How long New Project waits for wisp's provider to list a new project before it stops waiting. */
+export const LISTED_TIMEOUT_MS = 30_000;
 
 /** wispd refuses a `repoPath` with a `.` or `..` segment, so one folder has one spelling. */
 export function hasDotSegment(path: string): boolean {
@@ -62,6 +70,8 @@ export class WispNewProjectFlow {
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@ISessionsService private readonly sessionsService: ISessionsService,
+		@ISessionsManagementService private readonly sessionsManagementService: ISessionsManagementService,
+		@ISessionsProvidersService private readonly sessionsProvidersService: ISessionsProvidersService,
 	) { }
 
 	async run(): Promise<Project | undefined> {
@@ -109,8 +119,38 @@ export class WispNewProjectFlow {
 				}
 				return undefined;
 			}
-			await this.sessionsService.openSession(projectResource(project.id));
+			const resource = projectResource(project.id);
+			const outcome = await this.whenListed(project.id, resource);
+			if (outcome === 'listed') {
+				await this.sessionsService.openSession(resource);
+			} else if (outcome === 'timedOut') {
+				this.notificationService.info(localize('wispNewProject.notListed', "Created {0}. It will be in the sidebar once the window finishes loading.", project.name));
+			}
 			return project;
+		}
+	}
+
+	/**
+	 * Waits for a sessions provider to list the new project's session. wisp's provider registers
+	 * only after the window restores, when the workbench is idle, so on a busy machine New Project
+	 * can create the project before there is a provider to open it with (#249). It gives up when the
+	 * project leaves the list, which a host change does, and after `LISTED_TIMEOUT_MS`.
+	 */
+	private async whenListed(projectId: string, resource: URI): Promise<'listed' | 'gone' | 'timedOut'> {
+		const outcome = () => this.sessionsManagementService.getSession(resource) ? 'listed' : this.projectsService.getProject(projectId) ? undefined : 'gone';
+		const store = new DisposableStore();
+		try {
+			const changes = Event.any<unknown>(
+				this.sessionsManagementService.onDidChangeSessions,
+				this.sessionsProvidersService.onDidChangeProviders,
+				Event.fromObservableLight(this.projectsService.projects),
+			);
+			if (!outcome()) {
+				await raceTimeout(Event.toPromise(Event.filter(changes, () => !!outcome()), store), LISTED_TIMEOUT_MS);
+			}
+			return outcome() ?? 'timedOut';
+		} finally {
+			store.dispose();
 		}
 	}
 
