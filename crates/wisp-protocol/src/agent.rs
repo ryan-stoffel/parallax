@@ -21,6 +21,12 @@ uuid_v7_id! {
 }
 
 uuid_v7_id! {
+    /// A project's coordinator thread (M4, #195, decision 0019). Runs the coordinator starts
+    /// through its wisp tools carry it, so a client can tell them from runs it started itself.
+    CoordinatorThreadId
+}
+
+uuid_v7_id! {
     /// A follow-up turn's id: a version 7 UUID that the client generates once and sends again on
     /// every retry of `agent/send`, so a retry never sends the message twice.
     TurnId
@@ -122,6 +128,11 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub diff: Option<DiffSummary>,
+    /// The coordinator thread that started it through its wisp tools. Absent for a run a client
+    /// started itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub coordinator_thread: Option<CoordinatorThreadId>,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -413,6 +424,11 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<AccountChoice>,
+    /// The coordinator thread starting the run, which `wispd mcp` sets for runs the coordinator
+    /// spawns (0019). The run keeps it, and a retry must repeat it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub coordinator_thread: Option<CoordinatorThreadId>,
 }
 
 /// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.

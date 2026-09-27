@@ -346,6 +346,10 @@ pub fn start(
         // A no-write run never writes, so it has no worker sandbox (0013), whatever was asked.
         request.sandbox = None;
     }
+    if role != Role::Coordinator {
+        // Only the coordinator starts and steers other runs (0019).
+        request.coordinator_tools = None;
+    }
     let started = backend.start(request.clone())?;
 
     let fallback_id = is_subscription
