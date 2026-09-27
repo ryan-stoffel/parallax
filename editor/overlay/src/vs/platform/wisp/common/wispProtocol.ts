@@ -1082,6 +1082,12 @@ export type AgentRun = {
 	 */
 	worktreePath?: string,
 	/**
+	 * True when the worktree's base was resolved from a dirty `HEAD` (#257): the repository's
+	 * tracked files had uncommitted changes that aren't in this run. Never true for a run whose
+	 * worktree doesn't exist yet, or whose caller passed an explicit base.
+	 */
+	baseDirty?: boolean,
+	/**
 	 * The vendor's session id, once the CLI reported it.
 	 */
 	sessionId?: string,

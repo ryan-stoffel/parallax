@@ -122,6 +122,7 @@ async fn create_makes_a_worktree_on_a_new_branch_from_head() {
         created.branch
     );
     assert_eq!(created.base, rev_parse(&repo, "HEAD"));
+    assert!(!created.base_dirty, "a clean repo isn't flagged dirty");
     assert_eq!(
         worktree_count(&repo),
         2,
@@ -214,26 +215,46 @@ async fn create_works_from_a_detached_head() {
 }
 
 #[tokio::test]
-async fn create_refuses_a_dirty_default_base() {
+async fn create_from_an_untracked_only_repo_never_blocks_and_is_not_flagged_dirty() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    // Only an untracked file: #257's original report (an untracked AGENTS.md blocked New Chat).
+    std::fs::write(repo.join("AGENTS.md"), "notes\n").unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+
+    let created = mgr.create(&repo, RunId::generate(), None).await.unwrap();
+
+    assert_eq!(created.base, rev_parse(&repo, "HEAD"));
+    assert!(
+        !created.base_dirty,
+        "an untracked file alone isn't in any commit either way, so it needs no notice"
+    );
+}
+
+#[tokio::test]
+async fn create_from_a_tracked_dirty_repo_never_blocks_but_is_flagged_dirty() {
     let repo_dir = tempfile::tempdir().unwrap();
     let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
     std::fs::write(repo.join("README.md"), "changed\n").unwrap();
     let data_dir = tempfile::tempdir().unwrap();
     let mgr = manager(data_dir.path());
 
-    let error = mgr
-        .create(&repo, RunId::generate(), None)
-        .await
-        .unwrap_err();
+    let created = mgr.create(&repo, RunId::generate(), None).await.unwrap();
 
+    assert_eq!(
+        created.base,
+        rev_parse(&repo, "HEAD"),
+        "starts from HEAD, not the uncommitted change"
+    );
     assert!(
-        matches!(error, WorktreeError::DirtyBase { .. }),
-        "{error:?}"
+        created.base_dirty,
+        "the caller shows a notice that the tracked edit isn't in the worktree"
     );
 }
 
 #[tokio::test]
-async fn create_with_an_explicit_base_skips_the_dirty_check() {
+async fn create_with_an_explicit_base_is_never_flagged_dirty() {
     let repo_dir = tempfile::tempdir().unwrap();
     let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
     let head = rev_parse(&repo, "HEAD");
@@ -247,6 +268,7 @@ async fn create_with_an_explicit_base_skips_the_dirty_check() {
         .unwrap();
 
     assert_eq!(created.base, head);
+    assert!(!created.base_dirty, "the caller chose this base on purpose");
 }
 
 #[tokio::test]
