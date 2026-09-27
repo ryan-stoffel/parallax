@@ -13,30 +13,50 @@ export function useConnection(hostId: string): ConnectionState | undefined {
   return state;
 }
 
-/** One line: connected, connecting, or why it failed, with Retry. RYA-13 places and styles it. */
+/**
+ * A quiet status line for the sidebar's footer: a dot and a word while things
+ * are fine; on failure, why, and Retry once wispd stops retrying by itself.
+ * The tail of attach's stderr is only in the tooltip.
+ */
 export function ConnectionStatus({ hostId }: { hostId: string }) {
   const state = useConnection(hostId);
   if (!state) return null;
-  if (state.status !== "failed") {
-    return (
-      <p className="text-xs text-neutral-500">
-        {state.status === "connected"
-          ? `Connected to wispd ${state.wispd}`
-          : "Connecting to wispd…"}
-      </p>
-    );
-  }
-  const { error, retrying } = state;
+
+  const failed = state.status === "failed";
+  const dot = {
+    connected: "bg-emerald-500",
+    connecting: "bg-amber-500 animate-pulse",
+    failed: "bg-red-500",
+  }[state.status];
+  let label = "Connected";
+  if (state.status === "connecting") label = "Connecting…";
+  if (state.status === "failed") label = state.retrying ? "Reconnecting…" : "Disconnected";
+
   return (
-    <p className="max-w-xl text-center text-xs text-red-400" title={error.stderr}>
-      {error.message}
-      {error.stderr && `: ${error.stderr.split("\n").at(-1)}`}
-      {retrying ? " Retrying…" : " "}
-      {!retrying && (
-        <button className="underline" onClick={() => void window.wisp.retry(hostId)}>
-          Retry
-        </button>
+    <div role="status" className="px-2 py-1 text-[12px] text-muted-foreground">
+      <div className="flex items-center gap-2">
+        <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${dot}`} />
+        <span className="min-w-0 flex-1 truncate">
+          {label}
+          {state.status === "connected" && (
+            <span className="text-faint-foreground"> · wispd {state.wispd}</span>
+          )}
+        </span>
+        {failed && !state.retrying && (
+          <button
+            type="button"
+            onClick={() => void window.wisp.retry(hostId)}
+            className="rounded px-1.5 text-foreground hover:bg-hover"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+      {failed && (
+        <p title={state.error.stderr} className="mt-0.5 line-clamp-2 pl-3.5 text-faint-foreground">
+          {state.error.message}
+        </p>
       )}
-    </p>
+    </div>
   );
 }
