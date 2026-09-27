@@ -5,6 +5,7 @@ set -eu
 # upstream, so it needs no network and never touches editor/.
 
 here=$(cd "$(dirname "$0")" && pwd)
+node --test "$here/theme-wisp.test.mjs"
 work=$(mktemp -d "${TMPDIR:-/tmp}/wisp-editor-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 

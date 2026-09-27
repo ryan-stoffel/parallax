@@ -25,6 +25,7 @@ import './wispAccountsEditor.js';
 import './wispComposerAccount.js';
 import './wispAgentsPanel.js';
 import './wispStartSubagent.js';
+import '../../../../platform/wisp/common/wispTheme.js';
 
 registerSingleton(IWispHostStatusService, WispHostStatusService, InstantiationType.Delayed);
 registerSingleton(IWispAccountsService, WispAccountsService, InstantiationType.Delayed);
