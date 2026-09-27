@@ -157,6 +157,8 @@ suite('wisp: agents', () => {
 				const state = agentState(run(options), step);
 				return [state.status, state.mark, state.label, state.running];
 			};
+			assert.deepStrictEqual(read({ status: 'queued' }), [SessionStatus.InProgress, 'hollow', 'Queued', false], '#197: waiting for a slot, not yet doing anything');
+			assert.deepStrictEqual(read({ status: 'queued', queuedReason: 'waiting for a host slot (4 of 4 running)' }), [SessionStatus.InProgress, 'hollow', 'waiting for a host slot (4 of 4 running)', false], 'the reason, when wispd gives one, replaces the generic label');
 			assert.deepStrictEqual(read({ status: 'starting' }), [SessionStatus.InProgress, 'hollow', 'Starting', true]);
 			assert.deepStrictEqual(read({ status: 'running' }), [SessionStatus.InProgress, 'running', 'Running', true]);
 			assert.deepStrictEqual(read({ status: 'running' }, 'Writing tests'), [SessionStatus.InProgress, 'running', 'Writing tests', true]);
@@ -182,6 +184,12 @@ suite('wisp: agents', () => {
 			const failed = run({ status: 'failed', error: 'boom' });
 			const next = applyRunState(failed, { status: 'running', accountId: 'key-1', updatedAt: '2026-09-25T11:00:00Z' });
 			assert.deepStrictEqual([next.status, next.accountId, next.error, next.prompt], ['running', 'key-1', undefined, failed.prompt]);
+		});
+
+		test('#197: agent.updated clears a stale queuedReason once a queued run starts', () => {
+			const queued = run({ status: 'queued', queuedReason: 'waiting for a host slot (4 of 4 running)' });
+			const next = applyRunState(queued, { status: 'starting', accountId: 'key-1', updatedAt: '2026-09-25T11:00:00Z' });
+			assert.deepStrictEqual([next.status, next.queuedReason], ['starting', undefined]);
 		});
 	});
 

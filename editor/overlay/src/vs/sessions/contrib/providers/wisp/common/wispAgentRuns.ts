@@ -40,6 +40,12 @@ export function applyRunState(run: AgentRun, state: AgentRunState): AgentRun {
 	if (state.diff !== undefined) {
 		next.diff = state.diff;
 	}
+	if (state.status !== 'queued') {
+		// `agent.updated` never carries a fresh `queuedReason` (#197: it's computed live, only for
+		// `agent/list` and `agent/start`'s own results), so once a run leaves `queued` its old
+		// reason text would otherwise linger on a run that isn't waiting on anything any more.
+		delete next.queuedReason;
+	}
 	return next;
 }
 
@@ -76,8 +82,10 @@ export function currentStep(items: readonly AgentTodoItem[] | undefined): string
  * How a run reads in the Agents panel, on its tab, and as `IChat.status`. A newer wispd may send
  * a status this editor doesn't know; it reads as the run's status word.
  */
-export function agentState(run: Pick<AgentRun, 'status' | 'diff'>, step?: string): IWispAgentState {
+export function agentState(run: Pick<AgentRun, 'status' | 'diff' | 'queuedReason'>, step?: string): IWispAgentState {
 	switch (run.status) {
+		case 'queued':
+			return { status: SessionStatus.InProgress, mark: 'hollow', label: run.queuedReason ?? localize('wispAgent.queued', "Queued"), running: false };
 		case 'starting':
 			return { status: SessionStatus.InProgress, mark: 'hollow', label: localize('wispAgent.starting', "Starting"), running: true };
 		case 'running':
