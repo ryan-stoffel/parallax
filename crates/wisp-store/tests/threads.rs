@@ -23,6 +23,7 @@ fn run_fields(repo: Uuid) -> RunFields {
         requested_account: None,
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
+        coordinator_thread: None,
     }
 }
 

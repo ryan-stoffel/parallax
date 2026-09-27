@@ -388,6 +388,7 @@ mod tests {
                 },
                 resume: None,
                 model: None,
+                coordinator_tools: None,
             })
             .unwrap();
         let mut seen = Vec::new();

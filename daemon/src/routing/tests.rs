@@ -3,16 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
+use wisp_protocol::{AccountChoice, AccountId, CoordinatorThreadId, ProjectId, Provider, Role};
 
 use super::{
     BackendRegistry, Defaults, KeyAccounts, PolicyCheckError, RoutingError, check, resolve,
     snapshot, start,
 };
 use crate::backend::{
-    AccountRef, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, Event, EventSink,
-    EventStream, Failure, FailureKind, ModelUsage, Outcome, RunHandle, RunId, RunRequest,
-    StartError, Started, ToolPolicy, Usage, WorkerSandbox, claude,
+    AccountRef, Backend, CancelSwitch, Capabilities, CoordinatorTools, Credential, EVENT_BUFFER,
+    Event, EventSink, EventStream, Failure, FailureKind, ModelUsage, Outcome, RunHandle, RunId,
+    RunRequest, StartError, Started, ToolPolicy, Usage, WorkerSandbox, claude,
 };
 use crate::keystore::{KeyStore, MemoryKeyStore};
 
@@ -40,6 +40,7 @@ fn request(cwd: &Path) -> RunRequest {
         },
         resume: None,
         model: None,
+        coordinator_tools: None,
     }
 }
 
@@ -426,6 +427,101 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
         expected,
         "Claude runs a coordinator with exactly 0004's no-write flags, none of 0013's"
     );
+}
+
+fn coordinator_tools() -> CoordinatorTools {
+    CoordinatorTools {
+        program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
+        data_dir: PathBuf::from("/Users/u/Library/Application Support/wisp"),
+        project: ProjectId::generate(),
+        thread: CoordinatorThreadId::generate(),
+    }
+}
+
+/// #195: a coordinator's allowlist is its read-only tools plus exactly wispd's eight MCP tools,
+/// with the no-write flags unchanged, and only the `wispd mcp` server connected.
+#[tokio::test]
+async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
+    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
+        Outcome::Completed { result: None },
+    )]]));
+    let resolved = resolved_for_role(backend.clone(), Role::Coordinator, ToolPolicy::NoWrite);
+    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
+    let tools = coordinator_tools();
+    let request = RunRequest {
+        coordinator_tools: Some(tools.clone()),
+        ..request(&root())
+    };
+
+    let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
+    rest(&mut started.events).await;
+
+    let sent = &backend.calls()[0];
+    assert_eq!(sent.coordinator_tools.as_ref(), Some(&tools));
+    let args: Vec<String> = claude::arguments(sent)
+        .unwrap()
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+    let mut expected: Vec<String> = claude::BASE_ARGS
+        .iter()
+        .chain(claude::NO_WRITE_ARGS)
+        .map(|arg| (*arg).to_owned())
+        .collect();
+    let config = serde_json::json!({"mcpServers": {"wispd": {
+        "type": "stdio",
+        "command": "/Applications/Wisp.app/Contents/Resources/wispd",
+        "args": [
+            "mcp",
+            "--data-dir", "/Users/u/Library/Application Support/wisp",
+            "--project", tools.project.to_string(),
+            "--coordinator-thread", tools.thread.to_string(),
+        ],
+    }}});
+    expected.extend([
+        "--mcp-config".to_owned(),
+        config.to_string(),
+        "--allowedTools".to_owned(),
+        "mcp__wispd__spawn_agent,mcp__wispd__list_agents,mcp__wispd__agent_status,\
+         mcp__wispd__message_agent,mcp__wispd__cancel_agent,mcp__wispd__agent_diff,\
+         mcp__wispd__read_context,mcp__wispd__write_context"
+            .to_owned(),
+    ]);
+    assert_eq!(args, expected);
+    assert!(
+        args.iter().any(|arg| arg == "--strict-mcp-config"),
+        "no MCP server but wispd's"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_never_gets_the_coordinator_tools() {
+    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
+        Outcome::Completed { result: None },
+    )]]));
+    let resolved = resolved_for_role(backend.clone(), Role::Worker, ToolPolicy::WorkspaceWrite);
+    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
+    let request = RunRequest {
+        coordinator_tools: Some(coordinator_tools()),
+        ..request(&root())
+    };
+
+    let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
+    rest(&mut started.events).await;
+
+    assert_eq!(backend.calls()[0].coordinator_tools, None);
+}
+
+#[test]
+fn claude_refuses_the_coordinator_tools_on_a_worker() {
+    let request = RunRequest {
+        coordinator_tools: Some(coordinator_tools()),
+        ..request(&root())
+    };
+    assert!(matches!(
+        claude::arguments(&request),
+        Err(StartError::Invalid(_))
+    ));
 }
 
 #[tokio::test]

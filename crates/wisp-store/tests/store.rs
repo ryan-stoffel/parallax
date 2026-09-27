@@ -441,10 +441,10 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 10,
+        version, 11,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
-         #110), and 10 (turns, #190) also apply"
+         #110), 10 (turns, #190), and 11 (coordinator threads, #195) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -533,9 +533,10 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 10,
+        version, 11,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
-         8 (accepted runs, #157), 9 (threads, #110), and 10 (turns, #190) also apply"
+         8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), and 11 (coordinator \
+         threads, #195) also apply"
     );
 }
 

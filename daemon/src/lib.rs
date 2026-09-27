@@ -18,6 +18,8 @@
 //!   `context.changed` events.
 //! - `detect`: detecting which vendor CLIs are installed and signed in, without touching their
 //!   credentials (#114).
+//! - [`mcp`]: `wispd mcp`, the coordinator's wisp tools as an MCP server on stdio, bound to one
+//!   project and one coordinator thread (#195, 0019).
 //! - [`launch_agent`]: the launch agent that `attach` starts wispd through, when it is installed.
 //! - [`service`]: installs, removes, and reports on the per-user `LaunchAgent` that keeps
 //!   `serve` running (#61).
@@ -44,6 +46,7 @@ mod json;
 pub mod keystore;
 pub mod launch_agent;
 pub mod logging;
+pub mod mcp;
 mod methods;
 pub mod paths;
 mod repo;

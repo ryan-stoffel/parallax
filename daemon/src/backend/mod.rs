@@ -133,6 +133,55 @@ pub struct RunRequest {
     pub resume: Option<Resume>,
     /// The model, or the CLI's default.
     pub model: Option<String>,
+    /// wispd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
+    /// Routing drops them for every other role, and a backend refuses them on a worker.
+    pub coordinator_tools: Option<CoordinatorTools>,
+}
+
+/// How a coordinator's CLI launches `wispd mcp` (0019): the server is bound to one project and one
+/// coordinator thread by these arguments, which wispd sets and the model never sees or chooses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoordinatorTools {
+    /// The `wispd` executable that serves the tools.
+    pub program: PathBuf,
+    /// wispd's data folder, which tells `wispd mcp` where the socket is.
+    pub data_dir: PathBuf,
+    /// The only project the tools can reach.
+    pub project: wisp_protocol::ProjectId,
+    /// The coordinator thread that runs spawned through the tools are tagged with.
+    pub thread: wisp_protocol::CoordinatorThreadId,
+}
+
+impl CoordinatorTools {
+    /// `{"mcpServers": {"wispd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
+    /// its program and arguments.
+    ///
+    /// # Errors
+    ///
+    /// [`StartError::Invalid`] if the program's or the data folder's path isn't UTF-8.
+    pub fn mcp_config(&self) -> Result<serde_json::Value, StartError> {
+        let text = |path: &std::path::Path, what: &str| {
+            path.to_str().map(str::to_owned).ok_or_else(|| {
+                StartError::Invalid(format!("{what} {} is not UTF-8", path.display()))
+            })
+        };
+        let program = text(&self.program, "wispd's executable")?;
+        let data_dir = text(&self.data_dir, "the data folder")?;
+        Ok(serde_json::json!({
+            "mcpServers": {
+                crate::mcp::SERVER: {
+                    "type": "stdio",
+                    "command": program,
+                    "args": [
+                        "mcp",
+                        "--data-dir", data_dir,
+                        "--project", self.project.to_string(),
+                        "--coordinator-thread", self.thread.to_string(),
+                    ],
+                },
+            },
+        }))
+    }
 }
 
 /// A vendor session for a run to continue.
