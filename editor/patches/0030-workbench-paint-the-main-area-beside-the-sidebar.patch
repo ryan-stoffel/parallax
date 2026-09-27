@@ -1,4 +1,4 @@
-From 0f87b139aecacb90154e7db0001bf0dbbe5bfbf6 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
 Date: Sun, 27 Sep 2026 17:35:26 +0000
 Subject: [PATCH] workbench: paint the main area beside the sidebar
@@ -8,14 +8,9 @@ mode and #FDFDFD in light mode, so it matches the surface next to the
 sidebar.
 
 Issue #316.
----
- src/vs/code/electron-browser/workbench/workbench.ts |  4 ++--
- src/vs/platform/windows/electron-main/windows.ts    | 10 ++++++----
- src/vs/sessions/electron-browser/sessions.ts        |  4 ++--
- 3 files changed, 10 insertions(+), 8 deletions(-)
 
 diff --git a/src/vs/code/electron-browser/workbench/workbench.ts b/src/vs/code/electron-browser/workbench/workbench.ts
-index 86e6cc40..ddc438d5 100644
+index 86e6cc406f2f0aab8e62b8e4fbd61f5c33a51927..ddc438d5f82b3d627cb938ba67db9d46e59d38c1 100644
 --- a/src/vs/code/electron-browser/workbench/workbench.ts
 +++ b/src/vs/code/electron-browser/workbench/workbench.ts
 @@ -29,9 +29,9 @@
@@ -31,7 +26,7 @@ index 86e6cc40..ddc438d5 100644
  
  		const style = document.createElement('style');
 diff --git a/src/vs/platform/windows/electron-main/windows.ts b/src/vs/platform/windows/electron-main/windows.ts
-index fb50f427..7f20fc88 100644
+index fb50f427c8ee22b5b39857297c9ea18b3fd7b775..7f20fc88d416084ad0836620f9e373c0d03a27f4 100644
 --- a/src/vs/platform/windows/electron-main/windows.ts
 +++ b/src/vs/platform/windows/electron-main/windows.ts
 @@ -132,13 +132,15 @@ export interface IDefaultBrowserWindowOptionsOverrides {
@@ -55,7 +50,7 @@ index fb50f427..7f20fc88 100644
  
  export function defaultBrowserWindowOptions(accessor: ServicesAccessor, windowState: IWindowState, overrides?: IDefaultBrowserWindowOptionsOverrides, webPreferences?: electron.WebPreferences): electron.BrowserWindowConstructorOptions & { experimentalDarkMode: boolean } {
 diff --git a/src/vs/sessions/electron-browser/sessions.ts b/src/vs/sessions/electron-browser/sessions.ts
-index 1f4171ab..32efdf04 100644
+index 1f4171ab0e967756d02c0c9a8ab12f564dc164cb..32efdf042968f49231958ca217d65218a1220911 100644
 --- a/src/vs/sessions/electron-browser/sessions.ts
 +++ b/src/vs/sessions/electron-browser/sessions.ts
 @@ -25,9 +25,9 @@
@@ -70,6 +65,3 @@ index 1f4171ab..32efdf04 100644
  		const shellForeground = dark ? '#ffffff' : '#000000';
  
  		const style = document.createElement('style');
--- 
-2.43.0
-

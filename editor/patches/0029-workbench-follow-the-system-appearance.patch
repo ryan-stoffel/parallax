@@ -1,4 +1,4 @@
-From f7a9e9e28c7a0cb7f59ace1696971a53221f064a Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
 Date: Sun, 27 Sep 2026 17:17:12 +0000
 Subject: [PATCH] workbench: follow the system appearance
@@ -8,15 +8,9 @@ The Electron window background and the shell track the OS theme on macOS
 and Windows, including while the window is open.
 
 Issue #316.
----
- .../electron-browser/workbench/workbench.ts   | 452 +-----------------
- .../electron-main/themeMainServiceImpl.ts     |  47 +-
- .../platform/windows/electron-main/windows.ts |  21 +
- src/vs/sessions/electron-browser/sessions.ts  |  63 +--
- 4 files changed, 58 insertions(+), 525 deletions(-)
 
 diff --git a/src/vs/code/electron-browser/workbench/workbench.ts b/src/vs/code/electron-browser/workbench/workbench.ts
-index f116c3f7..86e6cc40 100644
+index f116c3f702a19c0735e027957ccc11457d6de307..86e6cc406f2f0aab8e62b8e4fbd61f5c33a51927 100644
 --- a/src/vs/code/electron-browser/workbench/workbench.ts
 +++ b/src/vs/code/electron-browser/workbench/workbench.ts
 @@ -5,8 +5,6 @@
@@ -498,7 +492,7 @@ index f116c3f7..86e6cc40 100644
  	}
  
 diff --git a/src/vs/platform/theme/electron-main/themeMainServiceImpl.ts b/src/vs/platform/theme/electron-main/themeMainServiceImpl.ts
-index 0009eb39..5155fcf1 100644
+index 0009eb39c87dda878ec48ed832c1560103a9be13..5155fcf1ea91475f8bd16d8f7c43aaf46317596a 100644
 --- a/src/vs/platform/theme/electron-main/themeMainServiceImpl.ts
 +++ b/src/vs/platform/theme/electron-main/themeMainServiceImpl.ts
 @@ -14,7 +14,7 @@ import { IColorScheme } from '../../window/common/window.js';
@@ -578,7 +572,7 @@ index 0009eb39..5155fcf1 100644
  		}
  	}
 diff --git a/src/vs/platform/windows/electron-main/windows.ts b/src/vs/platform/windows/electron-main/windows.ts
-index aefb5d3e..fb50f427 100644
+index aefb5d3eee8a1435f8d2a92f60748d7a7d7eabac..fb50f427c8ee22b5b39857297c9ea18b3fd7b775 100644
 --- a/src/vs/platform/windows/electron-main/windows.ts
 +++ b/src/vs/platform/windows/electron-main/windows.ts
 @@ -131,6 +131,16 @@ export interface IDefaultBrowserWindowOptionsOverrides {
@@ -617,7 +611,7 @@ index aefb5d3e..fb50f427 100644
  		options.resizable = false;
  	}
 diff --git a/src/vs/sessions/electron-browser/sessions.ts b/src/vs/sessions/electron-browser/sessions.ts
-index ff1ebe4a..1f4171ab 100644
+index ff1ebe4a7fc73ed402ecf11a806571cf6f8ab2ae..1f4171ab0e967756d02c0c9a8ab12f564dc164cb 100644
 --- a/src/vs/sessions/electron-browser/sessions.ts
 +++ b/src/vs/sessions/electron-browser/sessions.ts
 @@ -25,68 +25,21 @@
@@ -697,6 +691,3 @@ index ff1ebe4a..1f4171ab 100644
  		performance.mark('code/didShowPartsSplash');
  	}
  
--- 
-2.43.0
-

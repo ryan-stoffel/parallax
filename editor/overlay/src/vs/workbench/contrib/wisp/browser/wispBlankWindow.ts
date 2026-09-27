@@ -26,22 +26,43 @@ export function openBlankWorkbench(parent: HTMLElement, container: HTMLElement, 
 	container.style.position = 'fixed';
 	container.style.inset = '0';
 	mountSidebar(container);
-	paintAppearance(parent, container);
-	parent.appendChild(container);
-
 	const query = mainWindow.matchMedia('(prefers-color-scheme: dark)');
-	query.addEventListener('change', () => paintAppearance(parent, container));
+	// The page media query paints the first frame. After the native theme
+	// reports, it owns the color: setting themeSource updates
+	// shouldUseDarkColors without the media query always following (#316).
+	let nativeKnown = false;
+	paintAppearance(parent, container, query.matches);
+	parent.appendChild(container);
+	query.addEventListener('change', () => {
+		if (!nativeKnown) {
+			paintAppearance(parent, container, query.matches);
+		}
+	});
 
 	instantiationService.invokeFunction(accessor => {
+		const nativeHostService = accessor.get(INativeHostService);
 		const lifecycleService = accessor.get(ILifecycleService);
+		let epoch = 0;
+		const applyNative = (dark: boolean): void => {
+			epoch++;
+			nativeKnown = true;
+			paintAppearance(parent, container, dark);
+		};
+		nativeHostService.onDidChangeColorScheme(scheme => applyNative(scheme.dark));
+		const epochAtRequest = epoch;
+		void nativeHostService.getOSColorScheme().then(scheme => {
+			if (epoch === epochAtRequest) {
+				nativeKnown = true;
+				paintAppearance(parent, container, scheme.dark);
+			}
+		});
 		mark('code/didStartWorkbench');
 		lifecycleService.phase = LifecyclePhase.Restored;
-		void accessor.get(INativeHostService).notifyReady();
+		void nativeHostService.notifyReady();
 	});
 }
 
-function paintAppearance(parent: HTMLElement, container: HTMLElement): void {
-	const dark = mainWindow.matchMedia('(prefers-color-scheme: dark)').matches;
+function paintAppearance(parent: HTMLElement, container: HTMLElement, dark: boolean): void {
 	const main = dark ? '#0A0A0A' : '#FDFDFD';
 	const foreground = dark ? '#ECECEC' : '#1C1C1C';
 	container.dataset.appearance = dark ? 'dark' : 'light';

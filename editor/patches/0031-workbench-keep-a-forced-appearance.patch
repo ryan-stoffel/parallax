@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+Date: Sun, 27 Sep 2026 17:41:18 +0000
+Subject: [PATCH] workbench: keep a forced appearance
+
+Saving the splash reset the native theme to the host. On a light host
+that undoes dark mode, so the shell never becomes ready.
+
+Issue #316.
+
+diff --git a/src/vs/platform/theme/electron-main/themeMainServiceImpl.ts b/src/vs/platform/theme/electron-main/themeMainServiceImpl.ts
+index 5155fcf1ea91475f8bd16d8f7c43aaf46317596a..a2dcf98eef509bd3a791dcb0a6dfb56428038461 100644
+--- a/src/vs/platform/theme/electron-main/themeMainServiceImpl.ts
++++ b/src/vs/platform/theme/electron-main/themeMainServiceImpl.ts
+@@ -219,8 +219,11 @@ export class ThemeMainService extends Disposable implements IThemeMainService {
+ 			this.updateBackgroundColor(windowId, splash);
+ 		}
+ 
+-		// Update system theme
+-		this.updateSystemColorTheme();
++		// wisp: do not reset themeSource here (#316). This runs when the blank
++		// window is restored and again after a color-scheme change. Forcing
++		// `system` then undoes a dark appearance on a light host, so the shell
++		// never becomes ready. `system` is set when this service starts and
++		// when the system-color settings change.
+ 	}
+ 
+ 	private updateWindowSplashOverride(workspace: IWorkspaceIdentifier | ISingleFolderWorkspaceIdentifier | undefined, splash: IPartsSplash): IPartsSplashOverride | undefined {
