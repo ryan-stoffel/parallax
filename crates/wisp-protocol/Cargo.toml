@@ -1,6 +1,6 @@
 [package]
 name = "wisp-protocol"
-description = "Messages and framing for the wispd protocol"
+description = "Messages, framing, and generated TypeScript types for the wispd protocol"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
