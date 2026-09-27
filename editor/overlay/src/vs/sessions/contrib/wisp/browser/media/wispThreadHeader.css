@@ -1,0 +1,122 @@
+/*---------------------------------------------------------------------------------------------
+ *  wisp: not part of Code - OSS. Edit editor/overlay in the wisp repo, not this copy.
+ *--------------------------------------------------------------------------------------------*/
+
+/* The state word replaces upstream's status icon (#302). */
+.chat-composite-bar.session-header-bar > .chat-composite-bar-header > .chat-composite-bar-session-icon {
+	display: none;
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-crumb {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-workspace {
+	margin: 0;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--vscode-descriptionForeground);
+	font: inherit;
+	font-weight: var(--vscode-fontWeight-regular, 400);
+	font-size: var(--vscode-fontSize-heading3, 13px);
+	cursor: pointer;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-workspace:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-sep {
+	flex: none;
+	color: var(--vscode-descriptionForeground);
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-title {
+	font-weight: var(--vscode-fontWeight-semibold, 600);
+}
+
+/* Each state has its own shape, so the word does not depend on color alone. */
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-state {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+	color: var(--vscode-descriptionForeground);
+	font-size: var(--vscode-fontSize-heading3, 13px);
+	font-weight: var(--vscode-fontWeight-regular, 400);
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-state::before {
+	content: '';
+	width: 8px;
+	height: 8px;
+	flex: none;
+	box-sizing: border-box;
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-state[data-mark="working"]::before {
+	border: 1.5px solid currentColor;
+	border-radius: 50%;
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-state[data-mark="done"]::before {
+	width: 8px;
+	height: 4px;
+	border-left: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(-45deg);
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-state[data-mark="stopped"]::before {
+	background: currentColor;
+}
+
+.chat-composite-bar.session-header-bar .chat-composite-bar-session-state[data-mark="failed"]::before {
+	width: 6px;
+	height: 6px;
+	background: currentColor;
+	transform: rotate(45deg);
+}
+
+.session-header-bar .wisp-header-changes .action-label,
+.session-header-bar .wisp-header-accept .action-label {
+	padding: 0 6px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.session-header-bar .wisp-header-accept button.action-label {
+	margin: 0;
+	border: none;
+	background: none;
+	color: inherit;
+	font: inherit;
+}
+
+.session-header-bar .wisp-header-accept-split {
+	display: inline-flex;
+	align-items: center;
+}
+
+.session-header-bar .wisp-header-accept.dimmed .action-label {
+	opacity: 0.55;
+}
+
+.session-header-bar .wisp-header-accept.primary .wisp-header-accept-split > .action-label:first-child {
+	font-weight: var(--vscode-fontWeight-semibold, 600);
+}
+
+/* IDE moves into the session header, so the title bar copy stays hidden. */
+.monaco-workbench .part.titlebar .open-in-vscode-titlebar-widget {
+	display: none;
+}

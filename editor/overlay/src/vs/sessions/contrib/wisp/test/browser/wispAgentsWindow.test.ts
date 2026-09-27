@@ -18,6 +18,8 @@ import { ISessionsProvidersService } from '../../../../services/sessions/browser
 import { WispSessionsProviderContribution } from '../../../providers/wisp/browser/wispSessionsProvider.contribution.js';
 import { WISP_SESSIONS_PROVIDER_ID, WispSessionsProvider } from '../../../providers/wisp/browser/wispSessionsProvider.js';
 import { hostMenuItems, WISP_RETRY_COMMAND, WISP_SHOW_HOST_MENU_COMMAND, WISP_SHOW_LOG_COMMAND, WISP_SWITCH_HOST_COMMAND } from '../../browser/wispHostMenu.js';
+import { clearSidebarRepositoryFilter, toggleSidebarRepositoryFilter } from '../../browser/wispSidebarFilter.js';
+import { WISP_NO_REPO_FILTER } from '../../../providers/wisp/common/wispThreads.js';
 import { WispNoHostContribution } from '../../browser/wispNoHost.contribution.js';
 import { WISP_NO_HOST_VIEW_ID, WispNoHostView } from '../../browser/wispNoHostView.js';
 import '../../browser/wispThreads.contribution.js';
@@ -51,6 +53,8 @@ suite('wisp: Agents window', () => {
 	}
 
 	suite('sidebar', () => {
+
+		setup(() => clearSidebarRepositoryFilter());
 
 		test('wisp.threads is the sidebar\'s default container in the Agents window and holds the view', () => {
 			const { viewDescriptorService } = services(true);
@@ -91,6 +95,20 @@ suite('wisp: Agents window', () => {
 			]);
 			assert.strictEqual(buttons[0].disabled, false, 'a disabled button would leave the tab order');
 			assert.strictEqual(buttons[0].getAttribute('aria-description'), 'Connect to a host to start a chat.');
+		});
+
+		test('a repository filter hides Projects and offers Show all', () => {
+			toggleSidebarRepositoryFilter(WISP_NO_REPO_FILTER);
+			const { view } = renderSidebar();
+			const banner = query<HTMLElement>(view.element, '.wisp-threads-filter');
+			assert.strictEqual(banner.hidden, false);
+			assert.ok(banner.textContent?.includes('Showing No repo'));
+			assert.ok(banner.textContent?.includes('Show all'));
+			const projects = [...view.element.querySelectorAll<HTMLElement>('section.wisp-threads-section')].find(section => section.querySelector('h2')?.textContent === 'Projects');
+			assert.strictEqual(projects?.hidden, true);
+			banner.querySelector('button')!.click();
+			assert.strictEqual(banner.hidden, true);
+			assert.strictEqual(projects?.hidden, false);
 		});
 
 		test('shows Projects with its empty copy, and hides Repositories and No Repo', () => {

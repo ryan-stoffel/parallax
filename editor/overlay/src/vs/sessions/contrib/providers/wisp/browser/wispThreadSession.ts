@@ -200,7 +200,9 @@ function repoWorkspace(path: string, name: string | undefined, isLocal: boolean)
 		icon: Codicon.repo,
 		folders: [{ root: uri, workingDirectory: uri, name: label, description: undefined }],
 		requiresWorkspaceTrust: false,
-		isVirtualWorkspace: uri.scheme === WISP_REPO_SCHEME,
+		// Upstream's Run button is shown only when the workspace is not virtual. A thread has no
+		// Run task, so every wisp workspace reports virtual and that when clause hides it (#302).
+		isVirtualWorkspace: true,
 	};
 }
 

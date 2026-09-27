@@ -79,6 +79,11 @@ const excludedWorkbenchContributions: ReadonlySet<string> = new Set([
 	'sessions.contrib.onboardingTours.newSessionViewTour',
 	'sessions.contrib.onboardingTours.newSessionViewV2Tour',
 	'sessions.contrib.onboardingTours.newSessionViewV3Tour',
+	// Agents window title bar: the folder pill is registered in this contribution's constructor (#302).
+	'workbench.contrib.agentSessionsTitleBar',
+	// Agents window title bar: Run. Its menu item is hidden by the virtual-workspace when clause;
+	// excluding the contribution keeps the script widget from being built.
+	'workbench.contrib.agentSessions.runScript',
 	// Agents window: Copilot voice mode.
 	'sessions.voiceBridge',
 	'sessions.voiceActiveSession',

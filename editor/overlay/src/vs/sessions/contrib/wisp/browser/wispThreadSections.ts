@@ -21,7 +21,8 @@ import { ISession, SessionStatus } from '../../../services/sessions/common/sessi
 import { ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
 import { WISP_SESSIONS_PROVIDER_ID } from '../../providers/wisp/browser/wispSessionsProvider.js';
 import { compactAge } from '../../providers/wisp/common/wispProjects.js';
-import { placeThreadSessions } from '../../providers/wisp/common/wispThreads.js';
+import { filterThreadPlacement, placeThreadSessions } from '../../providers/wisp/common/wispThreads.js';
+import { sidebarRepositoryFilter } from './wispSidebarFilter.js';
 
 /** How often the rows' ages are refreshed. */
 const AGE_REFRESH_MS = 60_000;
@@ -64,7 +65,7 @@ export class WispThreadSections extends Disposable {
 				session.isArchived.read(reader);
 			}
 			const active = this.sessionsService.activeSession.read(reader)?.resource.toString();
-			const placement = placeThreadSessions(sessions);
+			const placement = filterThreadPlacement(placeThreadSessions(sessions), sidebarRepositoryFilter.read(reader));
 			const focused = parent.ownerDocument.activeElement instanceof HTMLElement && parent.contains(parent.ownerDocument.activeElement)
 				? parent.ownerDocument.activeElement.dataset.session
 				: undefined;

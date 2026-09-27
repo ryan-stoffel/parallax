@@ -183,6 +183,8 @@ export const scenarios: readonly Scenario[] = [
       await sendFirstMessage(context.window);
       await repoThreadRow(context.window).waitFor({ state: 'visible', timeout: 30_000 });
       await chatShows(context.window, agentReply);
+      await context.window.locator('.session-header-bar button.chat-composite-bar-session-workspace', { hasText: projectName }).waitFor({ state: 'visible', timeout: 30_000 });
+      await context.window.locator('.session-header-bar .chat-composite-bar-session-state').waitFor({ state: 'visible', timeout: 30_000 });
       return screenshot(context.window);
     },
   },
