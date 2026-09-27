@@ -19,8 +19,13 @@ defaults:
     shell: bash
 
 jobs:
+  # wispd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (RYA-17).
   rust:
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
@@ -41,9 +46,20 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}
 
       - name: Lint, type-check, build, and test
         run: scripts/ci/check-rust
+
+      # The Ubuntu images may ship only the ssh client.
+      - name: Install sshd
+        if: runner.os == 'Linux'
+        run: |
+          if [ ! -x /usr/sbin/sshd ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends openssh-server
+          fi
 
       # scripts/ci/ssh-localhost sets up key-based ssh to localhost; check-ssh-attach runs
       # `wispd attach` through it (#95). On a runner, "ssh not ready" fails instead of skipping.

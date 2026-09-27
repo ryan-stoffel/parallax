@@ -1,12 +1,12 @@
 #!/bin/sh
-# Sets up key-based `ssh localhost` on a disposable GitHub-hosted macOS runner, for #95's
+# Sets up key-based `ssh localhost` on a disposable GitHub-hosted macOS or Linux runner, for #95's
 # check-ssh-attach. It generates a throwaway client key and host
 # key, runs a user-level sshd of its own on a high port, and points a `Host localhost` block in
 # ~/.ssh/config at its own throwaway identity and known_hosts, so a client's fixed ssh argv
 # (`ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <host> wispd attach`,
 # decision record 0007) never needs its own -i or -o UserKnownHostsFile to use them.
 #
-# Never runs outside a GitHub-hosted runner (a developer's Mac, or a self-hosted runner, keeps its
+# Never runs outside a GitHub-hosted runner (a developer's machine, or a self-hosted runner, keeps its
 # own ~/.ssh untouched: gating on CI=true alone is not enough, since developers and tools often
 # export that too), and never fails the build on its own: whatever happens, it writes
 # WISP_E2E_SSH_READY=true or =false plus a reason to <status-file>, and the caller
@@ -40,7 +40,10 @@ skip() {
   exit 0
 }
 
-[ "$(uname -s)" = "Darwin" ] || skip "not macOS"
+case "$(uname -s)" in
+  Darwin | Linux) ;;
+  *) skip "not macOS or Linux" ;;
+esac
 # GITHUB_ACTIONS and RUNNER_ENVIRONMENT are both set by Actions itself and not something a
 # developer's local CI=true export would set; RUNNER_ENVIRONMENT also keeps this off a self-hosted
 # runner, which is not disposable the way a GitHub-hosted one is.
