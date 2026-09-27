@@ -49,7 +49,7 @@ export async function assertBlankWindow(app: ElectronApplication, window: Page):
   }
 
   const text = (await shell.innerText()).replace(/\s+/g, ' ').trim();
-  if (text !== 'Wisp New Chat Projects Threads Settled (0)') {
+  if (text !== 'Wisp New Thread Projects Threads (0) Settled (0)') {
     throw new Error(`the sidebar text is ${JSON.stringify(text.slice(0, 200))}`);
   }
 

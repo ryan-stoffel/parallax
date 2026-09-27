@@ -1,0 +1,69 @@
+#!/bin/sh
+# Prepare, compile, and launch the development build.
+# From the repo root: scripts/mac-dev
+#
+# The build runs in a subshell. Sourcing this file cannot exit the
+# interactive shell, and `exit` below runs only when this file is the process.
+
+mac_dev_sourced() {
+	if [ -n "${ZSH_EVAL_CONTEXT-}" ]; then
+		case $ZSH_EVAL_CONTEXT in
+			*:file*) return 0 ;;
+		esac
+		return 1
+	fi
+	if [ -n "${BASH_VERSION-}" ]; then
+		[ "${BASH_SOURCE[0]}" != "$0" ]
+		return
+	fi
+	return 1
+}
+
+if [ -n "${ZSH_VERSION-}" ]; then
+	eval 'script_dir=$(CDPATH= cd -- "$(dirname "${(%):-%x}")" && pwd)'
+elif [ -n "${BASH_VERSION-}" ]; then
+	script_dir=$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+else
+	script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+fi || script_dir=
+
+status=1
+if [ -n "$script_dir" ]; then
+	(
+		set -eu
+		if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
+			echo "mac-dev: this launch needs an Apple silicon Mac" >&2
+			exit 1
+		fi
+		root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+		node_home=$HOME/.local/node-v24.18.0-darwin-arm64
+		node_bin=$node_home/bin/node
+		if [ ! -x "$node_bin" ]; then
+			mkdir -p "$HOME/.local"
+			archive=$(mktemp)
+			curl -fsSL "https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-arm64.tar.gz" -o "$archive"
+			tar -xzf "$archive" -C "$HOME/.local"
+			rm -f "$archive"
+		fi
+		[ -x "$node_bin" ]
+		PATH="$node_home/bin:$PATH"
+		export PATH
+		cd "$root"
+		scripts/editor/prepare
+		cd "$root/editor/vscode"
+		# Compile needs node_modules. Install them only on a fresh tree.
+		if [ ! -d node_modules ]; then
+			PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --no-audit --no-fund
+		fi
+		npm run compile
+		./scripts/code.sh
+	)
+	status=$?
+else
+	echo "mac-dev: cannot find the repo" >&2
+fi
+
+if mac_dev_sourced; then
+	return "$status"
+fi
+exit "$status"

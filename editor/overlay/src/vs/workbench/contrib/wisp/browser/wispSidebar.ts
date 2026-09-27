@@ -8,9 +8,9 @@ import { isMacintosh } from '../../../../base/common/platform.js';
 const SVG = 'http://www.w3.org/2000/svg';
 
 /**
- * The first sidebar. Search, New Chat, the project plus, and the footer icons
+ * The first sidebar. Search, New Thread, the project plus, and the footer icons
  * are visible and do nothing. The hide/show control and the section headers work.
- * Lists stay empty.
+ * Lists stay empty. Closing slides the sidebar off the left edge. The button stays.
  */
 export function mountSidebar(shell: HTMLElement): void {
 	shell.classList.add('wisp-shell');
@@ -22,19 +22,25 @@ export function mountSidebar(shell: HTMLElement): void {
 	style.textContent = SIDEBAR_CSS;
 	mainWindow.document.head.appendChild(style);
 
-	const sidebar = el('aside', 'wisp-sidebar');
-	const main = el('div', 'wisp-main');
-	const title = el('div', 'wisp-sidebar-title');
 	const toggle = button('wisp-sidebar-toggle', 'Hide sidebar');
 	toggle.dataset.wispSidebarToggle = '';
 	toggle.append(icon(SIDEBAR_ICON));
+
+	const sidebar = el('aside', 'wisp-sidebar');
+	const main = el('div', 'wisp-main');
+	const title = el('div', 'wisp-sidebar-title');
 	const name = el('span', 'wisp-sidebar-name');
 	name.dataset.wispAppName = '';
 	name.textContent = 'Wisp';
-	title.append(toggle, name);
+	title.append(name);
 
 	const body = el('div', 'wisp-sidebar-body');
-	body.append(searchField(), newChatButton(), section('projects', 'Projects', true, false), section('threads', 'Threads', false, false), section('settled', 'Settled (0)', false, true));
+	body.append(
+		searchField(),
+		newThreadButton(),
+		section('projects', 'Projects', true, false),
+		section('threads', 'Threads (0)', false, true),
+	);
 
 	const footer = el('div', 'wisp-sidebar-footer');
 	footer.append(
@@ -45,14 +51,15 @@ export function mountSidebar(shell: HTMLElement): void {
 		footerButton('Updates', icon(UPDATES_ICON)),
 	);
 
-	sidebar.append(title, body, footer);
-	shell.append(sidebar, main);
+	sidebar.append(title, body, section('settled', 'Settled (0)', false, true), footer);
+	shell.append(toggle, sidebar, main);
 
 	let open = true;
 	toggle.setAttribute('aria-expanded', 'true');
 	toggle.addEventListener('click', () => {
 		open = !open;
-		sidebar.classList.toggle('is-closed', !open);
+		shell.classList.toggle('is-closed', !open);
+		sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
 		toggle.setAttribute('aria-expanded', String(open));
 		toggle.setAttribute('aria-label', open ? 'Hide sidebar' : 'Show sidebar');
 	});
@@ -72,32 +79,32 @@ function searchField(): HTMLElement {
 	return field;
 }
 
-function newChatButton(): HTMLButtonElement {
-	const control = button('wisp-new-chat', 'New Chat');
-	control.dataset.wispNewChat = '';
+function newThreadButton(): HTMLButtonElement {
+	const control = button('wisp-new-thread', 'New Thread');
+	control.dataset.wispNewThread = '';
 	control.append(icon(PLUS_ICON));
-	const label = el('span', 'wisp-new-chat-label');
-	label.textContent = 'New Chat';
+	const label = el('span', 'wisp-new-thread-label');
+	label.textContent = 'New Thread';
 	control.append(label);
 	return control;
 }
 
-function section(id: string, label: string, plus: boolean, settled: boolean): HTMLElement {
-	const root = el('section', 'wisp-section');
+function section(id: string, label: string, plus: boolean, ruled: boolean): HTMLElement {
+	const root = el('section', ruled ? 'wisp-section is-ruled' : 'wisp-section');
 	root.dataset.wispSection = id;
 	const row = el('div', 'wisp-section-row');
-	const toggle = button(settled ? 'wisp-settled-toggle' : 'wisp-section-label', label);
+	const toggle = button('wisp-section-toggle', label);
 	toggle.dataset.wispSectionToggle = '';
 	toggle.setAttribute('aria-expanded', 'true');
-	const chevron = el('span', settled ? 'wisp-chevron is-always' : 'wisp-chevron');
+	const chevron = el('span', 'wisp-chevron is-always');
 	chevron.append(icon(CHEVRON_ICON));
 	const text = el('span', 'wisp-section-text');
 	text.textContent = label;
-	if (settled) {
-		const line = el('span', 'wisp-settled-line');
+	if (ruled) {
+		const line = el('span', 'wisp-section-line');
 		toggle.append(text, line, chevron);
 	} else {
-		toggle.append(chevron, text);
+		toggle.append(text, chevron);
 	}
 	row.append(toggle);
 	if (plus) {
@@ -111,12 +118,7 @@ function section(id: string, label: string, plus: boolean, settled: boolean): HT
 	root.append(row, list);
 
 	let expanded = true;
-	const direction = (): string => {
-		if (!expanded) {
-			return 'right';
-		}
-		return settled ? 'up' : 'down';
-	};
+	const direction = (): string => expanded ? 'down' : 'up';
 	const paint = (): void => {
 		const pointing = direction();
 		root.dataset.chevron = pointing;
@@ -225,9 +227,11 @@ const UPDATES_ICON = [
 
 const SIDEBAR_CSS = `
 .wisp-shell {
+	position: relative;
 	display: flex;
 	box-sizing: border-box;
 	height: 100%;
+	overflow: hidden;
 	background: var(--wisp-main);
 	color: var(--wisp-text);
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -243,6 +247,7 @@ const SIDEBAR_CSS = `
 	--wisp-faint: #6F6F6F;
 	--wisp-field: #141414;
 	--wisp-line: #3A3A3A;
+	--wisp-edge: #3A3A3A;
 	--wisp-hover: #1A1A1A;
 	--wisp-icon: #C6C6C6;
 	color-scheme: dark;
@@ -255,49 +260,63 @@ const SIDEBAR_CSS = `
 	--wisp-faint: #8A8A8A;
 	--wisp-field: #F5F5F5;
 	--wisp-line: #E3E3E3;
+	--wisp-edge: #D0D0D0;
 	--wisp-hover: #F2F2F2;
 	--wisp-icon: #3C3C3C;
 	color-scheme: light;
 }
 .wisp-shell *, .wisp-shell *::before, .wisp-shell *::after { box-sizing: border-box; }
 .wisp-sidebar {
+	position: absolute;
+	z-index: 1;
+	top: 0;
+	bottom: 0;
+	left: 0;
 	display: flex;
 	flex-direction: column;
 	width: 260px;
-	flex: 0 0 260px;
-	min-height: 0;
 	background: var(--wisp-sidebar);
 	color: var(--wisp-text);
+	border-right: 1px solid var(--wisp-edge);
+	transform: translateX(0);
+	transition: transform 80ms linear;
 }
-.wisp-sidebar.is-closed {
-	width: auto;
-	flex-basis: auto;
-	background: transparent;
+.wisp-shell.is-closed .wisp-sidebar { transform: translateX(-100%); }
+.wisp-main {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin-left: 260px;
+	background: var(--wisp-main);
+	-webkit-app-region: drag;
 }
-.wisp-sidebar.is-closed .wisp-sidebar-name,
-.wisp-sidebar.is-closed .wisp-sidebar-body,
-.wisp-sidebar.is-closed .wisp-sidebar-footer { display: none; }
-.wisp-main { flex: 1 1 auto; min-width: 0; background: var(--wisp-main); -webkit-app-region: drag; }
+.wisp-shell.is-closed .wisp-main { margin-left: 0; }
 .wisp-sidebar-title {
 	display: flex;
 	align-items: center;
-	gap: 8px;
 	height: 40px;
-	padding: 0 12px 0 10px;
+	padding: 0 12px 0 46px;
 	flex: 0 0 auto;
 	-webkit-app-region: drag;
 }
-.wisp-platform-mac .wisp-sidebar-title { padding-left: 78px; }
-.wisp-sidebar-title button, .wisp-sidebar-title span { -webkit-app-region: no-drag; }
-.wisp-sidebar-toggle, .wisp-section-plus, .wisp-footer-button, .wisp-section-label, .wisp-settled-toggle, .wisp-new-chat {
+.wisp-platform-mac .wisp-sidebar-title { padding-left: 114px; }
+.wisp-sidebar-title span { -webkit-app-region: no-drag; }
+.wisp-sidebar-toggle {
+	position: absolute;
+	z-index: 2;
+	top: 6px;
+	left: 10px;
+	-webkit-app-region: no-drag;
+}
+.wisp-platform-mac .wisp-sidebar-toggle { left: 78px; }
+.wisp-sidebar-toggle, .wisp-section-plus, .wisp-footer-button, .wisp-section-toggle, .wisp-new-thread {
 	border: 0;
 	background: transparent;
 	color: inherit;
 	font: inherit;
 	padding: 0;
 }
-.wisp-sidebar-toggle, .wisp-section-label, .wisp-settled-toggle { cursor: pointer; }
-.wisp-new-chat, .wisp-section-plus, .wisp-footer-button, .wisp-search input { cursor: default; }
+.wisp-sidebar-toggle, .wisp-section-toggle { cursor: pointer; }
+.wisp-new-thread, .wisp-section-plus, .wisp-footer-button, .wisp-search input { cursor: default; }
 .wisp-sidebar-toggle, .wisp-section-plus, .wisp-footer-button {
 	display: grid;
 	place-items: center;
@@ -306,10 +325,10 @@ const SIDEBAR_CSS = `
 	border-radius: 6px;
 	color: var(--wisp-icon);
 }
-.wisp-sidebar-toggle:hover, .wisp-section-plus:hover, .wisp-footer-button:hover, .wisp-section-label:hover, .wisp-settled-toggle:hover {
+.wisp-sidebar-toggle:hover, .wisp-section-plus:hover, .wisp-footer-button:hover {
 	background: var(--wisp-hover);
 }
-.wisp-sidebar-toggle svg, .wisp-search svg, .wisp-new-chat svg, .wisp-section-plus svg, .wisp-footer-button svg {
+.wisp-sidebar-toggle svg, .wisp-search svg, .wisp-new-thread svg, .wisp-section-plus svg, .wisp-footer-button svg {
 	width: 16px;
 	height: 16px;
 	display: block;
@@ -349,7 +368,7 @@ const SIDEBAR_CSS = `
 	user-select: text;
 }
 .wisp-search input::placeholder { color: var(--wisp-faint); }
-.wisp-new-chat {
+.wisp-new-thread {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -361,21 +380,23 @@ const SIDEBAR_CSS = `
 	color: var(--wisp-text);
 	text-align: left;
 }
-.wisp-section { margin: 0 8px 2px; }
+.wisp-section { margin: 0 8px 2px; flex: 0 0 auto; }
 .wisp-section-row { display: flex; align-items: center; min-height: 28px; }
-.wisp-section-label, .wisp-settled-toggle {
+.wisp-section-toggle {
 	display: flex;
 	align-items: center;
 	gap: 4px;
 	min-height: 28px;
 	padding: 0 6px;
-	border-radius: 6px;
+	border-radius: 0;
+	background: transparent;
 	color: var(--wisp-muted);
 	font-size: 12px;
 	font-weight: 500;
 }
-.wisp-section-label { flex: 0 1 auto; }
-.wisp-settled-toggle { width: 100%; }
+.wisp-section-toggle:hover, .wisp-section-toggle:focus-visible { background: transparent; }
+.wisp-section:not(.is-ruled) .wisp-section-toggle { flex: 0 1 auto; }
+.wisp-section.is-ruled .wisp-section-toggle { width: 100%; }
 .wisp-section-text { white-space: nowrap; }
 .wisp-chevron {
 	display: grid;
@@ -383,15 +404,13 @@ const SIDEBAR_CSS = `
 	width: 12px;
 	height: 12px;
 	flex: 0 0 12px;
-	opacity: 0;
+	opacity: 1;
 }
 .wisp-chevron svg { width: 12px; height: 12px; display: block; }
-.wisp-section-label:hover .wisp-chevron, .wisp-section-label:focus-visible .wisp-chevron, .wisp-chevron.is-always { opacity: 1; }
 .wisp-chevron[data-direction="down"] { transform: none; }
-.wisp-chevron[data-direction="right"] { transform: rotate(-90deg); }
 .wisp-chevron[data-direction="up"] { transform: rotate(180deg); }
 .wisp-section-plus { margin-left: auto; color: var(--wisp-muted); }
-.wisp-settled-line { flex: 1 1 auto; height: 1px; margin: 0 8px; background: var(--wisp-line); }
+.wisp-section-line { flex: 1 1 auto; height: 1px; margin: 0 8px; background: var(--wisp-line); }
 .wisp-section-list[hidden] { display: none; }
 .wisp-sidebar-footer {
 	display: flex;
@@ -399,7 +418,6 @@ const SIDEBAR_CSS = `
 	gap: 2px;
 	flex: 0 0 auto;
 	padding: 8px 10px 10px;
-	margin-top: auto;
 }
 .wisp-sidebar-footer-spacer { flex: 1 1 auto; }
 .wisp-footer-button[data-wisp-footer="Profile"] svg { width: 18px; height: 18px; }
