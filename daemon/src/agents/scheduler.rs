@@ -317,6 +317,45 @@ async fn pass(daemon: &Arc<Daemon>) {
     }
 }
 
+/// Records `created`'s worktree and moves `run_id` out of `queued`, in one store job, or `None` if
+/// it wasn't `queued` any more by the time this ran. Split out of `promote` only to keep that
+/// function under clippy's line count.
+async fn record_promotion(
+    daemon: &Arc<Daemon>,
+    run_id: RunId,
+    scope_path: &str,
+    created: &crate::worktree::CreatedWorktree,
+    backend: &str,
+    account_id: &str,
+) -> Result<Option<(wisp_store::Run, wisp_store::Worktree)>, ErrorObject> {
+    let worktree_fields = WorktreeFields {
+        repo_path: scope_path.to_owned(),
+        path: created.path.to_string_lossy().into_owned(),
+        branch: created.branch.clone(),
+        base: created.base.clone(),
+        git_dir: created.git_dir.to_string_lossy().into_owned(),
+    };
+    let state = RunState {
+        status: STARTING.to_owned(),
+        account_id: account_id.to_owned(),
+        ..RunState::default()
+    };
+    let backend = backend.to_owned();
+    store(daemon, move |db| {
+        let worktree = db
+            .create_worktree(run_id.into(), &worktree_fields)
+            .map_err(|error| store_error(&error))?;
+        match db
+            .start_queued_run(run_id.into(), &backend, &state)
+            .map_err(|error| store_error(&error))?
+        {
+            Some(row) => Ok(Some((row, worktree))),
+            None => Ok(None),
+        }
+    })
+    .await
+}
+
 /// Tries to start `run_id`, whose project [`pass`] already reserved a slot for. Always resolves
 /// that reservation before returning, on every path: releases it if the run isn't started here
 /// (already resolved by a concurrent caller, or its account is rate limited — the one case that
@@ -376,38 +415,15 @@ async fn promote(
                 return Ok(());
             }
         };
-    let worktree_fields = WorktreeFields {
-        repo_path: scope_path.clone(),
-        path: created.path.to_string_lossy().into_owned(),
-        branch: created.branch.clone(),
-        base: created.base.clone(),
-        git_dir: created.git_dir.to_string_lossy().into_owned(),
-    };
     let backend = prepared.resolved.backend().name().to_owned();
-    let state = RunState {
-        status: STARTING.to_owned(),
-        account_id: account_id.clone(),
-        ..RunState::default()
-    };
-    let started = {
-        let backend = backend.clone();
-        store(daemon, move |db| {
-            let worktree = db
-                .create_worktree(run_id.into(), &worktree_fields)
-                .map_err(|error| store_error(&error))?;
-            let row = db
-                .start_queued_run(run_id.into(), &backend, &state)
-                .map_err(|error| store_error(&error))?;
-            Ok((row, worktree))
-        })
-        .await
-    };
-    let row = match started {
-        Ok((Some(row), worktree)) => (row, worktree),
+    let recorded =
+        record_promotion(daemon, run_id, &scope_path, &created, &backend, &account_id).await;
+    let (row, worktree) = match recorded {
+        Ok(Some(recorded)) => recorded,
         // The `WHERE status = 'queued'` guard didn't match: cancelled between the check above and
         // here despite holding `start_guard` (defensive; `agents::cancel`'s own queued path takes
         // the same guard, so this should not happen in practice).
-        Ok((None, _)) => {
+        Ok(None) => {
             release();
             remove_orphaned_worktree(daemon, run_id, &scope_path, &created).await;
             return Ok(());
@@ -418,7 +434,6 @@ async fn promote(
             return Err(error);
         }
     };
-    let (row, worktree) = row;
     agents.scheduler.clear_reason(run_id);
     let mut actor = Actor::new(
         Arc::clone(daemon),
