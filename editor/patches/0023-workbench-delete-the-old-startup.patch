@@ -1,0 +1,312 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+Date: Sun, 27 Sep 2026 05:34:17 +0000
+Subject: [PATCH] workbench: delete the old startup
+
+startup() only opens the empty window. The code that built the sidebar,
+activity bar, panel, title bar, editor, and sessions surface is not left
+under a return. The native window has no title bar or traffic lights.
+
+Issue #316.
+
+diff --git a/src/vs/platform/windows/electron-main/windowImpl.ts b/src/vs/platform/windows/electron-main/windowImpl.ts
+index 4a4172f5834ed5b9452363ad94fcd4ebb5333570..41df00d60e40552a244745c33589ca16ce8a9ece 100644
+--- a/src/vs/platform/windows/electron-main/windowImpl.ts
++++ b/src/vs/platform/windows/electron-main/windowImpl.ts
+@@ -803,6 +803,12 @@ export class CodeWindow extends BaseWindow implements ICodeWindow {
+ 
+ 			this._id = this._win.id;
+ 			this.setWin(this._win, options);
++			// wisp: frameless windows on macOS still draw traffic lights until
++			// this is called, and load() must not put the product name back.
++			if (isMacintosh) {
++				this._win.setWindowButtonVisibility(false);
++			}
++			this._win.setTitle('');
+ 
+ 			// Apply some state after window creation
+ 			this.applyState(this.windowState, hasMultipleDisplays);
+@@ -1264,7 +1270,11 @@ export class CodeWindow extends BaseWindow implements ICodeWindow {
+ 				this.setRepresentedFilename('');
+ 			}
+ 
+-			this._win.setTitle(this.productService.nameLong);
++			// wisp: no native title text (#316).
++			this._win.setTitle('');
++			if (isMacintosh) {
++				this._win.setWindowButtonVisibility(false);
++			}
+ 		}
+ 
+ 		// Update configuration values based on our window context
+diff --git a/src/vs/platform/windows/electron-main/windows.ts b/src/vs/platform/windows/electron-main/windows.ts
+index 60c1b4390edf37be9be4070e7c13d19d238b0dc6..51e59137645ee791daf723adbd42208569392313 100644
+--- a/src/vs/platform/windows/electron-main/windows.ts
++++ b/src/vs/platform/windows/electron-main/windows.ts
+@@ -246,10 +246,14 @@ export function defaultBrowserWindowOptions(accessor: ServicesAccessor, windowSt
+ 		options.minHeight = 1;
+ 	}
+ 
+-	// wisp: no native title bar or traffic lights. The in-page title bar is not created.
++	// wisp: no native title bar, title text, or traffic lights. The in-page
++	// title bar is not created. `titleBarStyle: 'hidden'` would keep the
++	// traffic lights, so that property is removed rather than left set.
+ 	options.frame = false;
+-	options.titleBarStyle = undefined;
+-	options.titleBarOverlay = undefined;
++	delete options.titleBarStyle;
++	delete options.titleBarOverlay;
++	options.title = '';
++	options.trafficLightPosition = { x: -150, y: -150 };
+ 	options.minWidth = 1;
+ 	options.minHeight = 1;
+ 
+diff --git a/src/vs/sessions/browser/workbench.ts b/src/vs/sessions/browser/workbench.ts
+index 40eee72ad4c6477131de6dcc8785fda0ea7ab475..c4e41c8587b709232dbc84782d08c1909120fdf1 100644
+--- a/src/vs/sessions/browser/workbench.ts
++++ b/src/vs/sessions/browser/workbench.ts
+@@ -37,19 +37,12 @@ import { IStorageService, WillSaveStateReason, StorageScope, StorageTarget } fro
+ import { IConfigurationChangeEvent, IConfigurationService } from '../../platform/configuration/common/configuration.js';
+ import { IHostService } from '../../workbench/services/host/browser/host.js';
+ import { IDialogService } from '../../platform/dialogs/common/dialogs.js';
+-import { INotificationService } from '../../platform/notification/common/notification.js';
+ import { NotificationService } from '../../workbench/services/notification/common/notificationService.js';
+-import { IHoverService, WorkbenchHoverDelegate } from '../../platform/hover/browser/hover.js';
+-import { setHoverDelegateFactory } from '../../base/browser/ui/hover/hoverDelegateFactory.js';
+-import { setBaseLayerHoverDelegate } from '../../base/browser/ui/hover/hoverDelegate2.js';
+-import { Registry } from '../../platform/registry/common/platform.js';
+-import { IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions } from '../../workbench/common/contributions.js';
+-import { IEditorFactoryRegistry, EditorExtensions, IEditorWillOpenEvent } from '../../workbench/common/editor.js';
++import { IEditorWillOpenEvent } from '../../workbench/common/editor.js';
+ import { alert, setARIAContainer } from '../../base/browser/ui/aria/aria.js';
+ import { localize } from '../../nls.js';
+ import { FontMeasurements } from '../../editor/browser/config/fontMeasurements.js';
+ import { createBareFontInfoFromRawSettings } from '../../editor/common/config/fontInfoFromSettings.js';
+-import { WorkbenchContextKeysHandler } from '../../workbench/browser/contextkeys.js';
+ import { PixelRatio } from '../../base/browser/pixelRatio.js';
+ import { AccessibilityProgressSignalScheduler } from '../../platform/accessibilitySignal/browser/progressAccessibilitySignalScheduler.js';
+ import { setProgressAccessibilitySignalScheduler } from '../../base/browser/ui/progressbar/progressAccessibilitySignal.js';
+@@ -62,18 +55,16 @@ import { registerNotificationCommands } from '../../workbench/browser/parts/noti
+ import { CommandsRegistry } from '../../platform/commands/common/commands.js';
+ import { NotificationsToasts } from '../../workbench/browser/parts/notifications/notificationsToasts.js';
+ import { COMPACT_NOTIFICATION_ROW_HEIGHT, DEFAULT_NOTIFICATION_ROW_HEIGHT, setNotificationRowHeight } from '../../workbench/browser/parts/notifications/notificationsViewer.js';
+-import { IMarkdownRendererService } from '../../platform/markdown/browser/markdownRenderer.js';
+-import { EditorMarkdownCodeBlockRenderer } from '../../editor/browser/widget/markdownRenderer/browser/editorMarkdownCodeBlockRenderer.js';
+ import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
+ import { TitleService } from './parts/titlebarPart.js';
+ import { EDITOR_PART_DEFAULT_WIDTH, EDITOR_PART_MINIMUM_WIDTH } from './parts/editorPartSizing.js';
+ import { IContextKey, IContextKeyService } from '../../platform/contextkey/common/contextkey.js';
+-import { CustomViewVisibleContext, EditorMaximizedContext, IsPhoneLayoutContext, SinglePaneLayoutEnabledContext } from '../common/contextkeys.js';
++import { CustomViewVisibleContext } from '../common/contextkeys.js';
+ import { SessionsLayoutPolicy } from './layoutPolicy.js';
+ import { AGENTS_PART_CARD_CLASS } from './parts/agentsPartCard.js';
+ import { MobileNavigationStack } from './mobileNavigationStack.js';
+ import { MobileTitlebarPart } from './parts/mobile/mobileTitlebarPart.js';
+-import { getMobileViewportDimension, IMobileVisualViewport } from './parts/mobile/mobileVisualViewport.js';
++import { getMobileViewportDimension } from './parts/mobile/mobileVisualViewport.js';
+ import { autorun } from '../../base/common/observable.js';
+ import { ISessionsService } from '../services/sessions/browser/sessionsService.js';
+ import { ISessionsPartService } from '../services/sessions/browser/sessionsPartService.js';
+@@ -550,97 +541,8 @@ export class Workbench extends Disposable implements IAgentWorkbenchLayoutServic
+ 			// Services
+ 			const instantiationService = this.initServices(this.serviceCollection);
+ 
+-			instantiationService.invokeFunction(accessor => {
+-				// wisp: boot is an empty window. Parts are not created (#316).
+-				openBlankWorkbench(this.parent, this.mainContainer, instantiationService);
+-				return;
+-
+-				const lifecycleService = accessor.get(ILifecycleService);
+-				const storageService = accessor.get(IStorageService);
+-				const configurationService = accessor.get(IConfigurationService);
+-				const hostService = accessor.get(IHostService);
+-				const hoverService = accessor.get(IHoverService);
+-				const dialogService = accessor.get(IDialogService);
+-				const notificationService = accessor.get(INotificationService) as NotificationService;
+-				const markdownRendererService = accessor.get(IMarkdownRendererService);
+-
+-				// On web, the configuration service needs access to the
+-				// instantiation service for dynamic configuration resolution.
+-				if (isWeb && typeof (configurationService as IConfigurationService & { acquireInstantiationService?(i: IInstantiationService): void }).acquireInstantiationService === 'function') {
+-					(configurationService as IConfigurationService & { acquireInstantiationService(i: IInstantiationService): void }).acquireInstantiationService(instantiationService);
+-				}
+-
+-				// Set code block renderer for markdown rendering
+-				markdownRendererService.setDefaultCodeBlockRenderer(instantiationService.createInstance(EditorMarkdownCodeBlockRenderer));
+-
+-				// Default Hover Delegate must be registered before creating any workbench/layout components
+-				setHoverDelegateFactory((placement, enableInstantHover) => instantiationService.createInstance(WorkbenchHoverDelegate, placement, { instantHover: enableInstantHover }, {}));
+-				setBaseLayerHoverDelegate(hoverService);
+-
+-				// Layout
+-				this.initLayout(accessor);
+-
+-				// Registries - this creates and registers all parts
+-				Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).start(accessor);
+-				Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).start(accessor);
+-
+-				// Context Keys
+-				this._register(instantiationService.createInstance(WorkbenchContextKeysHandler));
+-
+-				// Editor Maximized Context Key
+-				const editorMaximizedContext = EditorMaximizedContext.bindTo(accessor.get(IContextKeyService));
+-				this._register(this.onDidChangeEditorMaximized(() => {
+-					editorMaximizedContext.set(this.isEditorMaximized());
+-				}));
+-
+-				// Phone Layout Context Key
+-				const contextKeyService = accessor.get(IContextKeyService);
+-				const isPhoneLayoutCtx = IsPhoneLayoutContext.bindTo(contextKeyService);
+-				this._register(autorun(reader => {
+-					isPhoneLayoutCtx.set(this.layoutPolicy.viewportClass.read(reader) === 'phone');
+-				}));
+-
+-				SinglePaneLayoutEnabledContext.bindTo(contextKeyService).set(this.isSinglePaneLayoutEnabled);
+-				this.logWindowLayout(accessor.get(ITelemetryService));
+-
+-				// Virtual keyboard tracking (visualViewport): publishes the
+-				// keyboard height as an observable, mirrors it onto the
+-				// `--vscode-keyboard-height` CSS variable on the main
+-				// container, and drives the `KeyboardVisibleContext`
+-				// context key. The service is an eager singleton, so
+-				// resolving it here is what triggers its constructor —
+-				// the registry hands ownership/disposal to the
+-				// instantiation service so we don't `_register` it.
+-				accessor.get(IMobileVisualViewport);
+-
+-				// Orientation changes produce a window `resize` event which
+-				// is already handled by `registerLayoutListeners()`. No
+-				// separate matchMedia listener is needed — the previous
+-				// implementation caused a redundant second layout.
+-
+-				// Register Listeners
+-				this.registerListeners(lifecycleService, storageService, configurationService, hostService, dialogService);
+-
+-				// Render Workbench
+-				this.renderWorkbench(instantiationService, notificationService, storageService, configurationService);
+-
+-				// Workbench Layout
+-				this.createWorkbenchLayout();
+-
+-				// Create mobile navigation after grid exists (so DOM order is correct)
+-				if (this.layoutPolicy.viewportClass.get() === 'phone') {
+-					this.createMobileTitlebar();
+-				}
+-
+-				// Workbench Management
+-				this.createWorkbenchManagement(instantiationService);
+-
+-				// Layout
+-				this.layout();
+-
+-				// Restore
+-				this.restore(lifecycleService);
+-			});
++			// wisp: boot is an empty window. Parts are not created (#316).
++			openBlankWorkbench(this.parent, this.mainContainer, instantiationService);
+ 
+ 			return instantiationService;
+ 		} catch (error) {
+diff --git a/src/vs/workbench/browser/workbench.ts b/src/vs/workbench/browser/workbench.ts
+index 0607b379e6f91fa2d6c1836c1c66cb6a50307bb3..719a20cd41ad9d101c1cb85483fb37b493f74514 100644
+--- a/src/vs/workbench/browser/workbench.ts
++++ b/src/vs/workbench/browser/workbench.ts
+@@ -11,10 +11,7 @@ import { isFirefox, isSafari, isChrome } from '../../base/browser/browser.js';
+ import { mark } from '../../base/common/performance.js';
+ import { openBlankWorkbench } from '../contrib/wisp/browser/wispBlankWindow.js';
+ import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
+-import { Registry } from '../../platform/registry/common/platform.js';
+ import { isWindows, isLinux, isWeb, isNative, isMacintosh } from '../../base/common/platform.js';
+-import { IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions } from '../common/contributions.js';
+-import { IEditorFactoryRegistry, EditorExtensions } from '../common/editor.js';
+ import { getSingletonServiceDescriptors } from '../../platform/instantiation/common/extensions.js';
+ import { Position, Parts, IWorkbenchLayoutService, positionToString } from '../services/layout/browser/layoutService.js';
+ import { IStorageService, WillSaveStateReason, StorageScope, StorageTarget } from '../../platform/storage/common/storage.js';
+@@ -22,7 +19,6 @@ import { IConfigurationChangeEvent, IConfigurationService } from '../../platform
+ import { IInstantiationService } from '../../platform/instantiation/common/instantiation.js';
+ import { ServiceCollection } from '../../platform/instantiation/common/serviceCollection.js';
+ import { LifecyclePhase, ILifecycleService, WillShutdownEvent } from '../services/lifecycle/common/lifecycle.js';
+-import { INotificationService } from '../../platform/notification/common/notification.js';
+ import { NotificationService } from '../services/notification/common/notificationService.js';
+ import { NotificationsCenter } from './parts/notifications/notificationsCenter.js';
+ import { NotificationsAlerts } from './parts/notifications/notificationsAlerts.js';
+@@ -33,7 +29,6 @@ import { setARIAContainer } from '../../base/browser/ui/aria/aria.js';
+ import { FontMeasurements } from '../../editor/browser/config/fontMeasurements.js';
+ import { createBareFontInfoFromRawSettings } from '../../editor/common/config/fontInfoFromSettings.js';
+ import { createUnexpectedErrorHandler, ILogService } from '../../platform/log/common/log.js';
+-import { WorkbenchContextKeysHandler } from './contextkeys.js';
+ import { coalesce } from '../../base/common/arrays.js';
+ import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
+ import { Layout } from './layout.js';
+@@ -41,15 +36,10 @@ import { IHostService } from '../services/host/browser/host.js';
+ import { IDialogService } from '../../platform/dialogs/common/dialogs.js';
+ import { mainWindow } from '../../base/browser/window.js';
+ import { PixelRatio } from '../../base/browser/pixelRatio.js';
+-import { IHoverService, WorkbenchHoverDelegate } from '../../platform/hover/browser/hover.js';
+-import { setHoverDelegateFactory } from '../../base/browser/ui/hover/hoverDelegateFactory.js';
+-import { setBaseLayerHoverDelegate } from '../../base/browser/ui/hover/hoverDelegate2.js';
+ import { AccessibilityProgressSignalScheduler } from '../../platform/accessibilitySignal/browser/progressAccessibilitySignalScheduler.js';
+ import { setProgressAccessibilitySignalScheduler } from '../../base/browser/ui/progressbar/progressAccessibilitySignal.js';
+ import { AccessibleViewRegistry } from '../../platform/accessibility/browser/accessibleViewRegistry.js';
+ import { NotificationAccessibleView } from './parts/notifications/notificationAccessibleView.js';
+-import { IMarkdownRendererService } from '../../platform/markdown/browser/markdownRenderer.js';
+-import { EditorMarkdownCodeBlockRenderer } from '../../editor/browser/widget/markdownRenderer/browser/editorMarkdownCodeBlockRenderer.js';
+ 
+ export interface IWorkbenchOptions {
+ 
+@@ -118,53 +108,8 @@ export class Workbench extends Layout {
+ 			// Services
+ 			const instantiationService = this.initServices(this.serviceCollection);
+ 
+-			instantiationService.invokeFunction(accessor => {
+-				// wisp: boot is an empty window. Parts are not created (#316).
+-				openBlankWorkbench(this.parent, this.mainContainer, instantiationService);
+-				return;
+-
+-				const lifecycleService = accessor.get(ILifecycleService);
+-				const storageService = accessor.get(IStorageService);
+-				const configurationService = accessor.get(IConfigurationService);
+-				const hostService = accessor.get(IHostService);
+-				const hoverService = accessor.get(IHoverService);
+-				const dialogService = accessor.get(IDialogService);
+-				const notificationService = accessor.get(INotificationService) as NotificationService;
+-				const markdownRendererService = accessor.get(IMarkdownRendererService);
+-
+-				// Set code block renderer for markdown rendering
+-				markdownRendererService.setDefaultCodeBlockRenderer(instantiationService.createInstance(EditorMarkdownCodeBlockRenderer));
+-
+-				// Default Hover Delegate must be registered before creating any workbench/layout components
+-				// as these possibly will use the default hover delegate
+-				setHoverDelegateFactory((placement, enableInstantHover) => instantiationService.createInstance(WorkbenchHoverDelegate, placement, { instantHover: enableInstantHover }, {}));
+-				setBaseLayerHoverDelegate(hoverService);
+-
+-				// Layout
+-				this.initLayout(accessor);
+-
+-				// Registries
+-				Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).start(accessor);
+-				Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).start(accessor);
+-
+-				// Context Keys
+-				this._register(instantiationService.createInstance(WorkbenchContextKeysHandler));
+-
+-				// Register Listeners
+-				this.registerListeners(lifecycleService, storageService, configurationService, hostService, dialogService);
+-
+-				// Render Workbench
+-				this.renderWorkbench(instantiationService, notificationService, storageService, configurationService);
+-
+-				// Workbench Layout
+-				this.createWorkbenchLayout();
+-
+-				// Layout
+-				this.layout();
+-
+-				// Restore
+-				this.restore(lifecycleService);
+-			});
++			// wisp: boot is an empty window. Parts are not created (#316).
++			openBlankWorkbench(this.parent, this.mainContainer, instantiationService);
+ 
+ 			return instantiationService;
+ 		} catch (error) {

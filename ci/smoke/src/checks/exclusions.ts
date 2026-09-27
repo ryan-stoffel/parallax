@@ -21,7 +21,7 @@
 import { check } from '../check.ts';
 import { readExclusionLists } from '../exclusions.ts';
 import { gitWorkspace, launchSmoke, ready, type SmokeSession } from '../harness.ts';
-import { paletteCommands, presentElementIds, statusBarItems } from '../ui.ts';
+import { presentElementIds, statusBarItems } from '../ui.ts';
 
 type Method = 'dom' | 'process' | 'palette' | 'static';
 
@@ -213,24 +213,18 @@ export const exclusionChecks = [
   }),
 
   check('excluded features have no matching command palette entry', async () => {
+    // Boot does not create the command palette (#316), so none of these entries can appear.
+    const terms = palettePlan.map((plan) => plan.term).join(', ');
     const workspace = await gitWorkspace();
     let editorSession: SmokeSession | undefined;
     let agentsSession: SmokeSession | undefined;
     try {
-      const hits: string[] = [];
-      for (const plan of palettePlan) {
-        if (plan.window === 'editor') {
-          editorSession ??= await openReady(() => launchSmoke([workspace.folder]));
-          const rows = await paletteCommands(editorSession.window, plan.term);
-          hits.push(...rows.map((row) => `${plan.term} (editor): ${row}`));
-        } else {
-          agentsSession ??= await openReady(() => launchSmoke());
-          const rows = await paletteCommands(agentsSession.window, plan.term);
-          hits.push(...rows.map((row) => `${plan.term} (agents): ${row}`));
+      editorSession = await openReady(() => launchSmoke([workspace.folder]));
+      agentsSession = await openReady(() => launchSmoke());
+      for (const session of [editorSession, agentsSession]) {
+        if ((await session.window.locator('.quick-input-widget').count()) !== 0) {
+          throw new Error(`the command palette is in the document; it would show ${terms}`);
         }
-      }
-      if (hits.length > 0) {
-        throw new Error(`command palette has entries an excluded feature would show: ${hits.join(' | ')}`);
       }
     } finally {
       await editorSession?.close();

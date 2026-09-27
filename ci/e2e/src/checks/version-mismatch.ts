@@ -1,23 +1,19 @@
-// A fake wispd that answers `initialize` with a higher protocol version shows the incompatible
-// state (wispdClient.ts's handshake, 0007's versioning rules).
+// A fake wispd that speaks a newer protocol used to show an incompatible host chip.
+// Boot no longer creates that chip, so the launch is a blank window (#316).
 import { join } from 'node:path';
+import { assertBlankWindow } from '../../../screenshots/src/blankWindow.ts';
 import { check } from '../check.ts';
-import { TIMEOUT_MS, launchWithWispd, ready } from '../harness.ts';
-import { waitForHostKind } from '../wispUi.ts';
+import { launchWithWispd, ready } from '../harness.ts';
 
 const fakeWispd = join(import.meta.dirname, '..', '..', 'fixtures', 'fake-wispd-incompatible.mjs');
 
 export const versionMismatchChecks = [
-  check('a wispd speaking a newer protocol shows the incompatible state', async () => {
+  check('a plain launch opens a blank window and does not show a protocol error', async () => {
     const session = await launchWithWispd(fakeWispd);
     try {
       const { app, window } = session;
       await ready({ app, window });
-
-      const status = await waitForHostKind(window, ['error'], TIMEOUT_MS);
-      if (status.kind !== 'error' || !status.state.toLowerCase().includes('update')) {
-        throw new Error(`host chip is ${JSON.stringify(status)}, expected the incompatible ("needs an update") state`);
-      }
+      await assertBlankWindow(app, window);
     } finally {
       await session.close();
     }

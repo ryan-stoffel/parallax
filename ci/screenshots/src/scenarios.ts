@@ -1,6 +1,7 @@
 import { cp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fakeClaudeEnv } from './agents.ts';
+import { assertBlankWindow } from './blankWindow.ts';
 import { notAvailable, screenshot, type Scenario } from './harness.ts';
 
 const workspace = join(import.meta.dirname, '..', 'fixtures', 'workspace');
@@ -11,26 +12,6 @@ const openFile = 'tasks.ts';
  * route). An unresolvable name can take a DNS timeout of 30 s or more, longer than the handshake.
  */
 const unreachableHost = 'ssh://127.0.0.1:9';
-
-/** Chrome that must not exist in the document. A hidden node still counts. */
-const removedChrome = [
-	'.part',
-	'.part.titlebar',
-	'.part.activitybar',
-	'.part.sidebar',
-	'.part.panel',
-	'.part.auxiliarybar',
-	'.part.statusbar',
-	'.part.editor',
-	'.tabs-container',
-	'.command-center',
-	'.editor-group-watermark',
-	'.monaco-parts-splash',
-	'.welcome',
-	'textarea',
-	'h1',
-	'h2',
-];
 
 const chromeGone = notAvailable('The boot window has no chrome, so this view is not on screen.');
 
@@ -45,18 +26,8 @@ export const scenarios: readonly Scenario[] = [
 	{
 		name: 'startup',
 		title: 'Blank window',
-		async run({ window }) {
-			await window.locator('.monaco-workbench').waitFor();
-			for (const selector of removedChrome) {
-				const count = await window.locator(selector).count();
-				if (count !== 0) {
-					throw new Error(`${selector} is still in the document (${String(count)})`);
-				}
-			}
-			const text = (await window.locator('.monaco-workbench').innerText()).replace(/\s+/g, ' ').trim();
-			if (text.length > 0) {
-				throw new Error(`the window is not blank: ${JSON.stringify(text.slice(0, 200))}`);
-			}
+		async run({ app, window }) {
+			await assertBlankWindow(app, window);
 			return screenshot(window);
 		},
 	},
