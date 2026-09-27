@@ -1,6 +1,6 @@
 # 0006: Release versions, packaging, and signing
 
-- Status: accepted
+- Status: accepted; its arm64-only releases are extended by [0023](0023-cross-platform.md): macOS arm64, plus Linux and Windows on x86_64 and arm64
 - Date: 2026-09-24
 - Issue: #5
 

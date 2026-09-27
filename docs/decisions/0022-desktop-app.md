@@ -1,6 +1,6 @@
 # 0022: The desktop app's stack and layout
 
-- Status: accepted
+- Status: accepted; how wispd listens on Linux and Windows, and which `ssh` the app runs on Windows, which this record deferred, are in [0023](0023-cross-platform.md)
 - Date: 2026-09-27
 - Issue: RYA-6
 

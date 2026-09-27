@@ -9,7 +9,7 @@
 `docs/PLAN.md` lists Windows and Linux as non-goals, and `wispd` builds only on macOS. The desktop app (0022) targets all three OSes, and a host can be any of them. These parts of `daemon/` are macOS-only today:
 
 - **Transport:** a Unix socket with `getpeereid`, and a `getconf DARWIN_USER_TEMP_DIR` fallback for long paths (0007).
-- **Data folder:** `~/Library/Application Support/wisp`, with a `flock` lock (0009).
+- **Data folder:** `~/Library/Application Support/wisp`, with a lock file that is removed at shutdown and checked by inode (0009).
 - **Starting `serve`:** `posix_spawn` with `POSIX_SPAWN_SETSID` and `POSIX_SPAWN_CLOEXEC_DEFAULT`, the second of which only Apple has (0010).
 - **Service:** a LaunchAgent, driven with `launchctl` (0010).
 - **Agent CLIs:** cancel sends signals to the CLI's process group (0014). Missing `PATH` entries are filled in with `/opt/homebrew/bin` and friends.
@@ -30,8 +30,8 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 | Data folder | `~/Library/Application Support/wisp` | `$XDG_DATA_HOME/wisp`, or `~/.local/share/wisp` | `%LOCALAPPDATA%\wisp` |
 | `serve` listens on | `wispd.sock` in the data folder. Past 103 bytes: `$(getconf DARWIN_USER_TEMP_DIR)wispd-<hash>.sock` | `wispd.sock` in the data folder. Past 107 bytes: `$XDG_RUNTIME_DIR/wispd-<hash>.sock` | The named pipe `\\.\pipe\wispd-<hash>` |
 | Only this user connects | 0700 folder, 0600 socket, `peer_cred` | Same as macOS | The pipe's DACL grants only the user's SID. Both ends check the other's SID |
-| One `serve` per folder | `wispd.lock` with std's `File::try_lock` | Same | Same |
-| `attach` detaches `serve` | `posix_spawn`, `SETSID`, `CLOEXEC_DEFAULT` | `posix_spawn`, `SETSID`, `posix_spawn_file_actions_addclosefrom_np(3)` | `CreateProcess` with `DETACHED_PROCESS`, `CREATE_NEW_PROCESS_GROUP`, `CREATE_BREAKAWAY_FROM_JOB`, and a handle list |
+| One `serve` per folder | `wispd.lock`, locked with std's `File::try_lock` (`flock`), removed at shutdown | Same as macOS | `wispd.lock`, locked with std's `File::try_lock` (`LockFileEx`), never removed |
+| `attach` detaches `serve` | `posix_spawn`, `SETSID`, `CLOEXEC_DEFAULT` | `posix_spawn`, `SETSID`, and a close action for each descriptor above 2 in `/proc/self/fd` | std `Command` with `DETACHED_PROCESS`, `CREATE_NEW_PROCESS_GROUP`, and `CREATE_BREAKAWAY_FROM_JOB` |
 | Cancelling an agent CLI | Signal, then `SIGKILL` to its process group | Same | Close stdin, then terminate its job object |
 | Keeps `serve` running | LaunchAgent in `gui/<uid>` | systemd user unit `<label>.service`, with `loginctl enable-linger` | Per-user scheduled task with a logon trigger |
 | API keys | Keychain, through `security-framework` | Secret Service, through `keyring-core` and `zbus-secret-service-keyring-store` | Credential Manager, through `keyring-core` and `windows-native-keyring-store` |
@@ -62,14 +62,19 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
   - Any user can create a pipe under any name. So `attach` and `wispd mcp` check that the server's process runs as their own user (`GetNamedPipeServerProcessId`) before sending anything. A mismatch fails at once with exit 4.
   - `ERROR_FILE_NOT_FOUND` means no `serve` is running, so attach starts one, like `ENOENT` in 0010.
   - `ERROR_PIPE_BUSY` means retry within the connect timeout. Any other error fails at once.
-- **Unsafe code.** tokio's security-attributes hook is `unsafe`, and std wraps none of these calls. They are the pipe's security descriptor, the two SID checks, the child's handle list, and job objects. All of them live in one Windows-only module that calls `windows-sys`. That module is the only place with `#[allow(unsafe_code)]`, and each call gets a `SAFETY` comment. The workspace lint stays `deny`.
+- **Unsafe code.** tokio's security-attributes hook is `unsafe`, and std wraps none of these calls. They are the pipe's security descriptor, the two SID checks, clearing the inherit flag on the std handles, and job objects. All of them live in one Windows-only module that calls `windows-sys`. That module is the only place with `#[allow(unsafe_code)]`, and each call gets a `SAFETY` comment. The workspace lint stays `deny`, and macOS and Linux need no unsafe code.
 
 ### Starting and stopping `serve`
 
-- **Linux** uses 0010's `posix_spawn` with `POSIX_SPAWN_SETSID`. `POSIX_SPAWN_CLOEXEC_DEFAULT` doesn't exist there, so `posix_spawn_file_actions_addclosefrom_np(3)` (glibc 2.34) closes every descriptor above stdio instead (#86).
+- **Linux** uses 0010's safe `nix` `posix_spawn` with `POSIX_SPAWN_SETSID`. `POSIX_SPAWN_CLOEXEC_DEFAULT` is Apple's only. So `spawn_session` lists `/proc/self/fd` and adds a `PosixSpawnFileActions::add_close` for every descriptor above 2. Without `/proc`, the spawn fails with an error that names it. This is safe code, and it closes #86's race:
+  - A descriptor opened between the scan and the spawn leaks only if it lacks close-on-exec.
+  - Every descriptor wispd opens has close-on-exec: std, tokio, and SQLite (`O_CLOEXEC`) set it. The `rustix` calls that don't (`io::dup`, `pipe::pipe`) go on clippy's `disallowed-methods` list outside tests. So only descriptors inherited at startup can leak, and the scan sees them.
+  - `attach` also has one thread whenever it spawns: `connect` runs before its tokio runtime exists, and the reaper thread starts only after it connects.
+  - A listed descriptor that closes before the spawn is harmless, because glibc and musl both ignore that close failure.
 - **Windows.** Win32-OpenSSH puts each session in a job object and kills the job when the session ends. It has let processes break away from that job since v7.6.0.0p1.
-  - attach starts `serve` with `CREATE_BREAKAWAY_FROM_JOB`, so `serve` outlives the session. If the job forbids breakaway, attach retries without the flag and warns that `serve` will end with the session.
-  - `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` passes exactly three handles: stdin on `NUL`, and stdout and stderr on the log. This is #86 on Windows.
+  - attach starts `serve` with std `Command` and `creation_flags`, including `CREATE_BREAKAWAY_FROM_JOB`, so `serve` outlives the session. If the job forbids breakaway, attach retries without the flag and warns that `serve` will end with the session.
+  - std creates every handle it opens as non-inheritable. The only inheritable handles are the std handles that sshd passed in. attach and `serve` clear `HANDLE_FLAG_INHERIT` on those at startup, so `serve` gets only the three handles `Command` hands it. This is #86 on Windows. `serve` needs the same clearing, or agent CLIs would inherit its log.
+- **The Windows lock.** 0009's scheme removes `wispd.lock` at shutdown, then checks its identity by device and inode. Windows has no stable equivalent (`file_index` is unstable in std), and it can't remove an open file anyway. So on Windows, `serve` never removes the lock file and skips that check. `LockFileEx` is mandatory, so a second `serve` can't read the pid either. Its exit-3 error leaves the pid out; nothing depends on it.
 - **Shutdown on Windows.** `serve` treats Ctrl-C, Ctrl-Break, console close, logoff, and shutdown (`tokio::signal::windows`) as it treats SIGTERM.
 - **Services.** Each one is named after 0010's label, and attach starts it the way 0010 uses `launchctl kickstart`:
   - **Linux:** a systemd user unit at `~/.config/systemd/user/<label>.service`, started with `systemctl --user start`. With linger, it runs with nobody logged in. Hosts without systemd rely on attach's detached `serve`.
@@ -82,7 +87,7 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 
 - The `KeyStore` interface stays. macOS keeps `security-framework`, whose error codes wispd already maps (0004).
 - Linux and Windows use `keyring-core` with one store crate each:
-  - Linux uses the zbus store rather than the dbus one. zbus is pure Rust, so the Linux build links no `libdbus`.
+  - Linux uses the zbus store, not the dbus one, with only the `rt-tokio-crypto-rust` feature. So the Linux build links neither `libdbus` nor OpenSSL.
   - Windows' store needs no unsafe code of ours.
 - **Headless hosts** have the same problem on every OS. A key-authenticated SSH session can't unlock the store:
   - macOS: a locked Keychain (0004).
@@ -98,10 +103,12 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
   - The same `worker_settings` apply, and wispd never sets `enableWeakerNestedSandbox`.
   - wispd also requires Claude Code's optional seccomp filter, from `@anthropic-ai/sandbox-runtime`. Without it, sandboxed commands can connect to any Unix socket. On Linux that includes the D-Bus session bus that serves the Secret Service, and `docker.sock`. On macOS, Seatbelt blocks these by default (0013).
   - A missing `bwrap`, `socat`, or filter fails `agent/start` with `workerUnavailable` naming it. So does an AppArmor policy that keeps `bwrap` from creating user namespaces (Ubuntu 24.04 and later).
+  - `failIfUnavailable` doesn't cover the filter, because Claude Code treats it as optional, so wispd has to detect it itself. RYA-20 decides how. For example, it could check where `@anthropic-ai/sandbox-runtime` installs the filter, or run a sandboxed probe that tries to connect to a Unix socket. Until RYA-20 lands, Linux workers are refused.
   - `UNREADABLE_IN_HOME` becomes a list per OS. RYA-20 adds Linux's.
 - **Linux: Codex.** It sandboxes with bubblewrap and seccomp, and its permission profiles work on Linux. RYA-38 uses the same profile as on macOS.
 - **Windows: Claude Code.** It has no sandbox on native Windows and says to use WSL2. So the Claude backend reports `worker_sandbox: false` there. `workspace-write` runs fail with `workerUnavailable`, and the message names WSL2. No-write runs, such as the coordinator and normal threads, still run natively.
 - **Windows: Codex.** It has a native sandbox, and its permission profiles, deny rules included, are supported on native Windows. Codex workers may run natively once RYA-38 and RYA-24 confirm that 0013's contract holds there. Until then they are refused too. Only the `elevated` sandbox mode counts, and it needs a one-time admin setup. The `unelevated` mode has no separate sandbox user and weaker network isolation.
+- **Cursor** workers stay refused on every OS until RYA-40 settles 0013's open items for Cursor. Its Linux and Windows sandboxes are part of that work.
 - **WSL2 is how a Windows machine runs Claude workers.** `wispd` for Linux runs inside a WSL2 distro, with Linux's sandbox. The app reaches it as a host by running `wsl.exe --distribution <name> -- wispd attach` instead of `ssh`. That keeps 0022's rule that the main process owns every process and speaks over stdio. RYA-86 builds it.
 
 ### The app's `ssh` on Windows
@@ -116,13 +123,13 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 | Target | Rust target | PR CI (`ci.yml`) | Built on `develop` and released |
 | --- | --- | --- | --- |
 | macOS arm64 | `aarch64-apple-darwin` | `check-rust`, ssh attach check, app | Yes |
-| Linux x86_64 | `x86_64-unknown-linux-gnu` | `check-rust`, ssh attach check, app | Yes |
-| Linux arm64 | `aarch64-unknown-linux-gnu` | No | Yes |
+| Linux x86_64 | `x86_64-unknown-linux-musl` | `check-rust`, ssh attach check, app | Yes |
+| Linux arm64 | `aarch64-unknown-linux-musl` | No | Yes |
 | Windows x86_64 | `x86_64-pc-windows-msvc` | `check-rust`, app; the ssh attach check once the runner's `sshd` can be set up | Yes |
 | Windows arm64 | `aarch64-pc-windows-msvc` | No | Yes |
 
 - **PR CI** tests one arch per OS, to keep it fast. The arm64 builds for Linux and Windows run on GitHub's arm64 runners, with `wispd --version` and an attach handshake as a smoke check (RYA-29).
-- **Linux binaries** are built on the oldest Ubuntu LTS runner GitHub offers, now 22.04, so they need glibc 2.35 or later. That covers Ubuntu 22.04, Debian 12, and RHEL 10. glibc keeps `posix_spawn_file_actions_addclosefrom_np`, which musl doesn't have.
+- **Linux binaries** are static musl builds, so they run on any distro with no glibc floor. The spawn above needs only `POSIX_SPAWN_SETSID`, which musl has. Nothing links a system library: SQLite is bundled, and the Secret Service store is pure Rust.
 - **macOS x86_64 isn't built.** 0006's reason still holds: macOS 27 runs only on Apple silicon. Adding it later is one more target on the macOS runner.
 - **Windows** needs Windows 10 1809 or later, or Windows 11. That's the first version with the OpenSSH Client feature and ConPTY.
 - **Releases** ship the app for these five targets. Each package bundles the local `wispd` and the others, for installs on remote hosts (RYA-66). Installer formats and signing are RYA-64's.
@@ -134,7 +141,10 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 | AF_UNIX sockets on Windows, for one code path | Neither tokio nor std supports them on Windows, so wisp would need its own async wrapper. They also have no `SO_PEERCRED`. |
 | `interprocess`, for sockets and pipes behind one API | The Unix side already runs on tokio's sockets. The Windows ACL still needs the same Win32 calls. |
 | Socket in `$XDG_RUNTIME_DIR` by default on Linux | `logind` deletes that folder at the last logout, while a `serve` started over ssh keeps running. |
-| A static musl build for Linux | musl lacks `posix_spawn_file_actions_addclosefrom_np`. A glibc 2.35 floor covers current LTS distros. |
+| glibc's `posix_spawn_file_actions_addclosefrom_np` on Linux | nix 0.31 doesn't wrap it, so it would need raw `libc` spawn calls in unsafe code, which 0010 rejected. It would also tie the build to glibc 2.34 or later. |
+| A per-OS `sys` module with unsafe code on Linux too | The `/proc/self/fd` scan does the same job with safe code. |
+| A hand-built `CreateProcessW` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` | std's `inherit_handles` and `spawn_with_attributes` are unstable, so it would mean building the command line and environment block in unsafe code. Clearing the inherit flag on three handles is smaller. |
+| A glibc build for Linux | Its only draw was `addclosefrom_np`. A static musl binary has no distro floor. |
 | The `keyring` crate with every store | It pulls in stores wisp doesn't use. On macOS, it would swap working code for the same call with coarser errors. |
 | `dirs` or `directories` for the data folder | Three environment variables, one per OS. |
 | A Windows service (SCM) | Needs admin rights, and runs outside the user's logon, so Credential Manager can't be reached. |
@@ -145,9 +155,18 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 
 ## Consequences
 
-- **Supersedes** PLAN.md's non-goal of Windows and Linux (RYA-8 rewrites the plan). It also extends 0004's Keychain, 0007's transport, 0009's data folder, 0010's LaunchAgent and `posix_spawn`, 0013's sandbox, and 0014's `PATH` to three OSes. On macOS, their decisions stand as written, except that the lock moves from `rustix`'s `flock` to std's `File::try_lock`, which calls `flock` there.
-- **RYA-17** (wispd on Linux) implements the Linux column, with the socket in the data folder by default. **RYA-18** installs the systemd user unit, and **RYA-19** adds the Secret Service store. **RYA-20** adds the Linux sandbox, including the seccomp-filter requirement.
-- **RYA-21** (wispd on Windows) implements the Windows column: the pipe, the unsafe module, breakaway, and the handle list. It also covers `.cmd` shims: std's `Command` finds only `.exe` on `PATH`, and refuses batch-file arguments it can't escape. So the error for such a refusal suggests the vendor's native installer. RYA-21 also checks that `core.hooksPath=/dev/null` disables hooks under Git for Windows, or uses `NUL`.
+- **Supersedes** PLAN.md's non-goal of Windows and Linux (RYA-8 rewrites the plan). It also extends these records to three OSes:
+
+  - 0004's Keychain, and 0005's FSEvents watcher.
+  - 0006's arm64-only releases.
+  - 0007's transport, and 0009's data folder and lock.
+  - 0010's LaunchAgent and `posix_spawn`.
+  - 0013's sandbox, and 0014's `PATH`.
+  - 0022's deferral of Windows' `ssh`.
+
+  On macOS, those records stand as written. The lock already uses std's `File::try_lock` (`flock` on Unix), so it doesn't change.
+- **RYA-17** (wispd on Linux) implements the Linux column. That covers the socket in the data folder by default, the `/proc/self/fd` close actions in `spawn_session` (which `backend/process.rs` also uses), and the `disallowed-methods` lint. **RYA-18** installs the systemd user unit, and **RYA-19** adds the Secret Service store. **RYA-20** adds the Linux sandbox, including the seccomp-filter requirement.
+- **RYA-21** (wispd on Windows) implements the Windows column: the pipe, the unsafe module, breakaway, clearing the inherit flag, and the lock that is never removed. It also covers `.cmd` shims: std's `Command` finds only `.exe` on `PATH`, and refuses batch-file arguments it can't escape. So the error for such a refusal suggests the vendor's native installer. RYA-21 also checks that `core.hooksPath=/dev/null` disables hooks under Git for Windows, or uses `NUL`.
 - **RYA-22** registers the scheduled task, **RYA-23** adds the Credential Manager store, and **RYA-24** makes the native refusal and its WSL2 message.
 - **RYA-86** reaches a WSL2 distro as a host from the Windows app. Until it lands, a Windows user who wants Claude workers adds the distro as an SSH host.
 - **RYA-25** runs `check-rust` on three OSes. **RYA-29** builds the five targets, and **RYA-64** and **RYA-66** package them.
