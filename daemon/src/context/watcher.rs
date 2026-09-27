@@ -1,14 +1,15 @@
 //! Turns an agent's own writes to shared context, made directly on disk outside any wispd call,
 //! into `context.changed` events (0005, #155).
 //!
-//! wispd watches with the `notify` crate (`FSEvents` on macOS) rather than rescanning the folder
-//! on a timer. Nothing else would ever see an agent's write: it never goes through wispd at all,
-//! so there is no request to hang the check off. A poll loop would then have to choose between
-//! missing a quick write between ticks and burning cycles ticking often enough not to, while
-//! `FSEvents` already tells the kernel's own record of every write to the tree, for free. One
-//! watcher covers the whole `context/` folder, recursively, from before any project exists, so a
-//! project created later needs no watch of its own: `FSEvents` reports changes anywhere under the
-//! root it was given, including in a subfolder created after the watch started.
+//! wispd watches with the `notify` crate (`FSEvents` on macOS, inotify on Linux) rather than
+//! rescanning the folder on a timer. Nothing else would ever see an agent's write: it never goes
+//! through wispd at all, so there is no request to hang the check off. A poll loop would then
+//! have to choose between missing a quick write between ticks and burning cycles ticking often
+//! enough not to, while the OS already tells the kernel's own record of every write to the tree,
+//! for free. One watcher covers the whole `context/` folder, recursively, from before any project
+//! exists, so a project created later needs no watch of its own: both backends report changes
+//! anywhere under the root they were given, including in a subfolder created after the watch
+//! started. inotify watches each folder separately, and `notify` adds a watch for each new one.
 
 use std::path::{Component, Path};
 
@@ -28,15 +29,17 @@ use crate::server::Daemon;
 pub(crate) fn start(daemon: std::sync::Arc<Daemon>) -> notify::Result<RecommendedWatcher> {
     let root = daemon.data_dir.context_root();
     // FSEvents reports its own canonical form of a path, which on macOS can differ from wispd's
-    // own spelling (`/tmp/...` versus the real `/private/tmp/...`, for example). Canonicalizing
-    // once here, rather than comparing against `root` as wispd spelled it, keeps `relative_file`
-    // matching every event instead of silently matching none of them. `context_root` is created
-    // just before this is called (`Server::start`), so canonicalizing it should not fail; if it
-    // somehow does, falling back to `root` at least keeps the watch itself running.
-    let canonical_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+    // own spelling (`/tmp/...` versus the real `/private/tmp/...`, for example), while inotify
+    // reports paths under the one it was given. Watching the canonical path, and comparing
+    // against it, keeps `relative_file` matching every event on both instead of silently
+    // matching none of them. `context_root` is created just before this is called
+    // (`Server::start`), so canonicalizing it should not fail; if it somehow does, falling back
+    // to `root` at least keeps the watch itself running.
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    let context_root = root.clone();
     let mut watcher =
         notify::recommended_watcher(move |event: notify::Result<Event>| match event {
-            Ok(event) => handle(&daemon, &canonical_root, &event),
+            Ok(event) => handle(&daemon, &context_root, &event),
             Err(error) => warn!(%error, "the shared context watcher failed"),
         })?;
     watcher.watch(&root, RecursiveMode::Recursive)?;

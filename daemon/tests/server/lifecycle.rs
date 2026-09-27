@@ -4,8 +4,7 @@ use std::fmt::Write as _;
 use std::fs::{self, Permissions};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 use std::os::unix::net::UnixDatagram;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::time::Duration;
 
 use rustix::process::Signal;
@@ -122,17 +121,18 @@ async fn the_data_folder_socket_lock_and_log_are_private() {
     assert_eq!(mode(&data.join("logs")), 0o700);
 }
 
-fn darwin_user_temp_dir() -> PathBuf {
-    let output = Command::new("/usr/bin/getconf")
+#[cfg(target_os = "macos")]
+fn darwin_user_temp_dir() -> std::path::PathBuf {
+    let output = std::process::Command::new("/usr/bin/getconf")
         .arg("DARWIN_USER_TEMP_DIR")
         .output()
         .unwrap();
     assert!(output.status.success());
-    PathBuf::from(String::from_utf8(output.stdout).unwrap().trim_end())
+    std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim_end())
 }
 
 #[tokio::test]
-async fn a_long_data_folder_puts_the_socket_in_the_user_temp_dir() {
+async fn a_long_data_folder_puts_the_socket_in_the_per_user_fallback_folder() {
     let dir = temp_dir();
     let data = dir.path().join("d".repeat(100));
     let hash = Sha256::digest(data.as_os_str().as_encoded_bytes())[..4]
@@ -141,10 +141,18 @@ async fn a_long_data_folder_puts_the_socket_in_the_user_temp_dir() {
             let _ = write!(hex, "{byte:02x}");
             hex
         });
-    let expected = darwin_user_temp_dir().join(format!("wispd-{hash}.sock"));
-    assert!(data.join("wispd.sock").as_os_str().len() > 103);
+    // Linux's fallback is XDG_RUNTIME_DIR (0023), which this test points at a folder of its own.
+    // macOS ignores it.
+    let runtime = temp_dir();
+    #[cfg(target_os = "macos")]
+    let fallback = darwin_user_temp_dir();
+    #[cfg(target_os = "linux")]
+    let fallback = runtime.path().to_owned();
+    let expected = fallback.join(format!("wispd-{hash}.sock"));
+    assert!(data.join("wispd.sock").as_os_str().len() > 107);
 
-    let wispd = Wispd::start(&data).await;
+    let env = [("XDG_RUNTIME_DIR", runtime.path().to_str().unwrap())];
+    let wispd = Wispd::start_at(&data, expected.clone(), &[], &env).await;
     assert_eq!(wispd.socket, expected);
     assert_eq!(mode(&expected), 0o600);
     assert!(!data.join("wispd.sock").exists());
