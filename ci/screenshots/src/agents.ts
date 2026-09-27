@@ -59,7 +59,7 @@ export async function chatShowsCount(window: Page, text: string, count: number, 
   await window.waitForFunction(
     ({ needle, needed }) => {
       const roots = document.querySelectorAll('.interactive-session');
-      return [...roots].some(root => (root.textContent?.split(needle).length ?? 1) - 1 >= needed);
+      return [...roots].some(root => root.textContent.split(needle).length - 1 >= needed);
     },
     { needle: text, needed: count },
     { timeout },

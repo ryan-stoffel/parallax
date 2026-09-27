@@ -8,7 +8,7 @@
 
 import { ValueWithChangeEvent } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { URI } from '../../../../base/common/uri.js';
+import { isUriComponents, URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
@@ -128,11 +128,8 @@ export function runIdFromArgument(arg: unknown): RunId | undefined {
 	if (typeof arg === 'string') {
 		return arg;
 	}
-	if (!arg || typeof arg !== 'object') {
-		return undefined;
-	}
-	const uri = URI.isUri(arg) ? arg : URI.revive(arg);
-	if (uri.scheme !== 'wisp.agent') {
+	const uri = URI.isUri(arg) ? arg : isUriComponents(arg) ? URI.revive(arg) : undefined;
+	if (!uri || uri.scheme !== 'wisp.agent') {
 		return undefined;
 	}
 	const match = /^\/[^/]+\/([^/]+)$/.exec(uri.path);
