@@ -38,7 +38,11 @@ export class TestSessionsProvidersService implements ISessionsProvidersService {
 
 	registerProvider(provider: ISessionsProvider): IDisposable {
 		this.providers.set(provider.id, provider);
-		return toDisposable(() => this.providers.delete(provider.id));
+		this.emitter.fire({ added: [provider], removed: [] });
+		return toDisposable(() => {
+			this.providers.delete(provider.id);
+			this.emitter.fire({ added: [], removed: [provider] });
+		});
 	}
 
 	getProviders(): ISessionsProvider[] {
@@ -54,7 +58,7 @@ export class TestSessionsProvidersService implements ISessionsProvidersService {
 	}
 }
 
-/** The two methods of `ISessionsManagementService` wisp's views read, over one provider. */
+/** The methods of `ISessionsManagementService` wisp's views read, over one provider. */
 class TestSessionsManagementService {
 	private readonly emitter = new Emitter<ISessionsChangeEvent>();
 	readonly onDidChangeSessions = this.emitter.event;
@@ -66,6 +70,10 @@ class TestSessionsManagementService {
 
 	getSessions(): ISession[] {
 		return this.provider.getSessions();
+	}
+
+	getSession(resource: URI): ISession | undefined {
+		return this.provider.getSessions().find(session => session.resource.toString() === resource.toString());
 	}
 
 	archiveSession(session: ISession): Promise<void> {
