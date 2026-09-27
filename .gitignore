@@ -5,29 +5,6 @@
 target/
 **/*.rs.bk
 
-# Node / editor fork
-/editor/vscode
-node_modules/
-out/
-out-build/
-out-vscode*/
-.build/
-*.tsbuildinfo
-npm-debug.log*
-yarn-error.log*
-
-# Packaging
-*.app
-*.dmg
-*.zip
-dist/
-
-# Playwright
-test-results/
-playwright-report/
-screenshots/
-!/ci/screenshots/
-
 # Env and secrets
 .env
 .env.*

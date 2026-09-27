@@ -7,7 +7,7 @@
 // keeps running after the ssh session ends, then stops it.
 //
 // Skips (exit 0) wherever scripts/ci/ssh-localhost was skipped, unless WISP_E2E_REQUIRE_SSH=1
-// (ci.yml's e2e job sets it), in which case "not ready" is a failure instead, so a broken ssh
+// (ci.yml's rust job sets it), in which case "not ready" is a failure instead, so a broken ssh
 // setup fails the build rather than silently dropping this coverage.
 
 const { execFileSync } = require('node:child_process');
@@ -111,9 +111,8 @@ async function main() {
     }
     const lockContent = readFileSync(lockFile, 'utf8');
     const pid = Number.parseInt(lockContent.trim(), 10);
-    // The same sanity check readWispdPid (ci/screenshots/src/harness.ts) applies: a lock holding
-    // 0, a negative number, or something unparseable must never be handed to process.kill, whose
-    // pid 0 (or a negative pid) targets a whole process group rather than one process.
+    // A lock holding 0, a negative number, or something unparseable must never be handed to
+    // process.kill, whose pid 0 (or a negative pid) targets a whole process group, not one process.
     if (!Number.isSafeInteger(pid) || pid <= 1) {
       fail(`${lockFile} does not hold a usable pid: ${JSON.stringify(lockContent)}`);
     }
