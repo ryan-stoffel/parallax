@@ -1,6 +1,6 @@
 # wispd
 
-wisp's host daemon. Each macOS user runs their own, and it keeps projects, and later agents, running while the editor is closed. The editor reaches it through `wispd attach`, either on the same Mac or on a host over SSH.
+wisp's host daemon. Each macOS user runs their own, and it keeps projects, and later agents, running in the background. Clients reach it through `wispd attach`, either on the same Mac or on a host over SSH.
 
 Build it with `cargo build --release -p wispd`. `WISP_VERSION`, if set at compile time, is what `wispd --version` prints (`daemon/src/lib.rs` reads it with `option_env!`); otherwise it prints `Cargo.toml`'s placeholder.
 
@@ -45,7 +45,7 @@ If wispd isn't running, `attach` starts it through the LaunchAgent when one is i
 
 ## Using a Mac as a host over SSH
 
-The editor on your laptop runs this command, where `<host>` is anything `ssh` accepts:
+A client on your laptop runs this command, where `<host>` is anything `ssh` accepts:
 
 ```sh
 ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <host> wispd attach
@@ -54,20 +54,17 @@ ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <host> wispd
 It uses your own ssh config, keys, and agent (0007). For that command to work, the host needs:
 
 1. **`wispd` installed**, built as above and copied into a folder such as Homebrew's `bin`: `/opt/homebrew/bin` on Apple silicon, `/usr/local/bin` on Intel.
-2. **`wispd` on the `PATH` of a non-interactive SSH command.** sshd runs `wispd attach` through your login shell as `zsh -c`, which reads `~/.zshenv` but not `~/.zprofile` or `~/.zshrc`. The `PATH` it starts with is `/usr/bin:/bin:/usr/sbin:/sbin`, so Homebrew's `bin` folder is missing. Fix it on the host in one of these ways. The examples use Apple silicon's `/opt/homebrew/bin`; on an Intel host, use `/usr/local/bin` instead.
+2. **`wispd` on the `PATH` of a non-interactive SSH command.** sshd runs `wispd attach` through your login shell as `zsh -c`, which reads `~/.zshenv` but not `~/.zprofile` or `~/.zshrc`. The `PATH` it starts with is `/usr/bin:/bin:/usr/sbin:/sbin`, so Homebrew's `bin` folder is missing. Fix it on the host. The examples use Apple silicon's `/opt/homebrew/bin`; on an Intel host, use `/usr/local/bin` instead.
    - Add Homebrew to `PATH` in `~/.zshenv`, the file zsh reads for every command:
 
      ```sh
      export PATH="/opt/homebrew/bin:$PATH"
      ```
 
-   - Or do nothing: when the host's shell exits 127, meaning it didn't find `wispd`, the editor retries with `/opt/homebrew/bin/wispd`, then `/usr/local/bin/wispd`, in that order, without a login shell (#64). This costs one or two failed attempts per reconnect and assumes a normal Homebrew install; set `wisp.remoteWispdPath` to the binary's absolute path to skip the search, at the cost of having to update the setting if it ever moves.
-
-   `SetEnv PATH=...` for the host in the laptop's `~/.ssh/config`, or `ssh -o SetEnv=...`, works only if the host's sshd lists `PATH` in `AcceptEnv`. macOS's sshd accepts only `LANG` and `LC_*`, so it drops `PATH`. Changing that means editing the host's sshd configuration, which affects every login, so prefer one of the fixes above.
+   `SetEnv PATH=...` for the host in the laptop's `~/.ssh/config`, or `ssh -o SetEnv=...`, works only if the host's sshd lists `PATH` in `AcceptEnv`. macOS's sshd accepts only `LANG` and `LC_*`, so it drops `PATH`. Changing that means editing the host's sshd configuration, which affects every login, so prefer the fix above.
 
    To check, run `ssh <host> 'command -v wispd'`.
 3. **Quiet shell startup files.** Over SSH, stdout carries the protocol, so anything the host's shell prints while it starts a non-interactive command gets mixed into it. For zsh, that output comes from `~/.zshenv`.
-   - Until `initialize` is answered, the editor skips lines that aren't JSON and logs them. After that, such a line is a protocol error (#64).
    - Keep output behind a check for an interactive shell, such as `[[ -o interactive ]]` in zsh.
 4. **A key that logs in without prompts.** `BatchMode=yes` turns every prompt into an error. Run `ssh <host>` once in a terminal to accept the host key and unlock your key. Hosts that require interactive two-factor login aren't supported.
 5. **The LaunchAgent, which is recommended** (#61). Without it, `attach` starts `wispd serve` itself.

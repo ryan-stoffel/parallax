@@ -53,7 +53,7 @@ jobs:
         run: |
           status=$(mktemp)
           scripts/ci/ssh-localhost "$status"
-          scripts/ci/check-ssh-attach "$status" target/debug/wispd
+          scripts/ci/check-ssh-attach "$status" "$PWD/target/debug/wispd"
 
   actionlint:
     runs-on: ubuntu-24.04
