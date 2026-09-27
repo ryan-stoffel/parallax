@@ -19,7 +19,9 @@ import { INotificationService } from '../../../../platform/notification/common/n
 import { ISessionsService } from '../../../services/sessions/browser/sessionsService.js';
 import { ISession, SessionStatus } from '../../../services/sessions/common/session.js';
 import { ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
+import { WispThreadSession } from '../../providers/wisp/browser/wispThreadSession.js';
 import { WISP_SESSIONS_PROVIDER_ID } from '../../providers/wisp/browser/wispSessionsProvider.js';
+import { WispAgentMark } from '../../providers/wisp/common/wispAgentRuns.js';
 import { compactAge } from '../../providers/wisp/common/wispProjects.js';
 import { filterThreadPlacement, placeThreadSessions } from '../../providers/wisp/common/wispThreads.js';
 import { sidebarRepositoryFilter } from './wispSidebarFilter.js';
@@ -30,8 +32,9 @@ const AGE_REFRESH_MS = 60_000;
 /**
  * The Repositories and No Repo sections of wisp's sidebar (decision record 0011,
  * docs/design/agents-window.md, note 3): normal threads grouped under their repository, and
- * quick chats under No Repo. Each row shows the thread's title and a relative age; its context
- * menu archives or deletes it through the provider. Both sections stay hidden while empty.
+ * quick chats under No Repo. Each row shows the thread's title and a relative age, and a status
+ * mark only when it is running, needs review, or failed (#303). Its context menu archives or
+ * deletes it through the provider. Both sections stay hidden while empty.
  */
 export class WispThreadSections extends Disposable {
 
@@ -63,6 +66,9 @@ export class WispThreadSections extends Disposable {
 				session.updatedAt.read(reader);
 				session.status.read(reader);
 				session.isArchived.read(reader);
+				if (session instanceof WispThreadSession) {
+					session.state.read(reader);
+				}
 			}
 			const active = this.sessionsService.activeSession.read(reader)?.resource.toString();
 			const placement = filterThreadPlacement(placeThreadSessions(sessions), sidebarRepositoryFilter.read(reader));
@@ -113,22 +119,23 @@ export class WispThreadSections extends Disposable {
 	private renderRow(list: HTMLElement, session: ISession, now: number, active: string | undefined, repo: string | undefined, store: DisposableStore): HTMLButtonElement {
 		const title = session.title.get();
 		const updated = session.updatedAt.get();
-		const running = session.status.get() === SessionStatus.InProgress;
+		const attention = threadAttention(session);
 		const item = append(list, $('li'));
 		const row = append(item, $<HTMLButtonElement>('button.wisp-threads-row.wisp-threads-thread-row', { type: 'button' }));
 		row.dataset.session = session.resource.toString();
 		row.tabIndex = -1;
 		const age = fromNow(updated, true);
-		row.setAttribute('aria-label', repo
-			? localize('wispThreads.threadRowLabel', "{0}, chat in {1}, updated {2}", title, repo, age)
-			: localize('wispThreads.quickChatRowLabel', "{0}, chat, updated {1}", title, age));
+		row.setAttribute('aria-label', threadRowLabel(title, repo, age, attention?.label));
 		row.setAttribute('aria-haspopup', 'menu');
 		if (active === session.resource.toString()) {
 			row.classList.add('selected');
 			row.setAttribute('aria-current', 'true');
 		}
-		const mark = append(row, $(`span.wisp-threads-thread-mark${ThemeIcon.asCSSSelector(running ? Codicon.circleFilled : Codicon.commentDiscussion)}`, { 'aria-hidden': 'true' }));
-		mark.classList.toggle('running', running);
+		// The slot stays, empty, so titles line up when only some rows have a mark.
+		const mark = append(row, $('span.wisp-threads-thread-mark', { 'aria-hidden': 'true' }));
+		if (attention) {
+			mark.dataset.mark = attention.mark;
+		}
 		append(row, $('span.wisp-threads-row-title', { 'aria-hidden': 'true' }, title));
 		append(row, $('span.wisp-threads-row-age', { 'aria-hidden': 'true' }, compactAge(updated, now)));
 		store.add(addDisposableListener(row, EventType.CLICK, () => this.sessionsService.openSession(session.resource)));
@@ -219,4 +226,28 @@ export class WispThreadSections extends Disposable {
 			this.notificationService.error(`${failure}: ${toErrorMessage(error)}`);
 		}
 	}
+}
+
+/** A mark only when the thread needs attention: running, needs review, or failed (#303). */
+function threadAttention(session: ISession): { readonly mark: WispAgentMark; readonly label: string } | undefined {
+	if (!(session instanceof WispThreadSession)) {
+		return undefined;
+	}
+	const state = session.state.get();
+	if (!state || (state.status !== SessionStatus.InProgress && state.status !== SessionStatus.NeedsInput && state.status !== SessionStatus.Error)) {
+		return undefined;
+	}
+	return { mark: state.mark, label: state.label };
+}
+
+/** The row's accessible name. The state word is included only when a mark is shown. */
+function threadRowLabel(title: string, repo: string | undefined, age: string, attention: string | undefined): string {
+	if (repo) {
+		return attention
+			? localize('wispThreads.threadRowLabelState', "{0}, chat in {1}, {2}, updated {3}", title, repo, attention, age)
+			: localize('wispThreads.threadRowLabel', "{0}, chat in {1}, updated {2}", title, repo, age);
+	}
+	return attention
+		? localize('wispThreads.quickChatRowLabelState', "{0}, chat, {1}, updated {2}", title, attention, age)
+		: localize('wispThreads.quickChatRowLabel', "{0}, chat, updated {1}", title, age);
 }

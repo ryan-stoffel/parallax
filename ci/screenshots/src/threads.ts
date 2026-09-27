@@ -7,15 +7,15 @@ import { projectName } from './projects.ts';
 /** The first message the checks start a thread with, and the title its row shows. */
 export const threadTask = 'Fix the flaky attach test';
 
-/** The sidebar's New Chat action. */
+/** The sidebar's New chat icon button. */
 export function newChatAction(window: Page) {
-  return window.locator('.part.sidebar .wisp-threads-action', { hasText: 'New Chat' }).first();
+  return window.locator('.part.sidebar button.wisp-threads-new-chat').first();
 }
 
-/** Clicks New Chat once it is enabled, and waits for the new-session composer. */
+/** Clicks New chat once it is enabled, and waits for the new-session composer. */
 export async function openNewChat(window: Page): Promise<void> {
   const action = newChatAction(window);
-  await window.locator('.part.sidebar .wisp-threads-action:not(.disabled)', { hasText: 'New Chat' }).waitFor({ state: 'visible', timeout: 30_000 });
+  await window.locator('.part.sidebar button.wisp-threads-new-chat:not(.disabled)').waitFor({ state: 'visible', timeout: 30_000 });
   await action.click();
   await composer(window).waitFor({ state: 'visible', timeout: 30_000 });
 }

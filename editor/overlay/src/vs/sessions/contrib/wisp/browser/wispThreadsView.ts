@@ -11,22 +11,25 @@ import { DisposableStore, MutableDisposable, toDisposable } from '../../../../ba
 import { autorun, observableSignal, observableSignalFromEvent } from '../../../../base/common/observable.js';
 import { basename } from '../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
-import { localize } from '../../../../nls.js';
+import { localize, localize2 } from '../../../../nls.js';
+import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
-import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../../workbench/browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../../workbench/common/views.js';
 import { IPathService } from '../../../../workbench/services/path/common/pathService.js';
+import { ISessionsProvidersService } from '../../../services/sessions/browser/sessionsProvidersService.js';
 import { ISessionsService } from '../../../services/sessions/browser/sessionsService.js';
 import { ISession } from '../../../services/sessions/common/session.js';
 import { ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
+import { WISP_SESSIONS_PROVIDER_ID } from '../../providers/wisp/browser/wispSessionsProvider.js';
 import { IWispProjectsService } from '../../providers/wisp/browser/wispProjectsService.js';
 import { compactAge, projectGlyph, projectIdOf } from '../../providers/wisp/common/wispProjects.js';
 import { placeThreadSessions, sidebarFilterLabel } from '../../providers/wisp/common/wispThreads.js';
@@ -43,16 +46,30 @@ import { NEW_SESSION_ACTION_ID } from '../../chat/common/constants.js';
 export const WISP_THREADS_CONTAINER_ID = 'wisp.threads';
 export const WISP_THREADS_VIEW_ID = 'wisp.threads.view';
 
+/** Picks a repository on the host, then opens a new chat in it (#303). */
+export const WISP_ADD_REPOSITORY_COMMAND = 'wisp.threads.addRepository';
+
+/**
+ * Runs the provider's repository browse action and opens upstream's new-session composer in the
+ * repository it returns. Cancelling the picker, or a host whose wispd has no threads, does nothing.
+ */
+export async function openAddedRepository(providers: ISessionsProvidersService, sessions: ISessionsService): Promise<void> {
+	const workspace = await providers.getProvider(WISP_SESSIONS_PROVIDER_ID)?.browseActions[0]?.run();
+	if (workspace) {
+		await sessions.openNewSession({ folderUri: workspace.uri });
+	}
+}
+
 /** How often the rows' ages are refreshed. */
 const AGE_REFRESH_MS = 60_000;
 
 let instanceCount = 0;
 
 /**
- * wisp's left sidebar in the Agents window (decision record 0011, docs/design/agents-window.md in
- * wisp): actions, then Projects, Repositories, and No Repo, then a footer with the user, the host,
- * and settings. Projects are read through `ISessionsManagementService` and opened through
- * `ISessionsService`. New Chat opens upstream's new-session composer for a normal thread, and
+ * wisp's left sidebar in the Agents window (decision record 0011, docs/design/chat-v2.md section 5,
+ * #303): a search row, then Projects, Repositories, and No Repo, then a footer with the user, the
+ * host, and Customize. Projects are read through `ISessionsManagementService` and opened through
+ * `ISessionsService`. New chat opens upstream's new-session composer for a normal thread, and
  * `WispThreadSections` lists threads under Repositories and No Repo (#110).
  */
 export class WispThreadsView extends ViewPane {
@@ -89,18 +106,23 @@ export class WispThreadsView extends ViewPane {
 		const root = this.root = append(container, $('.wisp-threads'));
 
 		const actions = append(root, $('.wisp-threads-actions', { role: 'group', 'aria-label': localize('wispThreads.actions', "Actions") }));
-		let setNewChatDisabled: ((reason: string | undefined) => void) | undefined;
-		this.firstAction = this.renderAction(actions, Codicon.edit, localize('wispThreads.newChat', "New Chat"), { run: () => this.commandService.executeCommand(NEW_SESSION_ACTION_ID), keybinding: NEW_SESSION_ACTION_ID, disabledReason: '', onEnabler: setter => setNewChatDisabled = setter });
-		this.renderAction(actions, Codicon.search, localize('wispThreads.search', "Search"), { run: () => this.commandService.executeCommand(WISP_SEARCH_COMMAND), keybinding: WISP_SEARCH_COMMAND });
-		// Automations stays hidden until wisp decides on triggers (M6).
-		this.renderAction(actions, Codicon.settings, localize('wispThreads.customize', "Customize"), { run: () => this.commandService.executeCommand(WISP_SHOW_ACCOUNTS_COMMAND) });
+		this.firstAction = this.renderSearch(actions);
+		// Add repository and New chat share one reason: a host whose wispd can run threads.
+		const disablers: Array<(reason: string | undefined) => void> = [];
+		disablers.push(this.renderIconButton(actions, Codicon.newFolder, localize('wispThreads.addRepository', "Add repository"), 'wisp-threads-add-repository', () => this.commandService.executeCommand(WISP_ADD_REPOSITORY_COMMAND)));
+		disablers.push(this.renderIconButton(actions, Codicon.edit, localize('wispThreads.newChat', "New chat"), 'wisp-threads-new-chat', () => this.commandService.executeCommand(NEW_SESSION_ACTION_ID), NEW_SESSION_ACTION_ID));
 
 		this.renderFilterBanner(root);
 		const lists = append(root, $('.wisp-threads-lists'));
 		this.renderProjects(lists, `${idPrefix}-projects`);
 		// Repositories and No Repo render only once they have threads (#110).
 		this._register(this.instantiationService.createInstance(WispThreadSections, lists, idPrefix));
-		this.renderNewChatState(setNewChatDisabled!);
+		disablers.push(this.renderThreadEmpty(lists));
+		this.renderNewChatState(reason => {
+			for (const setDisabled of disablers) {
+				setDisabled(reason);
+			}
+		});
 
 		this.renderFooter(root);
 	}
@@ -127,7 +149,7 @@ export class WispThreadsView extends ViewPane {
 		this._register(toDisposable(() => clearSidebarRepositoryFilter()));
 	}
 
-	/** New Chat needs a host whose wispd runs normal threads (decision record 0017). */
+	/** New chat needs a host whose wispd runs normal threads (decision record 0017). */
 	private renderNewChatState(setDisabledReason: (reason: string | undefined) => void): void {
 		this._register(autorun(reader => {
 			const connected = this.hostStatusService.status.read(reader).kind === 'connected';
@@ -220,7 +242,7 @@ export class WispThreadsView extends ViewPane {
 			clearNode(empty);
 			empty.hidden = sessions.length > 0;
 			if (sessions.length === 0) {
-				this.renderEmpty(empty, connected, hostStatus.host, state, emptyStore);
+				this.renderEmpty(empty, connected, state, emptyStore);
 			}
 		}));
 	}
@@ -244,7 +266,7 @@ export class WispThreadsView extends ViewPane {
 		return row;
 	}
 
-	private renderEmpty(empty: HTMLElement, connected: boolean, host: string, state: ReturnType<IWispProjectsService['state']['get']>, store: DisposableStore): void {
+	private renderEmpty(empty: HTMLElement, connected: boolean, state: ReturnType<IWispProjectsService['state']['get']>, store: DisposableStore): void {
 		if (!connected) {
 			append(empty, $('p', undefined, localize('wispThreads.noProjects', "No projects yet. A project runs on a host, so it shows here once wisp connects to one.")));
 			return;
@@ -262,29 +284,74 @@ export class WispThreadsView extends ViewPane {
 				store.add(addDisposableListener(retry, EventType.CLICK, () => this.projectsService.reload()));
 				return;
 			}
-			case 'ready': {
+			case 'ready':
+				// The thread list's calm empty state covers a connected sidebar with nothing in it (#303).
 				empty.removeAttribute('aria-busy');
-				append(empty, $('p', undefined, localize('wispThreads.noProjectsConnected', "No projects yet. A project is a repository on {0}, with a coordinator that plans the work.", host)));
-				const create = append(empty, $<HTMLButtonElement>('button.wisp-threads-link', { type: 'button' }, localize('wispThreads.newProjectLink', "New Project")));
-				store.add(addDisposableListener(create, EventType.CLICK, () => this.commandService.executeCommand(WISP_NEW_PROJECT_COMMAND)));
+				empty.hidden = true;
 				return;
-			}
 		}
 	}
 
-	private renderAction(parent: HTMLElement, icon: ThemeIcon, label: string, options: { run?: () => void; disabledReason?: string; keybinding?: string; onEnabler?: (setDisabledReason: (reason: string | undefined) => void) => void }): HTMLButtonElement {
-		const button = append(parent, $<HTMLButtonElement>('button.wisp-threads-action', { type: 'button' }));
-		append(button, $(`span.wisp-threads-action-icon${ThemeIcon.asCSSSelector(icon)}`, { 'aria-hidden': 'true' }));
-		append(button, $('span.wisp-threads-action-label', undefined, label));
-		const keybinding = options.keybinding ? this.keybindingService.lookupKeybinding(options.keybinding)?.getLabel() : undefined;
-		if (keybinding) {
-			append(button, $('span.wisp-threads-action-keybinding', { 'aria-hidden': 'true' }, keybinding));
-			button.setAttribute('aria-keyshortcuts', this.keybindingService.lookupKeybinding(options.keybinding!)?.getAriaLabel() ?? keybinding);
+	/**
+	 * Search opens the projects-and-threads Quick Pick. It is a button drawn as a field, with the
+	 * shortcut beside the placeholder, because the pick is the search (#303).
+	 */
+	private renderSearch(parent: HTMLElement): HTMLButtonElement {
+		const label = localize('wispThreads.search', "Search");
+		const button = append(parent, $<HTMLButtonElement>('button.wisp-threads-search', { type: 'button', 'aria-label': label }));
+		append(button, $(`span${ThemeIcon.asCSSSelector(Codicon.search)}`, { 'aria-hidden': 'true' }));
+		append(button, $('span.wisp-threads-search-label', { 'aria-hidden': 'true' }, label));
+		const binding = this.keybindingService.lookupKeybinding(WISP_SEARCH_COMMAND);
+		const shortcut = binding?.getLabel();
+		if (shortcut) {
+			append(button, $('span.wisp-threads-search-keybinding', { 'aria-hidden': 'true' }, shortcut));
+			button.setAttribute('aria-keyshortcuts', binding?.getAriaLabel() ?? shortcut);
 		}
-		const setDisabledReason = this.enableable(button, label, options.run);
-		setDisabledReason(options.disabledReason);
-		options.onEnabler?.(setDisabledReason);
+		this._register(addDisposableListener(button, EventType.CLICK, () => this.commandService.executeCommand(WISP_SEARCH_COMMAND)));
 		return button;
+	}
+
+	/** An icon button in the search row. The returned setter disables it, naming the reason. */
+	private renderIconButton(parent: HTMLElement, icon: ThemeIcon, label: string, className: string, run: () => void, keybinding?: string): (reason: string | undefined) => void {
+		const button = append(parent, $<HTMLButtonElement>(`button.wisp-threads-icon-button.${className}`, { type: 'button', 'aria-label': label }));
+		append(button, $(`span${ThemeIcon.asCSSSelector(icon)}`, { 'aria-hidden': 'true' }));
+		const binding = keybinding ? this.keybindingService.lookupKeybinding(keybinding) : undefined;
+		const shortcut = binding?.getLabel();
+		if (binding && shortcut) {
+			button.setAttribute('aria-keyshortcuts', binding.getAriaLabel() ?? shortcut);
+		}
+		const hover = shortcut ? localize('wispThreads.iconWithShortcut', "{0} ({1})", label, shortcut) : label;
+		return this.enableable(button, hover, run);
+	}
+
+	/**
+	 * "No threads yet" with Start a chat, once the host is connected and its projects have loaded,
+	 * and only while no thread is listed. Returns the setter that disables the link.
+	 */
+	private renderThreadEmpty(parent: HTMLElement): (reason: string | undefined) => void {
+		const empty = append(parent, $('.wisp-threads-calm'));
+		empty.hidden = true;
+		append(empty, $('p', undefined, localize('wispThreads.noThreads', "No threads yet")));
+		const startLabel = localize('wispThreads.startChat', "Start a chat");
+		const start = append(empty, $<HTMLButtonElement>('button.wisp-threads-link.wisp-threads-start-chat', { type: 'button' }, startLabel));
+		const setDisabled = this.enableable(start, startLabel, () => this.commandService.executeCommand(NEW_SESSION_ACTION_ID));
+
+		const sessionsChanged = observableSignalFromEvent(this, this.sessionsManagementService.onDidChangeSessions);
+		this._register(autorun(reader => {
+			sessionsChanged.read(reader);
+			const connected = this.hostStatusService.status.read(reader).kind === 'connected';
+			const projectsReady = this.projectsService.state.read(reader).kind === 'ready';
+			const sessions = this.sessionsManagementService.getSessions().filter(session => session.providerId === WISP_SESSIONS_PROVIDER_ID);
+			for (const session of sessions) {
+				session.isArchived.read(reader);
+				session.workspace.read(reader);
+				session.isQuickChat?.read(reader);
+			}
+			const placement = placeThreadSessions(sessions);
+			const hasThreads = placement.repositories.length > 0 || placement.noRepo.length > 0;
+			empty.hidden = !(connected && projectsReady && !hasThreads);
+		}));
+		return setDisabled;
 	}
 
 	/**
@@ -343,11 +410,11 @@ export class WispThreadsView extends ViewPane {
 
 		this.renderHostChip(footer);
 
-		const settingsLabel = localize('wispThreads.settings', "Settings");
-		const settings = append(footer, $<HTMLButtonElement>('button.wisp-threads-icon-button.wisp-threads-settings', { type: 'button', 'aria-label': settingsLabel }));
+		const customizeLabel = localize('wispThreads.customize', "Customize");
+		const settings = append(footer, $<HTMLButtonElement>('button.wisp-threads-icon-button.wisp-threads-settings', { type: 'button', 'aria-label': customizeLabel }));
 		append(settings, $(`span${ThemeIcon.asCSSSelector(Codicon.settingsGear)}`, { 'aria-hidden': 'true' }));
-		this._register(this.hoverService.setupDelayedHover(settings, { content: settingsLabel }));
-		this._register(addDisposableListener(settings, EventType.CLICK, () => this.commandService.executeCommand('workbench.action.openSettings')));
+		this._register(this.hoverService.setupDelayedHover(settings, { content: customizeLabel }));
+		this._register(addDisposableListener(settings, EventType.CLICK, () => this.commandService.executeCommand(WISP_SHOW_ACCOUNTS_COMMAND)));
 	}
 
 	/**
@@ -394,3 +461,18 @@ export class WispThreadsView extends ViewPane {
 		this.firstAction?.focus();
 	}
 }
+
+registerAction2(class AddRepositoryAction extends Action2 {
+	constructor() {
+		super({
+			id: WISP_ADD_REPOSITORY_COMMAND,
+			title: localize2('wispThreads.addRepositoryCommand', "Add Repository"),
+			category: localize2('wisp.category', "Wisp"),
+			f1: true,
+		});
+	}
+
+	run(accessor: ServicesAccessor): Promise<void> {
+		return openAddedRepository(accessor.get(ISessionsProvidersService), accessor.get(ISessionsService));
+	}
+});

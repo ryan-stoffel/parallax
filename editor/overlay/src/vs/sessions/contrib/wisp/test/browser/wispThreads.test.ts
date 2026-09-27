@@ -11,6 +11,8 @@ import { INotificationService } from '../../../../../platform/notification/commo
 import { WispdError, WispdUnavailableError, type WispdState } from '../../../../../platform/wisp/common/wispd.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { AgentListParams, AgentRun, Repo, RepoAddParams, Thread, ThreadStartParams } from '../../../../../platform/wisp/common/wispProtocol.js';
+import { ISessionsProvidersService } from '../../../../services/sessions/browser/sessionsProvidersService.js';
+import { ISessionsService } from '../../../../services/sessions/browser/sessionsService.js';
 import { ISession, SessionStatus } from '../../../../services/sessions/common/session.js';
 import { WispThreadSession } from '../../../providers/wisp/browser/wispThreadSession.js';
 import { agentRunOf } from '../../../providers/wisp/common/wispAgentRuns.js';
@@ -18,6 +20,8 @@ import { filterThreadPlacement, placeThreadSessions, repoPathOf, repoUri, thread
 import { clearSidebarRepositoryFilter, toggleSidebarRepositoryFilter } from '../../browser/wispSidebarFilter.js';
 import { WISP_BASE_DIRTY_NOTICE_ID } from '../../browser/wispStartSubagent.js';
 import { WispThreadSections } from '../../browser/wispThreadSections.js';
+import { NEW_SESSION_ACTION_ID } from '../../../chat/common/constants.js';
+import { openAddedRepository, WISP_THREADS_VIEW_ID, WispThreadsView } from '../../browser/wispThreadsView.js';
 import { agentsWindowServices, IAgentsWindowServices, settle } from './wispAgentsTestServices.js';
 import { connected, SSH_COMMAND } from './wispHostTestUtils.js';
 
@@ -26,6 +30,8 @@ const SCRATCH: Repo = { id: '0192f0c4-0000-7000-8000-00000000a002', name: 'No Re
 const IN_REPO = '0192f0c4-0000-7000-8000-00000000b001';
 const QUICK = '0192f0c4-0000-7000-8000-00000000b002';
 const ARCHIVED = '0192f0c4-0000-7000-8000-00000000b003';
+const FAILED = '0192f0c4-0000-7000-8000-00000000b004';
+const DONE = '0192f0c4-0000-7000-8000-00000000b005';
 
 function thread(id: string, repo: Repo, options: Partial<Thread> = {}): Thread {
 	return { id, repo: repo.id, createdAt: '2026-09-26T10:00:00Z', ...options };
@@ -71,11 +77,15 @@ suite('wisp: threads', () => {
 			thread(IN_REPO, APP),
 			thread(QUICK, SCRATCH),
 			thread(ARCHIVED, APP, { archived: true }),
+			thread(FAILED, APP),
+			thread(DONE, APP),
 		] : [];
 		const runs = [
 			run(IN_REPO, APP, 'Fix the flaky attach test', { updatedAt: '2026-09-26T10:05:00Z' }),
-			run(QUICK, SCRATCH, 'What is a git worktree?', { status: 'completed', diff: { commit: 'c0ffee', files: 2, insertions: 3, deletions: 1 } }),
+			run(QUICK, SCRATCH, 'What is a git worktree?', { status: 'completed', updatedAt: '2026-09-26T10:00:00Z', diff: { commit: 'c0ffee', files: 2, insertions: 3, deletions: 1 } }),
 			run(ARCHIVED, APP, 'Old work', { status: 'completed' }),
+			run(FAILED, APP, 'Add --json to wispd status', { status: 'failed', updatedAt: '2026-09-26T10:04:00Z' }),
+			run(DONE, APP, 'Explain the LaunchAgent plist', { status: 'completed', updatedAt: '2026-09-26T10:03:00Z' }),
 		];
 		context.wispd.handler = async (method, params) => {
 			switch (method) {
@@ -143,6 +153,8 @@ suite('wisp: threads', () => {
 				[IN_REPO, 'Fix the flaky attach test', false, URI.file(APP.path).toString(), false],
 				[QUICK, 'What is a git worktree?', true, undefined, false],
 				[ARCHIVED, 'Old work', false, URI.file(APP.path).toString(), true],
+				[FAILED, 'Add --json to wispd status', false, URI.file(APP.path).toString(), false],
+				[DONE, 'Explain the LaunchAgent plist', false, URI.file(APP.path).toString(), false],
 			]);
 			const [inRepo, quick] = sessions;
 			assert.strictEqual(inRepo.resource.toString(), threadResource(IN_REPO).toString());
@@ -200,7 +212,7 @@ suite('wisp: threads', () => {
 		test('repo threads go under their repository and quick chats under No Repo, leaving out archived ones', async () => {
 			const context = await services();
 			const placement = placeThreadSessions(context.provider.getSessions());
-			assert.deepStrictEqual(placement.repositories.map(group => [group.label, group.sessions.map(session => (session as WispThreadSession).runId)]), [['wisp', [IN_REPO]]]);
+			assert.deepStrictEqual(placement.repositories.map(group => [group.label, group.sessions.map(session => (session as WispThreadSession).runId)]), [['wisp', [IN_REPO, FAILED, DONE]]]);
 			assert.deepStrictEqual(placement.noRepo.map(session => (session as WispThreadSession).runId), [QUICK]);
 		});
 
@@ -242,16 +254,49 @@ suite('wisp: threads', () => {
 					rows: [...section.querySelectorAll('button.wisp-threads-row')].map(row => row.getAttribute('aria-label')?.split(',').slice(0, 2).join(',')),
 				});
 				assert.deepStrictEqual(sections.map(read), [
-					{ title: 'Repositories', hidden: false, repos: ['wisp'], rows: ['Fix the flaky attach test, chat in wisp'] },
+					{ title: 'Repositories', hidden: false, repos: ['wisp'], rows: ['Fix the flaky attach test, chat in wisp', 'Add --json to wispd status, chat in wisp', 'Explain the LaunchAgent plist, chat in wisp'] },
 					{ title: 'No Repo', hidden: false, repos: [], rows: ['What is a git worktree?, chat'] },
 				]);
 				const rows = [...container.querySelectorAll<HTMLButtonElement>('button.wisp-threads-row')];
-				assert.deepStrictEqual(rows.map(row => row.tabIndex), [0, 0], 'one tab stop per section');
+				assert.deepStrictEqual([...container.querySelectorAll('.wisp-threads-thread-mark')].map(mark => mark.getAttribute('data-mark')), ['running', 'diamond', null, 'filled']);
+				assert.match(rows[0].getAttribute('aria-label') ?? '', /Running/);
+				assert.match(rows[1].getAttribute('aria-label') ?? '', /Failed/);
+				assert.ok(!/Done|Failed|Running|Needs review/.test(rows[2].getAttribute('aria-label') ?? ''), 'a finished thread with nothing to review has no state in its name');
+				assert.match(rows[3].getAttribute('aria-label') ?? '', /Needs review/);
+				assert.deepStrictEqual(rows.map(row => row.tabIndex), [0, -1, -1, 0], 'one tab stop per section');
 				rows[0].click();
 				assert.deepStrictEqual(context.opened.map(uri => uri.toString()), [threadResource(IN_REPO).toString()]);
 			} finally {
 				container.remove();
 			}
+		});
+	});
+
+	suite('add repository', () => {
+
+		test('opens a new chat in the repository the browse action returns', async () => {
+			const uri = URI.file('/Users/ryan/src/other');
+			const opened: URI[] = [];
+			await openAddedRepository({
+				getProvider: () => ({ browseActions: [{ run: async () => ({ uri }) }] }),
+			} as unknown as ISessionsProvidersService, {
+				openNewSession: async (options?: { folderUri?: URI }) => {
+					if (options?.folderUri) {
+						opened.push(options.folderUri);
+					}
+				},
+			} as unknown as ISessionsService);
+			assert.deepStrictEqual(opened.map(item => item.toString()), [uri.toString()]);
+		});
+
+		test('does nothing when the picker is cancelled or the host cannot browse repositories', async () => {
+			let calls = 0;
+			const sessions = { openNewSession: async () => { calls++; } } as unknown as ISessionsService;
+			await openAddedRepository({
+				getProvider: () => ({ browseActions: [{ run: async () => undefined }] }),
+			} as unknown as ISessionsProvidersService, sessions);
+			await openAddedRepository({ getProvider: () => undefined } as unknown as ISessionsProvidersService, sessions);
+			assert.strictEqual(calls, 0);
 		});
 	});
 
@@ -262,6 +307,27 @@ suite('wisp: threads', () => {
 			const bare = mainWindow.document.createElement('div');
 			disposables.add(empty.instantiationService.createInstance(WispThreadSections, bare, 'empty'));
 			assert.deepStrictEqual([...bare.querySelectorAll<HTMLElement>('section')].map(section => section.hidden), [true, true]);
+		});
+
+		test('a connected sidebar with no threads says No threads yet, and Start a chat opens one', async () => {
+			const context = await services('local', false);
+			const view = disposables.add(context.instantiationService.createInstance(WispThreadsView, { id: WISP_THREADS_VIEW_ID, title: 'Wisp' }));
+			view.render();
+			const calm = view.element.querySelector<HTMLElement>('.wisp-threads-calm')!;
+			assert.strictEqual(calm.hidden, false);
+			assert.match(calm.textContent ?? '', /No threads yet/);
+			const start = calm.querySelector<HTMLButtonElement>('button')!;
+			assert.strictEqual(start.textContent, 'Start a chat');
+			assert.strictEqual(start.getAttribute('aria-disabled'), null);
+			start.click();
+			assert.deepStrictEqual(context.commands, [NEW_SESSION_ACTION_ID]);
+		});
+
+		test('the empty state hides once a thread is listed', async () => {
+			const context = await services();
+			const view = disposables.add(context.instantiationService.createInstance(WispThreadsView, { id: WISP_THREADS_VIEW_ID, title: 'Wisp' }));
+			view.render();
+			assert.strictEqual(view.element.querySelector<HTMLElement>('.wisp-threads-calm')?.hidden, true);
 		});
 	});
 

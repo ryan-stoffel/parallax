@@ -22,6 +22,13 @@ export const scenarios: readonly Scenario[] = [
     async run({ window }) {
       // The packaged app's own wispd starts through wispd attach, as for a user (#62, 0010).
       await connectedToThisMac(window);
+      await visible(window, '.part.sidebar .wisp-threads-search', '.part.sidebar button.wisp-threads-add-repository', '.part.sidebar button.wisp-threads-new-chat');
+      const calm = window.locator('.part.sidebar .wisp-threads-calm');
+      await calm.waitFor({ state: 'visible' });
+      const text = await calm.innerText();
+      if (!text.includes('No threads yet') || !text.includes('Start a chat')) {
+        throw new Error(`the sidebar empty state is ${JSON.stringify(text)}`);
+      }
       return screenshot(window);
     },
   },
@@ -99,7 +106,7 @@ export const scenarios: readonly Scenario[] = [
     title: 'Customize, Accounts, with the bundled wispd and no CLIs installed',
     async run({ window }) {
       await connectedToThisMac(window);
-      await window.locator('.wisp-threads-action', { hasText: 'Customize' }).click();
+      await window.locator('.part.sidebar button.wisp-threads-settings').click();
       await visible(window, '.wisp-accounts', '.wisp-accounts-section-title');
       return screenshot(window);
     },

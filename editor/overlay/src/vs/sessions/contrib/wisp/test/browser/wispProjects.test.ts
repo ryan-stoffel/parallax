@@ -352,7 +352,7 @@ suite('wisp: projects', () => {
 			}
 		});
 
-		test('+ and the empty state\'s New Project run the new-project command once a host connects', async () => {
+		test('+ creates a project, and an empty thread list offers Start a chat', async () => {
 			const context = services('local', []);
 			const view = disposables.add(context.instantiationService.createInstance(WispThreadsView, { id: WISP_THREADS_VIEW_ID, title: 'Wisp' }));
 			view.render();
@@ -365,10 +365,16 @@ suite('wisp: projects', () => {
 			await settle();
 			assert.strictEqual(plus.getAttribute('aria-disabled'), null);
 			plus.click();
-			const empty = view.element.querySelector<HTMLElement>('.wisp-threads-empty')!;
-			assert.match(empty.textContent ?? '', /No projects yet. A project is a repository on this Mac/);
-			empty.querySelector<HTMLButtonElement>('button')!.click();
-			assert.deepStrictEqual(context.commands, ['wisp.newProject', 'wisp.newProject']);
+			const calm = view.element.querySelector<HTMLElement>('.wisp-threads-calm')!;
+			assert.strictEqual(calm.hidden, false);
+			assert.match(calm.textContent ?? '', /No threads yet/);
+			const start = calm.querySelector<HTMLButtonElement>('button')!;
+			assert.strictEqual(start.textContent, 'Start a chat');
+			// This host's wispd has no threads capability, so the link stays disabled.
+			assert.strictEqual(start.getAttribute('aria-disabled'), 'true');
+			start.click();
+			assert.strictEqual(view.element.querySelector<HTMLElement>('.wisp-threads-section .wisp-threads-empty')?.hidden, true);
+			assert.deepStrictEqual(context.commands, ['wisp.newProject']);
 		});
 	});
 

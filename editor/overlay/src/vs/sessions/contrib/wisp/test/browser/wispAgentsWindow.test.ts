@@ -23,7 +23,10 @@ import { WISP_NO_REPO_FILTER } from '../../../providers/wisp/common/wispThreads.
 import { WispNoHostContribution } from '../../browser/wispNoHost.contribution.js';
 import { WISP_NO_HOST_VIEW_ID, WispNoHostView } from '../../browser/wispNoHostView.js';
 import '../../browser/wispThreads.contribution.js';
-import { WISP_THREADS_CONTAINER_ID, WISP_THREADS_VIEW_ID, WispThreadsView } from '../../browser/wispThreadsView.js';
+import { NEW_SESSION_ACTION_ID } from '../../../chat/common/constants.js';
+import { WISP_ADD_REPOSITORY_COMMAND, WISP_THREADS_CONTAINER_ID, WISP_THREADS_VIEW_ID, WispThreadsView } from '../../browser/wispThreadsView.js';
+import { WISP_SHOW_ACCOUNTS_COMMAND } from '../../browser/wispAccountsEditor.js';
+import { WISP_SEARCH_COMMAND } from '../../browser/wispSearch.js';
 import { agentsWindowServices, IAgentsWindowServices, TestSessionsProvidersService } from './wispAgentsTestServices.js';
 import { connected, connecting, disconnected, SSH_COMMAND } from './wispHostTestUtils.js';
 
@@ -83,18 +86,35 @@ suite('wisp: Agents window', () => {
 			return { ...context, view };
 		}
 
-		test('shows the actions, with New Chat disabled, Customize enabled, and no Automations', () => {
-			const { view } = renderSidebar();
+		test('shows Search, Add repository, and New chat, with the chat actions disabled until a host connects', () => {
+			const { view, commands } = renderSidebar();
 			const actions = query<HTMLElement>(view.element, '.wisp-threads-actions');
 			assert.strictEqual(actions.getAttribute('role'), 'group');
-			const buttons = [...actions.querySelectorAll<HTMLButtonElement>('button.wisp-threads-action')];
-			assert.deepStrictEqual(buttons.map(button => [button.textContent, button.getAttribute('aria-disabled')]), [
-				['New Chat', 'true'],
-				['Search', null],
-				['Customize', null],
-			]);
-			assert.strictEqual(buttons[0].disabled, false, 'a disabled button would leave the tab order');
-			assert.strictEqual(buttons[0].getAttribute('aria-description'), 'Connect to a host to start a chat.');
+			assert.strictEqual(view.element.querySelector('.wisp-threads-action'), null, 'the three-row action list is gone');
+			const search = query<HTMLButtonElement>(actions, 'button.wisp-threads-search');
+			const add = query<HTMLButtonElement>(actions, 'button.wisp-threads-add-repository');
+			const newChat = query<HTMLButtonElement>(actions, 'button.wisp-threads-new-chat');
+			assert.deepStrictEqual([search, add, newChat].map(button => button.getAttribute('aria-label')), ['Search', 'Add repository', 'New chat']);
+			assert.strictEqual(search.getAttribute('aria-disabled'), null);
+			assert.strictEqual(add.getAttribute('aria-disabled'), 'true');
+			assert.strictEqual(newChat.getAttribute('aria-disabled'), 'true');
+			assert.strictEqual(newChat.disabled, false, 'a disabled button would leave the tab order');
+			assert.strictEqual(newChat.getAttribute('aria-description'), 'Connect to a host to start a chat.');
+			search.click();
+			assert.deepStrictEqual(commands, [WISP_SEARCH_COMMAND]);
+		});
+
+		test('enables Add repository and New chat once the host can run threads', async () => {
+			const { view, wispd, commands } = renderSidebar();
+			wispd.setState({ ...connected(), capabilities: { threads: {} } });
+			await settle();
+			const add = query<HTMLButtonElement>(view.element, 'button.wisp-threads-add-repository');
+			const newChat = query<HTMLButtonElement>(view.element, 'button.wisp-threads-new-chat');
+			assert.strictEqual(add.getAttribute('aria-disabled'), null);
+			assert.strictEqual(newChat.getAttribute('aria-disabled'), null);
+			add.click();
+			newChat.click();
+			assert.deepStrictEqual(commands, [WISP_ADD_REPOSITORY_COMMAND, NEW_SESSION_ACTION_ID]);
 		});
 
 		test('a repository filter hides Projects and offers Show all', () => {
@@ -136,9 +156,9 @@ suite('wisp: Agents window', () => {
 			assert.ok(host.querySelector('.wisp-threads-host-dot'));
 
 			const settings = query<HTMLButtonElement>(view.element, 'button.wisp-threads-settings');
-			assert.strictEqual(settings.getAttribute('aria-label'), 'Settings');
+			assert.strictEqual(settings.getAttribute('aria-label'), 'Customize');
 			settings.click();
-			assert.deepStrictEqual(commands, ['workbench.action.openSettings']);
+			assert.deepStrictEqual(commands, [WISP_SHOW_ACCOUNTS_COMMAND]);
 		});
 
 		test('the host chip follows the connection, and clicking it opens the host menu', () => {
