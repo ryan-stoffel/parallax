@@ -1,8 +1,8 @@
 #!/bin/sh
-# Sets up key-based `ssh localhost` on a disposable GitHub-hosted macOS runner, for #95 and
-# ci/e2e's own ssh check (ci/e2e/src/checks/ssh.ts). It generates a throwaway client key and host
+# Sets up key-based `ssh localhost` on a disposable GitHub-hosted macOS runner, for #95's
+# check-ssh-attach. It generates a throwaway client key and host
 # key, runs a user-level sshd of its own on a high port, and points a `Host localhost` block in
-# ~/.ssh/config at its own throwaway identity and known_hosts, so the editor's fixed ssh argv
+# ~/.ssh/config at its own throwaway identity and known_hosts, so a client's fixed ssh argv
 # (`ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <host> wispd attach`,
 # decision record 0007) never needs its own -i or -o UserKnownHostsFile to use them.
 #
@@ -10,14 +10,14 @@
 # own ~/.ssh untouched: gating on CI=true alone is not enough, since developers and tools often
 # export that too), and never fails the build on its own: whatever happens, it writes
 # WISP_E2E_SSH_READY=true or =false plus a reason to <status-file>, and the caller
-# (scripts/ci/e2e, ci/e2e's ssh check) decides whether that is a skip or, with
+# (ci.yml's rust job) decides whether that is a skip or, with
 # WISP_E2E_REQUIRE_SSH=1, a failure. Readiness is proven by actually running `ssh localhost`, not
 # assumed from having started sshd.
 set -eu
 
 status_file=${1:?"usage: $0 <status-file>"}
 # Set once the user-level sshd actually starts, however this script ends up exiting, so the
-# caller (scripts/ci/e2e) can always stop it: an ephemeral runner would tear it down anyway, but
+# caller can always stop it: an ephemeral runner would tear it down anyway, but
 # leaving it running past this script's own use of it is untidy on general principle.
 sshd_pid=""
 
@@ -100,7 +100,7 @@ fi
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 {
-  echo "# wisp-e2e-ci: throwaway localhost ssh for ci/e2e and #95, added by scripts/ci/ssh-localhost"
+  echo "# wisp-e2e-ci: throwaway localhost ssh for #95, added by scripts/ci/ssh-localhost"
   echo "Host localhost"
   echo "    Port $port"
   echo "    IdentityFile $identity"

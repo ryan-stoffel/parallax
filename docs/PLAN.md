@@ -2,6 +2,8 @@
 
 Updated Sep 24, 2026
 
+> Sep 27, 2026: the editor fork is dropped ([0020](decisions/0020-drop-the-editor-fork.md)). wisp is `wispd` only for now; the editor parts below are historical.
+
 ## Overview
 
 An open-source macOS app that reproduces the Cursor Projects workflow. One coordinator chat plans the work and spawns subagents that share project context.
