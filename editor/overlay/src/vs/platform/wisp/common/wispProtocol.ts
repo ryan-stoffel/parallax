@@ -1099,6 +1099,11 @@ export type AgentRun = {
 	 */
 	coordinatorThread?: CoordinatorThreadId,
 	/**
+	 * Why a `queued` run is still waiting, for people (#197): a host or project limit, or an
+	 * account's rate limit and when it resets. Absent once it starts.
+	 */
+	queuedReason?: string,
+	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -1114,7 +1119,7 @@ export type AgentRun = {
  * A newer wispd may send a status this version does not know; treat it as unknown, and don't
  * end a `switch` over this type in an exhaustiveness assertion.
  */
-export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "accepted";
+export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "accepted" | "queued";
 
 /**
  * The commit wispd made for a run, compared with the commit its worktree was created from.
@@ -1580,6 +1585,10 @@ export type AgentRunState = {
 	 * Its latest commit, once wispd made one.
 	 */
 	diff?: DiffSummary,
+	/**
+	 * Why a `queued` run is still waiting, for people. Absent once it starts.
+	 */
+	queuedReason?: string,
 	/**
 	 * When it changed, in RFC 3339 UTC.
 	 */

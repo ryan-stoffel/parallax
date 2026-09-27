@@ -69,6 +69,9 @@ pub enum AgentStatus {
     /// `agent/accept` merged its changes into the project's branch and removed its worktree and
     /// branch. It takes no more messages.
     Accepted,
+    /// A per-host or per-project limit is full, or its account is rate limited (#197); it has no
+    /// worktree yet. `queuedReason` says why. It starts once a slot frees.
+    Queued,
     /// A status this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -133,6 +136,11 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// Why a `queued` run is still waiting, for people (#197): a host or project limit, or an
+    /// account's rate limit and when it resets. Absent once it starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub queued_reason: Option<String>,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -160,6 +168,10 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub diff: Option<DiffSummary>,
+    /// Why a `queued` run is still waiting, for people. Absent once it starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub queued_reason: Option<String>,
     /// When it changed, in RFC 3339 UTC.
     pub updated_at: Timestamp,
 }
