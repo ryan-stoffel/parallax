@@ -7,7 +7,10 @@
 //!
 //! - **No-write** is exactly 0004's: [`NO_WRITE_ARGS`]. As a second check, a no-write run whose
 //!   `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
-//!   [`FailureKind::PolicyViolation`].
+//!   [`FailureKind::PolicyViolation`]. A coordinator's run also gets wispd's own MCP tools
+//!   (0019): `--mcp-config` with only the `wispd mcp` server, and `--allowedTools` with exactly
+//!   [`crate::mcp::ALLOWED_TOOLS`], which `dontAsk` would otherwise deny. `--strict-mcp-config`
+//!   still keeps every other MCP server out, and those tools are all `system/init` may add.
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then
 //!   [`worker_settings`] as `--settings`, then `--add-dir` for each writable folder:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
@@ -90,6 +93,7 @@ use super::{
     RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
     WorkerSandbox,
 };
+use crate::mcp;
 
 /// The CLI's program name, looked up on the launcher's `PATH`.
 pub const PROGRAM: &str = "claude";
@@ -119,9 +123,9 @@ pub const NO_WRITE_ARGS: &[&str] = &[
     "dontAsk",
 ];
 
-/// The only tools a no-write run's `system/init` may list. `EndConversation` stays whatever
-/// `--tools` says (the CLI reference), and only ends the session. wispd's own MCP tools join
-/// this list in M4.
+/// The only built-in tools a no-write run's `system/init` may list. `EndConversation` stays
+/// whatever `--tools` says (the CLI reference), and only ends the session. A coordinator run
+/// may also list exactly [`mcp::ALLOWED_TOOLS`], wispd's own MCP tools (0019).
 pub const NO_WRITE_TOOLS: &[&str] = &["Read", "Glob", "Grep", "EndConversation"];
 
 /// The built-in tools a worker gets (0013): the file tools, `Bash`, which Claude Code's sandbox
@@ -253,6 +257,19 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
+    if let Some(tools) = &request.coordinator_tools {
+        if request.policy != ToolPolicy::NoWrite {
+            return Err(StartError::Invalid(
+                "wispd's coordinator tools are only for a no-write run".into(),
+            ));
+        }
+        args.extend([
+            "--mcp-config".into(),
+            tools.mcp_config()?.to_string().into(),
+            "--allowedTools".into(),
+            mcp::ALLOWED_TOOLS.join(",").into(),
+        ]);
+    }
     if let Some(sandbox) = worker_sandbox(request)? {
         let config_home = match &request.account.credential {
             Credential::Subscription { config_home } => config_home.as_deref(),
@@ -434,7 +451,8 @@ impl Backend for ClaudeBackend {
             sink,
             switch,
             stop: Arc::clone(&stop),
-            translator: Translator::new(request.policy, expected_key_source),
+            translator: Translator::new(request.policy, expected_key_source)
+                .with_coordinator_tools(request.coordinator_tools.is_some()),
             turns: VecDeque::new(),
             violation: None,
         };

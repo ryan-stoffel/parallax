@@ -158,6 +158,14 @@ New patches, on top of #10's six:
 
 That is four to six patches and about 20 to 80 changed lines. The rest is overlay code, which breaks at type-check rather than at rebase when upstream changes the interfaces it implements. From 1.138.0 to 1.139.0, `sessionsProvider.ts` changed 11 lines, `session.ts` 30, and `sessionsManagement.ts` 11. Over four releases they changed 81, 221, and 31. Budget an extra 30 to 45 minutes per monthly upgrade (0002's estimate): about 10 for the patches, which rarely conflict, and the rest to adapt the provider and sidebar view to interface changes. Keep the provider thin: it maps wispd's events to upstream's facades and holds no logic of its own.
 
+### Chat v2 header (#302)
+
+| Patch | File | What it changes |
+| --- | --- | --- |
+| `chat: show the repository in the session header` | `sessions/browser/parts/sessionHeader.ts` | The title row becomes a breadcrumb: repository, title, and a state word. Clicking the repository runs `wisp.filterSidebarRepository`. The words come from a reader the overlay registers. |
+
+The patch touches the header constructor's title row, the drag guard, and `_updateHeader`. The title bar's folder pill, Back, Forward, and Run stay out through the exclusion lists and Run's existing virtual-workspace when clause, not another patch. The IDE, Changes, and Accept actions are overlay menu items on `Menus.SessionBarToolbar`.
+
 ## What changes in #10 and #93
 
 **#10**, as a concrete issue, #103:

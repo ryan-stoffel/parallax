@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -7,6 +7,7 @@ use clap::{Args, Parser, Subcommand};
 use tokio::net::UnixStream;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
+use wisp_protocol::{CoordinatorThreadId, ProjectId};
 use wispd::VERSION;
 use wispd::attach::{
     self, DEFAULT_CONNECT_TIMEOUT, EXIT_UNAVAILABLE, MAX_CONNECT_TIMEOUT, Options, report,
@@ -33,6 +34,24 @@ enum Command {
     Attach(AttachArgs),
     /// Manage wispd's per-user `LaunchAgent`.
     Service(ServiceArgs),
+    /// Serve a coordinator's wisp tools over MCP on stdin and stdout. wispd starts it.
+    #[command(hide = true)]
+    Mcp(McpArgs),
+}
+
+#[derive(Debug, Args)]
+struct McpArgs {
+    /// The data folder [default: ~/Library/Application Support/wisp]
+    #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
+    data_dir: Option<PathBuf>,
+
+    /// The only project the tools reach
+    #[arg(long, value_name = "ID")]
+    project: ProjectId,
+
+    /// The coordinator thread that spawned runs are tagged with
+    #[arg(long, value_name = "ID")]
+    coordinator_thread: CoordinatorThreadId,
 }
 
 #[derive(Debug, Args)]
@@ -104,7 +123,48 @@ fn main() -> ExitCode {
         Command::Serve(args) => serve(&args),
         Command::Attach(args) => attach(&args),
         Command::Service(args) => service_command(args.command),
+        Command::Mcp(args) => mcp(&args),
     }
+}
+
+/// Runs `mcp` and exits with `std::process::exit`, for the same reason as [`attach`].
+fn mcp(args: &McpArgs) -> ! {
+    let report = |message: &dyn std::fmt::Display| {
+        let _ = writeln!(io::stderr(), "wispd mcp: {message}");
+    };
+    let socket = match DataDir::resolve(args.data_dir.as_deref()).and_then(|dir| dir.socket_path())
+    {
+        Ok(socket) => socket.path,
+        Err(error) => {
+            report(&format!("could not find wispd's socket: {error}"));
+            std::process::exit(EXIT_UNAVAILABLE.into());
+        }
+    };
+    let binding = wispd::mcp::Binding {
+        socket,
+        project: args.project,
+        thread: args.coordinator_thread,
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            report(&format!("could not start the runtime: {error}"));
+            std::process::exit(1);
+        }
+    };
+    let served = runtime.block_on(wispd::mcp::run(
+        &binding,
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+    ));
+    if let Err(error) = served {
+        report(&error);
+        std::process::exit(1);
+    }
+    std::process::exit(0)
 }
 
 /// Runs `attach` and exits, with `std::process::exit`: the thread that reads stdin blocks until
@@ -436,6 +496,38 @@ mod tests {
         };
         assert_eq!(options.label, super::DEFAULT_LABEL);
         assert_eq!(options.data_dir, None);
+    }
+
+    #[test]
+    fn mcp_needs_a_project_and_a_coordinator_thread_as_uuidv7s() {
+        let project = "01a0d349-6e00-7c9e-80e2-0426486a8cae";
+        let thread = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
+        let cli = Cli::try_parse_from([
+            "wispd",
+            "mcp",
+            "--project",
+            project,
+            "--coordinator-thread",
+            thread,
+        ])
+        .unwrap();
+        let Command::Mcp(args) = cli.command else {
+            panic!("expected mcp, got {:?}", cli.command);
+        };
+        assert_eq!(args.project.to_string(), project);
+        assert_eq!(args.coordinator_thread.to_string(), thread);
+        assert!(Cli::try_parse_from(["wispd", "mcp", "--project", project]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "wispd",
+                "mcp",
+                "--project",
+                "not-an-id",
+                "--coordinator-thread",
+                thread,
+            ])
+            .is_err()
+        );
     }
 
     #[test]

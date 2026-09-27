@@ -244,6 +244,7 @@ mod tests {
                     requested_account: None,
                     policy: "workspaceWrite".to_owned(),
                     backend: "fake".to_owned(),
+                    coordinator_thread: None,
                 };
                 let state = RunState {
                     status: "running".to_owned(),

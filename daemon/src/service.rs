@@ -19,8 +19,8 @@ use wisp_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
 use crate::VERSION;
 use crate::paths::{DATA_DIR_ENV, DataDir};
 
-/// wispd's `LaunchAgent` label: the app's bundle id from `editor/product.json`
-/// (`io.github.ryan-stoffel.wisp`, #9) plus `.wispd`.
+/// wispd's `LaunchAgent` label: wisp's bundle id (`io.github.ryan-stoffel.wisp`, 0006) plus
+/// `.wispd`.
 pub const DEFAULT_LABEL: &str = "io.github.ryan-stoffel.wisp.wispd";
 
 /// The environment variable that overrides the label when `--label` is not given. Only tests
