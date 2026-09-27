@@ -5,6 +5,7 @@ this is not json
 [1, 2, 3]
 {"no_type":true}
 {"type":"telepathy","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68"}
+{"type":"command_lifecycle","uuid":"a0000000-0000-4000-8000-000000000046","state":"completed"}
 {"type":"stream_event","event":{"type":"message_start"},"session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68","uuid":"a0000000-0000-4000-8000-000000000043"}
 {"type":"assistant","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68"}
 {"type":"assistant","message":{"id":"msg_01Ml1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"Still here."}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":14000,"output_tokens":40,"service_tier":"standard"}},"parent_tool_use_id":null,"session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68","uuid":"a0000000-0000-4000-8000-000000000044"}

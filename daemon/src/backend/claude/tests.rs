@@ -241,6 +241,38 @@ fn warnings(events: &[Event]) -> Vec<WarningKind> {
         .collect()
 }
 
+/// A `tracing` writer that keeps everything written to it, for tests that check what did or did
+/// not reach the log.
+#[derive(Clone, Default)]
+struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Capture {
+    /// Installs `self` as the default subscriber for as long as the guard lives.
+    fn install(&self) -> tracing::subscriber::DefaultGuard {
+        let writer = self.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+impl std::io::Write for Capture {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn tokens(input: u64, output: u64, read: u64, write: u64, cost: u64) -> Usage {
     Usage {
         input_tokens: input,
@@ -907,30 +939,8 @@ async fn an_api_key_run_reporting_a_different_source_fails() {
 
 #[tokio::test]
 async fn an_api_key_never_reaches_tracing_output() {
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Clone, Default)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for Capture {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     let capture = Capture::default();
-    let for_writer = capture.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_writer(move || for_writer.clone())
-        .finish();
-    let guard = tracing::subscriber::set_default(subscriber);
+    let guard = capture.install();
     let key = "sk-ant-api03-test-key-not-real";
 
     // A completed run and a failed one (the mismatch check), so both outcomes are covered.
@@ -953,7 +963,7 @@ async fn an_api_key_never_reaches_tracing_output() {
     assert_eq!(failure(&all).0, FailureKind::UnexpectedApiKey);
 
     drop(guard);
-    let logged = String::from_utf8_lossy(&capture.0.lock().unwrap()).into_owned();
+    let logged = capture.text();
     assert!(
         logged.contains("wisp-test-sentinel: starting the mismatched run"),
         "the capture never saw anything, so it can't prove the key's absence: {logged:?}"
@@ -1005,16 +1015,17 @@ async fn a_no_write_run_offered_write_tools_is_stopped() {
 }
 
 #[tokio::test]
-async fn malformed_and_unknown_lines_are_skipped_with_warnings() {
+async fn malformed_lines_are_warned_and_unknown_types_are_dropped_silently() {
     let fake = Fake::new("malformed");
     let all = run(&fake, request(&fake.root())).await;
+    // The fixture's `telepathy` (unknown) and `command_lifecycle` (known but unused, #258) lines
+    // carry no warning at all: only the malformed ones do.
     assert_eq!(
         warnings(&all),
         [
             WarningKind::MalformedLine,
             WarningKind::MalformedLine,
             WarningKind::MalformedLine,
-            WarningKind::UnknownEvent,
             WarningKind::MalformedLine,
         ]
     );
@@ -1245,6 +1256,40 @@ fn an_init_that_does_not_say_where_its_credentials_came_from_is_refused() {
             Some(Step::Violation(failure)) if failure.failure == FailureKind::UnexpectedApiKey
         ),
         "{steps:?}"
+    );
+}
+
+#[test]
+fn an_unknown_event_type_is_dropped_and_logged_at_debug_not_as_a_warning() {
+    let capture = Capture::default();
+    let guard = capture.install();
+
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    // A type wisp has no name for at all: dropped silently, logged so it can still be found.
+    let unknown = translator.line(br#"{"type":"telepathy","session_id":"s"}"#);
+    // A type wisp knows and explicitly ignores (#258): dropped just as silently, no log needed.
+    let known_but_unused =
+        translator.line(br#"{"type":"command_lifecycle","uuid":"u","state":"completed"}"#);
+
+    drop(guard);
+    assert_eq!(
+        unknown,
+        Vec::new(),
+        "an unknown type must not become a Warning event"
+    );
+    assert_eq!(
+        known_but_unused,
+        Vec::new(),
+        "a known-but-unused type must not become a Warning event"
+    );
+    let logged = capture.text();
+    assert!(
+        logged.contains("telepathy") && logged.contains("DEBUG"),
+        "the unknown type should be named in a debug-level log line: {logged:?}"
+    );
+    assert!(
+        !logged.contains("command_lifecycle"),
+        "a known-but-unused type is expected, so it doesn't need its own log line: {logged:?}"
     );
 }
 

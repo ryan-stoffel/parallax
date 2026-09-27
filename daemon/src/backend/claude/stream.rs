@@ -44,9 +44,14 @@ const RUN_LIMITS: &[&str] = &[
     "error_max_structured_output_retries",
 ];
 
-/// Message types that carry nothing wisp shows, and are skipped without a warning.
+/// Message types that carry nothing wisp shows, and are skipped without a warning: known
+/// auxiliary event kinds, named explicitly as they turn up (#258) instead of falling through to
+/// the generic unknown-type path.
 const IGNORED_TYPES: &[&str] = &[
     "auth_status",
+    // A queued command's own start, cancellation, or completion (`{type, uuid, state}`),
+    // separate from the turn it belongs to; wisp already tracks turns through `result` (#258).
+    "command_lifecycle",
     "conversation_reset",
     "keep_alive",
     "prompt_suggestion",
@@ -149,10 +154,13 @@ impl Translator {
             Some("result") => self.result(&message),
             Some("rate_limit_event") => self.rate_limit(&message),
             Some(kind) if IGNORED_TYPES.contains(&kind) => Vec::new(),
-            Some(kind) => vec![warning(
-                WarningKind::UnknownEvent,
-                format!("a message of type {kind:?}"),
-            )],
+            // A newer CLI's event type wisp has no name for (#258): dropped, not shown in the
+            // transcript, since 0004 already asks adapters to ignore what they don't know. Kept
+            // at debug level, not a warning, because this is expected to happen on every release.
+            Some(kind) => {
+                tracing::debug!(kind, "an unknown Claude Code stream event type was dropped");
+                Vec::new()
+            }
             None => vec![warning(
                 WarningKind::MalformedLine,
                 "a message without a type".into(),
