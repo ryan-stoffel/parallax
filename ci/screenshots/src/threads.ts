@@ -31,7 +31,7 @@ export async function openNewChat(window: Page): Promise<void> {
   }
   const editorHeight = await part.locator('.sessions-chat-editor').last().evaluate(el => el.getBoundingClientRect().height);
   if (editorHeight < 70) {
-    throw new Error(`the composer is ${editorHeight}px tall, shorter than three lines`);
+    throw new Error(`the composer is ${String(editorHeight)}px tall, shorter than three lines`);
   }
   for (const selector of ['.new-session-workspace-picker-container', '.new-session-quick-chat-header']) {
     if (await part.locator(selector).first().isVisible()) {
