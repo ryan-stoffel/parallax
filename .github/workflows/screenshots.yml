@@ -222,7 +222,8 @@ jobs:
       - name: Note the restored package
         if: steps.source.outputs.same-repo == 'true' && steps.cached.outputs.cache-hit == 'true'
         timeout-minutes: 1
-        run: echo "- App: restored packaged Windows build, key \`${{ steps.inputs.outputs.key }}\`" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "- App: restored packaged Windows build, key \`${{ steps.inputs.outputs.key }}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the packaged app
         if: steps.source.outputs.same-repo == 'true'
