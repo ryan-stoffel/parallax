@@ -92,6 +92,11 @@ struct Batch {
     since: Option<Instant>,
 }
 
+// Four independent flags on a run's own lifecycle, not a state machine over one another: `deleted`
+// and `stopping` are `thread/delete`/shutdown bookkeeping, `is_thread` is fixed for the run's
+// whole life, and `slot_reserved` toggles independently of all three as the scheduler reserves and
+// releases (#197).
+#[allow(clippy::struct_excessive_bools)]
 pub(super) struct Actor {
     daemon: Arc<Daemon>,
     id: RunId,
@@ -109,23 +114,28 @@ pub(super) struct Actor {
     stopping: bool,
     /// Set once `thread/delete` removed the run: the actor stops, refusing what is still queued.
     deleted: bool,
-    /// Set by `agents::create`/`scheduler::promote` when the scheduler (#197) reserved this run a
-    /// host and project slot before its first `launch`. Cleared the first time this run's CLI
-    /// stops being live or fails to start, which releases that reservation and retries the queue.
-    /// Never set for a normal thread's run (0017), which the scheduler does not limit, so a
-    /// resumed run's later `launch` calls never touch it either way.
+    /// Whether this run is a normal thread (0017), which the scheduler never limits or queues:
+    /// neither its first `launch` nor a later resume through `agent/send` ever reserves a slot.
+    is_thread: bool,
+    /// Set by `agents::create`, `scheduler::promote`, or `resume` when the scheduler (#197)
+    /// reserved this run a host and project slot before a `launch`. Cleared the first time this
+    /// run's CLI stops being live or fails to start, which releases that reservation and wakes
+    /// the scheduler. Never set for a thread's run.
     slot_reserved: bool,
 }
 
 impl Actor {
     /// `turns` is what a run already sent, from the store (#190): empty for a run just created by
     /// `agents::start`, and loaded by `actor_for` for a run whose actor is spawned fresh, so a
-    /// restarted wispd still recognizes a retried `agent/send`.
+    /// restarted wispd still recognizes a retried `agent/send`. `is_thread` is fixed for the run's
+    /// whole lifetime (0017 gives a thread its own scope id, never shared with a project's runs),
+    /// so every caller either already knows it or, in `actor_for`'s case, looks it up once.
     pub fn new(
         daemon: Arc<Daemon>,
         row: RunRow,
         worktree: Option<Worktree>,
         turns: HashMap<TurnId, String>,
+        is_thread: bool,
     ) -> Self {
         let id = RunId::try_from(row.id).unwrap_or_else(|_| RunId::generate());
         let project = ProjectId::try_from(row.fields.project_id).unwrap_or_else(|_| {
@@ -145,6 +155,7 @@ impl Actor {
             last_message,
             stopping: false,
             deleted: false,
+            is_thread,
             slot_reserved: false,
         }
     }
@@ -154,33 +165,22 @@ impl Actor {
     }
 
     /// Marks this run as holding a scheduler reservation (#197), to release once its CLI stops
-    /// being live or fails to start. Called only for a run `create`/`scheduler::promote` just
-    /// admitted, before its first `launch`.
+    /// being live or fails to start. Called only for a run `create`/`scheduler::promote`/`resume`
+    /// just admitted, before the matching `launch`.
     pub(super) fn mark_slot_reserved(&mut self) {
         self.slot_reserved = true;
     }
 
     /// Releases this run's scheduler reservation, if `launch` took one, and wakes the scheduler
-    /// to try the queue again. Idempotent: only the first call after a reservation does anything,
-    /// so a later `launch` resuming this same run (0014) never double-releases or is mistaken for
-    /// a fresh admission.
-    async fn release_slot(&mut self) {
+    /// task to try the queue again. Idempotent: only the first call after a reservation does
+    /// anything, so a later `launch` resuming this same run (0014) never double-releases or is
+    /// mistaken for a fresh admission. Synchronous and non-blocking — `Scheduler::wake` only
+    /// signals the one scheduler task (`scheduler::run`); it never runs a pass itself, which is
+    /// what let an earlier version of this deadlock (see the module doc of `agents/scheduler.rs`).
+    fn release_slot(&mut self) {
         if std::mem::take(&mut self.slot_reserved) {
             self.daemon.agents.scheduler.release(self.project);
-            // Through `Agents::detached`, not a direct call: `tick` can itself reach this same
-            // method (promoting a queued run whose `launch` immediately fails calls it again),
-            // which would make this async fn's own future infinitely recursive. Spawning breaks
-            // that at the type level, the same way `Agents::detached` already keeps a run's own
-            // bookkeeping going after its request's connection drops.
-            let daemon = Arc::clone(&self.daemon);
-            let _ = self
-                .daemon
-                .agents
-                .detached(async move {
-                    super::scheduler::tick(&daemon).await;
-                    Ok(())
-                })
-                .await;
+            self.daemon.agents.scheduler.wake();
         }
     }
 
@@ -491,6 +491,26 @@ impl Actor {
             session_id,
             usage_totals: totals.into_iter().map(model_usage).collect(),
         };
+
+        // #272: a resumed run's CLI occupies the same host and project slot a first start does.
+        // Reserved last, only once every other check above has already passed, so a resume that
+        // was never going to succeed doesn't take a slot away from a run that could actually use
+        // it. Unlike `agent/start`, a busy resume is refused rather than queued: the run already
+        // has a live actor and a caller (0011: Ryan messaging a subagent directly, or #196's
+        // coordinator) expects `agent/send` to answer now, not to wait an unknown time for a slot.
+        if !self.is_thread && !self.daemon.agents.scheduler.reserve(self.project) {
+            return Err(ErrorObject::wisp(
+                ErrorKind::HostBusy,
+                format!(
+                    "no host or project slot is free to resume run {}; try again once another \
+                     run finishes",
+                    self.id
+                ),
+            ));
+        }
+        if !self.is_thread {
+            self.mark_slot_reserved();
+        }
         info!(run = %self.id, "resuming an agent run's session");
         let message = text.clone();
         if self
@@ -623,14 +643,14 @@ impl Actor {
         convert::FAILED.clone_into(&mut self.row.state.status);
         self.row.state.error = Some(message);
         self.save().await;
-        self.release_slot().await;
+        self.release_slot();
     }
 
     async fn on_event(&mut self, event: Option<Event>) {
         let Some(event) = event else {
             // An `EventStream` always ends with `Finished`, which clears `live` first.
             self.clear_live();
-            self.release_slot().await;
+            self.release_slot();
             return;
         };
         match &event {
@@ -686,7 +706,7 @@ impl Actor {
                 self.record_usage(event).await;
                 self.clear_live();
                 self.finish(&outcome).await;
-                self.release_slot().await;
+                self.release_slot();
             }
             _ => {
                 if let Some(item) = output_item(&event) {
@@ -1053,7 +1073,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
         let (row, worktree) = fake_row_and_worktree();
-        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let mut actor = Actor::new(
+            Arc::clone(&daemon),
+            row,
+            Some(worktree),
+            HashMap::new(),
+            false,
+        );
 
         let (mut sink, events) = EventSink::channel(FLOOD, Vec::new());
         for _ in 0..FLOOD {

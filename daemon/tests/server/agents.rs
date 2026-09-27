@@ -18,7 +18,7 @@ use wisp_protocol::methods::{
     ProjectCreate, RequestMethod, UsageGet,
 };
 use wisp_protocol::{
-    AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
+    AcceptId, AccountChoice, AccountId, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
     AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFailureKind,
     AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentListParams, AgentMerge,
     AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRequestChangesParams,
@@ -79,6 +79,57 @@ pub(crate) fn fake(steps: Vec<Step>) -> BackendRegistry {
                 grace: Duration::from_millis(500),
             }),
         ),
+    );
+    backends
+}
+
+/// A backend that fails `start` outright for one exact prompt, and otherwise runs `inner`'s
+/// script normally. For reproducing #197's promotion-failure path deterministically.
+struct FlakyBackend {
+    inner: FakeBackend,
+    fails_for: &'static str,
+}
+
+impl Backend for FlakyBackend {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        // `Actor::launch` wraps the user's prompt in the worker's own instructions
+        // (`worker::worker_prompt`), so this matches a substring, not the whole thing.
+        if request.prompt.contains(self.fails_for) {
+            return Err(StartError::Invalid(
+                "this run is scripted to always fail to start".to_owned(),
+            ));
+        }
+        self.inner.start(request)
+    }
+}
+
+pub(crate) fn flaky(fails_for: &'static str, steps: Vec<Step>) -> BackendRegistry {
+    let scratch = tempfile::tempdir().unwrap();
+    let launcher = Launcher::new(
+        DataDir::new(scratch.path()).unwrap(),
+        Environment::inherited(),
+    );
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(FlakyBackend {
+            inner: FakeBackend::new(launcher, Script { steps }).with_cancel_policy(CancelPolicy {
+                signal: Signal::INT,
+                group: false,
+                // The fake's shell can lose a SIGINT that lands while it forks (#188), so
+                // `SIGKILL` follows soon.
+                grace: Duration::from_millis(500),
+            }),
+            fails_for,
+        }),
     );
     backends
 }
@@ -1669,5 +1720,287 @@ async fn a_rate_limited_account_pauses_new_starts_until_its_reset() {
         status_of(runs, second.run_id).status == AgentStatus::Running
     })
     .await;
+    server.stop().await;
+}
+
+// #269 review: a deadlock, and a rate-limited direct start, a queue that skipped validation, and
+// order the scheduler did not actually guarantee.
+
+/// The review's own repro: A holds the one slot, B is queued behind it and always fails to spawn,
+/// C is queued behind B. Cancelling A must promote B (which fails), then C (which must still
+/// start) — and every connection, including one asking about a run this has nothing to do with,
+/// must keep answering throughout. An earlier version of the scheduler deadlocked exactly here:
+/// `Actor::release_slot` awaited a recursive `scheduler::tick` that was still holding the mutex
+/// its own caller held, wedging every actor's commands (and the accept loop, where the periodic
+/// retry ran inline) forever. `poll_until`'s own timeout is what turns that hang into a failing
+/// assertion instead of a wedged test binary.
+#[tokio::test]
+async fn a_run_that_fails_to_spawn_releases_its_slot_so_the_next_queued_run_still_starts() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(flaky(
+        "always fails to spawn",
+        vec![init("s"), text("hi"), Step::Hang],
+    ));
+    config.scheduler_host_limit = 1;
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+
+    let a = start_params(project.id, "A holds the one slot");
+    client.call::<AgentStart>(a.clone()).await.unwrap();
+    let b = start_params(project.id, "always fails to spawn");
+    let queued_b = client.call::<AgentStart>(b.clone()).await.unwrap().run;
+    assert_eq!(queued_b.status, AgentStatus::Queued);
+    let c = start_params(project.id, "C must still get its turn");
+    let queued_c = client.call::<AgentStart>(c.clone()).await.unwrap().run;
+    assert_eq!(queued_c.status, AgentStatus::Queued);
+
+    client
+        .call::<AgentCancel>(AgentCancelParams { run_id: a.run_id })
+        .await
+        .unwrap();
+
+    poll_until(&mut client, 1, |runs| {
+        status_of(runs, b.run_id).status == AgentStatus::Failed
+    })
+    .await;
+    poll_until(&mut client, 1, |runs| {
+        status_of(runs, c.run_id).status == AgentStatus::Running
+    })
+    .await;
+
+    // The connection must still answer promptly, including for a run the deadlock never touched.
+    // The call answering at all is the point; the cancel itself is still in flight when it does
+    // (its snapshot is taken the moment the signal is sent, same as every other cancel here), so
+    // `poll_until` confirms the run actually stops.
+    client
+        .call::<AgentCancel>(AgentCancelParams { run_id: c.run_id })
+        .await
+        .unwrap();
+    poll_until(&mut client, 1, |runs| {
+        status_of(runs, c.run_id).status == AgentStatus::Cancelled
+    })
+    .await;
+    server.stop().await;
+}
+
+/// A permanent error while promoting a queued run — here, its repository is gone by the time its
+/// turn comes — fails the run outright instead of leaving it `queued` and retrying the same dead
+/// end on every future pass.
+#[tokio::test]
+async fn a_permanent_error_while_promoting_a_queued_run_fails_it_instead_of_retrying_forever() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(hang()));
+    config.scheduler_host_limit = 1;
+    config.scheduler_tick_interval = Duration::from_millis(30);
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+    let repo_path = PathBuf::from(&project.repo_path);
+
+    let first = start_params(project.id, "occupies the one slot");
+    client.call::<AgentStart>(first.clone()).await.unwrap();
+    let second = start_params(project.id, "its repository will be gone by its turn");
+    let queued = client.call::<AgentStart>(second.clone()).await.unwrap().run;
+    assert_eq!(queued.status, AgentStatus::Queued);
+
+    std::fs::remove_dir_all(&repo_path).unwrap();
+    client
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: first.run_id,
+        })
+        .await
+        .unwrap();
+
+    let failed = poll_until(&mut client, 1, |runs| {
+        status_of(runs, second.run_id).status == AgentStatus::Failed
+    })
+    .await;
+    assert!(
+        status_of(&failed, second.run_id).error.is_some(),
+        "{:?}",
+        status_of(&failed, second.run_id)
+    );
+    server.stop().await;
+}
+
+/// `agent/start` validates a request the same way whether or not it ends up queued: a bad account
+/// fails immediately, even while the host is full, instead of sitting `queued` forever.
+#[tokio::test]
+async fn a_bad_request_fails_immediately_even_while_the_host_is_full() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(hang()));
+    config.scheduler_host_limit = 1;
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+
+    let first = start_params(project.id, "occupies the one slot");
+    client.call::<AgentStart>(first).await.unwrap();
+
+    let mut bad = start_params(project.id, "names an account that does not exist");
+    bad.account = Some(AccountChoice::Key {
+        id: AccountId::generate(),
+    });
+    let error = client.call::<AgentStart>(bad).await.unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::AccountNotFound);
+
+    let runs = list(&mut client).await;
+    assert_eq!(
+        runs.len(),
+        1,
+        "the bad request must never be recorded: {runs:#?}"
+    );
+    server.stop().await;
+}
+
+/// A rate-limited account pauses a brand-new `agent/start`, not only one that happened to queue
+/// first: the host here has plenty of room, and nothing else is queued.
+#[tokio::test]
+async fn a_rate_limited_account_pauses_a_direct_start_with_a_free_slot() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(vec![
+        init("s"),
+        Step::Emit(Event::RateLimit(LimitWindow {
+            window: "five_hour".to_owned(),
+            duration_minutes: None,
+            used_percent: Some(100.0),
+            status: LimitStatus::Rejected,
+            resets_at: Some(jiff::Timestamp::now() + jiff::Span::new().hours(1)),
+        })),
+        text("hi"),
+        Step::Hang,
+    ]));
+    config.scheduler_host_limit = 4;
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+
+    let first = start_params(project.id, "reports the account rate limited");
+    client.call::<AgentStart>(first).await.unwrap();
+    until(
+        &mut client,
+        has_item(AgentOutputItem::Text {
+            message_id: None,
+            text: "hi".to_owned(),
+        }),
+    )
+    .await;
+
+    let second = start_params(project.id, "must not start on the paused account");
+    let run = client.call::<AgentStart>(second).await.unwrap().run;
+    assert_eq!(
+        run.status,
+        AgentStatus::Queued,
+        "the host has plenty of free slots (4) and nothing is queued, so only the rate limit \
+         explains this"
+    );
+    assert!(
+        run.queued_reason
+            .as_deref()
+            .unwrap()
+            .contains("rate limited"),
+        "{run:?}"
+    );
+    server.stop().await;
+}
+
+/// A new `agent/start` must not start ahead of an older queued run, even in a different project
+/// that, on its own, would have room: once anything is queued host-wide, the scheduler task is
+/// the only thing that promotes, always oldest first.
+#[tokio::test]
+async fn a_new_start_queues_behind_an_older_queued_run_in_a_different_project() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(hang()));
+    config.scheduler_host_limit = 5;
+    config.scheduler_project_limit = 1;
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let dir_b = temp_dir();
+    let project_a = create(&mut client, project_params(dir.path())).await;
+    let project_b = create(&mut client, project_params(dir_b.path())).await;
+
+    let first = start_params(project_a.id, "fills project A's own limit of one");
+    client.call::<AgentStart>(first).await.unwrap();
+    let second = start_params(
+        project_a.id,
+        "queues on A's limit; the host has plenty of room",
+    );
+    let queued = client.call::<AgentStart>(second).await.unwrap().run;
+    assert_eq!(queued.status, AgentStatus::Queued);
+
+    let third = start_params(
+        project_b.id,
+        "a later arrival in an unrelated, empty project",
+    );
+    let run = client.call::<AgentStart>(third).await.unwrap().run;
+    assert_eq!(
+        run.status,
+        AgentStatus::Queued,
+        "a new run must not start ahead of an older queued one, even in a different project"
+    );
+    server.stop().await;
+}
+
+// #272: resumed runs count against the scheduler limits too.
+
+/// Resuming a finished run's session starts a new CLI process, which must respect the same host
+/// limit a fresh start does: it is refused, not silently allowed to exceed the limit, while
+/// another run holds the only slot.
+#[tokio::test]
+async fn resuming_a_finished_run_is_refused_while_the_host_is_full() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(hang()));
+    config.scheduler_host_limit = 1;
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+
+    let done = start_params(project.id, "finishes and can be resumed");
+    let run_id = done.run_id;
+    client.call::<AgentStart>(done).await.unwrap();
+    // Waits for the CLI's session to actually be recorded before cancelling: cancelling too soon
+    // would end the run before it ever became resumable, unrelated to what this test checks.
+    until(
+        &mut client,
+        has_item(AgentOutputItem::Text {
+            message_id: None,
+            text: "Working".to_owned(),
+        }),
+    )
+    .await;
+    client
+        .call::<AgentCancel>(AgentCancelParams { run_id })
+        .await
+        .unwrap();
+    poll_until(&mut client, 1, |runs| {
+        status_of(runs, run_id).status == AgentStatus::Cancelled
+    })
+    .await;
+
+    let holder = start_params(project.id, "holds the only slot");
+    client.call::<AgentStart>(holder).await.unwrap();
+
+    let turn = TurnId::generate();
+    let error = client
+        .call::<AgentSend>(send_params(run_id, turn, "carry on"))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::HostBusy);
+
+    let runs = list(&mut client).await;
+    assert_eq!(
+        status_of(&runs, run_id).status,
+        AgentStatus::Cancelled,
+        "no second CLI was actually started for the resumed run"
+    );
     server.stop().await;
 }

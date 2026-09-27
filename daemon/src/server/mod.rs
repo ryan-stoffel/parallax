@@ -388,16 +388,20 @@ impl Server {
             }
         };
         agents::recover(&daemon).await;
+        // The one scheduler task (#197): it runs its first pass immediately, right after recover,
+        // then wakes on `Scheduler::wake` or its own periodic timer until wispd stops. Spawned on
+        // `Agents`'s own tracker, never run inline here — see `agents/scheduler.rs`'s module doc
+        // for why a promotion must never block the accept loop (or anything else) while it runs.
+        daemon.agents.spawn_background(agents::scheduler::run(
+            Arc::clone(&daemon),
+            config.scheduler_tick_interval,
+        ));
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
         let euid = rustix::process::geteuid().as_raw();
         let period = config.socket_check_interval;
         let mut check = time::interval_at(time::Instant::now() + period, period);
         check.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let scheduler_period = config.scheduler_tick_interval;
-        let mut scheduler_check =
-            time::interval_at(time::Instant::now() + scheduler_period, scheduler_period);
-        scheduler_check.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut connection_id = 0_u64;
 
         loop {
@@ -405,9 +409,6 @@ impl Server {
                 biased;
                 () = shutdown.graceful.cancelled() => break,
                 _ = check.tick() => rebind(&mut socket, &mut listener),
-                // Retries a run waiting only on an account's rate limit, once it resets, even
-                // when nothing else is finishing to trigger `tick` on its own (#197).
-                _ = scheduler_check.tick() => agents::scheduler::tick(&daemon).await,
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => {
                         connection_id += 1;

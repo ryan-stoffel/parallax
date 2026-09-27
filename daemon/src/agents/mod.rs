@@ -197,6 +197,13 @@ impl Agents {
         })?
     }
 
+    /// Runs `task` on the same tracker `detached` uses, without waiting for it: for the
+    /// scheduler's one background task (#197), which outlives every request and every run and
+    /// stops only when wispd itself does.
+    pub(crate) fn spawn_background(&self, task: impl Future<Output = ()> + Send + 'static) {
+        self.tracker.spawn(task);
+    }
+
     fn actor(&self, id: RunId) -> Option<mpsc::Sender<Command>> {
         self.actors
             .lock()
@@ -364,10 +371,10 @@ pub(crate) fn with_queued_reason(daemon: &Daemon, mut run: AgentRun) -> AgentRun
 /// Releases `project`'s scheduler reservation and retries the queue, if `create` actually took
 /// one (`reserved`). Used by `create`'s own failure paths, between admission and the point where
 /// the run's actor exists to release it through `Actor::release_slot` instead.
-async fn release_reservation(daemon: &Arc<Daemon>, project: ProjectId, reserved: bool) {
+fn release_reservation(daemon: &Daemon, project: ProjectId, reserved: bool) {
     if reserved {
         daemon.agents.scheduler.release(project);
-        scheduler::tick(daemon).await;
+        daemon.agents.scheduler.wake();
     }
 }
 
@@ -380,6 +387,7 @@ async fn enqueue(
     prompt: String,
     requested: Option<String>,
     coordinator_thread: Option<CoordinatorThreadId>,
+    reason: Option<(String, Option<jiff::Timestamp>)>,
 ) -> Result<CreatedRun, ErrorObject> {
     let fields = RunFields {
         project_id: project.into(),
@@ -411,6 +419,13 @@ async fn enqueue(
             },
         )
         .await;
+    if let Some((text, expires)) = reason {
+        daemon.agents.scheduler.set_reason(run_id, text, expires);
+    }
+    // Even though this run just queued, a slot may already be free for a different reason (an
+    // account it doesn't share is what's paused, say); waking the scheduler now, instead of
+    // waiting for the periodic timer, keeps that latency low.
+    daemon.agents.scheduler.wake();
     info!(run = %run_id, project = %project, "queued an agent run");
     Ok(CreatedRun {
         run: with_queued_reason(daemon, snapshot),
@@ -596,22 +611,21 @@ pub(crate) struct CreatedRun {
 
 /// Resolves the account and creates the worktree for a new (not queued) run: the two fallible,
 /// slow steps `create` needs between reserving a scheduler slot and recording the run.
-async fn prepare_and_create_worktree(
-    daemon: &Arc<Daemon>,
+/// The worktree half of what `create` needs: `prepare` already ran, up front, so every non-thread
+/// request is validated the same way whether or not it ends up queued (#197 review).
+async fn create_worktree_for(
     agents: &Agents,
-    project: ProjectId,
     run_id: RunId,
-    account: Option<AccountChoice>,
     thread: Option<&NewThread>,
-) -> Result<(Prepared, String, CreatedWorktree, PathBuf, PathBuf), ErrorObject> {
-    let (prepared, scope_path) = prepare(daemon, project, run_id, account).await?;
+    scope_path: String,
+) -> Result<(String, CreatedWorktree, PathBuf, PathBuf), ErrorObject> {
     let repo_path = match thread.and_then(|thread| thread.scratch.clone()) {
         Some(scratch) => scratch.to_string_lossy().into_owned(),
         None => scope_path,
     };
     let (created, worktree_path, git_common_dir) =
         create_worktree(agents, Path::new(&repo_path), run_id).await?;
-    Ok((prepared, repo_path, created, worktree_path, git_common_dir))
+    Ok((repo_path, created, worktree_path, git_common_dir))
 }
 
 /// Creates and starts a run: see the module documentation. Idempotent on the run id.
@@ -648,13 +662,44 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         });
     }
 
+    let is_thread = thread.is_some();
+
+    // Validated up front, before any queueing decision (0014, #197 review): a bad project,
+    // account, or backend fails the same way whether or not the host happens to be full.
+    let (prepared, scope_path) = prepare(&daemon, project, run_id, account).await?;
+
     // A per-host and per-project limit gate new, non-thread runs (#197): normal threads (0017)
     // are a user's own chat, never limited or queued, since the limit is on "running workers".
-    // Reserved here, before anything slow: `prepare`'s account resolution and CLI checks, and
-    // worktree creation, both do real I/O, so admission must be decided (and, on any failure
-    // below, released again) before either runs, not after.
-    let is_thread = thread.is_some();
-    let reserved = !is_thread && agents.scheduler.reserve(project);
+    let reserved = if is_thread {
+        false
+    } else {
+        let account_id = prepared.resolved.account_id();
+        if let Some(until) = agents.scheduler.paused_until(&account_id) {
+            // A rate-limited account pauses new starts on it even when a host and project slot
+            // are both free (#197 review): this is checked here, not only in `scheduler::promote`,
+            // so it applies to every start, not only ones that happened to queue first.
+            let reason = format!("waiting: the account is rate limited until {until}");
+            return enqueue(
+                &daemon,
+                run_id,
+                project,
+                prompt,
+                requested,
+                coordinator_thread,
+                Some((reason, Some(until))),
+            )
+            .await;
+        }
+        // Never let a fresh run cut ahead of an older queued one (#197 review): once anything is
+        // queued host-wide, later non-thread starts join the queue too — even one whose own
+        // project has room — so the scheduler task is the only thing that ever promotes, always
+        // oldest first.
+        let any_queued = store(&daemon, |db| {
+            db.any_run_queued().map_err(|error| store_error(&error))
+        })
+        .await?;
+        !any_queued && agents.scheduler.reserve(project)
+    };
     if !is_thread && !reserved {
         return enqueue(
             &daemon,
@@ -663,18 +708,16 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
             prompt,
             requested,
             coordinator_thread,
+            None,
         )
         .await;
     }
 
-    let prepared_and_worktree =
-        prepare_and_create_worktree(&daemon, agents, project, run_id, account, thread.as_ref())
-            .await;
-    let (prepared, repo_path, created, worktree_path, git_common_dir) = match prepared_and_worktree
-    {
+    let created_worktree = create_worktree_for(agents, run_id, thread.as_ref(), scope_path).await;
+    let (repo_path, created, worktree_path, git_common_dir) = match created_worktree {
         Ok(v) => v,
         Err(error) => {
-            release_reservation(&daemon, project, reserved).await;
+            release_reservation(&daemon, project, reserved);
             return Err(error);
         }
     };
@@ -745,11 +788,19 @@ async fn record_and_launch(
     let (row, worktree, thread_row) = match recorded {
         Ok(v) => v,
         Err(error) => {
-            release_reservation(daemon, project, reserved).await;
+            release_reservation(daemon, project, reserved);
             return Err(error);
         }
     };
-    let snapshot = agent_run(&row, Some(&worktree))?;
+    let snapshot = match agent_run(&row, Some(&worktree)) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            // A corrupt row (#197 review): nothing has launched yet, so the reservation is still
+            // this function's to release, the same as every failure path above.
+            release_reservation(daemon, project, reserved);
+            return Err(error);
+        }
+    };
     daemon
         .log
         .append(
@@ -767,7 +818,13 @@ async fn record_and_launch(
     info!(run = %run_id, project = %project, backend = %row.fields.backend, thread = is_thread, "created an agent run");
 
     // A run just created here has no sent turns yet.
-    let mut actor = Actor::new(Arc::clone(daemon), row, Some(worktree), HashMap::new());
+    let mut actor = Actor::new(
+        Arc::clone(daemon),
+        row,
+        Some(worktree),
+        HashMap::new(),
+        is_thread,
+    );
     if reserved {
         actor.mark_slot_reserved();
     }
@@ -824,7 +881,7 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
     if let Some(actor) = agents.actor(id) {
         return Ok(actor);
     }
-    let (row, worktree, turns) = store(daemon, move |db| {
+    let (row, worktree, turns, is_thread) = store(daemon, move |db| {
         let row = db
             .get_run(id.into())
             .map_err(|e| store_error(&e))?
@@ -843,7 +900,11 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
             )));
         }
         let turns = db.run_turns(id.into()).map_err(|e| store_error(&e))?;
-        Ok((row, worktree, turns))
+        let is_thread = db
+            .get_thread(id.into())
+            .map_err(|e| store_error(&e))?
+            .is_some();
+        Ok((row, worktree, turns, is_thread))
     })
     .await?;
     // A restarted actor rebuilds `agent/send`'s idempotency from the store (#190), since a fresh
@@ -859,7 +920,13 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
             }
         })
         .collect();
-    Ok(agents.spawn(Actor::new(Arc::clone(daemon), row, worktree, turns)))
+    Ok(agents.spawn(Actor::new(
+        Arc::clone(daemon),
+        row,
+        worktree,
+        turns,
+        is_thread,
+    )))
 }
 
 async fn ask<T>(
@@ -940,6 +1007,9 @@ async fn cancel_queued(
             .map_err(|error| store_error(&error))
     })
     .await?;
+    // Nothing reads it again once the run isn't queued any more, but leaving it would otherwise
+    // sit in the map forever (#197 review): a cancelled run's id is never reused.
+    daemon.agents.scheduler.clear_reason(id);
     let snapshot = agent_run(&updated, None)?;
     daemon
         .log
