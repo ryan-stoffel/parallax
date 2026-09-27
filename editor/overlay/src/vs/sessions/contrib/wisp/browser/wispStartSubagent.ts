@@ -58,8 +58,14 @@ export async function pickWorkerAccount(wispdService: IWispdService, quickInputS
 	return picked ? picked.account : null;
 }
 
-/** The account a run was on, to start it again on the same one. */
-function accountOf(run: AgentRun): AccountChoice {
+/** The account a run was on, to start it again on the same one. `undefined` for a run that was
+ * cancelled while still `queued` (#197): its `backend` and `accountId` are both empty, since
+ * nothing was ever resolved for it, not a backend or account actually named `""` — Retry then
+ * falls back to the worker role's default, the same as a fresh start with no account chosen. */
+function accountOf(run: AgentRun): AccountChoice | undefined {
+	if (!run.backend) {
+		return undefined;
+	}
 	return run.accountId === run.backend ? { kind: 'subscription', backend: run.backend } : { kind: 'key', id: run.accountId };
 }
 
