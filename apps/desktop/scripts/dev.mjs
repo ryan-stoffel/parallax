@@ -66,10 +66,13 @@ watch("dist", { recursive: true }, () => {
   timer = setTimeout(restartApp, 200);
 });
 
-function stop() {
+// Clean up on every way out, including an uncaught error.
+process.on("exit", () => {
   app?.kill();
   killPackTree();
+});
+function stop() {
   process.exit();
 }
-process.on("SIGINT", stop);
-process.on("SIGTERM", stop);
+// SIGHUP: a closed terminal signals our group, which no longer holds `vp`.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, stop);
