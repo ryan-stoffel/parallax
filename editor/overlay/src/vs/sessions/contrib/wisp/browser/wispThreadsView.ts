@@ -29,6 +29,8 @@ import { ISession } from '../../../services/sessions/common/session.js';
 import { ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
 import { IWispProjectsService } from '../../providers/wisp/browser/wispProjectsService.js';
 import { compactAge, projectGlyph, projectIdOf } from '../../providers/wisp/common/wispProjects.js';
+import { placeThreadSessions, sidebarFilterLabel } from '../../providers/wisp/common/wispThreads.js';
+import { clearSidebarRepositoryFilter, sidebarRepositoryFilter } from './wispSidebarFilter.js';
 import { WISP_SHOW_ACCOUNTS_COMMAND } from './wispAccountsEditor.js';
 import { WISP_SHOW_HOST_MENU_COMMAND } from './wispHostMenu.js';
 import { IWispHostStatusService } from './wispHostStatusService.js';
@@ -93,6 +95,7 @@ export class WispThreadsView extends ViewPane {
 		// Automations stays hidden until wisp decides on triggers (M6).
 		this.renderAction(actions, Codicon.settings, localize('wispThreads.customize', "Customize"), { run: () => this.commandService.executeCommand(WISP_SHOW_ACCOUNTS_COMMAND) });
 
+		this.renderFilterBanner(root);
 		const lists = append(root, $('.wisp-threads-lists'));
 		this.renderProjects(lists, `${idPrefix}-projects`);
 		// Repositories and No Repo render only once they have threads (#110).
@@ -100,6 +103,28 @@ export class WispThreadsView extends ViewPane {
 		this.renderNewChatState(setNewChatDisabled!);
 
 		this.renderFooter(root);
+	}
+
+	/** "Showing {repository}" while the header's crumb filters the sidebar, with Show all to clear it. */
+	private renderFilterBanner(parent: HTMLElement): void {
+		const banner = append(parent, $('.wisp-threads-filter', { role: 'status' }));
+		banner.hidden = true;
+		const text = append(banner, $('span.wisp-threads-filter-label'));
+		const showAll = append(banner, $<HTMLButtonElement>('button.wisp-threads-link', { type: 'button' }, localize('wispThreads.showAll', "Show all")));
+		this._register(addDisposableListener(showAll, EventType.CLICK, () => clearSidebarRepositoryFilter()));
+		const sessionsChanged = observableSignalFromEvent(this, this.sessionsManagementService.onDidChangeSessions);
+		this._register(autorun(reader => {
+			sessionsChanged.read(reader);
+			const key = sidebarRepositoryFilter.read(reader);
+			if (!key) {
+				banner.hidden = true;
+				return;
+			}
+			const sessions = this.sessionsManagementService.getSessions();
+			text.textContent = localize('wispThreads.showing', "Showing {0}", sidebarFilterLabel(key, placeThreadSessions(sessions)));
+			banner.hidden = false;
+		}));
+		this._register(toDisposable(() => clearSidebarRepositoryFilter()));
 	}
 
 	/** New Chat needs a host whose wispd runs normal threads (decision record 0017). */
@@ -154,6 +179,11 @@ export class WispThreadsView extends ViewPane {
 		this._register(autorun(reader => {
 			sessionsChanged.read(reader);
 			tick.read(reader);
+			if (sidebarRepositoryFilter.read(reader) !== undefined) {
+				section.hidden = true;
+				return;
+			}
+			section.hidden = false;
 			const hostStatus = this.hostStatusService.status.read(reader);
 			const state = this.projectsService.state.read(reader);
 			const connected = hostStatus.kind === 'connected';

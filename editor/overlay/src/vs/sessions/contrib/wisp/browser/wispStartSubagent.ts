@@ -3,22 +3,42 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
+import Severity from '../../../../base/common/severity.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
-import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { INotificationService, NeverShowAgainScope } from '../../../../platform/notification/common/notification.js';
 import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
 import { IWispdService } from '../../../../platform/wisp/common/wispd.js';
-import type { AccountChoice, AgentRun } from '../../../../platform/wisp/common/wispProtocol.js';
+import type { AccountChoice, AgentRun, ProjectId } from '../../../../platform/wisp/common/wispProtocol.js';
+import { generateUuidV7 } from '../../../../platform/wisp/common/uuidv7.js';
 import { IsSessionsWindowContext } from '../../../../workbench/common/contextkeys.js';
 import { ISessionsService } from '../../../services/sessions/browser/sessionsService.js';
 import { ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
 import { IWispAgentsService } from '../../providers/wisp/browser/wispAgentsService.js';
-import { WISP_RETRY_AGENT_COMMAND } from '../../providers/wisp/browser/wispAgentTranscript.js';
+import { WISP_RETRY_AGENT_COMMAND, WISP_SEND_AGAIN_COMMAND } from '../../providers/wisp/browser/wispAgentTranscript.js';
 import { agentChatResource } from '../../providers/wisp/common/wispAgentRuns.js';
 import { projectIdOf, projectResource } from '../../providers/wisp/common/wispProjects.js';
 import { cliLabel } from './wispAccounts.js';
+
+/** The id `noticeBaseDirty`'s "don't show again" is stored under. */
+export const WISP_BASE_DIRTY_NOTICE_ID = 'wisp.agent.baseDirtyNotice';
+
+/**
+ * Tells the user a run's worktree started from `repoLabel`'s last commit while it had uncommitted,
+ * tracked changes (#257): those edits aren't in the run. Every path that can start a run this way —
+ * Start Subagent, Retry Agent, and New Chat — shows the same notice, with a "don't show again" for
+ * a repository that stays dirty across every run.
+ */
+export function noticeBaseDirty(notificationService: INotificationService, repoLabel: string): void {
+	notificationService.prompt(
+		Severity.Info,
+		localize('wispBaseDirty.notice', "This run started from {0}'s last commit. Uncommitted changes there aren't in it.", repoLabel),
+		[],
+		{ neverShowAgain: { id: WISP_BASE_DIRTY_NOTICE_ID, scope: NeverShowAgainScope.PROFILE } },
+	);
+}
 
 export const WISP_START_SUBAGENT_COMMAND = 'wisp.startSubagent';
 
@@ -61,6 +81,11 @@ export async function pickWorkerAccount(wispdService: IWispdService, quickInputS
 /** The account a run was on, to start it again on the same one. */
 function accountOf(run: AgentRun): AccountChoice {
 	return run.accountId === run.backend ? { kind: 'subscription', backend: run.backend } : { kind: 'key', id: run.accountId };
+}
+
+/** A project's title, as its session lists it, for a run that names it by id alone. */
+function projectTitle(sessionsManagementService: ISessionsManagementService, projectId: ProjectId): string | undefined {
+	return sessionsManagementService.getSessions().find(candidate => candidate.resource.toString() === projectResource(projectId).toString())?.title.get();
 }
 
 // Until the coordinator exists (M4), a developer command starts a subagent on the active project,
@@ -109,6 +134,9 @@ registerAction2(class StartSubagentAction extends Action2 {
 			notificationService.error(localize('wispStartSubagent.failed', "The agent didn't start: {0}", toErrorMessage(error)));
 			return;
 		}
+		if (run.baseDirty) {
+			noticeBaseDirty(notificationService, active!.title.get());
+		}
 		await openAgentTab(sessionsService, sessionsManagementService, run);
 	}
 });
@@ -139,6 +167,39 @@ registerAction2(class RetryAgentAction extends Action2 {
 			notificationService.error(localize('wispRetryAgent.failed', "The agent didn't start again: {0}", toErrorMessage(error)));
 			return;
 		}
+		if (run.baseDirty) {
+			noticeBaseDirty(notificationService, projectTitle(sessionsManagementService, run.project) ?? run.project);
+		}
 		await openAgentTab(sessionsService, sessionsManagementService, run);
+	}
+});
+
+registerAction2(class SendAgainAction extends Action2 {
+	constructor() {
+		super({
+			id: WISP_SEND_AGAIN_COMMAND,
+			title: localize2('wispSendAgain.title', "Send Again"),
+			category,
+			f1: false,
+		});
+	}
+
+	/** `turnId` is the message that never arrived. Its text is the one this window sent. */
+	async run(accessor: ServicesAccessor, runId?: unknown, turnId?: unknown): Promise<void> {
+		const agentsService = accessor.get(IWispAgentsService);
+		const notificationService = accessor.get(INotificationService);
+		if (typeof runId !== 'string' || typeof turnId !== 'string') {
+			return;
+		}
+		const text = agentsService.sentText(turnId);
+		if (!text) {
+			notificationService.info(localize('wispSendAgain.missing', "That message isn't available to send again."));
+			return;
+		}
+		try {
+			await agentsService.send(runId, generateUuidV7(), text);
+		} catch (error) {
+			notificationService.error(localize('wispSendAgain.failed', "The message didn't reach the agent: {0}", toErrorMessage(error)));
+		}
 	}
 });

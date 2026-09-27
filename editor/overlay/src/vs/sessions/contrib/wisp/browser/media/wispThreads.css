@@ -367,3 +367,19 @@
 	color: var(--vscode-chat-sessionStateIndicator-inProgressBorder, var(--vscode-progressBar-background));
 	font-size: 10px;
 }
+
+/* The header crumb's repository filter (#302). */
+.wisp-threads-filter {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--vscode-spacing-size80);
+	flex: none;
+	padding: var(--vscode-spacing-size60) var(--vscode-spacing-size80);
+	color: var(--vscode-descriptionForeground);
+	font-size: var(--vscode-fontSize-label1);
+}
+
+.wisp-threads-filter[hidden] {
+	display: none;
+}

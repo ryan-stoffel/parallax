@@ -216,6 +216,20 @@ const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (run_id, turn_id)
         );",
     },
+    // The coordinator thread that started a run through its wisp tools (#195, decision 0019), or
+    // NULL for a run a client started itself. Part of `agent/start`'s idempotent params.
+    Migration {
+        version: 11,
+        sql: "ALTER TABLE runs ADD COLUMN coordinator_thread TEXT;",
+    },
+    // Whether a worktree's base was resolved from a dirty `HEAD` (#257): its repository's tracked
+    // files had uncommitted changes not included in the worktree. A caller shows the user a
+    // notice; it never blocks creating the worktree. Always 0 for an explicit base, and for a row
+    // written before this column existed.
+    Migration {
+        version: 12,
+        sql: "ALTER TABLE worktrees ADD COLUMN base_dirty INTEGER NOT NULL DEFAULT 0;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

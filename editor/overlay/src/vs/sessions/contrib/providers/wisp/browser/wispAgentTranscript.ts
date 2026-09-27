@@ -5,14 +5,17 @@
 import { MarkdownString } from '../../../../../base/common/htmlContent.js';
 import { basename } from '../../../../../base/common/path.js';
 import { localize } from '../../../../../nls.js';
-import type { AgentOutcome, AgentOutputItem, AgentRun, DiffSummary, JsonValue, LoggedEvent, RunId, TurnId } from '../../../../../platform/wisp/common/wispProtocol.js';
-import { IChatProgress, IChatToolInvocationSerialized, ToolConfirmKind } from '../../../../../workbench/contrib/chat/common/chatService/chatService.js';
+import { agentFileUri } from '../../../../../platform/wisp/common/wispAgentFiles.js';
+import type { AgentDiffFile, AgentOutcome, AgentOutputItem, AgentRun, DiffSummary, JsonValue, LoggedEvent, RunId, TurnId } from '../../../../../platform/wisp/common/wispProtocol.js';
+import { IChatMultiDiffDataSerialized, IChatProgress, IChatToolInvocationSerialized, ToolConfirmKind } from '../../../../../workbench/contrib/chat/common/chatService/chatService.js';
 import { ToolDataSource } from '../../../../../workbench/contrib/chat/common/tools/languageModelToolsService.js';
 
 /** The command #157 registers to open a run's changes in the diff review. */
 export const WISP_REVIEW_AGENT_CHANGES_COMMAND = 'wisp.reviewAgentChanges';
 /** Starts a new run with a finished run's task. */
 export const WISP_RETRY_AGENT_COMMAND = 'wisp.retryAgent';
+/** Sends again a message that never reached the agent. */
+export const WISP_SEND_AGAIN_COMMAND = 'wisp.sendAgentMessageAgain';
 
 /** One request and its response in a subagent's chat. */
 export interface IWispTranscriptTurn {
@@ -36,13 +39,29 @@ export type WispTranscriptChange =
 	| { readonly kind: 'parts'; readonly turn: IWispTranscriptTurn; readonly parts: readonly IChatProgress[] }
 	| { readonly kind: 'turnCompleted'; readonly turn: IWispTranscriptTurn }
 	/** A message never reached the agent, so its turn never starts. */
-	| { readonly kind: 'dropped'; readonly turnId: TurnId };
+	| { readonly kind: 'dropped'; readonly turnId: TurnId }
+	/** A closing line needs the file list from `agent/diff` before the turn can end. */
+	| { readonly kind: 'needsFiles' };
+
+/** The files `agent/diff` listed, with the commits their `wisp-agent:` URIs name. */
+export interface IWispListedDiff {
+	readonly base: string;
+	readonly head: string;
+	readonly files: readonly AgentDiffFile[];
+}
 
 export interface IWispTranscriptOptions {
 	/** The text of a message this window sent, by its turn id. */
 	readonly sentText: (turnId: TurnId) => string | undefined;
-	/** Whether #157's review command exists, so the card offers Review changes. */
-	readonly canReview: () => boolean;
+	/** The run's worktree branch, once it exists. */
+	readonly branch?: () => string | undefined;
+	/**
+	 * Files from `agent/diff` for the commit in `DiffSummary`. `undefined` means they are not
+	 * loaded yet, and a turn that changed files waits. The head must be that commit.
+	 */
+	readonly files?: () => IWispListedDiff | undefined;
+	/** A warning or an event kind this transcript does not show. */
+	readonly log?: (message: string) => void;
 }
 
 interface IPendingToolCall {
@@ -57,11 +76,14 @@ interface IPendingToolCall {
  *
  * - `text` and `textDelta` are Markdown; `reasoning` is a thinking part.
  * - A tool call shows once its result arrives, or when its turn ends without one.
- * - `todoList`, `notice`, `warning`, and `followUpDropped` show as they come; `sessionStarted`
- *   and `usage` are not part of the transcript.
- * - A turn's response stays open until the CLI ends or the next message starts. Each time the
- *   CLI ends, a closing card says how, with Review changes and Retry. It waits for the run's new
- *   status, since wispd reports the commit (`agent.diffReady`) after `agent.finished`.
+ * - A vendor `notice` is a transient progress line. A wispd `warning`, and an output kind this
+ *   transcript does not show, is logged and not shown. `sessionStarted` and `usage` are skipped.
+ * - A turn's response stays open until the CLI ends or the next message starts. It then closes
+ *   with a quiet line (docs/design/chat-v2.md, Finished): how long it took, the files from
+ *   `agent/diff`, and no info or warning card. It waits for the run's new status, since wispd
+ *   reports the commit (`agent.diffReady`) after `agent.finished`, and for the file list when
+ *   that commit is new. A later turn that does not change the commit closes on the summary
+ *   already shown; it does not wait to list those files again.
  */
 export class WispAgentTranscript {
 
@@ -75,12 +97,24 @@ export class WispAgentTranscript {
 	private outcome: AgentOutcome | undefined;
 	/** Whether the task's own `turnStarted` has arrived; its id is absent. */
 	private taskStarted = false;
+	/** The worktree branch, from the run and from `agent.started`. */
+	private branch: string | undefined;
+	/** Files supplied for `listedCommit` by `acceptListed`, after `agent/diff`. */
+	private listed: IWispListedDiff | undefined;
+	private listedCommit: string | undefined;
+	/**
+	 * The commit a closing line already showed. A later turn whose diff is still this commit
+	 * closes without waiting on `agent/diff` again: a follow-up that changes nothing emits no
+	 * new `agent.diffReady`, and the previous commit's file list is not that turn's gate.
+	 */
+	private settledCommit: string | undefined;
 
 	constructor(
-		private readonly run: Pick<AgentRun, 'id' | 'prompt' | 'createdAt' | 'diff'>,
+		private readonly run: Pick<AgentRun, 'id' | 'prompt' | 'createdAt' | 'diff' | 'branch'>,
 		private readonly options: IWispTranscriptOptions,
 	) {
 		this.diff = run.diff;
+		this.branch = run.branch;
 		this.turns.push({
 			id: taskTurnId(run.id),
 			turnId: undefined,
@@ -96,6 +130,17 @@ export class WispAgentTranscript {
 	/** The turn that is showing now: the newest. */
 	get current(): IWispTranscriptTurn {
 		return this.turns[this.turns.length - 1];
+	}
+
+	/**
+	 * The commit a closing line is waiting to list, or `undefined` when it is not waiting.
+	 * `acceptListed` takes this commit.
+	 */
+	filesCommit(): string | undefined {
+		if (!this.outcome || !this.waitsForFiles(this.outcome) || this.currentFiles()) {
+			return undefined;
+		}
+		return this.diff?.commit;
 	}
 
 	/** Applies an event once. Events of other runs and kinds this editor doesn't know are skipped. */
@@ -119,10 +164,19 @@ export class WispAgentTranscript {
 			}
 			case 'agent.diffReady':
 				this.diff = event.diff;
+				if (this.listedCommit !== event.diff.commit) {
+					this.listed = undefined;
+					this.listedCommit = undefined;
+				}
+				return [];
+			case 'agent.started':
+				if (event.run?.branch) {
+					this.branch = event.run.branch;
+				}
 				return [];
 			case 'agent.finished':
 				// wispd commits the worktree after the CLI ends, then reports the commit and the
-				// run's new status, so the closing card waits for that status.
+				// run's new status, so the closing line waits for that status.
 				this.outcome = event.outcome;
 				return this.closeTools(time);
 			case 'agent.updated':
@@ -132,13 +186,38 @@ export class WispAgentTranscript {
 		}
 	}
 
+	/**
+	 * Supplies the file list `agent/diff` returned for `commit` (the value of `filesCommit`) and
+	 * closes the turn that was waiting for it. A list that arrives after that wait has ended,
+	 * because the next message already started, is kept for this commit but does not close the
+	 * turn that is streaming now.
+	 */
+	acceptListed(commit: string, listed: IWispListedDiff, time?: number): WispTranscriptChange[] {
+		if (this.filesCommit() !== commit) {
+			if (this.diff?.commit === commit) {
+				this.listed = listed;
+				this.listedCommit = commit;
+			}
+			return [];
+		}
+		const waiting = this.current;
+		this.listed = listed;
+		this.listedCommit = commit;
+		const changes = this.flushOutcome(time, true);
+		if (this.outcome || waiting.complete) {
+			return changes;
+		}
+		changes.push(...this.complete(waiting, time));
+		return changes;
+	}
+
 	private item(item: AgentOutputItem, time: number | undefined): WispTranscriptChange[] {
 		switch (item.kind) {
 			case 'turnStarted':
 				return this.turnStarted(item.turnId, time);
 			case 'turnFinished': {
 				// The turn's response stays open until the CLI ends or the next message starts, so the
-				// closing card lands in it. The task's turn has no id.
+				// closing line lands in it. The task's turn has no id.
 				const turn = this.turns.find(candidate => candidate.turnId === item.turnId);
 				if (turn && turn.finishedAt === undefined) {
 					turn.finishedAt = time;
@@ -187,14 +266,20 @@ export class WispAgentTranscript {
 					},
 				}]);
 			case 'notice':
-				return this.append([{ kind: 'info', content: new MarkdownString().appendText(item.detail) }]);
+				return this.append([{ kind: 'progressMessage', content: new MarkdownString().appendText(item.detail) }]);
 			case 'warning':
-				return this.append([{ kind: 'warning', content: new MarkdownString().appendText(item.detail) }]);
-			case 'followUpDropped':
-				return [...this.append([droppedWarning()]), { kind: 'dropped', turnId: item.turnId }];
-			default:
-				// `sessionStarted`, `usage`, and kinds a newer wispd sends.
+				this.options.log?.(localize('wispAgent.warningSkipped', "Skipped a warning from the agent: {0}", item.detail));
 				return [];
+			case 'followUpDropped':
+				return [...this.append(droppedEnding(this.run.id, item.turnId)), { kind: 'dropped', turnId: item.turnId }];
+			default: {
+				// A newer wispd can send a kind this type doesn't list. `sessionStarted` and `usage` are known and skipped.
+				const kind = item.kind as string;
+				if (kind !== 'sessionStarted' && kind !== 'usage') {
+					this.options.log?.(localize('wispAgent.unknownEvent', "Skipped an agent event ({0}).", kind));
+				}
+				return [];
+			}
 		}
 	}
 
@@ -206,7 +291,9 @@ export class WispAgentTranscript {
 		if (turnId !== undefined && this.turns.some(turn => turn.turnId === turnId)) {
 			return [];
 		}
-		const changes = this.flushOutcome(time);
+		// The next message does not wait for the file list: the previous line closes with the
+		// summary, and chips only if the list is already here.
+		const changes = this.flushOutcome(time, false);
 		changes.push(...this.closeTools(time));
 		const previous = this.current;
 		if (!previous.complete) {
@@ -227,23 +314,37 @@ export class WispAgentTranscript {
 		return changes;
 	}
 
-	/** Shows the closing card of the CLI that just ended, if one hasn't been shown. */
-	private flushOutcome(time: number | undefined): WispTranscriptChange[] {
+	/** Shows the closing line of the CLI that just ended, if one hasn't been shown. */
+	private flushOutcome(time: number | undefined, waitForFiles: boolean): WispTranscriptChange[] {
 		const outcome = this.outcome;
 		if (!outcome) {
 			return [];
 		}
+		const commit = this.diff?.commit;
+		// The same commit already has a closing line. This turn did not change it (wispd emits
+		// no `agent.diffReady` when there is nothing new to commit), so it must not stay open
+		// waiting to list those files again.
+		const alreadySettled = !!commit && commit === this.settledCommit;
+		if (waitForFiles && this.waitsForFiles(outcome) && !this.currentFiles() && !alreadySettled) {
+			return [{ kind: 'needsFiles' }];
+		}
 		this.outcome = undefined;
-		return [...this.closeTools(time), ...this.append(this.card(outcome))];
+		const changes = [...this.closeTools(time), ...this.append(this.ending(outcome, time))];
+		this.settledCommit = commit;
+		return changes;
 	}
 
 	/**
-	 * Shows the closing card, then closes every open turn. It runs when the run stops running,
+	 * Shows the closing line, then closes every open turn. It runs when the run stops running,
 	 * and the chat calls it when the run is no longer running but no `agent.updated` came, as for
-	 * a run wispd found interrupted after a crash.
+	 * a run wispd found interrupted after a crash. A line that still needs `agent/diff` leaves the
+	 * turn open and reports `needsFiles`.
 	 */
 	completeAll(time: number | undefined): WispTranscriptChange[] {
-		const changes: WispTranscriptChange[] = this.flushOutcome(time);
+		const changes: WispTranscriptChange[] = this.flushOutcome(time, true);
+		if (this.outcome) {
+			return changes;
+		}
 		for (const turn of this.turns) {
 			if (!turn.complete) {
 				changes.push(...this.complete(turn, time));
@@ -252,38 +353,27 @@ export class WispAgentTranscript {
 		return changes;
 	}
 
-	private card(outcome: AgentOutcome): IChatProgress[] {
+	private ending(outcome: AgentOutcome, time: number | undefined): IChatProgress[] {
 		const retry = { id: WISP_RETRY_AGENT_COMMAND, title: localize('wispAgent.retry', "Retry"), arguments: [this.run.id] };
-		const review = { id: WISP_REVIEW_AGENT_CHANGES_COMMAND, title: localize('wispAgent.review', "Review changes"), arguments: [this.run.id] };
-		const changed = this.diff && this.diff.files > 0;
-		const summary = !changed
-			? localize('wispAgent.unchanged', "No files changed.")
-			: this.diff!.files === 1
-				? localize('wispAgent.changedOne', "1 file changed, +{0} -{1}.", this.diff!.insertions, this.diff!.deletions)
-				: localize('wispAgent.changed', "{0} files changed, +{1} -{2}.", this.diff!.files, this.diff!.insertions, this.diff!.deletions);
+		const files = this.currentFiles();
 		switch (outcome.status) {
-			case 'completed': {
-				const parts: IChatProgress[] = [{ kind: 'info', content: new MarkdownString().appendText(localize('wispAgent.finished', "Finished. {0}", summary)) }];
-				if (changed && this.options.canReview()) {
-					parts.push({ kind: 'command', command: review });
-				}
-				return parts;
-			}
+			case 'completed':
+				return [quietLine('check', this.doneText(this.duration(time))), ...this.fileList(files)];
 			case 'failed':
+				// #297 rewrites this copy. It is a quiet line until then, not a warning card.
 				return [
-					{ kind: 'warning', content: new MarkdownString().appendText(localize('wispAgent.failedCard', "Failed: {0}", outcome.message)) },
-					{ kind: 'command', command: retry, ...(changed && this.options.canReview() ? { additionalCommands: [review] } : {}) },
+					quietLine(undefined, localize('wispAgent.failedLine', "Failed: {0}", outcome.message)),
+					...this.fileList(files),
+					{ kind: 'command', command: retry },
 				];
 			case 'cancelled':
 				return [
-					{ kind: 'info', content: new MarkdownString().appendText(localize('wispAgent.cancelledCard', "Stopped. {0}", summary)) },
-					{ kind: 'command', command: retry, ...(changed && this.options.canReview() ? { additionalCommands: [review] } : {}) },
-				];
-			case 'interrupted':
-				return [
-					{ kind: 'info', content: new MarkdownString().appendText(localize('wispAgent.interruptedCard', "wispd stopped before this agent finished. Send a message to pick up where it left off.")) },
+					quietLine('primitive-square', this.stoppedText()),
+					...this.fileList(files),
 					{ kind: 'command', command: retry },
 				];
+			case 'interrupted':
+				return [quietLine(undefined, localize('wispAgent.interruptedLine', "wispd restarted before the agent finished. Send a message to pick up where it left off."))];
 			default:
 				return [];
 		}
@@ -315,18 +405,154 @@ export class WispAgentTranscript {
 		turn.parts.push(...parts);
 		return [{ kind: 'parts', turn, parts }];
 	}
+
+	private get changed(): boolean {
+		return !!this.diff && this.diff.files > 0;
+	}
+
+	/** Interrupted turns have no file list: the spec gives them no button, and Review lives on the list. */
+	private waitsForFiles(outcome: AgentOutcome): boolean {
+		return this.changed && outcome.status !== 'interrupted';
+	}
+
+	private currentFiles(): IWispListedDiff | undefined {
+		const commit = this.diff?.commit;
+		if (!commit) {
+			return undefined;
+		}
+		if (this.listed && this.listedCommit === commit) {
+			return this.listed;
+		}
+		const fromOption = this.options.files?.();
+		return fromOption && fromOption.head === commit ? fromOption : undefined;
+	}
+
+	private fileList(files: IWispListedDiff | undefined): IChatProgress[] {
+		if (!this.changed || !files || files.files.length === 0) {
+			return [];
+		}
+		return [multiDiff(this.run.id, files)];
+	}
+
+	private branchName(): string | undefined {
+		return this.options.branch?.() || this.branch;
+	}
+
+	private duration(time: number | undefined): string | undefined {
+		const start = this.current.startedAt;
+		const end = this.current.finishedAt ?? time;
+		if (start === undefined || end === undefined) {
+			return undefined;
+		}
+		return formatTurnDuration(end - start);
+	}
+
+	private doneText(duration: string | undefined): string {
+		if (!this.changed || !this.diff) {
+			return duration
+				? localize('wispAgent.doneUnchanged', "Done in {0}. No files changed.", duration)
+				: localize('wispAgent.doneUnchangedNoTime', "Done. No files changed.");
+		}
+		const stat = fileStat(this.diff);
+		const branch = this.branchName();
+		if (duration && branch) {
+			return localize('wispAgent.done', "Done in {0} · {1} · committed to {2}", duration, stat, branch);
+		}
+		if (duration) {
+			return localize('wispAgent.doneNoBranch', "Done in {0} · {1}", duration, stat);
+		}
+		if (branch) {
+			return localize('wispAgent.doneNoTime', "Done · {0} · committed to {1}", stat, branch);
+		}
+		return localize('wispAgent.doneBare', "Done · {0}", stat);
+	}
+
+	private stoppedText(): string {
+		if (!this.changed || !this.diff) {
+			return localize('wispAgent.stoppedUnchanged', "Stopped. No files changed.");
+		}
+		return localize('wispAgent.stopped', "Stopped · {0}", fileStat(this.diff));
+	}
 }
 
 export function taskTurnId(runId: RunId): string {
 	return `task-${runId}`;
 }
 
-export function droppedWarning(): IChatProgress {
-	return { kind: 'warning', content: new MarkdownString().appendText(localize('wispAgent.followUpDropped', "A message didn't reach the agent before it stopped. Send it again.")) };
+/** A quiet line and **Send again**, for a message that never reached the agent. */
+export function droppedEnding(runId: RunId, turnId: TurnId): IChatProgress[] {
+	return [
+		quietLine(undefined, localize('wispAgent.followUpDropped', "Your message didn't reach the agent before it stopped")),
+		{
+			kind: 'command',
+			command: {
+				id: WISP_SEND_AGAIN_COMMAND,
+				title: localize('wispAgent.sendAgain', "Send again"),
+				arguments: [runId, turnId],
+			},
+		},
+	];
+}
+
+/** `3m 04s` once a turn takes a minute, otherwise `40s`. Hours keep the minutes. */
+export function formatTurnDuration(ms: number): string {
+	const total = Math.max(0, Math.round(ms / 1000));
+	const hours = Math.floor(total / 3600);
+	const minutes = Math.floor((total % 3600) / 60);
+	const seconds = total % 60;
+	if (hours > 0) {
+		return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+	}
+	if (minutes > 0) {
+		return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+	}
+	return `${seconds}s`;
+}
+
+function fileStat(diff: DiffSummary): string {
+	const files = diff.files === 1
+		? localize('wispAgent.oneFile', "1 file changed")
+		: localize('wispAgent.manyFiles', "{0} files changed", diff.files);
+	return localize('wispAgent.fileStat', "{0} +{1} -{2}", files, diff.insertions, diff.deletions);
+}
+
+/** A status line that stays. `icon` is a codicon id, drawn as an icon rather than typed. */
+function quietLine(icon: string | undefined, text: string): IChatProgress {
+	const content = new MarkdownString('', { supportThemeIcons: true });
+	if (icon) {
+		content.appendMarkdown(`$(${icon}) `);
+	}
+	content.appendText(text);
+	return { kind: 'markdownContent', content };
 }
 
 function markdown(text: string): IChatProgress {
 	return { kind: 'markdownContent', content: new MarkdownString(text) };
+}
+
+/** One chip per file. Review changes and Open in IDE are menu items on this part, not buttons here. */
+function multiDiff(runId: RunId, listed: IWispListedDiff): IChatMultiDiffDataSerialized {
+	return {
+		kind: 'multiDiffData',
+		collapsed: false,
+		multiDiffData: {
+			title: listed.files.length === 1
+				? localize('wispAgent.diffOne', "Changed 1 file")
+				: localize('wispAgent.diffMany', "Changed {0} files", listed.files.length),
+			resources: listed.files.map(file => {
+				const basePath = file.oldPath ?? file.path;
+				const originalUri = file.status === 'added' ? undefined : agentFileUri({ runId, side: 'base', path: basePath, commit: listed.base });
+				const modifiedUri = file.status === 'deleted' ? undefined : agentFileUri({ runId, side: 'head', path: file.path, commit: listed.head });
+				return {
+					originalUri,
+					modifiedUri,
+					goToFileUri: modifiedUri ?? originalUri,
+					added: file.insertions,
+					removed: file.deletions,
+				};
+			}),
+		},
+	};
 }
 
 function toolPart(callId: string, name: string, input: JsonValue, status: 'ok' | 'error' | 'denied' | undefined, output: string | undefined): IChatToolInvocationSerialized {

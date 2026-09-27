@@ -38,7 +38,11 @@ export class TestSessionsProvidersService implements ISessionsProvidersService {
 
 	registerProvider(provider: ISessionsProvider): IDisposable {
 		this.providers.set(provider.id, provider);
-		return toDisposable(() => this.providers.delete(provider.id));
+		this.emitter.fire({ added: [provider], removed: [] });
+		return toDisposable(() => {
+			this.providers.delete(provider.id);
+			this.emitter.fire({ added: [], removed: [provider] });
+		});
 	}
 
 	getProviders(): ISessionsProvider[] {
@@ -54,7 +58,7 @@ export class TestSessionsProvidersService implements ISessionsProvidersService {
 	}
 }
 
-/** The two methods of `ISessionsManagementService` wisp's views read, over one provider. */
+/** The methods of `ISessionsManagementService` wisp's views read, over one provider. */
 class TestSessionsManagementService {
 	private readonly emitter = new Emitter<ISessionsChangeEvent>();
 	readonly onDidChangeSessions = this.emitter.event;
@@ -66,6 +70,10 @@ class TestSessionsManagementService {
 
 	getSessions(): ISession[] {
 		return this.provider.getSessions();
+	}
+
+	getSession(resource: URI): ISession | undefined {
+		return this.provider.getSessions().find(session => session.resource.toString() === resource.toString());
 	}
 
 	archiveSession(session: ISession): Promise<void> {
@@ -106,8 +114,13 @@ function environment(isSessionsWindow: boolean): IWorkbenchEnvironmentService {
 /**
  * Upstream's workbench test services, with a test wispd and wisp's own services on top: the host
  * status, the projects, the agent runs, the normal threads, and the sessions provider, which `ISessionsManagementService` reads.
+ *
+ * `configure`, if given, runs after the base stubs (config, wispd) and before wisp's own services
+ * and the sessions provider are constructed, so a test can stub something the provider or
+ * `WispThreadSessions` reads at construction time, such as `INotificationService` — stubbing it
+ * after `createInstance` would leave already-injected consumers holding the old instance.
  */
-export function agentsWindowServices(disposables: Pick<DisposableStore, 'add'>, isSessionsWindow: boolean, host = 'local'): IAgentsWindowServices {
+export function agentsWindowServices(disposables: Pick<DisposableStore, 'add'>, isSessionsWindow: boolean, host = 'local', configure?: (instantiationService: TestInstantiationService) => void): IAgentsWindowServices {
 	const configuration = new TestConfigurationService({ [WISP_HOST_SETTING]: host });
 	const instantiationService = workbenchInstantiationService({
 		environmentService: () => environment(isSessionsWindow),
@@ -122,6 +135,7 @@ export function agentsWindowServices(disposables: Pick<DisposableStore, 'add'>, 
 	const wispd = disposables.add(new TestWispdService());
 	instantiationService.stub(IWispdService, wispd);
 	instantiationService.stub(IConfigurationService, configuration);
+	configure?.(instantiationService);
 	const hostStatus = disposables.add(instantiationService.createInstance(WispHostStatusService));
 	instantiationService.stub(IWispHostStatusService, hostStatus);
 	const projects = disposables.add(instantiationService.createInstance(WispProjectsService));

@@ -28,9 +28,13 @@
 //!
 //! [`WorktreeManager::create`] resolves `base` to a concrete commit once, at creation, so a later
 //! [`WorktreeManager::diff`] is never compared against a ref that has since moved. When the caller
-//! leaves `base` unset (today's only case: the repo's current branch `HEAD`), creation refuses if
-//! the repo's working tree is dirty, since a new worktree cut from `HEAD` would silently drop
-//! those uncommitted changes; an explicit `base` skips that check. [`WorktreeManager::commit_all`]
+//! leaves `base` unset (today's only case: the repo's current branch `HEAD`), creation never
+//! refuses over the repo's own working tree (#257): an untracked file was never going to be in a
+//! fresh worktree anyway, and a tracked, uncommitted change simply isn't included either, the same
+//! as checking out any other commit. [`CreatedWorktree::base_dirty`] flags the latter case — the
+//! repo's tracked files had uncommitted changes at that moment — so a caller can tell the user
+//! those edits aren't in the run; an explicit `base` is never flagged, since the caller chose it on
+//! purpose. [`WorktreeManager::commit_all`]
 //! resolves `user.name`/`user.email` itself, from the repository the user actually works in
 //! (`repo_root`, see [`WorktreeManager::resolve_identity`]), and scrubs every environment
 //! variable that could override them anyway (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `EMAIL`), so a
@@ -235,16 +239,6 @@ pub enum WorktreeError {
         /// What git said.
         detail: String,
     },
-    /// The default base (the repo's current branch `HEAD`) has uncommitted changes, which a new
-    /// worktree cut from that commit would not include.
-    #[error(
-        "{} has uncommitted changes that a new worktree would not include; commit or stash them, or create the worktree from an explicit base",
-        .repo.display()
-    )]
-    DirtyBase {
-        /// The repository.
-        repo: PathBuf,
-    },
     /// [`WorktreeManager::commit_all`] found changes to commit, but the repository has no
     /// `user.name` or `user.email` configured.
     #[error(
@@ -305,6 +299,10 @@ pub struct CreatedWorktree {
     /// `.git` file again (#166): the worktree it names is worker-writable, and a worker could
     /// rewrite it to point anywhere.
     pub git_dir: PathBuf,
+    /// Whether the repository's tracked files had uncommitted changes when `base` was resolved
+    /// from `HEAD` (#257): those changes aren't in this worktree. Always `false` when the caller
+    /// passed an explicit `base`.
+    pub base_dirty: bool,
 }
 
 /// How a changed file differs from the base.
@@ -439,10 +437,9 @@ impl WorktreeManager {
     /// # Errors
     ///
     /// [`WorktreeError::NotAGitRepo`] if `repo_path` isn't a git repository,
-    /// [`WorktreeError::UnknownRevision`] if `base` doesn't resolve,
-    /// [`WorktreeError::DirtyBase`] if `base` was left unset and the repo has uncommitted
-    /// changes, or [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or
-    /// [`WorktreeError::Spawn`] from running git.
+    /// [`WorktreeError::UnknownRevision`] if `base` doesn't resolve, or
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`] from
+    /// running git.
     pub async fn create(
         &self,
         repo_path: &Path,
@@ -452,13 +449,11 @@ impl WorktreeManager {
         let repo_root = self.repo_root(repo_path).await?;
         let _guard = self.lock_repo(&repo_root).await;
 
-        let resolved_base = if let Some(reference) = base {
-            self.resolve_commit(&repo_root, reference).await?
+        let (resolved_base, base_dirty) = if let Some(reference) = base {
+            (self.resolve_commit(&repo_root, reference).await?, false)
         } else {
-            if self.is_dirty(&repo_root).await? {
-                return Err(WorktreeError::DirtyBase { repo: repo_root });
-            }
-            self.resolve_commit(&repo_root, "HEAD").await?
+            let dirty = self.tracked_dirty(&repo_root).await?;
+            (self.resolve_commit(&repo_root, "HEAD").await?, dirty)
         };
 
         let branch = format!("wisp/{}", short_hash(&run_id.to_string()));
@@ -494,6 +489,7 @@ impl WorktreeManager {
             branch,
             base: resolved_base,
             git_dir,
+            base_dirty,
         })
     }
 
@@ -849,9 +845,16 @@ impl WorktreeManager {
         Ok(())
     }
 
-    async fn is_dirty(&self, repo_root: &Path) -> Result<bool, WorktreeError> {
+    /// Whether the repository's tracked files have uncommitted changes, staged or unstaged (#257).
+    /// Untracked files are excluded (`--untracked-files=no`): they were never part of any commit,
+    /// so a worktree cut fresh from `HEAD` doesn't lack anything of theirs a clean `HEAD` wouldn't
+    /// also lack, and they don't warrant flagging [`CreatedWorktree::base_dirty`].
+    async fn tracked_dirty(&self, repo_root: &Path) -> Result<bool, WorktreeError> {
         let status = self
-            .run_git_ok(repo_root, &["status", "--porcelain"])
+            .run_git_ok(
+                repo_root,
+                &["status", "--porcelain", "--untracked-files=no"],
+            )
             .await?;
         Ok(!status.trim().is_empty())
     }

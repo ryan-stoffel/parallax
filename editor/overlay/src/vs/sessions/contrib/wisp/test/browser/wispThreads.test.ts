@@ -4,14 +4,19 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../../../base/browser/window.js';
+import { CancellationError } from '../../../../../base/common/errors.js';
+import Severity from '../../../../../base/common/severity.js';
 import { URI } from '../../../../../base/common/uri.js';
-import type { WispdState } from '../../../../../platform/wisp/common/wispd.js';
+import { INotificationService } from '../../../../../platform/notification/common/notification.js';
+import { WispdError, WispdUnavailableError, type WispdState } from '../../../../../platform/wisp/common/wispd.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { AgentListParams, AgentRun, Repo, RepoAddParams, Thread, ThreadStartParams } from '../../../../../platform/wisp/common/wispProtocol.js';
 import { ISession, SessionStatus } from '../../../../services/sessions/common/session.js';
 import { WispThreadSession } from '../../../providers/wisp/browser/wispThreadSession.js';
 import { agentRunOf } from '../../../providers/wisp/common/wispAgentRuns.js';
-import { placeThreadSessions, repoPathOf, repoUri, threadChatResource, threadResource, threadRunOf, WISP_REPO_SCHEME, WISP_THREAD_SESSION_TYPE } from '../../../providers/wisp/common/wispThreads.js';
+import { filterThreadPlacement, placeThreadSessions, repoPathOf, repoUri, threadChatResource, threadResource, threadRunOf, WISP_NO_REPO_FILTER, WISP_REPO_SCHEME, WISP_THREAD_SESSION_TYPE } from '../../../providers/wisp/common/wispThreads.js';
+import { clearSidebarRepositoryFilter, toggleSidebarRepositoryFilter } from '../../browser/wispSidebarFilter.js';
+import { WISP_BASE_DIRTY_NOTICE_ID } from '../../browser/wispStartSubagent.js';
 import { WispThreadSections } from '../../browser/wispThreadSections.js';
 import { agentsWindowServices, IAgentsWindowServices, settle } from './wispAgentsTestServices.js';
 import { connected, SSH_COMMAND } from './wispHostTestUtils.js';
@@ -56,9 +61,11 @@ suite('wisp: threads', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
+	setup(() => clearSidebarRepositoryFilter());
+
 	/** Services whose wispd has the `threads` capability, two repo entries, and three threads. */
-	async function services(host = 'local', withThreads = true): Promise<IThreadServices> {
-		const context = agentsWindowServices(disposables, true, host);
+	async function services(host = 'local', withThreads = true, configure?: (instantiationService: IThreadServices['instantiationService']) => void): Promise<IThreadServices> {
+		const context = agentsWindowServices(disposables, true, host, configure);
 		const repos = withThreads ? [APP, SCRATCH] : [];
 		const threadList = withThreads ? [
 			thread(IN_REPO, APP),
@@ -144,6 +151,7 @@ suite('wisp: threads', () => {
 			assert.strictEqual(inRepo.status.get(), SessionStatus.InProgress);
 			assert.strictEqual(quick.status.get(), SessionStatus.NeedsInput, 'a finished run with a commit needs review');
 			assert.strictEqual(inRepo.workspace.get()?.label, 'wisp');
+			assert.strictEqual(inRepo.workspace.get()?.isVirtualWorkspace, true, 'a local thread reports a virtual workspace so the title bar hides Run');
 			assert.ok(inRepo.capabilities.get().supportsDelete);
 			assert.deepStrictEqual(context.provider.sessionTypes.map(type => type.id), [WISP_THREAD_SESSION_TYPE]);
 			assert.ok(context.provider.supportsQuickChats);
@@ -194,6 +202,30 @@ suite('wisp: threads', () => {
 			const placement = placeThreadSessions(context.provider.getSessions());
 			assert.deepStrictEqual(placement.repositories.map(group => [group.label, group.sessions.map(session => (session as WispThreadSession).runId)]), [['wisp', [IN_REPO]]]);
 			assert.deepStrictEqual(placement.noRepo.map(session => (session as WispThreadSession).runId), [QUICK]);
+		});
+
+		test('a repository filter keeps that repository and hides the rest', async () => {
+			const context = await services();
+			const placement = placeThreadSessions(context.provider.getSessions());
+			const key = placement.repositories[0].key;
+			assert.deepStrictEqual(filterThreadPlacement(placement, key).repositories.map(group => group.label), ['wisp']);
+			assert.deepStrictEqual(filterThreadPlacement(placement, key).noRepo, []);
+			assert.strictEqual(filterThreadPlacement(placement, undefined), placement);
+			assert.deepStrictEqual(filterThreadPlacement(placement, WISP_NO_REPO_FILTER).repositories, []);
+			assert.strictEqual(filterThreadPlacement(placement, WISP_NO_REPO_FILTER).noRepo.length, 1);
+
+			toggleSidebarRepositoryFilter(key);
+			const container = mainWindow.document.createElement('div');
+			mainWindow.document.body.appendChild(container);
+			try {
+				disposables.add(context.instantiationService.createInstance(WispThreadSections, container, 'filtered'));
+				const sections = [...container.querySelectorAll<HTMLElement>('section')];
+				assert.deepStrictEqual(sections.map(section => section.hidden), [false, true]);
+				assert.deepStrictEqual([...container.querySelectorAll('.wisp-threads-repo-name')].map(heading => heading.textContent), ['wisp']);
+			} finally {
+				clearSidebarRepositoryFilter();
+				container.remove();
+			}
 		});
 
 		test('the sidebar lists them in Repositories and No Repo', async () => {
@@ -276,6 +308,103 @@ suite('wisp: threads', () => {
 			const draft = context.provider.createQuickChat(WISP_THREAD_SESSION_TYPE);
 			context.provider.deleteNewSession(draft.sessionId);
 			await assert.rejects(() => context.provider.sendRequest(draft.sessionId, draft.mainChat.get().resource, { query: 'x' }));
+		});
+	});
+
+	suite('local changes (#257)', () => {
+
+		function send(context: IThreadServices): Promise<ISession> {
+			const draft = context.provider.createNewSession(URI.file(APP.path), WISP_THREAD_SESSION_TYPE);
+			return context.provider.sendRequest(draft.sessionId, draft.mainChat.get().resource, { query: 'Tidy the README' });
+		}
+
+		/**
+		 * Records `INotificationService.prompt` calls. Returns a `configure` hook for `services()`:
+		 * `WispSessionsProvider` (and the `WispThreadSessions` inside it) reads `INotificationService`
+		 * at construction, so stubbing it on `context.instantiationService` afterward would leave the
+		 * already-injected instance in place and the stub would never be called.
+		 */
+		function capturePrompts(respond: (choices: ReadonlyArray<{ label: string; run: () => void }>, options?: { onCancel?: () => void; neverShowAgain?: { id: string } }) => void): { readonly prompts: Array<[string, unknown]>; readonly configure: (instantiationService: IThreadServices['instantiationService']) => void } {
+			const prompts: Array<[string, unknown]> = [];
+			const configure = (instantiationService: IThreadServices['instantiationService']) => instantiationService.stub(INotificationService, {
+				prompt: (_severity: Severity, message: string, choices: ReadonlyArray<{ label: string; run: () => void }>, options?: { onCancel?: () => void; neverShowAgain?: { id: string } }) => {
+					prompts.push([message, options?.neverShowAgain?.id]);
+					respond(choices, options);
+					return undefined;
+				},
+			} as unknown as INotificationService);
+			return { prompts, configure };
+		}
+
+		test('a tracked-dirty run shows a notice naming the repository, with a "don\'t show again" choice', async () => {
+			const { prompts, configure } = capturePrompts(() => { });
+			const context = await services('local', true, configure);
+			const handler = context.wispd.handler!;
+			context.wispd.handler = async (method, params) => {
+				if (method !== 'thread/start') {
+					return handler(method, params);
+				}
+				const started = await handler(method, params) as { readonly thread: Thread; readonly run: AgentRun };
+				return { ...started, run: { ...started.run, baseDirty: true } };
+			};
+			await send(context);
+			assert.deepStrictEqual(prompts, [["This run started from wisp's last commit. Uncommitted changes there aren't in it.", WISP_BASE_DIRTY_NOTICE_ID]]);
+		});
+
+		test('a run that is not flagged dirty shows no notice', async () => {
+			const { prompts, configure } = capturePrompts(() => { });
+			const context = await services('local', true, configure);
+			await send(context);
+			assert.deepStrictEqual(prompts, []);
+		});
+
+		test('a lost connection is retried, idempotently on the run id', async () => {
+			const { prompts, configure } = capturePrompts(choices => choices[0].run());
+			const context = await services('local', true, configure);
+			const handler = context.wispd.handler!;
+			let failures = 1;
+			context.wispd.handler = async (method, params) => {
+				if (method === 'thread/start' && failures-- > 0) {
+					throw new WispdUnavailableError('the connection to wispd was lost');
+				}
+				return handler(method, params);
+			};
+			await send(context);
+			assert.strictEqual(prompts.length, 1);
+			const starts = context.wispd.requests.filter(([method]) => method === 'thread/start').map(([, params]) => (params as ThreadStartParams).runId);
+			assert.strictEqual(starts.length, 2);
+			assert.strictEqual(starts[0], starts[1], 'the retry sends the same run id');
+		});
+
+		test('a transient worktree failure is retried, but a deterministic error is not', async () => {
+			const { prompts, configure } = capturePrompts(choices => choices[0].run());
+			const context = await services('local', true, configure);
+			const handler = context.wispd.handler!;
+			let failures = 1;
+			context.wispd.handler = async (method, params) => {
+				if (method === 'thread/start' && failures-- > 0) {
+					throw new WispdError(-32000, 'git timed out', 'worktreeFailed');
+				}
+				return handler(method, params);
+			};
+			await send(context);
+			assert.strictEqual(prompts.length, 1, 'a transient git failure offers Retry');
+
+			context.wispd.handler = async (method, params) => method === 'thread/start' ? Promise.reject(new WispdError(-32602, 'no repo entry has id x', 'repoNotFound')) : handler(method, params);
+			await assert.rejects(
+				() => send(context),
+				(error: unknown) => error instanceof WispdError && error.kind === 'repoNotFound',
+			);
+			assert.strictEqual(prompts.length, 1, 'a deterministic error is thrown straight through, with no Retry offered');
+		});
+
+		test('declining Retry cancels instead of showing the error again', async () => {
+			const { prompts, configure } = capturePrompts((_choices, options) => options?.onCancel?.());
+			const context = await services('local', true, configure);
+			const handler = context.wispd.handler!;
+			context.wispd.handler = async (method, params) => method === 'thread/start' ? Promise.reject(new WispdError(-32000, 'git timed out', 'worktreeFailed')) : handler(method, params);
+			await assert.rejects(() => send(context), CancellationError);
+			assert.strictEqual(prompts.length, 1, 'no further retry after declining');
 		});
 	});
 

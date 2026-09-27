@@ -18,6 +18,9 @@ pub struct WorktreeFields {
     /// (#166). Every later git call pins it instead of trusting the worktree's `.git` file, which
     /// a worker can rewrite, so it is stored rather than derived again after a restart.
     pub git_dir: String,
+    /// Whether the repository's tracked files had uncommitted changes when `base` was resolved
+    /// from `HEAD` (#257). Always `false` for an explicit `base`.
+    pub base_dirty: bool,
 }
 
 /// A worktree row.
@@ -30,6 +33,8 @@ pub struct Worktree {
     pub base: String,
     /// See [`WorktreeFields::git_dir`]. Empty for a row written before the column existed.
     pub git_dir: String,
+    /// See [`WorktreeFields::base_dirty`]. `false` for a row written before the column existed.
+    pub base_dirty: bool,
     pub created_at: Timestamp,
 }
 
@@ -42,6 +47,7 @@ struct RawWorktree {
     branch: String,
     base: String,
     git_dir: String,
+    base_dirty: bool,
     created_at: String,
 }
 
@@ -54,7 +60,8 @@ impl RawWorktree {
             branch: row.get(3)?,
             base: row.get(4)?,
             git_dir: row.get(5)?,
-            created_at: row.get(6)?,
+            base_dirty: row.get(6)?,
+            created_at: row.get(7)?,
         })
     }
 
@@ -64,6 +71,7 @@ impl RawWorktree {
             && self.branch == fields.branch
             && self.base == fields.base
             && self.git_dir == fields.git_dir
+            && self.base_dirty == fields.base_dirty
     }
 
     fn into_worktree(self) -> Result<Worktree, StoreError> {
@@ -74,6 +82,7 @@ impl RawWorktree {
             branch: self.branch,
             base: self.base,
             git_dir: self.git_dir,
+            base_dirty: self.base_dirty,
             created_at: timestamp::parse(&self.created_at)?,
         })
     }
@@ -82,7 +91,7 @@ impl RawWorktree {
 fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawWorktree>, StoreError> {
     Ok(conn
         .query_row(
-            "SELECT id, repo_path, path, branch, base, git_dir, created_at
+            "SELECT id, repo_path, path, branch, base, git_dir, base_dirty, created_at
              FROM worktrees WHERE id = ?1",
             params![id_text],
             RawWorktree::from_row,
@@ -121,8 +130,8 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "INSERT INTO worktrees (id, repo_path, path, branch, base, git_dir, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO worktrees (id, repo_path, path, branch, base, git_dir, base_dirty, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (id) DO NOTHING",
             params![
                 id_text,
@@ -131,6 +140,7 @@ impl Store {
                 fields.branch,
                 fields.base,
                 fields.git_dir,
+                fields.base_dirty,
                 now
             ],
         )?;
@@ -167,7 +177,7 @@ impl Store {
     /// Returns a database error, or an error if a stored id or timestamp is corrupt.
     pub fn list_worktrees(&self) -> Result<Vec<Worktree>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repo_path, path, branch, base, git_dir, created_at
+            "SELECT id, repo_path, path, branch, base, git_dir, base_dirty, created_at
              FROM worktrees
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -205,8 +215,8 @@ pub(crate) fn insert_worktree(
 ) -> Result<Worktree, StoreError> {
     let id_text = id.to_string();
     let inserted = conn.execute(
-        "INSERT INTO worktrees (id, repo_path, path, branch, base, git_dir, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO worktrees (id, repo_path, path, branch, base, git_dir, base_dirty, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (id) DO NOTHING",
         params![
             id_text,
@@ -215,6 +225,7 @@ pub(crate) fn insert_worktree(
             fields.branch,
             fields.base,
             fields.git_dir,
+            fields.base_dirty,
             timestamp::now()
         ],
     )?;

@@ -8,10 +8,12 @@
 
 import { ValueWithChangeEvent } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { URI } from '../../../../base/common/uri.js';
+import { isUriComponents, URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
-import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { ContextKeyExpr, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
@@ -19,16 +21,23 @@ import { INotificationService } from '../../../../platform/notification/common/n
 import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
 import { agentReviewItems, agentReviewUri, parseAgentReviewUri, reviewedCommit, WISP_AGENT_REVIEW_SCHEME, WISP_AGENT_SCHEME, WispAgentFileSystemProvider } from '../../../../platform/wisp/common/wispAgentFiles.js';
 import { IWispdService, WispdState } from '../../../../platform/wisp/common/wispd.js';
+import { isLocalHost, WISP_HOST_LOCAL, WISP_HOST_SETTING } from '../../../../platform/wisp/common/wispdConfiguration.js';
 import type { AgentRun, RunId } from '../../../../platform/wisp/common/wispProtocol.js';
 import { generateUuidV7 } from '../../../../platform/wisp/common/uuidv7.js';
 import { IWorkbenchContribution, WorkbenchPhase, registerWorkbenchContribution2 } from '../../../common/contributions.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IHostService } from '../../../services/host/browser/host.js';
 import { MultiDiffEditorInput } from '../../multiDiffEditor/browser/multiDiffEditorInput.js';
 import { IMultiDiffSourceResolver, IMultiDiffSourceResolverService, IResolvedMultiDiffSource, MultiDiffEditorItem } from '../../multiDiffEditor/browser/multiDiffSourceResolverService.js';
 
 export const WISP_REVIEW_AGENT_CHANGES = 'wisp.reviewAgentChanges';
 export const WISP_ACCEPT_AGENT_CHANGES = 'wisp.acceptAgentChanges';
 export const WISP_REQUEST_AGENT_CHANGES = 'wisp.requestAgentChanges';
+/** Opens the run's worktree in an editor window. The finished turn's file list contributes it. */
+export const WISP_OPEN_AGENT_IN_IDE = 'wisp.openAgentInIde';
+
+/** A `wisp.agent` chat, the only transcript that contributes these buttons (#296). */
+const inWispAgentChat = ContextKeyExpr.equals('chatSessionType', 'wisp.agent');
 
 /** Whether the connected wispd reviews runs: it advertises the `agentReview` capability. */
 export const WispAgentReviewContext = new RawContextKey<boolean>('wisp.agentReview', false, localize('wisp.agentReview', "Whether the connected wispd can review and accept agent runs"));
@@ -111,14 +120,30 @@ function activeReview(editorService: IEditorService): URI | undefined {
 		: undefined;
 }
 
+/**
+ * A run id passed to a command, or the one in a `wisp.agent` chat resource. The finished turn's
+ * file-list toolbar passes that resource, marshalled, as the menu argument.
+ */
+export function runIdFromArgument(arg: unknown): RunId | undefined {
+	if (typeof arg === 'string') {
+		return arg;
+	}
+	const uri = URI.isUri(arg) ? arg : isUriComponents(arg) ? URI.revive(arg) : undefined;
+	if (!uri || uri.scheme !== 'wisp.agent') {
+		return undefined;
+	}
+	const match = /^\/[^/]+\/([^/]+)$/.exec(uri.path);
+	return match ? match[1] : undefined;
+}
+
 /** The run a command was given, else the one whose review is open, else one the user picks. */
 async function chooseRun(accessor: ServicesAccessor, runId: unknown, placeHolder: string): Promise<AgentRun | undefined> {
 	const wispdService = accessor.get(IWispdService);
 	const quickInputService = accessor.get(IQuickInputService);
 	const notificationService = accessor.get(INotificationService);
 	const open = activeReview(accessor.get(IEditorService));
-	if (typeof runId !== 'string' && open) {
-		runId = parseAgentReviewUri(open)?.runId;
+	if (typeof runId !== 'string') {
+		runId = runIdFromArgument(runId) ?? (open ? parseAgentReviewUri(open)?.runId : undefined);
 	}
 	if (typeof runId === 'string') {
 		const run = await findRun(wispdService, runId);
@@ -179,6 +204,19 @@ registerAction2(class ReviewAgentChangesAction extends Action2 {
 			failed(notificationService, localize('wispAgentReview.reviewFailed', "Couldn't open the agent's changes"), error);
 		}
 	}
+});
+
+// The file list's toolbar shows every contributed action. `navigation` is its first group, and
+// order 1 puts Review changes ahead of Open in IDE: Review is the primary button (#296).
+MenuRegistry.appendMenuItem(MenuId.ChatMultiDiffContext, {
+	command: {
+		id: WISP_REVIEW_AGENT_CHANGES,
+		title: localize('wispAgentReview.reviewChanges', "Review changes"),
+		precondition: WispAgentReviewContext,
+	},
+	group: 'navigation',
+	order: 1,
+	when: ContextKeyExpr.and(inWispAgentChat, WispAgentReviewContext),
 });
 
 registerAction2(class AcceptAgentChangesAction extends Action2 {
@@ -256,5 +294,45 @@ registerAction2(class RequestAgentChangesAction extends Action2 {
 		} catch (error) {
 			failed(notificationService, localize('wispAgentReview.requestFailed', "Couldn't send the requested changes"), error);
 		}
+	}
+});
+
+registerAction2(class OpenAgentInIdeAction extends Action2 {
+	constructor() {
+		super({
+			id: WISP_OPEN_AGENT_IN_IDE,
+			title: localize2('wispAgentReview.openInIde', "Open in IDE"),
+			category,
+			f1: false,
+			menu: {
+				id: MenuId.ChatMultiDiffContext,
+				group: 'navigation',
+				order: 2,
+				when: inWispAgentChat,
+			},
+		});
+	}
+
+	/** Opens the run's worktree when it is on this Mac. Otherwise the session's IDE action. */
+	async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+		const commandService = accessor.get(ICommandService);
+		const hostService = accessor.get(IHostService);
+		const wispdService = accessor.get(IWispdService);
+		const configurationService = accessor.get(IConfigurationService);
+		const notificationService = accessor.get(INotificationService);
+		const runId = runIdFromArgument(arg);
+		try {
+			const run = runId ? await findRun(wispdService, runId) : undefined;
+			const state = await wispdService.getState();
+			const local = state.target ? state.target === WISP_HOST_LOCAL : isLocalHost(configurationService.getValue(WISP_HOST_SETTING));
+			if (run?.worktreePath && local) {
+				await hostService.openWindow([{ folderUri: URI.file(run.worktreePath) }], { forceNewWindow: true });
+				return;
+			}
+		} catch (error) {
+			failed(notificationService, localize('wispAgentReview.openInIdeFailed', "Couldn't open the agent's worktree"), error);
+			return;
+		}
+		await commandService.executeCommand('agents.openSessionInVSCode');
 	}
 });
