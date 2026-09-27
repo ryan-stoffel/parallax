@@ -43,17 +43,15 @@ interface WorkArea {
 export async function captureNativeWindow(app: ElectronApplication, window: Page): Promise<Buffer> {
   const browserWindow = await app.browserWindow(window);
   // The helper runs here, not in Electron: Playwright only sends the callback source.
-  const placed = await browserWindow.evaluate((win: NativeWindow) => {
-    // The callback runs in the Electron main process, which is where `electron` loads.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const electron = require('electron') as {
-      screen: { getDisplayMatching(rect: WorkArea): { workArea: WorkArea } };
-    };
-    return { bounds: win.getBounds(), area: electron.screen.getDisplayMatching(win.getBounds()).workArea };
-  });
+  const bounds = await browserWindow.evaluate((win: NativeWindow) => win.getBounds());
+  const area = await app.evaluate(
+    (electron: { screen: { getDisplayMatching(rect: WorkArea): { workArea: WorkArea } } }, rect: WorkArea) =>
+      electron.screen.getDisplayMatching(rect).workArea,
+    bounds,
+  );
   const info = await browserWindow.evaluate(
-    (win: NativeWindow, bounds: WorkArea) => {
-      win.setBounds(bounds);
+    (win: NativeWindow, next: WorkArea) => {
+      win.setBounds(next);
       win.show();
       win.moveTop();
       win.focus();
@@ -62,7 +60,7 @@ export async function captureNativeWindow(app: ElectronApplication, window: Page
         handleHex: win.getNativeWindowHandle().toString('hex'),
       };
     },
-    boundsInsideWorkArea(placed.bounds, placed.area),
+    boundsInsideWorkArea(bounds, area),
   );
   await delay(500);
 
