@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/../../apps/desktop"
+set -x
+
+node --version
+pnpm --version
+pnpm install --frozen-lockfile
+pnpm check
+pnpm test
+pnpm build

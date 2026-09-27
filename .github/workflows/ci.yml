@@ -55,6 +55,44 @@ jobs:
           scripts/ci/ssh-localhost "$status"
           scripts/ci/check-ssh-attach "$status" "$PWD/target/debug/wispd"
 
+  # The desktop app on every OS it ships to (0022). Electron's binary is never downloaded:
+  # nothing here loads `electron`.
+  app:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      # corepack provides the pnpm pinned in package.json's packageManager.
+      - name: Install pnpm
+        id: pnpm
+        working-directory: apps/desktop
+        run: |
+          corepack enable
+          echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install, check, test, and build
+        run: scripts/ci/check-app
+
   actionlint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -89,7 +127,7 @@ jobs:
   # Branch protection requires this job's name, ci, as the only check (#6). Renaming it blocks every merge.
   ci:
     if: always()
-    needs: [actionlint, rust]
+    needs: [actionlint, app, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

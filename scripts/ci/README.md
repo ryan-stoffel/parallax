@@ -1,10 +1,11 @@
 # CI entry points
 
-Workflows call these scripts instead of running cargo themselves, so a local run is the same as a CI run. Each script finds the repo root on its own, so it runs from any directory.
+Workflows call these scripts instead of running cargo or pnpm themselves, so a local run is the same as a CI run. Each script finds the repo root on its own, so it runs from any directory.
 
 | Script | What it does | Called by |
 | --- | --- | --- |
 | `check-rust` | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo build`, and `cargo test` on the workspace, with `--locked`. The tests include the protocol sample checks. | `ci.yml`, `rust` job |
+| `check-app` | In `apps/desktop/`: `pnpm install --frozen-lockfile`, `pnpm check` (format, lint, type-check), `pnpm test`, and `pnpm build`. | `ci.yml`, `app` job on macOS, Linux, and Windows |
 | `ssh-localhost` | Sets up key-based ssh to localhost with a throwaway key and its own sshd, and writes whether ssh is ready to a status file. Skips cleanly where it can't run. | `ci.yml`, `rust` job |
 | `check-ssh-attach` | Runs `wispd attach` through a real `ssh localhost` (#95) and checks the handshake answer, the ssh exit, and that `serve` outlives the session. Skips when ssh isn't ready, unless `WISP_E2E_REQUIRE_SSH=1`. | `ci.yml`, `rust` job |
 
@@ -12,6 +13,8 @@ Workflows call these scripts instead of running cargo themselves, so a local run
 
 - Rust: rustup. `rust-toolchain.toml` pins the toolchain and its components. In CI, run `rustup toolchain install` with no arguments as its own step before `check-rust`.
 - Node, any recent version, for `check-ssh-attach`. GitHub's macOS runners have it.
+- Node 24 and pnpm through corepack (`corepack enable`) for `check-app`. In CI, `setup-node` reads `apps/desktop/.node-version` and the pnpm store is cached per OS on the lockfile's hash, so a warm run skips the downloads.
+- On Windows the scripts run in Git Bash, the workflow's default shell. `.gitattributes` keeps checkouts LF so they pass the formatter.
 
 ## Protocol samples
 
