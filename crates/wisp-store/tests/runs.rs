@@ -94,6 +94,61 @@ fn a_run_is_created_once_read_back_and_updated() {
 }
 
 #[test]
+fn a_queued_run_is_promoted_with_its_resolved_backend() {
+    let (_dir, store) = open();
+    let (project, id) = (Uuid::now_v7(), Uuid::now_v7());
+    let queued = RunFields {
+        backend: String::new(),
+        ..fields(project)
+    };
+    store
+        .create_run(
+            id,
+            &queued,
+            &RunState {
+                status: "queued".to_owned(),
+                account_id: String::new(),
+                ..RunState::default()
+            },
+        )
+        .unwrap();
+
+    let started = store.start_queued_run(id, "claude", &starting()).unwrap();
+    assert_eq!(started.fields.backend, "claude");
+    assert_eq!(started.state, starting());
+    assert_eq!(store.get_run(id).unwrap().unwrap(), started);
+}
+
+#[test]
+fn promoting_a_run_that_is_no_longer_queued_leaves_it_untouched() {
+    let (_dir, store) = open();
+    let (project, id) = (Uuid::now_v7(), Uuid::now_v7());
+    let cancelled = RunFields {
+        backend: String::new(),
+        ..fields(project)
+    };
+    let state = RunState {
+        status: "cancelled".to_owned(),
+        account_id: String::new(),
+        ..RunState::default()
+    };
+    store.create_run(id, &cancelled, &state).unwrap();
+
+    let result = store.start_queued_run(id, "claude", &starting()).unwrap();
+    assert_eq!(
+        result.fields.backend, "",
+        "the WHERE status = 'queued' guard did not match"
+    );
+    assert_eq!(result.state.status, "cancelled");
+
+    let missing = Uuid::now_v7();
+    assert!(matches!(
+        store.start_queued_run(missing, "claude", &starting()),
+        Err(StoreError::NotFound { id }) if id == missing
+    ));
+}
+
+#[test]
 fn accepting_a_run_records_the_merge_and_drops_its_worktree_together() {
     let (_dir, mut store) = open();
     let (project, id) = (Uuid::now_v7(), Uuid::now_v7());

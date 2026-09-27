@@ -253,6 +253,44 @@ impl Store {
         update(&self.conn, id, state)
     }
 
+    /// Moves queued run `id` into `state` (`starting`, typically), also recording the backend
+    /// routing resolved it to — immutable from here on, like every other run's, so this is the
+    /// only place besides [`Store::create_run`]/[`Store::create_run_with_worktree`] that sets it.
+    /// Guarded by `status = 'queued'` in the `WHERE` clause, so a run a client already cancelled,
+    /// or that another caller already promoted, is left untouched: the caller tells this apart
+    /// from a real update by checking the returned row's `backend`.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no run has `id` at all, or a database error.
+    pub fn start_queued_run(
+        &self,
+        id: Uuid,
+        backend: &str,
+        state: &RunState,
+    ) -> Result<Run, StoreError> {
+        self.conn.execute(
+            "UPDATE runs SET backend = ?2, status = ?3, account_id = ?4, session_id = ?5,
+                             error = ?6, commit_sha = ?7, files_changed = ?8, insertions = ?9,
+                             deletions = ?10, updated_at = ?11
+             WHERE id = ?1 AND status = 'queued'",
+            params![
+                id.to_string(),
+                backend,
+                state.status,
+                state.account_id,
+                state.session_id,
+                state.error,
+                state.commit_sha,
+                state.files_changed,
+                state.insertions,
+                state.deletions,
+                timestamp::now(),
+            ],
+        )?;
+        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
+    }
+
     /// Replaces accepted run `id`'s state and deletes its worktree's row, in one transaction:
     /// `agent/accept` removed the worktree and its branch (#157).
     ///
