@@ -1,17 +1,33 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
 import path from "node:path";
 
+import { THEME_PREFERENCES } from "../preload/bridge";
 import { startHosts } from "./hosts";
 import { isOpenableExternally } from "./links";
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
 const devServerUrl = app.isPackaged ? undefined : process.env["WISP_DEV_SERVER_URL"];
 
+// The window's color before the renderer paints. Matches --background in the
+// renderer's index.css.
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? "#0d0d0f" : "#ffffff");
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    backgroundColor: "#0a0a0a",
+    minWidth: 720,
+    minHeight: 480,
+    // Hidden until the renderer's first paint, which already has the saved
+    // theme, so a theme that differs from the OS's never flashes.
+    show: false,
+    backgroundColor: windowBackground(),
+    // macOS: no title bar, the traffic lights inset over the app's 52px top
+    // row, which the renderer makes draggable. Windows and Linux keep the
+    // native frame, which follows nativeTheme, and hide the menu bar until Alt.
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 19 } }
+      : { autoHideMenuBar: true }),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.cjs"),
       contextIsolation: true,
@@ -19,6 +35,7 @@ function createWindow() {
       sandbox: true,
     },
   });
+  win.once("ready-to-show", () => win.show());
 
   if (devServerUrl) void win.loadURL(devServerUrl);
   else void win.loadFile(path.join(__dirname, "../renderer/index.html"));
@@ -37,6 +54,15 @@ app.on("web-contents-created", (_event, contents) => {
 });
 
 ipcMain.handle("wisp:version", () => app.getVersion());
+
+// The renderer's Appearance setting. Native UI follows it.
+ipcMain.on("wisp:theme", (_event, preference: unknown) => {
+  const source = THEME_PREFERENCES.find((p) => p === preference);
+  if (source) nativeTheme.themeSource = source;
+});
+nativeTheme.on("updated", () => {
+  for (const win of BrowserWindow.getAllWindows()) win.setBackgroundColor(windowBackground());
+});
 
 void app.whenReady().then(() => {
   startHosts();

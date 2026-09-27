@@ -1,1 +1,98 @@
 @import "tailwindcss";
+
+/* Wisp Light and Wisp Dark. The `dark` class on <html> switches them
+   (theme.ts). Components use only these tokens, never raw colors. Every
+   *-foreground keeps at least 4.5:1 contrast on the background and sidebar. */
+:root {
+  color-scheme: light;
+  --background: #ffffff;
+  --sidebar: #f6f6f7;
+  --surface: #ffffff;
+  --foreground: #18181b;
+  --muted-foreground: #4f4f58;
+  --faint-foreground: #63636c;
+  --border: rgb(0 0 0 / 9%);
+  --hover: rgb(0 0 0 / 4.5%);
+  --selected: rgb(0 0 0 / 7%);
+  --primary: #18181b;
+  --primary-foreground: #ffffff;
+  --ring: #3a6ff0;
+  --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
+}
+
+:root.dark {
+  color-scheme: dark;
+  --background: #0d0d0f;
+  --sidebar: #111113;
+  --surface: #17171a;
+  --foreground: #ececef;
+  --muted-foreground: #a8a8b1;
+  --faint-foreground: #86868f;
+  --border: rgb(255 255 255 / 8%);
+  --hover: rgb(255 255 255 / 4.5%);
+  --selected: rgb(255 255 255 / 8%);
+  --primary: #ececef;
+  --primary-foreground: #0d0d0f;
+  --ring: #7c9dff;
+  --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
+}
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --color-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint-foreground: var(--faint-foreground);
+  --color-border: var(--border);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-ring: var(--ring);
+  --shadow-composer: var(--shadow-composer);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+/* Keyboard focus is always visible; mouse focus never draws a ring. In the
+   base layer, so utilities like focus-visible:outline-none still win. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+}
+
+/* The top row doubles as the macOS title bar (main.ts uses hiddenInset).
+   Windows and Linux keep a native frame, so nothing there drags. */
+[data-platform="darwin"] .titlebar {
+  -webkit-app-region: drag;
+}
+[data-platform="darwin"] .titlebar :is(button, a, input, select, textarea, [role="tab"]) {
+  -webkit-app-region: no-drag;
+}
+/* Room for the traffic lights, where a row starts at the window's left edge. */
+[data-platform="darwin"] .traffic-light-inset {
+  padding-left: 80px;
+}
