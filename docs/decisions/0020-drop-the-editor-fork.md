@@ -1,6 +1,6 @@
 # 0020: Drop the editor fork
 
-- Status: accepted
+- Status: accepted; the "no UI" part is superseded by [0022](0022-desktop-app.md)
 - Date: 2026-09-27
 
 ## Context
