@@ -8,7 +8,7 @@ workspace and session-type picker row. wisp uses that for the empty
 thread (#298).
 
 diff --git a/src/vs/sessions/contrib/chat/browser/newChatWidget.ts b/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
-index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..b4e2b3be0f9248569750f0fd4e736c4bdd78c349 100644
+index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..411f7d4e2259b6378a6937572fe73edc72b5ea87 100644
 --- a/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
 +++ b/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
 @@ -12,7 +12,7 @@ import { isCancellationError, onUnexpectedError } from '../../../../base/common/
@@ -16,7 +16,7 @@ index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..b4e2b3be0f9248569750f0fd4e736c4b
  import { Event } from '../../../../base/common/event.js';
  import { Disposable, DisposableMap, DisposableStore, IDisposable, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 -import { constObservable, derived, derivedObservableWithCache, autorun, disposableObservableValue, IObservable, observableFromEvent, observableSignalFromEvent } from '../../../../base/common/observable.js';
-+import { constObservable, derived, derivedObservableWithCache, autorun, disposableObservableValue, IObservable, IReader, observableFromEvent, observableSignalFromEvent } from '../../../../base/common/observable.js';
++import { constObservable, derived, derivedObservableWithCache, autorun, disposableObservableValue, IObservable, IReader, IReaderWithStore, observableFromEvent, observableSignalFromEvent } from '../../../../base/common/observable.js';
  import { isWeb } from '../../../../base/common/platform.js';
  import { basename } from '../../../../base/common/resources.js';
  import { URI } from '../../../../base/common/uri.js';
@@ -186,7 +186,7 @@ index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..b4e2b3be0f9248569750f0fd4e736c4b
 +		return undefined;
 +	}
 +
-+	private _fillEmptyHeading(heading: HTMLElement, presentation: INewChatEmptyThread, reader: IReader): void {
++	private _fillEmptyHeading(heading: HTMLElement, presentation: INewChatEmptyThread, reader: IReaderWithStore): void {
 +		dom.clearNode(heading);
 +		for (const segment of presentation.heading) {
 +			if (!segment.link) {
