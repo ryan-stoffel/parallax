@@ -85,11 +85,15 @@ export async function appears(locator: Locator, timeout: number): Promise<boolea
 export async function appLaunchOptions(): Promise<LaunchOptions> {
   const script = join(repoRoot, 'scripts', 'ci', 'app-launch');
   try {
-    const { stdout } = await execFileAsync(script, { encoding: 'utf8' });
+    // The script has no extension. Windows cannot execute it from the shebang, so run it with node.
+    const { stdout } = await execFileAsync(process.execPath, [script], { encoding: 'utf8' });
     return JSON.parse(stdout) as LaunchOptions;
   } catch (error) {
     const stderr = (error as { stderr?: string }).stderr?.trim();
-    throw new Error(`scripts/ci/app-launch failed${stderr ? `: ${stderr}` : ''}`, { cause: error });
+    const detail = stderr !== undefined && stderr.length > 0
+      ? stderr
+      : (error instanceof Error ? error.message : '');
+    throw new Error(`scripts/ci/app-launch failed${detail.length > 0 ? `: ${detail}` : ''}`, { cause: error });
   }
 }
 

@@ -58,12 +58,13 @@ import { join } from 'node:path';
 import { _electron } from '@playwright/test';
 
 const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-const options = JSON.parse(execFileSync(join(repoRoot, 'scripts/ci/app-launch'), { encoding: 'utf8' }));
+const options = JSON.parse(execFileSync(process.execPath, [join(repoRoot, 'scripts/ci/app-launch')], { encoding: 'utf8' }));
 const electronApp = await _electron.launch({ ...options, env: { ...process.env, ...options.env } });
 const window = await electronApp.firstWindow();
 ```
 
-- It launches a packaged `Wisp.app`: `WISP_APP_BUNDLE` when that is set, otherwise the app that `build-app` built for this Mac's architecture, `editor/VSCode-darwin-<arch>/Wisp.app`. The executable is the bundle's `CFBundleExecutable`, with no arguments.
+- It launches a packaged `Wisp.app`: `WISP_APP_BUNDLE` when that is set, otherwise the app that `build-app` built for this Mac's architecture, `editor/VSCode-darwin-<arch>/Wisp.app`. The executable is the bundle's `CFBundleExecutable`, with no arguments. On Windows, `WISP_APP_DIR` is the directory that contains `Wisp.exe`.
+- Run the script with `node`. It has no file extension, so Windows cannot execute the shebang itself.
 - If there is no app, `app-launch` explains why on stderr, prints nothing to stdout, and exits 1.
 - Every key in the output is an `_electron.launch` option. It prints no `env` today. Merge it anyway, as above, so that an addition cannot drop `PATH`, `HOME`, and the rest.
 - Playwright adds its startup hook only when it locates Electron itself. With `executablePath`, the app starts without waiting for Playwright, so wait for `firstWindow()` before inspecting windows with `electronApp.evaluate()`.
