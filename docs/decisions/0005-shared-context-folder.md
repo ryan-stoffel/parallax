@@ -1,6 +1,6 @@
 # 0005: Shared context is a daemon-owned folder outside the repo
 
-- Status: accepted
+- Status: accepted; the context watcher's backend on Linux and Windows (inotify, `ReadDirectoryChangesW`) is in [0023](0023-cross-platform.md)
 - Date: 2026-09-23
 - Issue: #16
 

@@ -1,6 +1,6 @@
 # 0014: Agent runs in wispd
 
-- Status: accepted; review and accept added by #157
+- Status: accepted; review and accept added by #157; `PATH` fill-in and cancelling on Linux and Windows are in [0023](0023-cross-platform.md)
 - Date: 2026-09-25
 - Issue: #156, #157 (review and accept), #68 (what Accept does), #191 (no hooks in the user's checkout)
 

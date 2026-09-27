@@ -9,7 +9,7 @@ A decision that affects more than one issue gets a record here. Records supersed
 | [0003](0003-naming.md) | Wisp, `wisp`, and `wispd` |
 | [0004](0004-subscription-providers.md) | Subscriptions run through each vendor's official CLI; wisp never handles consumer credentials |
 | [0005](0005-shared-context-folder.md) | Shared context is a daemon-owned folder outside the repo |
-| [0006](0006-release-versioning-and-packaging.md) | Versions come from release tags; releases are arm64-only and ad-hoc signed until #7; bundle id `io.github.ryan-stoffel.wisp` |
+| [0006](0006-release-versioning-and-packaging.md) | Versions come from release tags; macOS releases are arm64-only ([0023](0023-cross-platform.md) adds Linux and Windows) and ad-hoc signed until #7; bundle id `io.github.ryan-stoffel.wisp` |
 | [0007](0007-editor-wispd-protocol.md) | The editor speaks JSON-RPC 2.0 as newline-delimited JSON through `wispd attach`, locally or over the user's `ssh`; types come from the `wisp-protocol` crate |
 | [0008](0008-editor-overlay.md) | `editor/product.json` and `editor/overlay/` reach the editor tree as one commit under the patches, never as a patch |
 | [0009](0009-wispd-data-folder-and-project-host.md) | wispd's files, overrides, log, and exit codes in the data folder; projects have no host field |
@@ -24,6 +24,7 @@ A decision that affects more than one issue gets a record here. Records supersed
 | [0019](0019-coordinator-mcp-tools.md) | The coordinator's wisp tools are `wispd mcp`, an MCP server on stdio bound to one project and one coordinator thread by arguments wispd sets; its runs carry `coordinatorThread`; Claude's coordinator allowlist is its read tools plus exactly the eight `mcp__wispd__*` tools |
 | [0020](0020-drop-the-editor-fork.md) | The editor fork, its UI tests, the screenshot and release workflows, and the TypeScript generator are gone; wisp is `wispd` only until a new frontend is decided; [0022](0022-desktop-app.md) supersedes its no-UI part |
 | [0022](0022-desktop-app.md) | The desktop app is Electron, React, and TypeScript in `apps/desktop/`, built with Vite+ and pnpm and laid out like T3 Code; its main process runs `wispd attach` locally or over `ssh` and speaks 0007's JSON-RPC, the sandboxed renderer uses a typed preload bridge, and protocol types are generated into `apps/desktop/src/protocol/generated/` |
+| [0023](0023-cross-platform.md) | wisp supports macOS, Linux, and Windows, with a per-OS data folder, local transport (a socket, or a per-user named pipe on Windows), service (LaunchAgent, systemd user unit, logon task), secret store, and watcher; native Windows refuses Claude workers, which run in WSL2; PR CI tests macOS arm64, Linux x64, and Windows x64, and releases add Linux and Windows arm64 |
 
 Numbers are assigned in order. Take the next free number when you start the record, add a row to this table in the same PR, and link the record from its issue.
 

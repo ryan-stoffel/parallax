@@ -1,6 +1,6 @@
 # 0009: wispd's data folder, and projects without a host
 
-- Status: accepted
+- Status: accepted; the data folder on Linux and Windows, and a Windows lock file that is never removed, are in [0023](0023-cross-platform.md)
 - Date: 2026-09-24
 - Issue: #59
 

@@ -1,6 +1,6 @@
 # 0004: Subscriptions run through each vendor's official CLI
 
-- Status: accepted
+- Status: accepted; where API keys are kept on Linux and Windows is in [0023](0023-cross-platform.md)
 - Date: 2026-09-23
 - Issue: #15
 
