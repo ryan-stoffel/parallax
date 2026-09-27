@@ -25,7 +25,6 @@ import { INotificationService } from '../../../../platform/notification/common/n
 import type { AgentRun, DiffSummary } from '../../../../platform/wisp/common/wispProtocol.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../../workbench/common/contributions.js';
 import { IsSessionsWindowContext } from '../../../../workbench/common/contextkeys.js';
-import { WISP_ACCEPT_AGENT_CHANGES, WISP_REQUEST_AGENT_CHANGES } from '../../../../workbench/contrib/wisp/browser/wispAgentReview.js';
 import { Menus } from '../../../browser/menus.js';
 import { ISessionHeaderDecoration, setSessionHeaderDecorationReader } from '../../../browser/parts/sessionHeader.js';
 import { SessionTypeContext } from '../../../common/contextkeys.js';
@@ -47,6 +46,10 @@ export const WISP_THREAD_ACCEPT_MENU = MenuId.for('wisp.threadAccept');
 
 const OPEN_IN_IDE = 'agents.openSessionInVSCode';
 const OPEN_CHANGES_VIEW = 'workbench.action.agentSessions.openChangesView';
+// String ids, not an import of wispAgentReview.ts: loading that module registers the review
+// commands, and the transcript then offers a review card (#157's test depends on it staying unregistered).
+const WISP_ACCEPT_AGENT_CHANGES = 'wisp.acceptAgentChanges';
+const WISP_REQUEST_AGENT_CHANGES = 'wisp.requestAgentChanges';
 
 const inWispSession = ContextKeyExpr.or(
 	SessionTypeContext.isEqualTo(WISP_THREAD_SESSION_TYPE),
