@@ -2,6 +2,7 @@
  *  wisp: not part of Code - OSS. Edit editor/overlay in the wisp repo, not this copy.
  *--------------------------------------------------------------------------------------------*/
 
+import { raceTimeout } from '../../../../base/common/async.js';
 import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/path.js';
@@ -31,6 +32,9 @@ const MAX_NAME_BYTES = 256;
 const MAX_PATH_BYTES = 1024;
 
 const encoder = new TextEncoder();
+
+/** How long New Project waits for wisp's provider to list a new project before it stops waiting. */
+export const LISTED_TIMEOUT_MS = 30_000;
 
 /** wispd refuses a `repoPath` with a `.` or `..` segment, so one folder has one spelling. */
 export function hasDotSegment(path: string): boolean {
@@ -116,21 +120,37 @@ export class WispNewProjectFlow {
 				return undefined;
 			}
 			const resource = projectResource(project.id);
-			await this.whenListed(resource);
-			await this.sessionsService.openSession(resource);
+			const outcome = await this.whenListed(project.id, resource);
+			if (outcome === 'listed') {
+				await this.sessionsService.openSession(resource);
+			} else if (outcome === 'timedOut') {
+				this.notificationService.info(localize('wispNewProject.notListed', "Created {0}. It will be in the sidebar once the window finishes loading.", project.name));
+			}
 			return project;
 		}
 	}
 
 	/**
-	 * Resolves once a sessions provider lists `resource`. wisp's provider registers only after the
-	 * window restores, when the workbench is idle, so on a busy machine New Project can create the
-	 * project before there is a provider to open it with (#249).
+	 * Waits for a sessions provider to list the new project's session. wisp's provider registers
+	 * only after the window restores, when the workbench is idle, so on a busy machine New Project
+	 * can create the project before there is a provider to open it with (#249). It gives up when the
+	 * project leaves the list, which a host change does, and after `LISTED_TIMEOUT_MS`.
 	 */
-	private async whenListed(resource: URI): Promise<void> {
-		const listed = () => !!this.sessionsManagementService.getSession(resource);
-		if (!listed()) {
-			await Event.toPromise(Event.filter(Event.any<unknown>(this.sessionsManagementService.onDidChangeSessions, this.sessionsProvidersService.onDidChangeProviders), listed));
+	private async whenListed(projectId: string, resource: URI): Promise<'listed' | 'gone' | 'timedOut'> {
+		const outcome = () => this.sessionsManagementService.getSession(resource) ? 'listed' : this.projectsService.getProject(projectId) ? undefined : 'gone';
+		const store = new DisposableStore();
+		try {
+			const changes = Event.any<unknown>(
+				this.sessionsManagementService.onDidChangeSessions,
+				this.sessionsProvidersService.onDidChangeProviders,
+				Event.fromObservableLight(this.projectsService.projects),
+			);
+			if (!outcome()) {
+				await raceTimeout(Event.toPromise(Event.filter(changes, () => !!outcome()), store), LISTED_TIMEOUT_MS);
+			}
+			return outcome() ?? 'timedOut';
+		} finally {
+			store.dispose();
 		}
 	}
 

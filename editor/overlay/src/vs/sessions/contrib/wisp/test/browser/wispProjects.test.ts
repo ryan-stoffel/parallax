@@ -4,10 +4,11 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../../../base/browser/window.js';
-import { Emitter, Event } from '../../../../../base/common/event.js';
+import { Emitter } from '../../../../../base/common/event.js';
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import Severity from '../../../../../base/common/severity.js';
 import { URI } from '../../../../../base/common/uri.js';
+import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { MenuId, MenuRegistry } from '../../../../../platform/actions/common/actions.js';
 import { IFileDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
@@ -477,28 +478,82 @@ suite('wisp: projects', () => {
 			assert.strictEqual(created?.id, creates[0]);
 		});
 
-		test('opens the project once its session is listed, though wisp\'s provider registers after the create (#249)', async () => {
-			const { instantiationService, wispd, provider, opened } = services();
-			wispd.setState(connected());
+		/**
+		 * New Project with wisp's provider not registered yet, as before upstream creates its
+		 * AfterRestored contribution (#249). `listing.sessions` false hides the provider's sessions.
+		 */
+		async function beforeProvider() {
+			const context = services();
+			context.wispd.setState(connected());
 			await settle();
-			// The window restored, but upstream hasn't created wisp's provider contribution yet.
 			const providers = disposables.add(new TestSessionsProvidersService());
-			instantiationService.stub(ISessionsProvidersService, providers);
-			instantiationService.stub(ISessionsManagementService, {
-				onDidChangeSessions: Event.None,
-				getSession: (resource: URI) => providers.getProviders().flatMap(p => p.getSessions()).find(s => s.resource.toString() === resource.toString()),
+			const sessionsChanged = disposables.add(new Emitter<void>());
+			const listing = { sessions: true };
+			const infos: string[] = [];
+			context.instantiationService.stub(ISessionsProvidersService, providers);
+			context.instantiationService.stub(ISessionsManagementService, {
+				onDidChangeSessions: sessionsChanged.event,
+				getSession: (resource: URI) => listing.sessions ? providers.getProviders().flatMap(p => p.getSessions()).find(s => s.resource.toString() === resource.toString()) : undefined,
 			} as unknown as ISessionsManagementService);
-			instantiationService.stub(IFileDialogService, { showOpenDialog: async () => [URI.file('/Users/ryan/src/billing-service')] } as unknown as IFileDialogService);
-			instantiationService.stub(IQuickInputService, quickInput(['billing-service'], []));
-			const run = instantiationService.createInstance(WispNewProjectFlow).run();
+			context.instantiationService.stub(INotificationService, { info: (message: string) => infos.push(message) } as unknown as INotificationService);
+			context.instantiationService.stub(IFileDialogService, { showOpenDialog: async () => [URI.file('/Users/ryan/src/billing-service')] } as unknown as IFileDialogService);
+			context.instantiationService.stub(IQuickInputService, quickInput(['billing-service'], []));
+			const creates = () => context.wispd.requests.filter(([method]) => method === 'project/create').length;
+			return { ...context, providers, sessionsChanged, listing, infos, creates, start: () => context.instantiationService.createInstance(WispNewProjectFlow).run() };
+		}
+
+		test('opens the project once wisp\'s provider registers, after the create (#249)', async () => {
+			const { providers, provider, opened, infos, creates, start } = await beforeProvider();
+			const run = start();
 			await settle();
-			assert.strictEqual(wispd.requests.filter(([method]) => method === 'project/create').length, 1);
+			assert.strictEqual(creates(), 1);
 			assert.deepStrictEqual(opened, [], 'nothing to open yet: no provider lists the project');
 
 			disposables.add(providers.registerProvider(provider));
 			const created = await run;
 			assert.deepStrictEqual(opened.map(uri => projectIdOf(uri)), [created?.id]);
+			assert.deepStrictEqual(infos, []);
 		});
+
+		test('opens the project once its session is listed through onDidChangeSessions', async () => {
+			const { providers, provider, sessionsChanged, listing, opened, creates, start } = await beforeProvider();
+			disposables.add(providers.registerProvider(provider));
+			listing.sessions = false;
+			const run = start();
+			await settle();
+			assert.strictEqual(creates(), 1);
+			assert.deepStrictEqual(opened, []);
+
+			listing.sessions = true;
+			sessionsChanged.fire();
+			const created = await run;
+			assert.deepStrictEqual(opened.map(uri => projectIdOf(uri)), [created?.id]);
+		});
+
+		test('stops waiting when the host changes, and opens nothing', async () => {
+			const { wispd, opened, infos, creates, start } = await beforeProvider();
+			const run = start();
+			await settle();
+			assert.strictEqual(creates(), 1);
+
+			wispd.setState(connected(SSH_COMMAND));
+			const created = await run;
+			assert.ok(created, 'the project was made on the first host');
+			assert.deepStrictEqual(opened, []);
+			assert.deepStrictEqual(infos, []);
+		});
+
+		test('gives up after a while when no provider ever lists it, says so, and still returns the project', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+			const { opened, infos, creates, start } = await beforeProvider();
+			const run = start();
+			await settle();
+			assert.strictEqual(creates(), 1);
+
+			const created = await run;
+			assert.strictEqual(created?.name, 'billing-service');
+			assert.deepStrictEqual(opened, []);
+			assert.deepStrictEqual(infos, ['Created billing-service. It will be in the sidebar once the window finishes loading.']);
+		}));
 
 		test('paths with . or .. segments are refused before wispd sees them', () => {
 			assert.deepStrictEqual(['/src/../etc', '/src/./app', '/src/app/..', '/src/app/.', '/src/app', '/src/.config/app', '/src/app..x'].map(hasDotSegment), [true, true, true, true, false, false, false]);
