@@ -27,8 +27,8 @@ use super::convert::{self, agent_run, item_bytes, output_item};
 use super::worker::sandbox_path;
 use super::{Prepared, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, Credential, Event, EventStream, FollowUp, ModelUsage, Outcome, Resume, Run,
-    RunRequest, SendError, ToolPolicy, Usage, WorkerSandbox,
+    AccountRef, Credential, Event, EventStream, FailureKind, FollowUp, LimitStatus, ModelUsage,
+    Outcome, Resume, Run, RunRequest, SendError, ToolPolicy, Usage, WorkerSandbox,
 };
 use crate::routing;
 use crate::server::Daemon;
@@ -109,6 +109,12 @@ pub(super) struct Actor {
     stopping: bool,
     /// Set once `thread/delete` removed the run: the actor stops, refusing what is still queued.
     deleted: bool,
+    /// Set by `agents::create`/`scheduler::promote` when the scheduler (#197) reserved this run a
+    /// host and project slot before its first `launch`. Cleared the first time this run's CLI
+    /// stops being live or fails to start, which releases that reservation and retries the queue.
+    /// Never set for a normal thread's run (0017), which the scheduler does not limit, so a
+    /// resumed run's later `launch` calls never touch it either way.
+    slot_reserved: bool,
 }
 
 impl Actor {
@@ -139,11 +145,43 @@ impl Actor {
             last_message,
             stopping: false,
             deleted: false,
+            slot_reserved: false,
         }
     }
 
     pub fn id(&self) -> RunId {
         self.id
+    }
+
+    /// Marks this run as holding a scheduler reservation (#197), to release once its CLI stops
+    /// being live or fails to start. Called only for a run `create`/`scheduler::promote` just
+    /// admitted, before its first `launch`.
+    pub(super) fn mark_slot_reserved(&mut self) {
+        self.slot_reserved = true;
+    }
+
+    /// Releases this run's scheduler reservation, if `launch` took one, and wakes the scheduler
+    /// to try the queue again. Idempotent: only the first call after a reservation does anything,
+    /// so a later `launch` resuming this same run (0014) never double-releases or is mistaken for
+    /// a fresh admission.
+    async fn release_slot(&mut self) {
+        if std::mem::take(&mut self.slot_reserved) {
+            self.daemon.agents.scheduler.release(self.project);
+            // Through `Agents::detached`, not a direct call: `tick` can itself reach this same
+            // method (promoting a queued run whose `launch` immediately fails calls it again),
+            // which would make this async fn's own future infinitely recursive. Spawning breaks
+            // that at the type level, the same way `Agents::detached` already keeps a run's own
+            // bookkeeping going after its request's connection drops.
+            let daemon = Arc::clone(&self.daemon);
+            let _ = self
+                .daemon
+                .agents
+                .detached(async move {
+                    super::scheduler::tick(&daemon).await;
+                    Ok(())
+                })
+                .await;
+        }
     }
 
     pub fn snapshot(&self) -> Result<AgentRun, ErrorObject> {
@@ -585,12 +623,14 @@ impl Actor {
         convert::FAILED.clone_into(&mut self.row.state.status);
         self.row.state.error = Some(message);
         self.save().await;
+        self.release_slot().await;
     }
 
     async fn on_event(&mut self, event: Option<Event>) {
         let Some(event) = event else {
             // An `EventStream` always ends with `Finished`, which clears `live` first.
             self.clear_live();
+            self.release_slot().await;
             return;
         };
         match &event {
@@ -617,7 +657,25 @@ impl Actor {
                 self.row.state.account_id.clone_from(to_account);
                 self.save().await;
             }
-            Event::Usage(_) | Event::RateLimit(_) => {
+            Event::RateLimit(window) => {
+                // A window's `resets_at`, when the vendor reports one, is the precise time #197's
+                // scheduler needs to pause new starts on this account until; a `Warning` or
+                // `Allowed` window isn't a pause. `pause_account` itself is a no-op for an empty
+                // account id, so a run with no account resolved yet can't reach this.
+                if window.status == LimitStatus::Rejected
+                    && let Some(resets_at) = window.resets_at
+                {
+                    self.daemon
+                        .agents
+                        .scheduler
+                        .pause_account(&self.row.state.account_id, resets_at);
+                }
+                self.record_usage(event.clone()).await;
+                if let Some(item) = output_item(&event) {
+                    self.push(item).await;
+                }
+            }
+            Event::Usage(_) => {
                 self.record_usage(event.clone()).await;
                 if let Some(item) = output_item(&event) {
                     self.push(item).await;
@@ -628,6 +686,7 @@ impl Actor {
                 self.record_usage(event).await;
                 self.clear_live();
                 self.finish(&outcome).await;
+                self.release_slot().await;
             }
             _ => {
                 if let Some(item) = output_item(&event) {
@@ -663,6 +722,22 @@ impl Actor {
     /// first, through #166's hardened commit, and reports the commit.
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
+        if let Outcome::Failed(failure) = outcome
+            && failure.failure == FailureKind::RateLimited
+        {
+            // ponytail: a `RateLimit` event (above) already paused the account precisely, when
+            // the vendor sent one; this is only the fallback for a CLI that fails outright with no
+            // such event. A guessed one-hour cooldown, not the vendor's real reset time, so the
+            // queue does not immediately retry the same account. `pause_account`'s "later wins"
+            // rule means this never shortens a precise pause already recorded. Upgrade: have every
+            // backend translate a `RateLimited` failure into a `RateLimit` window with the
+            // vendor's own reset time, if it reports one, instead of guessing here.
+            let until = jiff::Timestamp::now() + jiff::Span::new().hours(1);
+            self.daemon
+                .agents
+                .scheduler
+                .pause_account(&self.row.state.account_id, until);
+        }
         if self.stopping && matches!(outcome, Outcome::Cancelled) {
             info!(run = %self.id, "an agent run was interrupted because wispd is stopping");
             self.append(WispEvent::AgentFinished {

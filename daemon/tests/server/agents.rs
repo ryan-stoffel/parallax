@@ -29,7 +29,8 @@ use wisp_protocol::{
 use wispd::backend::fake::{FakeBackend, Script, Step};
 use wispd::backend::process::{CancelPolicy, Environment, Launcher};
 use wispd::backend::{
-    Backend, Capabilities, Event, FailureKind, ModelUsage, RunRequest, StartError, Started, Usage,
+    Backend, Capabilities, Event, FailureKind, LimitStatus, LimitWindow, ModelUsage, RunRequest,
+    StartError, Started, Usage,
 };
 use wispd::paths::DataDir;
 use wispd::routing::BackendRegistry;
@@ -1431,4 +1432,242 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
     assert_eq!(accepted.merge.how, AgentMergeKind::FastForward);
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), diff.head);
     host.server.stop().await;
+}
+
+// #197: the host and project scheduler.
+
+/// Runs `list` until `ready` accepts what it returns, asserting on every poll that no more than
+/// `host_limit` runs are `starting` or `running` at once. Polls rather than following events,
+/// since several runs progress concurrently here and a single `until` can only wait for one, and
+/// `queued_reason` (unlike a run's stored fields) is never carried on the event stream, only on
+/// `agent/list` and `agent/start`'s own results.
+async fn poll_until(
+    client: &mut Conn,
+    host_limit: usize,
+    mut ready: impl FnMut(&[AgentRun]) -> bool,
+) -> Vec<AgentRun> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let runs = list(client).await;
+        let active = runs
+            .iter()
+            .filter(|run| matches!(run.status, AgentStatus::Starting | AgentStatus::Running))
+            .count();
+        assert!(
+            active <= host_limit,
+            "more than the host limit of {host_limit} ran at once: {runs:#?}"
+        );
+        if ready(&runs) {
+            return runs;
+        }
+        assert!(Instant::now() < deadline, "gave up waiting; got {runs:#?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn status_of(runs: &[AgentRun], id: RunId) -> &AgentRun {
+    runs.iter()
+        .find(|run| run.id == id)
+        .unwrap_or_else(|| panic!("run {id} is listed: {runs:#?}"))
+}
+
+#[tokio::test]
+async fn five_spawns_under_a_host_limit_of_two_run_at_most_two_at_once_and_all_finish() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(vec![init("s"), text("hi"), Step::Hang]));
+    config.scheduler_host_limit = 2;
+    config.scheduler_project_limit = 5; // isolate the host limit; not what this test checks
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+
+    let mut run_ids = Vec::new();
+    for i in 0..5 {
+        let params = start_params(project.id, &format!("task {i}"));
+        run_ids.push(params.run_id);
+        client.call::<AgentStart>(params).await.unwrap();
+    }
+
+    let runs = poll_until(&mut client, 2, |runs| {
+        let active = runs
+            .iter()
+            .filter(|run| matches!(run.status, AgentStatus::Starting | AgentStatus::Running))
+            .count();
+        let queued = runs
+            .iter()
+            .filter(|run| run.status == AgentStatus::Queued)
+            .count();
+        active == 2 && queued == 3
+    })
+    .await;
+    for run in runs.iter().filter(|run| run.status == AgentStatus::Queued) {
+        assert!(run.queued_reason.is_some(), "{run:?}");
+    }
+
+    // Cancel every run in the order it was created. Each cancel frees a slot, which the scheduler
+    // fills from the queue, so the next-oldest queued run gets its turn.
+    for &id in &run_ids {
+        poll_until(&mut client, 2, |runs| {
+            matches!(
+                status_of(runs, id).status,
+                AgentStatus::Starting | AgentStatus::Running
+            )
+        })
+        .await;
+        client
+            .call::<AgentCancel>(AgentCancelParams { run_id: id })
+            .await
+            .unwrap();
+    }
+
+    let finished = poll_until(&mut client, 2, |runs| {
+        runs.iter().all(|run| run.status == AgentStatus::Cancelled)
+    })
+    .await;
+    assert_eq!(finished.len(), 5);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn cancelling_a_queued_run_creates_no_worktree() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(hang()));
+    config.scheduler_host_limit = 1;
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+
+    let running = start_params(project.id, "keeps the one slot busy");
+    client.call::<AgentStart>(running).await.unwrap();
+
+    let params = start_params(project.id, "never gets a worktree");
+    let queued = client.call::<AgentStart>(params.clone()).await.unwrap().run;
+    assert_eq!(queued.status, AgentStatus::Queued);
+    assert_eq!(queued.worktree_path, None);
+    assert_eq!(queued.branch, None);
+
+    let cancelled = client
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: params.run_id,
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(cancelled.status, AgentStatus::Cancelled);
+    assert_eq!(
+        cancelled.worktree_path, None,
+        "cancelling a queued run must never create one"
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn queued_runs_survive_a_restart() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(hang()));
+    config.scheduler_host_limit = 1;
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+
+    let first = start_params(project.id, "occupies the one slot");
+    client.call::<AgentStart>(first).await.unwrap();
+    let second = start_params(project.id, "stays queued");
+    let queued = client.call::<AgentStart>(second.clone()).await.unwrap().run;
+    assert_eq!(queued.status, AgentStatus::Queued);
+    drop(client);
+    server.stop().await;
+
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(hang()));
+    config.scheduler_host_limit = 1;
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let runs = list(&mut client).await;
+    let still_queued = status_of(&runs, second.run_id);
+    assert_eq!(
+        still_queued.status,
+        AgentStatus::Queued,
+        "a restart must not lose or reinterpret a queued run: {still_queued:?}"
+    );
+    assert_eq!(still_queued.worktree_path, None);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_rate_limited_account_pauses_new_starts_until_its_reset() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(fake(vec![
+        init("s"),
+        Step::Emit(Event::RateLimit(LimitWindow {
+            window: "five_hour".to_owned(),
+            duration_minutes: None,
+            used_percent: Some(100.0),
+            status: LimitStatus::Rejected,
+            resets_at: Some(jiff::Timestamp::now() + jiff::Span::new().seconds(2)),
+        })),
+        text("hi"),
+        Step::Hang,
+    ]));
+    config.scheduler_host_limit = 1;
+    // Fast enough that the periodic tick notices the reset well inside `PATIENCE`, with no other
+    // run finishing to trigger a retry.
+    config.scheduler_tick_interval = Duration::from_millis(30);
+    let server = InProcess::start(config);
+    let mut client = Conn::ready(&server.socket).await;
+    let project = create(&mut client, project_params(dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+
+    let first = start_params(project.id, "reports the account rate limited");
+    let first_id = first.run_id;
+    client.call::<AgentStart>(first).await.unwrap();
+    // The script's `RateLimit` event precedes "hi"; waiting for "hi" means the actor already
+    // processed it and paused the account before the second run is admitted.
+    until(
+        &mut client,
+        has_item(AgentOutputItem::Text {
+            message_id: None,
+            text: "hi".to_owned(),
+        }),
+    )
+    .await;
+
+    let second = start_params(project.id, "waits for the same account");
+    let queued = client.call::<AgentStart>(second.clone()).await.unwrap().run;
+    assert_eq!(
+        queued.status,
+        AgentStatus::Queued,
+        "the one host slot is still taken by the first run"
+    );
+
+    client
+        .call::<AgentCancel>(AgentCancelParams { run_id: first_id })
+        .await
+        .unwrap();
+
+    // The freed slot's own tick considers the second run, finds its account still paused, and
+    // leaves it queued with a reason instead of starting it.
+    let paused = poll_until(&mut client, 1, |runs| {
+        status_of(runs, second.run_id)
+            .queued_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("rate limited"))
+    })
+    .await;
+    assert_eq!(
+        status_of(&paused, second.run_id).status,
+        AgentStatus::Queued
+    );
+
+    // Once the window resets, the periodic tick promotes it on its own, with nothing else
+    // finishing to trigger a retry.
+    poll_until(&mut client, 1, |runs| {
+        status_of(runs, second.run_id).status == AgentStatus::Running
+    })
+    .await;
+    server.stop().await;
 }

@@ -50,6 +50,11 @@ pub(super) const FAILED: &str = "failed";
 pub(super) const CANCELLED: &str = "cancelled";
 pub(super) const INTERRUPTED: &str = "interrupted";
 pub(super) const ACCEPTED: &str = "accepted";
+pub(super) const QUEUED: &str = "queued";
+
+/// The store's sentinel for "not resolved yet": a queued run's `backend` and `account_id` before
+/// it starts, the same empty-string convention `usage_deltas.model` already uses for "no value".
+pub(super) const UNRESOLVED: &str = "";
 
 /// The store's text for the only policy `agent/start` takes.
 pub(super) const WORKSPACE_WRITE: &str = "workspaceWrite";
@@ -63,6 +68,7 @@ fn status(text: &str) -> AgentStatus {
         CANCELLED => AgentStatus::Cancelled,
         INTERRUPTED => AgentStatus::Interrupted,
         ACCEPTED => AgentStatus::Accepted,
+        QUEUED => AgentStatus::Queued,
         _ => AgentStatus::Unknown,
     }
 }
@@ -105,6 +111,10 @@ pub(crate) fn agent_run(
             .map(CoordinatorThreadId::try_from)
             .transpose()
             .map_err(|_| corrupt("coordinator thread id"))?,
+        // Filled in by callers that have a `Scheduler` to ask (`agents::queue_reason`), never
+        // here: this conversion has no access to the live host/project counts or the rate-limit
+        // cache a reason needs, and a stored one would go stale the moment a slot frees.
+        queued_reason: None,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -119,6 +129,7 @@ pub(super) fn run_state(row: &wisp_store::Run) -> AgentRunState {
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),
+        queued_reason: None,
         updated_at: row.updated_at,
     }
 }

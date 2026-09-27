@@ -114,7 +114,10 @@ pub(crate) async fn list(
         .await?;
     let runs = runs
         .iter()
-        .map(|(row, worktree)| agents::snapshot(row, worktree.as_ref()))
+        .map(|(row, worktree)| {
+            agents::snapshot(row, worktree.as_ref())
+                .map(|run| agents::with_queued_reason(&context.daemon, run))
+        })
         .collect::<Result<_, _>>()?;
     Ok(AgentListResult { runs, seq })
 }

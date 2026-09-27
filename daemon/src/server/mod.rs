@@ -82,6 +82,15 @@ pub struct Config {
     pub max_requests_in_flight: usize,
     /// Replies one connection may have waiting to be written. 32 by default.
     pub outbound_queue: usize,
+    /// The most non-thread runs `agent/start` admits at once, host-wide; more wait `queued`
+    /// (#197). 4 by default.
+    pub scheduler_host_limit: u32,
+    /// The most non-thread runs `agent/start` admits at once, per project (#197). 3 by default.
+    pub scheduler_project_limit: u32,
+    /// How often the scheduler retries the queue on its own, so a run waiting only on an
+    /// account's rate limit resumes once it resets even with no other run finishing to trigger a
+    /// retry. 30 s by default.
+    pub scheduler_tick_interval: Duration,
     /// The backends workers run on (#156). `None`, the default, registers Claude Code for
     /// Anthropic accounts; tests register a fake.
     pub backends: Option<BackendRegistry>,
@@ -104,6 +113,9 @@ impl Config {
             host_event_retention: 10_000,
             max_requests_in_flight: 32,
             outbound_queue: 32,
+            scheduler_host_limit: 4,
+            scheduler_project_limit: 3,
+            scheduler_tick_interval: Duration::from_secs(30),
             backends: None,
             agent_environment: None,
         }
@@ -303,7 +315,12 @@ impl Server {
             keys: Arc::new(KeychainStore::new()),
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
-            agents: Agents::new(backends, worktrees),
+            agents: Agents::new(
+                backends,
+                worktrees,
+                config.scheduler_host_limit,
+                config.scheduler_project_limit,
+            ),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -377,6 +394,10 @@ impl Server {
         let period = config.socket_check_interval;
         let mut check = time::interval_at(time::Instant::now() + period, period);
         check.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let scheduler_period = config.scheduler_tick_interval;
+        let mut scheduler_check =
+            time::interval_at(time::Instant::now() + scheduler_period, scheduler_period);
+        scheduler_check.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut connection_id = 0_u64;
 
         loop {
@@ -384,6 +405,9 @@ impl Server {
                 biased;
                 () = shutdown.graceful.cancelled() => break,
                 _ = check.tick() => rebind(&mut socket, &mut listener),
+                // Retries a run waiting only on an account's rate limit, once it resets, even
+                // when nothing else is finishing to trigger `tick` on its own (#197).
+                _ = scheduler_check.tick() => agents::scheduler::tick(&daemon).await,
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => {
                         connection_id += 1;
@@ -514,7 +538,9 @@ impl Daemon {
             keys: Arc::new(crate::keystore::MemoryKeyStore::new()),
             data_dir: DataDir::new(dir).unwrap(),
             context: ContextIndex::default(),
-            agents: Agents::new(BackendRegistry::new(), worktrees),
+            // The production defaults (4, 3): tests that need tighter limits set them on
+            // `Config` instead, through `InProcess::config` (`daemon/tests/server/support.rs`).
+            agents: Agents::new(BackendRegistry::new(), worktrees, 4, 3),
         })
     }
 }
