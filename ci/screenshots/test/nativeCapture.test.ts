@@ -68,6 +68,10 @@ function chunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([length, Buffer.from(type), data, Buffer.alloc(4)]);
 }
 
+function captionGlyph(x: number, y: number, starts: readonly number[]): boolean {
+  return y >= 8 && y <= 18 && starts.some((start) => x >= start && x <= start + 8);
+}
+
 function fill(color: [number, number, number]): (x: number, y: number) => [number, number, number] {
   return () => color;
 }
@@ -96,25 +100,60 @@ test('macOS traffic lights are the colored controls at the top left', () => {
 });
 
 test('Windows caption buttons are the contrasting controls at the top right', () => {
-  const image = png(200, 100, (x, y) => {
-    const glyph = y >= 6 && y <= 14 && ((x >= 160 && x <= 168) || (x >= 176 && x <= 184) || (x >= 192 && x <= 198));
-    return glyph ? [236, 236, 236] : gray;
-  });
+  const image = png(400, 120, (x, y) => (captionGlyph(x, y, [330, 360, 390]) ? [236, 236, 236] : gray));
   assert.equal(decorationProblem(image, 'win32'), undefined);
   assert.match(decorationProblem(image, 'darwin') ?? '', /traffic lights/);
 });
 
+test('a hole inside one icon does not count as another caption button', () => {
+  const image = png(400, 120, (x, y) => {
+    const splitClose = y >= 8 && y <= 18 && x >= 390 && x <= 398 && !(x >= 393 && x <= 395);
+    return captionGlyph(x, y, [330, 360]) || splitClose ? [236, 236, 236] : gray;
+  });
+  assert.equal(decorationProblem(image, 'win32'), undefined);
+});
+
 test('one caption mark is not minimize, maximize, and close', () => {
-  const image = png(200, 100, (x, y) => (y >= 4 && y <= 14 && x >= 168 && x <= 190 ? [236, 236, 236] : gray));
+  const image = png(400, 120, (x, y) => (captionGlyph(x, y, [390]) ? [236, 236, 236] : gray));
   assert.match(decorationProblem(image, 'win32') ?? '', /three separate caption buttons/);
 });
 
+test('minimize and maximize without close are not the three caption buttons', () => {
+  const image = png(400, 120, (x, y) => (captionGlyph(x, y, [330, 360]) ? [236, 236, 236] : gray));
+  assert.match(decorationProblem(image, 'win32') ?? '', /three separate caption buttons/);
+});
+
+test('caption buttons still count when the desktop shows through the frame', () => {
+  const image = png(400, 120, (x, y) => {
+    if (x >= 396) {
+      return [180, 40, 90];
+    }
+    return captionGlyph(x, y, [260, 300, 340]) ? [236, 236, 236] : gray;
+  });
+  assert.equal(decorationProblem(image, 'win32'), undefined);
+});
+
+test('the desktop strip is not the close button', () => {
+  const image = png(400, 120, (x, y) => {
+    if (x >= 396) {
+      return [180, 40, 90];
+    }
+    return captionGlyph(x, y, [300, 340]) ? [236, 236, 236] : gray;
+  });
+  assert.match(decorationProblem(image, 'win32') ?? '', /three separate caption buttons/);
+});
+
+test('a mark to the left of minimize is not one of the three caption buttons', () => {
+  const image = png(400, 120, (x, y) => (captionGlyph(x, y, [250, 300, 340, 380]) ? [236, 236, 236] : gray));
+  assert.equal(decorationProblem(image, 'win32'), undefined);
+});
+
 test('a transparent strip on the right is a clipped window', () => {
-  const image = pngRgba(220, 100, (x, y) => {
-    if (x >= 200) {
+  const image = pngRgba(420, 120, (x, y) => {
+    if (x >= 400) {
       return [0, 0, 0, 0];
     }
-    const glyph = y >= 6 && y <= 14 && ((x >= 160 && x <= 168) || (x >= 176 && x <= 184) || (x >= 192 && x <= 198));
+    const glyph = captionGlyph(x, y, [330, 360, 390]);
     return glyph ? [236, 236, 236, 255] : [gray[0], gray[1], gray[2], 255];
   });
   assert.match(decorationProblem(image, 'win32') ?? '', /right edge/);

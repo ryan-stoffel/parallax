@@ -11,6 +11,7 @@ import {
   type ScenarioContext,
   type Session,
 } from './harness.ts';
+import { NativeWindowCaptureError } from './nativeCapture.ts';
 import {
   capturedFile,
   failedFile,
@@ -122,7 +123,11 @@ async function capture(scenario: Scenario, options: LaunchOptions): Promise<Resu
     await writeFile(join(outDir, capturedFile(name)), shot);
     return { name, title, status: 'captured', file: capturedFile(name) };
   } catch (error) {
-    const failed = latest ? await screenshot(latest.window, failureShotTimeoutMs).catch(() => undefined) : undefined;
+    const failed = error instanceof NativeWindowCaptureError
+      ? error.png
+      : latest
+        ? await screenshot(latest.window, failureShotTimeoutMs).catch(() => undefined)
+        : undefined;
     if (failed) {
       await writeFile(join(outDir, failedFile(name)), failed);
       return { name, title, status: 'failed', error: messageOf(error), file: failedFile(name) };

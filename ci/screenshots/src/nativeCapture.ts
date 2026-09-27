@@ -67,7 +67,7 @@ export async function captureNativeWindow(app: ElectronApplication, window: Page
   const png = await captureForPlatform(app.process().pid, info);
   const problem = decorationProblem(png, process.platform);
   if (problem !== undefined) {
-    throw new Error(problem);
+    throw new NativeWindowCaptureError(problem, png);
   }
   return png;
 }
@@ -136,10 +136,22 @@ export function decorationProblem(png: Buffer, platform: NodeJS.Platform): strin
     return `the right edge of the native window capture is transparent (${String(transparent)} columns, image ${String(raster.width)}x${String(raster.height)})`;
   }
   const glyphs = captionGlyphs(raster, center, inset, band);
-  if (glyphs !== 3) {
-    return `the native window capture does not show minimize, maximize, and close as three separate caption buttons (${String(glyphs)} glyphs, image ${String(raster.width)}x${String(raster.height)})`;
+  if (glyphs.length < 3) {
+    const where = glyphs.length === 0 ? 'none' : glyphs.map((glyph) => `${String(glyph.start)}-${String(glyph.end)}`).join(', ');
+    return `the native window capture does not show minimize, maximize, and close as three separate caption buttons (${String(glyphs.length)} glyphs at ${where}, image ${String(raster.width)}x${String(raster.height)})`;
   }
   return undefined;
+}
+
+/** The native PNG that failed the decoration check, so a failure artifact is the window and not a page shot. */
+export class NativeWindowCaptureError extends Error {
+  readonly png: Buffer;
+
+  constructor(message: string, png: Buffer) {
+    super(message);
+    this.name = 'NativeWindowCaptureError';
+    this.png = png;
+  }
 }
 
 /** Shrink and move a window so its whole frame, including the caption buttons, stays inside the work area. */
@@ -479,44 +491,84 @@ function trailingTransparentColumns(raster: Raster): number {
   return columns;
 }
 
-/** Minimize, maximize, and close are three horizontal runs of contrasting pixels in the top right. */
-function captionGlyphs(raster: Raster, center: RGB, inset: number, band: number): number {
-  const x0 = Math.floor(raster.width * 0.78);
-  let glyphs = 0;
+interface Glyph {
+  start: number;
+  end: number;
+}
+
+/**
+ * Minimize, maximize, and close are the three rightmost compact marks in the caption.
+ * A hole inside one icon stays one glyph. Columns that stay contrasting down the window
+ * are the desktop showing through the frame, the same strip as the left edge of the
+ * clipped capture, and are not buttons.
+ */
+function captionGlyphs(raster: Raster, center: RGB, inset: number, band: number): Glyph[] {
+  const x0 = Math.max(0, raster.width - 168);
+  const glyphs: Glyph[] = [];
   let inGlyph = false;
   let pixels = 0;
+  let start = 0;
   let gap = 0;
-  const finish = (): void => {
+  const finish = (end: number): void => {
     if (inGlyph && pixels >= 8) {
-      glyphs += 1;
+      glyphs.push({ start, end });
     }
     inGlyph = false;
     pixels = 0;
     gap = 0;
   };
   for (let x = x0; x < raster.width; x += 1) {
+    if (frameColumn(raster, x, center)) {
+      if (inGlyph) {
+        gap += 1;
+        if (gap >= 12) {
+          finish(x - gap);
+        }
+      }
+      continue;
+    }
     let columnPixels = 0;
     for (let y = inset; y < band; y += 1) {
-      if (alphaAt(raster, x, y) === 0) {
-        continue;
-      }
-      if (channelDelta(at(raster, x, y), center) > 48) {
+      if (contrasting(raster, x, y, center)) {
         columnPixels += 1;
       }
     }
     if (columnPixels > 0) {
-      inGlyph = true;
+      if (!inGlyph) {
+        inGlyph = true;
+        start = x;
+        pixels = 0;
+      }
       pixels += columnPixels;
       gap = 0;
     } else if (inGlyph) {
       gap += 1;
-      if (gap >= 2) {
-        finish();
+      if (gap >= 12) {
+        finish(x - gap);
       }
     }
   }
-  finish();
-  return glyphs;
+  finish(raster.width - 1);
+  return glyphs.length > 3 ? glyphs.slice(-3) : glyphs;
+}
+
+function frameColumn(raster: Raster, x: number, center: RGB): boolean {
+  let seen = 0;
+  let hit = 0;
+  for (let y = 40; y < raster.height; y += 4) {
+    seen += 1;
+    if (contrasting(raster, x, y, center)) {
+      hit += 1;
+    }
+  }
+  return seen > 0 && hit / seen > 0.4;
+}
+
+function contrasting(raster: Raster, x: number, y: number, center: RGB): boolean {
+  if (alphaAt(raster, x, y) === 0) {
+    return false;
+  }
+  return channelDelta(at(raster, x, y), center) > 48;
 }
 
 function alphaAt(raster: Raster, x: number, y: number): number {
