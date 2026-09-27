@@ -65,6 +65,10 @@ pub enum ErrorKind {
     RepoNotFound,
     /// No normal thread has the given run id (#110).
     ThreadNotFound,
+    /// `agent/send` can't resume a run right now: no host or project slot is free for its CLI
+    /// (#197, #272). Unlike a fresh `agent/start`, a resume is never queued; retry once a slot
+    /// frees, which a `agent.updated` for some other run ending signals.
+    HostBusy,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

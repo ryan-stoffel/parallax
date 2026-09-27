@@ -679,6 +679,27 @@
   },
   {
     "jsonrpc": "2.0",
+    "id": 15,
+    "method": "agent/send",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+      "turnId": "01a0d361-2b3c-7d4e-9f50-6a7b8c9d0e12",
+      "text": "Carry on"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 15,
+    "error": {
+      "code": -32000,
+      "message": "no host or project slot is free to resume run 01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e02; try again once another run finishes",
+      "data": {
+        "kind": "hostBusy"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "method": "events/event",
     "params": {
       "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",

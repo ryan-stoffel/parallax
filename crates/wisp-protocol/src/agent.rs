@@ -106,10 +106,13 @@ pub struct AgentRun {
     pub policy: AgentPolicy,
     /// Where it is.
     pub status: AgentStatus,
-    /// The backend running it, such as `claude`.
+    /// The backend running it, such as `claude`. Empty for a `queued` run: nothing is resolved
+    /// until it starts (#197). A client should treat an empty `backend` the same as an absent
+    /// account, not as a backend named `""`.
     pub backend: String,
     /// The account it is charged to now: the backend's name for a subscription, or a key
-    /// account's id. It changes on `agent.accountFallback`.
+    /// account's id. It changes on `agent.accountFallback`. Empty for a `queued` run, for the
+    /// same reason `backend` is.
     pub account_id: String,
     /// Its worktree's branch, such as `wisp/1a2b3c4d`, once the worktree exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]

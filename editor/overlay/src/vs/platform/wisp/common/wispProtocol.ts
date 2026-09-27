@@ -1065,12 +1065,15 @@ export type AgentRun = {
 	 */
 	status: AgentStatus,
 	/**
-	 * The backend running it, such as `claude`.
+	 * The backend running it, such as `claude`. Empty for a `queued` run: nothing is resolved
+	 * until it starts (#197). A client should treat an empty `backend` the same as an absent
+	 * account, not as a backend named `""`.
 	 */
 	backend: string,
 	/**
 	 * The account it is charged to now: the backend's name for a subscription, or a key
-	 * account's id. It changes on `agent.accountFallback`.
+	 * account's id. It changes on `agent.accountFallback`. Empty for a `queued` run, for the
+	 * same reason `backend` is.
 	 */
 	accountId: string,
 	/**
@@ -2082,7 +2085,7 @@ export type ErrorData = {
  * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "hostBusy";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every editor can read it
