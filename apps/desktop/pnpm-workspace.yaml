@@ -1,0 +1,16 @@
+# One package, not a workspace (0022). This file exists because pnpm 11
+# reads these settings only from here, not from package.json.
+#
+# No allowBuilds entry: Electron 44 has no install script. It downloads its
+# binary the first time `electron` is required (scripts/dev.mjs does that).
+
+# Vite+ asks for these so every tool shares its Vite and Vitest.
+overrides:
+  vite: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1
+  vitest: 5.0.1
+
+# Vite+ core is Vite 8 under its own version number, so Vite plugins'
+# `vite@^8` peer ranges don't match it.
+peerDependencyRules:
+  allowAny:
+    - vite

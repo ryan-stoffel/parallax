@@ -14,6 +14,18 @@ cargo build --release -p wispd
 
 `scripts/ci/check-rust` runs the same lint, build, and tests as CI.
 
+## Desktop app
+
+The Electron app lives in [apps/desktop](apps/desktop) ([0022](docs/decisions/0022-desktop-app.md)). It needs Node 24 and pnpm through corepack (`corepack enable`). Run pnpm inside `apps/desktop`, where corepack finds the pinned version.
+
+```sh
+cd apps/desktop
+pnpm install
+pnpm dev       # window with hot reload
+```
+
+`pnpm check` (format, lint, type-check), `pnpm fmt`, `pnpm test`, and `pnpm build` run the rest. Once the app talks to wispd, it will start a local `wispd`, taken from `WISPD_PATH` in development.
+
 ## License
 
 [Apache-2.0](LICENSE)
