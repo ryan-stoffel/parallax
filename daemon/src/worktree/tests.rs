@@ -663,6 +663,63 @@ async fn commit_all_does_not_run_a_hook_configured_via_an_included_config_file()
 }
 
 #[tokio::test]
+async fn create_and_accept_do_not_run_fsmonitor_from_a_tracked_included_config_file() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+
+    // #270's repro: the repository's local config includes a tracked file (a common pattern for
+    // team-shared settings), and that file sets `core.fsmonitor` to a shell command. A relative
+    // `include.path` resolves against `.git/`, so `../.gitconfig` names the checkout's own
+    // tracked `.gitconfig` — once an agent's run is accepted, that file is agent-written.
+    let sentinel = repo.join("PWNED");
+    std::fs::write(
+        repo.join(".gitconfig"),
+        format!(
+            "[core]\n\tfsmonitor = \"touch {}; false\"\n",
+            sentinel.display()
+        ),
+    )
+    .unwrap();
+    git(&repo, &["add", ".gitconfig"]);
+    git(&repo, &["commit", "-q", "-m", "shared config"]);
+    git(&repo, &["config", "include.path", "../.gitconfig"]);
+    assert_eq!(
+        git_output(&repo, &["config", "--get", "core.fsmonitor"]),
+        format!("touch {}; false", sentinel.display()),
+        "the include must have applied core.fsmonitor, or this test proves nothing"
+    );
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+
+    // `create`'s dirty check (`git status`) is an index-reading call in the checkout. Checked
+    // before unwrapping: without the fix, the sentinel's own appearance makes the checkout look
+    // dirty and `create` fail, which would otherwise mask the vulnerability behind a different
+    // assertion.
+    let created = mgr.create(&repo, RunId::generate(), None).await;
+    assert!(
+        !sentinel.exists(),
+        "create must not run fsmonitor from a tracked included config file"
+    );
+    let created = created.unwrap();
+
+    // Accept's own checkout-scoped calls (`status`, `merge --ff-only`) must not run it either.
+    std::fs::write(created.path.join("README.md"), "edited\n").unwrap();
+    let commit = mgr
+        .commit_all(&created.path, &created.git_dir, &repo, "agent work")
+        .await
+        .unwrap()
+        .expect("a commit");
+    mgr.accept(&repo, &commit.sha, "Merge wisp run: test\n")
+        .await
+        .unwrap();
+    assert!(
+        !sentinel.exists(),
+        "accept must not run fsmonitor from a tracked included config file"
+    );
+}
+
+#[tokio::test]
 async fn diff_does_not_run_a_gitattributes_textconv_driver() {
     let repo_dir = tempfile::tempdir().unwrap();
     let repo = init_repo(repo_dir.path()).canonicalize().unwrap();

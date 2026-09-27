@@ -58,9 +58,13 @@
 //!
 //! [`WorktreeManager::create`] and [`WorktreeManager::remove`] are not scoped this way: their git
 //! commands run against `repo_root`, the user's own checkout, which a worker never writes, so
-//! there is no `.git` file or repo-local config of the worker's to distrust there. They still run
-//! with hooks off, like every git call wispd makes (#157, #191): once a run is accepted, the
-//! checkout's hooks can include files the worker wrote.
+//! there is no `.git` file of the worker's to distrust there. They still run with [`BASE_GIT_CONFIG`]'s
+//! overrides, like every git call wispd makes (#157, #191, #270): once a run is accepted, the
+//! checkout's own tracked files — including ones included by its local config, such as a shared
+//! `.gitconfig` an `include.path` names — are agent-written, and can set `core.hooksPath` or
+//! `core.fsmonitor` to a command of the agent's choosing. [`WorktreeManager::repo_root`] also
+//! warns, without refusing, when the checkout's effective config draws from such a file, since a
+//! filter or merge driver it defines has no `-c` escape hatch (#270's audit).
 //!
 //! [`WorktreeManager::gc_orphans`] takes a third path (#171): an orphan folder has no
 //! [`CreatedWorktree::git_dir`] pinned for it the way a known worktree does, so it never
@@ -181,25 +185,31 @@ fn indexed_git_config_vars(base: &Environment) -> Vec<OsString> {
 /// through.
 const GIT_SAFE_HOME_DIR: &str = "git-safe-home";
 
-/// `-c` overrides applied to every git command scoped to a worker's worktree (#166), neutralizing
-/// what repo-local config and tracked files can otherwise make git execute:
+/// `-c` overrides applied to every git command wispd runs, whether in the user's own checkout
+/// ([`WorktreeManager::run_git_for`]) or a worker's worktree ([`worktree_argv`]): a `-c` always
+/// wins over a config file's value for that key, no matter how the file set it, `include`/
+/// `includeIf` included. Neutralizes what repo-local config and tracked files can otherwise make
+/// git execute:
 ///
 /// - `core.hooksPath=/dev/null` — no hooks run, wherever `core.hooksPath` points, including a
 ///   tracked folder such as husky's `.husky/_`. `--no-verify` alone only skips `pre-commit` and
 ///   `commit-msg`; `post-commit` and (on `git add`) `post-index-change` still run without this.
-/// - `core.fsmonitor=false` — no filesystem monitor hook.
+/// - `core.fsmonitor=false` — no filesystem monitor hook. An index-reading call (`status`, `diff`,
+///   `add`) would otherwise run whatever command a config value names, and in the user's own
+///   checkout that value can come from a tracked, included file an accepted run wrote (#270).
 /// - `core.pager=cat`, `diff.external=` — no pager or external diff tool.
 /// - `core.sshCommand=false` — if anything ever triggered a transport, no attacker-chosen SSH
 ///   command.
 /// - `protocol.allow=never` — no remote helper protocol (for example `ext::`) runs.
 ///
 /// Filter drivers (`filter.<name>.clean`/`.smudge`) can't be neutralized this way, because `-c`
-/// needs the filter's name and `man git-config` gives no wildcard form. Instead, worktree-scoped
-/// calls run with `GIT_CONFIG_NOSYSTEM=1`, a `/dev/null` `GIT_CONFIG_GLOBAL`, and a dedicated,
-/// empty `HOME` (see [`GIT_SAFE_HOME_DIR`]), so the pinned repository's own local config — never
-/// worker-writable — is the only place left a filter, or a diff or merge driver, could be
-/// configured.
-const WORKTREE_GIT_CONFIG: &[(&str, &str)] = &[
+/// needs the filter's name and `man git-config` gives no wildcard form. Worktree-scoped calls
+/// close that gap with a dedicated, worker-unwritable environment instead (see
+/// [`WorktreeManager::worktree_spec`]); the user's own checkout keeps its real filters, merge
+/// drivers, and identity (0014), and [`WorktreeManager::repo_root`] instead warns when the
+/// checkout's own effective config draws from a file inside it (#270's audit; see
+/// [`WorktreeManager::warn_on_tracked_config_origins`]).
+const BASE_GIT_CONFIG: &[(&str, &str)] = &[
     ("core.hooksPath", "/dev/null"),
     ("core.fsmonitor", "false"),
     ("core.pager", "cat"),
@@ -811,7 +821,68 @@ impl WorktreeManager {
         if !output.success() {
             return Err(not_a_repo(describe_failure(&output)));
         }
-        Ok(PathBuf::from(output.stdout.trim().to_owned()))
+        let repo_root = PathBuf::from(output.stdout.trim().to_owned());
+        self.warn_on_tracked_config_origins(&repo_root).await;
+        Ok(repo_root)
+    }
+
+    /// Warns when `repo_root`'s effective git config draws from a file inside the checkout's own
+    /// working tree (outside its git directory) — for example a tracked `.gitconfig` an
+    /// `include`/`includeIf` names (#270's repro). [`BASE_GIT_CONFIG`] closes the concrete vectors
+    /// (hooks, `core.fsmonitor`) such a file can set, regardless of how it was included; a filter
+    /// or merge driver it defines has no `-c` escape hatch, and the checkout otherwise keeps its
+    /// real ones (0014). Chosen to warn rather than refuse: a repository-shared, tracked
+    /// `.gitconfig` reached this way is also a common, legitimate setup, and refusing outright
+    /// would make wispd unusable in such a repository. Best-effort: a failure here is logged, not
+    /// propagated, since this call's job is confirming `repo_path` is a repository, not auditing
+    /// its config.
+    async fn warn_on_tracked_config_origins(&self, repo_root: &Path) {
+        let Ok(listing) = self
+            .run_git_ok(repo_root, &["config", "--show-origin", "--list"])
+            .await
+        else {
+            return;
+        };
+        // Not `Self::git_common_dir`, which itself calls `repo_root` and would recurse.
+        let Ok(git_dir) = self
+            .run_git_ok(
+                repo_root,
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            )
+            .await
+        else {
+            return;
+        };
+        let git_dir = PathBuf::from(git_dir.trim());
+        let mut warned = HashSet::new();
+        for line in listing.lines() {
+            let Some(rest) = line.strip_prefix("file:") else {
+                continue;
+            };
+            let Some((origin, _)) = rest.split_once('\t') else {
+                continue;
+            };
+            let origin = origin.trim_matches('"');
+            let path = if Path::new(origin).is_absolute() {
+                PathBuf::from(origin)
+            } else {
+                repo_root.join(origin)
+            };
+            let Ok(canonical) = tokio::fs::canonicalize(&path).await else {
+                continue;
+            };
+            if canonical.starts_with(repo_root)
+                && !canonical.starts_with(&git_dir)
+                && warned.insert(canonical.clone())
+            {
+                warn!(
+                    repo = %repo_root.display(),
+                    origin = %canonical.display(),
+                    "this checkout's git config includes a file inside its own working tree; if \
+                     it is tracked, an accepted run could have written it (#270)"
+                );
+            }
+        }
     }
 
     async fn resolve_commit(
@@ -908,11 +979,13 @@ impl WorktreeManager {
     /// [`WorktreeError::Spawn`] and [`WorktreeError::Timeout`] are possible failures here; callers
     /// that want a non-zero exit turned into an error use [`WorktreeManager::run_git_ok`].
     ///
-    /// Every call runs with `core.hooksPath=/dev/null` (#157, #191): no git command wispd runs
-    /// in the user's checkout ever runs a repository hook. Once a run is accepted, the
-    /// repository's hooks can include files the agent wrote (a tracked `core.hooksPath` such as
-    /// husky's `.husky/`), and `worktree add` (`post-checkout`) or `branch -D`
-    /// (`reference-transaction`) would otherwise run them, headless and unsandboxed, in wispd.
+    /// Every call runs with [`BASE_GIT_CONFIG`]'s `-c` overrides (#157, #191, #270): no git
+    /// command wispd runs in the user's checkout ever runs a repository hook or a filesystem
+    /// monitor. Once a run is accepted, the repository's tracked files, and any config they set
+    /// through an `include`/`includeIf`, are agent-written (a tracked `core.hooksPath` such as
+    /// husky's `.husky/`, or a tracked `core.fsmonitor`), and `worktree add` (`post-checkout`),
+    /// `branch -D` (`reference-transaction`), or an index-reading call such as `status` would
+    /// otherwise run them, headless and unsandboxed, in wispd.
     async fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<GitOutput, WorktreeError> {
         self.run_git_for(cwd, args, self.timeout).await
     }
@@ -925,11 +998,7 @@ impl WorktreeManager {
         limit: Duration,
     ) -> Result<GitOutput, WorktreeError> {
         let mut spec = ProcessSpec::new("git", cwd);
-        spec.args = ["-c", "core.hooksPath=/dev/null"]
-            .iter()
-            .chain(args)
-            .map(|arg| OsString::from(*arg))
-            .collect();
+        spec.args = base_git_config_argv(args);
         spec.scrub = GIT_SCRUBBED
             .iter()
             .map(|name| OsString::from(*name))
@@ -1046,15 +1115,24 @@ impl WorktreeManager {
 
 /// Builds the full argument list for a git command scoped to a worker's worktree (#166):
 /// `--git-dir`/`--work-tree` pinned explicitly, ahead of any auto-discovery from a `.git` file,
-/// then [`WORKTREE_GIT_CONFIG`]'s `-c` overrides, then `args` as the caller gave them.
+/// then [`BASE_GIT_CONFIG`]'s `-c` overrides, then `args` as the caller gave them.
 fn worktree_argv(work_tree: &Path, git_dir: &Path, args: &[&str]) -> Vec<OsString> {
-    let mut full_args = Vec::with_capacity(2 + WORKTREE_GIT_CONFIG.len() * 2 + args.len());
+    let mut full_args = Vec::with_capacity(2 + BASE_GIT_CONFIG.len() * 2 + args.len());
     full_args.push(OsString::from(format!("--git-dir={}", git_dir.display())));
     full_args.push(OsString::from(format!(
         "--work-tree={}",
         work_tree.display()
     )));
-    for (key, value) in WORKTREE_GIT_CONFIG {
+    full_args.extend(base_git_config_argv(args));
+    full_args
+}
+
+/// [`BASE_GIT_CONFIG`]'s `-c` overrides, then `args` as the caller gave them: the part of the
+/// argument list every git command wispd runs shares, whether scoped to the user's own checkout
+/// or a worker's worktree.
+fn base_git_config_argv(args: &[&str]) -> Vec<OsString> {
+    let mut full_args = Vec::with_capacity(BASE_GIT_CONFIG.len() * 2 + args.len());
+    for (key, value) in BASE_GIT_CONFIG {
         full_args.push(OsString::from("-c"));
         full_args.push(OsString::from(format!("{key}={value}")));
     }

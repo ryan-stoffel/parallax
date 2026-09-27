@@ -17,9 +17,11 @@
 //! failure or a timeout it puts back nothing (see `WorktreeManager::roll_back`). It never pushes.
 //!
 //! Those calls use the user's own configuration, since the checkout is theirs: global config,
-//! filters such as Git LFS's, merge drivers, and identity. Hooks are the exception: like every git
-//! call wispd makes, they run with `core.hooksPath=/dev/null` (see `WorktreeManager::run_git`).
-//! The merge commit is not signed, because signing can wait on a prompt.
+//! filters such as Git LFS's, merge drivers, and identity. Hooks and `core.fsmonitor` are the
+//! exception: like every git call wispd makes, they run with `BASE_GIT_CONFIG`'s overrides (see
+//! `WorktreeManager::run_git`), closed no matter how a value was set, including through a tracked,
+//! included config file (#270). The merge commit is not signed, because signing can wait on a
+//! prompt.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
