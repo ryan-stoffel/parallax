@@ -257,8 +257,11 @@ impl Store {
     /// routing resolved it to — immutable from here on, like every other run's, so this is the
     /// only place besides [`Store::create_run`]/[`Store::create_run_with_worktree`] that sets it.
     /// Guarded by `status = 'queued'` in the `WHERE` clause, so a run a client already cancelled,
-    /// or that another caller already promoted, is left untouched: the caller tells this apart
-    /// from a real update by checking the returned row's `backend`.
+    /// or that another caller already promoted, is left untouched.
+    ///
+    /// Returns `None`, directly from the `UPDATE`'s own changed-row count, when the guard didn't
+    /// match: `id` exists but wasn't `queued` any more, not `id` doesn't exist at all, which
+    /// [`StoreError::NotFound`] still reports.
     ///
     /// # Errors
     ///
@@ -268,8 +271,8 @@ impl Store {
         id: Uuid,
         backend: &str,
         state: &RunState,
-    ) -> Result<Run, StoreError> {
-        self.conn.execute(
+    ) -> Result<Option<Run>, StoreError> {
+        let changed = self.conn.execute(
             "UPDATE runs SET backend = ?2, status = ?3, account_id = ?4, session_id = ?5,
                              error = ?6, commit_sha = ?7, files_changed = ?8, insertions = ?9,
                              deletions = ?10, updated_at = ?11
@@ -288,7 +291,29 @@ impl Store {
                 timestamp::now(),
             ],
         )?;
-        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
+        if changed == 0 {
+            // Tell "id doesn't exist" (an error) from "id exists but wasn't queued" (`None`).
+            return if fetch(&self.conn, id)?.is_some() {
+                Ok(None)
+            } else {
+                Err(StoreError::NotFound { id })
+            };
+        }
+        fetch(&self.conn, id)
+    }
+
+    /// Whether any run is currently `queued`, for `agent/start`'s ordering: a new run must not
+    /// start ahead of an older one still waiting for a slot (#197 review).
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error.
+    pub fn any_run_queued(&self) -> Result<bool, StoreError> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE status = 'queued')",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// Replaces accepted run `id`'s state and deletes its worktree's row, in one transaction:

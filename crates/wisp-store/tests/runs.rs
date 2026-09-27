@@ -113,14 +113,17 @@ fn a_queued_run_is_promoted_with_its_resolved_backend() {
         )
         .unwrap();
 
-    let started = store.start_queued_run(id, "claude", &starting()).unwrap();
+    let started = store
+        .start_queued_run(id, "claude", &starting())
+        .unwrap()
+        .expect("the run was queued");
     assert_eq!(started.fields.backend, "claude");
     assert_eq!(started.state, starting());
     assert_eq!(store.get_run(id).unwrap().unwrap(), started);
 }
 
 #[test]
-fn promoting_a_run_that_is_no_longer_queued_leaves_it_untouched() {
+fn promoting_a_run_that_is_no_longer_queued_reports_none_and_leaves_it_untouched() {
     let (_dir, store) = open();
     let (project, id) = (Uuid::now_v7(), Uuid::now_v7());
     let cancelled = RunFields {
@@ -136,16 +139,48 @@ fn promoting_a_run_that_is_no_longer_queued_leaves_it_untouched() {
 
     let result = store.start_queued_run(id, "claude", &starting()).unwrap();
     assert_eq!(
-        result.fields.backend, "",
+        result, None,
         "the WHERE status = 'queued' guard did not match"
     );
-    assert_eq!(result.state.status, "cancelled");
+    assert_eq!(store.get_run(id).unwrap().unwrap().fields.backend, "");
+    assert_eq!(
+        store.get_run(id).unwrap().unwrap().state.status,
+        "cancelled"
+    );
 
     let missing = Uuid::now_v7();
     assert!(matches!(
         store.start_queued_run(missing, "claude", &starting()),
         Err(StoreError::NotFound { id }) if id == missing
     ));
+}
+
+#[test]
+fn any_run_queued_reflects_whether_one_is() {
+    let (_dir, store) = open();
+    assert!(!store.any_run_queued().unwrap());
+    let (project, id) = (Uuid::now_v7(), Uuid::now_v7());
+    store
+        .create_run(
+            id,
+            &RunFields {
+                backend: String::new(),
+                ..fields(project)
+            },
+            &RunState {
+                status: "queued".to_owned(),
+                account_id: String::new(),
+                ..RunState::default()
+            },
+        )
+        .unwrap();
+    assert!(store.any_run_queued().unwrap());
+
+    store
+        .start_queued_run(id, "claude", &starting())
+        .unwrap()
+        .expect("the run was queued");
+    assert!(!store.any_run_queued().unwrap());
 }
 
 #[test]
