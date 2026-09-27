@@ -176,7 +176,11 @@ export class WispAgentChatSession extends Disposable implements IChatSession {
 		}
 	}
 
-	/** Loads `agent/diff` for the commit the closing line is waiting on, then closes that turn. */
+	/**
+	 * Loads `agent/diff` for the commit the closing line is waiting on, then closes that turn.
+	 * A list that returns after a later message has started is not applied: that message is the
+	 * open turn now, and closing it would drop the rest of its stream.
+	 */
 	private fetchFiles(): void {
 		const commit = this.transcript.filesCommit();
 		if (!commit || !this.loadDiff || this.fetching === commit) {
@@ -184,7 +188,10 @@ export class WispAgentChatSession extends Disposable implements IChatSession {
 		}
 		this.fetching = commit;
 		this.loadDiff(commit).then(listed => {
-			if (this.fetching !== commit) {
+			if (this.fetching !== commit || this.transcript.filesCommit() !== commit) {
+				if (this.fetching === commit) {
+					this.fetching = undefined;
+				}
 				return;
 			}
 			this.apply(this.transcript.acceptListed(commit, listed));

@@ -470,6 +470,28 @@ suite('wisp: agents', () => {
 			assert.strictEqual(other.turns[1].prompt, 'A message sent to this agent');
 		});
 
+		test('a file list that arrives after the next message started does not close that message', () => {
+			const built = transcript(() => 'also add tests', () => undefined);
+			for (const event of firstTurn()) {
+				built.accept(event);
+			}
+			assert.strictEqual(built.filesCommit(), 'abc');
+			assert.strictEqual(built.current.complete, false, 'the line waits for agent/diff');
+
+			built.accept(followUp()[0]);
+			built.accept(followUp()[1]);
+			const follow = built.turns[1];
+			assert.strictEqual(built.turns[0].complete, true, 'the previous line closes without waiting');
+			assert.strictEqual(follow.complete, false);
+			assert.strictEqual(built.filesCommit(), undefined);
+
+			assert.deepStrictEqual(built.acceptListed('abc', listedDiff()), [], 'the late list is not applied');
+			assert.strictEqual(follow.complete, false, 'the follow-up stays open');
+			built.accept(logged(22, { kind: 'agent.output', runId: RUN, items: [{ kind: 'text', text: 'still going' }] }, '2026-09-25T10:01:01Z'));
+			assert.strictEqual(follow.complete, false);
+			assert.deepStrictEqual(describe(follow.parts), ['text: still going']);
+		});
+
 		test('a dropped message is a quiet line with Send again, and a run that stops without finishing closes', () => {
 			const built = transcript();
 			built.accept(firstTurn()[0]);
@@ -544,6 +566,59 @@ suite('wisp: agents', () => {
 			assert.strictEqual(session.isCompleteObs.get(), true);
 			assert.strictEqual(await session.interruptActiveResponseCallback(), true);
 			assert.deepStrictEqual(cancels, [RUN]);
+		});
+
+		test('a follow-up that starts while the file list is loading keeps streaming', async () => {
+			const built = new WispAgentTranscript(run({ branch: BRANCH, status: 'completed', diff: { commit: 'abc', files: 1, insertions: 1, deletions: 0 } }), {
+				sentText: turnId => turnId === TURN ? 'also add tests' : undefined,
+				branch: () => BRANCH,
+			});
+			for (const event of firstTurn()) {
+				built.accept(event);
+			}
+			assert.strictEqual(built.filesCommit(), 'abc');
+
+			let calls = 0;
+			let releaseFirst: ((listed: IWispListedDiff) => void) | undefined;
+			const loadDiff = () => {
+				calls++;
+				if (calls === 1) {
+					return new Promise<IWispListedDiff>(resolve => { releaseFirst = resolve; });
+				}
+				return Promise.resolve(listedDiff());
+			};
+			const session = disposables.add(new WispAgentChatSession(
+				agentChatResource(PROJECT, RUN),
+				built,
+				constObservable(run({ branch: BRANCH, status: 'completed', diff: { commit: 'abc', files: 1, insertions: 1, deletions: 0 } })),
+				async () => { },
+				loadDiff,
+			));
+			assert.strictEqual(calls, 1, 'the closing line asks for agent/diff');
+			assert.strictEqual(built.current.complete, false);
+
+			const sent: IChatProgress[][] = [];
+			let closed = false;
+			const token = disposables.add(new CancellationTokenSource());
+			const expected = session.expect(TURN, parts => sent.push(parts), token.token);
+			const done = expected.done.then(() => { closed = true; });
+
+			session.accept(followUp()[0]);
+			session.accept(followUp()[1]);
+			releaseFirst!(listedDiff());
+			await settle();
+			assert.strictEqual(closed, false, 'the late file list does not resolve the follow-up');
+			assert.strictEqual(built.turns[1].complete, false);
+
+			for (const event of followUp().slice(2)) {
+				session.accept(event);
+			}
+			await settle();
+			await done;
+			assert.strictEqual(closed, true);
+			const text = sent.flat().filter(part => part.kind === 'markdownContent').map(part => part.kind === 'markdownContent' ? part.content.value : '');
+			assert.ok(text.some(value => value.includes('Fake agent heard: also add tests')), 'later parts of the follow-up still arrive');
+			expected.dispose();
 		});
 
 		test('a turn this window didn\'t send starts a server request; one it sent streams to its request', async () => {

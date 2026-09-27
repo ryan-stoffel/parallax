@@ -181,12 +181,22 @@ export class WispAgentTranscript {
 
 	/**
 	 * Supplies the file list `agent/diff` returned for `commit` (the value of `filesCommit`) and
-	 * closes the turn that was waiting for it.
+	 * closes the turn that was waiting for it. A list that arrives after that wait has ended,
+	 * because the next message already started, is ignored, so the new turn keeps streaming.
 	 */
 	acceptListed(commit: string, listed: IWispListedDiff, time?: number): WispTranscriptChange[] {
+		if (this.filesCommit() !== commit) {
+			return [];
+		}
+		const waiting = this.current;
 		this.listed = listed;
 		this.listedCommit = commit;
-		return this.completeAll(time);
+		const changes = this.flushOutcome(time, true);
+		if (this.outcome || waiting.complete) {
+			return changes;
+		}
+		changes.push(...this.complete(waiting, time));
+		return changes;
 	}
 
 	private item(item: AgentOutputItem, time: number | undefined): WispTranscriptChange[] {
