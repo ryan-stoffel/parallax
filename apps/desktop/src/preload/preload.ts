@@ -15,6 +15,7 @@ ipcRenderer.on("wisp:subscription", (_event, key: string, message: SubscriptionM
 const bridge: WispBridge = {
   platform: process.platform,
   version: () => ipcRenderer.invoke("wisp:version") as Promise<string>,
+  setThemeSource: (preference) => ipcRenderer.send("wisp:theme", preference),
 
   request: (hostId, method, params) => ipcRenderer.invoke("wisp:request", hostId, method, params),
   subscribe(hostId, params, listener) {

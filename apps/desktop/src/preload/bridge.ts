@@ -7,11 +7,17 @@ import type {
   WispRequests,
 } from "../protocol/generated/protocol";
 
+/** The Appearance setting: follow the OS, or force a theme. */
+export const THEME_PREFERENCES = ["system", "dark", "light"] as const;
+export type ThemePreference = (typeof THEME_PREFERENCES)[number];
+
 export interface WispBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
   /** The app's version. */
   version(): Promise<string>;
+  /** Sets Electron's `nativeTheme.themeSource`, so native UI matches the app's theme. */
+  setThemeSource(preference: ThemePreference): void;
 
   /**
    * Calls a wispd method on a host. Resolves to its result or its error, also for an unknown
