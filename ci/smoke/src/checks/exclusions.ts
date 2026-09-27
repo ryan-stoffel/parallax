@@ -3,7 +3,7 @@
 // committed source directly, so a renamed or mis-quoted id shows up here even if check-fork's own sed missed
 // it (#94's finding 1).
 //
-// Every one of the 58 ids gets one of four kinds of evidence, recorded below so the mapping itself is a
+// Every one of the 63 ids gets one of four kinds of evidence, recorded below so the mapping itself is a
 // checked invariant: a new exclusion has to be triaged into this table or the suite fails on the count
 // mismatch, instead of silently getting no coverage.
 //
@@ -44,6 +44,9 @@ const entries: readonly Entry[] = [
   entry('workbench.action.chat.profileAgentHost', 'process', 'it opens a view onto the same local agent host the process check covers'),
   entry('agentsVoice.simulateConnection', 'palette', 'a "Developer:" command named after the id'),
   entry('agentsVoice.resetOnboarding', 'palette', 'a "Developer:" command named after the id'),
+  entry('sessions.goBack', 'static', 'title-bar Back; a palette search for "go back" also matches editor navigation'),
+  entry('sessions.goForward', 'static', 'title-bar Forward; a palette search for "go forward" also matches editor navigation'),
+  entry('workbench.action.agentSessions.runScript.notAvailable', 'static', 'the disabled Run placeholder; its title "Run" is not unique in the palette'),
 
   // Chat and Copilot core.
   entry('workbench.contrib.chatSetup', 'palette', 'the sign-in and setup commands it registers'),
@@ -101,6 +104,10 @@ const entries: readonly Entry[] = [
   entry('sessions.contrib.onboardingTours.newSessionViewTour', 'static', 'launched only from a new-session flow this suite does not drive'),
   entry('sessions.contrib.onboardingTours.newSessionViewV2Tour', 'static', 'launched only from a new-session flow this suite does not drive'),
   entry('sessions.contrib.onboardingTours.newSessionViewV3Tour', 'static', 'launched only from a new-session flow this suite does not drive'),
+
+  // Title bar of a thread: the folder pill and Run have no DOM id of their own once excluded (#302).
+  entry('workbench.contrib.agentSessionsTitleBar', 'static', 'the folder pill is appended in the contribution constructor, which never runs'),
+  entry('workbench.contrib.agentSessions.runScript', 'static', 'the Run widget; the menu item is already hidden because wisp workspaces are virtual'),
 
   // Copilot voice mode: background wiring with no command or id of its own.
   entry('sessions.voiceBridge', 'static', 'a background bridge with no command or view of its own'),

@@ -14,6 +14,11 @@ const excludedActions: ReadonlySet<string> = new Set([
 	// Copilot voice mode's developer commands.
 	'agentsVoice.simulateConnection',
 	'agentsVoice.resetOnboarding',
+	// Agents window title bar: Back and Forward do nothing for a thread (#302).
+	'sessions.goBack',
+	'sessions.goForward',
+	// The disabled Run placeholder. The real Run item is hidden because wisp workspaces are virtual.
+	'workbench.action.agentSessions.runScript.notAvailable',
 ]);
 
 export function isExcludedAction(id: string): boolean {
