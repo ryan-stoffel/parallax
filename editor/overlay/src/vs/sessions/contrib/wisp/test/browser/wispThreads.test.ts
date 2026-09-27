@@ -14,7 +14,8 @@ import type { AgentListParams, AgentRun, Repo, RepoAddParams, Thread, ThreadStar
 import { ISession, SessionStatus } from '../../../../services/sessions/common/session.js';
 import { WispThreadSession } from '../../../providers/wisp/browser/wispThreadSession.js';
 import { agentRunOf } from '../../../providers/wisp/common/wispAgentRuns.js';
-import { placeThreadSessions, repoPathOf, repoUri, threadChatResource, threadResource, threadRunOf, WISP_REPO_SCHEME, WISP_THREAD_SESSION_TYPE } from '../../../providers/wisp/common/wispThreads.js';
+import { filterThreadPlacement, placeThreadSessions, repoPathOf, repoUri, threadChatResource, threadResource, threadRunOf, WISP_NO_REPO_FILTER, WISP_REPO_SCHEME, WISP_THREAD_SESSION_TYPE } from '../../../providers/wisp/common/wispThreads.js';
+import { clearSidebarRepositoryFilter, toggleSidebarRepositoryFilter } from '../../browser/wispSidebarFilter.js';
 import { WISP_BASE_DIRTY_NOTICE_ID } from '../../browser/wispStartSubagent.js';
 import { WispThreadSections } from '../../browser/wispThreadSections.js';
 import { agentsWindowServices, IAgentsWindowServices, settle } from './wispAgentsTestServices.js';
@@ -59,6 +60,8 @@ interface IThreadServices extends IAgentsWindowServices {
 suite('wisp: threads', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	setup(() => clearSidebarRepositoryFilter());
 
 	/** Services whose wispd has the `threads` capability, two repo entries, and three threads. */
 	async function services(host = 'local', withThreads = true, configure?: (instantiationService: IThreadServices['instantiationService']) => void): Promise<IThreadServices> {
@@ -148,6 +151,7 @@ suite('wisp: threads', () => {
 			assert.strictEqual(inRepo.status.get(), SessionStatus.InProgress);
 			assert.strictEqual(quick.status.get(), SessionStatus.NeedsInput, 'a finished run with a commit needs review');
 			assert.strictEqual(inRepo.workspace.get()?.label, 'wisp');
+			assert.strictEqual(inRepo.workspace.get()?.isVirtualWorkspace, true, 'a local thread reports a virtual workspace so the title bar hides Run');
 			assert.ok(inRepo.capabilities.get().supportsDelete);
 			assert.deepStrictEqual(context.provider.sessionTypes.map(type => type.id), [WISP_THREAD_SESSION_TYPE]);
 			assert.ok(context.provider.supportsQuickChats);
@@ -198,6 +202,30 @@ suite('wisp: threads', () => {
 			const placement = placeThreadSessions(context.provider.getSessions());
 			assert.deepStrictEqual(placement.repositories.map(group => [group.label, group.sessions.map(session => (session as WispThreadSession).runId)]), [['wisp', [IN_REPO]]]);
 			assert.deepStrictEqual(placement.noRepo.map(session => (session as WispThreadSession).runId), [QUICK]);
+		});
+
+		test('a repository filter keeps that repository and hides the rest', async () => {
+			const context = await services();
+			const placement = placeThreadSessions(context.provider.getSessions());
+			const key = placement.repositories[0].key;
+			assert.deepStrictEqual(filterThreadPlacement(placement, key).repositories.map(group => group.label), ['wisp']);
+			assert.deepStrictEqual(filterThreadPlacement(placement, key).noRepo, []);
+			assert.strictEqual(filterThreadPlacement(placement, undefined), placement);
+			assert.deepStrictEqual(filterThreadPlacement(placement, WISP_NO_REPO_FILTER).repositories, []);
+			assert.strictEqual(filterThreadPlacement(placement, WISP_NO_REPO_FILTER).noRepo.length, 1);
+
+			toggleSidebarRepositoryFilter(key);
+			const container = mainWindow.document.createElement('div');
+			mainWindow.document.body.appendChild(container);
+			try {
+				disposables.add(context.instantiationService.createInstance(WispThreadSections, container, 'filtered'));
+				const sections = [...container.querySelectorAll<HTMLElement>('section')];
+				assert.deepStrictEqual(sections.map(section => section.hidden), [false, true]);
+				assert.deepStrictEqual([...container.querySelectorAll('.wisp-threads-repo-name')].map(heading => heading.textContent), ['wisp']);
+			} finally {
+				clearSidebarRepositoryFilter();
+				container.remove();
+			}
 		});
 
 		test('the sidebar lists them in Repositories and No Repo', async () => {

@@ -175,6 +175,7 @@ function localWorkspace(repoPath: string): ISessionWorkspace {
 		icon: Codicon.repo,
 		folders: [{ root: uri, workingDirectory: uri, name, description: undefined }],
 		requiresWorkspaceTrust: false,
-		isVirtualWorkspace: false,
+		// Same as a thread's workspace: reporting virtual hides upstream's Run button (#302).
+		isVirtualWorkspace: true,
 	};
 }

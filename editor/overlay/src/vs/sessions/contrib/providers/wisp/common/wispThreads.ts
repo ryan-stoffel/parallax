@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../../base/common/uri.js';
+import { localize } from '../../../../../nls.js';
 import type { RunId } from '../../../../../platform/wisp/common/wispProtocol.js';
 import { ISession } from '../../../../services/sessions/common/session.js';
 import { agentChatResource } from './wispAgentRuns.js';
@@ -103,4 +104,32 @@ export function placeThreadSessions(sessions: readonly ISession[]): IWispThreadP
 			.sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key)),
 		noRepo: newestFirst(noRepo),
 	};
+}
+
+/** Sidebar filter for a thread that has no repository. The header crumb sends this key. */
+export const WISP_NO_REPO_FILTER = 'wisp:no-repo';
+
+/**
+ * Limits a placement to one repository, or to No Repo. `undefined` leaves it unchanged.
+ * The repository crumb toggles this (#302).
+ */
+export function filterThreadPlacement(placement: IWispThreadPlacement, key: string | undefined): IWispThreadPlacement {
+	if (key === undefined) {
+		return placement;
+	}
+	if (key === WISP_NO_REPO_FILTER) {
+		return { repositories: [], noRepo: placement.noRepo };
+	}
+	return {
+		repositories: placement.repositories.filter(group => group.key === key),
+		noRepo: [],
+	};
+}
+
+/** The banner's repository name for a filter key. */
+export function sidebarFilterLabel(key: string, placement: IWispThreadPlacement): string {
+	if (key === WISP_NO_REPO_FILTER) {
+		return localize('wispThreads.filterNoRepo', "No repo");
+	}
+	return placement.repositories.find(group => group.key === key)?.label ?? key;
 }

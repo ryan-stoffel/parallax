@@ -11,7 +11,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import type { AgentRun, Repo, RunId, Thread } from '../../../../../platform/wisp/common/wispProtocol.js';
 import { ChatInteractivity, ChatModelSource, getUntitledSessionTitle, IChat, IChatCapabilities, IChatCheckpoints, ISession, ISessionCapabilities, ISessionChangeset, ISessionFileChange, ISessionWorkspace, SessionRemoteConnectionStatus, SessionStatus, toSessionId } from '../../../../services/sessions/common/session.js';
 import { agentLocation, agentState, agentTitle, IWispAgentState, isRunActive } from '../common/wispAgentRuns.js';
-import { repoUri, threadChatResource, threadResource, WISP_REPO_SCHEME, WISP_THREAD_SESSION_TYPE } from '../common/wispThreads.js';
+import { repoUri, threadChatResource, threadResource, WISP_THREAD_SESSION_TYPE } from '../common/wispThreads.js';
 import { IWispAgentLocation } from './wispAgentChat.js';
 
 /**
@@ -200,7 +200,9 @@ function repoWorkspace(path: string, name: string | undefined, isLocal: boolean)
 		icon: Codicon.repo,
 		folders: [{ root: uri, workingDirectory: uri, name: label, description: undefined }],
 		requiresWorkspaceTrust: false,
-		isVirtualWorkspace: uri.scheme === WISP_REPO_SCHEME,
+		// Upstream's Run button is shown only when the workspace is not virtual. A thread has no
+		// Run task, so every wisp workspace reports virtual and that when clause hides it (#302).
+		isVirtualWorkspace: true,
 	};
 }
 
