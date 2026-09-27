@@ -1,0 +1,85 @@
+/* The proposed Wisp Dark and Wisp Light color themes (chat-v2.md, Theme). They sit on top of the
+ * Dark Modern and Light Modern values captured in ../../agents-window/src/tokens.css and change
+ * only the tokens listed here: a deeper shell, higher-contrast text, fewer visible borders, and
+ * Wisp's own violet accent. The product ships them as a built-in color theme. */
+
+.theme-wisp-dark {
+	--vscode-modernUI-shellBackground: #111113;
+	--vscode-sideBar-background: #111113;
+	--vscode-sideBar-foreground: #e4e4e7;
+	--vscode-activeSessionView-background: #18181b;
+	--vscode-activeSessionView-foreground: #e4e4e7;
+	--vscode-agentsPanel-background: #18181b;
+	--vscode-agentsPanel-foreground: #e4e4e7;
+	--vscode-agentsPanel-border: #232327;
+	--vscode-agentsCard-border: #202024;
+	--vscode-foreground: #e4e4e7;
+	--vscode-icon-foreground: #c4c4ca;
+	--vscode-descriptionForeground: #9696a0;
+	--vscode-agentsChatInput-background: #1f1f23;
+	--vscode-agentsChatInput-border: #2c2c31;
+	--vscode-agentsChatInput-foreground: #e4e4e7;
+	--vscode-agentsChatInput-placeholderForeground: #85858f;
+	--vscode-agentsNewSessionButton-border: #2c2c31;
+	--vscode-widget-border: #27272c;
+	--vscode-sideBarSectionHeader-border: #1f1f23;
+	--vscode-list-inactiveSelectionBackground: #26262b;
+	--vscode-list-hoverBackground: #1e1e22;
+	--vscode-editorWidget-background: #1c1c20;
+	--vscode-quickInput-background: #1c1c20;
+	--vscode-quickInputList-focusBackground: #2b2840;
+	--vscode-quickInputList-focusForeground: #ffffff;
+	--vscode-chat-requestBubbleBackground: #26262b;
+	--vscode-chat-statusBackground: rgba(228, 228, 231, 0.06);
+	--vscode-button-background: #6c5ce7;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-border: rgba(255, 255, 255, 0.08);
+	--vscode-button-secondaryBackground: #26262b;
+	--vscode-button-secondaryBorder: #2f2f35;
+	--vscode-agentsBadge-background: #6c5ce7;
+	--vscode-focusBorder: #8b7ff0;
+	--vscode-textLink-foreground: #a99ff7;
+	--vscode-textPreformat-background: #26262b;
+	--vscode-agentStatusIndicator-background: rgba(228, 228, 231, 0.06);
+}
+
+.theme-wisp-light {
+	--vscode-modernUI-shellBackground: #f4f4f5;
+	--vscode-sideBar-background: #f4f4f5;
+	--vscode-sideBar-foreground: #1c1c20;
+	--vscode-activeSessionView-background: #ffffff;
+	--vscode-activeSessionView-foreground: #1c1c20;
+	--vscode-agentsPanel-background: #ffffff;
+	--vscode-agentsPanel-foreground: #1c1c20;
+	--vscode-agentsPanel-border: #ebebee;
+	--vscode-agentsCard-border: #e4e4e8;
+	--vscode-foreground: #1c1c20;
+	--vscode-icon-foreground: #3f3f46;
+	--vscode-descriptionForeground: #66666f;
+	--vscode-agentsChatInput-background: #ffffff;
+	--vscode-agentsChatInput-border: #dcdce1;
+	--vscode-agentsChatInput-foreground: #1c1c20;
+	--vscode-agentsChatInput-placeholderForeground: #75757e;
+	--vscode-agentsNewSessionButton-border: #dcdce1;
+	--vscode-widget-border: #e4e4e8;
+	--vscode-sideBarSectionHeader-border: #e4e4e8;
+	--vscode-list-inactiveSelectionBackground: #e7e7eb;
+	--vscode-list-hoverBackground: #ededf0;
+	--vscode-editorWidget-background: #fafafa;
+	--vscode-quickInput-background: #ffffff;
+	--vscode-quickInputList-focusBackground: #ecebfb;
+	--vscode-quickInputList-focusForeground: #1c1c20;
+	--vscode-chat-requestBubbleBackground: #f0f0f3;
+	--vscode-chat-statusBackground: rgba(28, 28, 32, 0.05);
+	--vscode-button-background: #5b4ad6;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-secondaryBackground: #f0f0f3;
+	--vscode-button-secondaryBorder: #dcdce1;
+	--vscode-button-secondaryForeground: #1c1c20;
+	--vscode-agentsBadge-background: #5b4ad6;
+	--vscode-focusBorder: #5b4ad6;
+	--vscode-textLink-foreground: #5b4ad6;
+	--vscode-textPreformat-background: #f0f0f3;
+	--vscode-textPreformat-foreground: #1c1c20;
+	--vscode-agentStatusIndicator-background: rgba(28, 28, 32, 0.05);
+}
