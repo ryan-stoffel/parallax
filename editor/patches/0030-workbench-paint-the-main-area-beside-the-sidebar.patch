@@ -1,0 +1,75 @@
+From 0f87b139aecacb90154e7db0001bf0dbbe5bfbf6 Mon Sep 17 00:00:00 2001
+From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+Date: Sun, 27 Sep 2026 17:35:26 +0000
+Subject: [PATCH] workbench: paint the main area beside the sidebar
+
+The first paint of the window is the main-area color, #0A0A0A in dark
+mode and #FDFDFD in light mode, so it matches the surface next to the
+sidebar.
+
+Issue #316.
+---
+ src/vs/code/electron-browser/workbench/workbench.ts |  4 ++--
+ src/vs/platform/windows/electron-main/windows.ts    | 10 ++++++----
+ src/vs/sessions/electron-browser/sessions.ts        |  4 ++--
+ 3 files changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/src/vs/code/electron-browser/workbench/workbench.ts b/src/vs/code/electron-browser/workbench/workbench.ts
+index 86e6cc40..ddc438d5 100644
+--- a/src/vs/code/electron-browser/workbench/workbench.ts
++++ b/src/vs/code/electron-browser/workbench/workbench.ts
+@@ -29,9 +29,9 @@
+ 	}
+ 
+ 	function showDefaultSplash(configuration: INativeWindowConfiguration) {
+-		// wisp: pure black or white from the first paint. The workbench splash is not drawn (#316).
++		// wisp: the main area from the first paint. The workbench splash is not drawn (#316).
+ 		const dark = configuration.colorScheme.dark;
+-		const shellBackground = dark ? '#000000' : '#ffffff';
++		const shellBackground = dark ? '#0A0A0A' : '#FDFDFD';
+ 		const shellForeground = dark ? '#ffffff' : '#000000';
+ 
+ 		const style = document.createElement('style');
+diff --git a/src/vs/platform/windows/electron-main/windows.ts b/src/vs/platform/windows/electron-main/windows.ts
+index fb50f427..7f20fc88 100644
+--- a/src/vs/platform/windows/electron-main/windows.ts
++++ b/src/vs/platform/windows/electron-main/windows.ts
+@@ -132,13 +132,15 @@ export interface IDefaultBrowserWindowOptionsOverrides {
+ }
+ 
+ /**
+- * The blank window is pure black or pure white, from the OS appearance.
+- * `symbol` is the caption-button color on the Windows title-bar overlay.
++ * The main area beside the sidebar, from the OS appearance (#316).
++ * Dark is `#0A0A0A` and light is `#FDFDFD`. `symbol` is the caption-button
++ * color on the Windows title-bar overlay. The sidebar itself is pure black
++ * or white and is painted by the shell.
+  */
+ export function blankWindowColors(): { readonly background: string; readonly symbol: string } {
+ 	return electron.nativeTheme.shouldUseDarkColors
+-		? { background: '#000000', symbol: '#ffffff' }
+-		: { background: '#ffffff', symbol: '#000000' };
++		? { background: '#0A0A0A', symbol: '#ffffff' }
++		: { background: '#FDFDFD', symbol: '#000000' };
+ }
+ 
+ export function defaultBrowserWindowOptions(accessor: ServicesAccessor, windowState: IWindowState, overrides?: IDefaultBrowserWindowOptionsOverrides, webPreferences?: electron.WebPreferences): electron.BrowserWindowConstructorOptions & { experimentalDarkMode: boolean } {
+diff --git a/src/vs/sessions/electron-browser/sessions.ts b/src/vs/sessions/electron-browser/sessions.ts
+index 1f4171ab..32efdf04 100644
+--- a/src/vs/sessions/electron-browser/sessions.ts
++++ b/src/vs/sessions/electron-browser/sessions.ts
+@@ -25,9 +25,9 @@
+ 	function showSplash(configuration: INativeWindowConfiguration) {
+ 		performance.mark('code/willShowPartsSplash');
+ 
+-		// wisp: pure black or white from the first paint. No splash chrome (#316).
++		// wisp: the main area from the first paint. No splash chrome (#316).
+ 		const dark = configuration.colorScheme.dark;
+-		const shellBackground = dark ? '#000000' : '#ffffff';
++		const shellBackground = dark ? '#0A0A0A' : '#FDFDFD';
+ 		const shellForeground = dark ? '#ffffff' : '#000000';
+ 
+ 		const style = document.createElement('style');
+-- 
+2.43.0
+

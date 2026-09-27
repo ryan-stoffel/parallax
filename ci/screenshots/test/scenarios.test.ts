@@ -7,8 +7,8 @@ import { test } from 'node:test';
 import { LIMITS, nameProblem, textProblem } from '../src/manifest.ts';
 import { scenarios } from '../src/scenarios.ts';
 
-test('ships only the blank window', () => {
-  assert.deepEqual(scenarios.map((scenario) => scenario.name), ['startup-dark', 'startup-light']);
+test('ships the open sidebar in both appearances', () => {
+  assert.deepEqual(scenarios.map((scenario) => scenario.name), ['sidebar-dark', 'sidebar-light']);
 });
 
 test('names are unique and titles are text the comment accepts', () => {

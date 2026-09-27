@@ -1,4 +1,4 @@
-// A plain launch, and the same profile after a relaunch, is a blank window. The sidebar is not created (#316).
+// A plain launch, and the same profile after a relaunch, shows the sidebar and an empty main area (#316).
 import { assertBlankWindow } from '../../../screenshots/src/blankWindow.ts';
 import { check } from '../check.ts';
 import { launchConnected, ready, type Session } from '../harness.ts';

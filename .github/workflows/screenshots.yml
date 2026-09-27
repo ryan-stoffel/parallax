@@ -285,7 +285,7 @@ jobs:
         if: steps.source.outputs.same-repo == 'true'
         timeout-minutes: 20
         env:
-          WISP_SCREENSHOT_ONLY: startup-dark,startup-light
+          WISP_SCREENSHOT_ONLY: sidebar-dark,sidebar-light
         run: |
           set -eux
           temp=$(cygpath -u "$RUNNER_TEMP")
@@ -379,8 +379,8 @@ jobs:
               echo "Windows capture did not produce $name.png"
             fi
           }
-          copy_windows startup-dark windows-dark.png
-          copy_windows startup-light windows-light.png
+          copy_windows sidebar-dark windows-dark.png
+          copy_windows sidebar-light windows-light.png
 
       - name: Publish the screenshots
         timeout-minutes: 10

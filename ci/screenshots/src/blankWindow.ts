@@ -25,9 +25,9 @@ interface NativeWindowHandle {
 }
 
 /**
- * A plain launch is a visible empty window. The shell fills the viewport, and
- * the in-page title bar, sidebar, tabs, status bar, editor, and sessions UI
- * are absent. Native window controls belong to the operating system.
+ * A plain launch shows the sidebar and an empty main area. Workbench parts,
+ * tabs, the status bar, the editor, and the sessions UI are absent. Native
+ * window controls belong to the operating system.
  */
 export async function assertBlankWindow(app: ElectronApplication, window: Page): Promise<void> {
   const shell = window.locator('.monaco-workbench');
@@ -49,13 +49,28 @@ export async function assertBlankWindow(app: ElectronApplication, window: Page):
   }
 
   const text = (await shell.innerText()).replace(/\s+/g, ' ').trim();
-  if (text.length > 0) {
-    throw new Error(`the window is not blank: ${JSON.stringify(text.slice(0, 200))}`);
+  if (text !== 'Wisp New Chat Projects Threads Settled (0)') {
+    throw new Error(`the sidebar text is ${JSON.stringify(text.slice(0, 200))}`);
   }
 
-  const background = await shell.evaluate((element) => getComputedStyle(element).backgroundColor);
-  if (background !== 'rgb(0, 0, 0)' && background !== 'rgb(255, 255, 255)' && background !== 'rgba(0, 0, 0, 1)' && background !== 'rgba(255, 255, 255, 1)') {
-    throw new Error(`the window background is ${background}`);
+  const lists = await window.locator('[data-wisp-section-list]').count();
+  const items = await window.locator('[data-wisp-section-list] > *').count();
+  if (lists !== 3 || items !== 0) {
+    throw new Error(`the sidebar lists are not empty (${String(lists)} lists, ${String(items)} rows)`);
+  }
+
+  const colors = await window.evaluate(() => {
+    const sidebar = document.querySelector('.wisp-sidebar');
+    const main = document.querySelector('.wisp-main');
+    return {
+      sidebar: sidebar ? getComputedStyle(sidebar).backgroundColor : '',
+      main: main ? getComputedStyle(main).backgroundColor : '',
+    };
+  });
+  const dark = colors.sidebar === 'rgb(0, 0, 0)' && colors.main === 'rgb(10, 10, 10)';
+  const light = colors.sidebar === 'rgb(255, 255, 255)' && colors.main === 'rgb(253, 253, 253)';
+  if (!dark && !light) {
+    throw new Error(`the sidebar is ${colors.sidebar} and the main area is ${colors.main}`);
   }
 
   const browserWindow = await app.browserWindow(window);

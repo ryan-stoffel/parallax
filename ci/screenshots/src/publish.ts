@@ -42,8 +42,8 @@ const runUrl = `${serverUrl}/${repository}/actions/runs/${process.env.GITHUB_RUN
 const prefix = `pr-${String(prNumber)}/${headSha.slice(0, 7)}`;
 
 const windowsShots = [
-  { file: 'windows-dark.png', title: 'Blank window on Windows, dark' },
-  { file: 'windows-light.png', title: 'Blank window on Windows, light' },
+  { file: 'windows-dark.png', title: 'Sidebar on Windows, dark' },
+  { file: 'windows-light.png', title: 'Sidebar on Windows, light' },
 ] as const;
 
 let capture: Capture | undefined;

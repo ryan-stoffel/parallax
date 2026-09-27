@@ -1,4 +1,4 @@
-// A plain launch opens a visible window with no in-page chrome. Native window controls stay (#316).
+// A plain launch opens the sidebar and an empty main area. Native window controls stay (#316).
 import { assertBlankWindow } from '../../../screenshots/src/blankWindow.ts';
 import { check } from '../check.ts';
 import { launchSmoke, ready } from '../harness.ts';

@@ -2,39 +2,51 @@ import type { ElectronApplication, Page } from 'playwright-core';
 
 export type Appearance = 'dark' | 'light';
 
-/** Computed color of a pure black or pure white shell. */
-export function shellColor(appearance: Appearance): string {
-  return appearance === 'dark' ? 'rgb(0, 0, 0)' : 'rgb(255, 255, 255)';
+export interface AppearanceColors {
+  sidebar: string;
+  main: string;
 }
 
-function matches(actual: string, expected: string): boolean {
-  return actual === expected || actual === expected.replace('rgb(', 'rgba(').replace(')', ', 1)');
+/** Computed colors of the sidebar and the main area. */
+export function appearanceColors(appearance: Appearance): AppearanceColors {
+  return appearance === 'dark'
+    ? { sidebar: 'rgb(0, 0, 0)', main: 'rgb(10, 10, 10)' }
+    : { sidebar: 'rgb(255, 255, 255)', main: 'rgb(253, 253, 253)' };
+}
+
+function accepted(color: string): Set<string> {
+  return new Set([color, color.replace('rgb(', 'rgba(').replace(')', ', 1)')]);
 }
 
 /**
- * Points Electron at one appearance and waits until the shell, page, and
- * document background are that pure color. `nativeTheme.themeSource` is what
- * the OS theme uses, so the same path runs on macOS and Windows.
+ * Points Electron at one appearance and waits until the sidebar and the main
+ * area are that pair of colors. `nativeTheme.themeSource` is what the OS
+ * theme uses, so the same path runs on macOS and Windows.
  */
 export async function forceAppearance(app: ElectronApplication, window: Page, appearance: Appearance): Promise<void> {
   await app.evaluate((electron: { nativeTheme: { themeSource: string } }, source: Appearance) => {
     electron.nativeTheme.themeSource = source;
   }, appearance);
-  const expected = shellColor(appearance);
-  await window.waitForFunction((color) => {
-    const shell = document.querySelector('.monaco-workbench');
-    if (!(shell instanceof HTMLElement)) {
+  const expected = appearanceColors(appearance);
+  await window.waitForFunction((colors: AppearanceColors) => {
+    const sidebar = document.querySelector('.wisp-sidebar');
+    const main = document.querySelector('.wisp-main');
+    if (!(sidebar instanceof HTMLElement) || !(main instanceof HTMLElement)) {
       return false;
     }
-    const accepted = new Set([color, color.replace('rgb(', 'rgba(').replace(')', ', 1)')]);
-    const same = (node: Element) => accepted.has(getComputedStyle(node).backgroundColor);
-    return same(shell) && same(document.body) && same(document.documentElement);
+    const sidebarOk = new Set([colors.sidebar, colors.sidebar.replace('rgb(', 'rgba(').replace(')', ', 1)')]);
+    const mainOk = new Set([colors.main, colors.main.replace('rgb(', 'rgba(').replace(')', ', 1)')]);
+    return sidebarOk.has(getComputedStyle(sidebar).backgroundColor) && mainOk.has(getComputedStyle(main).backgroundColor);
   }, expected);
   const actual = await window.evaluate(() => {
-    const shell = document.querySelector('.monaco-workbench');
-    return shell ? getComputedStyle(shell).backgroundColor : '';
+    const sidebar = document.querySelector('.wisp-sidebar');
+    const main = document.querySelector('.wisp-main');
+    return {
+      sidebar: sidebar ? getComputedStyle(sidebar).backgroundColor : '',
+      main: main ? getComputedStyle(main).backgroundColor : '',
+    };
   });
-  if (!matches(actual, expected)) {
-    throw new Error(`the window background is ${actual}, not ${expected}`);
+  if (!accepted(expected.sidebar).has(actual.sidebar) || !accepted(expected.main).has(actual.main)) {
+    throw new Error(`the sidebar is ${actual.sidebar} and the main area is ${actual.main}`);
   }
 }

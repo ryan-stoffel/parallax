@@ -12,7 +12,7 @@ const STATUS_ENV_VAR = 'WISP_E2E_SSH_STATUS_FILE';
 const REQUIRE_SSH_ENV_VAR = 'WISP_E2E_REQUIRE_SSH';
 
 export const sshChecks = [
-  check('a plain launch opens a blank window and does not show the host chip or sidebar', async () => {
+  check('a plain launch opens the sidebar and does not show the host chip', async () => {
     const required = process.env[REQUIRE_SSH_ENV_VAR] === '1';
     const statusFile = process.env[STATUS_ENV_VAR];
     if (statusFile === undefined) {
