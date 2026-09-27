@@ -89,17 +89,16 @@ fn observe(daemon: &Daemon, context_root: &Path, path: &Path) {
         warn!(project = %project, path = %name, "ignoring an oversized shared context file on disk");
         return;
     }
-    let Ok(content) = std::fs::read(path) else {
-        return; // raced a delete or another write; the next event settles it
-    };
-    if daemon.context.matches_recorded(project, &name, &content) {
-        return; // no new information: wispd's own write, or the same content seen again
-    }
-    daemon
+    // A failed read raced a delete or another write, whose event settles it. Content that matches
+    // is no new information: wispd's own write, or the same content seen again.
+    if !daemon
         .context
-        .record_external_write(project, &name, &content);
-    let writer = daemon.context.writer_of(project, &name);
-    let file = context_file(&name, &metadata, writer);
+        .record_disk_write(project, &name, || std::fs::read(path).ok())
+    {
+        return;
+    }
+    // An agent's write has no writer.
+    let file = context_file(&name, &metadata, None);
     let seq = daemon.log.append_blocking(
         jiff::Timestamp::now(),
         Some(project),

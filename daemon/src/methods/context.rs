@@ -113,14 +113,17 @@ fn write_context_file(
             format!("{name} would be over the shared context size cap"),
         ));
     }
-    let metadata = context::write_file(&dir, name, content.as_bytes()).map_err(io_error(name))?;
-    daemon.context.record_protocol_write(
-        project,
-        name,
-        write_id,
-        writer.clone(),
-        content.as_bytes(),
-    );
+    let metadata = daemon
+        .context
+        .write_protocol(
+            project,
+            name,
+            write_id,
+            writer.clone(),
+            content.as_bytes(),
+            || context::write_file(&dir, name, content.as_bytes()),
+        )
+        .map_err(io_error(name))?;
     let file = context::context_file(name, &metadata, writer);
     let seq = daemon.log.append_blocking(
         jiff::Timestamp::now(),

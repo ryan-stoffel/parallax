@@ -277,16 +277,28 @@ impl ContextIndex {
         }
     }
 
-    /// Records a write that came through `context/write`.
-    pub fn record_protocol_write(
+    /// Puts a `context/write`'s `content` on disk with `write`, then records it, holding the
+    /// index the whole time.
+    ///
+    /// The watcher checks the index for every change it sees, and inotify reports the rename at
+    /// once, so recording after letting go would let the watcher take wispd's own write for an
+    /// agent's. Holding it also orders racing writes: the last one recorded is the one on disk.
+    ///
+    /// # Errors
+    ///
+    /// `write`'s, in which case nothing is recorded.
+    pub fn write_protocol<T>(
         &self,
         project: ProjectId,
         path: &str,
         write_id: ContextWriteId,
         writer: Option<String>,
         content: &[u8],
-    ) {
-        self.lock().insert(
+        write: impl FnOnce() -> io::Result<T>,
+    ) -> io::Result<T> {
+        let mut records = self.lock();
+        let written = write()?;
+        records.insert(
             (project, path.to_owned()),
             Record {
                 write_id: Some(write_id),
@@ -294,30 +306,43 @@ impl ContextIndex {
                 writer,
             },
         );
+        Ok(written)
     }
 
-    /// True if `content`'s hash already matches the last write recorded for this path, whether
-    /// that was `context/write`'s own or an earlier disk observation. A filesystem event that
-    /// matches carries no new information and should not be reported: it is either the echo of
-    /// wispd's own write (which the OS can report more than once for a single rename, so this
-    /// checks content rather than consuming a one-shot flag), or a rewrite of a file with the
-    /// content it already had.
-    pub fn matches_recorded(&self, project: ProjectId, path: &str, content: &[u8]) -> bool {
-        self.lock()
-            .get(&(project, path.to_owned()))
-            .is_some_and(|record| record.hash == hash_content(content))
-    }
-
-    /// Records a write the watcher found on disk, with no `context/write` behind it.
-    pub fn record_external_write(&self, project: ProjectId, path: &str, content: &[u8]) {
-        self.lock().insert(
-            (project, path.to_owned()),
+    /// Reads a file the watcher saw change with `read`, and records it as a write with no
+    /// `context/write` behind it, unless its content matches the last write recorded for this
+    /// path. Returns whether it was new: `false` when it matched or `read` failed.
+    ///
+    /// A change that matches carries no new information and should not be reported: it is either
+    /// the echo of wispd's own write (which the OS can report more than once for a single rename,
+    /// so this checks content rather than consuming a one-shot flag), or a rewrite of a file with
+    /// the content it already had. The index is held from the read to the record, as
+    /// [`ContextIndex::write_protocol`] holds it, so a `context/write` can't land in between and
+    /// get its content taken for an agent's.
+    pub fn record_disk_write(
+        &self,
+        project: ProjectId,
+        path: &str,
+        read: impl FnOnce() -> Option<Vec<u8>>,
+    ) -> bool {
+        let mut records = self.lock();
+        let Some(content) = read() else {
+            return false;
+        };
+        let hash = hash_content(&content);
+        let key = (project, path.to_owned());
+        if records.get(&key).is_some_and(|record| record.hash == hash) {
+            return false;
+        }
+        records.insert(
+            key,
             Record {
                 write_id: None,
-                hash: hash_content(content),
+                hash,
                 writer: None,
             },
         );
+        true
     }
 
     /// Who last wrote `path` in `project`, if wispd has seen a write to it since it started.
@@ -522,7 +547,16 @@ mod tests {
             Existing::New
         );
 
-        index.record_protocol_write(project, "notes.md", id, Some("editor".to_owned()), b"hello");
+        index
+            .write_protocol(
+                project,
+                "notes.md",
+                id,
+                Some("editor".to_owned()),
+                b"hello",
+                || Ok(()),
+            )
+            .unwrap();
         assert_eq!(
             index.check(project, "notes.md", id, b"hello", Some("editor")),
             Existing::SameRetry
@@ -550,16 +584,22 @@ mod tests {
         let index = ContextIndex::default();
         let project = wisp_protocol::ProjectId::generate();
         let id = wisp_protocol::ContextWriteId::generate();
-        index.record_protocol_write(project, "notes.md", id, None, b"hello");
+        index
+            .write_protocol(project, "notes.md", id, None, b"hello", || Ok(()))
+            .unwrap();
         // The OS can report more than one filesystem event for a single atomic write (a rename
         // touches both the temporary name and the target); every one of them must still count as
         // the same already-known write, not just the first.
-        assert!(index.matches_recorded(project, "notes.md", b"hello"));
-        assert!(index.matches_recorded(project, "notes.md", b"hello"));
+        let observe = |content: &[u8]| {
+            index.record_disk_write(project, "notes.md", || Some(content.to_vec()))
+        };
+        assert!(!observe(b"hello"));
+        assert!(!observe(b"hello"));
         assert!(
-            !index.matches_recorded(project, "notes.md", b"something else"),
+            observe(b"something else"),
             "different content is new information, not an echo"
         );
+        assert!(!observe(b"something else"), "and is recorded");
     }
 
     #[test]
@@ -567,10 +607,19 @@ mod tests {
         let index = ContextIndex::default();
         let project = wisp_protocol::ProjectId::generate();
         assert_eq!(index.writer_of(project, "notes.md"), None);
-        index.record_external_write(project, "notes.md", b"from disk");
+        index.record_disk_write(project, "notes.md", || Some(b"from disk".to_vec()));
         assert_eq!(index.writer_of(project, "notes.md"), None);
         let id = wisp_protocol::ContextWriteId::generate();
-        index.record_protocol_write(project, "notes.md", id, Some("editor".to_owned()), b"hi");
+        index
+            .write_protocol(
+                project,
+                "notes.md",
+                id,
+                Some("editor".to_owned()),
+                b"hi",
+                || Ok(()),
+            )
+            .unwrap();
         assert_eq!(
             index.writer_of(project, "notes.md"),
             Some("editor".to_owned())
