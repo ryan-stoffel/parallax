@@ -6,6 +6,7 @@ Workflows call these scripts instead of running cargo or pnpm themselves, so a l
 | --- | --- | --- |
 | `check-rust` | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo build`, and `cargo test` on the workspace, with `--locked`. The tests include the protocol sample checks and the generated TypeScript staleness check. | `ci.yml`, `rust` job |
 | `check-app` | In `apps/desktop/`: `pnpm install --frozen-lockfile`, `pnpm check` (format, lint, type-check), `pnpm test`, and `pnpm build`. | `ci.yml`, `app` job on macOS, Linux, and Windows |
+| `launch-app` | Launches the app `check-app` built, with a check preloaded into its main process (`electron -r`), and fails unless the window loads, `window.wisp` answers over IPC, and React renders, with no renderer console errors (CSP violations included), then checks the app quits with exit 0. Gives up after 60 seconds. Downloads Electron's binary on first run. On Linux with no `DISPLAY` it runs under `xvfb-run`. | `ci.yml`, `app` job on macOS, Linux, and Windows |
 | `ssh-localhost` | Sets up key-based ssh to localhost with a throwaway key and its own sshd, and writes whether ssh is ready to a status file. Skips cleanly where it can't run. | `ci.yml`, `rust` job |
 | `check-ssh-attach` | Runs `wispd attach` through a real `ssh localhost` (#95) and checks the handshake answer, the ssh exit, and that `serve` outlives the session. Skips when ssh isn't ready, unless `WISP_E2E_REQUIRE_SSH=1`. | `ci.yml`, `rust` job |
 
@@ -14,6 +15,7 @@ Workflows call these scripts instead of running cargo or pnpm themselves, so a l
 - Rust: rustup. `rust-toolchain.toml` pins the toolchain and its components. In CI, run `rustup toolchain install` with no arguments as its own step before `check-rust`.
 - Node, any recent version, for `check-ssh-attach`. GitHub's macOS runners have it.
 - Node 24 and pnpm through corepack (`corepack enable`) for `check-app`. In CI, `setup-node` reads `apps/desktop/.node-version` and the pnpm store is cached per OS on the lockfile's hash, so a warm run skips the downloads.
+- `launch-app` runs after `check-app`. `pnpm install` doesn't fetch Electron's binary; requiring `electron` does, into `$electron_config_cache` (CI caches that directory per OS on the Electron version) or Electron's default cache. On Linux it needs `xvfb-run` when there is no display, and a working Chromium sandbox: on Ubuntu 24.04 and later, AppArmor blocks it until `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, which the workflow runs. The check keeps the sandbox on rather than pass `--no-sandbox`.
 - On Windows the scripts run in Git Bash, the workflow's default shell. `.gitattributes` keeps checkouts LF so they pass the formatter.
 
 ## Protocol samples
