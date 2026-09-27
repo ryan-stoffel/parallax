@@ -1,0 +1,2 @@
+# LF everywhere, so Windows checkouts pass the formatter and run the sh scripts.
+* text=auto eol=lf
