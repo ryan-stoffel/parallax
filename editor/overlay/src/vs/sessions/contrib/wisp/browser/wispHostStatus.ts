@@ -78,6 +78,9 @@ export function describeHostStatus(state: WispdState, context: IWispHostContext)
 				wispd: state.wispd,
 			};
 		case 'connecting':
+			if (state.restarting !== undefined) {
+				return restarting(state.restarting, context);
+			}
 			if (context.lastProblem) {
 				return { ...describeProblem(context.lastProblem, context), retrying: true };
 			}
@@ -90,6 +93,15 @@ export function describeHostStatus(state: WispdState, context: IWispHostContext)
 		case 'incompatible':
 			return describeProblem(state, context);
 	}
+}
+
+function restarting(version: string, context: IWispHostContext): IWispHostStatus {
+	const state = localize('wispHost.restarting', "restarting wispd");
+	return {
+		...notConnected(context, state, 'connecting', 'connecting'),
+		heading: localize('wispHost.restartingHeading', "Restarting wispd on {0}", context.host),
+		body: localize('wispHost.restartingBody', "wispd {0} is out of date, so wisp is restarting it with the version installed on {1}. Agents that were running stop and can be resumed.", version, context.host),
+	};
 }
 
 function notConnected(context: IWispHostContext, state: string, kind: 'notConnected' | 'connecting', mark: WispHostMark): IWispHostStatus {

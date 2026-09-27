@@ -27,6 +27,8 @@ export interface IWispdTransport extends IDisposable {
 	readonly onDidReceiveData: Event<void>;
 	/** Fires once, never during `create`, when the transport can't be used anymore. */
 	readonly onDidClose: Event<IWispdTransportClose>;
+	/** Each line `attach` writes to stderr, for transports that run it. */
+	readonly onDidWriteStderr?: Event<string>;
 	/** Sends one message. `line` has no line ending. */
 	send(line: string): void;
 }
@@ -70,6 +72,9 @@ export interface IWispdClientOptions {
 
 /** The protocol versions this editor speaks. */
 export const SUPPORTED_PROTOCOL: ProtocolRange = { min: 1, max: PROTOCOL_VERSION };
+
+/** What `wispd attach` writes to stderr when it restarts an out-of-date wispd (decision record 0020). */
+const RESTARTING_LINE = /^wispd attach: restarting wispd (\S+),/;
 
 class Connection extends Disposable {
 	readonly protocol: JsonRpcProtocol;
@@ -224,7 +229,9 @@ export class WispdClient extends Disposable {
 				return await this.send<WispRequests[M]['result']>(connection, method, params, token);
 			} catch (error) {
 				if (error instanceof JsonRpcError) {
-					throw toWispdError(error);
+					throw error.code === ErrorCodes.MethodNotFound
+						? outOfDate(error, method, connection.initialized?.wispd, this.options.client.version)
+						: toWispdError(error);
 				}
 				if (!isCancellationError(error) || token.isCancellationRequested) {
 					throw error;
@@ -278,7 +285,17 @@ export class WispdClient extends Disposable {
 		connection.track(transport.onDidReceiveData(() => this.armLiveness(connection)));
 		connection.track(transport.onDidReceiveLine(line => this.onLine(connection, line)));
 		connection.track(transport.onDidClose(close => this.drop(connection, close)));
+		if (transport.onDidWriteStderr) {
+			connection.track(transport.onDidWriteStderr(line => this.onStderr(connection, line)));
+		}
 		this.handshake(connection);
+	}
+
+	private onStderr(connection: Connection, line: string): void {
+		const restarting = RESTARTING_LINE.exec(line)?.[1];
+		if (restarting !== undefined && connection === this.connection && !connection.initialized && this._state.kind === 'connecting') {
+			this.setState({ ...this._state, restarting });
+		}
 	}
 
 	private async handshake(connection: Connection): Promise<void> {
@@ -604,6 +621,17 @@ function toWispdError(error: JsonRpcError): WispdError {
 	return new WispdError(error.code, error.message, wispErrorKind(error), detail);
 }
 
+/**
+ * A method this editor needs that the wispd it reached doesn't know: that wispd is out of date.
+ * The message names both versions instead of the raw "Method not found".
+ */
+function outOfDate(error: JsonRpcError, method: string, wispd: string | undefined, editor: string): WispdError {
+	const message = wispd === undefined
+		? `wispd is out of date and doesn't support ${method}. Update wisp on the host, or reconnect to restart wispd.`
+		: `wispd ${wispd} is out of date and doesn't support ${method}, which Wisp ${editor} needs. Update wisp on the host, or reconnect to restart wispd.`;
+	return new WispdError(error.code, message, undefined);
+}
+
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -611,7 +639,9 @@ function errorMessage(error: unknown): string {
 export function describeState(state: WispdState): string {
 	switch (state.kind) {
 		case 'connecting':
-			return `connecting through ${state.command} (attempt ${state.attempt})`;
+			return state.restarting === undefined
+				? `connecting through ${state.command} (attempt ${state.attempt})`
+				: `restarting wispd ${state.restarting}, which is out of date, through ${state.command}`;
 		case 'connected':
 			return `connected to wispd ${state.wispd}, protocol ${state.protocol}, log ${state.logId}`;
 		case 'disconnected':

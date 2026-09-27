@@ -126,12 +126,15 @@ export interface IWispdProcessStreams {
 
 /**
  * A transport over a child process's stdio, normally `wispd attach`. Closing it kills the
- * process; `attach` never stops wispd itself (decision record 0010).
+ * process; `attach` never stops wispd itself, except an older one it replaces (decision records 0010, 0020).
  */
 export class WispdProcessTransport extends Disposable implements IWispdTransport {
 
 	private readonly _onDidClose = this._register(new Emitter<IWispdTransportClose>());
 	readonly onDidClose = this._onDidClose.event;
+
+	private readonly _onDidWriteStderr = this._register(new Emitter<string>());
+	readonly onDidWriteStderr = this._onDidWriteStderr.event;
 
 	readonly onDidReceiveLine;
 	readonly onDidReceiveData;
@@ -167,6 +170,7 @@ export class WispdProcessTransport extends Disposable implements IWispdTransport
 			for (const line of text.split('\n')) {
 				if (line.trim()) {
 					this.logger.info(`${line.trimEnd()}`);
+					this._onDidWriteStderr.fire(line.trimEnd());
 				}
 			}
 			this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_BYTES);

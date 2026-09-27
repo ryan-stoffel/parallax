@@ -64,6 +64,8 @@ export class FakeTransport implements IWispdTransport {
 	readonly onDidReceiveData = this._onDidReceiveData.event;
 	private readonly _onDidClose = new Emitter<IWispdTransportClose>();
 	readonly onDidClose = this._onDidClose.event;
+	private readonly _onDidWriteStderr = new Emitter<string>();
+	readonly onDidWriteStderr = this._onDidWriteStderr.event;
 
 	readonly sent: Array<{ id?: number | string; method?: string; params?: unknown }> = [];
 	disposed = false;
@@ -88,6 +90,11 @@ export class FakeTransport implements IWispdTransport {
 		this._onDidReceiveLine.fire(line);
 	}
 
+	/** `attach` writes a line to stderr. */
+	writeStderr(line: string): void {
+		this._onDidWriteStderr.fire(line);
+	}
+
 	/** Bytes arrive without completing a line. */
 	receiveData(): void {
 		this._onDidReceiveData.fire();
@@ -106,6 +113,7 @@ export class FakeTransport implements IWispdTransport {
 		this._onDidReceiveLine.dispose();
 		this._onDidReceiveData.dispose();
 		this._onDidClose.dispose();
+		this._onDidWriteStderr.dispose();
 	}
 }
 

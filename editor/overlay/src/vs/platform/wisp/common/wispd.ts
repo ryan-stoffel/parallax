@@ -67,6 +67,11 @@ type WispdConnectionState =
 		readonly command: string;
 		/** 1 for the first attempt, counting up until a handshake succeeds. */
 		readonly attempt: number;
+		/**
+		 * The version of an out-of-date wispd that `attach` is restarting, from its stderr
+		 * (decision record 0020).
+		 */
+		readonly restarting?: string;
 	}
 	| {
 		readonly kind: 'connected';

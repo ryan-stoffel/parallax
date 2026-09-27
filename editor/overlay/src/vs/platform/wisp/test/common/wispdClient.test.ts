@@ -369,6 +369,36 @@ suite('WispdClient', () => {
 		assert.strictEqual(conflict.kind, 'idConflict');
 	});
 
+	test('a method an older wispd lacks says it is out of date instead of Method not found', async () => {
+		const client = await connect();
+		const error = await client.request('host/version', {}).then(() => undefined, e => e);
+		assert.ok(error instanceof WispdError);
+		assert.strictEqual(error.code, -32601);
+		assert.strictEqual(
+			error.message,
+			'wispd 0.1.0 is out of date and doesn\'t support host/version, which Wisp 0.1.0 needs. Update wisp on the host, or reconnect to restart wispd.',
+		);
+	});
+
+	test('attach restarting an out-of-date wispd shows as restarting until the handshake', async () => {
+		wispd.answering = false;
+		const client = createClient();
+		client.start();
+		await settle();
+		wispd.current.writeStderr('wispd attach: something else');
+		assert.deepStrictEqual(stateOf(client), { kind: 'connecting', command: 'wispd attach', attempt: 1 });
+
+		wispd.current.writeStderr('wispd attach: restarting wispd 0.0.9, which is older than 0.1.0');
+		assert.deepStrictEqual(stateOf(client), { kind: 'connecting', command: 'wispd attach', attempt: 1, restarting: '0.0.9' });
+
+		wispd.answering = true;
+		wispd.current.close();
+		await timers.advance(1_000);
+		assert.strictEqual(stateOf(client).kind, 'connected');
+		wispd.current.writeStderr('wispd attach: restarting wispd 0.0.9, which is older than 0.1.0');
+		assert.strictEqual(stateOf(client).kind, 'connected', 'only a connection still connecting');
+	});
+
 	test('cancelling a request sends $/cancelRequest with its id', async () => {
 		const client = await connect();
 		wispd.answering = false;

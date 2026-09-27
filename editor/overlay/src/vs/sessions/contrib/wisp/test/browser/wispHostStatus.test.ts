@@ -38,6 +38,24 @@ suite('wisp: host status', () => {
 			assert.deepStrictEqual([trying.kind, trying.mark, trying.state, trying.ariaLabel], ['connecting', 'connecting', 'connecting', 'Host: mac-mini, connecting']);
 		});
 
+		test('restarting an out-of-date wispd says so, even after a problem', () => {
+			const restarting: WispdState = { kind: 'connecting', command: SSH_COMMAND, attempt: 1, restarting: '0.1.0' };
+			const problem: WispHostProblem = disconnected('exited', SSH_COMMAND);
+			for (const status of [remote(restarting), remote(restarting, { lastProblem: problem })]) {
+				assert.deepStrictEqual(
+					{ kind: status.kind, mark: status.mark, state: status.state, ariaLabel: status.ariaLabel, heading: status.heading, body: status.body },
+					{
+						kind: 'connecting',
+						mark: 'connecting',
+						state: 'restarting wispd',
+						ariaLabel: 'Host: mac-mini, restarting wispd',
+						heading: 'Restarting wispd on mac-mini',
+						body: 'wispd 0.1.0 is out of date, so wisp is restarting it with the version installed on mac-mini. Agents that were running stop and can be resumed.',
+					},
+				);
+			}
+		});
+
 		test('every problem is a diamond with the state in words next to the host', () => {
 			const reasons: WispdDisconnectReason[] = ['spawnFailed', 'invalidHost', 'unreachable', 'noRoute', 'authFailed', 'hostKeyUnknown', 'hostKeyChanged', 'wispdNotFound', 'exited', 'timedOut', 'frameTooLarge', 'protocolError'];
 			for (const reason of reasons) {
