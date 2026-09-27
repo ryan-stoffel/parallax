@@ -35,7 +35,10 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
   return (
     <div role="status" className="px-2 py-1 text-[12px] text-muted-foreground">
       <div className="flex items-center gap-2">
-        <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${dot}`} />
+        {/* As wide as the Settings icon below, so the two line up. */}
+        <span aria-hidden className="grid w-4 shrink-0 place-items-center">
+          <span className={`size-1.5 rounded-full ${dot}`} />
+        </span>
         <span className="min-w-0 flex-1 truncate">
           {label}
           {state.status === "connected" && (
@@ -53,7 +56,7 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
         )}
       </div>
       {failed && (
-        <p title={state.error.stderr} className="mt-0.5 line-clamp-2 pl-3.5 text-faint-foreground">
+        <p title={state.error.stderr} className="mt-0.5 line-clamp-2 pl-6 text-faint-foreground">
           {state.error.message}
         </p>
       )}
