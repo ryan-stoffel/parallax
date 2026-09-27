@@ -6,16 +6,21 @@
 mod support;
 
 use std::fs;
+use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::fd::AsFd;
 use std::os::unix::fs::symlink;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
 use std::time::Duration;
 
 use rustix::process::Signal;
 use tokio::time::{Instant, sleep};
-use wisp_protocol::jsonrpc::{Message, RequestId};
+use wisp_protocol::jsonrpc::{Message, Request, RequestId};
 use wisp_protocol::methods::{HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList};
-use wisp_protocol::{HostHealthParams, HostVersionParams, ProjectListParams, StoreState};
+use wisp_protocol::{
+    HostHealthParams, HostVersionParams, InitializeResult, ProjectListParams, StoreState,
+};
+use wispd::VERSION;
 use wispd::attach::{self, Options};
 use wispd::launch_agent::LaunchAgent;
 use wispd::paths::DataDir;
@@ -381,6 +386,7 @@ fn options(launch_agent: LaunchAgent) -> Options {
         program: WISPD.into(),
         connect_timeout: PATIENCE,
         launch_agent: Some(launch_agent),
+        version: VERSION,
     }
 }
 
@@ -435,4 +441,175 @@ fn a_launch_agent_that_cannot_start_falls_back_to_serve() {
         "kickstart gui/501/wispd-test\n"
     );
     assert!(serve_pid(&data).is_some());
+}
+
+/// Options for an `attach` of release `version`, with no launch agent.
+fn as_version(version: &'static str) -> Options {
+    Options {
+        program: WISPD.into(),
+        connect_timeout: PATIENCE,
+        launch_agent: None,
+        version,
+    }
+}
+
+/// Sends `initialize` on a connection that [`attach::connect`] made, and returns the answer.
+fn initialize_on(stream: &StdUnixStream) -> InitializeResult {
+    stream.set_read_timeout(Some(PATIENCE)).unwrap();
+    let mut line = serde_json::to_vec(&Request::new::<Initialize>(1, initialize_params())).unwrap();
+    line.push(b'\n');
+    (&*stream).write_all(&line).unwrap();
+    let mut answer = String::new();
+    BufReader::new(stream).read_line(&mut answer).unwrap();
+    match Message::from_frame(answer.trim_end().as_bytes()).unwrap() {
+        Message::Response(response) => response.into_result().expect("initialize"),
+        other => panic!("expected a response, got {other:?}"),
+    }
+}
+
+/// Waits until the `serve` the test started has exited.
+async fn stopped(serve: &mut Serve) {
+    let deadline = Instant::now() + PATIENCE;
+    while serve.is_running() {
+        assert!(
+            Instant::now() < deadline,
+            "the older wispd is still running"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn an_older_wispd_is_replaced_and_its_data_kept() {
+    let dir = temp_dir();
+    let _stop = StopServe(dir.path().to_owned());
+    let mut old = Serve::start(dir.path()).await;
+    let old_pid = old.pid();
+    let params = create_params(dir.path(), "kept");
+    let mut attach = Attach::spawn(dir.path());
+    attach.initialize().await;
+    attach.call::<ProjectCreate>(params.clone()).await.unwrap();
+    attach.close_stdin();
+    assert!(attach.exit().await.status.success());
+
+    let connected = {
+        let _lock = spawn_lock();
+        attach::connect(&DataDir::new(dir.path()).unwrap(), &as_version("999.0.0"))
+    };
+    let stream = connected.expect("connect to the wispd that replaced the older one");
+    stopped(&mut old).await;
+    let new_pid = serve_pid(dir.path()).expect("a new wispd holds the lock");
+    assert_ne!(new_pid, old_pid);
+    assert_eq!(initialize_on(&stream).wispd, VERSION);
+    drop(stream);
+
+    // The new wispd is this build's version, so a plain attach keeps it.
+    let mut attach = Attach::spawn(dir.path());
+    attach.initialize().await;
+    let listed = attach
+        .call::<ProjectList>(ProjectListParams {})
+        .await
+        .unwrap();
+    assert!(
+        listed
+            .projects
+            .iter()
+            .any(|project| project.id == params.id),
+        "the store survived the restart"
+    );
+    attach.close_stdin();
+    let exited = attach.exit().await;
+    assert!(exited.stderr.is_empty(), "{exited:?}");
+    assert_eq!(serve_pid(dir.path()), Some(new_pid));
+}
+
+#[tokio::test]
+async fn a_wispd_of_the_same_or_a_newer_version_is_kept() {
+    let dir = temp_dir();
+    let mut serve = Serve::start(dir.path()).await;
+    for version in [VERSION, "0.0.1", "not a version"] {
+        let connected = {
+            let _lock = spawn_lock();
+            attach::connect(&DataDir::new(dir.path()).unwrap(), &as_version(version))
+        };
+        let stream = connected.expect("connect");
+        assert_eq!(initialize_on(&stream).wispd, VERSION, "{version}");
+        assert!(
+            serve.is_running(),
+            "attach {version} kept the running wispd"
+        );
+        assert_eq!(serve_pid(dir.path()), Some(serve.pid()), "{version}");
+    }
+}
+
+#[tokio::test]
+async fn two_newer_attaches_racing_replace_an_older_wispd_once() {
+    let dir = temp_dir();
+    let _stop = StopServe(dir.path().to_owned());
+    let mut old = Serve::start(dir.path()).await;
+    let data_dir = DataDir::new(dir.path()).unwrap();
+    let options = as_version("999.0.0");
+
+    let (first, second) = {
+        let _lock = spawn_lock();
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| attach::connect(&data_dir, &options));
+            let second = scope.spawn(|| attach::connect(&data_dir, &options));
+            (first.join().unwrap(), second.join().unwrap())
+        })
+    };
+    let (first, second) = (first.expect("first"), second.expect("second"));
+    stopped(&mut old).await;
+    assert_eq!(
+        initialize_on(&first).log_id,
+        initialize_on(&second).log_id,
+        "both reach the same new wispd"
+    );
+    assert_ne!(serve_pid(dir.path()), Some(old.pid()));
+}
+
+#[tokio::test]
+async fn an_older_launch_agent_wispd_is_restarted_through_launchctl() {
+    let dir = temp_dir();
+    let data = dir.path().join("data");
+    let _stop = StopServe(data.clone());
+    let mut old = Serve::start(&data).await;
+    let lock = data.join("wispd.lock");
+    // The stand-in reports the running wispd as launchd's, and on `kickstart -k` stops it and
+    // starts another once it has let go of the lock, as launchd would.
+    let agent = fake_launchctl(
+        dir.path(),
+        &format!(
+            "case \"$1\" in\n\
+             print) printf 'svc = {{\\n\\tstate = running\\n\\tpid = %s\\n}}\\n' \"$(cat '{lock}')\" ;;\n\
+             kickstart) kill \"$(cat '{lock}')\"\n\
+             while [ -e '{lock}' ]; do sleep 0.02; done\n\
+             WISPD_DATA_DIR='{data}' '{WISPD}' serve </dev/null >/dev/null 2>&1 & ;;\n\
+             esac",
+            lock = lock.display(),
+            data = data.display(),
+        ),
+    );
+    let options = Options {
+        launch_agent: Some(agent),
+        ..as_version("999.0.0")
+    };
+
+    let connected = {
+        let _lock = spawn_lock();
+        attach::connect(&DataDir::new(&data).unwrap(), &options)
+    };
+    connected.expect("connect to the restarted wispd");
+    stopped(&mut old).await;
+    assert_eq!(
+        fs::read_to_string(dir.path().join("launchctl-args")).unwrap(),
+        "print gui/501/wispd-test\nkickstart -k gui/501/wispd-test\n"
+    );
+    assert_ne!(serve_pid(&data), Some(old.pid()));
+    let log = log(&data);
+    assert_eq!(
+        log.matches("wispd: starting").count(),
+        2,
+        "only the stand-in started a wispd: {log}"
+    );
 }

@@ -373,7 +373,7 @@ fn load_state(uid: u32, label: &str) -> Result<LaunchdState, ServiceError> {
 /// a not-currently-running job (`launchctl` has used both "not running" and no `state` line at
 /// all across macOS releases) is left as `running: false, pid: None`, which is always correct
 /// even if the exact wording changes again.
-fn parse_print_output(text: &str) -> (bool, Option<u32>) {
+pub(crate) fn parse_print_output(text: &str) -> (bool, Option<u32>) {
     let running = text.lines().any(|line| line.trim() == "state = running");
     let pid = text
         .lines()

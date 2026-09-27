@@ -182,6 +182,7 @@ fn attach(args: &AttachArgs) -> ! {
         program,
         connect_timeout: args.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
         launch_agent: LaunchAgent::installed_for(&data_dir),
+        version: VERSION,
     };
     // Starting wispd happens here, before the runtime exists.
     let stream = match attach::connect(&data_dir, &options) {

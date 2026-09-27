@@ -4,11 +4,14 @@
 //! there. [`bridge`] then copies stdin to the socket and the socket to stdout, byte for byte,
 //! with no framing of its own. Over SSH, stdout is the protocol stream, so `attach` writes
 //! nothing else there. Its own messages go to stderr, through [`report`].
+//!
+//! A running wispd older than this `attach` is replaced first (0020).
 
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
+use std::fs::{self, File};
+use std::io::{self, BufRead as _, BufReader, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::fd::AsFd;
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -16,9 +19,12 @@ use std::process::ExitStatus;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rustix::process::{Pid, WaitOptions};
+use rustix::process::{Pid, Signal, WaitOptions};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
+use wisp_protocol::jsonrpc::Request;
+use wisp_protocol::methods::Initialize;
+use wisp_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
 
 use crate::launch_agent::LaunchAgent;
 use crate::logging;
@@ -45,6 +51,12 @@ const MAX_RETRY: Duration = Duration::from_millis(500);
 /// An error quotes the last line from at most this much of the end of the log.
 const QUOTED_LOG_BYTES: u64 = 64 * 1024;
 const QUOTED_LINE_CHARS: usize = 300;
+/// How long the probe waits for a running wispd to answer `initialize`.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// The most of that answer the probe reads.
+const PROBE_ANSWER_BYTES: u64 = 64 * 1024;
+/// How often `attach` checks whether an older wispd has let go of its socket.
+const REPLACE_POLL: Duration = Duration::from_millis(20);
 
 /// How [`connect`] reaches wispd.
 #[derive(Clone, Debug)]
@@ -55,6 +67,8 @@ pub struct Options {
     pub connect_timeout: Duration,
     /// The launch agent that starts wispd, if one is installed for the data folder.
     pub launch_agent: Option<LaunchAgent>,
+    /// This `attach`'s release version. A running wispd older than it is replaced (0020).
+    pub version: &'static str,
 }
 
 /// Why [`connect`] could not reach wispd.
@@ -127,7 +141,10 @@ pub fn report(message: impl fmt::Display) {
 /// `serve` that exits 3, because another one holds the lock, is started again at the next retry
 /// (0009). One that stops any other way ends the wait.
 ///
-/// It never stops a wispd, including one it started.
+/// A running wispd whose release version is older than [`Options::version`] is replaced first
+/// (0020): a launch agent's through `launchctl kickstart -k`, any other with SIGTERM, and wispd is
+/// then started as above. It never stops a wispd of the same or a newer version, or one whose
+/// version it can't read.
 ///
 /// # Errors
 ///
@@ -137,9 +154,6 @@ pub fn connect(data_dir: &DataDir, options: &Options) -> Result<StdUnixStream, U
         .socket_path()
         .map_err(Unavailable::SocketPath)?
         .path;
-    if let Some(stream) = try_connect(&socket)? {
-        return Ok(stream);
-    }
     let timeout = options.connect_timeout.min(MAX_CONNECT_TIMEOUT);
     let deadline = Instant::now() + timeout;
     let mut starter = Starter {
@@ -148,7 +162,22 @@ pub fn connect(data_dir: &DataDir, options: &Options) -> Result<StdUnixStream, U
         launched: None,
         spawned: None,
     };
-    starter.start(deadline)?;
+    match try_connect(&socket)? {
+        Some(probe) => match older(probe, &socket, data_dir, options.version, deadline) {
+            Some(old) => {
+                report(format_args!(
+                    "restarting wispd {}, which is older than {}",
+                    old.version, options.version
+                ));
+                starter.replace(&old, &socket, deadline)?;
+            }
+            None => match try_connect(&socket)? {
+                Some(stream) => return Ok(stream),
+                None => starter.start(deadline)?,
+            },
+        },
+        None => starter.start(deadline)?,
+    }
     let mut retry = FIRST_RETRY;
     loop {
         let now = Instant::now();
@@ -168,6 +197,112 @@ pub fn connect(data_dir: &DataDir, options: &Options) -> Result<StdUnixStream, U
         }
         starter.check()?;
     }
+}
+
+/// A running wispd that is older than this `attach`.
+#[derive(Debug)]
+struct Older {
+    version: String,
+    /// Its pid, from the lock file.
+    pid: u32,
+    /// Its socket file's device and inode.
+    socket: (u64, u64),
+}
+
+/// Asks the wispd at the other end of `probe` for its version, and returns it if it is older
+/// than `ours`. `None` also covers every way of not finding out, so a wispd whose version can't
+/// be read is kept.
+///
+/// The socket's identity is read before `initialize` is sent, and the pid after the answer. A
+/// wispd removes its socket as soon as it starts shutting down, before it lets go of the lock. So
+/// if the socket is still the same one when [`Starter::replace`] checks again, the pid came from
+/// this wispd's lock file and not a successor's.
+fn older(
+    probe: StdUnixStream,
+    socket: &Path,
+    data_dir: &DataDir,
+    ours: &str,
+    deadline: Instant,
+) -> Option<Older> {
+    let identity = socket_identity(socket)?;
+    let version = running_version(probe, ours, deadline)?;
+    if !is_older(&version, ours) {
+        return None;
+    }
+    let pid = fs::read_to_string(data_dir.lock_file())
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(Older {
+        version,
+        pid,
+        socket: identity,
+    })
+}
+
+fn socket_identity(socket: &Path) -> Option<(u64, u64)> {
+    fs::symlink_metadata(socket)
+        .ok()
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+}
+
+/// Sends `initialize` on `stream` and returns the release version wispd answers with.
+fn running_version(mut stream: StdUnixStream, ours: &str, deadline: Instant) -> Option<String> {
+    let wait = PROBE_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
+    if wait.is_zero() {
+        return None;
+    }
+    stream.set_read_timeout(Some(wait)).ok()?;
+    stream.set_write_timeout(Some(wait)).ok()?;
+    let request = Request::new::<Initialize>(
+        1,
+        InitializeParams {
+            protocol: ProtocolRange::SUPPORTED,
+            client: ClientInfo {
+                name: "wispd-attach".to_owned(),
+                version: ours.to_owned(),
+                machine_id: None,
+            },
+            capabilities: Capabilities::default(),
+        },
+    );
+    let mut line = serde_json::to_vec(&request).ok()?;
+    line.push(b'\n');
+    stream.write_all(&line).ok()?;
+    let mut answer = String::new();
+    BufReader::new(stream.take(PROBE_ANSWER_BYTES))
+        .read_line(&mut answer)
+        .ok()?;
+    reported_version(&answer)
+}
+
+/// The release version in an answer to `initialize`: the result's, or that of an
+/// `incompatibleProtocol` error, whose shape never changes (0007).
+fn reported_version(answer: &str) -> Option<String> {
+    let answer: serde_json::Value = serde_json::from_str(answer).ok()?;
+    answer
+        .pointer("/result/wispd")
+        .or_else(|| answer.pointer("/error/data/detail/wispd"))?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// Whether release version `theirs` is older than `ours`. Only `major.minor.patch` counts, so a
+/// pre-release or build suffix never makes a version older, and neither does a version that
+/// doesn't parse.
+fn is_older(theirs: &str, ours: &str) -> bool {
+    match (release(theirs), release(ours)) {
+        (Some(theirs), Some(ours)) => theirs < ours,
+        _ => false,
+    }
+}
+
+fn release(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version.split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
+    let release = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(release)
 }
 
 /// A connection, or `None` when nothing accepts connections at `path` yet: no socket file, or
@@ -220,6 +355,50 @@ impl Starter<'_> {
             }
         }
         self.spawn()
+    }
+
+    /// Stops the older wispd `old`, waits until its socket is gone, and starts wispd again.
+    ///
+    /// A launch agent's wispd, known by the pid launchd reports, is restarted with `launchctl
+    /// kickstart -k`, which starts it again from its plist. Any other gets SIGTERM, which lets
+    /// its requests in flight finish (0009). Nothing is signalled if the socket has changed since
+    /// the probe: another `attach` is replacing that wispd already, and a second SIGTERM would
+    /// cut its grace short.
+    fn replace(
+        &mut self,
+        old: &Older,
+        socket: &Path,
+        deadline: Instant,
+    ) -> Result<(), Unavailable> {
+        let mut restarted = false;
+        if socket_identity(socket) == Some(old.socket) {
+            if let Some(agent) = &self.options.launch_agent
+                && agent.pid() == Some(old.pid)
+            {
+                match agent.restart(deadline) {
+                    Ok(()) => {
+                        self.launched = Some(agent.service.clone());
+                        restarted = true;
+                    }
+                    Err(error) => report(format_args!("{error}; stopping it instead")),
+                }
+            }
+            if !restarted {
+                terminate(old.pid)?;
+            }
+        }
+        while socket_identity(socket) == Some(old.socket) {
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(());
+            }
+            thread::sleep(REPLACE_POLL.min(deadline - now));
+        }
+        if restarted {
+            Ok(())
+        } else {
+            self.start(deadline)
+        }
     }
 
     // The data folder is checked first, as `serve` would check it, so the log is never created
@@ -288,6 +467,23 @@ impl Starter<'_> {
             said: last_line(&log, log_len),
             log,
         })
+    }
+}
+
+/// Sends SIGTERM to `pid`. One that is gone already is fine.
+fn terminate(pid: u32) -> Result<(), Unavailable> {
+    let stop = |error: &dyn fmt::Display| {
+        Unavailable::Start(format!(
+            "could not stop the older wispd (pid {pid}): {error}"
+        ))
+    };
+    let target = i32::try_from(pid)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| stop(&"not a pid"))?;
+    match rustix::process::kill_process(target, Signal::TERM) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(stop(&error)),
     }
 }
 
@@ -373,7 +569,7 @@ mod tests {
     use tokio::task::JoinHandle;
     use tokio::time::timeout;
 
-    use super::{bridge, last_line};
+    use super::{bridge, is_older, last_line, reported_version};
 
     const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -529,6 +725,39 @@ mod tests {
         }
         ended(bridge).await.unwrap();
         drop(stdin);
+    }
+
+    #[test]
+    fn only_a_strictly_older_release_is_older() {
+        assert!(is_older("0.1.0", "0.2.0"));
+        assert!(is_older("0.9.9", "1.0.0"));
+        assert!(is_older("0.2.9", "0.10.0"), "numbers, not text");
+        assert!(!is_older("0.2.0", "0.2.0"));
+        assert!(!is_older("0.3.0", "0.2.0"));
+        assert!(
+            !is_older("0.2.0-dev", "0.2.0"),
+            "a suffix never makes one older"
+        );
+        assert!(is_older("0.1.0", "0.2.0-dev.1"));
+        assert!(is_older("0.1.0+build.7", "0.2.0"));
+        for unreadable in ["", "0.1", "0.1.0.0", "v0.1.0", "unknown", "0.x.0"] {
+            assert!(!is_older(unreadable, "0.2.0"), "{unreadable:?}");
+            assert!(!is_older("0.1.0", unreadable), "{unreadable:?}");
+        }
+    }
+
+    #[test]
+    fn the_version_comes_from_the_result_or_an_incompatible_protocol_error() {
+        let result =
+            r#"{"jsonrpc":"2.0","id":1,"result":{"protocol":1,"wispd":"0.1.0","logId":"x"}}"#;
+        assert_eq!(reported_version(result).as_deref(), Some("0.1.0"));
+        let incompatible = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"no","data":{"kind":"incompatibleProtocol","detail":{"requested":{"min":2,"max":2},"supported":{"min":1,"max":1},"wispd":"0.0.9"}}}}"#;
+        assert_eq!(reported_version(incompatible).as_deref(), Some("0.0.9"));
+        let other =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        assert_eq!(reported_version(other), None);
+        assert_eq!(reported_version("not json"), None);
+        assert_eq!(reported_version(""), None);
     }
 
     #[test]
