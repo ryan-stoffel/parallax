@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+Date: Sun, 27 Sep 2026 07:25:26 +0000
+Subject: [PATCH] build: package Windows without the explorer context menu
+
+
+diff --git a/build/gulpfile.vscode.ts b/build/gulpfile.vscode.ts
+index 9a7ba645ed60ea53018973f5358b492d35470b01..a65d535b381eda2cfd5f345b68eeaa6240e62b64 100644
+--- a/build/gulpfile.vscode.ts
++++ b/build/gulpfile.vscode.ts
+@@ -427,24 +427,30 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
+ 				.pipe(replace('@@VERSIONFOLDER@@', versionedResourcesFolder ? `${versionedResourcesFolder}\\` : ''))
+ 				.pipe(rename(product.nameShort + '.VisualElementsManifest.xml')));
+ 
+-			result = es.merge(result, gulp.src('.build/policies/win32/**', { base: '.build/policies/win32' })
++			// Group policy definitions and the explorer-command DLL are produced by the
++			// proprietary pipeline. A stable build without them still has to package.
++			result = es.merge(result, gulp.src('.build/policies/win32/**', { base: '.build/policies/win32', allowEmpty: true })
+ 				.pipe(rename(f => f.dirname = `policies/${f.dirname}`)));
+ 
+ 			if (quality === 'stable' || quality === 'insider') {
+-				result = es.merge(result, gulp.src('.build/win32/appx/**', { base: '.build/win32' }));
++				result = es.merge(result, gulp.src('.build/win32/appx/**', { base: '.build/win32', allowEmpty: true }));
+ 				const rawVersion = version.replace(/-\w+$/, '').split('.');
+ 				const appxVersion = `${rawVersion[0]}.0.${rawVersion[1]}.${rawVersion[2]}`;
+-				result = es.merge(result, gulp.src('resources/win32/appx/AppxManifest.xml', { base: '.' })
++				const ctxMenu = (product as { win32ContextMenu?: Record<string, { clsid: string }> }).win32ContextMenu?.[arch];
++				let manifest = gulp.src('resources/win32/appx/AppxManifest.xml', { base: '.' })
+ 					.pipe(replace('@@AppxPackageName@@', product.win32AppUserModelId))
+ 					.pipe(replace('@@AppxPackageVersion@@', appxVersion))
+ 					.pipe(replace('@@AppxPackageDisplayName@@', product.nameLong))
+ 					.pipe(replace('@@AppxPackageDescription@@', product.win32NameVersion))
+ 					.pipe(replace('@@ApplicationIdShort@@', product.win32RegValueName))
+ 					.pipe(replace('@@ApplicationExe@@', product.nameShort + '.exe'))
+-					.pipe(replace('@@FileExplorerContextMenuID@@', quality === 'stable' ? 'OpenWithCode' : 'OpenWithCodeInsiders'))
+-					.pipe(replace('@@FileExplorerContextMenuCLSID@@', (product as { win32ContextMenu?: Record<string, { clsid: string }> }).win32ContextMenu![arch].clsid))
+-					.pipe(replace('@@FileExplorerContextMenuDLL@@', `${quality === 'stable' ? 'code' : 'code_insider'}_explorer_command_${arch}.dll`))
+-					.pipe(rename(f => f.dirname = `appx/manifest`)));
++					.pipe(replace('@@FileExplorerContextMenuID@@', quality === 'stable' ? 'OpenWithCode' : 'OpenWithCodeInsiders'));
++				if (ctxMenu) {
++					manifest = manifest
++						.pipe(replace('@@FileExplorerContextMenuCLSID@@', ctxMenu.clsid))
++						.pipe(replace('@@FileExplorerContextMenuDLL@@', `${quality === 'stable' ? 'code' : 'code_insider'}_explorer_command_${arch}.dll`));
++				}
++				result = es.merge(result, manifest.pipe(rename(f => f.dirname = `appx/manifest`)));
+ 			}
+ 		} else if (platform === 'linux') {
+ 			result = es.merge(result, gulp.src('resources/linux/bin/code.sh', { base: '.' })
