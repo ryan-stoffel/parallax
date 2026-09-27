@@ -24,7 +24,7 @@ pnpm install
 pnpm dev       # window with hot reload
 ```
 
-`pnpm check` (format, lint, type-check), `pnpm fmt`, `pnpm test`, and `pnpm build` run the rest. Once the app talks to wispd, it will start a local `wispd`, taken from `WISPD_PATH` in development.
+`pnpm check` (format, lint, type-check), `pnpm fmt`, `pnpm test`, and `pnpm build` run the rest.
 
 ## License
 

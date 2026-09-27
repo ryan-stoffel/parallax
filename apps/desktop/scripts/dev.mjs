@@ -1,7 +1,7 @@
 // `pnpm dev`: serves the renderer with hot reload, rebuilds main and preload
 // on change, and runs Electron on the dev server, restarting it whenever those
 // bundles change. Quitting the app or Ctrl-C stops everything.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -20,9 +20,28 @@ rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist");
 
 // Run Vite+'s CLI with this Node, not the `vp` shim, so Windows needs no shell.
+// `vp` runs the watcher as its own child without forwarding signals, so stop()
+// kills the whole tree: a process group on POSIX, taskkill /T on Windows.
+const windows = process.platform === "win32";
 const vp = fileURLToPath(import.meta.resolve("vite-plus/bin"));
-const pack = spawn(process.execPath, [vp, "pack", "--watch"], { stdio: "inherit" });
+const pack = spawn(process.execPath, [vp, "pack", "--watch"], {
+  stdio: "inherit",
+  detached: !windows,
+});
 pack.on("exit", () => stop());
+
+function killPackTree() {
+  const { pid } = pack;
+  if (pid === undefined) return; // It never started.
+  if (windows) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+  else {
+    try {
+      process.kill(-pid);
+    } catch {
+      // The group already exited.
+    }
+  }
+}
 
 // Terminals inside Electron apps (VS Code, Cursor) set ELECTRON_RUN_AS_NODE,
 // which would start Electron as plain Node.
@@ -49,7 +68,7 @@ watch("dist", { recursive: true }, () => {
 
 function stop() {
   app?.kill();
-  pack.kill();
+  killPackTree();
   process.exit();
 }
 process.on("SIGINT", stop);

@@ -1,17 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "ES2024",
-    "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "jsx": "react-jsx",
-    "types": ["node", "vite-plus/client"],
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noPropertyAccessFromIndexSignature": true,
-    "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
-    "noEmit": true
-  },
-  "include": ["src", "scripts", "vite.config.ts"]
+  "files": [],
+  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }]
 }

@@ -1,12 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-// The renderer's only way into the app, exposed as `window.wisp`.
-// Its type is the renderer's type too (see src/renderer/wisp.d.ts).
-const bridge = {
-  platform: process.platform,
-  version: (): Promise<string> => ipcRenderer.invoke("wisp:version"),
-};
+import type { WispBridge } from "./bridge";
 
-export type WispBridge = typeof bridge;
+// The renderer's only way into the app, exposed as `window.wisp`.
+const bridge: WispBridge = {
+  platform: process.platform,
+  version: () => ipcRenderer.invoke("wisp:version") as Promise<string>,
+};
 
 contextBridge.exposeInMainWorld("wisp", bridge);
