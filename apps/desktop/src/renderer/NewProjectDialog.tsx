@@ -68,13 +68,13 @@ export function NewProjectDialog({
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3">
           <p className="text-[12px] text-muted-foreground">
-            Creating Projects comes with the wispd connection.
+            Creating Projects isn't available yet.
           </p>
           {/* Placeholder until RYA-46 wires project/create. */}
           <button
             type="submit"
             disabled
-            className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            className="shrink-0 whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
             Create Project
           </button>
