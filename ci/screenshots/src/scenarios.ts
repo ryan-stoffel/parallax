@@ -2,7 +2,8 @@ import { cp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fakeClaudeEnv } from './agents.ts';
 import { assertBlankWindow } from './blankWindow.ts';
-import { notAvailable, screenshot, type Scenario } from './harness.ts';
+import { notAvailable, type Scenario } from './harness.ts';
+import { captureNativeWindow } from './nativeCapture.ts';
 
 const workspace = join(import.meta.dirname, '..', 'fixtures', 'workspace');
 const openFile = 'tasks.ts';
@@ -28,7 +29,7 @@ export const scenarios: readonly Scenario[] = [
 		title: 'Blank window',
 		async run({ app, window }) {
 			await assertBlankWindow(app, window);
-			return screenshot(window);
+			return captureNativeWindow(app, window);
 		},
 	},
 	{

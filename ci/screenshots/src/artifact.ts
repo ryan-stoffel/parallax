@@ -66,6 +66,28 @@ export async function readCapture(dir: string): Promise<Capture | undefined> {
   return { manifest, files };
 }
 
+/** A PNG sitting next to the manifest, such as the Windows capture copied in beside the macOS results. */
+export async function hasSidecarPng(dir: string, file: string): Promise<boolean> {
+  if (file !== 'windows.png') {
+    throw new Error(`${file} is not a capture sidecar`);
+  }
+  const path = join(dir, file);
+  const size = await kind(path);
+  if (size === 'missing') {
+    return false;
+  }
+  if (typeof size !== 'number') {
+    throw new Error(`${file} is not a regular file`);
+  }
+  if (size === 0 || size > maxPngBytes) {
+    throw new Error(`${file} is empty or larger than ${String(maxPngBytes)} bytes`);
+  }
+  if (!(await readBytes(path, 0, pngSignature.length)).equals(pngSignature)) {
+    throw new Error(`${file} is not a PNG`);
+  }
+  return true;
+}
+
 export function missingArtifactError(capture: Capture | undefined, captureOutcome: string | undefined): string | undefined {
   if (capture !== undefined || captureOutcome !== 'success') {
     return undefined;

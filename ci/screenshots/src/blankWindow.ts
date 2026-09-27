@@ -21,14 +21,13 @@ export const removedChrome = [
 ] as const;
 
 interface NativeWindowHandle {
-  getTitle(): string;
-  getContentSize(): [number, number];
-  getSize(): [number, number];
+  getNativeWindowHandle(): { length: number };
 }
 
 /**
- * A plain launch is a visible empty window: the shell fills the viewport, and
- * the title bar, traffic lights, sidebar, and the rest of the chrome are absent.
+ * A plain launch is a visible empty window. The shell fills the viewport, and
+ * the in-page title bar, sidebar, tabs, status bar, editor, and sessions UI
+ * are absent. Native window controls belong to the operating system.
  */
 export async function assertBlankWindow(app: ElectronApplication, window: Page): Promise<void> {
   const shell = window.locator('.monaco-workbench');
@@ -55,19 +54,10 @@ export async function assertBlankWindow(app: ElectronApplication, window: Page):
   }
 
   const browserWindow = await app.browserWindow(window);
-  const native = await browserWindow.evaluate((win: NativeWindowHandle) => {
-    const [contentWidth, contentHeight] = win.getContentSize();
-    const [width, height] = win.getSize();
-    return { title: win.getTitle(), contentWidth, contentHeight, width, height };
-  });
-  if (native.title.trim().length > 0) {
-    throw new Error(`the native title bar still shows ${JSON.stringify(native.title)}`);
-  }
-  const extraHeight = native.height - native.contentHeight;
-  const extraWidth = native.width - native.contentWidth;
-  if (extraHeight > 8 || extraWidth > 8) {
-    throw new Error(
-      `a native title bar or frame is outside the content (${String(native.width)}x${String(native.height)} window, ${String(native.contentWidth)}x${String(native.contentHeight)} content)`,
-    );
+  const handleBytes = await browserWindow.evaluate(
+    (win: NativeWindowHandle) => win.getNativeWindowHandle().length,
+  );
+  if (handleBytes < 4) {
+    throw new Error('the page is not hosted in a native window');
   }
 }

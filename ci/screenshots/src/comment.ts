@@ -24,6 +24,7 @@ export interface CommentInput {
   pushError?: string;
   artifactError?: string;
   failedSteps: readonly FailedStep[];
+  extraImages?: readonly { title: string; file: string }[];
 }
 
 const logLines = 40;
@@ -64,8 +65,11 @@ export function renderComment(input: CommentInput): string {
   for (const result of results) {
     blocks.push(`### ${result.title}`, ...section(result, input.images));
   }
+  for (const extra of input.extraImages ?? []) {
+    blocks.push(`### ${extra.title}`, image(extra.title, extra.file, input.images));
+  }
 
-  if (input.images && results.some((result) => 'file' in result)) {
+  if (input.images && (results.some((result) => 'file' in result) || (input.extraImages?.length ?? 0) > 0)) {
     blocks.push(`<sub>The images are on the [ci-screenshots branch](${input.images.tree}).</sub>`);
   }
   return `${blocks.join('\n\n')}\n`;

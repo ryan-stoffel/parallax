@@ -2,7 +2,7 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
-const { existsSync, readdirSync } = require('node:fs');
+const { existsSync, readFileSync, readdirSync } = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..', '..');
@@ -48,5 +48,24 @@ function fromBundle(bundle) {
   return { executablePath, args: [] };
 }
 
-const bundle = process.env.WISP_APP_BUNDLE ? path.resolve(process.env.WISP_APP_BUNDLE) : builtBundle();
-process.stdout.write(`${JSON.stringify(fromBundle(bundle))}\n`);
+function windowsExecutable() {
+  const productPath = path.join(root, 'editor', 'vscode', 'product.json');
+  let name = 'Wisp';
+  if (existsSync(productPath)) {
+    const product = JSON.parse(readFileSync(productPath, 'utf8'));
+    if (typeof product.nameShort === 'string' && product.nameShort.length > 0) {
+      name = product.nameShort;
+    }
+  }
+  const dir = process.env.WISP_APP_DIR ? path.resolve(process.env.WISP_APP_DIR) : path.join(root, 'editor', 'VSCode-win32-x64');
+  const executablePath = path.join(dir, `${name}.exe`);
+  if (!existsSync(executablePath)) {
+    fail(`${executablePath} does not exist; build the Windows app first`);
+  }
+  return { executablePath, args: [] };
+}
+
+const launch = process.platform === 'win32'
+  ? windowsExecutable()
+  : fromBundle(process.env.WISP_APP_BUNDLE ? path.resolve(process.env.WISP_APP_BUNDLE) : builtBundle());
+process.stdout.write(`${JSON.stringify(launch)}\n`);

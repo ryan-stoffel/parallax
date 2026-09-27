@@ -139,11 +139,93 @@ jobs:
           retention-days: 7
           overwrite: true
 
+  # The packaged Windows app, launched the same way, so the blank window's caption buttons are a real capture.
+  capture-windows:
+    name: capture-windows
+    runs-on: windows-2025
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Skip pull requests from forks
+        id: source
+        timeout-minutes: 1
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+            echo "same-repo=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Windows screenshots skipped::The head branch is in ${HEAD_REPO:-a deleted fork}, not $GITHUB_REPOSITORY."
+          fi
+
+      - name: Check out the head commit
+        if: steps.source.outputs.same-repo == 'true'
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node
+        if: steps.source.outputs.same-repo == 'true'
+        timeout-minutes: 10
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Prepare the editor
+        if: steps.source.outputs.same-repo == 'true'
+        timeout-minutes: 20
+        run: scripts/editor/prepare
+
+      - name: Build the Windows app
+        id: build
+        if: steps.source.outputs.same-repo == 'true'
+        timeout-minutes: 90
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          temp=$(cygpath -u "$RUNNER_TEMP")
+          mkdir -p "$temp/capture/logs"
+          cd editor/vscode
+          npm ci --no-audit --no-fund
+          npm run download-builtin-extensions
+          CI=true npm run gulp vscode-win32-x64-min
+          if [ ! -f ../VSCode-win32-x64/Wisp.exe ]; then
+            find .. -maxdepth 3 -name '*.exe' -print >&2 || true
+            echo "gulp did not produce ../VSCode-win32-x64/Wisp.exe" >&2
+            exit 1
+          fi
+
+      - name: Capture the blank window
+        id: capture
+        if: steps.source.outputs.same-repo == 'true'
+        timeout-minutes: 20
+        env:
+          WISP_SCREENSHOT_ONLY: startup
+        run: |
+          temp=$(cygpath -u "$RUNNER_TEMP")
+          mkdir -p "$temp/capture/logs"
+          scripts/ci/screenshots "$temp/capture/screenshots" 2>&1 | tee "$temp/capture/logs/capture.log"
+
+      - name: Upload the Windows capture
+        if: ${{ !cancelled() && steps.source.outputs.same-repo == 'true' }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: screenshots-windows
+          path: ${{ runner.temp }}/capture
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: true
+
   # The only job with a write token. Keep npm install, builds, and PR code that is not publish-screenshots
   # out of it, and treat the artifact as untrusted input (scripts/ci/README.md, Screenshots).
   publish:
     name: publish
-    needs: capture
+    needs: [capture, capture-windows]
     if: ${{ !cancelled() && needs.capture.outputs.same-repo == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -175,6 +257,32 @@ jobs:
         with:
           name: screenshots
           path: ${{ runner.temp }}/capture
+
+      - name: Download the Windows capture
+        id: windows
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: screenshots-windows
+          path: ${{ runner.temp }}/capture-windows
+
+      - name: Keep the Windows startup image with the macOS captures
+        if: steps.windows.outcome == 'success'
+        timeout-minutes: 1
+        run: |
+          src="${RUNNER_TEMP}/capture-windows/screenshots"
+          dest="${RUNNER_TEMP}/capture/screenshots"
+          if [ -f "$src/manifest.json" ] && node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const captured = Array.isArray(manifest.results) && manifest.results.some((result) => result.name === "startup" && result.status === "captured" && result.file === "startup.png");
+            process.exit(captured ? 0 : 1);
+          ' "$src/manifest.json"; then
+            cp "$src/startup.png" "$dest/windows.png"
+          else
+            echo "Windows capture did not produce startup.png"
+          fi
 
       - name: Publish the screenshots
         timeout-minutes: 10

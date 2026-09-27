@@ -18,7 +18,8 @@ fail() {
 # apply.whitespace, diff.algorithm, or format.* cannot change applied or
 # exported patches. Network commands and rebases use plain git instead.
 tree_git() {
-  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$tree" "$@"
+  # core.longpaths lets Windows check out the editor tree. It does not change patch bytes.
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$tree" -c core.longpaths=true "$@"
 }
 
 read_pin() {

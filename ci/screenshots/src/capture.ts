@@ -37,12 +37,14 @@ for (const entry of await readdir(outDir)) {
 
 const manifest: Manifest = { results: [] };
 
+const selected = selectedScenarios(scenarios);
+
 try {
-  checkScenarios(scenarios);
-  manifest.results = scenarios.map(({ name, title }) => ({ name, title, status: 'pending' }));
+  checkScenarios(selected);
+  manifest.results = selected.map(({ name, title }) => ({ name, title, status: 'pending' }));
   await writeManifest(outDir, manifest);
   const options = await appLaunchOptions();
-  for (const [index, scenario] of scenarios.entries()) {
+  for (const [index, scenario] of selected.entries()) {
     console.log(`${scenario.name}: running`);
     const result = await capture(scenario, options);
     manifest.results[index] = result;
@@ -58,6 +60,23 @@ try {
 console.log(`wrote ${join(outDir, MANIFEST_FILE)}`);
 if (manifest.error !== undefined || manifest.results.some((result) => result.status === 'failed')) {
   process.exitCode = 1;
+}
+
+function selectedScenarios(list: readonly Scenario[]): readonly Scenario[] {
+  const only = process.env.WISP_SCREENSHOT_ONLY;
+  if (only === undefined || only.trim() === '') {
+    return list;
+  }
+  const names = only
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+  const picked = list.filter((scenario) => names.includes(scenario.name));
+  const missing = names.filter((name) => !picked.some((scenario) => scenario.name === name));
+  if (missing.length > 0) {
+    throw new Error(`WISP_SCREENSHOT_ONLY names a scenario that does not exist: ${missing.join(', ')}`);
+  }
+  return picked;
 }
 
 function checkScenarios(list: readonly Scenario[]): void {

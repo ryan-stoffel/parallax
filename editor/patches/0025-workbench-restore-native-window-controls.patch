@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+Date: Sun, 27 Sep 2026 06:17:09 +0000
+Subject: [PATCH] workbench: restore native window controls
+
+The blank window keeps the operating system's traffic lights and caption buttons. The unread options property is no longer stored on either workbench.
+
+diff --git a/src/vs/platform/windows/electron-main/windowImpl.ts b/src/vs/platform/windows/electron-main/windowImpl.ts
+index 41df00d60e40552a244745c33589ca16ce8a9ece..4a4172f5834ed5b9452363ad94fcd4ebb5333570 100644
+--- a/src/vs/platform/windows/electron-main/windowImpl.ts
++++ b/src/vs/platform/windows/electron-main/windowImpl.ts
+@@ -803,12 +803,6 @@ export class CodeWindow extends BaseWindow implements ICodeWindow {
+ 
+ 			this._id = this._win.id;
+ 			this.setWin(this._win, options);
+-			// wisp: frameless windows on macOS still draw traffic lights until
+-			// this is called, and load() must not put the product name back.
+-			if (isMacintosh) {
+-				this._win.setWindowButtonVisibility(false);
+-			}
+-			this._win.setTitle('');
+ 
+ 			// Apply some state after window creation
+ 			this.applyState(this.windowState, hasMultipleDisplays);
+@@ -1270,11 +1264,7 @@ export class CodeWindow extends BaseWindow implements ICodeWindow {
+ 				this.setRepresentedFilename('');
+ 			}
+ 
+-			// wisp: no native title text (#316).
+-			this._win.setTitle('');
+-			if (isMacintosh) {
+-				this._win.setWindowButtonVisibility(false);
+-			}
++			this._win.setTitle(this.productService.nameLong);
+ 		}
+ 
+ 		// Update configuration values based on our window context
+diff --git a/src/vs/platform/windows/electron-main/windows.ts b/src/vs/platform/windows/electron-main/windows.ts
+index 51e59137645ee791daf723adbd42208569392313..aefb5d3eee8a1435f8d2a92f60748d7a7d7eabac 100644
+--- a/src/vs/platform/windows/electron-main/windows.ts
++++ b/src/vs/platform/windows/electron-main/windows.ts
+@@ -246,17 +246,6 @@ export function defaultBrowserWindowOptions(accessor: ServicesAccessor, windowSt
+ 		options.minHeight = 1;
+ 	}
+ 
+-	// wisp: no native title bar, title text, or traffic lights. The in-page
+-	// title bar is not created. `titleBarStyle: 'hidden'` would keep the
+-	// traffic lights, so that property is removed rather than left set.
+-	options.frame = false;
+-	delete options.titleBarStyle;
+-	delete options.titleBarOverlay;
+-	options.title = '';
+-	options.trafficLightPosition = { x: -150, y: -150 };
+-	options.minWidth = 1;
+-	options.minHeight = 1;
+-
+ 	if (overrides?.backgroundColor) {
+ 		options.backgroundColor = overrides.backgroundColor;
+ 	}
+diff --git a/src/vs/sessions/browser/web.main.ts b/src/vs/sessions/browser/web.main.ts
+index c6e97e797586e0e3bc22213e106fcc41e24307e6..7960b7f840ebcafbe1ff53341dc07c814c9151aa 100644
+--- a/src/vs/sessions/browser/web.main.ts
++++ b/src/vs/sessions/browser/web.main.ts
+@@ -31,7 +31,7 @@ import { createSessionsWorkbench } from './workbenchFactory.js';
+ export class SessionsBrowserMain extends BrowserMain {
+ 
+ 	protected override createWorkbench(domElement: HTMLElement, serviceCollection: ServiceCollection, logService: ILogService): IBrowserMainWorkbench {
+-		return createSessionsWorkbench(domElement, undefined, serviceCollection, logService);
++		return createSessionsWorkbench(domElement, serviceCollection, logService);
+ 	}
+ 
+ 	protected override async createWorkspaceConfigAndStorageServices(
+diff --git a/src/vs/sessions/browser/workbench.ts b/src/vs/sessions/browser/workbench.ts
+index 9472812111c5e205fa2c576b3d7c7266592ef318..6e12182c072c664c2b8b4122b71315d0d3ad4573 100644
+--- a/src/vs/sessions/browser/workbench.ts
++++ b/src/vs/sessions/browser/workbench.ts
+@@ -55,17 +55,6 @@ import { ICustomViewDescriptor } from '../services/customView/browser/customView
+ import { ISessionsSetUpService } from './sessionsSetUpService.js';
+ import { AGENTS_FLOATING_PANEL_GAP } from '../common/layoutConstants.js';
+ 
+-//#region Workbench Options
+-
+-export interface IWorkbenchOptions {
+-	/**
+-	 * Extra classes to be added to the workbench container.
+-	 */
+-	extraClasses?: string[];
+-}
+-
+-//#endregion
+-
+ //#region Layout Classes
+ 
+ enum LayoutClasses {
+@@ -440,7 +429,6 @@ export class Workbench extends Disposable implements IAgentWorkbenchLayoutServic
+ 
+ 	constructor(
+ 		protected readonly parent: HTMLElement,
+-		private readonly options: IWorkbenchOptions | undefined,
+ 		private readonly serviceCollection: ServiceCollection,
+ 		private readonly logService: ILogService
+ 	) {
+diff --git a/src/vs/sessions/browser/workbenchFactory.ts b/src/vs/sessions/browser/workbenchFactory.ts
+index 1ccd539eeaf57281df10c8b59ebf60db15f5ccef..55afd43037e62ff1fd9dc25aa7e74fd84f21dba8 100644
+--- a/src/vs/sessions/browser/workbenchFactory.ts
++++ b/src/vs/sessions/browser/workbenchFactory.ts
+@@ -11,20 +11,20 @@ import { ServiceCollection } from '../../platform/instantiation/common/serviceCo
+ import { ILogService } from '../../platform/log/common/log.js';
+ import { DOCK_DETAIL_PANEL_SETTING } from '../common/sessionConfig.js';
+ import { SinglePaneWorkbench } from './singlePaneWorkbench.js';
+-import { IWorkbenchOptions, Workbench } from './workbench.js';
++import { Workbench } from './workbench.js';
+ 
+ /**
+  * Creates the Agents window workbench, choosing the single-pane variant when the
+  * detail-panel setting is enabled on a non-phone viewport. Fixed at construction —
+  * toggling the setting requires a window reload.
+  */
+-export function createSessionsWorkbench(parent: HTMLElement, options: IWorkbenchOptions | undefined, serviceCollection: ServiceCollection, logService: ILogService): Workbench {
++export function createSessionsWorkbench(parent: HTMLElement, serviceCollection: ServiceCollection, logService: ILogService): Workbench {
+ 	const configurationService = serviceCollection.get(IConfigurationService);
+ 	const isPhoneLayout = getClientArea(mainWindow.document.body).width < 640;
+ 	const singlePane = !(configurationService instanceof SyncDescriptor)
+ 		&& !isPhoneLayout
+ 		&& configurationService.getValue<boolean>(DOCK_DETAIL_PANEL_SETTING) === true;
+ 	return singlePane
+-		? new SinglePaneWorkbench(parent, options, serviceCollection, logService)
+-		: new Workbench(parent, options, serviceCollection, logService);
++		? new SinglePaneWorkbench(parent, serviceCollection, logService)
++		: new Workbench(parent, serviceCollection, logService);
+ }
+diff --git a/src/vs/sessions/electron-browser/sessions.main.ts b/src/vs/sessions/electron-browser/sessions.main.ts
+index 9cd0e79b76ec4be520e2771f791ee4514affd53d..b9a997cc0471efd9eea7c2785bfc6a0e65fbc08b 100644
+--- a/src/vs/sessions/electron-browser/sessions.main.ts
++++ b/src/vs/sessions/electron-browser/sessions.main.ts
+@@ -41,7 +41,7 @@ import { WorkspaceTrustEnablementService, WorkspaceTrustManagementService } from
+ import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService } from '../../platform/workspace/common/workspaceTrust.js';
+ import { safeStringify } from '../../base/common/objects.js';
+ import { IUtilityProcessWorkerWorkbenchService, UtilityProcessWorkerWorkbenchService } from '../../workbench/services/utilityProcess/electron-browser/utilityProcessWorkerWorkbenchService.js';
+-import { isCI, isMacintosh, isTahoeOrNewer } from '../../base/common/platform.js';
++import { isCI } from '../../base/common/platform.js';
+ import { Schemas } from '../../base/common/network.js';
+ import { DiskFileSystemProvider } from '../../workbench/services/files/electron-browser/diskFileSystemProvider.js';
+ import { FileUserDataProvider } from '../../platform/userData/common/fileUserDataProvider.js';
+@@ -126,9 +126,7 @@ export class SessionsMain extends Disposable {
+ 		this.applyWindowZoomLevel(services.configurationService);
+ 
+ 		// Create Agentic Workbench
+-		const workbench = createSessionsWorkbench(mainWindow.document.body, {
+-			extraClasses: this.getExtraClasses(),
+-		}, services.serviceCollection, services.logService);
++		const workbench = createSessionsWorkbench(mainWindow.document.body, services.serviceCollection, services.logService);
+ 
+ 		// Listeners
+ 		this.registerListeners(workbench, services.storageService);
+@@ -150,14 +148,6 @@ export class SessionsMain extends Disposable {
+ 		applyZoom(zoomLevel, mainWindow);
+ 	}
+ 
+-	private getExtraClasses(): string[] {
+-		if (isMacintosh && isTahoeOrNewer(this.configuration.os.release)) {
+-			return ['macos-tahoe'];
+-		}
+-
+-		return [];
+-	}
+-
+ 	private registerListeners(workbench: AgenticWorkbench, storageService: NativeWorkbenchStorageService): void {
+ 
+ 		// Workbench Lifecycle
+diff --git a/src/vs/workbench/browser/workbench.ts b/src/vs/workbench/browser/workbench.ts
+index e1fe2c9247e4e6a21bf709e16f99f5b6c2a233b2..453e469efb3757387b67ff03731196e8133e515e 100644
+--- a/src/vs/workbench/browser/workbench.ts
++++ b/src/vs/workbench/browser/workbench.ts
+@@ -43,7 +43,7 @@ export class Workbench extends Layout {
+ 
+ 	constructor(
+ 		parent: HTMLElement,
+-		private readonly options: IWorkbenchOptions | undefined,
++		options: IWorkbenchOptions | undefined,
+ 		private readonly serviceCollection: ServiceCollection,
+ 		logService: ILogService
+ 	) {

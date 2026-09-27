@@ -71,9 +71,10 @@ const window = await electronApp.firstWindow();
 
 ## Screenshots
 
-`screenshots.yml` runs on every PR from a branch in this repo. It has two jobs, so the PR's build and its dependencies never run where the write token is; the publish script and this workflow itself still come from the PR head until #48:
+`screenshots.yml` runs on every PR from a branch in this repo. It has three jobs, so the PR's build and its dependencies never run where the write token is; the publish script and this workflow itself still come from the PR head until #48:
 
 - `capture` (macOS, `contents: read`) gets the arm64 `Wisp.app` (see [Getting the app](#getting-the-app)), runs `screenshots <dir>`, and uploads the PNGs, `manifest.json`, and both steps' logs as the `screenshots` artifact. `screenshots` installs `ci/screenshots/`, whose only runtime dependency is `playwright-core`, and runs each scenario in `ci/screenshots/src/scenarios.ts` against a fresh launch of the app from `app-launch`'s output. It exits 1 if any scenario failed. For PRs from forks, whose token is read-only, the job logs a notice and skips the rest, and `publish` does not run.
+- `capture-windows` (Windows, `contents: read`) prepares the editor, builds `editor/VSCode-win32-x64/Wisp.exe` with `gulp vscode-win32-x64-min`, and runs only the `startup` scenario (`WISP_SCREENSHOT_ONLY=startup`). It uploads that capture as `screenshots-windows`. `publish` copies `startup.png` from a successful capture to `windows.png` next to the macOS results. A failed Windows build does not block publishing the macOS captures.
 - `publish` (Linux, `contents: write` and `pull-requests: write`) runs even when `capture` failed. It checks out only `scripts/ci/` and `ci/screenshots/src/`, installs nothing, downloads the artifact, and runs `publish-screenshots`. That commits the PNGs to the orphan branch `ci-screenshots` under `pr-<number>/<short-sha>/`, then creates or updates the one comment by `github-actions[bot]` that contains `<!-- wisp-screenshots -->`. The images are `raw.githubusercontent.com` URLs pinned to the `ci-screenshots` commit, so no cache shows an old image. Nothing is deleted from `ci-screenshots` yet (#40).
 
 Rules that keep the token away from the PR's build:
@@ -128,7 +129,7 @@ The shipped scenarios wait for these elements, using the classes and attributes 
 - `agents-window` launches with no arguments, which opens the Agents window (0011), and the app's bundled wispd starts through `wispd attach` as it does for a user. It waits for the title bar and wisp's sidebar view (`.part.titlebar`, `.part.sidebar .wisp-threads`), then for the sidebar's host chip to be connected (`button.wisp-threads-host[data-kind="connected"]`, labeled "Host: this Mac, connected") and the no-host view to be gone.
 - `agents-window-disconnected` starts with `wisp.host` set to `ssh://127.0.0.1:9`, a port nothing listens on, so ssh fails at once with "connection refused". (An unresolvable name can wait 30 s or more on DNS, past the handshake timeout.) It waits for the chip's error state and fails unless the no-host view says "Can't reach ssh://127.0.0.1:9.", its composer reads "Reconnect to send messages", and the composer and Send are `aria-disabled`.
 - `agents-window-host-menu` waits for the connected state, clicks the host chip, and waits for the host menu's Quick Pick with the current host and Reconnect.
-- `startup` opens an empty editor window with `--new-window` and waits for the title bar, activity bar, editor, and status bar parts.
+- `startup` is the real boot, with no extra arguments. It waits for the visible empty window, fails if any in-page chrome is present, and photographs the operating system's window so the macOS traffic lights or the Windows caption buttons are in the PNG. A page screenshot does not include those controls.
 - `editor-file-open` copies `ci/screenshots/fixtures/workspace/` into its directory and opens that folder with `src/tasks.ts`. It waits for three things:
   - the editor, `.monaco-editor[data-uri$="/src/tasks.ts"]`
   - the active tab, `.tab.active[data-resource-name="tasks.ts"]`

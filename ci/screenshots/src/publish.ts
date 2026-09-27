@@ -1,7 +1,7 @@
 import { appendFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { missingArtifactError, readCapture, readLogTail, type Capture } from './artifact.ts';
+import { hasSidecarPng, missingArtifactError, readCapture, readLogTail, type Capture } from './artifact.ts';
 import { commitFiles } from './branch.ts';
 import { MARKER, renderComment, type FailedStep, type Images } from './comment.ts';
 
@@ -41,21 +41,32 @@ if (!/^[0-9a-f]{40}$/.test(headSha) || !Number.isSafeInteger(prNumber) || prNumb
 const runUrl = `${serverUrl}/${repository}/actions/runs/${process.env.GITHUB_RUN_ID ?? '0'}`;
 const prefix = `pr-${String(prNumber)}/${headSha.slice(0, 7)}`;
 
+const windowsFile = 'windows.png';
+
 let capture: Capture | undefined;
 let artifactError: string | undefined;
+let windowsShot = false;
 try {
   capture = await readCapture(dir);
+  if (capture) {
+    windowsShot = await hasSidecarPng(dir, windowsFile);
+  }
 } catch (error) {
   artifactError = error instanceof Error ? error.message : String(error);
   console.error(`rejected the capture results in ${dir}: ${artifactError}`);
+  capture = undefined;
+  windowsShot = false;
 }
 artifactError ??= missingArtifactError(capture, process.env.CAPTURE_OUTCOME);
 const failedSteps = await readFailedSteps(values.logs);
 
 let images: Images | undefined;
 let pushError: string | undefined;
-if (capture && capture.files.length > 0) {
+if (capture && (capture.files.length > 0 || windowsShot)) {
   const files = capture.files.map((file) => ({ path: `${prefix}/${file}`, source: join(dir, file) }));
+  if (windowsShot) {
+    files.push({ path: `${prefix}/${windowsFile}`, source: join(dir, windowsFile) });
+  }
   if (dryRun) {
     images = { base: `https://raw.githubusercontent.com/${repository}/<sha>/${prefix}`, tree: '<tree>' };
   } else {
@@ -87,6 +98,7 @@ const body = renderComment({
   manifest: capture?.manifest,
   images,
   failedSteps,
+  ...(windowsShot ? { extraImages: [{ title: 'Blank window on Windows', file: windowsFile }] } : {}),
   ...(pushError === undefined ? {} : { pushError }),
   ...(artifactError === undefined ? {} : { artifactError }),
 });
