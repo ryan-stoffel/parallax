@@ -1,0 +1,30 @@
+{
+  "name": "wisp-desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "vp build && vp pack",
+    "check": "vp check",
+    "fmt": "vp fmt",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^24.19.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^44.4.5",
+    "tailwindcss": "^4.3.3",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1",
+    "vite-plus": "1.0.0-rc.1"
+  },
+  "packageManager": "pnpm@11.10.0"
+}
