@@ -1020,8 +1020,13 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
         .await
         .unwrap_err();
     assert_eq!(kind(&old), ErrorKind::WorkerUnavailable);
-    assert!(old.message.contains("2.1.100"), "{}", old.message);
-    assert!(old.message.contains("2.1.248"), "{}", old.message);
+    if cfg!(target_os = "macos") {
+        assert!(old.message.contains("2.1.100"), "{}", old.message);
+        assert!(old.message.contains("2.1.248"), "{}", old.message);
+    } else {
+        // No Claude Code worker runs off macOS yet, whatever its version (0023).
+        assert!(old.message.contains("this OS"), "{}", old.message);
+    }
 
     let unsandboxed = client
         .call::<AgentStart>(AgentStartParams {
