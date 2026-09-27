@@ -23,6 +23,12 @@
 //!     ever running outside it. Commands, `WebFetch`, and `WebSearch` reach any host but
 //!     [`WORKER_DENIED_HOSTS`] (Ryan, #137), so the unreadable paths are what keep secrets in.
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
+//!   - `--permission-mode default` and explicit allow rules for the write tools and `Bash`:
+//!     the `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` every run gets forces the mode to `default` whatever
+//!     the flag says, and turns off `autoAllowBashIfSandboxed`, so without the rules `-p` denies
+//!     every edit and command (#274). `--restricted` still confines the file tools to the
+//!     working directories, protected paths such as `.git` and `.claude` still need an approval
+//!     `-p` can't give, and the sandbox still holds every command.
 //!
 //!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`], or
 //!   a Claude Code older than [`WORKER_MIN_VERSION`], fails with
@@ -163,7 +169,19 @@ pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
     WORKER_TOOL_LIST,
     "--strict-mcp-config",
     "--permission-mode",
-    "acceptEdits",
+    "default",
+];
+
+/// A worker's allow rules: its write tools and `Bash`, which `--restricted` and the sandbox
+/// confine, and the web tools. `WebFetch(domain:*)` also opens the sandbox's network to every
+/// host (0013).
+pub const WORKER_ALLOWED: &[&str] = &[
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "Bash",
+    "WebFetch(domain:*)",
+    "WebSearch",
 ];
 
 /// The oldest Claude Code that has every flag and setting a worker relies on: `--restricted`
@@ -196,7 +214,10 @@ pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
 
 /// Variables every run gets: keep credentials out of the agent's own subprocesses (0004
-/// Consequences), and report a startup failure as a `result` instead of on stderr alone.
+/// Consequences), and report a startup failure as a `result` instead of on stderr alone. The
+/// scrub matters for an API key account, whose key is in the CLI's own environment. It also
+/// forces the permission mode to `default`, which is why a worker's [`worker_settings`] allow
+/// its write tools explicitly (#274, 0013).
 const ALWAYS_SET: &[(&str, &str)] = &[
     ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
     ("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1"),
@@ -292,8 +313,9 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     Ok(args)
 }
 
-/// The `--settings` a worker runs with (0013): hooks off; the web tools allowed; and Claude Code's
-/// Bash sandbox on, with no way around it, `sandbox`'s paths, and every host but
+/// The `--settings` a worker runs with (0013): hooks off; [`WORKER_ALLOWED`], because the
+/// subprocess scrub every run gets leaves no permission mode that allows them (#274); and Claude
+/// Code's Bash sandbox on, with no way around it, `sandbox`'s paths, and every host but
 /// [`WORKER_DENIED_HOSTS`]. `WebFetch(domain:*)` is what opens the network: the sandbox takes its
 /// allowlist from `WebFetch` allow rules, and a bare `*` matches every host. The denied hosts are
 /// `WebFetch` deny rules as well as `deniedDomains`, because the sandbox's list binds only
@@ -323,13 +345,12 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
     serde_json::json!({
         "disableAllHooks": true,
         "permissions": {
-            "allow": ["WebFetch(domain:*)", "WebSearch"],
+            "allow": WORKER_ALLOWED,
             "deny": denied_fetches,
         },
         "sandbox": {
             "enabled": true,
             "failIfUnavailable": true,
-            "autoAllowBashIfSandboxed": true,
             "allowUnsandboxedCommands": false,
             "excludedCommands": [],
             "network": {

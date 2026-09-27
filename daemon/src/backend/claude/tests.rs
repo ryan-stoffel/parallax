@@ -1,5 +1,6 @@
 //! The Claude backend against a fake `claude` on `PATH` that replays synthetic fixtures, so every
-//! test spawns a real process through the supervisor. No test runs the real CLI.
+//! test spawns a real process through the supervisor. No test here runs the real CLI; the opt-in
+//! contract tests in `real_cli.rs` do.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -364,7 +365,7 @@ fn assert_worker_invocation(fake: &Fake) {
     assert_eq!(
         WORKSPACE_WRITE_ARGS.join(" "),
         "--restricted --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
-         TodoWrite --strict-mcp-config --permission-mode acceptEdits",
+         TodoWrite --strict-mcp-config --permission-mode default",
         "0013's worker policy, exactly"
     );
     assert_eq!(WORKER_TOOL_LIST, WORKER_TOOLS.join(","));
@@ -381,7 +382,7 @@ fn assert_worker_invocation(fake: &Fake) {
         serde_json::json!({
             "disableAllHooks": true,
             "permissions": {
-                "allow": ["WebFetch(domain:*)", "WebSearch"],
+                "allow": ["Edit", "Write", "NotebookEdit", "Bash", "WebFetch(domain:*)", "WebSearch"],
                 "deny": [
                     "WebFetch(domain:localhost)",
                     "WebFetch(domain:127.0.0.1)",
@@ -393,7 +394,6 @@ fn assert_worker_invocation(fake: &Fake) {
             "sandbox": {
                 "enabled": true,
                 "failIfUnavailable": true,
-                "autoAllowBashIfSandboxed": true,
                 "allowUnsandboxedCommands": false,
                 "excludedCommands": [],
                 "network": {
@@ -456,10 +456,45 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
         let rule = format!("WebFetch(domain:{host})");
         assert!(denied_fetches.contains(&rule), "WebFetch reaches {host}");
     }
+    let allowed = list("/permissions/allow");
     assert_eq!(
-        list("/permissions/allow"),
+        allowed[allowed.len() - 2..],
         ["WebFetch(domain:*)", "WebSearch"]
     );
+}
+
+/// #274: `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` forces Claude Code's permission mode to `default`
+/// and turns off `autoAllowBashIfSandboxed`, so a worker that gets it must allow its write tools
+/// and `Bash` explicitly, or the real CLI denies every edit and command. Dropping the scrub
+/// instead would let a worker's commands read an API key account's key (0004).
+#[tokio::test]
+async fn a_worker_under_the_subprocess_scrub_allows_its_write_tools_explicitly() {
+    let fake = Fake::new("tool-call");
+    let mut worker = request(&fake.root());
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(&fake.root()));
+    run(&fake, worker).await;
+
+    let env = fake.env();
+    assert!(
+        env.iter()
+            .any(|var| var == "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"),
+        "{env:?}"
+    );
+    let argv = fake.argv();
+    let value_of = |flag: &str| {
+        let at = argv.iter().position(|arg| arg == flag).unwrap();
+        argv[at + 1].clone()
+    };
+    assert_eq!(value_of("--permission-mode"), "default");
+    let settings: Value = serde_json::from_str(&value_of("--settings")).unwrap();
+    let allowed = settings.pointer("/permissions/allow").unwrap();
+    for tool in ["Edit", "Write", "NotebookEdit", "Bash"] {
+        assert!(
+            allowed.as_array().unwrap().contains(&Value::from(tool)),
+            "{tool} has no allow rule: {allowed}"
+        );
+    }
 }
 
 #[test]

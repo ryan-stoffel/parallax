@@ -1,7 +1,7 @@
 # 0013: The worker sandbox
 
 - Status: accepted
-- Date: 2026-09-25
+- Date: 2026-09-25, amended 2026-09-26 (#274)
 - Issue: #137
 
 ## Context
@@ -53,7 +53,7 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
   --restricted \
   --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite \
   --strict-mcp-config \
-  --permission-mode acceptEdits \
+  --permission-mode default \
   --settings '<worker_settings>' \
   --add-dir <shared context folder> \
   [--model <m>] [--resume <id>]
@@ -65,14 +65,13 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
 {
   "disableAllHooks": true,
   "permissions": {
-    "allow": ["WebFetch(domain:*)", "WebSearch"],
+    "allow": ["Edit", "Write", "NotebookEdit", "Bash", "WebFetch(domain:*)", "WebSearch"],
     "deny": ["WebFetch(domain:localhost)", "WebFetch(domain:127.0.0.1)", "WebFetch(domain:[::1])",
              "WebFetch(domain:0.0.0.0)", "WebFetch(domain:[::])"]
   },
   "sandbox": {
     "enabled": true,
     "failIfUnavailable": true,
-    "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": false,
     "excludedCommands": [],
     "network": {
@@ -94,7 +93,11 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
 - **Network.** The sandbox takes its allowlist from `allowedDomains` and from `WebFetch(domain:...)` allow rules, and it honors a bare `*` in those rules [1]. So `WebFetch(domain:*)` opens every host to commands and approves WebFetch; `WebSearch` approves search. `strictAllowlist` makes any host outside the list, which is only `deniedDomains`, fail instead of prompting. `deniedDomains` wins over the allowlist, but it binds sandboxed commands only; WebFetch runs in-process and follows permission rules [4]. So each denied host is also a `WebFetch(domain:...)` deny rule, which beats the `*` allow for the tool [3].
 - **`failIfUnavailable`** makes a run fail when the sandbox can't start, instead of running commands unsandboxed. **`allowUnsandboxedCommands: false`** ignores `dangerouslyDisableSandbox`, the model's escape hatch [1][4].
 - **`--strict-mcp-config`** with no `--mcp-config` connects no MCP servers, including `.mcp.json` [2]. wispd's own MCP tools join in M4.
-- **`acceptEdits`** approves the file tools inside the working directories. Writes to the permission system's protected paths (`.git`, `.claude`, `.vscode`, `.husky`, `.mcp.json`, shell startup files, ...) still prompt, and `-p` denies them [5]. That covers the Edit and Write tools only. The sandbox's own protected paths are a shorter list, and `.husky` isn't on it [1]. So a Claude worker's Bash can write `.husky/_/post-commit`, which git would run, outside any sandbox, when wispd commits. #166 is needed for Claude workers too.
+- **`default` mode and explicit allow rules (#274).** wispd sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` on every run (0004), and the CLI treats it as a hardening switch, not only a scrub. Claude Code's own code, read in the 2.1.274 bundle, forces the permission mode to `default` whatever `--permission-mode` says, with a stderr notice that names "allowed_non_write_users hardening" and says to "Declare allowedTools explicitly". It also ignores `autoAllowBashIfSandboxed`. The env-vars page [14] documents none of this. So the first design, `--permission-mode acceptEdits` with `autoAllowBashIfSandboxed`, ran with neither on the real CLI, and `-p` denied every `Write`, `Edit`, and command. A worker now passes `--permission-mode default`, the mode it gets anyway, and allows `Edit`, `Write`, `NotebookEdit`, and `Bash` in `worker_settings`. `Edit` does not cover `Write` here: with only `Edit` allowed, `Write` was still denied.
+  - **Why keep the scrub.** The allowlisted environment (0014) keeps wispd's own tokens away, but not the key wispd injects on purpose: an API key account's `ANTHROPIC_API_KEY` is in the CLI's environment, and without the scrub a worker's command could read it and, with network on, send it anywhere. Opting out with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0` for subscription accounts only would leave key accounts' workers read-only, and two regimes to keep correct.
+  - **What bounds the rules.** Checked against the real CLI (Evidence): `--restricted` still refuses the file tools outside the working directories; a `Write` to `.claude/settings.json` in the worktree, and a command appending to the worktree's `.git` file, are still denied as protected; a command writing outside the working directories fails in the sandbox. `failIfUnavailable` and `allowUnsandboxedCommands: false` still keep every command in the sandbox, so a bare `Bash` rule allows no more than `autoAllowBashIfSandboxed` did.
+  - **Side effects of the hardening mode** that workers now run with: stricter parsing of Bash command strings (some `for` and `while` loops become too complex to approve statically), and `CLAUDE_CODE_SCRIPT_CAPS` applies. No-write runs are unaffected in practice: their `dontAsk` becomes `default`, which denies the same calls under `-p`.
+- **Protected paths.** The file tools' writes to the permission system's protected paths (`.git`, `.claude`, `.vscode`, `.husky`, `.mcp.json`, shell startup files, ...) still prompt, even with an allow rule, and `-p` denies them [5]. That covers the Edit and Write tools only. The sandbox's own protected paths are a shorter list, and `.husky` isn't on it [1]. So a Claude worker's Bash can write `.husky/_/post-commit`, which git would run, outside any sandbox, when wispd commits. #166 is needed for Claude workers too.
 - **`denyWrite` on git metadata.** In a linked worktree the sandbox would otherwise let commands write the repository's shared git folder, for `git commit` [1]. That would let a worker move any branch, including the user's. wispd commits for every backend instead.
 - **Second checks on `system/init`.** A worker whose `system/init` lists a tool outside `WORKER_TOOLS` fails with `policyViolation`, as a no-write run does with anything outside its read tools. So does one whose `claude_code_version` is missing or below `WORKER_MIN_VERSION`.
 - **`CLAUDE_CONFIG_DIR` in Bash.** `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` removes it from Bash's environment only from 2.1.251 on [14]. That is harmless, because the folder is in `denyRead` either way.
@@ -187,6 +190,20 @@ wisp's own profile does have one use: commands wispd runs itself, such as a setu
 
 Local experiments on macOS 27.0 with Codex CLI 0.154.0 (`codex sandbox -P <profile>`), Cursor CLI 2026.09.10 (`agent sandbox run`), and `sandbox-exec`. None needs a vendor login. A probe script tried each operation from a simulated linked worktree whose `.git` file points to a separate git folder, with the context folder, the git folder, and a "secret" all outside the worktree and outside `/tmp`. The experiments ran with each vendor's default network setting (off), before Ryan chose network access, so the HTTPS row shows those defaults, not v1. Claude Code's sandbox needs a signed-in session, so it has no column here: its behavior comes from the docs [1] and is left for #124 to confirm.
 
+**Real Claude Code (#274).** `daemon/src/backend/claude/real_cli.rs` runs a worker through `ClaudeBackend` exactly as wispd builds it, with the real signed-in `claude` (2.1.274) on Haiku, in a throwaway repository whose linked worktree sits in a throwaway data folder with a space in its name. They are `#[ignore]`d, because CI has no Claude login: `cargo test -p wispd real_claude -- --ignored`. Results on 2026-09-26:
+
+| Operation | Before (#274) | After |
+| --- | --- | --- |
+| `Write`, then `Edit`, a file in the worktree | denied | allowed |
+| A command writing a file in the worktree | denied | allowed |
+| `WebFetch` of example.com | not reached | allowed |
+| `Write` outside the working directories | | denied (`--restricted`) |
+| `Write` `.claude/settings.json` in the worktree | | denied (protected path) |
+| A command appending to the worktree's `.git` file | | denied (sensitive file) |
+| A command writing outside the working directories | | fails in the sandbox (`operation not permitted`) |
+
+CI keeps the arguments honest instead: `a_worker_under_the_subprocess_scrub_allows_its_write_tools_explicitly` fails if a worker gets the scrub without `default` mode and the four allow rules.
+
 | Operation | Codex `:workspace` | Codex `wisp_worker` profile | Cursor sandbox | wisp `sandbox-exec` profile |
 | --- | --- | --- | --- | --- |
 | Write the worktree | allowed | allowed | allowed | allowed |
@@ -221,4 +238,4 @@ Read on 2026-09-25, as raw Markdown (`.md` appended to each page URL).
 11. Cursor CLI configuration (`sandbox.mode`, `sandbox.networkAccess`, project `.cursor/cli.json`): https://cursor.com/docs/cli/reference/configuration
 12. Git, `git commit --no-verify` and githooks: https://git-scm.com/docs/git-commit, https://git-scm.com/docs/githooks
 13. sandbox-runtime, the engine behind Claude Code's sandbox: its macOS profile (Mach lookups it allows), host canonicalization and the resolved-address guard (which skips IP literals), and glob characters in paths: https://github.com/anthropic-experimental/sandbox-runtime (`src/sandbox/macos-sandbox-utils.ts`, `parent-proxy.ts`, `resolved-address-guard.ts`, `sandbox-utils.ts`)
-14. Claude Code environment variables (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`): https://code.claude.com/docs/en/env-vars
+14. Claude Code environment variables (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`): https://code.claude.com/docs/en/env-vars. Its effect on the permission mode and on `autoAllowBashIfSandboxed` is from the 2.1.274 bundle's own code (#274).
