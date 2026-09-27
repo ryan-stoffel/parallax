@@ -66,9 +66,9 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 
 ### Starting and stopping `serve`
 
-- **Linux** uses 0010's safe `nix` `posix_spawn` with `POSIX_SPAWN_SETSID`. `POSIX_SPAWN_CLOEXEC_DEFAULT` is Apple's only. So `spawn_session` lists `/proc/self/fd` and adds a `PosixSpawnFileActions::add_close` for every descriptor above 2. Without `/proc`, the spawn fails with an error that names it. This is safe code, and it closes #86's race:
+- **Linux** uses 0010's safe `nix` `posix_spawn` with `POSIX_SPAWN_SETSID`. `POSIX_SPAWN_CLOEXEC_DEFAULT` is Apple's only. So `spawn_session` lists `/proc/self/fd` and, after its `dup2` actions, adds a `PosixSpawnFileActions::add_close` for every descriptor above 2. Without `/proc`, the spawn fails with an error that names it. This is safe code, and it closes #86's race:
   - A descriptor opened between the scan and the spawn leaks only if it lacks close-on-exec.
-  - Every descriptor wispd opens has close-on-exec: std, tokio, and SQLite (`O_CLOEXEC`) set it. The `rustix` calls that don't (`io::dup`, `pipe::pipe`) go on clippy's `disallowed-methods` list outside tests. So only descriptors inherited at startup can leak, and the scan sees them.
+  - Every descriptor wispd opens has close-on-exec: std, tokio, and SQLite (`O_CLOEXEC`) set it. The calls that don't (`rustix::fs::open`/`openat`, `rustix::io::dup2`/`dup3`, and `nix`'s `pipe2`/`dup*`) go on clippy's `disallowed-methods` list outside tests. So only descriptors inherited at startup can leak, and the scan sees them.
   - `attach` also has one thread whenever it spawns: `connect` runs before its tokio runtime exists, and the reaper thread starts only after it connects.
   - A listed descriptor that closes before the spawn is harmless, because glibc and musl both ignore that close failure.
 - **Windows.** Win32-OpenSSH puts each session in a job object and kills the job when the session ends. It has let processes break away from that job since v7.6.0.0p1.
