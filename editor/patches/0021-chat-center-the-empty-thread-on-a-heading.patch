@@ -8,7 +8,7 @@ workspace and session-type picker row. wisp uses that for the empty
 thread (#298).
 
 diff --git a/src/vs/sessions/contrib/chat/browser/newChatWidget.ts b/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
-index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..42729d6da0c7b36807124e4389e60237a328de55 100644
+index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..b4e2b3be0f9248569750f0fd4e736c4bdd78c349 100644
 --- a/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
 +++ b/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
 @@ -12,7 +12,7 @@ import { isCancellationError, onUnexpectedError } from '../../../../base/common/
@@ -51,16 +51,18 @@ index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..42729d6da0c7b36807124e4389e60237
  export class NewChatWidget extends Disposable {
  
  	private readonly _workspacePicker: WorkspacePicker;
-@@ -93,6 +117,8 @@ export class NewChatWidget extends Disposable {
+@@ -93,6 +117,10 @@ export class NewChatWidget extends Disposable {
  	private readonly _activeEmptyState = this._register(disposableObservableValue<NoAgentHostEmptyState | undefined>(this, undefined));
  	private _workspacePickerRow: HTMLElement | undefined;
  	private _quickChatHeaderPickerHost: HTMLElement | undefined;
 +	/** Held so render can set the placeholder and height a provider asked for, before the editor exists. */
 +	private _newChatInputOptions: ConstructorParameters<typeof NewChatInputWidget>[0] | undefined;
++	/** Set while a provider's empty-thread presentation hides the workspace and session-type row. */
++	private _emptyThreadHidesPickerRow = false;
  
  	private readonly _session: IObservable<IActiveSession | undefined>;
  
-@@ -239,7 +265,7 @@ export class NewChatWidget extends Disposable {
+@@ -239,7 +267,7 @@ export class NewChatWidget extends Disposable {
  			() => this._hasEnoughSessionsForFirstRunNotices(),
  		);
  
@@ -69,7 +71,7 @@ index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..42729d6da0c7b36807124e4389e60237
  			session: this._session,
  			getContextFolderUri: () => this._getContextFolderUri(),
  			getContextPickerActions: () => this._workspacePicker.getContextPickerActions(),
-@@ -258,6 +284,7 @@ export class NewChatWidget extends Disposable {
+@@ -258,6 +286,7 @@ export class NewChatWidget extends Disposable {
  			loading,
  			historyKey: constObservable(undefined), // no persisted history for the new-session view
  			placeholder: localize('newSessionPromptPlaceholder', "Pitch your idea"),
@@ -77,7 +79,7 @@ index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..42729d6da0c7b36807124e4389e60237
  			supportsBackground: true,
  			deferredNotificationsEnabled,
  			petHostPreferred: this.options.petHostPreferred,
-@@ -266,7 +293,9 @@ export class NewChatWidget extends Disposable {
+@@ -266,7 +295,9 @@ export class NewChatWidget extends Disposable {
  			sessionTypePickerOptions: {
  				prepareSessionTypeSelection: pick => this._prepareSessionTypeSelection(pick),
  			},
@@ -88,58 +90,68 @@ index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..42729d6da0c7b36807124e4389e60237
  		this._register(toDisposable(() => newChatInput.saveState()));
  		this._newChatInput = this._register(newChatInput);
  		this.pickerVisibility = derived(this, reader => this._activeEmptyState.read(reader)
-@@ -473,6 +502,16 @@ export class NewChatWidget extends Disposable {
- 			});
- 		}));
+@@ -490,6 +521,50 @@ export class NewChatWidget extends Disposable {
  
-+		const emptyThread = this._queryEmptyThread();
-+		if (emptyThread && this._newChatInputOptions) {
+ 		this._renderFeedbackBanner(chatWidgetContent);
+ 		this._newChatInput.render(chatWidgetContent, parent);
++		// The new-session view is created before workbench contributions register providers, so the
++		// heading has to follow provider registration. Otherwise the composer stays on "Pitch your idea".
++		const providersChanged = observableSignalFromEvent(this, this.sessionsProvidersService.onDidChangeProviders);
++		const selectionChanged = observableSignalFromEvent(this, this._workspacePicker.onDidChangeSelection);
++		let heading: HTMLElement | undefined;
++		this._register(autorun(reader => {
++			providersChanged.read(reader);
++			selectionChanged.read(reader);
++			const emptyThread = this._queryEmptyThread(reader);
++			this._emptyThreadHidesPickerRow = !!emptyThread?.hidePickerRow;
++			if (!emptyThread || !this._newChatInputOptions) {
++				heading?.remove();
++				heading = undefined;
++				workspacePickerContainer.style.display = '';
++				if (this._quickChatHeaderPickerHost) {
++					this._quickChatHeaderPickerHost.style.display = '';
++				}
++				return;
++			}
 +			this._newChatInputOptions.placeholder = emptyThread.placeholder;
 +			this._newChatInputOptions.minEditorHeight = EMPTY_THREAD_MIN_EDITOR_HEIGHT;
 +			chatWidgetContent.style.maxWidth = '760px';
 +			// A little above the middle: the column is centered, and extra bottom padding lifts it.
 +			chatWidgetContainer.style.paddingBottom = '72px';
-+			this._renderEmptyHeading(chatWidgetContent);
-+		}
-+
- 		const workspacePickerContainer = dom.append(chatWidgetContent, dom.$('.new-session-workspace-picker-container'));
- 		// On web (vscode.dev / insiders.vscode.dev) the workspace picker is
- 		// scoped to the currently selected agent host. When no hosts are
-@@ -483,13 +522,23 @@ export class NewChatWidget extends Disposable {
- 		this._register(isWeb
- 			? this._renderEmptyStateGate(workspacePickerContainer, chatWidgetContent)
- 			: this._renderWorkspacePicker(workspacePickerContainer));
-+		// Keep the row mounted so a send with no draft can still open the picker, but don't show it.
-+		if (emptyThread?.hidePickerRow) {
-+			workspacePickerContainer.style.display = 'none';
-+		}
- 
--		if (!isWeb) {
-+		if (!isWeb && !emptyThread?.hidePickerRow) {
- 			this._quickChatHeaderPickerHost = dom.append(chatWidgetContent, dom.$('.new-session-quick-chat-header.sessions-workspace-category-picker'));
- 		}
- 
- 		this._renderFeedbackBanner(chatWidgetContent);
- 		this._newChatInput.render(chatWidgetContent, parent);
-+		if (emptyThread) {
++			if (!heading) {
++				heading = dom.$('h1.new-chat-empty-heading');
++				heading.style.cssText = 'font-size:30px;font-weight:600;line-height:1.25;text-align:center;margin:0 0 28px';
++				chatWidgetContent.insertBefore(heading, chatWidgetContent.firstChild);
++			}
++			this._fillEmptyHeading(heading, emptyThread, reader);
++			// Keep the row mounted so a send with no draft can still open the picker, but don't show it.
++			workspacePickerContainer.style.display = emptyThread.hidePickerRow ? 'none' : '';
++			if (this._quickChatHeaderPickerHost) {
++				this._quickChatHeaderPickerHost.style.display = emptyThread.hidePickerRow ? 'none' : '';
++			}
++			this._newChatInput.inputEditor?.updateOptions({ placeholder: emptyThread.placeholder });
 +			const editor = chatWidgetContent.querySelector('.sessions-chat-editor');
 +			if (editor instanceof HTMLElement) {
 +				editor.style.minHeight = `${EMPTY_THREAD_MIN_EDITOR_HEIGHT}px`;
++				if (editor.getBoundingClientRect().height < EMPTY_THREAD_MIN_EDITOR_HEIGHT) {
++					editor.style.height = `${EMPTY_THREAD_MIN_EDITOR_HEIGHT}px`;
++				}
 +			}
-+		}
++		}));
  
  		// The tip lives in the input's notice slot, so the presenter is created
  		// after the input has rendered it.
-@@ -533,7 +582,7 @@ export class NewChatWidget extends Disposable {
- 			}
- 		}));
+@@ -535,6 +610,9 @@ export class NewChatWidget extends Disposable {
  
--		if (!isWeb) {
-+		if (!isWeb && !emptyThread?.hidePickerRow) {
+ 		if (!isWeb) {
  			this._register(autorun(reader => {
++				if (this._emptyThreadHidesPickerRow) {
++					return;
++				}
  				const isQuickChat = this._isQuickChatComposer.read(reader);
  				const isWorkspacePickerQuickChat = this._isWorkspacePickerQuickChat.read(reader);
-@@ -903,6 +952,61 @@ export class NewChatWidget extends Disposable {
+ 				const useHeaderHost = isQuickChat && !isWorkspacePickerQuickChat;
+@@ -903,6 +981,56 @@ export class NewChatWidget extends Disposable {
  		};
  	}
  
@@ -150,9 +162,14 @@ index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..42729d6da0c7b36807124e4389e60237
 +	private _queryEmptyThread(reader?: IReader): INewChatEmptyThread | undefined {
 +		const session = reader ? this._session.read(reader) : this._session.get();
 +		const quickChat = reader ? this._isQuickChatComposer.read(reader) : this._isQuickChatComposer.get();
-+		const candidates = session
-+			? [this.sessionsProvidersService.getProvider(session.providerId)]
-+			: this.sessionsProvidersService.getProviders();
++		const providers = this.sessionsProvidersService.getProviders();
++		const sessionProvider = session ? this.sessionsProvidersService.getProvider(session.providerId) : undefined;
++		// The draft's own provider goes first. A draft from another host (the composer is created
++		// before wisp registers, and may then belong to Copilot) still picks up a provider that
++		// implements the empty thread.
++		const candidates = sessionProvider
++			? [sessionProvider, ...providers.filter(provider => provider !== sessionProvider)]
++			: providers;
 +		for (const provider of candidates) {
 +			const getEmptyThread = (provider as Partial<INewChatEmptyThreadProvider> | undefined)?.getEmptyThread;
 +			if (typeof getEmptyThread !== 'function') {
@@ -169,33 +186,23 @@ index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..42729d6da0c7b36807124e4389e60237
 +		return undefined;
 +	}
 +
-+	private _renderEmptyHeading(parent: HTMLElement): void {
-+		const heading = dom.append(parent, dom.$('h1.new-chat-empty-heading'));
-+		heading.style.cssText = 'font-size:30px;font-weight:600;line-height:1.25;text-align:center;margin:0 0 28px';
-+		const selectionChanged = observableSignalFromEvent(this, this._workspacePicker.onDidChangeSelection);
-+		this._register(autorun(reader => {
-+			selectionChanged.read(reader);
-+			const presentation = this._queryEmptyThread(reader);
-+			dom.clearNode(heading);
-+			if (!presentation) {
-+				return;
++	private _fillEmptyHeading(heading: HTMLElement, presentation: INewChatEmptyThread, reader: IReader): void {
++		dom.clearNode(heading);
++		for (const segment of presentation.heading) {
++			if (!segment.link) {
++				dom.append(heading, segment.text);
++				continue;
 +			}
-+			for (const segment of presentation.heading) {
-+				if (!segment.link) {
-+					dom.append(heading, segment.text);
-+					continue;
-+				}
-+				const button = dom.append(heading, dom.$('button.new-chat-empty-heading-name')) as HTMLButtonElement;
-+				button.type = 'button';
-+				button.textContent = segment.text;
-+				button.title = localize('newChat.emptyThread.repository', "Choose a repository");
-+				button.setAttribute('aria-haspopup', 'true');
-+				button.style.cssText = 'font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer;text-decoration:underline dotted;text-underline-offset:4px';
-+				reader.store.add(dom.addDisposableListener(button, dom.EventType.CLICK, () => {
-+					this._workspacePicker.showPicker(false, button);
-+				}));
-+			}
-+		}));
++			const button = dom.append(heading, dom.$('button.new-chat-empty-heading-name')) as HTMLButtonElement;
++			button.type = 'button';
++			button.textContent = segment.text;
++			button.title = localize('newChat.emptyThread.repository', "Choose a repository");
++			button.setAttribute('aria-haspopup', 'true');
++			button.style.cssText = 'font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer;text-decoration:underline dotted;text-underline-offset:4px';
++			reader.store.add(dom.addDisposableListener(button, dom.EventType.CLICK, () => {
++				this._workspacePicker.showPicker(false, button);
++			}));
++		}
 +	}
 +
  	private _renderWorkspacePicker(container: HTMLElement): IDisposable {
