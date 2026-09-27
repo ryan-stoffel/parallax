@@ -41,31 +41,38 @@ if (!/^[0-9a-f]{40}$/.test(headSha) || !Number.isSafeInteger(prNumber) || prNumb
 const runUrl = `${serverUrl}/${repository}/actions/runs/${process.env.GITHUB_RUN_ID ?? '0'}`;
 const prefix = `pr-${String(prNumber)}/${headSha.slice(0, 7)}`;
 
-const windowsFile = 'windows.png';
+const windowsShots = [
+  { file: 'windows-dark.png', title: 'Blank window on Windows, dark' },
+  { file: 'windows-light.png', title: 'Blank window on Windows, light' },
+] as const;
 
 let capture: Capture | undefined;
 let artifactError: string | undefined;
-let windowsShot = false;
+const windowsPresent: { file: string; title: string }[] = [];
 try {
   capture = await readCapture(dir);
   if (capture) {
-    windowsShot = await hasSidecarPng(dir, windowsFile);
+    for (const shot of windowsShots) {
+      if (await hasSidecarPng(dir, shot.file)) {
+        windowsPresent.push(shot);
+      }
+    }
   }
 } catch (error) {
   artifactError = error instanceof Error ? error.message : String(error);
   console.error(`rejected the capture results in ${dir}: ${artifactError}`);
   capture = undefined;
-  windowsShot = false;
+  windowsPresent.length = 0;
 }
 artifactError ??= missingArtifactError(capture, process.env.CAPTURE_OUTCOME);
 const failedSteps = await readFailedSteps(values.logs);
 
 let images: Images | undefined;
 let pushError: string | undefined;
-if (capture && (capture.files.length > 0 || windowsShot)) {
+if (capture && (capture.files.length > 0 || windowsPresent.length > 0)) {
   const files = capture.files.map((file) => ({ path: `${prefix}/${file}`, source: join(dir, file) }));
-  if (windowsShot) {
-    files.push({ path: `${prefix}/${windowsFile}`, source: join(dir, windowsFile) });
+  for (const shot of windowsPresent) {
+    files.push({ path: `${prefix}/${shot.file}`, source: join(dir, shot.file) });
   }
   if (dryRun) {
     images = { base: `https://raw.githubusercontent.com/${repository}/<sha>/${prefix}`, tree: '<tree>' };
@@ -98,7 +105,7 @@ const body = renderComment({
   manifest: capture?.manifest,
   images,
   failedSteps,
-  ...(windowsShot ? { extraImages: [{ title: 'Blank window on Windows', file: windowsFile }] } : {}),
+  ...(windowsPresent.length > 0 ? { extraImages: windowsPresent } : {}),
   ...(pushError === undefined ? {} : { pushError }),
   ...(artifactError === undefined ? {} : { artifactError }),
 });

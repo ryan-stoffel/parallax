@@ -8,7 +8,7 @@ import { LIMITS, nameProblem, textProblem } from '../src/manifest.ts';
 import { scenarios } from '../src/scenarios.ts';
 
 test('ships only the blank window', () => {
-  assert.deepEqual(scenarios.map((scenario) => scenario.name), ['startup']);
+  assert.deepEqual(scenarios.map((scenario) => scenario.name), ['startup-dark', 'startup-light']);
 });
 
 test('names are unique and titles are text the comment accepts', () => {

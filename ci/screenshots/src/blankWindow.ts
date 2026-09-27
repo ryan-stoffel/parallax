@@ -53,6 +53,11 @@ export async function assertBlankWindow(app: ElectronApplication, window: Page):
     throw new Error(`the window is not blank: ${JSON.stringify(text.slice(0, 200))}`);
   }
 
+  const background = await shell.evaluate((element) => getComputedStyle(element).backgroundColor);
+  if (background !== 'rgb(0, 0, 0)' && background !== 'rgb(255, 255, 255)' && background !== 'rgba(0, 0, 0, 1)' && background !== 'rgba(255, 255, 255, 1)') {
+    throw new Error(`the window background is ${background}`);
+  }
+
   const browserWindow = await app.browserWindow(window);
   const handleBytes = await browserWindow.evaluate(
     (win: NativeWindowHandle) => win.getNativeWindowHandle().length,

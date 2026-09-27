@@ -66,9 +66,11 @@ export async function readCapture(dir: string): Promise<Capture | undefined> {
   return { manifest, files };
 }
 
-/** A PNG sitting next to the manifest, such as the Windows capture copied in beside the macOS results. */
+const sidecarPngs = new Set(['windows-dark.png', 'windows-light.png']);
+
+/** A PNG sitting next to the manifest, such as a Windows capture copied in beside the macOS results. */
 export async function hasSidecarPng(dir: string, file: string): Promise<boolean> {
-  if (file !== 'windows.png') {
+  if (!sidecarPngs.has(file)) {
     throw new Error(`${file} is not a capture sidecar`);
   }
   const path = join(dir, file);

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { missingArtifactError, readCapture, readLogTail } from '../src/artifact.ts';
+import { hasSidecarPng, missingArtifactError, readCapture, readLogTail } from '../src/artifact.ts';
 
 const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('rest of the image')]);
 let root = '';
@@ -120,6 +120,16 @@ test('reads only the end of a log and ignores anything but a regular file', asyn
   assert.equal(await readLogTail(logs, 'missing.log'), undefined);
   await symlink(logs, join(root, 'logs-link'));
   assert.equal(await readLogTail(join(root, 'logs-link'), 'build.log'), undefined);
+});
+
+test('accepts the Windows appearance sidecars and rejects any other extra PNG', async () => {
+  const dir = await captureDir(captured, { 'startup.png': png, 'windows-dark.png': png, 'windows-light.png': png });
+  assert.equal(await hasSidecarPng(dir, 'windows-dark.png'), true);
+  assert.equal(await hasSidecarPng(dir, 'windows-light.png'), true);
+  await assert.rejects(hasSidecarPng(dir, 'windows.png'), /not a capture sidecar/);
+  await assert.rejects(hasSidecarPng(dir, 'startup.png'), /not a capture sidecar/);
+  const missing = await captureDir(captured, { 'startup.png': png });
+  assert.equal(await hasSidecarPng(missing, 'windows-light.png'), false);
 });
 
 test('flags a successful capture whose artifact never arrived', () => {
