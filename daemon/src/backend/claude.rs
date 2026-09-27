@@ -70,6 +70,8 @@
 //! `SIGINT`, closes stdin so the CLI exits after the interrupted turn, and kills the process
 //! group if it is still running after the grace period.
 
+#[cfg(test)]
+mod real_cli;
 mod stream;
 #[cfg(test)]
 mod tests;
