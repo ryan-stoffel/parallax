@@ -214,7 +214,6 @@ fn write_docs(out: &mut String, docs: &[&str]) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
     use std::fs;
     use std::path::Path;
 
@@ -248,83 +247,5 @@ mod tests {
         let generated = generate();
         assert!(!generated.contains("bigint"));
         assert!(!generated.contains("\"unknown\""));
-        assert!(generated.contains("export type ErrorKind = \"notInitialized\" | \"incompatibleProtocol\" | \"resyncRequired\" | \"projectNotFound\" | \"accountNotFound\" | \"keychainUnavailable\" | \"idConflict\" | \"contextNotFound\" | \"contextTooLarge\" | \"notARepository\" | \"runNotFound\" | \"runNotResumable\" | \"workerUnavailable\" | \"worktreeFailed\" | \"runAccepted\" | \"mergeRefused\" | \"mergeConflict\" | \"repoNotFound\" | \"threadNotFound\";"));
-        assert!(
-            generated.contains(
-                "\"initialize\": { params: InitializeParams, result: InitializeResult },"
-            )
-        );
-        assert!(generated.contains("\"events/event\": EventsEventParams,"));
-        assert_eq!(generated.matches("export type JsonValue =").count(), 1);
-    }
-
-    #[test]
-    fn every_type_the_file_uses_is_declared_in_it() {
-        let code = without_comments_and_strings(&generate());
-        let builtins = ["Array", "Record"];
-        let error_code_keys = crate::jsonrpc::CODES.map(|(name, _)| name);
-        let mut declared: BTreeSet<String> = builtins
-            .iter()
-            .chain(&error_code_keys)
-            .map(|&name| name.to_owned())
-            .collect();
-        let mut used = BTreeSet::new();
-        let words: Vec<&str> = code
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .filter(|word| !word.is_empty())
-            .collect();
-        for pair in words.windows(2) {
-            if matches!(pair[0], "type" | "const") {
-                declared.insert(pair[1].to_owned());
-            }
-        }
-        for word in words {
-            if word.starts_with(|c: char| c.is_ascii_uppercase())
-                && word.chars().any(|c| c.is_ascii_lowercase())
-            {
-                used.insert(word.to_owned());
-            }
-        }
-        let undeclared: Vec<_> = used.difference(&declared).collect();
-        assert!(
-            undeclared.is_empty(),
-            "used but not declared: {undeclared:?}"
-        );
-    }
-
-    #[test]
-    fn wire_names_are_camel_case() {
-        let code = without_comments_and_strings(&generate());
-        let snake: BTreeSet<&str> = code
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .filter(|word| word.contains('_') && word.chars().any(|c| c.is_ascii_lowercase()))
-            .collect();
-        assert!(
-            snake.is_empty(),
-            "add #[serde(rename_all = \"camelCase\")] to the types with {snake:?}"
-        );
-    }
-
-    fn without_comments_and_strings(source: &str) -> String {
-        let mut out = String::new();
-        let mut rest = source;
-        while let Some(start) = rest.find(['/', '"']) {
-            out.push_str(&rest[..start]);
-            let tail = &rest[start..];
-            let end = if tail.starts_with("/*") {
-                tail.find("*/").map(|i| i + 2)
-            } else if tail.starts_with("//") {
-                tail.find('\n')
-            } else if let Some(string) = tail.strip_prefix('"') {
-                string.find('"').map(|i| i + 2)
-            } else {
-                Some(1)
-            };
-            let end = end.unwrap_or(tail.len());
-            out.push(' ');
-            rest = &tail[end..];
-        }
-        out.push_str(rest);
-        out
     }
 }

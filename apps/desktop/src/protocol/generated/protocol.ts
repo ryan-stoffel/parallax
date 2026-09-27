@@ -762,11 +762,11 @@ export type UsageLimitWindow = {
 	/**
 	 * How much of the window is used, from 0 to 100, when the vendor says.
 	 */
-	usedPercent?: number | null,
+	usedPercent?: number,
 	/**
 	 * When the window resets, when the vendor says.
 	 */
-	resetsAt?: string | null,
+	resetsAt?: string,
 	/**
 	 * When wispd captured this snapshot.
 	 */
@@ -797,7 +797,7 @@ export type UsagePeriod = {
 	 * The cost, when the vendor reports one for this account in the period. Absent, not zero,
 	 * when it never does (0004: Codex and Cursor report no cost).
 	 */
-	costUsdMicros?: number | null,
+	costUsdMicros?: number,
 };
 
 /**

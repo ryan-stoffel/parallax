@@ -49,6 +49,7 @@ pub struct UsagePeriod {
     /// The cost, when the vendor reports one for this account in the period. Absent, not zero,
     /// when it never does (0004: Codex and Cursor report no cost).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub cost_usd_micros: Option<u64>,
 }
 
@@ -62,9 +63,11 @@ pub struct UsageLimitWindow {
     pub window: String,
     /// How much of the window is used, from 0 to 100, when the vendor says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub used_percent: Option<f64>,
     /// When the window resets, when the vendor says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub resets_at: Option<Timestamp>,
     /// When wispd captured this snapshot.
     pub captured_at: Timestamp,
