@@ -54,8 +54,11 @@ export default defineConfig({
   // Main process and preload (`vp pack`).
   pack: [electronBundle("main"), electronBundle("preload")],
 
-  // `vp check`. Oxlint and Oxfmt skip what .gitignore lists.
+  // `vp check`. Oxlint and Oxfmt skip what .gitignore lists. The generated
+  // protocol types keep the generator's formatting, but are still linted and
+  // type-checked.
   lint: { options: { typeAware: true, typeCheck: true } },
+  fmt: { ignorePatterns: ["src/protocol/generated/**"] },
   test: {
     root: ".",
     include: ["src/**/*.test.ts"],

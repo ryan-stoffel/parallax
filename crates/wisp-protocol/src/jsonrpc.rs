@@ -35,7 +35,6 @@ pub const WISP_ERROR: i64 = -32000;
 /// A request cancelled by `$/cancelRequest`.
 pub const REQUEST_CANCELLED: i64 = -32800;
 
-#[cfg(test)]
 pub(crate) const CODES: [(&str, i64); 7] = [
     ("ParseError", PARSE_ERROR),
     ("InvalidRequest", INVALID_REQUEST),
