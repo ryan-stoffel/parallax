@@ -8,7 +8,7 @@ use wisp_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentCancelParams, AgentDiffParams, AgentDiffResult,
     AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentListParams,
     AgentListResult, AgentPolicy, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
-    AgentStartParams, ErrorKind, LoggedEvent,
+    AgentStartParams, ErrorKind, LoggedEvent, RunId,
 };
 
 use super::Context;
@@ -175,9 +175,6 @@ pub(crate) async fn events(
         after,
         limit,
     } = params;
-    let limit = limit
-        .unwrap_or(DEFAULT_EVENTS_LIMIT)
-        .clamp(1, MAX_EVENTS_LIMIT) as usize;
     let exists = context
         .daemon
         .store
@@ -193,6 +190,20 @@ pub(crate) async fn events(
             format!("no agent run has id {run_id}"),
         ));
     }
+    page(context, run_id, after, limit).await
+}
+
+/// A page of the events whose `run_id` column is `run_id`: a run's, or a coordinator thread's
+/// (0020).
+pub(super) async fn page(
+    context: &Context,
+    run_id: RunId,
+    after: u64,
+    limit: Option<u32>,
+) -> Result<AgentEventsResult, ErrorObject> {
+    let limit = limit
+        .unwrap_or(DEFAULT_EVENTS_LIMIT)
+        .clamp(1, MAX_EVENTS_LIMIT) as usize;
     let log = Arc::clone(&context.daemon.log);
     let (entries, more) = tokio::task::spawn_blocking(move || {
         log.run_events(run_id, after, limit, MAX_EVENTS_PAGE_BYTES)

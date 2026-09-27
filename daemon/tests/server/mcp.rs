@@ -10,10 +10,10 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
-use wisp_protocol::methods::{AgentList, AgentStart, ContextList, ContextRead};
+use wisp_protocol::methods::{AgentList, AgentStart, ContextList, ContextRead, CoordinatorGet};
 use wisp_protocol::{
     AgentListParams, AgentRun, AgentStatus, ContextListParams, ContextReadParams,
-    CoordinatorThreadId, ProjectId, RunId,
+    CoordinatorGetParams, CoordinatorThreadId, ProjectId, RunId,
 };
 use wispd::backend::fake::Step;
 use wispd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, TOOLS};
@@ -36,7 +36,7 @@ fn worker() -> Vec<Step> {
 }
 
 /// `wispd mcp` bound to `project` and `thread`, initialized.
-struct Mcp {
+pub(crate) struct Mcp {
     child: Child,
     stdin: ChildStdin,
     stdout: Lines<BufReader<ChildStdout>>,
@@ -60,9 +60,12 @@ fn command(data_dir: &Path, project: ProjectId, thread: CoordinatorThreadId) -> 
 
 impl Mcp {
     async fn start(data_dir: &Path, project: ProjectId, thread: CoordinatorThreadId) -> Self {
-        let mut child = command(data_dir, project, thread)
-            .spawn()
-            .expect("spawn wispd mcp");
+        Self::launch(command(data_dir, project, thread)).await
+    }
+
+    /// Spawns `command`, a `wispd mcp`, and initializes it.
+    pub(crate) async fn launch(mut command: Command) -> Self {
+        let mut child = command.spawn().expect("spawn wispd mcp");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap()).lines();
         let mut mcp = Self {
@@ -103,7 +106,7 @@ impl Mcp {
         Some(serde_json::from_str(&line).expect("a JSON line"))
     }
 
-    async fn request(&mut self, method: &str, params: Value) -> Value {
+    pub(crate) async fn request(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
         let id = self.next_id;
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
@@ -114,7 +117,7 @@ impl Mcp {
     }
 
     /// Calls a tool and returns its text and whether it is an error.
-    async fn tool(&mut self, name: &str, arguments: Value) -> (String, bool) {
+    pub(crate) async fn tool(&mut self, name: &str, arguments: Value) -> (String, bool) {
         let response = self
             .request("tools/call", json!({"name": name, "arguments": arguments}))
             .await;
@@ -127,7 +130,7 @@ impl Mcp {
     }
 
     /// Calls a tool that must succeed and parses its JSON text.
-    async fn ok(&mut self, name: &str, arguments: Value) -> Value {
+    pub(crate) async fn ok(&mut self, name: &str, arguments: Value) -> Value {
         let (text, is_error) = self.tool(name, arguments).await;
         assert!(!is_error, "{name} failed: {text}");
         serde_json::from_str(&text).unwrap_or_else(|_| panic!("{name} returned {text}"))
@@ -164,12 +167,25 @@ async fn runs(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
         .runs
 }
 
+/// The project's coordinator thread, which `agent/start` checks a spawned run's tag against.
+pub(crate) async fn coordinator_thread(
+    client: &mut Conn,
+    project: ProjectId,
+) -> CoordinatorThreadId {
+    client
+        .call::<CoordinatorGet>(CoordinatorGetParams { project })
+        .await
+        .unwrap()
+        .thread
+        .id
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_coordinator_spawns_steers_reviews_and_records_through_its_tools() {
     let host = Host::start(temp_dir(), fake(worker()));
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
-    let thread = CoordinatorThreadId::generate();
+    let thread = coordinator_thread(&mut client, project.id).await;
     let mut mcp = Mcp::start(host.dir.path(), project.id, thread).await;
 
     let listed = mcp.request("tools/list", json!({})).await;
@@ -281,7 +297,8 @@ async fn the_tools_reach_only_the_bound_project() {
         .unwrap()
         .run;
     let their_id = their_run.id.to_string();
-    let mut mcp = Mcp::start(dir, ours.id, CoordinatorThreadId::generate()).await;
+    let thread = coordinator_thread(&mut client, ours.id).await;
+    let mut mcp = Mcp::start(dir, ours.id, thread).await;
 
     let listed = mcp.ok("list_agents", json!({})).await;
     assert_eq!(
@@ -366,7 +383,8 @@ async fn tool_inputs_are_size_limited() {
     let host = Host::start(temp_dir(), fake(worker()));
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
-    let mut mcp = Mcp::start(host.dir.path(), project.id, CoordinatorThreadId::generate()).await;
+    let thread = coordinator_thread(&mut client, project.id).await;
+    let mut mcp = Mcp::start(host.dir.path(), project.id, thread).await;
 
     let long = "x".repeat(MAX_TEXT_BYTES + 1);
     let refused = mcp.refused("spawn_agent", json!({"prompt": long})).await;

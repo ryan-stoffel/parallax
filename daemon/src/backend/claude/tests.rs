@@ -1396,6 +1396,17 @@ fn a_coordinator_run_allows_the_read_tools_and_exactly_wispds_mcp_tools() {
     );
 }
 
+/// #196: the `system/init` the installed Claude Code 2.1.267 printed for a coordinator run with
+/// 0019's exact flags and `wispd mcp` attached to a running wispd, with a real subscription
+/// login, trimmed to the fields the check reads plus a few for context. MCP resource tools and
+/// the like don't appear, so the check lets it through.
+#[test]
+fn a_recorded_coordinator_init_passes_the_tool_check() {
+    let recorded = br#"{"type":"system","subtype":"init","cwd":"/private/tmp/wisp196.Tk6D/repo","session_id":"d7ab3e64-ffbf-4cbd-a924-f289c8764cac","tools":["Glob","Grep","Read","mcp__wispd__agent_diff","mcp__wispd__agent_status","mcp__wispd__cancel_agent","mcp__wispd__list_agents","mcp__wispd__message_agent","mcp__wispd__read_context","mcp__wispd__spawn_agent","mcp__wispd__write_context"],"mcp_servers":[{"name":"wispd","status":"connected"}],"model":"claude-haiku-4-5-20251001","permissionMode":"dontAsk","apiKeySource":"none","claude_code_version":"2.1.267"}"#;
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
+    assert_eq!(violation_kind(&translator.line(recorded)), None);
+}
+
 fn failed_result() -> &'static [u8] {
     br#"{"type":"result","subtype":"success","is_error":true,"result":"API Error"}"#
 }

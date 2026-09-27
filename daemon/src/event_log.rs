@@ -220,7 +220,8 @@ impl Drop for Writer {
     }
 }
 
-/// The run an event belongs to, for `agent/events`.
+/// The run an event belongs to, for `agent/events`, or the coordinator thread, as a `RunId`, for
+/// `coordinator/events`.
 pub(crate) fn run_of(event: &WispEvent) -> Option<RunId> {
     match event {
         WispEvent::AgentStarted { run_id, .. }
@@ -230,6 +231,15 @@ pub(crate) fn run_of(event: &WispEvent) -> Option<RunId> {
         | WispEvent::AgentFinished { run_id, .. }
         | WispEvent::AgentDiffReady { run_id, .. }
         | WispEvent::AgentAccepted { run_id, .. } => Some(*run_id),
+        // A coordinator thread's events are paged by its id the same way (0020).
+        WispEvent::CoordinatorStarted { thread_id, .. }
+        | WispEvent::CoordinatorUpdated { thread_id, .. }
+        | WispEvent::CoordinatorTurnStarted { thread_id, .. }
+        | WispEvent::CoordinatorOutput { thread_id, .. }
+        | WispEvent::CoordinatorAccountFallback { thread_id, .. }
+        | WispEvent::CoordinatorFinished { thread_id, .. } => {
+            RunId::try_from(uuid::Uuid::from(*thread_id)).ok()
+        }
         WispEvent::ProjectCreated { .. }
         | WispEvent::ContextChanged { .. }
         | WispEvent::RepoAdded { .. }

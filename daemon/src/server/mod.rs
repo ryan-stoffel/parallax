@@ -88,6 +88,12 @@ pub struct Config {
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
     /// default, is wispd's own with the usual install folders on `PATH` (#96, decision 0014).
     pub agent_environment: Option<Environment>,
+    /// The `wispd` a coordinator's CLI launches as `wispd mcp` (0019). `None`, the default, is
+    /// this process's own executable; in-process tests name the built binary.
+    pub wispd_program: Option<PathBuf>,
+    /// How long a coordinator wake-up that arrives while the coordinator is idle waits for other
+    /// runs to finish, so they wake it once (0020). 1 s by default.
+    pub coordinator_wake_batch: Duration,
 }
 
 impl Config {
@@ -106,6 +112,8 @@ impl Config {
             outbound_queue: 32,
             backends: None,
             agent_environment: None,
+            wispd_program: None,
+            coordinator_wake_batch: Duration::from_secs(1),
         }
     }
 }
@@ -284,6 +292,11 @@ impl Server {
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
         let store = StoreHandle::open(&data_dir.store_file());
+        let program = match &config.wispd_program {
+            Some(program) => program.clone(),
+            None => std::env::current_exe()
+                .map_err(|error| StartError::io("finding wispd's own executable", error))?,
+        };
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
             log: Arc::new(EventLog::open(
@@ -303,7 +316,7 @@ impl Server {
             keys: Arc::new(KeychainStore::new()),
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
-            agents: Agents::new(backends, worktrees),
+            agents: Agents::new(backends, worktrees, program, config.coordinator_wake_batch),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -514,7 +527,12 @@ impl Daemon {
             keys: Arc::new(crate::keystore::MemoryKeyStore::new()),
             data_dir: DataDir::new(dir).unwrap(),
             context: ContextIndex::default(),
-            agents: Agents::new(BackendRegistry::new(), worktrees),
+            agents: Agents::new(
+                BackendRegistry::new(),
+                worktrees,
+                PathBuf::from("wispd"),
+                Duration::from_secs(1),
+            ),
         })
     }
 }

@@ -34,10 +34,10 @@ use crate::routing;
 use crate::server::Daemon;
 
 /// How long transcript items wait to be sent together as one `agent.output` (0007).
-const COALESCE: Duration = Duration::from_millis(50);
+pub(super) const COALESCE: Duration = Duration::from_millis(50);
 
 /// An `agent.output` is sent early once its items reach about this many bytes.
-const MAX_BATCH_BYTES: usize = 256 * 1024;
+pub(super) const MAX_BATCH_BYTES: usize = 256 * 1024;
 
 /// What an actor is asked to do.
 pub(super) enum Command {
@@ -421,8 +421,8 @@ impl Actor {
                 format!("run {} can't be resumed: {why}", self.id),
             )
         };
-        let (prepared, _) = match prepare(&self.daemon, self.project, self.id, Some(account)).await
-        {
+        let prepared = prepare(&self.daemon, self.project, self.id, Some(account), None).await;
+        let (prepared, _) = match prepared {
             Ok(prepared) => prepared,
             Err(error)
                 if error
@@ -691,6 +691,7 @@ impl Actor {
                 None
             }
         };
+        let finished_outcome = outcome.clone();
         self.append(WispEvent::AgentFinished {
             run_id: self.id,
             outcome,
@@ -711,6 +712,15 @@ impl Actor {
         self.row.state.error = error;
         info!(run = %self.id, status, "an agent run's CLI finished");
         self.save().await;
+        if self.row.fields.coordinator_thread.is_some() {
+            let finished = super::coordinator::Finished {
+                run_id: self.id,
+                prompt: self.row.fields.prompt.clone(),
+                outcome: finished_outcome,
+                diff: self.snapshot().ok().and_then(|run| run.diff),
+            };
+            super::coordinator::wake(&self.daemon, self.project, finished);
+        }
     }
 
     /// Commits whatever the run changed in its worktree, on its branch, and measures the branch
@@ -819,7 +829,7 @@ async fn next_event(live: &mut Option<Live>) -> Option<Event> {
     }
 }
 
-fn model_usage(total: SessionModelUsage) -> ModelUsage {
+pub(super) fn model_usage(total: SessionModelUsage) -> ModelUsage {
     ModelUsage {
         model: total.model,
         usage: Usage {

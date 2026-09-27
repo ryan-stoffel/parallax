@@ -12,9 +12,13 @@
 //! vendor session in the same worktree. When wispd stops, running CLIs are cancelled and their
 //! runs recorded `interrupted`; a run still `starting` or `running` in the store when wispd
 //! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`.
+//!
+//! [`coordinator`] runs each project's coordinator thread (#196, decision 0020), and a run the
+//! coordinator started wakes it when its CLI process finishes.
 
 mod actor;
 mod convert;
+pub(crate) mod coordinator;
 pub(crate) mod review;
 pub(crate) mod worker;
 
@@ -49,11 +53,19 @@ use crate::worktree::{CreatedWorktree, WorktreeError, WorktreeManager};
 /// How long a stopping wispd waits for its runs to record that they were interrupted.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 
-/// Every run's actor, and what they share.
+/// Every run's actor, every coordinator thread's (#196), and what they share.
 pub(crate) struct Agents {
     backends: BackendRegistry,
     worktrees: WorktreeManager,
     actors: Mutex<HashMap<RunId, mpsc::Sender<Command>>>,
+    /// Each project's coordinator thread's actor.
+    coordinators: Mutex<HashMap<ProjectId, mpsc::Sender<coordinator::Command>>>,
+    /// Held while a coordinator actor is spawned, so a project never gets two.
+    coordinator_spawn: tokio::sync::Mutex<()>,
+    /// The `wispd` a coordinator's CLI runs as `wispd mcp` (0019).
+    program: PathBuf,
+    /// How long a wake-up that arrives while the coordinator is idle waits for others (0020).
+    wake_batch: Duration,
     /// One lock per run id, held while that run is being created, or while its actor is spawned
     /// for a run created earlier, so one run never gets two worktrees or two actors (#190: a run
     /// id's lock never makes an unrelated run's `agent/start`, `agent/send`, or `agent/cancel`
@@ -143,12 +155,22 @@ pub(super) struct Prepared {
 }
 
 impl Agents {
-    /// A runner that starts workers on `backends`, in worktrees `worktrees` makes.
-    pub fn new(backends: BackendRegistry, worktrees: WorktreeManager) -> Self {
+    /// A runner that starts workers on `backends`, in worktrees `worktrees` makes, and
+    /// coordinators whose tools run as `program mcp`, woken after `wake_batch`.
+    pub fn new(
+        backends: BackendRegistry,
+        worktrees: WorktreeManager,
+        program: PathBuf,
+        wake_batch: Duration,
+    ) -> Self {
         Self {
             backends,
             worktrees,
             actors: Mutex::new(HashMap::new()),
+            coordinators: Mutex::new(HashMap::new()),
+            coordinator_spawn: tokio::sync::Mutex::new(()),
+            program,
+            wake_batch,
             starting: StartLocks::default(),
             running: AtomicU32::new(0),
             tracker: TaskTracker::new(),
@@ -184,6 +206,14 @@ impl Agents {
         self.tracker.spawn(task).await.map_err(|error| {
             ErrorObject::internal_error(format!("the run's task failed: {error}"))
         })?
+    }
+
+    fn coordinator(&self, project: ProjectId) -> Option<mpsc::Sender<coordinator::Command>> {
+        self.coordinators
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&project)
+            .cloned()
     }
 
     fn actor(&self, id: RunId) -> Option<mpsc::Sender<Command>> {
@@ -244,33 +274,47 @@ pub(crate) fn run_accepted(id: RunId) -> ErrorObject {
     )
 }
 
+/// The key accounts routing reads: a snapshot of the `accounts` table.
+fn key_accounts(db: &wisp_store::Store) -> Result<StoredKeyAccounts, ErrorObject> {
+    let mut accounts = HashMap::new();
+    for account in db.list_accounts().map_err(|error| store_error(&error))? {
+        let account = crate::store::key_account(account)?;
+        accounts.insert(account.id, account.provider);
+    }
+    Ok(StoredKeyAccounts(accounts))
+}
+
 fn requested_account(account: Option<&AccountChoice>) -> Option<String> {
     account.and_then(|account| serde_json::to_string(account).ok())
 }
 
 /// The project's repository, the routing inputs, and the paths run `run` of `project` needs,
-/// checked: everything that can refuse a worker before anything is created.
+/// checked: everything that can refuse a worker before anything is created. A new run's
+/// `coordinator_thread` must be `project`'s own coordinator thread (#196): `wispd mcp` sets it
+/// from the arguments wispd gave the coordinator's CLI, but `agent/start` is open to any client.
 pub(super) async fn prepare(
     daemon: &Arc<Daemon>,
     project: ProjectId,
     run: RunId,
     requested: Option<AccountChoice>,
+    coordinator_thread: Option<CoordinatorThreadId>,
 ) -> Result<(Prepared, String), ErrorObject> {
     let (repo_path, context_scope, defaults, accounts) = store(daemon, move |db| {
         let repo_path = crate::threads::scope_path(db, project)?;
+        if let Some(thread) = coordinator_thread {
+            let owner = db
+                .get_coordinator_thread(thread.into())
+                .map_err(|error| store_error(&error))?
+                .map(|row| row.project_id);
+            if owner != Some(Uuid::from(project)) {
+                return Err(ErrorObject::invalid_params(format!(
+                    "coordinatorThread {thread} is not project {project}'s coordinator thread"
+                )));
+            }
+        }
         let context_scope = crate::threads::context_scope(db, project, run)?;
         let defaults = crate::methods::read_defaults(db)?;
-        let mut accounts = HashMap::new();
-        for account in db.list_accounts().map_err(|error| store_error(&error))? {
-            let account = crate::store::key_account(account)?;
-            accounts.insert(account.id, account.provider);
-        }
-        Ok((
-            repo_path,
-            context_scope,
-            defaults,
-            StoredKeyAccounts(accounts),
-        ))
+        Ok((repo_path, context_scope, defaults, key_accounts(db)?))
     })
     .await?;
     let defaults = Defaults {
@@ -530,15 +574,8 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
     let _starting = agents.start_guard(run_id).await;
     let requested = requested_account(account.as_ref());
 
-    if let Some(run) = existing(
-        &daemon,
-        run_id,
-        project,
-        &prompt,
-        (requested.as_deref(), coordinator_thread),
-    )
-    .await?
-    {
+    let same = (requested.as_deref(), coordinator_thread);
+    if let Some(run) = existing(&daemon, run_id, project, &prompt, same).await? {
         let row = if thread.is_some() {
             Some(crate::threads::existing_thread(&daemon, run_id).await?)
         } else {
@@ -546,7 +583,8 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         };
         return Ok(CreatedRun { run, thread: row });
     }
-    let (prepared, scope_path) = prepare(&daemon, project, run_id, account).await?;
+    let (prepared, scope_path) =
+        prepare(&daemon, project, run_id, account, coordinator_thread).await?;
     let repo_path = match thread.as_ref().and_then(|thread| thread.scratch.clone()) {
         Some(scratch) => scratch.to_string_lossy().into_owned(),
         None => scope_path,
@@ -802,6 +840,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
         }
         Err(error) => warn!(error = %error.message, "could not recover interrupted agent runs"),
     }
+    coordinator::recover(daemon).await;
 }
 
 #[cfg(test)]

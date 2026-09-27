@@ -85,6 +85,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agentReview".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
+        ("coordinator".to_owned(), serde_json::Map::new()),
     ]))
 }
 

@@ -166,7 +166,7 @@ pub(crate) async fn create(client: &mut Conn, params: ProjectCreateParams) -> Pr
     client.call::<ProjectCreate>(params).await.unwrap().project
 }
 
-async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
+pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
     client
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
@@ -238,14 +238,14 @@ impl Conn {
         }
     }
 
-    async fn stays_quiet(&mut self, within: Duration) {
+    pub(crate) async fn stays_quiet(&mut self, within: Duration) {
         assert!(self.pending.is_empty(), "{:?}", self.pending);
         self.client.stays_quiet(within).await;
     }
 }
 
 /// Events until one matches `done`, which is included.
-async fn until(
+pub(crate) async fn until(
     client: &mut Conn,
     mut done: impl FnMut(&EventsEventParams) -> bool,
 ) -> Vec<EventsEventParams> {

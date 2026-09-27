@@ -8,6 +8,7 @@
 mod accounts;
 mod agent;
 mod context;
+mod coordinator;
 mod defaults;
 mod events;
 mod host;
@@ -115,6 +116,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             .await
             .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         name if thread::handles(name) => thread::dispatch(&context, &request).await,
+        name if coordinator::handles(name) => coordinator::dispatch(&context, &request).await,
         EventsSubscribe::NAME => {
             let subscribed = match request.params() {
                 Ok(params) => events::subscribe(&context, params).await,
