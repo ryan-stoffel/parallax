@@ -1,7 +1,8 @@
 //! The method table: every method, with its params and result types.
 //!
 //! Each method is a marker type that implements [`RequestMethod`] or [`NotificationMethod`].
-//! Later milestones add methods here, each gated on a capability.
+//! The same table produces the generated TypeScript's method maps, so a method cannot exist on
+//! one side only. Later milestones add methods here, each gated on a capability.
 //!
 //! ```
 //! use wisp_protocol::HostHealthParams;
@@ -60,7 +61,6 @@ pub trait NotificationMethod {
     type Params: Serialize + DeserializeOwned + TS + 'static;
 }
 
-#[cfg(test)]
 pub(crate) trait Visitor {
     fn request<M: RequestMethod>(&mut self, docs: &[&str]);
     fn notification<N: NotificationMethod>(&mut self, docs: &[&str]);
@@ -104,7 +104,6 @@ macro_rules! method_table {
             }
         )*
 
-        #[cfg(test)]
         pub(crate) fn visit(visitor: &mut impl Visitor) {
             $(visitor.request::<$request>(&[$($request_doc),*]);)*
             $(visitor.notification::<$notification>(&[$($notification_doc),*]);)*

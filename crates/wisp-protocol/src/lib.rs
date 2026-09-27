@@ -1,6 +1,7 @@
 //! The protocol between the editor and `wispd`, from decision record 0007.
 //!
-//! This crate is the single source of truth for it.
+//! This crate is the single source of truth for it. The desktop app's TypeScript types are generated
+//! from the types here (see [`typescript`]).
 //!
 //! - [`framing`]: newline-delimited JSON, one compact message per line, at most
 //!   [`framing::MAX_FRAME_BYTES`] per line.
@@ -44,6 +45,7 @@ pub mod methods;
 mod project;
 mod review;
 mod thread;
+pub mod typescript;
 mod usage;
 
 #[cfg(test)]
