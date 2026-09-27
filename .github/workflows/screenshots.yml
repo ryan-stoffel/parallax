@@ -206,7 +206,22 @@ jobs:
           set -eux
           scripts/editor/prepare
           cd editor/vscode
-          npm ci --no-audit --no-fund
+          # node-gyp downloads the Electron headers once, with no retry. A reset
+          # connection fails the package and skips the Windows capture (#316).
+          attempt=1
+          while true; do
+            if npm ci --no-audit --no-fund; then
+              break
+            fi
+            if [ "$attempt" -ge 3 ]; then
+              echo "npm ci failed after $attempt attempts" >&2
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            echo "npm ci failed while installing native modules; retrying ($attempt of 3)" >&2
+            sleep 20
+            rm -rf node_modules
+          done
           npm run download-builtin-extensions
           CI=true npm run gulp vscode-win32-x64-min
           if [ ! -f ../VSCode-win32-x64/Wisp.exe ]; then
