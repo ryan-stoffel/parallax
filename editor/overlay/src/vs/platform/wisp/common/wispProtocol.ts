@@ -1004,6 +1004,11 @@ export type AgentStartParams = {
 	 * The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
 	 */
 	account?: AccountChoice,
+	/**
+	 * The coordinator thread starting the run, which `wispd mcp` sets for runs the coordinator
+	 * spawns (0019). The run keeps it, and a retry must repeat it.
+	 */
+	coordinatorThread?: CoordinatorThreadId,
 };
 
 /**
@@ -1012,6 +1017,12 @@ export type AgentStartParams = {
  * A newer wispd may send a policy this version does not know; treat it as unknown.
  */
 export type AgentPolicy = "workspaceWrite";
+
+/**
+ * A project's coordinator thread (M4, #195, decision 0019). Runs the coordinator starts
+ * through its wisp tools carry it, so a client can tell them from runs it started itself.
+ */
+export type CoordinatorThreadId = string;
 
 /**
  * An agent run's id: a version 7 UUID that the client generates once and sends again on every
@@ -1082,6 +1093,11 @@ export type AgentRun = {
 	 * Its latest commit, once wispd made one.
 	 */
 	diff?: DiffSummary,
+	/**
+	 * The coordinator thread that started it through its wisp tools. Absent for a run a client
+	 * started itself.
+	 */
+	coordinatorThread?: CoordinatorThreadId,
 	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */

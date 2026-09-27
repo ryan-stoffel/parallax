@@ -7,7 +7,7 @@ use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
     AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy,
     AgentRun, AgentRunState, AgentStatus, AgentTodoItem, AgentTodoStatus, AgentToolStatus,
-    DiffSummary, ProjectId, RunId,
+    CoordinatorThreadId, DiffSummary, ProjectId, RunId,
 };
 
 use crate::backend::{Event, FailureKind, Outcome, TodoItem, TodoStatus, ToolStatus};
@@ -99,6 +99,12 @@ pub(crate) fn agent_run(
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),
+        coordinator_thread: row
+            .fields
+            .coordinator_thread
+            .map(CoordinatorThreadId::try_from)
+            .transpose()
+            .map_err(|_| corrupt("coordinator thread id"))?,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })

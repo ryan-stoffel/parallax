@@ -14,6 +14,7 @@ use crate::backend::event::{
     Event, Failure, FailureKind, LimitStatus, LimitWindow, ModelUsage, TodoItem, TodoStatus,
     ToolStatus, Usage, WarningKind,
 };
+use crate::mcp;
 
 /// A `major.minor.patch` version, for comparing. Anything after the patch number, such as a
 /// pre-release tag, is ignored.
@@ -86,6 +87,8 @@ pub(super) struct TurnDone {
 pub(super) struct Translator {
     policy: ToolPolicy,
     expected_key_source: &'static str,
+    /// wispd's MCP tools were attached, so `system/init` may list [`mcp::ALLOWED_TOOLS`] too.
+    coordinator_tools: bool,
     verified: bool,
     session_id: Option<String>,
     denied: HashSet<String>,
@@ -106,6 +109,7 @@ impl Translator {
         Self {
             policy,
             expected_key_source,
+            coordinator_tools: false,
             verified: false,
             session_id: None,
             denied: HashSet::new(),
@@ -115,6 +119,12 @@ impl Translator {
             last_failure: None,
             last_result: None,
         }
+    }
+
+    /// Also admits wispd's MCP tools in `system/init`, when `attached` (0019).
+    pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
+        self.coordinator_tools = attached;
+        self
     }
 
     /// Reads one line of stdout.
@@ -218,10 +228,17 @@ impl Translator {
             steps.push(violation(FailureKind::PolicyViolation, message));
             return steps;
         };
+        let wispd_tools: &[&str] = if self.coordinator_tools {
+            mcp::ALLOWED_TOOLS
+        } else {
+            &[]
+        };
         let offered: Vec<&str> = tools
             .iter()
             .map(|tool| tool.as_str().unwrap_or("<not a string>"))
-            .filter(|tool| !allowed.contains(tool) && *tool != END_CONVERSATION)
+            .filter(|tool| {
+                !allowed.contains(tool) && !wispd_tools.contains(tool) && *tool != END_CONVERSATION
+            })
             .collect();
         if !offered.is_empty() {
             let message = format!(

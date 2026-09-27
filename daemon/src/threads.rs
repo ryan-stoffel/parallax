@@ -360,6 +360,7 @@ pub(crate) async fn start(
         scope,
         prompt,
         account,
+        coordinator_thread: None,
         thread: Some(NewThread {
             scratch: scratch.clone(),
         }),

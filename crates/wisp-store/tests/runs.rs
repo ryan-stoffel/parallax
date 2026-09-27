@@ -15,6 +15,7 @@ fn fields(project_id: Uuid) -> RunFields {
         requested_account: Some(r#"{"kind":"subscription","backend":"claude"}"#.to_owned()),
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
+        coordinator_thread: None,
     }
 }
 
@@ -35,6 +36,21 @@ fn event(seq: u64, run_id: Option<Uuid>) -> StoredEvent {
         kind: "agent.output".to_owned(),
         payload: format!(r#"{{"kind":"agent.output","n":{seq}}}"#),
     }
+}
+
+#[test]
+fn a_run_keeps_the_coordinator_thread_that_started_it() {
+    let (_dir, store) = open();
+    let (project, id, thread) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let tagged = RunFields {
+        coordinator_thread: Some(thread),
+        ..fields(project)
+    };
+    store.create_run(id, &tagged, &starting()).unwrap();
+    let read = store.get_run(id).unwrap().unwrap();
+    assert_eq!(read.fields.coordinator_thread, Some(thread));
+    let listed = store.list_runs(Some(project)).unwrap();
+    assert_eq!(listed[0].fields, tagged);
 }
 
 #[test]
