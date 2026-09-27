@@ -64,7 +64,7 @@ pub(crate) struct Agents {
     coordinator_spawn: tokio::sync::Mutex<()>,
     /// The `wispd` a coordinator's CLI runs as `wispd mcp` (0019).
     program: PathBuf,
-    /// How long a wake-up that arrives while the coordinator is idle waits for others (0020).
+    /// How long wake-ups with no message waiting are held for other runs to finish (0020).
     wake_batch: Duration,
     /// One lock per run id, held while that run is being created, or while its actor is spawned
     /// for a run created earlier, so one run never gets two worktrees or two actors (#190: a run

@@ -91,8 +91,8 @@ pub struct Config {
     /// The `wispd` a coordinator's CLI launches as `wispd mcp` (0019). `None`, the default, is
     /// this process's own executable; in-process tests name the built binary.
     pub wispd_program: Option<PathBuf>,
-    /// How long a coordinator wake-up that arrives while the coordinator is idle waits for other
-    /// runs to finish, so they wake it once (0020). 1 s by default.
+    /// How long the coordinator's wake-ups, with no message waiting, are held for other runs to
+    /// finish, so runs that finish close together wake it once (0020). 1 s by default.
     pub coordinator_wake_batch: Duration,
 }
 
