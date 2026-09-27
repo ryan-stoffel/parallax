@@ -23,9 +23,17 @@ interface NativeWindow {
   show(): void;
   focus(): void;
   moveTop(): void;
-  setPosition(x: number, y: number): void;
+  getBounds(): { x: number; y: number; width: number; height: number };
+  setBounds(bounds: { x: number; y: number; width: number; height: number }): void;
   getMediaSourceId(): string;
   getNativeWindowHandle(): { toString(encoding: 'hex'): string };
+}
+
+interface WorkArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /**
@@ -34,16 +42,28 @@ interface NativeWindow {
  */
 export async function captureNativeWindow(app: ElectronApplication, window: Page): Promise<Buffer> {
   const browserWindow = await app.browserWindow(window);
-  const info = await browserWindow.evaluate((win: NativeWindow) => {
-    win.setPosition(48, 48);
-    win.show();
-    win.moveTop();
-    win.focus();
-    return {
-      mediaSourceId: win.getMediaSourceId(),
-      handleHex: win.getNativeWindowHandle().toString('hex'),
+  // The helper runs here, not in Electron: Playwright only sends the callback source.
+  const placed = await browserWindow.evaluate((win: NativeWindow) => {
+    // The callback runs in the Electron main process, which is where `electron` loads.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const electron = require('electron') as {
+      screen: { getDisplayMatching(rect: WorkArea): { workArea: WorkArea } };
     };
+    return { bounds: win.getBounds(), area: electron.screen.getDisplayMatching(win.getBounds()).workArea };
   });
+  const info = await browserWindow.evaluate(
+    (win: NativeWindow, bounds: WorkArea) => {
+      win.setBounds(bounds);
+      win.show();
+      win.moveTop();
+      win.focus();
+      return {
+        mediaSourceId: win.getMediaSourceId(),
+        handleHex: win.getNativeWindowHandle().toString('hex'),
+      };
+    },
+    boundsInsideWorkArea(placed.bounds, placed.area),
+  );
   await delay(500);
 
   const png = await captureForPlatform(app.process().pid, info);
@@ -113,18 +133,35 @@ export function decorationProblem(png: Buffer, platform: NodeJS.Platform): strin
     return undefined;
   }
 
-  const buttons = count(
-    raster,
-    Math.floor(raster.width * 0.78),
-    inset,
-    raster.width - inset,
-    band,
-    (rgb) => channelDelta(rgb, center) > 48,
-  );
-  if (buttons < 24) {
-    return `the native window capture has no caption buttons in the top right (${String(buttons)} contrasting pixels, image ${String(raster.width)}x${String(raster.height)})`;
+  const transparent = trailingTransparentColumns(raster);
+  if (transparent > 0) {
+    return `the right edge of the native window capture is transparent (${String(transparent)} columns, image ${String(raster.width)}x${String(raster.height)})`;
+  }
+  const glyphs = captionGlyphs(raster, center, inset, band);
+  if (glyphs !== 3) {
+    return `the native window capture does not show minimize, maximize, and close as three separate caption buttons (${String(glyphs)} glyphs, image ${String(raster.width)}x${String(raster.height)})`;
   }
   return undefined;
+}
+
+/** Shrink and move a window so its whole frame, including the caption buttons, stays inside the work area. */
+export function boundsInsideWorkArea(bounds: WorkArea, area: WorkArea): WorkArea {
+  const margin = 8;
+  const roomWidth = Math.max(64, area.width - margin * 2);
+  const roomHeight = Math.max(32, area.height - margin * 2);
+  const width = Math.min(bounds.width, roomWidth);
+  const height = Math.min(bounds.height, roomHeight);
+  let x = Math.max(bounds.x, area.x + margin);
+  let y = Math.max(bounds.y, area.y + margin);
+  const right = area.x + area.width - margin;
+  const bottom = area.y + area.height - margin;
+  if (x + width > right) {
+    x = right - width;
+  }
+  if (y + height > bottom) {
+    y = bottom - height;
+  }
+  return { x, y, width, height };
 }
 
 async function captureDarwin(pid: number, mediaSourceId: string): Promise<Buffer> {
@@ -279,12 +316,14 @@ Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
+[StructLayout(LayoutKind.Sequential)]
 public struct WispRect { public int Left; public int Top; public int Right; public int Bottom; }
 public static class WispCap {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out WispRect rect);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out WispRect pvAttribute, int cbAttribute);
 }
 "@
 $bytes = New-Object byte[] 8
@@ -299,6 +338,14 @@ if (-not [WispCap]::IsWindow($ptr)) { throw "hwnd is not a window" }
 Start-Sleep -Milliseconds 400
 $rect = New-Object WispRect
 if (-not [WispCap]::GetWindowRect($ptr, [ref]$rect)) { throw "GetWindowRect failed" }
+# The visible frame excludes the DWM shadow, whose pixels stay transparent and can hide the close button.
+$visible = New-Object WispRect
+$visibleSize = [Runtime.InteropServices.Marshal]::SizeOf([type][WispRect])
+if ([WispCap]::DwmGetWindowAttribute($ptr, 9, [ref]$visible, $visibleSize) -eq 0) {
+  $visibleWidth = $visible.Right - $visible.Left
+  $visibleHeight = $visible.Bottom - $visible.Top
+  if ($visibleWidth -ge 32 -and $visibleHeight -ge 32) { $rect = $visible }
+}
 $w = $rect.Right - $rect.Left
 $h = $rect.Bottom - $rect.Top
 if ($w -lt 32 -or $h -lt 32) { throw "window rect is $w x $h" }
@@ -411,6 +458,75 @@ function paeth(left: number, up: number, upLeft: number): number {
     return left;
   }
   return upDistance <= upLeftDistance ? up : upLeft;
+}
+
+function trailingTransparentColumns(raster: Raster): number {
+  if (raster.bpp < 4) {
+    return 0;
+  }
+  let columns = 0;
+  for (let x = raster.width - 1; x >= 0; x -= 1) {
+    let columnTransparent = true;
+    for (let y = 0; y < raster.height; y += 1) {
+      if (alphaAt(raster, x, y) !== 0) {
+        columnTransparent = false;
+        break;
+      }
+    }
+    if (!columnTransparent) {
+      break;
+    }
+    columns += 1;
+  }
+  return columns;
+}
+
+/** Minimize, maximize, and close are three horizontal runs of contrasting pixels in the top right. */
+function captionGlyphs(raster: Raster, center: RGB, inset: number, band: number): number {
+  const x0 = Math.floor(raster.width * 0.78);
+  let glyphs = 0;
+  let inGlyph = false;
+  let pixels = 0;
+  let gap = 0;
+  const finish = (): void => {
+    if (inGlyph && pixels >= 8) {
+      glyphs += 1;
+    }
+    inGlyph = false;
+    pixels = 0;
+    gap = 0;
+  };
+  for (let x = x0; x < raster.width; x += 1) {
+    let columnPixels = 0;
+    for (let y = inset; y < band; y += 1) {
+      if (alphaAt(raster, x, y) === 0) {
+        continue;
+      }
+      if (channelDelta(at(raster, x, y), center) > 48) {
+        columnPixels += 1;
+      }
+    }
+    if (columnPixels > 0) {
+      inGlyph = true;
+      pixels += columnPixels;
+      gap = 0;
+    } else if (inGlyph) {
+      gap += 1;
+      if (gap >= 2) {
+        finish();
+      }
+    }
+  }
+  finish();
+  return glyphs;
+}
+
+function alphaAt(raster: Raster, x: number, y: number): number {
+  if (raster.bpp < 4) {
+    return 255;
+  }
+  const index = (y * raster.width + x) * raster.bpp;
+  return raster.pixels[index + 3] ?? 0;
 }
 
 function at(raster: Raster, x: number, y: number): RGB {
