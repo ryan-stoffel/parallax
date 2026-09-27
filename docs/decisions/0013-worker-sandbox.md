@@ -1,6 +1,6 @@
 # 0013: The worker sandbox
 
-- Status: accepted
+- Status: accepted; the sandbox on Linux, and the refusal of Claude workers on native Windows, are in [0023](0023-cross-platform.md)
 - Date: 2026-09-25
 - Issue: #137
 
