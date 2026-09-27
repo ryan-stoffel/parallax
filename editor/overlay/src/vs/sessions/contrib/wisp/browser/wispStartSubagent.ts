@@ -12,11 +12,12 @@ import { INotificationService, NeverShowAgainScope } from '../../../../platform/
 import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
 import { IWispdService } from '../../../../platform/wisp/common/wispd.js';
 import type { AccountChoice, AgentRun, ProjectId } from '../../../../platform/wisp/common/wispProtocol.js';
+import { generateUuidV7 } from '../../../../platform/wisp/common/uuidv7.js';
 import { IsSessionsWindowContext } from '../../../../workbench/common/contextkeys.js';
 import { ISessionsService } from '../../../services/sessions/browser/sessionsService.js';
 import { ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
 import { IWispAgentsService } from '../../providers/wisp/browser/wispAgentsService.js';
-import { WISP_RETRY_AGENT_COMMAND } from '../../providers/wisp/browser/wispAgentTranscript.js';
+import { WISP_RETRY_AGENT_COMMAND, WISP_SEND_AGAIN_COMMAND } from '../../providers/wisp/browser/wispAgentTranscript.js';
 import { agentChatResource } from '../../providers/wisp/common/wispAgentRuns.js';
 import { projectIdOf, projectResource } from '../../providers/wisp/common/wispProjects.js';
 import { cliLabel } from './wispAccounts.js';
@@ -170,5 +171,35 @@ registerAction2(class RetryAgentAction extends Action2 {
 			noticeBaseDirty(notificationService, projectTitle(sessionsManagementService, run.project) ?? run.project);
 		}
 		await openAgentTab(sessionsService, sessionsManagementService, run);
+	}
+});
+
+registerAction2(class SendAgainAction extends Action2 {
+	constructor() {
+		super({
+			id: WISP_SEND_AGAIN_COMMAND,
+			title: localize2('wispSendAgain.title', "Send Again"),
+			category,
+			f1: false,
+		});
+	}
+
+	/** `turnId` is the message that never arrived. Its text is the one this window sent. */
+	async run(accessor: ServicesAccessor, runId?: unknown, turnId?: unknown): Promise<void> {
+		const agentsService = accessor.get(IWispAgentsService);
+		const notificationService = accessor.get(INotificationService);
+		if (typeof runId !== 'string' || typeof turnId !== 'string') {
+			return;
+		}
+		const text = agentsService.sentText(turnId);
+		if (!text) {
+			notificationService.info(localize('wispSendAgain.missing', "That message isn't available to send again."));
+			return;
+		}
+		try {
+			await agentsService.send(runId, generateUuidV7(), text);
+		} catch (error) {
+			notificationService.error(localize('wispSendAgain.failed', "The message didn't reach the agent: {0}", toErrorMessage(error)));
+		}
 	}
 });

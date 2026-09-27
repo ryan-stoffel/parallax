@@ -13,7 +13,8 @@ import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IContextViewDelegate, IContextViewService } from '../../../../../platform/contextview/browser/contextView.js';
-import type { AgentEventsParams, AgentRun, AgentSendParams, AgentStartParams, LoggedEvent, WispEvent } from '../../../../../platform/wisp/common/wispProtocol.js';
+import { MenuId, MenuRegistry } from '../../../../../platform/actions/common/actions.js';
+import type { AgentDiffFile, AgentEventsParams, AgentRun, AgentSendParams, AgentStartParams, LoggedEvent, WispEvent } from '../../../../../platform/wisp/common/wispProtocol.js';
 import type { IChatPillSection } from '../../../../../workbench/browser/chatPills.js';
 import { IChatProgress } from '../../../../../workbench/contrib/chat/common/chatService/chatService.js';
 import { IChatSessionServerRequest, IChatSessionsService } from '../../../../../workbench/contrib/chat/common/chatSessionsService.js';
@@ -24,7 +25,8 @@ import { IActiveSession } from '../../../../services/sessions/common/sessionsMan
 import { SessionBackgroundActivitiesControl } from '../../../chat/browser/sessionBackgroundActivitiesControl.js';
 import { WispAgentChat } from '../../../providers/wisp/browser/wispAgentChat.js';
 import { WispAgentChatSession, WispAgentChatSessions } from '../../../providers/wisp/browser/wispAgentChatSessions.js';
-import { WispAgentTranscript } from '../../../providers/wisp/browser/wispAgentTranscript.js';
+import { formatTurnDuration, IWispListedDiff, WispAgentTranscript } from '../../../providers/wisp/browser/wispAgentTranscript.js';
+import { WISP_OPEN_AGENT_IN_IDE, WISP_REVIEW_AGENT_CHANGES } from '../../../../../workbench/contrib/wisp/browser/wispAgentReview.js';
 import { WispProjectSession } from '../../../providers/wisp/browser/wispProjectSession.js';
 import { agentChatResource, agentRunOf, agentState, agentTitle, applyRunState } from '../../../providers/wisp/common/wispAgentRuns.js';
 import { projectResource } from '../../../providers/wisp/common/wispProjects.js';
@@ -36,6 +38,15 @@ const PROJECT = '0192f0c4-0000-7000-8000-000000000001';
 const RUN = '0192f0c4-0000-7000-8000-0000000000aa';
 const TURN = '0192f0c4-0000-7000-8000-0000000000bb';
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const BRANCH = 'wisp/fix-flaky-attach-test';
+
+function notesFile(): AgentDiffFile {
+	return { path: 'FAKE_AGENT_NOTES.md', status: 'added', insertions: 1, deletions: 0, binary: false, diffTruncated: false };
+}
+
+function listedDiff(): IWispListedDiff {
+	return { base: 'ba5e', head: 'abc', files: [notesFile()] };
+}
 
 function run(options: Partial<AgentRun> = {}): AgentRun {
 	return {
@@ -124,6 +135,8 @@ suite('wisp: agents', () => {
 				case 'agent/send':
 				case 'agent/cancel':
 					return { run: run({ id: (params as AgentSendParams).runId, updatedAt: '2026-09-25T10:05:00Z' }) };
+				case 'agent/diff':
+					return { base: 'ba5e', head: 'abc', files: [notesFile()], stats: { files: 1, insertions: 1, deletions: 0 }, truncated: false };
 			}
 			throw new Error(`unexpected ${method}`);
 		};
@@ -311,24 +324,43 @@ suite('wisp: agents', () => {
 
 	suite('transcript', () => {
 
-		function transcript(sentText: (turnId: string) => string | undefined = () => undefined, canReview = true): WispAgentTranscript {
-			return new WispAgentTranscript(run(), { sentText, canReview: () => canReview });
+		function transcript(sentText: (turnId: string) => string | undefined = () => undefined, files: () => IWispListedDiff | undefined = listedDiff): WispAgentTranscript {
+			return new WispAgentTranscript(run({ branch: BRANCH }), {
+				sentText,
+				branch: () => BRANCH,
+				files,
+			});
+		}
+
+		/** The text a reader sees. appendText stores spaces as `&nbsp;` and escapes `+`. */
+		function visibleMarkdown(value: string): string {
+			return value.replace(/&nbsp;/g, ' ').replace(/\\([\\`*_{}[\]()#+\-.!|>])/g, '$1');
 		}
 
 		function describe(parts: readonly IChatProgress[]): string[] {
 			return parts.map(part => {
 				switch (part.kind) {
-					case 'markdownContent': return `text: ${part.content.value}`;
+					case 'markdownContent': return `text: ${visibleMarkdown(part.content.value)}`;
+					case 'progressMessage': return `progress: ${renderAsPlaintext(part.content)}`;
 					case 'toolInvocationSerialized': return `tool: ${typeof part.pastTenseMessage === 'string' ? part.pastTenseMessage : part.pastTenseMessage?.value}`;
 					case 'info': return `info: ${renderAsPlaintext(part.content)}`;
 					case 'warning': return `warning: ${renderAsPlaintext(part.content)}`;
 					case 'command': return `buttons: ${[part.command, ...part.additionalCommands ?? []].map(command => command.title).join(', ')}`;
+					case 'multiDiffData': {
+						const data = part.multiDiffData;
+						const resources = 'resources' in data ? data.resources : [];
+						return `files: ${resources.map(resource => (resource.modifiedUri ?? resource.originalUri)?.path).join(', ')}`;
+					}
 					default: return part.kind;
 				}
 			});
 		}
 
-		test('the task\'s turn shows tool calls and text, and closes with a card once the commit is reported', () => {
+		function assertNoCards(parts: readonly IChatProgress[]): void {
+			assert.deepStrictEqual(parts.filter(part => part.kind === 'info' || part.kind === 'warning'), []);
+		}
+
+		test('the task\'s turn shows tool calls and text, and closes with a summary once the commit is reported', () => {
 			const built = transcript();
 			const events = firstTurn();
 			for (const event of events.slice(0, 3)) {
@@ -340,21 +372,80 @@ suite('wisp: agents', () => {
 			assert.deepStrictEqual(describe(built.current.parts), ['tool: Write FAKE_AGENT_NOTES.md', 'text: Fake agent wrote FAKE_AGENT_NOTES.md.']);
 
 			const changes = [...built.accept(events[3]), ...built.accept(events[4])];
-			assert.deepStrictEqual(describe(built.current.parts).slice(2), ['info: Finished. 1 file changed, +1 -0.', 'buttons: Review changes']);
+			assert.deepStrictEqual(describe(built.current.parts).slice(2), [
+				`text: $(check) Done in 3s · 1 file changed +1 -0 · committed to ${BRANCH}`,
+				'files: /head/FAKE_AGENT_NOTES.md',
+			]);
+			assertNoCards(built.current.parts);
 			assert.deepStrictEqual(changes.map(change => change.kind), ['parts', 'turnCompleted']);
 			assert.strictEqual(built.current.complete, true);
 			assert.strictEqual(built.current.completedAt, Date.parse('2026-09-25T10:00:03Z'), 'it finished when wispd said the turn did');
 			assert.deepStrictEqual(built.accept(events[4]), [], 'an event applies once');
 		});
 
-		test('without #157\'s command the card offers no review, and a failure offers Retry', () => {
-			const built = transcript(undefined, false);
+		test('a turn that changed nothing is only the done line', () => {
+			const built = transcript();
+			built.accept(firstTurn()[0]);
+			built.accept(logged(12, { kind: 'agent.finished', runId: RUN, outcome: { status: 'completed' } }, '2026-09-25T10:00:40Z'));
+			built.accept(logged(13, { kind: 'agent.updated', runId: RUN, state: { status: 'completed', accountId: 'claude', updatedAt: '2026-09-25T10:00:40Z' } }, '2026-09-25T10:00:40Z'));
+			assert.deepStrictEqual(describe(built.current.parts), ['text: $(check) Done in 40s. No files changed.']);
+			assert.strictEqual(formatTurnDuration(3 * 60_000 + 4_000), '3m 04s');
+			assert.strictEqual(formatTurnDuration(3_600_000 + 5 * 60_000), '1h 05m');
+			assertNoCards(built.current.parts);
+		});
+
+		test('a failure is a quiet line with Retry, and waits to list files when there are changes', () => {
+			const built = transcript(() => undefined, () => undefined);
 			for (const event of firstTurn().slice(0, 2)) {
 				built.accept(event);
 			}
 			built.accept(logged(12, { kind: 'agent.finished', runId: RUN, outcome: { status: 'failed', failure: 'commitFailed', message: 'no git identity' } }));
 			built.accept(logged(13, { kind: 'agent.updated', runId: RUN, state: { status: 'failed', accountId: 'claude', error: 'no git identity', updatedAt: '2026-09-25T10:00:04Z' } }));
-			assert.deepStrictEqual(describe(built.current.parts).slice(2), ['warning: Failed: no git identity', 'buttons: Retry']);
+			assert.deepStrictEqual(describe(built.current.parts).slice(2), ['text: Failed: no git identity', 'buttons: Retry']);
+			assertNoCards(built.current.parts);
+
+			const withDiff = transcript(() => undefined, () => undefined);
+			for (const event of firstTurn()) {
+				withDiff.accept(event.event.kind === 'agent.finished'
+					? logged(event.seq, { kind: 'agent.finished', runId: RUN, outcome: { status: 'failed', failure: 'commitFailed', message: 'no git identity' } }, event.time)
+					: event);
+			}
+			assert.strictEqual(withDiff.current.complete, false, 'the line waits for agent/diff');
+			const closed = withDiff.acceptListed('abc', listedDiff());
+			assert.deepStrictEqual(describe(withDiff.current.parts).slice(2), [
+				'text: Failed: no git identity',
+				'files: /head/FAKE_AGENT_NOTES.md',
+				'buttons: Retry',
+			]);
+			assert.deepStrictEqual(closed.map(change => change.kind), ['parts', 'turnCompleted']);
+		});
+
+		test('stopped keeps Review on the file list and offers Retry; interrupted has no button', () => {
+			const stopped = transcript();
+			for (const event of firstTurn().slice(0, 4)) {
+				stopped.accept(event.event.kind === 'agent.finished'
+					? logged(event.seq, { kind: 'agent.finished', runId: RUN, outcome: { status: 'cancelled' } }, event.time)
+					: event);
+			}
+			stopped.accept(logged(14, { kind: 'agent.updated', runId: RUN, state: { status: 'cancelled', accountId: 'claude', diff: { commit: 'abc', files: 1, insertions: 1, deletions: 0 }, updatedAt: '2026-09-25T10:00:04Z' } }, '2026-09-25T10:00:04Z'));
+			assert.deepStrictEqual(describe(stopped.current.parts).slice(2), [
+				'text: $(primitive-square) Stopped · 1 file changed +1 -0',
+				'files: /head/FAKE_AGENT_NOTES.md',
+				'buttons: Retry',
+			]);
+
+			const idle = transcript();
+			idle.accept(firstTurn()[0]);
+			idle.accept(logged(12, { kind: 'agent.finished', runId: RUN, outcome: { status: 'cancelled' } }));
+			idle.accept(logged(13, { kind: 'agent.updated', runId: RUN, state: { status: 'cancelled', accountId: 'claude', updatedAt: '2026-09-25T10:00:04Z' } }));
+			assert.deepStrictEqual(describe(idle.current.parts), ['text: $(primitive-square) Stopped. No files changed.', 'buttons: Retry']);
+
+			const interrupted = transcript();
+			interrupted.accept(firstTurn()[0]);
+			interrupted.accept(logged(12, { kind: 'agent.finished', runId: RUN, outcome: { status: 'interrupted' } }));
+			interrupted.accept(logged(13, { kind: 'agent.updated', runId: RUN, state: { status: 'interrupted', accountId: 'claude', updatedAt: '2026-09-25T10:00:04Z' } }));
+			assert.deepStrictEqual(describe(interrupted.current.parts), ['text: wispd restarted before the agent finished. Send a message to pick up where it left off.']);
+			assertNoCards(interrupted.current.parts);
 		});
 
 		test('a message starts a turn with the text this window sent, or a placeholder', () => {
@@ -366,7 +457,11 @@ suite('wisp: agents', () => {
 				[`task-${RUN}`, undefined, run().prompt, true],
 				[TURN, TURN, 'also add tests', true],
 			]);
-			assert.deepStrictEqual(describe(built.turns[1].parts), ['text: Fake agent heard: also add tests', 'info: Finished. 1 file changed, +1 -0.', 'buttons: Review changes'], 'the diff is the run\'s, against its worktree\'s base');
+			assert.deepStrictEqual(describe(built.turns[1].parts), [
+				'text: Fake agent heard: also add tests',
+				`text: $(check) Done in 2s · 1 file changed +1 -0 · committed to ${BRANCH}`,
+				'files: /head/FAKE_AGENT_NOTES.md',
+			], 'the diff is the run\'s, against its worktree\'s base');
 
 			const other = transcript();
 			for (const event of [...firstTurn(), ...followUp('0192f0c4-0000-7000-8000-0000000000cc')]) {
@@ -375,22 +470,61 @@ suite('wisp: agents', () => {
 			assert.strictEqual(other.turns[1].prompt, 'A message sent to this agent');
 		});
 
-		test('a dropped message is reported, and a run that stops without finishing closes', () => {
+		test('a dropped message is a quiet line with Send again, and a run that stops without finishing closes', () => {
 			const built = transcript();
 			built.accept(firstTurn()[0]);
 			const dropped = built.accept(logged(11, { kind: 'agent.output', runId: RUN, items: [{ kind: 'followUpDropped', turnId: TURN }] }));
 			assert.deepStrictEqual(dropped.map(change => change.kind === 'dropped' ? `dropped ${change.turnId}` : change.kind), ['parts', `dropped ${TURN}`]);
+			assert.deepStrictEqual(describe(built.current.parts), [
+				'text: Your message didn\'t reach the agent before it stopped',
+				'buttons: Send again',
+			]);
 			built.accept(logged(12, { kind: 'agent.output', runId: RUN, items: [{ kind: 'toolCall', callId: 'c', name: 'Bash', input: { command: 'npm test' } }] }));
 			const closed = built.completeAll(undefined);
 			assert.deepStrictEqual(closed.map(change => change.kind), ['parts', 'turnCompleted']);
 			assert.deepStrictEqual(describe(built.current.parts).at(-1), 'tool: Bash npm test', 'a call with no result shows when its turn ends');
+		});
+
+		test('a notice is a progress line and a warning is logged, never an info or warning card', () => {
+			const loggedMessages: string[] = [];
+			const built = new WispAgentTranscript(run({ branch: BRANCH }), {
+				sentText: () => undefined,
+				branch: () => BRANCH,
+				files: listedDiff,
+				log: message => loggedMessages.push(message),
+			});
+			built.accept(logged(11, {
+				kind: 'agent.output', runId: RUN, items: [
+					{ kind: 'notice', detail: 'Compacting the conversation' },
+					{ kind: 'warning', detail: 'skipped a frame' },
+				],
+			}));
+			assert.deepStrictEqual(describe(built.current.parts), ['progress: Compacting the conversation']);
+			assert.deepStrictEqual(loggedMessages, ['Skipped a warning from the agent: skipped a frame']);
+			assertNoCards(built.current.parts);
+		});
+
+		test('Review changes is the first file-list action and Open in IDE follows it', () => {
+			const items = MenuRegistry.getMenuItems(MenuId.ChatMultiDiffContext).filter(item => 'command' in item && (item.command.id === WISP_REVIEW_AGENT_CHANGES || item.command.id === WISP_OPEN_AGENT_IN_IDE));
+			assert.deepStrictEqual(items.map(item => {
+				if (!('command' in item)) {
+					return [];
+				}
+				const title = item.command.title;
+				return [item.command.id, typeof title === 'string' ? title : title.value, item.group, item.order];
+			}), [
+				[WISP_REVIEW_AGENT_CHANGES, 'Review changes', 'navigation', 1],
+				[WISP_OPEN_AGENT_IN_IDE, 'Open in IDE', 'navigation', 2],
+			]);
+			assert.strictEqual(items[0]?.when?.serialize(), "wisp.agentReview && chatSessionType == 'wisp.agent'");
+			assert.strictEqual(items[1]?.when?.serialize(), "chatSessionType == 'wisp.agent'");
 		});
 	});
 
 	suite('chat session', () => {
 
 		function chatSession(events: LoggedEvent[], current: AgentRun, cancels: string[] = []): WispAgentChatSession {
-			const built = new WispAgentTranscript(current, { sentText: () => 'also add tests', canReview: () => true });
+			const built = new WispAgentTranscript(current, { sentText: () => 'also add tests', branch: () => current.branch, files: listedDiff });
 			for (const event of events) {
 				built.accept(event);
 			}
@@ -427,7 +561,7 @@ suite('wisp: agents', () => {
 			await expected.done;
 			expected.dispose();
 			assert.strictEqual(started.length, 0, 'the sent message\'s turn goes to its own request');
-			assert.deepStrictEqual(sent.flat().map(part => part.kind), ['markdownContent', 'info', 'command']);
+			assert.deepStrictEqual(sent.flat().map(part => part.kind), ['markdownContent', 'markdownContent', 'multiDiffData']);
 
 			for (const event of followUp('0192f0c4-0000-7000-8000-0000000000cc').map(event => ({ ...event, seq: event.seq + 10 }))) {
 				session.accept(event);
@@ -460,8 +594,8 @@ suite('wisp: agents', () => {
 				context.emit(event);
 			}
 			assert.deepStrictEqual(await result, {});
-			assert.deepStrictEqual(progress.map(part => part.kind), ['markdownContent', 'info']);
-			assert.strictEqual(progress.some(part => part.kind === 'command'), false, 'without #157, the card offers no review');
+			assert.deepStrictEqual(progress.map(part => part.kind), ['markdownContent', 'markdownContent', 'multiDiffData']);
+			assert.strictEqual(progress.some(part => part.kind === 'command'), false, 'Review changes is a menu on the file list, not a transcript button');
 		});
 	});
 

@@ -1,6 +1,6 @@
 import { cp } from 'node:fs/promises';
 import { join } from 'node:path';
-import { agentReply, agentTab, agentTask, chatShows, fakeClaudeEnv, openAgentsPanel, sendMessage, startSubagent } from './agents.ts';
+import { agentReply, agentTab, agentTask, chatShows, chatShowsCount, fakeClaudeEnv, openAgentsPanel, sendMessage, startSubagent } from './agents.ts';
 import { addSharedContextFile } from './context.ts';
 import { screenshot, visible, type Scenario } from './harness.ts';
 import { connectedToThisMac, createProject, hostChip, hostChipIn, projectName, projectRow, projectTab } from './projects.ts';
@@ -161,6 +161,7 @@ export const scenarios: readonly Scenario[] = [
       await agentTab(context.window, agentTask).click();
       await sendMessage(context.window, 'also handle credit notes');
       await chatShows(context.window, 'Fake agent heard: also handle credit notes');
+      await chatShowsCount(context.window, 'Done in', 2);
       return screenshot(context.window);
     },
   },
@@ -183,6 +184,7 @@ export const scenarios: readonly Scenario[] = [
       await sendFirstMessage(context.window);
       await repoThreadRow(context.window).waitFor({ state: 'visible', timeout: 30_000 });
       await chatShows(context.window, agentReply);
+      await chatShows(context.window, 'Done in');
       await context.window.locator('.session-header-bar button.chat-composite-bar-session-workspace', { hasText: projectName }).waitFor({ state: 'visible', timeout: 30_000 });
       await context.window.locator('.session-header-bar .chat-composite-bar-session-state').waitFor({ state: 'visible', timeout: 30_000 });
       return screenshot(context.window);

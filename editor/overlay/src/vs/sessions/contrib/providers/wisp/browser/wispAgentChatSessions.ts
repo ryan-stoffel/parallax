@@ -10,10 +10,10 @@ import { Disposable, IDisposable } from '../../../../../base/common/lifecycle.js
 import { autorun, constObservable, derived, IObservable, observableValue, transaction } from '../../../../../base/common/observable.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
-import { CommandsRegistry } from '../../../../../platform/commands/common/commands.js';
 import { ExtensionIdentifier } from '../../../../../platform/extensions/common/extensions.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { generateUuidV7 } from '../../../../../platform/wisp/common/uuidv7.js';
+import { IWispdService } from '../../../../../platform/wisp/common/wispd.js';
 import type { AgentRun, LoggedEvent, RunId, TurnId } from '../../../../../platform/wisp/common/wispProtocol.js';
 import { IChatProgress } from '../../../../../workbench/contrib/chat/common/chatService/chatService.js';
 import { IChatSession, IChatSessionContentProvider, IChatSessionHistoryItem, IChatSessionServerRequest, IChatSessionsExtensionPoint, IChatSessionsService } from '../../../../../workbench/contrib/chat/common/chatSessionsService.js';
@@ -21,7 +21,7 @@ import { ChatAgentLocation, ChatModeKind } from '../../../../../workbench/contri
 import { IChatAgentData, IChatAgentRequest, IChatAgentResult, IChatAgentService } from '../../../../../workbench/contrib/chat/common/participants/chatAgents.js';
 import { agentRunOf, agentTitle, isRunActive, WISP_AGENT_CHAT_TYPE } from '../common/wispAgentRuns.js';
 import { IWispAgentsService } from './wispAgentsService.js';
-import { droppedWarning, IWispTranscriptTurn, WISP_REVIEW_AGENT_CHANGES_COMMAND, WispAgentTranscript, WispTranscriptChange } from './wispAgentTranscript.js';
+import { droppedEnding, IWispListedDiff, IWispTranscriptTurn, WispAgentTranscript, WispTranscriptChange } from './wispAgentTranscript.js';
 
 export const WISP_AGENT_NAME = 'wisp-agent';
 
@@ -59,12 +59,15 @@ export class WispAgentChatSession extends Disposable implements IChatSession {
 	/** The turn `progressObs` streams, if any. */
 	private streaming: IWispTranscriptTurn | undefined;
 	private readonly expected = new Map<TurnId, IExpectedTurn>();
+	/** The commit whose file list is already being loaded, so a second nudge does not fetch twice. */
+	private fetching: string | undefined;
 
 	constructor(
 		readonly sessionResource: URI,
 		private readonly transcript: WispAgentTranscript,
 		run: IObservable<AgentRun | undefined>,
 		private readonly cancel: () => Promise<unknown>,
+		private readonly loadDiff?: (commit: string) => Promise<IWispListedDiff>,
 	) {
 		super();
 		this.title = transcript.turns[0].prompt ? agentTitle(transcript.turns[0].prompt) : '';
@@ -124,12 +127,18 @@ export class WispAgentChatSession extends Disposable implements IChatSession {
 	}
 
 	private apply(changes: readonly WispTranscriptChange[]): void {
+		let needsFiles = false;
 		for (const change of changes) {
+			if (change.kind === 'needsFiles') {
+				needsFiles = true;
+				continue;
+			}
 			if (change.kind === 'dropped') {
 				const dropped = this.expected.get(change.turnId);
-				if (dropped && !dropped.started) {
+				const runId = agentRunOf(this.sessionResource)?.runId;
+				if (dropped && !dropped.started && runId) {
 					this.expected.delete(change.turnId);
-					dropped.progress([droppedWarning()]);
+					dropped.progress(droppedEnding(runId, change.turnId));
 					dropped.done();
 				}
 				continue;
@@ -162,6 +171,24 @@ export class WispAgentChatSession extends Disposable implements IChatSession {
 					break;
 			}
 		}
+		if (needsFiles) {
+			this.fetchFiles();
+		}
+	}
+
+	/** Loads `agent/diff` for the commit the closing line is waiting on, then closes that turn. */
+	private fetchFiles(): void {
+		const commit = this.transcript.filesCommit();
+		if (!commit || !this.loadDiff || this.fetching === commit) {
+			return;
+		}
+		this.fetching = commit;
+		this.loadDiff(commit).then(listed => {
+			if (this.fetching !== commit) {
+				return;
+			}
+			this.apply(this.transcript.acceptListed(commit, listed));
+		});
 	}
 
 	private startServerRequest(turn: IWispTranscriptTurn): void {
@@ -214,6 +241,7 @@ export class WispAgentChatSessions extends Disposable implements IChatSessionCon
 		@IChatAgentService chatAgentService: IChatAgentService,
 		@IWispAgentsService private readonly agentsService: IWispAgentsService,
 		@ILogService private readonly logService: ILogService,
+		@IWispdService private readonly wispdService: IWispdService,
 	) {
 		super();
 		this._register(chatSessionsService.registerChatSessionContribution(contribution()));
@@ -241,19 +269,25 @@ export class WispAgentChatSessions extends Disposable implements IChatSessionCon
 			this.logService.error(`[wisp] couldn't load the transcript of run ${runId}`, error);
 		}
 		const run = this.agentsService.getRun(runId);
+		const fetchDiff = (commit: string) => this.loadDiff(runId, commit);
 		const transcript = new WispAgentTranscript(
 			run ?? { id: runId, prompt: '', createdAt: new Date().toISOString() },
 			{
 				sentText: turnId => this.agentsService.sentText(turnId),
-				canReview: () => !!CommandsRegistry.getCommand(WISP_REVIEW_AGENT_CHANGES_COMMAND),
+				branch: () => this.agentsService.getRun(runId)?.branch ?? run?.branch,
+				log: message => this.logService.warn(`[wisp] ${message}`),
 			},
 		);
 		for (const event of events) {
 			transcript.accept(event);
 		}
+		const waiting = transcript.filesCommit();
+		if (waiting) {
+			transcript.acceptListed(waiting, await fetchDiff(waiting), Date.parse(run?.updatedAt ?? '') || undefined);
+		}
 		const runs = run ? this.agentsService.runs(run.project) : undefined;
 		const current = runs ? derived(reader => runs.read(reader).find(candidate => candidate.id === runId)) : constObservable<AgentRun | undefined>(undefined);
-		const session = new WispAgentChatSession(sessionResource, transcript, current, () => this.agentsService.cancel(runId));
+		const session = new WispAgentChatSession(sessionResource, transcript, current, () => this.agentsService.cancel(runId), fetchDiff);
 		let set = this.sessions.get(runId);
 		if (!set) {
 			set = new Set();
@@ -268,6 +302,17 @@ export class WispAgentChatSessions extends Disposable implements IChatSessionCon
 			}
 		});
 		return session;
+	}
+
+	/** The files of a run's commit. An empty list still lets the closing line finish when the call fails. */
+	private async loadDiff(runId: RunId, commit: string): Promise<IWispListedDiff> {
+		try {
+			const diff = await this.wispdService.request('agent/diff', { runId });
+			return { base: diff.base, head: diff.head, files: diff.files };
+		} catch (error) {
+			this.logService.warn(`[wisp] couldn't list the changes of run ${runId}`, error);
+			return { base: '', head: commit, files: [] };
+		}
 	}
 
 	private async invoke(request: IChatAgentRequest, progress: (parts: IChatProgress[]) => void, token: CancellationToken): Promise<IChatAgentResult> {
