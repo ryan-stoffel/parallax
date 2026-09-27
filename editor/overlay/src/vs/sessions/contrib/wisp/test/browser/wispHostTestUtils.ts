@@ -13,7 +13,7 @@ export function project(id: string, name = id, options: Partial<Project> = {}): 
 export const LOCAL_COMMAND = '/Applications/Wisp.app/Contents/Resources/app/bin/wispd attach';
 export const SSH_COMMAND = 'ssh -T -o BatchMode=yes -- mac-mini wispd attach';
 
-export function connected(command = LOCAL_COMMAND): WispdState {
+export function connected(command = LOCAL_COMMAND): Extract<WispdState, { kind: 'connected' }> {
 	return { kind: 'connected', command, wispd: '0.1.0', protocol: 1, logId: 'log-1', capabilities: {}, maxFrameBytes: 8 * 1024 * 1024 };
 }
 
