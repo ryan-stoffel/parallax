@@ -1,0 +1,18 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+Date: Sun, 27 Sep 2026 06:41:29 +0000
+Subject: [PATCH] test: match the SessionsWorkbench constructor
+
+
+diff --git a/src/vs/sessions/test/web.test.ts b/src/vs/sessions/test/web.test.ts
+index 62c6b48b379b690bce8a63ab087c2fcd4860e240..ef30661806ad38c0a3f7a0a83025ed6a7d34617a 100644
+--- a/src/vs/sessions/test/web.test.ts
++++ b/src/vs/sessions/test/web.test.ts
+@@ -605,6 +605,6 @@ export class TestSessionsBrowserMain extends SessionsBrowserMain {
+ 
+ 		this.preseedFolder(serviceCollection.get(IStorageService) as IStorageService);
+ 
+-		return new SessionsWorkbench(domElement, undefined, serviceCollection, logService);
++		return new SessionsWorkbench(domElement, serviceCollection, logService);
+ 	}
+ }
