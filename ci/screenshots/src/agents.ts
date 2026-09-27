@@ -54,6 +54,19 @@ export async function chatShows(window: Page, text: string, timeout = 60_000): P
   await window.locator('.interactive-session .interactive-item-container').filter({ hasText: text }).first().waitFor({ state: 'visible', timeout });
 }
 
+/** Waits until the visible chat shows `text` at least `count` times, so a later turn's ending is on screen. */
+export async function chatShowsCount(window: Page, text: string, count: number, timeout = 60_000): Promise<void> {
+  await window.waitForFunction(
+    ({ needle, needed }) => {
+      const roots = document.querySelectorAll('.interactive-session');
+      // Quiet lines store spaces as nbsp, so textContent has U+00A0 where the line reads "Done in".
+      return [...roots].some(root => root.textContent.replace(/\u00a0/g, ' ').split(needle).length - 1 >= needed);
+    },
+    { needle: text, needed: count },
+    { timeout },
+  );
+}
+
 /** The Agents pill above the coordinator's composer. */
 export function agentsPill(window: Page) {
   return window.locator('.chat-pill-button[aria-label^="Agents,"]').first();
