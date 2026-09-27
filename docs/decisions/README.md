@@ -22,7 +22,8 @@ A decision that affects more than one issue gets a record here. Records supersed
 | [0016](0016-event-log-retention.md) | The stored event log prunes host and project events by count; a run's events stay until its run row does, which nothing removes yet (#207); the in-memory replay window is also bounded by bytes |
 | [0018](0018-pr-visuals-on-request.md) | `screenshots.yml` runs only for PRs with the `screenshots` label and captures only the scenes the body's `wisp-media` block names (`after`, `before-after`, `video`), into a section of the PR body instead of a comment; supersedes the every-PR rule |
 | [0019](0019-coordinator-mcp-tools.md) | The coordinator's wisp tools are `wispd mcp`, an MCP server on stdio bound to one project and one coordinator thread by arguments wispd sets; its runs carry `coordinatorThread`; Claude's coordinator allowlist is its read tools plus exactly the eight `mcp__wispd__*` tools |
-| [0020](0020-drop-the-editor-fork.md) | The editor fork, its UI tests, the screenshot and release workflows, and the TypeScript generator are gone; wisp is `wispd` only until a new frontend is decided |
+| [0020](0020-drop-the-editor-fork.md) | The editor fork, its UI tests, the screenshot and release workflows, and the TypeScript generator are gone; wisp is `wispd` only until a new frontend is decided; [0022](0022-desktop-app.md) supersedes its no-UI part |
+| [0022](0022-desktop-app.md) | The desktop app is Electron, React, and TypeScript in `apps/desktop/`, built with Vite+ and pnpm and laid out like T3 Code; its main process runs `wispd attach` locally or over `ssh` and speaks 0007's JSON-RPC, the sandboxed renderer uses a typed preload bridge, and protocol types are generated into `apps/desktop/src/protocol/generated/` |
 
 Numbers are assigned in order. Take the next free number when you start the record, add a row to this table in the same PR, and link the record from its issue.
 
