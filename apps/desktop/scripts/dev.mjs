@@ -20,8 +20,8 @@ rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist");
 
 // Run Vite+'s CLI with this Node, not the `vp` shim, so Windows needs no shell.
-// `vp` runs the watcher as its own child without forwarding signals, so stop()
-// kills the whole tree: a process group on POSIX, taskkill /T on Windows.
+// `vp` runs the watcher as its own child without forwarding signals, so the exit
+// handler kills the whole tree: a process group on POSIX, taskkill /T on Windows.
 const windows = process.platform === "win32";
 const vp = fileURLToPath(import.meta.resolve("vite-plus/bin"));
 const pack = spawn(process.execPath, [vp, "pack", "--watch"], {
