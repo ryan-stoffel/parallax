@@ -62,9 +62,8 @@ pub mod worktree;
 /// wispd's release version, reported by `wispd --version`, the protocol handshake
 /// (`initialize` and `host/version`), and the `LaunchAgent`'s probe.
 ///
-/// `scripts/editor/build-app` sets `WISP_VERSION` to the release version before it builds wispd
-/// for the app bundle (0006, #44); everywhere else, including a plain `cargo build`, this falls
-/// back to the crate's own placeholder in `Cargo.toml`.
+/// A build can set `WISP_VERSION` at compile time; without it, this falls back to the crate's own
+/// placeholder in `Cargo.toml`.
 pub const VERSION: &str = match option_env!("WISP_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),

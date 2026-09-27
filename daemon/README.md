@@ -2,7 +2,7 @@
 
 wisp's host daemon. Each macOS user runs their own, and it keeps projects, and later agents, running while the editor is closed. The editor reaches it through `wispd attach`, either on the same Mac or on a host over SSH.
 
-The `wisp` cask installs `wispd` at `Wisp.app/Contents/Resources/app/bin/wispd`, next to the `wisp` launcher, and links it into Homebrew's `bin` folder too (#62), so `wispd` on its own is a released build, and `wispd --version` prints the release's version. `scripts/editor/build-app` builds it with `cargo build --release -p wispd` for the app's architecture and copies it in before the bundle is signed; for a release, it also sets `WISP_VERSION`, which `daemon/src/lib.rs` reads with `option_env!` at compile time (0006). A plain `cargo build -p wispd` outside that script has no `WISP_VERSION`, so `wispd --version` prints `Cargo.toml`'s own placeholder instead.
+Build it with `cargo build --release -p wispd`. `WISP_VERSION`, if set at compile time, is what `wispd --version` prints (`daemon/src/lib.rs` reads it with `option_env!`); otherwise it prints `Cargo.toml`'s placeholder.
 
 The decisions behind it:
 
@@ -53,7 +53,7 @@ ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <host> wispd
 
 It uses your own ssh config, keys, and agent (0007). For that command to work, the host needs:
 
-1. **wisp installed**, with `brew install --cask ryan-stoffel/taps/wisp`. The cask links `wispd` into Homebrew's `bin` folder (#62): `/opt/homebrew/bin` on Apple silicon, `/usr/local/bin` on Intel.
+1. **`wispd` installed**, built as above and copied into a folder such as Homebrew's `bin`: `/opt/homebrew/bin` on Apple silicon, `/usr/local/bin` on Intel.
 2. **`wispd` on the `PATH` of a non-interactive SSH command.** sshd runs `wispd attach` through your login shell as `zsh -c`, which reads `~/.zshenv` but not `~/.zprofile` or `~/.zshrc`. The `PATH` it starts with is `/usr/bin:/bin:/usr/sbin:/sbin`, so Homebrew's `bin` folder is missing. Fix it on the host in one of these ways. The examples use Apple silicon's `/opt/homebrew/bin`; on an Intel host, use `/usr/local/bin` instead.
    - Add Homebrew to `PATH` in `~/.zshenv`, the file zsh reads for every command:
 
