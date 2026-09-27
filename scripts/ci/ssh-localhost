@@ -67,6 +67,8 @@ sshd_config="$state_dir/sshd_config"
 cat > "$sshd_config" <<CONFIG
 Port $port
 ListenAddress 127.0.0.1
+# Linux resolves localhost to ::1 first, and ssh-keyscan tries only that.
+ListenAddress ::1
 HostKey $host_key
 AuthorizedKeysFile $identity.pub
 PidFile $state_dir/sshd.pid
@@ -97,7 +99,7 @@ for _ in $(seq 1 20); do
   sleep 0.25
 done
 if [ ! -s "$known_hosts" ]; then
-  skip "ssh-keyscan got no host key from localhost:$port"
+  skip "ssh-keyscan got no host key from localhost:$port; sshd said: $(tail -n 5 "$state_dir/sshd.log" | tr '\n' ' ')"
 fi
 
 mkdir -p "$HOME/.ssh"
