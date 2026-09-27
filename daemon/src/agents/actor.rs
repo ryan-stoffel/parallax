@@ -956,6 +956,7 @@ mod tests {
             branch: "wisp/run".to_owned(),
             base: "0".repeat(40),
             git_dir: String::new(),
+            base_dirty: false,
             created_at: now,
         };
         (row, worktree)

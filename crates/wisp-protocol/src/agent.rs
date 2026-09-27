@@ -116,6 +116,11 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub worktree_path: Option<String>,
+    /// True when the worktree's base was resolved from a dirty `HEAD` (#257): the repository's
+    /// tracked files had uncommitted changes that aren't in this run. Never true for a run whose
+    /// worktree doesn't exist yet, or whose caller passed an explicit base.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_dirty: bool,
     /// The vendor's session id, once the CLI reported it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
