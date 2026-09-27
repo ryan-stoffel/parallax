@@ -15,7 +15,7 @@ use wisp_protocol::{
 };
 use wisp_store::StoreError;
 
-use crate::keystore::{KeyStore, KeyStoreError};
+use crate::keystore::{KeyStore, KeyStoreError, UNAVAILABLE_MESSAGE};
 use crate::methods::Context;
 use crate::store::{self, account_store_error};
 
@@ -179,14 +179,12 @@ fn remove_account(
 }
 
 /// The protocol error for a failed `KeyStore` call: `keychainUnavailable` when the Keychain is
-/// locked or access was denied, so the editor can tell that apart from a bare internal error;
-/// anything else stays a plain internal error, since its detail is not something to show.
+/// locked, access was denied, or this OS has no store yet, so the editor can tell that apart from
+/// a bare internal error; anything else stays a plain internal error, since its detail is not
+/// something to show.
 fn map_keychain_error(error: &KeyStoreError) -> ErrorObject {
     if error.is_unavailable() {
-        ErrorObject::wisp(
-            ErrorKind::KeychainUnavailable,
-            "the keychain is locked or access was denied",
-        )
+        ErrorObject::wisp(ErrorKind::KeychainUnavailable, UNAVAILABLE_MESSAGE)
     } else {
         ErrorObject::internal_error("the keychain failed")
     }

@@ -16,6 +16,7 @@ use wispd::launch_agent::LaunchAgent;
 use wispd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
 use wispd::paths::{DATA_DIR_ENV, DataDir};
 use wispd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartError};
+#[cfg(target_os = "macos")]
 use wispd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
 
 #[derive(Debug, Parser)]
@@ -33,6 +34,7 @@ enum Command {
     /// Connect stdin and stdout to wispd's socket, starting wispd if it isn't running.
     Attach(AttachArgs),
     /// Manage wispd's per-user `LaunchAgent`.
+    #[cfg(target_os = "macos")]
     Service(ServiceArgs),
     /// Serve a coordinator's wisp tools over MCP on stdin and stdout. wispd starts it.
     #[command(hide = true)]
@@ -41,7 +43,8 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct McpArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp]
+    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
+    /// on Linux]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -56,7 +59,8 @@ struct McpArgs {
 
 #[derive(Debug, Args)]
 struct ServeArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp]
+    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
+    /// on Linux]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -67,7 +71,8 @@ struct ServeArgs {
 
 #[derive(Debug, Args)]
 struct AttachArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp]
+    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
+    /// on Linux]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -90,12 +95,14 @@ fn parse_seconds(text: &str) -> Result<Duration, String> {
         })
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Args)]
 struct ServiceArgs {
     #[command(subcommand)]
     command: ServiceCommand,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
     /// Install or update the `LaunchAgent`, then start or restart it.
@@ -106,9 +113,11 @@ enum ServiceCommand {
     Status(ServiceOptions),
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Args)]
 struct ServiceOptions {
-    /// The data folder [default: ~/Library/Application Support/wisp]
+    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
+    /// on Linux]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -122,6 +131,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Serve(args) => serve(&args),
         Command::Attach(args) => attach(&args),
+        #[cfg(target_os = "macos")]
         Command::Service(args) => service_command(args.command),
         Command::Mcp(args) => mcp(&args),
     }
@@ -291,6 +301,7 @@ fn serve(args: &ServeArgs) -> ExitCode {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn service_command(command: ServiceCommand) -> ExitCode {
     match command {
         ServiceCommand::Install(options) => service_install(&options),
@@ -299,6 +310,7 @@ fn service_command(command: ServiceCommand) -> ExitCode {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn service_install(options: &ServiceOptions) -> ExitCode {
     let data_dir = match resolve_data_dir(options) {
         Ok(data_dir) => data_dir,
@@ -317,6 +329,7 @@ fn service_install(options: &ServiceOptions) -> ExitCode {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn service_uninstall(options: &ServiceOptions) -> ExitCode {
     match service::uninstall(&options.label) {
         Ok(service::UninstallOutcome::Removed) => {
@@ -331,6 +344,7 @@ fn service_uninstall(options: &ServiceOptions) -> ExitCode {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn service_status(options: &ServiceOptions) -> ExitCode {
     let data_dir = match resolve_data_dir(options) {
         Ok(data_dir) => data_dir,
@@ -357,6 +371,7 @@ fn service_status(options: &ServiceOptions) -> ExitCode {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn resolve_data_dir(options: &ServiceOptions) -> Result<DataDir, ExitCode> {
     DataDir::resolve(options.data_dir.as_deref())
         .map_err(|error| fail(&format!("could not find the data folder: {error}")))
@@ -389,7 +404,7 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{AttachArgs, Cli, Command, ServiceCommand, VERSION};
+    use super::{AttachArgs, Cli, Command, VERSION};
 
     #[test]
     fn the_command_line_definition_is_valid() {
@@ -460,6 +475,7 @@ mod tests {
         assert!(attach_args(&["extra"]).is_err());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn service_install_takes_a_data_folder_and_a_label() {
         let cli = Cli::try_parse_from([
@@ -475,7 +491,7 @@ mod tests {
         let Command::Service(service) = cli.command else {
             panic!("expected service, got {:?}", cli.command);
         };
-        let ServiceCommand::Install(options) = service.command else {
+        let super::ServiceCommand::Install(options) = service.command else {
             panic!("expected install, got {:?}", service.command);
         };
         assert_eq!(
@@ -485,13 +501,14 @@ mod tests {
         assert_eq!(options.label, "io.example.test");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn service_status_defaults_to_the_wisp_label_with_no_data_dir_override() {
         let cli = Cli::try_parse_from(["wispd", "service", "status"]).unwrap();
         let Command::Service(service) = cli.command else {
             panic!("expected service, got {:?}", cli.command);
         };
-        let ServiceCommand::Status(options) = service.command else {
+        let super::ServiceCommand::Status(options) = service.command else {
             panic!("expected status, got {:?}", service.command);
         };
         assert_eq!(options.label, super::DEFAULT_LABEL);
@@ -530,15 +547,20 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn service_uninstall_parses_with_no_options() {
         let cli = Cli::try_parse_from(["wispd", "service", "uninstall"]).unwrap();
         let Command::Service(service) = cli.command else {
             panic!("expected service, got {:?}", cli.command);
         };
-        assert!(matches!(service.command, ServiceCommand::Uninstall(_)));
+        assert!(matches!(
+            service.command,
+            super::ServiceCommand::Uninstall(_)
+        ));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn service_without_a_subcommand_is_a_usage_error() {
         assert!(Cli::try_parse_from(["wispd", "service"]).is_err());

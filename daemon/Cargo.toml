@@ -18,7 +18,6 @@ jiff = { workspace = true, features = ["serde", "tz-system", "tzdb-zoneinfo"] }
 nix = { workspace = true, features = ["process", "signal"] }
 notify.workspace = true
 rustix = { workspace = true, features = ["fs", "process"] }
-security-framework.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
@@ -32,6 +31,12 @@ uuid.workspace = true
 wisp-protocol = { path = "../crates/wisp-protocol" }
 wisp-store = { path = "../crates/wisp-store" }
 zeroize.workspace = true
+
+# The Keychain (0004) and FSEvents (0005) are macOS's. On Linux, notify's default backend is inotify
+# (0023).
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { workspace = true, features = ["macos_fsevent"] }
+security-framework.workspace = true
 
 [dev-dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

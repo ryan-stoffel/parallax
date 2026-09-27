@@ -1,8 +1,9 @@
-//! Starting the launch agent that [`crate::service`] installs (#61), as `attach` does when it
-//! finds wispd not running (0010).
+//! Starting the launch agent that `wispd service` installs on macOS (#61), as `attach` does when
+//! it finds wispd not running (0010).
 //!
-//! The label and plist path are [`service`]'s. The agent under [`DEFAULT_LABEL`] serves the
-//! default data folder, which `wispd service install` enforces.
+//! The label and plist path are `crate::service`'s. The agent under its `DEFAULT_LABEL` serves
+//! the default data folder, which `wispd service install` enforces. Linux has no service yet
+//! (systemd is RYA-18), so there `attach` always starts `serve` itself.
 
 use std::io::{self, Read as _};
 use std::path::PathBuf;
@@ -11,13 +12,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::paths::DataDir;
+#[cfg(target_os = "macos")]
 use crate::service::{self, DEFAULT_LABEL, LAUNCHCTL};
 
 const POLL: Duration = Duration::from_millis(10);
 
-/// The service target of the agent under [`DEFAULT_LABEL`] for the user `uid`:
+/// The service target of the agent under `DEFAULT_LABEL` for the user `uid`:
 /// `gui/<uid>/<label>`. launchd loads it into the user's GUI domain, where the Keychain is
 /// reachable (0004).
+#[cfg(target_os = "macos")]
 #[must_use]
 pub fn service_target(uid: u32) -> String {
     format!("gui/{uid}/{DEFAULT_LABEL}")
@@ -37,6 +40,7 @@ impl LaunchAgent {
     ///
     /// The agent serves the default data folder, so a `--data-dir` or `WISPD_DATA_DIR` that
     /// names another folder never starts it. It counts as installed when its plist exists.
+    #[cfg(target_os = "macos")]
     #[must_use]
     pub fn installed_for(data_dir: &DataDir) -> Option<Self> {
         if DataDir::default_location().ok()? != *data_dir {
@@ -49,6 +53,13 @@ impl LaunchAgent {
                 launchctl: PathBuf::from(LAUNCHCTL),
                 service: service_target(rustix::process::getuid().as_raw()),
             })
+    }
+
+    /// Never one: only macOS has a launch agent.
+    #[cfg(not(target_os = "macos"))]
+    #[must_use]
+    pub fn installed_for(_data_dir: &DataDir) -> Option<Self> {
+        None
     }
 
     /// Starts the service unless it is running, with `launchctl kickstart`, waiting for
@@ -108,13 +119,14 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
-    use super::{LaunchAgent, service_target};
+    use super::LaunchAgent;
     use crate::paths::DataDir;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_service_target_is_the_default_label_in_the_gui_domain() {
         assert_eq!(
-            service_target(501),
+            super::service_target(501),
             "gui/501/io.github.ryan-stoffel.wisp.wispd"
         );
     }

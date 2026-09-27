@@ -92,10 +92,8 @@ mod tests {
 
     #[test]
     fn a_locked_keychain_is_keychain_unavailable() {
-        // security_framework_sys::base::errSecInteractionNotAllowed: nothing can unlock the
-        // Keychain to answer, such as a headless session (0004, 0007, #91).
-        const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
-
+        // Nothing can unlock the Keychain to answer, such as a headless session (0004, 0007,
+        // #91).
         struct LockedStore;
         impl KeyStore for LockedStore {
             fn set(&self, _account: AccountId, _key: &str) -> Result<(), KeyStoreError> {
@@ -106,9 +104,7 @@ mod tests {
                 &self,
                 _account: AccountId,
             ) -> Result<Option<zeroize::Zeroizing<String>>, KeyStoreError> {
-                Err(KeyStoreError::from(security_framework::base::Error::from(
-                    ERR_SEC_INTERACTION_NOT_ALLOWED,
-                )))
+                Err(KeyStoreError::unavailable("locked"))
             }
 
             fn delete(&self, _account: AccountId) -> Result<(), KeyStoreError> {

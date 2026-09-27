@@ -28,6 +28,9 @@
 //!   a Claude Code older than [`WORKER_MIN_VERSION`], fails with
 //!   [`FailureKind::PolicyViolation`].
 //!
+//!   Only macOS runs workers. Linux's sandbox needs checks wispd doesn't make yet (0023,
+//!   RYA-20), so there the backend reports no `worker_sandbox` and refuses a workspace-write run.
+//!
 //! # Messages go on stdin
 //!
 //! With `--input-format stream-json`, the prompt and every follow-up are user messages on stdin,
@@ -417,13 +420,19 @@ impl Backend for ClaudeBackend {
             coordinator: true,
             reports_cost: true,
             rate_limits: true,
-            worker_sandbox: true,
+            worker_sandbox: cfg!(target_os = "macos"),
         }
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         if request.prompt.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
+        }
+        if request.policy != ToolPolicy::NoWrite && !self.capabilities().worker_sandbox {
+            return Err(StartError::Unsupported(
+                "wispd can't check Claude Code's worker sandbox on this OS yet (decision 0023)"
+                    .into(),
+            ));
         }
         let mut spec = ProcessSpec::new(self.program.clone(), &request.cwd);
         spec.args = arguments(&request)?;

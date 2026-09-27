@@ -1,8 +1,8 @@
 //! The wisp host daemon, `wispd`.
 //!
-//! `wispd serve` listens on a per-user Unix socket and speaks the protocol from the
-//! `wisp-protocol` crate (decision record 0007). The editor reaches it through `wispd attach`,
-//! locally or over SSH.
+//! `wispd serve` listens on a per-user Unix socket, on macOS or Linux (0023), and speaks the
+//! protocol from the `wisp-protocol` crate (decision record 0007). The editor reaches it through
+//! `wispd attach`, locally or over SSH.
 //!
 //! The library holds what the subcommands share:
 //!
@@ -21,9 +21,10 @@
 //! - [`mcp`]: `wispd mcp`, the coordinator's wisp tools as an MCP server on stdio, bound to one
 //!   project and one coordinator thread (#195, 0019).
 //! - [`launch_agent`]: the launch agent that `attach` starts wispd through, when it is installed.
-//! - [`service`]: installs, removes, and reports on the per-user `LaunchAgent` that keeps
-//!   `serve` running (#61).
-//! - [`keystore`]: where API keys live, the macOS login Keychain (#117).
+//!   Only macOS has one; elsewhere `attach` starts `serve` itself (0023).
+//! - `service`: installs, removes, and reports on the per-user `LaunchAgent` that keeps `serve`
+//!   running (#61). macOS only.
+//! - [`keystore`]: where API keys live: the macOS login Keychain (#117), and no store yet on Linux.
 //! - [`usage`]: turns backend usage events into `wisp-store` rows (#120).
 //! - `routing`: picks a task's backend and account, forces the coordinator's no-write policy,
 //!   falls a failed subscription run back to a key account, and checks a coordinator's turn
@@ -52,6 +53,7 @@ pub mod paths;
 mod repo;
 pub mod routing;
 pub mod server;
+#[cfg(target_os = "macos")]
 pub mod service;
 mod spawn;
 mod store;

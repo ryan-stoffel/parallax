@@ -16,7 +16,7 @@ clap = "4.6.7"
 futures-util = { version = "0.3.34", default-features = false }
 jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 nix = { version = "0.31.3", default-features = false }
-notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
+notify = { version = "8.2.0", default-features = false }
 rustix = "1.1.5"
 security-framework = "3.7.0"
 serde = "1.0.229"
