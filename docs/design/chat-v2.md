@@ -301,7 +301,24 @@ All in M3 (#23). Each is one PR.
 
 | Issue | Task | Role | Depends on |
 | --- | --- | --- | --- |
-| TBD | | | |
+| #291 | wispd reports each CLI's models, effort levels, and readiness | Software engineer | None |
+| #292 | wispd takes model, effort, permission, and base branch on `thread/start` | Software engineer | #291, #257 |
+| #293 | wispd names worktree branches after the task | Software engineer | None |
+| #294 | Wisp Dark and Wisp Light themes | Design engineer | None |
+| #295 | Tool calls collapse into plain-language steps | Design engineer | #258 |
+| #296 | Each turn ends with a changes summary and Review changes | Design engineer | None |
+| #297 | Agent failures in plain language with an action | Design engineer | #296 |
+| #298 | Empty thread heading and roomy composer (patch) | Design engineer | #294 |
+| #299 | Agent and model picker in the composer; folds in #259 | Design engineer | #291, #292, #259 |
+| #300 | Effort and permission controls | Design engineer | #299 |
+| #301 | Workspace and branch bar under the composer | Design engineer | #292, #257 |
+| #302 | Header breadcrumb and actions (patch) | Design engineer | None |
+| #303 | Sidebar search row, status marks, empty state | Design engineer | #294 |
+| #304 | First-run setup | Design engineer | #291, #294 |
+| #305 | Settings: General | Design engineer | #292 |
+| #306 | Settings: Providers | Design engineer | #291, #305 |
+
+The ones with no dependencies (#291, #293, #294, #296, #302) can start in parallel. Every editor task updates its screenshot scenario, so a PR shows its own screen. Current checkout mode has no task until Ryan answers the first open question.
 
 ## Revising the mockups
 
