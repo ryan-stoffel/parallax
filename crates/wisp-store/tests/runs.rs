@@ -15,6 +15,7 @@ fn fields(project_id: Uuid) -> RunFields {
         requested_account: Some(r#"{"kind":"subscription","backend":"claude"}"#.to_owned()),
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
+        coordinator_thread: None,
     }
 }
 
@@ -35,6 +36,21 @@ fn event(seq: u64, run_id: Option<Uuid>) -> StoredEvent {
         kind: "agent.output".to_owned(),
         payload: format!(r#"{{"kind":"agent.output","n":{seq}}}"#),
     }
+}
+
+#[test]
+fn a_run_keeps_the_coordinator_thread_that_started_it() {
+    let (_dir, store) = open();
+    let (project, id, thread) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let tagged = RunFields {
+        coordinator_thread: Some(thread),
+        ..fields(project)
+    };
+    store.create_run(id, &tagged, &starting()).unwrap();
+    let read = store.get_run(id).unwrap().unwrap();
+    assert_eq!(read.fields.coordinator_thread, Some(thread));
+    let listed = store.list_runs(Some(project)).unwrap();
+    assert_eq!(listed[0].fields, tagged);
 }
 
 #[test]
@@ -87,6 +103,7 @@ fn accepting_a_run_records_the_merge_and_drops_its_worktree_together() {
         branch: "wisp/abcd1234".to_owned(),
         base: "abc".to_owned(),
         git_dir: "/src/app/.git/worktrees/run".to_owned(),
+        base_dirty: false,
     };
     store
         .create_run_with_worktree(id, &fields(project), &starting(), &worktree)
@@ -241,6 +258,7 @@ fn worktree_fields() -> WorktreeFields {
         branch: "wisp/abcd1234".to_owned(),
         base: "abc".to_owned(),
         git_dir: "/src/app/.git/worktrees/run".to_owned(),
+        base_dirty: false,
     }
 }
 
@@ -312,20 +330,22 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
                     branch: "wisp/abcd1234".to_owned(),
                     base: "abc".to_owned(),
                     git_dir: "/src/app/.git/worktrees/run".to_owned(),
+                    base_dirty: false,
                 },
             )
             .unwrap();
     }
-    // Roll the database back to what #119 left on develop: schema 6, no runs, events, git_dir
-    // column, turns table (#190's migration 10; dropping `runs` already undoes #157's migration 8
-    // columns on it, since they're columns of the table this drops wholesale), or the normal
-    // threads tables (#110's migration 9).
+    // Roll the database back to what #119 left on develop: schema 6, no runs, events, git_dir or
+    // base_dirty columns, turns table (#190's migration 10; dropping `runs` already undoes #157's
+    // migration 8 columns on it, since they're columns of the table this drops wholesale), or the
+    // normal threads tables (#110's migration 9).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
              DROP TABLE threads; DROP TABLE repos;
              ALTER TABLE worktrees DROP COLUMN git_dir;
+             ALTER TABLE worktrees DROP COLUMN base_dirty;
              DELETE FROM schema_version WHERE version >= 7;",
         )
         .unwrap();
@@ -333,6 +353,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     let store = Store::open(&path).unwrap();
     let worktree = store.get_worktree(id).unwrap().unwrap();
     assert_eq!(worktree.git_dir, "", "an older row has no pinned git dir");
+    assert!(!worktree.base_dirty, "an older row is never flagged dirty");
     let run = store
         .create_run(Uuid::now_v7(), &fields(Uuid::now_v7()), &starting())
         .unwrap();

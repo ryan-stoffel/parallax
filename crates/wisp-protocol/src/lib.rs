@@ -1,7 +1,6 @@
 //! The protocol between the editor and `wispd`, from decision record 0007.
 //!
-//! This crate is the single source of truth for it. The editor's TypeScript types are generated
-//! from the types here (see [`typescript`]).
+//! This crate is the single source of truth for it.
 //!
 //! - [`framing`]: newline-delimited JSON, one compact message per line, at most
 //!   [`framing::MAX_FRAME_BYTES`] per line.
@@ -45,7 +44,6 @@ pub mod methods;
 mod project;
 mod review;
 mod thread;
-pub mod typescript;
 mod usage;
 
 #[cfg(test)]
@@ -60,7 +58,7 @@ pub use agent::{
     AgentCancelParams, AgentEventsParams, AgentEventsResult, AgentFailureKind, AgentListParams,
     AgentListResult, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRun, AgentRunResult,
     AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus,
-    AgentToolStatus, DiffSummary, LoggedEvent, RunId, TurnId,
+    AgentToolStatus, CoordinatorThreadId, DiffSummary, LoggedEvent, RunId, TurnId,
 };
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,

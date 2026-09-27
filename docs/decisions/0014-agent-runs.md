@@ -24,7 +24,7 @@ M3's done-when is one subagent that completes a task in a worktree and writes to
 - `agent/start` is idempotent on `runId` (0007). A retry with the same project, prompt, policy, and account returns the run; different params fail with `idConflict`. `account` absent means the worker role's default (0012).
 - `agent/send` is idempotent on `turnId` while wispd runs. It goes to a running CLI as its next turn. Once the run's CLI has ended, it resumes the vendor session in the same worktree with the message as the prompt (0011: Ryan messages a subagent directly).
 - Events, all project-scoped and all carrying `runId`: `agent.started {run?}` (wispd always sends `run`; it is optional only because a v1 sample predicted `agent.started {runId}`), `agent.updated {state}` with only the fields that change during a run (status, account, session, error, diff, `updatedAt`; never the prompt), `agent.output {items}` coalesced per run every 50 ms, `agent.accountFallback`, `agent.finished {outcome}` once per CLI process, and `agent.diffReady {diff}` after each commit.
-- Errors: `runNotFound`, `runNotResumable`, `workerUnavailable` (a backend without 0013, a missing or too old CLI with both versions named, a sandbox path holding `*?[]`), and `worktreeFailed` (for example a dirty repository).
+- Errors: `runNotFound`, `runNotResumable`, `workerUnavailable` (a backend without 0013, a missing or too old CLI with both versions named, a sandbox path holding `*?[]`), and `worktreeFailed` (for example a path that isn't a repository, or a git failure; #257 stopped counting the repository's own uncommitted changes as one).
 
 ### A run's life
 

@@ -168,6 +168,7 @@ fn request(cwd: &Path) -> RunRequest {
         },
         resume: None,
         model: None,
+        coordinator_tools: None,
     }
 }
 
@@ -1355,6 +1356,43 @@ fn a_no_write_run_allows_only_the_read_tools() {
     assert_eq!(
         violation_kind(&translator.line(no_tools)),
         Some(FailureKind::PolicyViolation)
+    );
+}
+
+/// #195: with wispd's tools attached, a coordinator's init may list exactly those eight MCP
+/// tools beyond its read tools; another server's tool, or a name outside the eight, still stops
+/// it, and without the tools attached even wispd's own names do.
+#[test]
+fn a_coordinator_run_allows_the_read_tools_and_exactly_wispds_mcp_tools() {
+    let wispd = crate::mcp::ALLOWED_TOOLS
+        .iter()
+        .map(|tool| format!("{tool:?}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let allowed = init_line(&format!(
+        r#"["Read","Glob","Grep","EndConversation",{wispd}]"#
+    ));
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
+    assert_eq!(violation_kind(&translator.line(&allowed)), None);
+    for extra in [
+        r#"["Read","mcp__github__create_issue"]"#,
+        r#"["Read","mcp__wispd__plan_approve"]"#,
+        r#"["Read","mcp__wispd__spawn_agent","Bash"]"#,
+        r#"["Read","Edit"]"#,
+    ] {
+        let mut translator =
+            Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
+        assert_eq!(
+            violation_kind(&translator.line(&init_line(extra))),
+            Some(FailureKind::PolicyViolation),
+            "{extra}"
+        );
+    }
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    assert_eq!(
+        violation_kind(&translator.line(&allowed)),
+        Some(FailureKind::PolicyViolation),
+        "wispd's tools count only when they were attached"
     );
 }
 

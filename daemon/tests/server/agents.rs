@@ -22,9 +22,9 @@ use wisp_protocol::{
     AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFailureKind,
     AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentListParams, AgentMerge,
     AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRequestChangesParams,
-    AgentRun, AgentSendParams, AgentStartParams, AgentStatus, DiffSummary, ErrorKind,
-    EventsEventParams, EventsSubscribeParams, HostHealthParams, InitializeResult, Project,
-    ProjectCreateParams, ProjectId, Provider, RunId, TurnId, UsageGetParams, WispEvent,
+    AgentRun, AgentSendParams, AgentStartParams, AgentStatus, CoordinatorThreadId, DiffSummary,
+    ErrorKind, EventsEventParams, EventsSubscribeParams, HostHealthParams, InitializeResult,
+    Project, ProjectCreateParams, ProjectId, Provider, RunId, TurnId, UsageGetParams, WispEvent,
 };
 use wispd::backend::fake::{FakeBackend, Script, Step};
 use wispd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -48,7 +48,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 /// A repository under `dir` with one commit and its own identity, as a user's checkout would be.
-fn real_repo(dir: &Path) -> PathBuf {
+pub(crate) fn real_repo(dir: &Path) -> PathBuf {
     let repo = dir.join("repos").join("app");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "--initial-branch=main"]);
@@ -60,7 +60,7 @@ fn real_repo(dir: &Path) -> PathBuf {
     repo
 }
 
-fn fake(steps: Vec<Step>) -> BackendRegistry {
+pub(crate) fn fake(steps: Vec<Step>) -> BackendRegistry {
     let scratch = tempfile::tempdir().unwrap();
     let launcher = Launcher::new(
         DataDir::new(scratch.path()).unwrap(),
@@ -82,21 +82,21 @@ fn fake(steps: Vec<Step>) -> BackendRegistry {
     backends
 }
 
-fn init(session_id: &str) -> Step {
+pub(crate) fn init(session_id: &str) -> Step {
     Step::Init {
         session_id: session_id.to_owned(),
         model: None,
     }
 }
 
-fn text(text: &str) -> Step {
+pub(crate) fn text(text: &str) -> Step {
     Step::Emit(Event::Text {
         message_id: None,
         text: text.to_owned(),
     })
 }
 
-fn end_turn(result: &str) -> Step {
+pub(crate) fn end_turn(result: &str) -> Step {
     Step::EndTurn {
         result: Some(result.to_owned()),
     }
@@ -107,7 +107,7 @@ fn hang() -> Vec<Step> {
     vec![init("hang-1"), text("Working"), Step::Hang]
 }
 
-fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams {
+pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams {
     AgentStartParams {
         run_id: RunId::generate(),
         project,
@@ -116,6 +116,7 @@ fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams {
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
         }),
+        coordinator_thread: None,
     }
 }
 
@@ -128,13 +129,13 @@ fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSendParams {
 }
 
 /// An in-process wispd and its data folder.
-struct Host {
-    dir: TempDir,
-    server: InProcess,
+pub(crate) struct Host {
+    pub(crate) dir: TempDir,
+    pub(crate) server: InProcess,
 }
 
 impl Host {
-    fn start(dir: TempDir, backends: BackendRegistry) -> Self {
+    pub(crate) fn start(dir: TempDir, backends: BackendRegistry) -> Self {
         let mut config = InProcess::config(dir.path());
         config.backends = Some(backends);
         let server = InProcess::start(config);
@@ -147,13 +148,13 @@ impl Host {
         Self::start(dir, backends)
     }
 
-    async fn client(&self) -> Conn {
+    pub(crate) async fn client(&self) -> Conn {
         Conn::ready(&self.server.socket).await
     }
 }
 
 /// Params for a project on a new real repository under `dir`.
-fn project_params(dir: &Path) -> ProjectCreateParams {
+pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
     ProjectCreateParams {
         id: ProjectId::generate(),
         name: "app".to_owned(),
@@ -161,7 +162,7 @@ fn project_params(dir: &Path) -> ProjectCreateParams {
     }
 }
 
-async fn create(client: &mut Conn, params: ProjectCreateParams) -> Project {
+pub(crate) async fn create(client: &mut Conn, params: ProjectCreateParams) -> Project {
     client.call::<ProjectCreate>(params).await.unwrap().project
 }
 
@@ -177,7 +178,7 @@ async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
 
 /// A client on which events can arrive between a request and its response. They wait in
 /// `pending` for [`until`], so none is lost.
-struct Conn {
+pub(crate) struct Conn {
     client: Client,
     pending: VecDeque<EventsEventParams>,
 }
@@ -208,7 +209,7 @@ impl Conn {
         self.client.initialize().await.expect("initialize")
     }
 
-    async fn call<M: RequestMethod>(
+    pub(crate) async fn call<M: RequestMethod>(
         &mut self,
         params: M::Params,
     ) -> Result<M::Result, ErrorObject> {
@@ -702,6 +703,14 @@ async fn agent_start_is_idempotent_on_its_run_id() {
         .await
         .unwrap_err();
     assert_eq!(kind(&conflict), ErrorKind::IdConflict);
+    let tagged = client
+        .call::<AgentStart>(AgentStartParams {
+            coordinator_thread: Some(CoordinatorThreadId::generate()),
+            ..params.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&tagged), ErrorKind::IdConflict);
     assert_eq!(list(&mut client).await.len(), 1);
     assert_eq!(
         worktree_count(host.dir.path()),
@@ -1030,22 +1039,52 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
         unsandboxed.message
     );
 
-    std::fs::write(Path::new(&project.repo_path).join("README.md"), "dirty\n").unwrap();
-    let mut fake_config = InProcess::config(dir.path());
-    fake_config.backends = Some(fake(vec![init("s"), end_turn("ok")]));
     server.stop().await;
-    let server = InProcess::start(fake_config);
-    let mut client = Conn::ready(&server.socket).await;
-    let dirty = client
+}
+
+/// #257: neither an untracked file nor an uncommitted tracked change blocks `agent/start`. Both
+/// start the worktree from `HEAD`; only the tracked change is flagged so the editor can tell the
+/// user those edits aren't in the run.
+#[tokio::test]
+async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
+    let dir = temp_dir();
+    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+
+    // Untracked only: #257's original report (an untracked AGENTS.md blocked New Chat).
+    std::fs::write(Path::new(&project.repo_path).join("AGENTS.md"), "notes\n").unwrap();
+    let untracked = client
         .call::<AgentStart>(start_params(project.id, "Fix it"))
         .await
-        .unwrap_err();
-    assert_eq!(kind(&dirty), ErrorKind::WorktreeFailed);
-    assert!(dirty.message.contains("uncommitted"), "{}", dirty.message);
+        .unwrap()
+        .run;
+    assert!(!untracked.base_dirty, "an untracked file needs no notice");
+    assert!(untracked.branch.is_some(), "a worktree was made");
 
-    assert!(list(&mut client).await.is_empty(), "nothing was recorded");
-    assert_eq!(worktree_count(dir.path()), 0, "and no worktree was made");
-    server.stop().await;
+    // A tracked, uncommitted change: still starts the worktree from HEAD, but is flagged.
+    std::fs::write(Path::new(&project.repo_path).join("README.md"), "dirty\n").unwrap();
+    let dirty = client
+        .call::<AgentStart>(start_params(project.id, "Fix it too"))
+        .await
+        .unwrap()
+        .run;
+    assert!(
+        dirty.base_dirty,
+        "a tracked, uncommitted change is flagged so the editor can tell the user"
+    );
+    assert!(
+        dirty.branch.is_some(),
+        "a worktree was made despite the dirty repo"
+    );
+
+    assert_eq!(list(&mut client).await.len(), 2, "both runs were recorded");
+    assert_eq!(
+        worktree_count(host.dir.path()),
+        2,
+        "and both worktrees were made"
+    );
+    host.server.stop().await;
 }
 
 fn decode_base64(text: &str) -> Vec<u8> {

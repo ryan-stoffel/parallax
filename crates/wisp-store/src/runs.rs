@@ -16,6 +16,8 @@ pub struct RunFields {
     pub requested_account: Option<String>,
     pub policy: String,
     pub backend: String,
+    /// The coordinator thread that started the run (#195), or `None` for a client's own run.
+    pub coordinator_thread: Option<Uuid>,
 }
 
 /// A run's state, which changes as it runs.
@@ -63,7 +65,7 @@ pub struct Run {
 const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backend, account_id, \
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
-                       merge_into, merge_how";
+                       merge_into, merge_how, coordinator_thread";
 
 struct RawRun {
     id: String,
@@ -86,6 +88,7 @@ struct RawRun {
     merge_commit: Option<String>,
     merge_into: Option<String>,
     merge_how: Option<String>,
+    coordinator_thread: Option<String>,
 }
 
 impl RawRun {
@@ -111,6 +114,7 @@ impl RawRun {
             merge_commit: row.get(17)?,
             merge_into: row.get(18)?,
             merge_how: row.get(19)?,
+            coordinator_thread: row.get(20)?,
         })
     }
 
@@ -137,6 +141,11 @@ impl RawRun {
                 requested_account: self.requested_account,
                 policy: self.policy,
                 backend: self.backend,
+                coordinator_thread: self
+                    .coordinator_thread
+                    .as_deref()
+                    .map(Uuid::parse_str)
+                    .transpose()?,
             },
             state: RunState {
                 status: self.status,
@@ -306,8 +315,9 @@ pub(crate) fn insert_run(
     let inserted = conn.execute(
         "INSERT INTO runs (id, project_id, prompt, requested_account, policy, backend,
                            account_id, status, session_id, error, commit_sha,
-                           files_changed, insertions, deletions, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
+                           files_changed, insertions, deletions, created_at, updated_at,
+                           coordinator_thread)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -325,6 +335,7 @@ pub(crate) fn insert_run(
             state.insertions,
             state.deletions,
             now,
+            fields.coordinator_thread.map(|id| id.to_string()),
         ],
     )?;
     if inserted == 0 {

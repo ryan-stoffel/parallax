@@ -23,6 +23,7 @@ fn run_fields(repo: Uuid) -> RunFields {
         requested_account: None,
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
+        coordinator_thread: None,
     }
 }
 
@@ -33,6 +34,7 @@ fn worktree_fields(id: Uuid) -> WorktreeFields {
         branch: format!("wisp/{}", &id.simple().to_string()[..8]),
         base: "b7e1f2a3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9".to_owned(),
         git_dir: format!("/Users/me/src/wisp/.git/worktrees/{id}"),
+        base_dirty: false,
     }
 }
 

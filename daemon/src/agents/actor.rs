@@ -534,6 +534,7 @@ impl Actor {
             },
             resume,
             model: None,
+            coordinator_tools: None,
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
             Ok(started) => {
@@ -938,6 +939,7 @@ mod tests {
                 requested_account: None,
                 policy: "workspaceWrite".to_owned(),
                 backend: "fake".to_owned(),
+                coordinator_thread: None,
             },
             state: RunState {
                 status: "running".to_owned(),
@@ -954,6 +956,7 @@ mod tests {
             branch: "wisp/run".to_owned(),
             base: "0".repeat(40),
             git_dir: String::new(),
+            base_dirty: false,
             created_at: now,
         };
         (row, worktree)
