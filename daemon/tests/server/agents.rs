@@ -1039,22 +1039,52 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
         unsandboxed.message
     );
 
-    std::fs::write(Path::new(&project.repo_path).join("README.md"), "dirty\n").unwrap();
-    let mut fake_config = InProcess::config(dir.path());
-    fake_config.backends = Some(fake(vec![init("s"), end_turn("ok")]));
     server.stop().await;
-    let server = InProcess::start(fake_config);
-    let mut client = Conn::ready(&server.socket).await;
-    let dirty = client
+}
+
+/// #257: neither an untracked file nor an uncommitted tracked change blocks `agent/start`. Both
+/// start the worktree from `HEAD`; only the tracked change is flagged so the editor can tell the
+/// user those edits aren't in the run.
+#[tokio::test]
+async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
+    let dir = temp_dir();
+    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+
+    // Untracked only: #257's original report (an untracked AGENTS.md blocked New Chat).
+    std::fs::write(Path::new(&project.repo_path).join("AGENTS.md"), "notes\n").unwrap();
+    let untracked = client
         .call::<AgentStart>(start_params(project.id, "Fix it"))
         .await
-        .unwrap_err();
-    assert_eq!(kind(&dirty), ErrorKind::WorktreeFailed);
-    assert!(dirty.message.contains("uncommitted"), "{}", dirty.message);
+        .unwrap()
+        .run;
+    assert!(!untracked.base_dirty, "an untracked file needs no notice");
+    assert!(untracked.branch.is_some(), "a worktree was made");
 
-    assert!(list(&mut client).await.is_empty(), "nothing was recorded");
-    assert_eq!(worktree_count(dir.path()), 0, "and no worktree was made");
-    server.stop().await;
+    // A tracked, uncommitted change: still starts the worktree from HEAD, but is flagged.
+    std::fs::write(Path::new(&project.repo_path).join("README.md"), "dirty\n").unwrap();
+    let dirty = client
+        .call::<AgentStart>(start_params(project.id, "Fix it too"))
+        .await
+        .unwrap()
+        .run;
+    assert!(
+        dirty.base_dirty,
+        "a tracked, uncommitted change is flagged so the editor can tell the user"
+    );
+    assert!(
+        dirty.branch.is_some(),
+        "a worktree was made despite the dirty repo"
+    );
+
+    assert_eq!(list(&mut client).await.len(), 2, "both runs were recorded");
+    assert_eq!(
+        worktree_count(host.dir.path()),
+        2,
+        "and both worktrees were made"
+    );
+    host.server.stop().await;
 }
 
 fn decode_base64(text: &str) -> Vec<u8> {

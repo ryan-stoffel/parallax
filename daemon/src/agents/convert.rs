@@ -96,6 +96,7 @@ pub(crate) fn agent_run(
         account_id: state.account_id.clone(),
         branch: worktree.map(|worktree| worktree.branch.clone()),
         worktree_path: worktree.map(|worktree| worktree.path.clone()),
+        base_dirty: worktree.is_some_and(|worktree| worktree.base_dirty),
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),

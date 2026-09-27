@@ -441,6 +441,7 @@ async fn record(
         branch: created.branch.clone(),
         base: created.base.clone(),
         git_dir: created.git_dir.to_string_lossy().into_owned(),
+        base_dirty: created.base_dirty,
     };
     let scope = fields.project_id;
     let recorded = store(daemon, move |db| {
