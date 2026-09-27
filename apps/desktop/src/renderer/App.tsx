@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { ConnectionStatus } from "./ConnectionStatus";
+
 // Placeholder window. RYA-13 builds the real layout.
 export function App() {
   const [version, setVersion] = useState("");
@@ -14,6 +16,7 @@ export function App() {
       <p className="text-sm text-neutral-500">
         {version} on {window.wisp.platform}
       </p>
+      <ConnectionStatus hostId="local" />
     </main>
   );
 }

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import path from "node:path";
 
+import { startHosts } from "./hosts";
 import { isOpenableExternally } from "./links";
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
@@ -38,6 +39,7 @@ app.on("web-contents-created", (_event, contents) => {
 ipcMain.handle("wisp:version", () => app.getVersion());
 
 void app.whenReady().then(() => {
+  startHosts();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
