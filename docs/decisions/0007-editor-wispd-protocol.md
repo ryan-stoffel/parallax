@@ -139,4 +139,4 @@ Later milestones add methods and events behind a capability, with no version bum
 
 - **One client:** #63 and #64 share one client that spawns a process and exchanges lines, and #63 gets auto-start from `attach`.
 - **Additive changes:** the protocol reaches M6 without a version bump only while changes stay additive. The sample-message tests and reviews of `wisp-protocol` enforce that.
-- **Upgrades:** after an upgrade, the old wispd keeps running until it restarts (#71).
+- **Upgrades:** after an upgrade, the old wispd keeps running until it restarts (#71). Since 0020, the next `attach` of the newer version restarts it.

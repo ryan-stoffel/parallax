@@ -31,6 +31,8 @@ When its input ends, `attach` keeps printing until wispd has answered everything
 
 If wispd isn't running, `attach` starts it through the LaunchAgent when one is installed and serves the same data folder. The LaunchAgent under the default label serves only the default data folder, so `wispd service install --data-dir <other>` needs `--label` as well. Otherwise it starts `wispd serve` in the background, in its own session. That `serve` keeps running after `attach` exits or the SSH connection drops, and `attach` never stops it.
 
+If the running wispd is older than `attach` itself, as after an upgrade, `attach` replaces it first: a LaunchAgent's through `launchctl kickstart -k`, any other with SIGTERM, then it starts wispd as above. It never stops a wispd of the same or a newer version ([0020](../docs/decisions/0020-replacing-an-older-wispd.md)).
+
 ### Exit codes
 
 | Code | `serve` | `attach` |

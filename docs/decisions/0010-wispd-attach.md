@@ -1,6 +1,6 @@
 # 0010: How `wispd attach` starts wispd, and its exit codes
 
-- Status: accepted
+- Status: accepted; [0020](0020-replacing-an-older-wispd.md) lets attach replace an older running wispd
 - Date: 2026-09-24
 - Issue: #60
 
@@ -27,7 +27,7 @@ Several other issues build on the details:
   - Any other error fails at once, because starting wispd can't fix it. Examples are `EACCES`, and `ENOTSOCK` for a file that isn't a socket.
 - attach then retries with backoff, starting at 10 ms and doubling up to 500 ms, until `--connect-timeout` passes.
   - The timeout is 10 s by default, which is the editor's liveness window (0007). It can be at most a day.
-- attach never stops or signals a wispd, including one it started.
+- attach never stops or signals a wispd, including one it started, except one older than itself, which it replaces (0020).
 - Once connected, attach waits for the last `serve` it started on a thread of its own. A `serve` that lost the lock to another therefore doesn't stay a zombie for as long as attach runs.
 
 ### Starting wispd
