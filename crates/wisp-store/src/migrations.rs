@@ -222,6 +222,23 @@ const MIGRATIONS: &[Migration] = &[
         version: 11,
         sql: "ALTER TABLE runs ADD COLUMN coordinator_thread TEXT;",
     },
+    // A project's coordinator thread (#196, decision 0020): one row per project, with the vendor
+    // session its turns resume. Its sent turn ids go in `turns`, keyed by the thread's id, and its
+    // events in `events`, with the thread's id in `run_id`.
+    Migration {
+        version: 12,
+        sql: "CREATE TABLE coordinator_threads (
+            id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            backend TEXT,
+            account_id TEXT,
+            session_id TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

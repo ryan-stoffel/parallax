@@ -33,6 +33,7 @@ mod account;
 mod agent;
 mod cli_account;
 mod context;
+mod coordinator;
 mod defaults;
 mod error;
 mod events;
@@ -69,6 +70,10 @@ pub use cli_account::{
 pub use context::{
     ContextFile, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
     ContextWriteId, ContextWriteParams, ContextWriteResult,
+};
+pub use coordinator::{
+    CoordinatorCancelParams, CoordinatorEventsParams, CoordinatorGetParams, CoordinatorSendParams,
+    CoordinatorStatus, CoordinatorThread, CoordinatorThreadResult, CoordinatorThreadState,
 };
 pub use defaults::{
     AccountChoice, AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,

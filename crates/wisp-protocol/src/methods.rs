@@ -34,9 +34,10 @@ use crate::{
     AgentFileParams, AgentFileResult, AgentListParams, AgentListResult, AgentRequestChangesParams,
     AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams, ContextListResult,
     ContextReadParams, ContextReadResult, ContextWriteParams, ContextWriteResult,
-    EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
-    EventsUnsubscribeResult, HostHealthParams, HostHealthResult, HostVersionParams,
-    HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
+    CoordinatorCancelParams, CoordinatorEventsParams, CoordinatorGetParams, CoordinatorSendParams,
+    CoordinatorThreadResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, HostHealthParams, HostHealthResult,
+    HostVersionParams, HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
     ProjectCreateResult, ProjectListParams, ProjectListResult, RepoAddParams, RepoAddResult,
     ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
     ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
@@ -207,6 +208,18 @@ method_table! {
         /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;
+        /// `coordinator/get`: the project's coordinator thread, made on first use (#196). Gated
+        /// on the `coordinator` capability, like every `coordinator/*` method.
+        CoordinatorGet = "coordinator/get": CoordinatorGetParams => CoordinatorThreadResult;
+        /// `coordinator/send`: a message to the project's coordinator, which starts a turn now or
+        /// goes out with the next one. Idempotent on its client-generated turn id.
+        CoordinatorSend = "coordinator/send": CoordinatorSendParams => CoordinatorThreadResult;
+        /// `coordinator/cancel`: stops the coordinator's running turn and holds back automatic
+        /// wake-ups until the next `coordinator/send`.
+        CoordinatorCancel = "coordinator/cancel": CoordinatorCancelParams => CoordinatorThreadResult;
+        /// `coordinator/events`: the project's coordinator events from wispd's log, a page at a
+        /// time.
+        CoordinatorEvents = "coordinator/events": CoordinatorEventsParams => AgentEventsResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -277,6 +290,10 @@ mod tests {
                 "thread/start",
                 "thread/archive",
                 "thread/delete",
+                "coordinator/get",
+                "coordinator/send",
+                "coordinator/cancel",
+                "coordinator/events",
                 "$/cancelRequest",
                 "events/event",
             ]

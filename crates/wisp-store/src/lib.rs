@@ -9,6 +9,7 @@
 //! in this database (#117).
 
 mod accounts;
+mod coordinator;
 mod defaults;
 mod error;
 mod events;
@@ -29,6 +30,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, Error as SqliteError, ErrorCode};
 
 pub use accounts::{Account, AccountFields};
+pub use coordinator::{CoordinatorState, CoordinatorThread};
 pub use defaults::RoleDefault;
 pub use error::StoreError;
 pub use events::StoredEvent;

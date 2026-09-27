@@ -5,7 +5,8 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::{
     AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun, AgentRunState,
-    ContextFile, DiffSummary, Project, ProjectId, Repo, RepoId, RunId, Thread,
+    ContextFile, CoordinatorThread, CoordinatorThreadId, CoordinatorThreadState, DiffSummary,
+    Project, ProjectId, Repo, RepoId, RunId, Thread, TurnId,
 };
 
 uuid_v7_id! {
@@ -190,6 +191,66 @@ pub enum WispEvent {
         run_id: RunId,
         /// Its repo entry.
         repo: RepoId,
+    },
+    /// A project's coordinator thread was made (#196), by its first `coordinator/get` or
+    /// `coordinator/send`. Project-scoped, like every `coordinator.*` event.
+    #[serde(rename = "coordinator.started")]
+    CoordinatorStarted {
+        /// The thread's id.
+        thread_id: CoordinatorThreadId,
+        /// The thread as it was made.
+        thread: CoordinatorThread,
+    },
+    /// Something about the coordinator thread changed: its status, session, account, or error.
+    #[serde(rename = "coordinator.updated")]
+    CoordinatorUpdated {
+        /// The thread's id.
+        thread_id: CoordinatorThreadId,
+        /// The thread's changing fields as they stand now.
+        state: CoordinatorThreadState,
+    },
+    /// A coordinator turn started. `text` is what the coordinator was told, without the planning
+    /// instructions a new session starts with: the user's messages, then a note on each finished
+    /// run that woke it.
+    #[serde(rename = "coordinator.turnStarted")]
+    CoordinatorTurnStarted {
+        /// The thread's id.
+        thread_id: CoordinatorThreadId,
+        /// The `coordinator/send` messages the turn delivers, oldest first.
+        turn_ids: Vec<TurnId>,
+        /// The runs it started whose finish the turn reports, oldest first.
+        run_ids: Vec<RunId>,
+        /// The turn's message.
+        text: String,
+    },
+    /// Part of the coordinator's transcript, coalesced as `agent.output` is.
+    #[serde(rename = "coordinator.output")]
+    CoordinatorOutput {
+        /// The thread's id.
+        thread_id: CoordinatorThreadId,
+        /// What happened, in order.
+        items: Vec<AgentOutputItem>,
+    },
+    /// Routing moved the coordinator's turn to another account, as `agent.accountFallback`.
+    #[serde(rename = "coordinator.accountFallback")]
+    CoordinatorAccountFallback {
+        /// The thread's id.
+        thread_id: CoordinatorThreadId,
+        /// The account it was on.
+        from_account: String,
+        /// The account it is on now.
+        to_account: String,
+        /// Why it moved.
+        reason: AgentFailureKind,
+    },
+    /// A coordinator turn's CLI process ended. A turn that changed the project's working tree
+    /// ends `failed` with `policyViolation`, naming what changed.
+    #[serde(rename = "coordinator.finished")]
+    CoordinatorFinished {
+        /// The thread's id.
+        thread_id: CoordinatorThreadId,
+        /// How it ended.
+        outcome: AgentOutcome,
     },
     /// A kind this version does not know yet.
     #[serde(other)]

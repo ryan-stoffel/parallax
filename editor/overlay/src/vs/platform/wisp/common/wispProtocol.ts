@@ -180,6 +180,26 @@ export type WispRequests = {
 	 * stopping its CLI first if it runs.
 	 */
 	"thread/delete": { params: ThreadDeleteParams, result: ThreadDeleteResult },
+	/**
+	 * `coordinator/get`: the project's coordinator thread, made on first use (#196). Gated
+	 * on the `coordinator` capability, like every `coordinator/*` method.
+	 */
+	"coordinator/get": { params: CoordinatorGetParams, result: CoordinatorThreadResult },
+	/**
+	 * `coordinator/send`: a message to the project's coordinator, which starts a turn now or
+	 * goes out with the next one. Idempotent on its client-generated turn id.
+	 */
+	"coordinator/send": { params: CoordinatorSendParams, result: CoordinatorThreadResult },
+	/**
+	 * `coordinator/cancel`: stops the coordinator's running turn and holds back automatic
+	 * wake-ups until the next `coordinator/send`.
+	 */
+	"coordinator/cancel": { params: CoordinatorCancelParams, result: CoordinatorThreadResult },
+	/**
+	 * `coordinator/events`: the project's coordinator events from wispd's log, a page at a
+	 * time.
+	 */
+	"coordinator/events": { params: CoordinatorEventsParams, result: AgentEventsResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1354,7 +1374,71 @@ export type WispEvent = { "kind": "project.created",
 	/**
 	 * Its repo entry.
 	 */
-	repo: RepoId,
+	repo: RepoId, } | { "kind": "coordinator.started",
+	/**
+	 * The thread's id.
+	 */
+	threadId: CoordinatorThreadId,
+	/**
+	 * The thread as it was made.
+	 */
+	thread: CoordinatorThread, } | { "kind": "coordinator.updated",
+	/**
+	 * The thread's id.
+	 */
+	threadId: CoordinatorThreadId,
+	/**
+	 * The thread's changing fields as they stand now.
+	 */
+	state: CoordinatorThreadState, } | { "kind": "coordinator.turnStarted",
+	/**
+	 * The thread's id.
+	 */
+	threadId: CoordinatorThreadId,
+	/**
+	 * The `coordinator/send` messages the turn delivers, oldest first.
+	 */
+	turnIds: Array<TurnId>,
+	/**
+	 * The runs it started whose finish the turn reports, oldest first.
+	 */
+	runIds: Array<RunId>,
+	/**
+	 * The turn's message.
+	 */
+	text: string, } | { "kind": "coordinator.output",
+	/**
+	 * The thread's id.
+	 */
+	threadId: CoordinatorThreadId,
+	/**
+	 * What happened, in order.
+	 */
+	items: Array<AgentOutputItem>, } | { "kind": "coordinator.accountFallback",
+	/**
+	 * The thread's id.
+	 */
+	threadId: CoordinatorThreadId,
+	/**
+	 * The account it was on.
+	 */
+	fromAccount: string,
+	/**
+	 * The account it is on now.
+	 */
+	toAccount: string,
+	/**
+	 * Why it moved.
+	 */
+	reason: AgentFailureKind, } | { "kind": "coordinator.finished",
+	/**
+	 * The thread's id.
+	 */
+	threadId: CoordinatorThreadId,
+	/**
+	 * How it ended.
+	 */
+	outcome: AgentOutcome,
 };
 
 /**
@@ -1580,6 +1664,85 @@ export type AgentRunState = {
 	 * Its latest commit, once wispd made one.
 	 */
 	diff?: DiffSummary,
+	/**
+	 * When it changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+};
+
+/**
+ * A project's coordinator thread.
+ */
+export type CoordinatorThread = {
+	/**
+	 * The thread's id, which the runs it starts carry as `coordinatorThread`.
+	 */
+	id: CoordinatorThreadId,
+	/**
+	 * Its project.
+	 */
+	project: ProjectId,
+	/**
+	 * Where it is.
+	 */
+	status: CoordinatorStatus,
+	/**
+	 * The backend its session runs on, once a turn started.
+	 */
+	backend?: string,
+	/**
+	 * The account its turns are charged to, once a turn started.
+	 */
+	accountId?: string,
+	/**
+	 * The vendor's session id, once a CLI reported it.
+	 */
+	sessionId?: string,
+	/**
+	 * Why its last turn failed, for people. Absent once a turn runs again.
+	 */
+	error?: string,
+	/**
+	 * When it was created, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+	/**
+	 * When it last changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+};
+
+/**
+ * Where a coordinator thread is.
+ *
+ * A newer wispd may send a status this version does not know; treat it as unknown.
+ */
+export type CoordinatorStatus = "idle" | "running";
+
+/**
+ * The part of a coordinator thread that changes, as `coordinator.updated` reports it.
+ */
+export type CoordinatorThreadState = {
+	/**
+	 * Where it is.
+	 */
+	status: CoordinatorStatus,
+	/**
+	 * The backend its session runs on.
+	 */
+	backend?: string,
+	/**
+	 * The account its turns are charged to.
+	 */
+	accountId?: string,
+	/**
+	 * The vendor's session id.
+	 */
+	sessionId?: string,
+	/**
+	 * Why its last turn failed.
+	 */
+	error?: string,
 	/**
 	 * When it changed, in RFC 3339 UTC.
 	 */
@@ -2010,6 +2173,79 @@ export type ThreadDeleteParams = {
  * Result of `thread/delete`.
  */
 export type ThreadDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `coordinator/get`: the project's coordinator thread, made on first use.
+ */
+export type CoordinatorGetParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Result of `coordinator/get`, `coordinator/send`, and `coordinator/cancel`: the thread as it
+ * stands.
+ */
+export type CoordinatorThreadResult = {
+	/**
+	 * The thread.
+	 */
+	thread: CoordinatorThread,
+};
+
+/**
+ * Params of `coordinator/send`: a message to the project's coordinator.
+ *
+ * It starts a turn at once when none is running; otherwise it waits and goes out with the next
+ * turn, together with anything else that arrived meanwhile. Idempotent on `turnId` while wispd
+ * runs.
+ */
+export type CoordinatorSendParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
+	/**
+	 * The message's id, a version 7 UUID generated by the client.
+	 */
+	turnId: TurnId,
+	/**
+	 * The message.
+	 */
+	text: string,
+};
+
+/**
+ * Params of `coordinator/cancel`: stops the coordinator's running turn, and holds back automatic
+ * wake-ups until the next `coordinator/send`.
+ */
+export type CoordinatorCancelParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Params of `coordinator/events`: the project's coordinator events from wispd's log, a page at a
+ * time. The result is `agent/events`'s.
+ */
+export type CoordinatorEventsParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
+	/**
+	 * Return the events whose `seq` is greater than this; 0 for the first page.
+	 */
+	after: number,
+	/**
+	 * The most events to return: 500 by default, and at most 1000.
+	 */
+	limit?: number,
+};
 
 /**
  * Params of `$/cancelRequest`.

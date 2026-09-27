@@ -1,0 +1,252 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "coordinator/get",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "thread": {
+        "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "status": "idle",
+        "createdAt": "2026-09-26T12:00:00Z",
+        "updatedAt": "2026-09-26T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 1,
+      "time": "2026-09-26T12:00:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "coordinator.started",
+        "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "thread": {
+          "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+          "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+          "status": "idle",
+          "createdAt": "2026-09-26T12:00:00Z",
+          "updatedAt": "2026-09-26T12:00:00Z"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "coordinator/send",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "turnId": "01a0d3b0-1111-7222-8333-444455556666",
+      "text": "Add a README and a CI workflow."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "thread": {
+        "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "createdAt": "2026-09-26T12:00:00Z",
+        "updatedAt": "2026-09-26T12:00:01Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 2,
+      "time": "2026-09-26T12:00:01Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "coordinator.updated",
+        "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "state": {
+          "status": "running",
+          "backend": "claude",
+          "accountId": "claude",
+          "updatedAt": "2026-09-26T12:00:01Z"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 3,
+      "time": "2026-09-26T12:00:01Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "coordinator.turnStarted",
+        "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "turnIds": ["01a0d3b0-1111-7222-8333-444455556666"],
+        "runIds": [],
+        "text": "Add a README and a CI workflow."
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 4,
+      "time": "2026-09-26T12:00:02Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "coordinator.output",
+        "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "items": [
+          {
+            "kind": "sessionStarted",
+            "sessionId": "session-c01"
+          },
+          {
+            "kind": "turnStarted",
+            "turnId": "01a0d3b0-1111-7222-8333-444455556666"
+          },
+          {
+            "kind": "toolCall",
+            "callId": "call_1",
+            "name": "mcp__wispd__spawn_agent",
+            "input": {
+              "prompt": "Add a README that explains how to build the app."
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 5,
+      "time": "2026-09-26T12:00:03Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "coordinator.accountFallback",
+        "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "fromAccount": "claude",
+        "toAccount": "01a0d3c0-aaaa-7bbb-8ccc-dddd00001111",
+        "reason": "rateLimited"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 6,
+      "time": "2026-09-26T12:00:09Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "coordinator.finished",
+        "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "outcome": {
+          "status": "completed",
+          "result": "Started two subagents."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 7,
+      "time": "2026-09-26T12:05:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "coordinator.turnStarted",
+        "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "turnIds": [],
+        "runIds": [
+          "01a0d3a0-4b5c-7d6e-8f70-81a2b3c4d5e6",
+          "01a0d3a1-4b5c-7d6e-8f70-81a2b3c4d5e7"
+        ],
+        "text": "wisp: 2 subagents you started have finished.\n- Run 01a0d3a0-4b5c-7d6e-8f70-81a2b3c4d5e6: completed. Its branch changes 1 files, +12 -0, at commit 3f2a9c1b7e4d. Its task began: Add a README that explains how to build the app.\n- Run 01a0d3a1-4b5c-7d6e-8f70-81a2b3c4d5e7: completed. Its branch changes 1 files, +20 -0, at commit 9b8c7d6e5f4a. Its task began: Add a CI workflow.\nReview their work with agent_status and agent_diff, ask for changes with message_agent, or start more work with spawn_agent. When everything is done, update the plan in shared context and report back to the user."
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "coordinator/cancel",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "thread": {
+        "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "01a0d3c0-aaaa-7bbb-8ccc-dddd00001111",
+        "sessionId": "session-c01",
+        "createdAt": "2026-09-26T12:00:00Z",
+        "updatedAt": "2026-09-26T12:05:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "coordinator/events",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "after": 0,
+      "limit": 1
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "events": [
+        {
+          "seq": 1,
+          "time": "2026-09-26T12:00:00Z",
+          "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+          "event": {
+            "kind": "coordinator.started",
+            "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+            "thread": {
+              "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+              "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+              "status": "idle",
+              "createdAt": "2026-09-26T12:00:00Z",
+              "updatedAt": "2026-09-26T12:00:00Z"
+            }
+          }
+        }
+      ],
+      "more": true
+    }
+  }
+]
