@@ -8,14 +8,15 @@ import { Emitter, Event } from '../../../../../base/common/event.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { autorun, derived, IObservable, ISettableObservable, observableValue } from '../../../../../base/common/observable.js';
 import { isAbsolute } from '../../../../../base/common/path.js';
+import Severity from '../../../../../base/common/severity.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { IQuickInputService, IQuickPickItem, IQuickPickSeparator } from '../../../../../platform/quickinput/common/quickInput.js';
 import { generateUuidV7 } from '../../../../../platform/wisp/common/uuidv7.js';
 import { agentReviewItems } from '../../../../../platform/wisp/common/wispAgentFiles.js';
-import { IWispdService } from '../../../../../platform/wisp/common/wispd.js';
-import type { Repo, RunId, Thread } from '../../../../../platform/wisp/common/wispProtocol.js';
+import { IWispdService, WispdError } from '../../../../../platform/wisp/common/wispd.js';
+import type { AccountChoice, AgentRun, Repo, RepoId, RunId, Thread } from '../../../../../platform/wisp/common/wispProtocol.js';
 import { ISession, ISessionFileChange, ISessionType, ISessionWorkspace, ISessionWorkspaceBrowseAction, SessionRemoteConnectionStatus, SessionTypeAuthRequirement } from '../../../../services/sessions/common/session.js';
 import { ISessionChangeEvent } from '../../../../services/sessions/common/sessionsProvider.js';
 import { pickWorkerAccount } from '../../../wisp/browser/wispStartSubagent.js';
@@ -266,16 +267,57 @@ export class WispThreadSessions extends Disposable {
 			? this.threadsService.repos.get().find(candidate => !candidate.scratch && candidate.path === path) ?? await this.threadsService.addRepo(path)
 			: undefined;
 		this.sending.set(draft.runId, draft);
+		let started: { readonly thread: Thread; readonly run: AgentRun };
 		try {
-			const { thread } = await this.threadsService.start(draft.runId, repo?.id, prompt, account);
-			// `start` added the thread, and `sync` adopted the draft; this covers a host change in
-			// between, where the thread never reached the list.
-			draft.update(thread);
+			started = await this.startThread(draft.runId, repo?.id, prompt, account);
 		} finally {
 			this.sending.delete(draft.runId);
 		}
+		// `start` added the thread, and `sync` adopted the draft; this covers a host change in
+		// between, where the thread never reached the list.
+		draft.update(started.thread);
+		if (started.run.baseDirty) {
+			// #257: the worktree started from the repository's last commit, not its working tree.
+			this.notificationService.info(localize('wispThread.baseDirty', "This chat starts from {0}'s last commit. Uncommitted changes there aren't in it.", workspace?.label ?? path ?? localize('wispThread.thisRepo', "the repository")));
+		}
 		this.drafts.delete(sessionId);
 		return this.sessions.get(draft.runId) ?? draft;
+	}
+
+	/**
+	 * `thread/start`, retrying on a wispd error instead of only showing it (#257): the worktree can
+	 * still genuinely fail to start (an invalid repository, or a transient git failure), and this
+	 * flow used to leave that as a bare message with nothing to do about it.
+	 */
+	private async startThread(runId: RunId, repo: RepoId | undefined, prompt: string, account: AccountChoice | undefined): Promise<{ readonly thread: Thread; readonly run: AgentRun }> {
+		for (; ;) {
+			try {
+				return await this.threadsService.start(runId, repo, prompt, account);
+			} catch (error) {
+				if (!(error instanceof WispdError) || !await this.offerRetry(error.message)) {
+					throw error;
+				}
+			}
+		}
+	}
+
+	/** Says the chat could not be started, and resolves to whether the user chose Retry. */
+	private offerRetry(reason: string): Promise<boolean> {
+		return new Promise<boolean>(resolve => {
+			let answered = false;
+			const answer = (retry: boolean) => {
+				if (!answered) {
+					answered = true;
+					resolve(retry);
+				}
+			};
+			this.notificationService.prompt(
+				Severity.Error,
+				localize('wispThread.startFailed', "Couldn't start the chat: {0}", reason),
+				[{ label: localize('wispThread.retry', "Retry"), run: () => answer(true) }],
+				{ onCancel: () => answer(false) },
+			);
+		});
 	}
 
 	async setArchived(sessionId: string, archived: boolean): Promise<void> {
