@@ -17,8 +17,9 @@ Steps: scripts/editor/prepare, then npm ci --ignore-scripts in editor/vscode
 and editor/vscode/build unless node_modules exists, upstream's
 transpile-client, npx playwright install for Chromium, and
 test/unit/browser/index.js against the wisp test files. Fails if that glob
-matches no tests, so a typo cannot silently pass. Needs no wispd and no
-packaged app, so unlike test-wisp it is not limited to macOS.
+matches no tests, so a typo cannot silently pass. When the overlay has no
+browser UI tests, it exits before preparing the editor. Needs no wispd and
+no packaged app, so unlike test-wisp it is not limited to macOS.
 EOF
 }
 
@@ -40,6 +41,11 @@ case "${1-}" in
 esac
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
+
+if ! find "$root/editor/overlay/src/vs/sessions/contrib" -path '*/wisp/*' -name '*.test.ts' -print -quit | grep -q .; then
+  echo "no wisp browser UI tests"
+  exit 0
+fi
 
 want=$(cut -d. -f1 "$root/.nvmrc")
 have=$(node -p 'process.versions.node.split(".")[0]')
