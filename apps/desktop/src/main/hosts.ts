@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "electron";
 
-import type { EventsSubscribeParams } from "../protocol/generated/protocol";
-import type { ConnectionState, RendererMethod } from "../preload/bridge";
+import { ErrorCodes, type EventsSubscribeParams } from "../protocol/generated/protocol";
+import type { ConnectionState, RendererMethod, RpcResponse } from "../preload/bridge";
 import { Connection } from "./connection";
 import { findWispd } from "./wispd";
 
@@ -63,20 +63,31 @@ export function startHosts(): void {
   connections.set("local", local);
   local.start();
 
+  // Answers `{error}` rather than throwing, so a bad call reads like any failed request.
   ipcMain.handle("wisp:request", (_event, hostId: unknown, method: unknown, params: unknown) => {
     if (typeof method !== "string" || !Object.hasOwn(rendererMethods, method)) {
-      throw new Error(`unknown method: ${String(method)}`);
+      return invalid(ErrorCodes.MethodNotFound, `unknown method: ${String(method)}`);
     }
+    const host = typeof hostId === "string" ? connections.get(hostId) : undefined;
+    if (!host) return invalid(ErrorCodes.InvalidParams, `unknown host: ${String(hostId)}`);
     // wispd validates the params' shape; they only have to be an object to be sent.
-    return connection(hostId).request(method as RendererMethod, object(params) as never);
+    if (!isObject(params)) return invalid(ErrorCodes.InvalidParams, "params must be an object");
+    return host.request(method as RendererMethod, params as never);
   });
 
   ipcMain.handle("wisp:subscribe", (event, hostId: unknown, key: unknown, params: unknown) => {
-    const { after, project } = object(params);
-    if (typeof key !== "string" || typeof after !== "number") throw new Error("invalid subscribe");
+    if (!isObject(params)) throw new Error("params must be an object");
+    const { after, project } = params;
+    if (typeof key !== "string") throw new Error("invalid subscription key");
+    if (typeof after !== "number" || !Number.isSafeInteger(after) || after < 0) {
+      throw new Error("after must be a non-negative integer");
+    }
     if (project !== undefined && typeof project !== "string") throw new Error("invalid project");
+    const host = connection(hostId);
     const sender = event.sender;
-    const unsubscribe = connection(hostId).subscribe(
+    // A reused key replaces its subscription instead of leaking the old one.
+    windowSubscriptions(sender).get(key)?.();
+    const unsubscribe = host.subscribe(
       { after, ...(project !== undefined && { project }) } satisfies EventsSubscribeParams,
       (message) => {
         if (message.type !== "event") windowSubscriptions(sender).delete(key);
@@ -109,11 +120,12 @@ function connection(hostId: unknown): Connection {
   return found;
 }
 
-function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("params must be an object");
-  }
-  return value as Record<string, unknown>;
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function invalid(code: number, message: string): RpcResponse<never> {
+  return { error: { code, message } };
 }
 
 function broadcastState(hostId: string, state: ConnectionState): void {
@@ -131,9 +143,9 @@ function windowSubscriptions(sender: WebContents): Map<string, () => void> {
       for (const unsubscribe of created.values()) unsubscribe();
       created.clear();
     };
-    sender.on("did-start-navigation", (details) => {
-      if (details.isMainFrame && !details.isSameDocument) endAll();
-    });
+    // `did-navigate` fires when a main-frame navigation commits, such as a reload. Not
+    // `did-start-navigation`, which also fires for link clicks that `will-navigate` cancels.
+    sender.on("did-navigate", endAll);
     sender.once("destroyed", () => {
       endAll();
       subscriptions.delete(sender);

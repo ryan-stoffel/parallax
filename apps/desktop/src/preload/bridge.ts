@@ -13,7 +13,10 @@ export interface WispBridge {
   /** The app's version. */
   version(): Promise<string>;
 
-  /** Calls a wispd method on a host. Resolves to its result or its error; never rejects. */
+  /**
+   * Calls a wispd method on a host. Resolves to its result or its error, also for an unknown
+   * host or method; never rejects.
+   */
   request<M extends RendererMethod>(
     hostId: string,
     method: M,
@@ -29,7 +32,7 @@ export interface WispBridge {
     params: EventsSubscribeParams,
     listener: (message: SubscriptionMessage) => void,
   ): () => void;
-  /** A host's connection state now. */
+  /** A host's connection state now. Rejects for an unknown host id, as `retry` does. */
   connectionState(hostId: string): Promise<ConnectionState>;
   /** Every later connection state change, for every host. Returns the unsubscribe function. */
   onConnectionState(listener: (hostId: string, state: ConnectionState) => void): () => void;

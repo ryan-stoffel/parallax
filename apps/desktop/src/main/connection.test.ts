@@ -120,6 +120,14 @@ test("an incompatible protocol stops retrying until retry()", () => {
   expect(children).toHaveLength(2);
 });
 
+test("a usage error from attach (exit 2) stops retrying", () => {
+  connect();
+  child().emit("close", 2, null);
+  expect(state()).toMatchObject({ status: "failed", error: { exitCode: 2 }, retrying: false });
+  vi.advanceTimersByTime(60_000);
+  expect(children).toHaveLength(1);
+});
+
 test("not found fails without spawning anything", () => {
   located = undefined;
   connect();
@@ -146,6 +154,8 @@ test("reports attach's exit code and stderr, and backs off from 1 s to 10 s", ()
   vi.advanceTimersByTime(1);
   expect(children).toHaveLength(2);
   child().emit("close", 4, null);
+  expect(state()).toMatchObject({ error: { exitCode: 4 } });
+  expect(state()).not.toHaveProperty("error.stderr"); // The first run's stderr isn't carried over.
   vi.advanceTimersByTime(1999);
   expect(children).toHaveLength(2);
   vi.advanceTimersByTime(1);

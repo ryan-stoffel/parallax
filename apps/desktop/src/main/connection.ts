@@ -144,7 +144,7 @@ export class Connection {
     this.child = child;
     this.client = client;
 
-    let stderr = "";
+    let stderr = ""; // This run's, capped, so an earlier run's line is never reported.
     child.stdin.on("error", ignore); // EPIPE once attach exits; "close" reports that.
     child.stderr.on("data", (chunk: Buffer) => {
       stderr = (stderr + chunk.toString("utf8")).slice(-4000);
@@ -241,7 +241,12 @@ export class Connection {
   }
 
   private fail(error: ConnectionError): void {
-    const retrying = error.reason !== "notFound" && error.reason !== "incompatibleProtocol";
+    // These can't fix themselves: the binary is missing or incompatible, or rejects `attach`'s
+    // arguments (exit 2, a usage error).
+    const retrying =
+      error.reason !== "notFound" &&
+      error.reason !== "incompatibleProtocol" &&
+      error.exitCode !== 2;
     this.setState({ status: "failed", error, retrying });
     if (retrying) this.retryTimer = setTimeout(() => this.connect(), backoffMs(this.failures++));
   }
@@ -279,9 +284,11 @@ function exitError(code: number | null, signal: string | null, stderr: string): 
   const message =
     code === 4
       ? "wispd couldn't be reached or started"
-      : code === 255
-        ? "ssh couldn't connect"
-        : `wispd attach exited with ${code ?? signal}`;
+      : code === 2
+        ? "wispd attach rejected its arguments. Update wispd."
+        : code === 255
+          ? "ssh couldn't connect"
+          : `wispd attach exited with ${code ?? signal}`;
   return { reason: "exited", message, ...details };
 }
 
