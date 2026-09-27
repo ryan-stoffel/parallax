@@ -1,0 +1,91 @@
+#!/usr/bin/env node
+'use strict';
+// Launches the built desktop app (run `scripts/ci/check-app` first) and fails unless its window
+// loads with `window.wisp` working, then checks the app quits cleanly (RYA-84).
+//
+// This one file plays two parts:
+// - Run by node, it starts `electron -r <this file> apps/desktop`: the real app, with this file
+//   preloaded into its main process. Requiring `electron` downloads Electron's binary the first
+//   time (into $electron_config_cache when set). On Linux with no display it runs under xvfb-run.
+// - Run inside Electron, it watches the window: a console error (CSP violations included), a
+//   preload error, a failed load, or a crash exits 1. Once the page loads it checks that
+//   `window.wisp` answers over IPC and React rendered, then quits normally.
+
+const TIMEOUT_MS = 60_000;
+
+// Runs in the page. Resolves to '' when fine, else what went wrong.
+const PAGE_CHECK = `(async () => {
+  if (typeof window.wisp !== 'object' || window.wisp === null) return 'window.wisp is missing';
+  if (typeof (await window.wisp.version()) !== 'string') return 'window.wisp.version() did not answer a string';
+  for (let i = 0; i < 50 && !document.querySelector('#root > *'); i++) await new Promise((r) => setTimeout(r, 100));
+  return document.querySelector('#root > *') ? '' : 'React rendered nothing into #root';
+})()`;
+
+if (process.versions.electron) watchApp();
+else launch();
+
+function launch() {
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const desktop = path.join(__dirname, '../../apps/desktop');
+  if (!fs.existsSync(path.join(desktop, 'dist/main/main.cjs'))) {
+    console.error('launch-app: apps/desktop is not built; run scripts/ci/check-app first');
+    process.exit(1);
+  }
+  const electron = require(require.resolve('electron', { paths: [desktop] }));
+
+  // A shell inside an Electron app (VS Code, Cursor) sets ELECTRON_RUN_AS_NODE, which would start
+  // Electron as plain Node; WISP_DEV_SERVER_URL would load the dev server instead of the build.
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.WISP_DEV_SERVER_URL;
+
+  let command = [electron, '-r', __filename, desktop];
+  if (process.platform === 'linux' && !env.DISPLAY) command = ['xvfb-run', '-a', ...command];
+
+  // ponytail: a timeout kills only the direct child; under xvfb-run, Electron can outlive it.
+  // Fine in CI, where the job ends right after.
+  const result = spawnSync(command[0], command.slice(1), { stdio: 'inherit', env, timeout: TIMEOUT_MS });
+  if (result.error?.code === 'ETIMEDOUT') console.error(`launch-app: no result within ${TIMEOUT_MS / 1000}s`);
+  else if (result.error) console.error(`launch-app: ${result.error.message}`);
+  else if (result.status !== 0) console.error(`launch-app: the app exited with ${result.status ?? result.signal}`);
+  else console.log('launch-app: ok');
+  process.exit(result.status === 0 && !result.error ? 0 : 1);
+}
+
+function watchApp() {
+  const { app } = require('electron');
+
+  let done = false;
+  const fail = (why) => {
+    if (done) return;
+    done = true;
+    console.error(`launch-app: ${why}`);
+    app.exit(1);
+  };
+
+  process.on('uncaughtException', (error) => fail(`main process threw: ${error.stack}`));
+
+  app.on('web-contents-created', (_event, contents) => {
+    contents.on('console-message', ({ level, message, sourceId, lineNumber }) => {
+      if (level === 'error') fail(`renderer console error: ${message} (${sourceId}:${lineNumber})`);
+    });
+    contents.on('preload-error', (_event, preloadPath, error) => fail(`preload ${preloadPath} threw: ${error}`));
+    contents.on('did-fail-load', (_event, _code, description, url) => fail(`${url} failed to load: ${description}`));
+    contents.on('render-process-gone', (_event, { reason }) => fail(`renderer gone: ${reason}`));
+    contents.on('did-finish-load', () => {
+      contents.executeJavaScript(PAGE_CHECK).then(
+        (problem) => {
+          if (problem) return fail(problem);
+          if (done) return;
+          done = true;
+          console.log(`launch-app: window.wisp answered in ${contents.getURL()}`);
+          app.quit();
+        },
+        (error) => fail(`page check threw: ${error}`),
+      );
+    });
+  });
+}

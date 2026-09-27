@@ -55,8 +55,7 @@ jobs:
           scripts/ci/ssh-localhost "$status"
           scripts/ci/check-ssh-attach "$status" "$PWD/target/debug/wispd"
 
-  # The desktop app on every OS it ships to (0022). Electron's binary is never downloaded:
-  # nothing here loads `electron`.
+  # The desktop app on every OS it ships to (0022): checked, built, then launched (RYA-84).
   app:
     strategy:
       fail-fast: false
@@ -92,6 +91,24 @@ jobs:
 
       - name: Install, check, test, and build
         run: scripts/ci/check-app
+
+      # Electron's binary, which launch-app downloads here on a miss. Keyed on the installed version.
+      - name: Cache Electron
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/node_modules/electron/package.json') }}
+
+      # Ubuntu 24.04's AppArmor blocks the unprivileged user namespaces Chromium's sandbox needs.
+      # Lift that on the runner instead of launching with --no-sandbox.
+      - name: Allow Chromium's sandbox
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Launch the app
+        env:
+          electron_config_cache: ${{ runner.temp }}/electron
+        run: scripts/ci/launch-app
 
   actionlint:
     runs-on: ubuntu-24.04
