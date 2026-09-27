@@ -21,6 +21,7 @@ A decision that affects more than one issue gets a record here. Records supersed
 | [0015](0015-subagent-chats.md) | Each agent run is a `wisp.agent` chat of its project's session; the subagents' chat agent is the default for agent-mode chat, which upstream needs to send anything; the Agents pill opens wisp's own panel through a presenter hook in `chatDropdownPill.ts`, and shows by default |
 | [0016](0016-event-log-retention.md) | The stored event log prunes host and project events by count; a run's events stay until its run row does, which nothing removes yet (#207); the in-memory replay window is also bounded by bytes |
 | [0019](0019-coordinator-mcp-tools.md) | The coordinator's wisp tools are `wispd mcp`, an MCP server on stdio bound to one project and one coordinator thread by arguments wispd sets; its runs carry `coordinatorThread`; Claude's coordinator allowlist is its read tools plus exactly the eight `mcp__wispd__*` tools |
+| [0020](0020-coordinator-planning-loop.md) | The coordinator runs in wispd behind `coordinator/*`, one thread per project; each turn is one no-write CLI process bracketed by `routing::snapshot` and `routing::check`, and messages and wake-ups wait for the next turn; a finished run the coordinator started wakes it, batched with any that finish within 1 s |
 
 Numbers are assigned in order. Take the next free number when you start the record, add a row to this table in the same PR, and link the record from its issue.
 
