@@ -21,6 +21,7 @@ import { IWispAgentsService } from './wispAgentsService.js';
 import { IWispProjectAgents, IWispProjectHost, WispProjectSession } from './wispProjectSession.js';
 import { IWispProjectsService } from './wispProjectsService.js';
 import { IWispThreadsService } from './wispThreadsService.js';
+import { emptyThreadPresentation, IEmptyThreadContext, IEmptyThreadPresentation } from './wispEmptyThread.js';
 import { WISP_THREAD_TYPE, WispThreadSessions } from './wispThreadSessions.js';
 
 export const WISP_SESSIONS_PROVIDER_ID = 'wisp';
@@ -174,6 +175,14 @@ export class WispSessionsProvider extends Disposable implements ISessionsProvide
 
 	getModelsSnapshot(_sessionId: string, _desiredModelId?: string): ISessionModelsSnapshot {
 		return { models: [], desiredModelResolution: { kind: 'notRequested' }, modelTarget: undefined };
+	}
+
+	/**
+	 * The empty new-session composer (#298): a heading for a repository, for no repository, and
+	 * for a project, the spec's placeholder, and no workspace or session-type pills.
+	 */
+	getEmptyThread(context: IEmptyThreadContext): IEmptyThreadPresentation {
+		return emptyThreadPresentation(context);
 	}
 
 	getModelPickerOptions(sessionId: string): ISessionModelPickerOptions {

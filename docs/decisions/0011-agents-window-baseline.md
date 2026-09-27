@@ -154,9 +154,10 @@ New patches, on top of #10's six:
 | `branding: call subagents Agents in the pill` | `sessionBackgroundActivitiesControl.ts` | 1 line | 0 lines |
 | `chat: show status and location in the Agents pill` | Same file | about 10 lines | 0 lines |
 | `chat: present the Agents pill as a panel`, only if needed | `workbench/browser/chatPills.ts` | 40 to 60 lines | 27 lines |
+| `chat: center the empty thread on a heading` (#298) | `sessions/contrib/chat/browser/newChatWidget.ts` | about 110 lines | 162 lines |
 | Reverted: patch 0010, the Agents window redirect | | -1 line | |
 
-That is four to six patches and about 20 to 80 changed lines. The rest is overlay code, which breaks at type-check rather than at rebase when upstream changes the interfaces it implements. From 1.138.0 to 1.139.0, `sessionsProvider.ts` changed 11 lines, `session.ts` 30, and `sessionsManagement.ts` 11. Over four releases they changed 81, 221, and 31. Budget an extra 30 to 45 minutes per monthly upgrade (0002's estimate): about 10 for the patches, which rarely conflict, and the rest to adapt the provider and sidebar view to interface changes. Keep the provider thin: it maps wispd's events to upstream's facades and holds no logic of its own.
+That is four to six patches and about 20 to 80 changed lines. #298 adds the empty-thread row: the patch reads an optional heading and placeholder from the session provider, hides the workspace and session-type picker row, and sizes the composer. `newChatWidget.ts` changed 162 lines from 1.138.0 to 1.139.0 (123 added, 39 removed). The patch is one render path plus the composer options. Dropping it on a conflict loses the heading, the placeholder, and the roomier composer, and the picker row comes back; sending still works. The rest is overlay code, which breaks at type-check rather than at rebase when upstream changes the interfaces it implements. From 1.138.0 to 1.139.0, `sessionsProvider.ts` changed 11 lines, `session.ts` 30, and `sessionsManagement.ts` 11. Over four releases they changed 81, 221, and 31. Budget an extra 30 to 45 minutes per monthly upgrade (0002's estimate): about 10 for the patches, which rarely conflict, and the rest to adapt the provider and sidebar view to interface changes. Keep the provider thin: it maps wispd's events to upstream's facades and holds no logic of its own.
 
 ### Chat v2 header (#302)
 

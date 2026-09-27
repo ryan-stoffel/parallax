@@ -12,12 +12,32 @@ export function newChatAction(window: Page) {
   return window.locator('.part.sidebar .wisp-threads-action', { hasText: 'New Chat' }).first();
 }
 
-/** Clicks New Chat once it is enabled, and waits for the new-session composer. */
+/** Clicks New Chat once it is enabled, and waits for the empty-thread heading and composer (#298). */
 export async function openNewChat(window: Page): Promise<void> {
   const action = newChatAction(window);
   await window.locator('.part.sidebar .wisp-threads-action:not(.disabled)', { hasText: 'New Chat' }).waitFor({ state: 'visible', timeout: 30_000 });
   await action.click();
+  const part = sessionsPart(window);
+  const heading = part.locator('h1.new-chat-empty-heading');
+  await heading.waitFor({ state: 'visible', timeout: 30_000 });
+  const text = (await heading.innerText()).replace(/\s+/g, ' ').trim();
+  if (!/^What do you want to work on\?$/.test(text) && !/^What should we build in .+?\?$/.test(text)) {
+    throw new Error(`unexpected empty-thread heading: ${JSON.stringify(text)}`);
+  }
   await composer(window).waitFor({ state: 'visible', timeout: 30_000 });
+  const maxWidth = await part.locator('.new-chat-widget-content').last().evaluate(el => getComputedStyle(el).maxWidth);
+  if (maxWidth !== '760px') {
+    throw new Error(`the composer column's max width is ${maxWidth}, not 760px`);
+  }
+  const editorHeight = await part.locator('.sessions-chat-editor').last().evaluate(el => el.getBoundingClientRect().height);
+  if (editorHeight < 70) {
+    throw new Error(`the composer is ${editorHeight}px tall, shorter than three lines`);
+  }
+  for (const selector of ['.new-session-workspace-picker-container', '.new-session-quick-chat-header']) {
+    if (await part.locator(selector).first().isVisible()) {
+      throw new Error(`${selector} is visible on the empty thread`);
+    }
+  }
 }
 
 /** The Agents window's main part, which holds the new-session composer. */

@@ -166,7 +166,7 @@ export const scenarios: readonly Scenario[] = [
   },
   {
     name: 'agents-window-new-chat',
-    title: "New Chat: upstream's new-session composer for a normal thread",
+    title: 'New Chat: a heading and a roomy composer for a normal thread',
     async run(context) {
       await connectedToThisMac(context.window);
       await openNewChat(context.window);

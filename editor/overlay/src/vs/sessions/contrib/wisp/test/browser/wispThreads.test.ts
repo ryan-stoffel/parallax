@@ -12,7 +12,9 @@ import { WispdError, WispdUnavailableError, type WispdState } from '../../../../
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { AgentListParams, AgentRun, Repo, RepoAddParams, Thread, ThreadStartParams } from '../../../../../platform/wisp/common/wispProtocol.js';
 import { ISession, SessionStatus } from '../../../../services/sessions/common/session.js';
+import { EMPTY_THREAD_PLACEHOLDER, emptyThreadPresentation } from '../../../providers/wisp/browser/wispEmptyThread.js';
 import { WispThreadSession } from '../../../providers/wisp/browser/wispThreadSession.js';
+import { WISP_PROJECT_SESSION_TYPE } from '../../../providers/wisp/common/wispProjects.js';
 import { agentRunOf } from '../../../providers/wisp/common/wispAgentRuns.js';
 import { filterThreadPlacement, placeThreadSessions, repoPathOf, repoUri, threadChatResource, threadResource, threadRunOf, WISP_NO_REPO_FILTER, WISP_REPO_SCHEME, WISP_THREAD_SESSION_TYPE } from '../../../providers/wisp/common/wispThreads.js';
 import { clearSidebarRepositoryFilter, toggleSidebarRepositoryFilter } from '../../browser/wispSidebarFilter.js';
@@ -301,6 +303,37 @@ suite('wisp: threads', () => {
 			await context.provider.sendRequest(quick.sessionId, quick.mainChat.get().resource, { query: 'Explain rebase' });
 			const starts = context.wispd.requests.filter(([method]) => method === 'repo/add' || method === 'thread/start').map(([method, params]) => [method, (params as ThreadStartParams).repo]);
 			assert.deepStrictEqual(starts, [['thread/start', APP.id], ['thread/start', undefined]]);
+		});
+
+		test('the empty thread names a repository, no repository, and a project (#298)', async () => {
+			const repo = emptyThreadPresentation({ quickChat: false, sessionTypeId: WISP_THREAD_SESSION_TYPE, workspaceLabel: 'wisp', sessionTitle: 'draft' });
+			assert.strictEqual(repo.placeholder, EMPTY_THREAD_PLACEHOLDER);
+			assert.strictEqual(repo.placeholder, 'Describe a change or a task. Paste an error, a file, or a link.');
+			assert.strictEqual(repo.hidePickerRow, true);
+			assert.deepStrictEqual(repo.heading, [
+				{ text: 'What should we build in ' },
+				{ text: 'wisp', link: true },
+				{ text: '?' },
+			]);
+			assert.deepStrictEqual(
+				emptyThreadPresentation({ quickChat: true, sessionTypeId: WISP_THREAD_SESSION_TYPE, workspaceLabel: 'wisp', sessionTitle: undefined }).heading,
+				[{ text: 'What do you want to work on?' }],
+			);
+			assert.deepStrictEqual(
+				emptyThreadPresentation({ quickChat: false, sessionTypeId: WISP_THREAD_SESSION_TYPE, workspaceLabel: '  ', sessionTitle: undefined }).heading,
+				[{ text: 'What do you want to work on?' }],
+			);
+			assert.deepStrictEqual(
+				emptyThreadPresentation({ quickChat: false, sessionTypeId: WISP_PROJECT_SESSION_TYPE, workspaceLabel: 'wisp', sessionTitle: 'billing-migration' }).heading,
+				[
+					{ text: "What's the goal for " },
+					{ text: 'billing-migration' },
+					{ text: '?' },
+				],
+			);
+			const context = await services();
+			const fromProvider = context.provider.getEmptyThread({ quickChat: false, sessionTypeId: WISP_THREAD_SESSION_TYPE, workspaceLabel: 'wisp', sessionTitle: undefined });
+			assert.deepStrictEqual(fromProvider, repo);
 		});
 
 		test('a deleted draft is forgotten', async () => {

@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+Date: Sun, 27 Sep 2026 03:00:58 +0000
+Subject: [PATCH] chat: center the empty thread on a heading
+
+A session provider can supply a heading and placeholder and hide the
+workspace and session-type picker row. wisp uses that for the empty
+thread (#298).
+
+diff --git a/src/vs/sessions/contrib/chat/browser/newChatWidget.ts b/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
+index 78c9d3be2cd6ce68800d1d5a13725033c4fea6a7..42729d6da0c7b36807124e4389e60237a328de55 100644
+--- a/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
++++ b/src/vs/sessions/contrib/chat/browser/newChatWidget.ts
+@@ -12,7 +12,7 @@ import { isCancellationError, onUnexpectedError } from '../../../../base/common/
+ import { toErrorMessage } from '../../../../base/common/errorMessage.js';
+ import { Event } from '../../../../base/common/event.js';
+ import { Disposable, DisposableMap, DisposableStore, IDisposable, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+-import { constObservable, derived, derivedObservableWithCache, autorun, disposableObservableValue, IObservable, observableFromEvent, observableSignalFromEvent } from '../../../../base/common/observable.js';
++import { constObservable, derived, derivedObservableWithCache, autorun, disposableObservableValue, IObservable, IReader, observableFromEvent, observableSignalFromEvent } from '../../../../base/common/observable.js';
+ import { isWeb } from '../../../../base/common/platform.js';
+ import { basename } from '../../../../base/common/resources.js';
+ import { URI } from '../../../../base/common/uri.js';
+@@ -69,6 +69,30 @@ import { reviveChatDraft } from '../../../../workbench/contrib/chat/common/attac
+ /** Minimum number of started sessions required before showing tips and promotions. */
+ const MIN_SESSIONS_FOR_FIRST_RUN_NOTICES = 2;
+ 
++/** Three lines of the new-session input: its line height is 20px, with 8px top and 2px bottom padding. */
++const EMPTY_THREAD_MIN_EDITOR_HEIGHT = 70;
++
++/** Optional empty-thread copy a sessions provider can supply. Absent, the composer stays as upstream ships it. */
++interface INewChatEmptyThreadSegment {
++	readonly text: string;
++	/** A linked segment opens the repository picker. */
++	readonly link?: boolean;
++}
++interface INewChatEmptyThread {
++	readonly heading: readonly INewChatEmptyThreadSegment[];
++	readonly placeholder: string;
++	readonly hidePickerRow?: boolean;
++}
++interface INewChatEmptyThreadContext {
++	readonly quickChat: boolean;
++	readonly sessionTypeId: string | undefined;
++	readonly workspaceLabel: string | undefined;
++	readonly sessionTitle: string | undefined;
++}
++interface INewChatEmptyThreadProvider {
++	getEmptyThread(context: INewChatEmptyThreadContext): INewChatEmptyThread | undefined;
++}
++
+ export class NewChatWidget extends Disposable {
+ 
+ 	private readonly _workspacePicker: WorkspacePicker;
+@@ -93,6 +117,8 @@ export class NewChatWidget extends Disposable {
+ 	private readonly _activeEmptyState = this._register(disposableObservableValue<NoAgentHostEmptyState | undefined>(this, undefined));
+ 	private _workspacePickerRow: HTMLElement | undefined;
+ 	private _quickChatHeaderPickerHost: HTMLElement | undefined;
++	/** Held so render can set the placeholder and height a provider asked for, before the editor exists. */
++	private _newChatInputOptions: ConstructorParameters<typeof NewChatInputWidget>[0] | undefined;
+ 
+ 	private readonly _session: IObservable<IActiveSession | undefined>;
+ 
+@@ -239,7 +265,7 @@ export class NewChatWidget extends Disposable {
+ 			() => this._hasEnoughSessionsForFirstRunNotices(),
+ 		);
+ 
+-		const newChatInput = this.instantiationService.createInstance(NewChatInputWidget, {
++		const newChatInputOptions: ConstructorParameters<typeof NewChatInputWidget>[0] = {
+ 			session: this._session,
+ 			getContextFolderUri: () => this._getContextFolderUri(),
+ 			getContextPickerActions: () => this._workspacePicker.getContextPickerActions(),
+@@ -258,6 +284,7 @@ export class NewChatWidget extends Disposable {
+ 			loading,
+ 			historyKey: constObservable(undefined), // no persisted history for the new-session view
+ 			placeholder: localize('newSessionPromptPlaceholder', "Pitch your idea"),
++			minEditorHeight: undefined as number | undefined,
+ 			supportsBackground: true,
+ 			deferredNotificationsEnabled,
+ 			petHostPreferred: this.options.petHostPreferred,
+@@ -266,7 +293,9 @@ export class NewChatWidget extends Disposable {
+ 			sessionTypePickerOptions: {
+ 				prepareSessionTypeSelection: pick => this._prepareSessionTypeSelection(pick),
+ 			},
+-		});
++		};
++		this._newChatInputOptions = newChatInputOptions;
++		const newChatInput = this.instantiationService.createInstance(NewChatInputWidget, newChatInputOptions);
+ 		this._register(toDisposable(() => newChatInput.saveState()));
+ 		this._newChatInput = this._register(newChatInput);
+ 		this.pickerVisibility = derived(this, reader => this._activeEmptyState.read(reader)
+@@ -473,6 +502,16 @@ export class NewChatWidget extends Disposable {
+ 			});
+ 		}));
+ 
++		const emptyThread = this._queryEmptyThread();
++		if (emptyThread && this._newChatInputOptions) {
++			this._newChatInputOptions.placeholder = emptyThread.placeholder;
++			this._newChatInputOptions.minEditorHeight = EMPTY_THREAD_MIN_EDITOR_HEIGHT;
++			chatWidgetContent.style.maxWidth = '760px';
++			// A little above the middle: the column is centered, and extra bottom padding lifts it.
++			chatWidgetContainer.style.paddingBottom = '72px';
++			this._renderEmptyHeading(chatWidgetContent);
++		}
++
+ 		const workspacePickerContainer = dom.append(chatWidgetContent, dom.$('.new-session-workspace-picker-container'));
+ 		// On web (vscode.dev / insiders.vscode.dev) the workspace picker is
+ 		// scoped to the currently selected agent host. When no hosts are
+@@ -483,13 +522,23 @@ export class NewChatWidget extends Disposable {
+ 		this._register(isWeb
+ 			? this._renderEmptyStateGate(workspacePickerContainer, chatWidgetContent)
+ 			: this._renderWorkspacePicker(workspacePickerContainer));
++		// Keep the row mounted so a send with no draft can still open the picker, but don't show it.
++		if (emptyThread?.hidePickerRow) {
++			workspacePickerContainer.style.display = 'none';
++		}
+ 
+-		if (!isWeb) {
++		if (!isWeb && !emptyThread?.hidePickerRow) {
+ 			this._quickChatHeaderPickerHost = dom.append(chatWidgetContent, dom.$('.new-session-quick-chat-header.sessions-workspace-category-picker'));
+ 		}
+ 
+ 		this._renderFeedbackBanner(chatWidgetContent);
+ 		this._newChatInput.render(chatWidgetContent, parent);
++		if (emptyThread) {
++			const editor = chatWidgetContent.querySelector('.sessions-chat-editor');
++			if (editor instanceof HTMLElement) {
++				editor.style.minHeight = `${EMPTY_THREAD_MIN_EDITOR_HEIGHT}px`;
++			}
++		}
+ 
+ 		// The tip lives in the input's notice slot, so the presenter is created
+ 		// after the input has rendered it.
+@@ -533,7 +582,7 @@ export class NewChatWidget extends Disposable {
+ 			}
+ 		}));
+ 
+-		if (!isWeb) {
++		if (!isWeb && !emptyThread?.hidePickerRow) {
+ 			this._register(autorun(reader => {
+ 				const isQuickChat = this._isQuickChatComposer.read(reader);
+ 				const isWorkspacePickerQuickChat = this._isWorkspacePickerQuickChat.read(reader);
+@@ -903,6 +952,61 @@ export class NewChatWidget extends Disposable {
+ 		};
+ 	}
+ 
++	/**
++	 * The provider's empty-thread presentation, or `undefined` when it has none.
++	 * Pass a reader from an autorun so the heading follows the draft and the workspace.
++	 */
++	private _queryEmptyThread(reader?: IReader): INewChatEmptyThread | undefined {
++		const session = reader ? this._session.read(reader) : this._session.get();
++		const quickChat = reader ? this._isQuickChatComposer.read(reader) : this._isQuickChatComposer.get();
++		const candidates = session
++			? [this.sessionsProvidersService.getProvider(session.providerId)]
++			: this.sessionsProvidersService.getProviders();
++		for (const provider of candidates) {
++			const getEmptyThread = (provider as Partial<INewChatEmptyThreadProvider> | undefined)?.getEmptyThread;
++			if (typeof getEmptyThread !== 'function') {
++				continue;
++			}
++			const workspace = session ? (reader ? session.workspace.read(reader) : session.workspace.get()) : undefined;
++			return getEmptyThread.call(provider, {
++				quickChat,
++				sessionTypeId: session?.sessionType,
++				workspaceLabel: quickChat ? undefined : workspace?.label ?? this._workspacePicker.selectedResolved?.workspace.label,
++				sessionTitle: session ? (reader ? session.title.read(reader) : session.title.get()) : undefined,
++			});
++		}
++		return undefined;
++	}
++
++	private _renderEmptyHeading(parent: HTMLElement): void {
++		const heading = dom.append(parent, dom.$('h1.new-chat-empty-heading'));
++		heading.style.cssText = 'font-size:30px;font-weight:600;line-height:1.25;text-align:center;margin:0 0 28px';
++		const selectionChanged = observableSignalFromEvent(this, this._workspacePicker.onDidChangeSelection);
++		this._register(autorun(reader => {
++			selectionChanged.read(reader);
++			const presentation = this._queryEmptyThread(reader);
++			dom.clearNode(heading);
++			if (!presentation) {
++				return;
++			}
++			for (const segment of presentation.heading) {
++				if (!segment.link) {
++					dom.append(heading, segment.text);
++					continue;
++				}
++				const button = dom.append(heading, dom.$('button.new-chat-empty-heading-name')) as HTMLButtonElement;
++				button.type = 'button';
++				button.textContent = segment.text;
++				button.title = localize('newChat.emptyThread.repository', "Choose a repository");
++				button.setAttribute('aria-haspopup', 'true');
++				button.style.cssText = 'font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer;text-decoration:underline dotted;text-underline-offset:4px';
++				reader.store.add(dom.addDisposableListener(button, dom.EventType.CLICK, () => {
++					this._workspacePicker.showPicker(false, button);
++				}));
++			}
++		}));
++	}
++
+ 	private _renderWorkspacePicker(container: HTMLElement): IDisposable {
+ 		const workspaceTrigger: IWorkspacePickerTrigger = {
+ 			label: localize('newSessionWorkspacePicker.workspace', "Workspace"),
