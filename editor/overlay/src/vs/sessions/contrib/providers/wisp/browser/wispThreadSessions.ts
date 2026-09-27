@@ -15,11 +15,11 @@ import { INotificationService } from '../../../../../platform/notification/commo
 import { IQuickInputService, IQuickPickItem, IQuickPickSeparator } from '../../../../../platform/quickinput/common/quickInput.js';
 import { generateUuidV7 } from '../../../../../platform/wisp/common/uuidv7.js';
 import { agentReviewItems } from '../../../../../platform/wisp/common/wispAgentFiles.js';
-import { IWispdService, WispdError } from '../../../../../platform/wisp/common/wispd.js';
+import { IWispdService, WispdError, WispdUnavailableError } from '../../../../../platform/wisp/common/wispd.js';
 import type { AccountChoice, AgentRun, Repo, RepoId, RunId, Thread } from '../../../../../platform/wisp/common/wispProtocol.js';
 import { ISession, ISessionFileChange, ISessionType, ISessionWorkspace, ISessionWorkspaceBrowseAction, SessionRemoteConnectionStatus, SessionTypeAuthRequirement } from '../../../../services/sessions/common/session.js';
 import { ISessionChangeEvent } from '../../../../services/sessions/common/sessionsProvider.js';
-import { pickWorkerAccount } from '../../../wisp/browser/wispStartSubagent.js';
+import { noticeBaseDirty, pickWorkerAccount } from '../../../wisp/browser/wispStartSubagent.js';
 import { WISP_AGENT_CHAT_TYPE } from '../common/wispAgentRuns.js';
 import { repoPathOf, WISP_THREAD_SESSION_TYPE } from '../common/wispThreads.js';
 import { IWispAgentLocation } from './wispAgentChat.js';
@@ -278,24 +278,31 @@ export class WispThreadSessions extends Disposable {
 		draft.update(started.thread);
 		if (started.run.baseDirty) {
 			// #257: the worktree started from the repository's last commit, not its working tree.
-			this.notificationService.info(localize('wispThread.baseDirty', "This chat starts from {0}'s last commit. Uncommitted changes there aren't in it.", workspace?.label ?? path ?? localize('wispThread.thisRepo', "the repository")));
+			noticeBaseDirty(this.notificationService, workspace?.label ?? path ?? localize('wispThread.thisRepo', "the repository"));
 		}
 		this.drafts.delete(sessionId);
 		return this.sessions.get(draft.runId) ?? draft;
 	}
 
 	/**
-	 * `thread/start`, retrying on a wispd error instead of only showing it (#257): the worktree can
-	 * still genuinely fail to start (an invalid repository, or a transient git failure), and this
-	 * flow used to leave that as a bare message with nothing to do about it.
+	 * `thread/start`, retrying instead of only showing the error for the two cases a retry can fix
+	 * (#257): the connection dropped (safe, since `thread/start` is idempotent on `runId`, 0017), or
+	 * the worktree hit a transient git failure or timeout (`worktreeFailed`). Anything else —
+	 * `workerUnavailable`, `repoNotFound`, `idConflict`, invalid params — fails the same way every
+	 * time, so it's thrown straight through, as `wispNewProject.ts`'s retry does for everything but
+	 * a lost connection.
 	 */
 	private async startThread(runId: RunId, repo: RepoId | undefined, prompt: string, account: AccountChoice | undefined): Promise<{ readonly thread: Thread; readonly run: AgentRun }> {
 		for (; ;) {
 			try {
 				return await this.threadsService.start(runId, repo, prompt, account);
 			} catch (error) {
-				if (!(error instanceof WispdError) || !await this.offerRetry(error.message)) {
+				if (!isRetryableStartError(error)) {
 					throw error;
+				}
+				if (!await this.offerRetry(error.message)) {
+					// The user already saw the error in the prompt; don't show it again.
+					throw new CancellationError();
 				}
 			}
 		}
@@ -378,3 +385,12 @@ export class WispThreadSessions extends Disposable {
 	}
 }
 
+/**
+ * Whether retrying `thread/start` on `error` can plausibly succeed (#257): a lost connection
+ * (`thread/start` is idempotent on `runId`, 0017), or the worktree's own transient git failure or
+ * timeout (`worktreeFailed`). Everything else — an unavailable worker, an unknown repo entry, a
+ * conflicting id, invalid params — is deterministic, so retrying it would just fail the same way.
+ */
+function isRetryableStartError(error: unknown): error is WispdUnavailableError | WispdError {
+	return error instanceof WispdUnavailableError || (error instanceof WispdError && error.kind === 'worktreeFailed');
+}
