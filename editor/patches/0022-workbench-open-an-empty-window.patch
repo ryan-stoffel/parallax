@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+Date: Sun, 27 Sep 2026 04:55:07 +0000
+Subject: [PATCH] workbench: open an empty window
+
+Boot does not create workbench parts. startup() opens the shell and
+returns, so the sidebar, activity bar, panel, title bar, editor,
+sessions surface, status bar, and notifications are never constructed.
+The native window controller is not started, because constructing it
+creates the title bar and editor parts. The BrowserWindow is frameless,
+so there is no native title bar or traffic lights either.
+
+Issue #316.
+
+diff --git a/src/vs/platform/windows/electron-main/windows.ts b/src/vs/platform/windows/electron-main/windows.ts
+index aefb5d3eee8a1435f8d2a92f60748d7a7d7eabac..60c1b4390edf37be9be4070e7c13d19d238b0dc6 100644
+--- a/src/vs/platform/windows/electron-main/windows.ts
++++ b/src/vs/platform/windows/electron-main/windows.ts
+@@ -246,6 +246,13 @@ export function defaultBrowserWindowOptions(accessor: ServicesAccessor, windowSt
+ 		options.minHeight = 1;
+ 	}
+ 
++	// wisp: no native title bar or traffic lights. The in-page title bar is not created.
++	options.frame = false;
++	options.titleBarStyle = undefined;
++	options.titleBarOverlay = undefined;
++	options.minWidth = 1;
++	options.minHeight = 1;
++
+ 	if (overrides?.backgroundColor) {
+ 		options.backgroundColor = overrides.backgroundColor;
+ 	}
+diff --git a/src/vs/sessions/browser/workbench.ts b/src/vs/sessions/browser/workbench.ts
+index df3ba84367ad0a2202c8301990251bdf54cb6faf..40eee72ad4c6477131de6dcc8785fda0ea7ab475 100644
+--- a/src/vs/sessions/browser/workbench.ts
++++ b/src/vs/sessions/browser/workbench.ts
+@@ -13,6 +13,7 @@ import { addDisposableGenericMouseDownListener, addDisposableListener, EventType
+ import { DeferredPromise, RunOnceScheduler } from '../../base/common/async.js';
+ import { isFullscreen, onDidChangeFullscreen, isChrome, isFirefox, isSafari } from '../../base/browser/browser.js';
+ import { mark } from '../../base/common/performance.js';
++import { openBlankWorkbench } from '../../workbench/contrib/wisp/browser/wispBlankWindow.js';
+ import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
+ import { isWindows, isLinux, isWeb, isNative, isMacintosh, isIOS } from '../../base/common/platform.js';
+ import { Parts, Position, PanelAlignment, IWorkbenchLayoutService, SINGLE_WINDOW_PARTS, MULTI_WINDOW_PARTS, IPartVisibilityChangeEvent, positionToString } from '../../workbench/services/layout/browser/layoutService.js';
+@@ -550,6 +551,10 @@ export class Workbench extends Disposable implements IAgentWorkbenchLayoutServic
+ 			const instantiationService = this.initServices(this.serviceCollection);
+ 
+ 			instantiationService.invokeFunction(accessor => {
++				// wisp: boot is an empty window. Parts are not created (#316).
++				openBlankWorkbench(this.parent, this.mainContainer, instantiationService);
++				return;
++
+ 				const lifecycleService = accessor.get(ILifecycleService);
+ 				const storageService = accessor.get(IStorageService);
+ 				const configurationService = accessor.get(IConfigurationService);
+diff --git a/src/vs/sessions/electron-browser/sessions.main.ts b/src/vs/sessions/electron-browser/sessions.main.ts
+index b72abdc5b4d1ede3dccf9ceed3a4bbdccfc54af6..9cd0e79b76ec4be520e2771f791ee4514affd53d 100644
+--- a/src/vs/sessions/electron-browser/sessions.main.ts
++++ b/src/vs/sessions/electron-browser/sessions.main.ts
+@@ -5,8 +5,7 @@
+ 
+ import { localize } from '../../nls.js';
+ import product from '../../platform/product/common/product.js';
+-import { INativeWindowConfiguration, IWindowsConfiguration, hasNativeMenu } from '../../platform/window/common/window.js';
+-import { NativeWindow } from '../../workbench/electron-browser/window.js';
++import { INativeWindowConfiguration, IWindowsConfiguration } from '../../platform/window/common/window.js';
+ import { setFullscreen } from '../../base/browser/browser.js';
+ import { domContentLoaded } from '../../base/browser/dom.js';
+ import { onUnexpectedError } from '../../base/common/errors.js';
+@@ -67,7 +66,6 @@ import { AccountPolicyService, IAccountPolicyGateService } from '../../workbench
+ import { MultiplexPolicyService } from '../../platform/policy/common/multiplexPolicyService.js';
+ import { Workbench as AgenticWorkbench } from '../browser/workbench.js';
+ import { createSessionsWorkbench } from '../browser/workbenchFactory.js';
+-import { NativeMenubarControl } from '../../workbench/electron-browser/parts/titlebar/menubarControl.js';
+ import { IWorkspaceEditingService } from '../../workbench/services/workspaces/common/workspaceEditing.js';
+ import { ConfigurationService } from '../services/configuration/browser/configurationService.js';
+ import { ConfigurationCache } from '../../workbench/services/configuration/common/configurationCache.js';
+@@ -135,16 +133,9 @@ export class SessionsMain extends Disposable {
+ 		// Listeners
+ 		this.registerListeners(workbench, services.storageService);
+ 
+-		// Startup
+-		const instantiationService = workbench.startup();
+-
+-		// Window
+-		this._register(instantiationService.createInstance(NativeWindow));
+-
+-		// Native menu controller
+-		if (isMacintosh || hasNativeMenu(services.configurationService)) {
+-			this._register(instantiationService.createInstance(NativeMenubarControl));
+-		}
++		// Startup. The workbench opens empty and does not construct the native
++		// window controller: that controller creates the title bar and editor parts.
++		workbench.startup();
+ 	}
+ 
+ 	private applyWindowZoomLevel(configurationService: IConfigurationService) {
+diff --git a/src/vs/workbench/browser/workbench.ts b/src/vs/workbench/browser/workbench.ts
+index 5fcc390818e7a309ca8e2017c29e797b805d900a..0607b379e6f91fa2d6c1836c1c66cb6a50307bb3 100644
+--- a/src/vs/workbench/browser/workbench.ts
++++ b/src/vs/workbench/browser/workbench.ts
+@@ -9,6 +9,7 @@ import { Event, Emitter, setGlobalLeakWarningThreshold } from '../../base/common
+ import { RunOnceScheduler, timeout } from '../../base/common/async.js';
+ import { isFirefox, isSafari, isChrome } from '../../base/browser/browser.js';
+ import { mark } from '../../base/common/performance.js';
++import { openBlankWorkbench } from '../contrib/wisp/browser/wispBlankWindow.js';
+ import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
+ import { Registry } from '../../platform/registry/common/platform.js';
+ import { isWindows, isLinux, isWeb, isNative, isMacintosh } from '../../base/common/platform.js';
+@@ -118,6 +119,10 @@ export class Workbench extends Layout {
+ 			const instantiationService = this.initServices(this.serviceCollection);
+ 
+ 			instantiationService.invokeFunction(accessor => {
++				// wisp: boot is an empty window. Parts are not created (#316).
++				openBlankWorkbench(this.parent, this.mainContainer, instantiationService);
++				return;
++
+ 				const lifecycleService = accessor.get(ILifecycleService);
+ 				const storageService = accessor.get(IStorageService);
+ 				const configurationService = accessor.get(IConfigurationService);
+diff --git a/src/vs/workbench/electron-browser/desktop.main.ts b/src/vs/workbench/electron-browser/desktop.main.ts
+index a827f145c61f0a4465289c5b6faed10756ee3051..b4df624bb75af93d9ac030651d2f28a9d50a9281 100644
+--- a/src/vs/workbench/electron-browser/desktop.main.ts
++++ b/src/vs/workbench/electron-browser/desktop.main.ts
+@@ -7,7 +7,6 @@ import { localize } from '../../nls.js';
+ import product from '../../platform/product/common/product.js';
+ import { INativeWindowConfiguration, IWindowsConfiguration } from '../../platform/window/common/window.js';
+ import { Workbench } from '../browser/workbench.js';
+-import { NativeWindow } from './window.js';
+ import { setFullscreen } from '../../base/browser/browser.js';
+ import { domContentLoaded } from '../../base/browser/dom.js';
+ import { onUnexpectedError } from '../../base/common/errors.js';
+@@ -137,11 +136,9 @@ export class DesktopMain extends Disposable {
+ 		// Listeners
+ 		this.registerListeners(workbench, services.storageService);
+ 
+-		// Startup
+-		const instantiationService = workbench.startup();
+-
+-		// Window
+-		this._register(instantiationService.createInstance(NativeWindow));
++		// Startup. The workbench opens empty and does not construct the native
++		// window controller: that controller creates the title bar and editor parts.
++		workbench.startup();
+ 	}
+ 
+ 	private applyWindowZoomLevel(configurationService: IConfigurationService) {
