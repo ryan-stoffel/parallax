@@ -29,7 +29,7 @@ uuid_v7_id! {
 pub struct Repo {
     /// The entry's id.
     pub id: RepoId,
-    /// The name shown in the editor: the repository folder's name.
+    /// The name shown in the app: the repository folder's name.
     pub name: String,
     /// The absolute, canonical path of the repository on the host.
     pub path: String,

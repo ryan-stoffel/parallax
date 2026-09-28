@@ -116,7 +116,7 @@ method_table! {
         /// `initialize`: the handshake. It must be the first request on a connection; wispd
         /// answers anything before it with `notInitialized`.
         Initialize = "initialize": InitializeParams => InitializeResult;
-        /// `host/health`: uptime, store state, and running agents. The editor sends it every
+        /// `host/health`: uptime, store state, and running agents. The app sends it every
         /// 30 seconds and on wake, as a heartbeat.
         HostHealth = "host/health": HostHealthParams => HostHealthResult;
         /// `host/version`: wispd's release and protocol versions, operating system, and CPU

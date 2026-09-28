@@ -1,4 +1,4 @@
-//! The protocol between the editor and `wispd`, from decision record 0007.
+//! The protocol between the client and `wispd`, from decision record 0007.
 //!
 //! This crate is the single source of truth for it. The desktop app's TypeScript types are generated
 //! from the types here (see [`typescript`]).
@@ -278,14 +278,14 @@ mod tests {
 
     #[test]
     fn context_types_round_trip() {
-        for last_writer in [None, Some("editor".to_owned())] {
+        for last_writer in [None, Some("app".to_owned())] {
             round_trip(&context_file(last_writer));
         }
         round_trip(&ContextListParams {
             project: ProjectId::generate(),
         });
         round_trip(&ContextListResult {
-            files: vec![context_file(None), context_file(Some("editor".to_owned()))],
+            files: vec![context_file(None), context_file(Some("app".to_owned()))],
         });
         round_trip(&ContextReadParams {
             project: ProjectId::generate(),
@@ -295,7 +295,7 @@ mod tests {
             file: context_file(None),
             content: "# Notes".to_owned(),
         });
-        for writer in [None, Some("editor".to_owned())] {
+        for writer in [None, Some("app".to_owned())] {
             round_trip(&ContextWriteParams {
                 id: ContextWriteId::generate(),
                 project: ProjectId::generate(),
@@ -305,7 +305,7 @@ mod tests {
             });
         }
         round_trip(&ContextWriteResult {
-            file: context_file(Some("editor".to_owned())),
+            file: context_file(Some("app".to_owned())),
         });
         round_trip(&EventsEventParams {
             subscription: SubscriptionId::generate(),
@@ -313,7 +313,7 @@ mod tests {
             time: "2026-09-24T12:00:00Z".parse().unwrap(),
             project: Some(ProjectId::generate()),
             event: WispEvent::ContextChanged {
-                file: context_file(Some("editor".to_owned())),
+                file: context_file(Some("app".to_owned())),
             },
         });
     }
