@@ -26,8 +26,8 @@
 //!   Only macOS has one; elsewhere `attach` starts `serve` itself (0023).
 //! - `service`: installs, removes, and reports on the per-user `LaunchAgent` that keeps `serve`
 //!   running (#61). macOS only.
-//! - [`keystore`]: where API keys live: the macOS login Keychain (#117), and no store yet on Linux
-//!   or Windows.
+//! - [`keystore`]: where API keys live: the macOS login Keychain (#117), the Secret Service on
+//!   Linux (RYA-19), and no store yet on Windows.
 //! - [`usage`]: turns backend usage events into `wisp-store` rows (#120).
 //! - `routing`: picks a task's backend and account, forces the coordinator's no-write policy,
 //!   falls a failed subscription run back to a key account, and checks a coordinator's turn

@@ -11,6 +11,7 @@ mod agents;
 mod context;
 mod events;
 mod handshake;
+mod keys;
 mod lifecycle;
 mod mcp;
 mod projects;
