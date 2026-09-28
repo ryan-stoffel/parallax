@@ -1027,7 +1027,7 @@ async fn a_no_write_run_offered_write_tools_is_stopped() {
 }
 
 #[tokio::test]
-async fn malformed_and_unknown_lines_are_skipped_with_warnings() {
+async fn malformed_lines_warn_and_unknown_types_are_skipped_quietly() {
     let fake = Fake::new("malformed");
     let all = run(&fake, request(&fake.root())).await;
     assert_eq!(
@@ -1036,7 +1036,6 @@ async fn malformed_and_unknown_lines_are_skipped_with_warnings() {
             WarningKind::MalformedLine,
             WarningKind::MalformedLine,
             WarningKind::MalformedLine,
-            WarningKind::UnknownEvent,
             WarningKind::MalformedLine,
         ]
     );
@@ -1268,6 +1267,14 @@ fn an_init_that_does_not_say_where_its_credentials_came_from_is_refused() {
         ),
         "{steps:?}"
     );
+}
+
+#[test]
+fn command_lifecycle_messages_are_skipped_without_a_notice() {
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    // Shape from the claude-codes changelog, not recorded from a run.
+    let line = br#"{"type":"command_lifecycle","command_uuid":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01","state":"started","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68"}"#;
+    assert_eq!(translator.line(line), []);
 }
 
 #[test]
