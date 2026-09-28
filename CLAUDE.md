@@ -58,7 +58,7 @@ When something comes up mid-work (a bug, a follow-up, a question, out-of-scope w
 
 ## CI/CD
 
-One GitHub Actions workflow, `ci.yml`, on every PR and every push to `develop` and `main`: lint, type-check, build, and test `wispd` on macOS, Linux, and Windows and check `wispd attach` over ssh; lint, type-check, test, build, and launch the app on the same three OSes; run the app's end-to-end tests on macOS; lint the workflow. The `ci` job needs every other job, and a red `ci` check blocks merge. There is no release workflow until there is something to ship.
+One GitHub Actions workflow, `ci.yml`, on every PR and every push to `develop` and `main`: lint, type-check, build, and test `wispd` on macOS, Linux, and Windows and check `wispd attach` over ssh; lint, type-check, test, build, and launch the app on the same three OSes; run the app's end-to-end tests on macOS, Linux, and Windows against the `wispd` the Rust job built for each (Windows runs only the connect test until RYA-109); lint the workflow. The `ci` job needs every other job, and a red `ci` check blocks merge. There is no release workflow until there is something to ship.
 
 ## Order of work
 
