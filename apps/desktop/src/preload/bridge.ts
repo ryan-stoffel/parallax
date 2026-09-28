@@ -18,6 +18,8 @@ export interface WispBridge {
   version(): Promise<string>;
   /** Sets Electron's `nativeTheme.themeSource`, so native UI matches the app's theme. */
   setThemeSource(preference: ThemePreference): void;
+  /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
+  pickFolder(): Promise<string | null>;
 
   /**
    * Calls a wispd method on a host. Resolves to its result or its error, also for an unknown

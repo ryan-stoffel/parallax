@@ -1,32 +1,31 @@
 import { PanelLeft, PanelRight, SquarePen } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import type { Thread } from "../protocol/generated/protocol";
 import { AgentChat } from "./AgentChat";
 import { Composer } from "./Composer";
-import { composerOptions, hosts, type Host } from "./placeholder";
+import { useConnection } from "./ConnectionStatus";
+import { NewThread } from "./NewThread";
+import { hosts, models } from "./placeholder";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { SettingsNav, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
+import { groupOf, groupThreads, noRepo, useThreads } from "./threads";
 import { Breadcrumb, IconButton, TopBar } from "./ui";
 
 /**
- * The open chat: a Project's coordinator chat, or a repository's thread
- * (`threadId: null` is a new thread there).
+ * The open chat: a Project's coordinator chat, a thread (its id is its run's), or a new
+ * thread in a sidebar group (`threads.ts`). With no group, it's the first repository's.
  */
 export type Selection =
   | { kind: "project"; projectId: string }
-  | { kind: "thread"; repoId: string; threadId: string | null };
+  | { kind: "thread"; threadId: string }
+  | { kind: "new"; groupId?: string };
 
 export type SettingsSection = "general" | "providers";
 
 const firstHost = hosts[0]!;
-// A host opens on a new thread in its first repository.
-const newThreadIn = (host: Host, repoId = host.repositories[0]!.id): Selection => ({
-  kind: "thread",
-  repoId,
-  threadId: null,
-});
 
 /**
  * The app frame: sidebar, then the chat or Settings, then the side panel.
@@ -35,31 +34,41 @@ const newThreadIn = (host: Host, repoId = host.repositories[0]!.id): Selection =
 export function App() {
   const [theme, setTheme] = useThemePreference();
   const [host, setHost] = useState(firstHost);
-  const [selection, setSelection] = useState(() => newThreadIn(firstHost));
+  const [selection, setSelection] = useState<Selection>({ kind: "new" });
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
 
-  // The breadcrumb, and for a new thread the centered composer's heading. An
-  // existing chat (a Project's, or a thread) docks the composer instead.
+  // Threads are live for this Mac only; other hosts arrive with RYA-26.
+  const connection = useConnection("local");
+  const connected = connection?.status === "connected";
+  const threads = useThreads("local", connected);
+  const { groups } = groupThreads(threads.state);
+  // The open thread's group (No Repo's until wispd lists it), or the new thread's.
+  let group = groups[0]!;
+  if (selection.kind === "thread") {
+    const open = threads.state.threads.find((t) => t.id === selection.threadId);
+    const id = open ? groupOf(threads.state, open) : noRepo;
+    group = groups.find((g) => g.id === id)!;
+  } else if (selection.kind === "new")
+    group = groups.find((g) => g.id === selection.groupId) ?? group;
+
   let crumbs: string[];
-  let heroHeading: string | null = null;
-  let runId: string | undefined;
-  if (selection.kind === "project") {
+  if (selection.kind === "project")
     crumbs = [host.name, host.projects.find((p) => p.id === selection.projectId)!.name];
-  } else {
-    const repo = host.repositories.find((r) => r.id === selection.repoId)!;
-    const thread = repo.threads.find((t) => t.id === selection.threadId);
-    crumbs = [host.name, repo.name, thread?.title ?? "New thread"];
-    runId = thread?.runId;
-    if (!thread)
-      heroHeading = repo.scratch
-        ? "What should we work on?"
-        : `What should we build in ${repo.name}?`;
-  }
+  else if (selection.kind === "thread")
+    crumbs = [host.name, group.name, threads.state.titles[selection.threadId] ?? "Thread"];
+  else crumbs = [host.name, group.name, "New thread"];
+
   const newThread = () => {
     setSettings(null);
-    setSelection(newThreadIn(host, selection.kind === "thread" ? selection.repoId : undefined));
+    setSelection({ kind: "new", groupId: selection.kind === "project" ? undefined : group.id });
+  };
+  const deleteThread = async (thread: Thread) => {
+    const error = await threads.remove(thread);
+    if (!error && selection.kind === "thread" && selection.threadId === thread.id)
+      setSelection({ kind: "new", groupId: groupOf(threads.state, thread) });
+    return error;
   };
 
   // Mod+B: sidebar. Mod+Alt+B: side panel. Mod+N: new thread. Mod+,: Settings.
@@ -109,14 +118,15 @@ export function App() {
             hosts={hosts}
             host={host}
             onHostChange={(id) => {
-              const next = hosts.find((h) => h.id === id)!;
-              setHost(next);
-              setSelection(newThreadIn(next));
+              setHost(hosts.find((h) => h.id === id)!);
+              setSelection({ kind: "new" });
             }}
             selection={selection}
             onSelect={setSelection}
             onOpenSettings={() => setSettings("general")}
-            models={composerOptions.models}
+            models={models}
+            threads={threads}
+            onDelete={deleteThread}
           />
         )}
       </Sidebar>
@@ -150,27 +160,40 @@ export function App() {
                 </IconButton>
               </div>
             </TopBar>
-            {runId ? (
+            {selection.kind === "thread" ? (
               // Keyed, so another run starts from an empty transcript.
-              <AgentChat key={`${host.id}/${runId}`} hostId={host.id} runId={runId} />
-            ) : heroHeading === null ? (
+              <AgentChat
+                key={`${host.id}/${selection.threadId}`}
+                hostId={host.id}
+                runId={selection.threadId}
+              />
+            ) : selection.kind === "new" ? (
+              <NewThread
+                groups={groups}
+                groupId={group.id}
+                onGroupChange={(groupId) => setSelection({ kind: "new", groupId })}
+                local={host.local}
+                addRepo={threads.addRepo}
+                start={threads.start}
+                onStarted={(threadId) => setSelection({ kind: "thread", threadId })}
+                disabledReason={
+                  connection?.status === "failed"
+                    ? "Disconnected from wispd"
+                    : connected
+                      ? undefined
+                      : "Connecting to wispd…"
+                }
+              />
+            ) : (
+              // A Project's coordinator chat is RYA-46's.
               <>
                 <div className="flex flex-1 items-center justify-center text-[13px] text-faint-foreground">
                   No messages yet
                 </div>
                 <div className="mx-auto w-full max-w-3xl px-6 pb-5">
-                  <Composer newThread={{ localHost: host.local, options: composerOptions }} />
+                  <Composer />
                 </div>
               </>
-            ) : (
-              <div className="flex flex-1 flex-col items-center justify-center px-6 pb-[12vh]">
-                <div className="w-full max-w-2xl">
-                  <h1 className="mb-6 text-center text-[22px] font-medium tracking-tight">
-                    {heroHeading}
-                  </h1>
-                  <Composer hero newThread={{ localHost: host.local, options: composerOptions }} />
-                </div>
-              </div>
             )}
           </>
         )}

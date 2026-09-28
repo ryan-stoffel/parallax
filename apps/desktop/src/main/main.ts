@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
 import path from "node:path";
 
 import { THEME_PREFERENCES } from "../preload/bridge";
@@ -54,6 +54,16 @@ app.on("web-contents-created", (_event, contents) => {
 });
 
 ipcMain.handle("wisp:version", () => app.getVersion());
+
+// New Thread's "Add repository…": a folder on this Mac, sheet-attached to the asking window.
+ipcMain.handle("wisp:pickFolder", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const options = { properties: ["openDirectory" as const] };
+  const { canceled, filePaths } = await (win
+    ? dialog.showOpenDialog(win, options)
+    : dialog.showOpenDialog(options));
+  return canceled ? null : (filePaths[0] ?? null);
+});
 
 // The renderer's Appearance setting. Native UI follows it.
 ipcMain.on("wisp:theme", (_event, preference: unknown) => {
