@@ -895,9 +895,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!retry_task.is_finished(), "the retry is still queued");
 
-        // The first attempt "fails" (a real caller's `Starting` guard would drop here) and
-        // releases, exactly as `agents::start`/`actor_for` do on any error path.
-        drop(first_guard);
+        // The first attempt "fails" and releases, exactly as `agents::start`/`actor_for` do on any
+        // error path. `Starting::drop` calls `release` while its guard is still alive, so the
+        // guard is dropped only after the checks below (RYA-91): dropping it first let the retry
+        // take the lock on the other worker and set `entered` before they ran.
         locks.release(id);
 
         // A caller arriving after the release, while the retry is still queued, must still be
@@ -912,6 +913,7 @@ mod tests {
             !entered.load(std::sync::atomic::Ordering::SeqCst),
             "the retry has not run yet: nothing has bypassed it"
         );
+        drop(first_guard);
 
         retry_task.await.unwrap();
         assert!(entered.load(std::sync::atomic::Ordering::SeqCst));
