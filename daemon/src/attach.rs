@@ -1,31 +1,25 @@
-//! `wispd attach`: how the editor reaches wispd, on this Mac or over SSH (0007, 0010).
+//! `wispd attach`: how the editor reaches wispd, on this machine or over SSH (0007, 0010, 0023).
 //!
-//! [`connect`] reaches wispd's socket, and starts wispd first if nothing accepts connections
-//! there. [`bridge`] then copies stdin to the socket and the socket to stdout, byte for byte,
-//! with no framing of its own. Over SSH, stdout is the protocol stream, so `attach` writes
-//! nothing else there. Its own messages go to stderr, through [`report`].
+//! [`connect`] reaches wispd's socket, or its named pipe on Windows, and starts wispd first if
+//! nothing accepts connections there. [`bridge`] then copies stdin to the connection and the
+//! connection to stdout, byte for byte, with no framing of its own. Over SSH, stdout is the
+//! protocol stream, so `attach` writes nothing else there. Its own messages go to stderr, through
+//! [`report`].
 
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
-use std::os::fd::AsFd;
-use std::os::unix::fs::FileTypeExt as _;
-use std::os::unix::net::UnixStream as StdUnixStream;
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rustix::process::{Pid, WaitOptions};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 use crate::launch_agent::LaunchAgent;
 use crate::logging;
 use crate::paths::DataDir;
 use crate::server::{self, EXIT_ALREADY_RUNNING};
-use crate::spawn::{self, Stdio};
 
 /// `attach` exits with this when it never reached wispd: it couldn't start wispd, the `serve` it
 /// started stopped, or nothing accepted a connection before the timeout.
@@ -118,22 +112,33 @@ pub fn report(message: impl fmt::Display) {
     let _ = writeln!(io::stderr(), "wispd attach: {message}");
 }
 
+/// A connection [`connect`] made: a std socket on Unix, which becomes tokio's inside the runtime,
+/// and a tokio pipe client on Windows.
+#[cfg(unix)]
+pub type Connection = std::os::unix::net::UnixStream;
+/// A connection [`connect`] made: a std socket on Unix, which becomes tokio's inside the runtime,
+/// and a tokio pipe client on Windows.
+#[cfg(windows)]
+pub type Connection = crate::transport::Stream;
+
 /// Connects to wispd's socket for `data_dir`, and starts wispd if nothing accepts connections
-/// there.
+/// there. On Windows, it must run inside a tokio runtime (not in `block_on`), and the pipe's
+/// server must run as this user (0023).
 ///
 /// wispd is started once. That goes through the launch agent when [`Options::launch_agent`] names
 /// one. Otherwise, or if the launch agent can't be started, it spawns `serve` detached: in a new
-/// session, with stdin on `/dev/null`, stdout and stderr appended to its log, and no other
-/// descriptors. It then retries with backoff until [`Options::connect_timeout`] has passed. A
-/// `serve` that exits 3, because another one holds the lock, is started again at the next retry
-/// (0009). One that stops any other way ends the wait.
+/// session (on Windows, a new process group outside the SSH session's job), with stdin on the
+/// null device, stdout and stderr appended to its log, and no other descriptors or handles. It
+/// then retries with backoff until [`Options::connect_timeout`] has passed. A `serve` that exits
+/// 3, because another one holds the lock, is started again at the next retry (0009). One that
+/// stops any other way ends the wait.
 ///
 /// It never stops a wispd, including one it started.
 ///
 /// # Errors
 ///
 /// [`Unavailable`] when no connection was made.
-pub fn connect(data_dir: &DataDir, options: &Options) -> Result<StdUnixStream, Unavailable> {
+pub fn connect(data_dir: &DataDir, options: &Options) -> Result<Connection, Unavailable> {
     let socket = data_dir
         .socket_path()
         .map_err(Unavailable::SocketPath)?
@@ -173,14 +178,18 @@ pub fn connect(data_dir: &DataDir, options: &Options) -> Result<StdUnixStream, U
 
 /// A connection, or `None` when nothing accepts connections at `path` yet: no socket file, or
 /// one that nothing listens on.
-fn try_connect(path: &Path) -> Result<Option<StdUnixStream>, Unavailable> {
-    match StdUnixStream::connect(path) {
+#[cfg(unix)]
+fn try_connect(path: &Path) -> Result<Option<Connection>, Unavailable> {
+    use std::os::unix::fs::FileTypeExt as _;
+
+    match Connection::connect(path) {
         Ok(stream) => Ok(Some(stream)),
         // Linux refuses a connection to a file that isn't a socket, where macOS says `ENOTSOCK`.
         // Starting `serve` can't fix that either, so both report it the same way.
         Err(error)
             if error.kind() == io::ErrorKind::ConnectionRefused
-                && fs::metadata(path).is_ok_and(|metadata| !metadata.file_type().is_socket()) =>
+                && std::fs::metadata(path)
+                    .is_ok_and(|metadata| !metadata.file_type().is_socket()) =>
         {
             Err(Unavailable::Connect {
                 path: path.to_owned(),
@@ -204,6 +213,25 @@ fn try_connect(path: &Path) -> Result<Option<StdUnixStream>, Unavailable> {
     }
 }
 
+/// A connection, or `None` when nothing accepts connections at `path` yet: no pipe
+/// (`ERROR_FILE_NOT_FOUND`), or every instance busy (`ERROR_PIPE_BUSY`). A server that runs as
+/// another user fails at once.
+#[cfg(windows)]
+fn try_connect(path: &Path) -> Result<Option<Connection>, Unavailable> {
+    match crate::transport::open(path) {
+        Ok(client) => Ok(Some(client)),
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound || crate::transport::is_busy(&error) =>
+        {
+            Ok(None)
+        }
+        Err(source) => Err(Unavailable::Connect {
+            path: path.to_owned(),
+            source,
+        }),
+    }
+}
+
 /// Starts wispd, and watches the `serve` it spawned until a connection works.
 struct Starter<'a> {
     data_dir: &'a DataDir,
@@ -215,7 +243,10 @@ struct Starter<'a> {
 }
 
 struct Spawned {
-    pid: Pid,
+    #[cfg(unix)]
+    pid: rustix::process::Pid,
+    #[cfg(windows)]
+    child: std::process::Child,
     /// The log's length when it started, so an error can quote what it wrote.
     log_len: u64,
 }
@@ -244,45 +275,50 @@ impl Starter<'_> {
             Unavailable::Start(format!("could not open {}: {error}", log_path.display()))
         })?;
         let log_len = log.metadata().map_or(0, |metadata| metadata.len());
-        let null = File::open("/dev/null")
-            .map_err(|error| Unavailable::Start(format!("could not open /dev/null: {error}")))?;
         let mut command = self.data_dir.command(&self.options.program);
         command.arg("serve");
-        let stdio = Stdio {
-            stdin: null.as_fd(),
-            stdout: log.as_fd(),
-            stderr: log.as_fd(),
-        };
-        let pid = spawn::spawn_detached(&command, stdio).map_err(|error| {
+        let spawned = detach(&mut command, &log).map_err(|error| {
             Unavailable::Start(format!(
                 "could not run {} serve: {error}",
                 self.options.program.display()
             ))
         })?;
-        self.spawned = Some(Spawned { pid, log_len });
+        self.spawned = Some(Spawned {
+            #[cfg(unix)]
+            pid: spawned,
+            #[cfg(windows)]
+            child: spawned,
+            log_len,
+        });
         Ok(())
     }
 
     /// Once connected, waits for the `serve` spawned last on a thread of its own, so one that
     /// lost the lock to another doesn't stay a zombie for as long as `attach` runs. The thread
-    /// ends with the process.
+    /// ends with the process. Windows has no zombies, so there this only lets go of it.
     fn reap_later(&mut self) {
+        #[cfg(unix)]
         if let Some(spawned) = self.spawned.take() {
             thread::spawn(move || {
-                let _ = rustix::process::waitpid(Some(spawned.pid), WaitOptions::empty());
+                let _ = rustix::process::waitpid(
+                    Some(spawned.pid),
+                    rustix::process::WaitOptions::empty(),
+                );
             });
         }
+        #[cfg(windows)]
+        drop(self.spawned.take());
     }
 
     /// Checks on the `serve` spawned last. One that another `serve` kept out with the lock is
     /// started again.
     fn check(&mut self) -> Result<(), Unavailable> {
-        let Some(spawned) = &self.spawned else {
+        let Some(spawned) = &mut self.spawned else {
             return Ok(());
         };
-        let status = match rustix::process::waitpid(Some(spawned.pid), WaitOptions::NOHANG) {
+        let status = match exit_status(spawned) {
             Ok(None) => return Ok(()),
-            Ok(Some((_, status))) => ExitStatus::from_raw(status.as_raw()),
+            Ok(Some(status)) => status,
             Err(error) => {
                 return Err(Unavailable::Start(format!(
                     "could not check on wispd serve: {error}"
@@ -301,6 +337,74 @@ impl Starter<'_> {
             log,
         })
     }
+}
+
+/// Starts `command` detached (0010): in a new session with stdin on `/dev/null`, stdout and
+/// stderr on `log`, and no other descriptors.
+#[cfg(unix)]
+fn detach(command: &mut std::process::Command, log: &File) -> io::Result<rustix::process::Pid> {
+    use std::os::fd::AsFd as _;
+
+    let null = File::open("/dev/null").map_err(|error| {
+        io::Error::new(error.kind(), format!("could not open /dev/null: {error}"))
+    })?;
+    let stdio = crate::spawn::Stdio {
+        stdin: null.as_fd(),
+        stdout: log.as_fd(),
+        stderr: log.as_fd(),
+    };
+    crate::spawn::spawn_detached(command, stdio)
+}
+
+/// Starts `command` detached (0023): with no console, in a new process group, and broken away
+/// from the SSH session's job, which Win32-OpenSSH kills when the session ends. stdin is `NUL`,
+/// and stdout and stderr are `log`. attach cleared the inherit flag on all its handles at
+/// startup, so those are the only handles `serve` gets. If the job forbids breaking away, it
+/// starts `serve` inside the job and warns that it ends with the session.
+#[cfg(windows)]
+fn detach(command: &mut std::process::Command, log: &File) -> io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt as _;
+    use std::process::Stdio;
+
+    use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+    use windows_sys::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+    };
+
+    command
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log.try_clone()?);
+    let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    match command
+        .creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB)
+        .spawn()
+    {
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.cast_signed()) => {
+            report(
+                "this session's job doesn't allow breaking away, so wispd serve will stop when the session ends",
+            );
+            command.creation_flags(flags).spawn()
+        }
+        spawned => spawned,
+    }
+}
+
+/// How the `serve` in `spawned` exited, or `None` while it runs.
+#[cfg(unix)]
+fn exit_status(spawned: &mut Spawned) -> io::Result<Option<ExitStatus>> {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    Ok(
+        rustix::process::waitpid(Some(spawned.pid), rustix::process::WaitOptions::NOHANG)?
+            .map(|(_, status)| ExitStatus::from_raw(status.as_raw())),
+    )
+}
+
+/// How the `serve` in `spawned` exited, or `None` while it runs.
+#[cfg(windows)]
+fn exit_status(spawned: &mut Spawned) -> io::Result<Option<ExitStatus>> {
+    spawned.child.try_wait()
 }
 
 /// The last line written to the log at `path` since it was `start` bytes long, cut short.
@@ -324,22 +428,29 @@ fn last_line(path: &Path, start: u64) -> Option<String> {
 /// Copies `input` to wispd and wispd's bytes to `output`, unchanged, until wispd closes the
 /// connection or `output` closes.
 ///
-/// When `input` ends, it shuts down the socket's write side and keeps copying, so wispd answers
-/// everything it was sent before it closes (0007). A peer that has gone away ends the bridge
-/// without an error.
+/// When `input` ends, it shuts down the connection's write side and keeps copying, so wispd
+/// answers everything it was sent before it closes (0007). A named pipe has no half-close, so on
+/// Windows an empty message stands in for it: `serve`'s pipe is a message pipe, where a
+/// zero-byte write arrives as a zero-byte read, and tokio reads that as the end of the input
+/// (see [`crate::transport`] for how the other messages stay whole). A peer that has gone away
+/// ends the bridge without an error.
 ///
 /// # Errors
 ///
 /// Any other I/O error.
-pub async fn bridge<I, O>(mut input: I, mut output: O, socket: UnixStream) -> io::Result<()>
+pub async fn bridge<I, O, S>(mut input: I, mut output: O, connection: S) -> io::Result<()>
 where
     I: AsyncRead + Unpin,
     O: AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite,
 {
-    let (mut from_wispd, mut to_wispd) = socket.into_split();
+    let (mut from_wispd, mut to_wispd) = tokio::io::split(connection);
     let upstream = async {
         let copied = tokio::io::copy(&mut input, &mut to_wispd).await;
+        #[cfg(unix)]
         let shut_down = to_wispd.shutdown().await;
+        #[cfg(windows)]
+        let shut_down = to_wispd.write(&[]).await.map(drop);
         copied.and(shut_down)
     };
     let downstream = tokio::io::copy(&mut from_wispd, &mut output);
@@ -374,8 +485,133 @@ fn gone_is_fine(result: io::Result<()>) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+mod log_tests {
     use std::fs;
+
+    use super::last_line;
+
+    #[test]
+    fn an_error_quotes_the_last_line_the_new_serve_logged() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("wispd.log");
+        fs::write(&log, "an older line\n").unwrap();
+        let start = fs::metadata(&log).unwrap().len();
+        assert_eq!(last_line(&log, start), None);
+
+        fs::write(
+            &log,
+            "an older line\nERROR could not start\nwispd: it failed\n\n",
+        )
+        .unwrap();
+        assert_eq!(last_line(&log, start).as_deref(), Some("wispd: it failed"));
+        fs::write(&log, format!("an older line\n{}\n", "x".repeat(1000))).unwrap();
+        assert_eq!(last_line(&log, start).map(|line| line.len()), Some(300));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::timeout;
+
+    use super::bridge;
+    use crate::server::setup::Pipe;
+
+    const PATIENCE: Duration = Duration::from_secs(10);
+
+    // A pipe has no half-close, so this checks the zero-byte write that stands in for one.
+    #[tokio::test]
+    async fn the_end_of_stdin_ends_the_servers_input_and_the_answer_still_arrives() {
+        let name = format!(r"\\.\pipe\wispd-test-bridge-{}", std::process::id());
+        let mut pipe = Pipe::create(name.as_ref()).unwrap();
+        let client = crate::transport::connect(name.as_ref()).await.unwrap();
+        let mut wispd = pipe.accept().await.unwrap();
+        let (mut stdin, input) = tokio::io::duplex(1024);
+        let (output, mut stdout) = tokio::io::duplex(1024);
+        let bridge = tokio::spawn(bridge(input, output, client));
+
+        stdin.write_all(b"{\"id\":1}\n").await.unwrap();
+        drop(stdin);
+        let mut request = Vec::new();
+        timeout(PATIENCE, wispd.read_to_end(&mut request))
+            .await
+            .expect("wispd reads to the end of the input")
+            .unwrap();
+        assert_eq!(request, b"{\"id\":1}\n");
+
+        wispd
+            .write_all(b"{\"id\":1,\"result\":{}}\n")
+            .await
+            .unwrap();
+        drop(wispd);
+        let mut answer = Vec::new();
+        timeout(PATIENCE, stdout.read_to_end(&mut answer))
+            .await
+            .expect("the answer and the end of stdout")
+            .unwrap();
+        assert_eq!(answer, b"{\"id\":1,\"result\":{}}\n");
+        timeout(PATIENCE, bridge)
+            .await
+            .expect("the bridge ends")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn large_bridge_inputs_arrive_byte_for_byte() {
+        for size in [64 << 10, 1 << 20] {
+            let name = format!(
+                r"\\.\pipe\wispd-test-bridge-large-{}-{size}",
+                std::process::id()
+            );
+            let mut pipe = Pipe::create(name.as_ref()).unwrap();
+            let client = crate::transport::connect(name.as_ref()).await.unwrap();
+            let server = pipe.accept().await.unwrap();
+            let (mut stdin, input) = tokio::io::duplex(8192);
+            let (output, mut stdout) = tokio::io::duplex(8192);
+            let bridge = tokio::spawn(bridge(input, output, client));
+            let sent: Vec<u8> = (0..size).map(|i| u8::try_from(i % 251).unwrap()).collect();
+            let writing = tokio::spawn({
+                let sent = sent.clone();
+                async move {
+                    for chunk in sent.chunks(8192) {
+                        stdin.write_all(chunk).await.unwrap();
+                    }
+                    drop(stdin);
+                }
+            });
+            let reading = async move {
+                let mut server = server;
+                let mut received = Vec::new();
+                server.read_to_end(&mut received).await.unwrap();
+                server.write_all(b"done").await.unwrap();
+                drop(server);
+                received
+            };
+            let received = timeout(PATIENCE, reading)
+                .await
+                .expect("server reads all input");
+            assert_eq!(received, sent, "bridge lost bytes at {size}");
+            writing.await.unwrap();
+            let mut answer = Vec::new();
+            timeout(PATIENCE, stdout.read_to_end(&mut answer))
+                .await
+                .expect("bridge returns response")
+                .unwrap();
+            assert_eq!(answer, b"done");
+            timeout(PATIENCE, bridge)
+                .await
+                .expect("bridge ends")
+                .unwrap()
+                .unwrap();
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
     use std::io;
     use std::time::Duration;
 
@@ -385,7 +621,7 @@ mod tests {
     use tokio::task::JoinHandle;
     use tokio::time::timeout;
 
-    use super::{bridge, last_line};
+    use super::bridge;
 
     const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -541,23 +777,5 @@ mod tests {
         }
         ended(bridge).await.unwrap();
         drop(stdin);
-    }
-
-    #[test]
-    fn an_error_quotes_the_last_line_the_new_serve_logged() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("wispd.log");
-        fs::write(&log, "an older line\n").unwrap();
-        let start = fs::metadata(&log).unwrap().len();
-        assert_eq!(last_line(&log, start), None);
-
-        fs::write(
-            &log,
-            "an older line\nERROR could not start\nwispd: it failed\n\n",
-        )
-        .unwrap();
-        assert_eq!(last_line(&log, start).as_deref(), Some("wispd: it failed"));
-        fs::write(&log, format!("an older line\n{}\n", "x".repeat(1000))).unwrap();
-        assert_eq!(last_line(&log, start).map(|line| line.len()), Some(300));
     }
 }

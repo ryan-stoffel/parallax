@@ -1,11 +1,13 @@
 //! Where wispd keeps its files.
 //!
 //! Everything lives in one data folder (0009, 0023), which the editor shares:
-//! `~/Library/Application Support/wisp` on macOS, and `$XDG_DATA_HOME/wisp` or
-//! `~/.local/share/wisp` on Linux. wispd's own entries are:
+//! `~/Library/Application Support/wisp` on macOS, `$XDG_DATA_HOME/wisp` or
+//! `~/.local/share/wisp` on Linux, and `%LOCALAPPDATA%\wisp` on Windows. wispd's own entries are:
 //!
-//! - `wispd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]).
-//! - `wispd.lock`: held with `flock` while a `wispd serve` runs. It contains that process's pid.
+//! - `wispd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]). Windows
+//!   listens on a named pipe instead, so there it isn't in the folder.
+//! - `wispd.lock`: locked (`flock`, or `LockFileEx` on Windows) while a `wispd serve` runs. It
+//!   contains that process's pid.
 //! - `wispd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
@@ -19,7 +21,6 @@
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -73,11 +74,33 @@ impl DataDir {
 
     /// The OS's data folder for wisp (0023): `~/Library/Application Support/wisp` on macOS. On
     /// Linux, `$XDG_DATA_HOME/wisp`, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset or,
-    /// as the XDG spec says, not absolute.
+    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\wisp`.
+    ///
+    /// # Errors
+    ///
+    /// If the home folder, or on Windows `LOCALAPPDATA`, is needed and unknown.
+    #[cfg(windows)]
+    pub fn default_location() -> io::Result<Self> {
+        let local = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "LOCALAPPDATA isn't set to an absolute path",
+                )
+            })?;
+        Self::new(local.join("wisp"))
+    }
+
+    /// The OS's data folder for wisp (0023): `~/Library/Application Support/wisp` on macOS. On
+    /// Linux, `$XDG_DATA_HOME/wisp`, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset or,
+    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\wisp`.
     ///
     /// # Errors
     ///
     /// If the home folder is needed and unknown.
+    #[cfg(unix)]
     pub fn default_location() -> io::Result<Self> {
         #[cfg(target_os = "linux")]
         if let Some(data_home) = std::env::var_os("XDG_DATA_HOME")
@@ -110,7 +133,7 @@ impl DataDir {
         &self.root
     }
 
-    /// `wispd.lock`, which a running `serve` holds with `flock`.
+    /// `wispd.lock`, which a running `serve` holds locked.
     #[must_use]
     pub fn lock_file(&self) -> PathBuf {
         self.root.join("wispd.lock")
@@ -167,6 +190,7 @@ impl DataDir {
     ///
     /// When the fallback is needed and its folder can't be found, or the fallback path is too
     /// long too.
+    #[cfg(unix)]
     pub fn socket_path(&self) -> io::Result<SocketPath> {
         let default = self.root.join("wispd.sock");
         if fits(&default) {
@@ -175,7 +199,7 @@ impl DataDir {
                 fallback: false,
             });
         }
-        let path = fallback_socket_dir()?.join(format!("wispd-{}.sock", self.hash()));
+        let path = fallback_socket_dir()?.join(format!("wispd-{}.sock", self.hash(4)));
         if !fits(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -191,9 +215,27 @@ impl DataDir {
         })
     }
 
-    fn hash(&self) -> String {
-        let digest = Sha256::digest(self.root.as_os_str().as_bytes());
-        digest[..4].iter().fold(String::new(), |mut hex, byte| {
+    /// The named pipe `serve` listens on (0023): `\\.\pipe\wispd-<hash>`, where `<hash>` is the
+    /// first 16 hex digits of the SHA-256 of the data folder's path. Pipe names share one
+    /// machine-wide namespace, hence twice the digits of the socket's fallback name. Only this
+    /// user may connect; see [`crate::transport`].
+    ///
+    /// # Errors
+    ///
+    /// Never; the `Result` matches the Unix version.
+    #[cfg(windows)]
+    pub fn socket_path(&self) -> io::Result<SocketPath> {
+        Ok(SocketPath {
+            path: PathBuf::from(format!(r"\\.\pipe\wispd-{}", self.hash(8))),
+            fallback: false,
+        })
+    }
+
+    /// The first `bytes` bytes of the SHA-256 of the folder's path, in hex. On Windows, the path's
+    /// bytes are its WTF-8 encoding, which is UTF-8 for any path that is valid Unicode.
+    fn hash(&self, bytes: usize) -> String {
+        let digest = Sha256::digest(self.root.as_os_str().as_encoded_bytes());
+        digest[..bytes].iter().fold(String::new(), |mut hex, byte| {
             let _ = write!(hex, "{byte:02x}");
             hex
         })
@@ -243,23 +285,22 @@ fn fallback_socket_dir() -> io::Result<PathBuf> {
 /// Where the socket goes, from [`DataDir::socket_path`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SocketPath {
-    /// The socket's path.
+    /// The socket's path, or on Windows the pipe's name.
     pub path: PathBuf,
     /// Whether this is the fallback in the per-user temporary or runtime folder. macOS deletes
     /// old files there, and logind deletes the runtime folder at the last logout, so the server
-    /// checks that the socket still exists.
+    /// checks that the socket still exists. Never on Windows.
     pub fallback: bool,
 }
 
+#[cfg(unix)]
 fn fits(path: &Path) -> bool {
     path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use super::{DataDir, MAX_SOCKET_PATH_BYTES};
+    use super::DataDir;
 
     #[test]
     fn spellings_of_one_folder_resolve_the_same() {
@@ -268,12 +309,12 @@ mod tests {
             assert_eq!(DataDir::new(other).unwrap(), plain, "{other}");
         }
         assert_eq!(
-            plain.hash(),
-            DataDir::new("/Users/me/data/").unwrap().hash()
+            plain.hash(4),
+            DataDir::new("/Users/me/data/").unwrap().hash(4)
         );
         assert_ne!(
-            plain.hash(),
-            DataDir::new("/Users/me/data2").unwrap().hash()
+            plain.hash(4),
+            DataDir::new("/Users/me/data2").unwrap().hash(4)
         );
     }
 
@@ -284,8 +325,11 @@ mod tests {
         assert!(dir.root().ends_with("relative/data"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn files_live_in_the_folder() {
+        use std::path::Path;
+
         let dir = DataDir::new("/d").unwrap();
         assert_eq!(dir.lock_file(), Path::new("/d/wispd.lock"));
         assert_eq!(dir.store_file(), Path::new("/d/wispd.sqlite3"));
@@ -298,6 +342,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn commands_pass_the_data_folder_on() {
         let dir = DataDir::new("/tmp/wispd-data/./x/").unwrap();
@@ -310,15 +355,19 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_hash_is_the_first_8_hex_digits_of_the_paths_sha256() {
         // printf '%s' /Users/me/Library/Application\ Support/wisp | shasum -a 256
         let dir = DataDir::new("/Users/me/Library/Application Support/wisp").unwrap();
-        assert_eq!(dir.hash(), "625c7f6d");
+        assert_eq!(dir.hash(4), "625c7f6d");
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_default_socket_is_used_up_to_the_limit() {
+        use super::MAX_SOCKET_PATH_BYTES;
+
         let folder = "/Library/Application Support/wisp";
         let home = format!(
             "/Users/{}",
@@ -336,12 +385,38 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_longer_path_falls_back_to_the_user_temp_dir() {
+        use super::MAX_SOCKET_PATH_BYTES;
+
         let home = format!("/Users/{}", "u".repeat(53));
         let dir = DataDir::new(format!("{home}/Library/Application Support/wisp")).unwrap();
         let socket = dir.socket_path().unwrap();
         assert!(socket.fallback);
         let temp = super::fallback_socket_dir().unwrap();
-        assert_eq!(socket.path, temp.join(format!("wispd-{}.sock", dir.hash())));
+        assert_eq!(
+            socket.path,
+            temp.join(format!("wispd-{}.sock", dir.hash(4)))
+        );
         assert!(socket.path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_pipe_is_named_after_16_hex_digits_of_the_paths_sha256() {
+        // printf %s 'C:\wisp' | shasum -a 256
+        let dir = DataDir::new(r"C:\wisp").unwrap();
+        assert_eq!(dir.hash(8), "bb46ad6a4ea41022");
+        let socket = dir.socket_path().unwrap();
+        assert_eq!(socket.path.as_os_str(), r"\\.\pipe\wispd-bb46ad6a4ea41022");
+        assert!(!socket.fallback);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_default_folder_is_wisp_in_local_app_data() {
+        let local = std::env::var_os("LOCALAPPDATA").unwrap();
+        assert_eq!(
+            DataDir::default_location().unwrap().root(),
+            std::path::Path::new(&local).join("wisp")
+        );
     }
 }

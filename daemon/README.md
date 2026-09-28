@@ -1,8 +1,8 @@
 # wispd
 
-wisp's host daemon. Each user on a macOS or Linux host runs their own, and it keeps projects and agents running in the background. Clients reach it through `wispd attach`, either on the same machine or on a host over SSH.
+wisp's host daemon. Each user on a macOS, Linux, or Windows host runs their own, and it keeps projects and agents running in the background. Clients reach it through `wispd attach`, either on the same machine or on a host over SSH.
 
-Build it with `cargo build --release -p wispd`. On Linux that needs a C compiler for the bundled SQLite, such as Debian's `build-essential`. `WISP_VERSION`, if set at compile time, is what `wispd --version` prints (`daemon/src/lib.rs` reads it with `option_env!`); otherwise it prints `Cargo.toml`'s placeholder.
+Build it with `cargo build --release -p wispd`. On Linux that needs a C compiler for the bundled SQLite, such as Debian's `build-essential`, and on Windows the Visual Studio C++ build tools. `WISP_VERSION`, if set at compile time, is what `wispd --version` prints (`daemon/src/lib.rs` reads it with `option_env!`); otherwise it prints `Cargo.toml`'s placeholder.
 
 The decisions behind it:
 
@@ -15,11 +15,11 @@ The decisions behind it:
 
 | Command | What it does |
 | --- | --- |
-| `wispd serve` | Serves the protocol on this user's Unix socket until SIGTERM or SIGINT |
-| `wispd attach` | Connects stdin and stdout to that socket, and starts wispd first if nothing is listening |
+| `wispd serve` | Serves the protocol on this user's Unix socket, or named pipe on Windows, until SIGTERM or SIGINT (Ctrl-C or Ctrl-Break on Windows) |
+| `wispd attach` | Connects stdin and stdout to that socket or pipe, and starts wispd first if nothing is listening |
 | `wispd service install`, `uninstall`, `status` | macOS only: manage the LaunchAgent that keeps `serve` running (#61) |
 
-Both commands take `--data-dir` (or `WISPD_DATA_DIR`) to use a data folder other than the default: `~/Library/Application Support/wisp` on macOS, and `$XDG_DATA_HOME/wisp` on Linux, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset. The socket is `wispd.sock` in that folder. When that path is too long for a Unix socket, it moves to a per-user folder: the one `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
+Both commands take `--data-dir` (or `WISPD_DATA_DIR`) to use a data folder other than the default: `~/Library/Application Support/wisp` on macOS, `$XDG_DATA_HOME/wisp` on Linux, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset, and `%LOCALAPPDATA%\wisp` on Windows. The socket is `wispd.sock` in that folder. When that path is too long for a Unix socket, it moves to a per-user folder: the one `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. On Windows, `serve` listens on the named pipe `\\.\pipe\wispd-<hash>` instead, where `<hash>` is the first 16 hex digits of the SHA-256 of the data folder's path. Its ACL admits only your user, and each end checks that the other runs as your user. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
 
 `attach` passes bytes through unchanged and prints nothing else on stdout. You can send a request by hand:
 
@@ -90,7 +90,16 @@ The client runs the same `ssh ... <host> wispd attach` command, and the host nee
 
 Linux has no service yet (systemd is RYA-18), so `attach` always starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. For now, a Linux host also can't store API keys (RYA-19) or run workers (RYA-20): key accounts fail with `keychainUnavailable`, and `agent/start` for a worker fails with `workerUnavailable`. Subscriptions and no-write runs work.
 
-wispd listens only on its Unix socket, never on a network port. SSH, with your own keys and config, is the only way in from another machine.
+## Using a Windows host over SSH
+
+The client runs the same `ssh ... <host> wispd attach` command against Windows' own OpenSSH server (Settings > System > Optional features > OpenSSH Server). The host needs:
+
+1. **`wispd.exe` on the `PATH`** of an SSH command, which runs through `cmd.exe`. The user or system `PATH` in Settings works; to check, run `ssh <host> where wispd`.
+2. **A key that logs in without prompts.** For an administrator, Windows' sshd reads keys from `C:\ProgramData\ssh\administrators_authorized_keys`, not `~/.ssh/authorized_keys`.
+
+Windows has no service yet (a scheduled task is RYA-22), so `attach` always starts `serve` itself, with no console and broken away from the SSH session's job, which Windows' sshd kills when the session ends. If the job doesn't allow that, `attach` warns that `serve` will stop with the session. `wispd.lock` stays in the data folder after `serve` stops, and a second `serve`'s exit-3 error can't name the running one's pid, because Windows' lock keeps other processes from reading the file. A Windows host can't store API keys yet (RYA-23), and Claude Code has no sandbox on native Windows, so workers are refused with `workerUnavailable`; run `wispd` in WSL2 for those (RYA-24). Subscriptions and no-write runs work. Agent CLIs run in a job object, so cancelling one closes its stdin and, after a grace period, ends everything it started.
+
+wispd listens only on its Unix socket or named pipe, never on a network port. SSH, with your own keys and config, is the only way in from another machine.
 
 ## Testing `attach` over ssh on your machine
 

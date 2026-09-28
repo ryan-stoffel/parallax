@@ -19,7 +19,6 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use wisp_protocol::framing::{FrameCodec, FrameError};
 use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Message, Request, RequestId, Response};
@@ -36,6 +35,7 @@ use wisp_protocol::{
 };
 
 use crate::VERSION;
+use crate::transport::{self, Stream};
 
 /// The server's name in the coordinator's `--mcp-config`, which prefixes its tools' names there.
 pub const SERVER: &str = "wispd";
@@ -643,14 +643,14 @@ fn render_diff(diff: &AgentDiffResult) -> String {
 
 /// One connection to wispd: `initialize`d, then calls in order.
 struct Wispd {
-    framed: Framed<UnixStream, FrameCodec>,
+    framed: Framed<Stream, FrameCodec>,
     next_id: i64,
 }
 
 /// Errors from wispd are its message: the model reads them, and nothing matches on them.
 impl Wispd {
     async fn open(socket: &Path) -> Result<Self, String> {
-        let stream = UnixStream::connect(socket)
+        let stream = transport::connect(socket)
             .await
             .map_err(|error| format!("could not reach wispd at {}: {error}", socket.display()))?;
         let mut wispd = Self {

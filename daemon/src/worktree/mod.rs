@@ -90,8 +90,10 @@
 
 mod review;
 mod scratch;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
+#[cfg(all(test, windows))]
+mod windows_tests;
 
 pub use review::{
     AcceptError, Accepted, Blob, CommitDiff, FileDiff, MAX_BLOB_BYTES, MergeHow, validate_repo_path,
@@ -185,12 +187,25 @@ fn indexed_git_config_vars(base: &Environment) -> Vec<OsString> {
 /// through.
 const GIT_SAFE_HOME_DIR: &str = "git-safe-home";
 
+/// The null device as git is given it, for `core.hooksPath` and `GIT_CONFIG_GLOBAL` (0023).
+/// Git for Windows reads `/dev/null` in `core.hooksPath` as `C:\dev\null`, a folder any user of
+/// the machine may create, so Windows uses `NUL`, a reserved name no checkout can create.
+pub(crate) const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+
+/// `-c` with [`NULL_DEVICE`] as `core.hooksPath`: no hooks run.
+pub(crate) const NO_HOOKS: &str = if cfg!(windows) {
+    "core.hooksPath=NUL"
+} else {
+    "core.hooksPath=/dev/null"
+};
+
 /// `-c` overrides applied to every git command scoped to a worker's worktree (#166), neutralizing
 /// what repo-local config and tracked files can otherwise make git execute:
 ///
-/// - `core.hooksPath=/dev/null` — no hooks run, wherever `core.hooksPath` points, including a
-///   tracked folder such as husky's `.husky/_`. `--no-verify` alone only skips `pre-commit` and
-///   `commit-msg`; `post-commit` and (on `git add`) `post-index-change` still run without this.
+/// - `core.hooksPath=/dev/null` ([`NO_HOOKS`], `NUL` on Windows) — no hooks run, wherever
+///   `core.hooksPath` points, including a tracked folder such as husky's `.husky/_`.
+///   `--no-verify` alone only skips `pre-commit` and `commit-msg`; `post-commit` and (on
+///   `git add`) `post-index-change` still run without this.
 /// - `core.fsmonitor=false` — no filesystem monitor hook.
 /// - `core.pager=cat`, `diff.external=` — no pager or external diff tool.
 /// - `core.sshCommand=false` — if anything ever triggered a transport, no attacker-chosen SSH
@@ -204,7 +219,7 @@ const GIT_SAFE_HOME_DIR: &str = "git-safe-home";
 /// worker-writable — is the only place left a filter, or a diff or merge driver, could be
 /// configured.
 const WORKTREE_GIT_CONFIG: &[(&str, &str)] = &[
-    ("core.hooksPath", "/dev/null"),
+    ("core.hooksPath", NULL_DEVICE),
     ("core.fsmonitor", "false"),
     ("core.pager", "cat"),
     ("core.sshCommand", "false"),
@@ -928,7 +943,7 @@ impl WorktreeManager {
         limit: Duration,
     ) -> Result<GitOutput, WorktreeError> {
         let mut spec = ProcessSpec::new("git", cwd);
-        spec.args = ["-c", "core.hooksPath=/dev/null"]
+        spec.args = ["-c", NO_HOOKS]
             .iter()
             .chain(args)
             .map(|arg| OsString::from(*arg))
@@ -1020,7 +1035,7 @@ impl WorktreeManager {
             .collect();
         spec.inject.set("GIT_TERMINAL_PROMPT", "0");
         spec.inject.set("GIT_CONFIG_NOSYSTEM", "1");
-        spec.inject.set("GIT_CONFIG_GLOBAL", "/dev/null");
+        spec.inject.set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
         spec.inject
             .set("HOME", self.git_safe_home.to_string_lossy().into_owned());
         spec.stdin = StdinMode::Null;
