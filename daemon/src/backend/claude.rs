@@ -68,7 +68,7 @@
 //! group if it is still running after the grace period.
 
 mod stream;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 use std::collections::VecDeque;
@@ -77,18 +77,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rustix::process::Signal;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
-use tokio::net::unix::pipe;
 use tokio::sync::{Notify, mpsc};
 
 pub(crate) use self::stream::version as parse_version;
 use self::stream::{Step, Translator, TurnDone};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
-    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec,
-    StdinMode,
+    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
+    StdinMode, StdinPipe,
 };
 use super::sandbox::worker_sandbox;
 use super::{
@@ -533,7 +531,7 @@ enum Delivery {
 /// Writes messages to stdin in order, off the driver's loop, so a CLI that stops reading stdin
 /// can't keep the driver from reading its stdout.
 async fn write_messages(
-    mut stdin: pipe::Sender,
+    mut stdin: StdinPipe,
     mut queue: mpsc::UnboundedReceiver<Message>,
     results: mpsc::UnboundedSender<Delivery>,
 ) {

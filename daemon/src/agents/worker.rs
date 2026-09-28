@@ -14,10 +14,10 @@ use crate::backend::process::Environment;
 use crate::routing::KeyAccounts;
 
 /// Folders appended to an agent's `PATH` when it lacks them (#96): the vendors' own install
-/// folder (`~/.local/bin`, where Claude Code's installer puts `claude`), Homebrew on Apple silicon
-/// (macOS only) and `/usr/local/bin`, and the system folders (0023). They go after whatever
-/// `PATH` wispd was started with, so the user's own order still wins; they only fill in what
-/// launchd or an SSH session left out.
+/// folder (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
+/// on Windows), Homebrew on Apple silicon (macOS only) and `/usr/local/bin`, and the system
+/// folders (0023). They go after whatever `PATH` wispd was started with, so the user's own order
+/// still wins; they only fill in what launchd or an SSH session left out.
 const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin"];
 #[cfg(target_os = "macos")]
 const EXTRA_PATH: &[&str] = &[
@@ -30,6 +30,8 @@ const EXTRA_PATH: &[&str] = &[
 ];
 #[cfg(target_os = "linux")]
 const EXTRA_PATH: &[&str] = &["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+#[cfg(windows)]
+const EXTRA_PATH: &[&str] = &[];
 
 /// The variables of wispd's own environment that agent CLIs, CLI probes, and worktree git
 /// commands inherit; everything else stays with wispd (0013, decision 0014). A worker has network
@@ -65,6 +67,34 @@ const INHERITED: &[&str] = &[
 /// Prefixes of inherited variables that are kept too: the locale categories.
 const INHERITED_PREFIXES: &[&str] = &["LC_"];
 
+/// What Windows programs need on top of [`INHERITED`] to find the system, the user's folders,
+/// and themselves: without `SYSTEMROOT`, for one, Node can't reach the network. Names are
+/// upper-case, as [`Environment::inherited`] spells them there.
+const INHERITED_ON_WINDOWS: &[&str] = &[
+    "SYSTEMROOT",
+    "WINDIR",
+    "SYSTEMDRIVE",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "USERNAME",
+    "USERDOMAIN",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "COMMONPROGRAMFILES",
+    "TEMP",
+    "TMP",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+];
+
 /// The environment every agent CLI, CLI probe, and worktree git command starts from (#96,
 /// decision 0014): only the [`INHERITED`] part of wispd's own, with [`EXTRA_PATH`] filled in.
 pub(crate) fn agent_environment() -> Environment {
@@ -74,12 +104,14 @@ pub(crate) fn agent_environment() -> Environment {
     )
 }
 
-/// The variables of `env` an agent may inherit: [`INHERITED`] and [`INHERITED_PREFIXES`].
+/// The variables of `env` an agent may inherit: [`INHERITED`] and [`INHERITED_PREFIXES`], and on
+/// Windows [`INHERITED_ON_WINDOWS`].
 pub(crate) fn allowlisted(env: &Environment) -> Environment {
     env.names()
         .filter(|name| {
             name.to_str().is_some_and(|name| {
                 INHERITED.contains(&name)
+                    || (cfg!(windows) && INHERITED_ON_WINDOWS.contains(&name))
                     || INHERITED_PREFIXES
                         .iter()
                         .any(|prefix| name.starts_with(prefix))
@@ -118,9 +150,15 @@ pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
 const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 /// What to do about a backend that can't sandbox a worker here. Linux's sandbox checks are
 /// RYA-20's (0023).
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const NO_SANDBOX_HINT: &str = "wispd can't check a worker sandbox on this OS yet (decision \
                                0023), so run workers on a macOS host";
+
+/// What to do about a backend that can't sandbox a worker here: Claude Code has no sandbox on
+/// native Windows (0023, RYA-24).
+#[cfg(windows)]
+const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so run wispd in \
+                               WSL2 and add that as the host for workers";
 
 /// Refuses a worker on a backend that doesn't enforce the worker sandbox (0013).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {

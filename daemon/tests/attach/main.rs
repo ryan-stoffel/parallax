@@ -2,6 +2,10 @@
 //!
 //! The tests drive `attach` through pipes, as the editor does locally and as `ssh` does on a
 //! host, and speak the protocol through it.
+//!
+//! Unix only: they drive processes with signals and descriptors. `tests/windows.rs` covers
+//! attach on Windows.
+#![cfg(unix)]
 
 mod support;
 

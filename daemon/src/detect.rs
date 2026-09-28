@@ -374,5 +374,5 @@ fn extract_subscription_tier(text: &str) -> Option<String> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

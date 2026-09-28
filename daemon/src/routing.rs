@@ -27,9 +27,7 @@
 //!   that itself.
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -656,7 +654,9 @@ fn fingerprint(repo_path: &Path) -> Result<[u8; 32], PolicyCheckError> {
     for path in untracked_paths(&status) {
         hasher.update(&path);
         hasher.update([0]);
-        if let Ok(contents) = std::fs::read(repo_path.join(OsStr::from_bytes(&path))) {
+        if let Some(contents) =
+            untracked_file(repo_path, &path).and_then(|file| std::fs::read(file).ok())
+        {
             hasher.update(&contents);
         }
     }
@@ -704,6 +704,16 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<Vec<u8>, PolicyCheckError>
         });
     }
     Ok(output.stdout)
+}
+
+/// Where the untracked `path` from `git status` is. Git for Windows prints paths as UTF-8.
+#[cfg_attr(unix, expect(clippy::unnecessary_wraps, reason = "Windows can fail"))]
+fn untracked_file(repo_path: &Path, path: &[u8]) -> Option<PathBuf> {
+    #[cfg(unix)]
+    let path = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(path);
+    #[cfg(windows)]
+    let path = std::str::from_utf8(path).ok()?;
+    Some(repo_path.join(path))
 }
 
 /// The paths of `??` (untracked) entries in `-z`-terminated porcelain output.

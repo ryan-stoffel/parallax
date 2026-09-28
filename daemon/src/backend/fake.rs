@@ -29,12 +29,11 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
-use tokio::net::unix::pipe;
 use tokio::sync::mpsc;
 
 use super::event::{Event, Failure, FailureKind, ModelUsage, Outcome, WarningKind};
 use super::process::{
-    CancelPolicy, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, StdinMode,
+    CancelPolicy, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, StdinMode, StdinPipe,
 };
 use super::sandbox::worker_sandbox;
 use super::{
@@ -303,7 +302,7 @@ enum Delivery {
 /// Writes follow-ups to stdin in order, off the driver's loop, so a CLI that stops reading stdin
 /// can't keep the driver from reading its stdout.
 async fn write_follow_ups(
-    mut stdin: pipe::Sender,
+    mut stdin: StdinPipe,
     mut queue: mpsc::UnboundedReceiver<FollowUp>,
     results: mpsc::UnboundedSender<Delivery>,
 ) {
@@ -709,5 +708,5 @@ fn compile(script: &Script) -> Result<String, String> {
     Ok(out)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

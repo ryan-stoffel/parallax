@@ -4,8 +4,6 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use tokio::net::UnixStream;
-use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
 use wisp_protocol::{CoordinatorThreadId, ProjectId};
 use wispd::VERSION;
@@ -29,9 +27,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Serve the editor on this user's socket until SIGTERM or SIGINT.
+    /// Serve the editor on this user's socket or pipe until SIGTERM or SIGINT (Ctrl-C or
+    /// Ctrl-Break on Windows).
     Serve(ServeArgs),
-    /// Connect stdin and stdout to wispd's socket, starting wispd if it isn't running.
+    /// Connect stdin and stdout to wispd's socket or pipe, starting wispd if it isn't running.
     Attach(AttachArgs),
     /// Manage wispd's per-user `LaunchAgent`.
     #[cfg(target_os = "macos")]
@@ -44,7 +43,7 @@ enum Command {
 #[derive(Debug, Args)]
 struct McpArgs {
     /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux]
+    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -60,7 +59,7 @@ struct McpArgs {
 #[derive(Debug, Args)]
 struct ServeArgs {
     /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux]
+    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -72,7 +71,7 @@ struct ServeArgs {
 #[derive(Debug, Args)]
 struct AttachArgs {
     /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux]
+    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -117,7 +116,7 @@ enum ServiceCommand {
 #[derive(Debug, Args)]
 struct ServiceOptions {
     /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux]
+    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -180,6 +179,8 @@ fn mcp(args: &McpArgs) -> ! {
 /// Runs `attach` and exits, with `std::process::exit`: the thread that reads stdin blocks until
 /// input arrives, and would keep the runtime from shutting down (0007).
 fn attach(args: &AttachArgs) -> ! {
+    #[cfg(windows)]
+    wispd::windows::stop_inheriting_std_handles();
     let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
         Ok(data_dir) => data_dir,
         Err(error) => unavailable(&format!("could not find the data folder: {error}")),
@@ -193,44 +194,63 @@ fn attach(args: &AttachArgs) -> ! {
         connect_timeout: args.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
         launch_agent: LaunchAgent::installed_for(&data_dir),
     };
-    // Starting wispd happens here, before the runtime exists.
-    let stream = match attach::connect(&data_dir, &options) {
-        Ok(stream) => stream,
-        Err(error) => unavailable(&error),
-    };
-    let runtime = match tokio::runtime::Builder::new_current_thread()
+    let runtime = || match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => runtime,
         Err(error) => failed(&format!("could not start the runtime: {error}")),
     };
+    // On Unix, starting wispd happens here, before the runtime exists (0023). Windows' pipe
+    // client needs the runtime to connect.
+    #[cfg(windows)]
+    let runtime = runtime();
+    #[cfg(windows)]
+    let entered = runtime.enter();
+    let stream = match attach::connect(&data_dir, &options) {
+        Ok(stream) => stream,
+        Err(error) => unavailable(&error),
+    };
+    #[cfg(windows)]
+    drop(entered);
+    #[cfg(unix)]
+    let runtime = runtime();
     let code = runtime.block_on(async {
-        let stream = match stream
-            .set_nonblocking(true)
-            .and_then(|()| UnixStream::from_std(stream))
-        {
-            Ok(stream) => stream,
-            Err(error) => failed(&format!("could not use the connection: {error}")),
+        let bridged = async {
+            #[cfg(unix)]
+            let stream = match stream
+                .set_nonblocking(true)
+                .and_then(|()| tokio::net::UnixStream::from_std(stream))
+            {
+                Ok(stream) => stream,
+                Err(error) => failed(&format!("could not use the connection: {error}")),
+            };
+            match attach::bridge(tokio::io::stdin(), tokio::io::stdout(), stream).await {
+                Ok(()) => 0,
+                Err(error) => {
+                    report(format_args!("the connection failed: {error}"));
+                    1
+                }
+            }
         };
         // Handling SIGHUP, rather than leaving its default, also overrides an ignored SIGHUP
         // inherited from a parent such as nohup, so a dropped SSH session always ends attach.
-        let mut hangup = match signal(SignalKind::hangup()) {
-            Ok(hangup) => hangup,
-            Err(error) => failed(&format!("could not catch SIGHUP: {error}")),
-        };
-        tokio::select! {
-            bridged = attach::bridge(tokio::io::stdin(), tokio::io::stdout(), stream) => {
-                match bridged {
-                    Ok(()) => 0,
-                    Err(error) => {
-                        report(format_args!("the connection failed: {error}"));
-                        1
-                    }
-                }
+        // On Windows, the session's end closes stdin and stdout, or kills attach with its job.
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+
+            let mut hangup = match signal(SignalKind::hangup()) {
+                Ok(hangup) => hangup,
+                Err(error) => failed(&format!("could not catch SIGHUP: {error}")),
+            };
+            tokio::select! {
+                code = bridged => code,
+                _ = hangup.recv() => 0,
             }
-            _ = hangup.recv() => 0,
         }
+        #[cfg(windows)]
+        bridged.await
     });
     std::process::exit(code)
 }
@@ -246,6 +266,9 @@ fn failed(message: &str) -> ! {
 }
 
 fn serve(args: &ServeArgs) -> ExitCode {
+    // So agent CLIs don't inherit the log, or whatever else started `serve` (0023).
+    #[cfg(windows)]
+    wispd::windows::stop_inheriting_std_handles();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -377,7 +400,10 @@ fn resolve_data_dir(options: &ServiceOptions) -> Result<DataDir, ExitCode> {
         .map_err(|error| fail(&format!("could not find the data folder: {error}")))
 }
 
+#[cfg(unix)]
 fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     tokio::spawn(async move {
@@ -385,6 +411,33 @@ fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
             let name = tokio::select! {
                 _ = terminate.recv() => "SIGTERM",
                 _ = interrupt.recv() => "SIGINT",
+            };
+            info!(signal = name, "received a signal to stop");
+            shutdown.trigger();
+        }
+    });
+    Ok(())
+}
+
+/// Windows' equivalents of SIGTERM and SIGINT (0023). A detached `serve` has no console, so
+/// only a `serve` run in one receives them.
+#[cfg(windows)]
+fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
+
+    let mut c = ctrl_c()?;
+    let mut r#break = ctrl_break()?;
+    let mut close = ctrl_close()?;
+    let mut logoff = ctrl_logoff()?;
+    let mut shutdown_event = ctrl_shutdown()?;
+    tokio::spawn(async move {
+        loop {
+            let name = tokio::select! {
+                _ = c.recv() => "Ctrl-C",
+                _ = r#break.recv() => "Ctrl-Break",
+                _ = close.recv() => "console close",
+                _ = logoff.recv() => "logoff",
+                _ = shutdown_event.recv() => "shutdown",
             };
             info!(signal = name, "received a signal to stop");
             shutdown.trigger();

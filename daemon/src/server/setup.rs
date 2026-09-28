@@ -1,21 +1,30 @@
-//! What `serve` does before it accepts a connection (0007): check the data folder, take the lock,
-//! clear an old socket, and bind a new one.
+//! What `serve` does before it accepts a connection (0007, 0023): check the data folder, take the
+//! lock, then clear an old socket and bind a new one, or on Windows create the named pipe.
 
-use std::fs::{self, DirBuilder, File, OpenOptions, Permissions, TryLockError};
-use std::io::{self, Read, Write};
+use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
+use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use rustix::fs::OFlags;
+#[cfg(unix)]
 use tracing::{info, warn};
 
 use super::StartError;
 
+#[cfg(unix)]
 const LOCK_ATTEMPTS: usize = 5;
 
-/// Creates the data folder if it is missing, checks that it is a folder, not a symlink, owned by
-/// this process's effective user, and makes it 0700.
+/// Creates the data folder if it is missing and checks that it is a folder, not a symlink. On
+/// Unix, it must also belong to this process's effective user, and is made 0700. On Windows, it
+/// must not be any reparse point, such as a junction; its ACL is left alone, since
+/// `%LOCALAPPDATA%` already grants only the user, SYSTEM, and Administrators (0023).
 ///
 /// # Errors
 ///
@@ -23,11 +32,15 @@ const LOCK_ATTEMPTS: usize = 5;
 pub fn prepare_data_dir(dir: &Path) -> Result<(), StartError> {
     let io_error = |doing: &str, error| StartError::io(format!("{doing} {}", dir.display()), error);
     match fs::symlink_metadata(dir) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(|error| io_error("creating", error))?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut builder = DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder
+                .create(dir)
+                .map_err(|error| io_error("creating", error))?;
+        }
         Err(error) => return Err(io_error("reading", error)),
         Ok(_) => {}
     }
@@ -39,58 +52,115 @@ pub fn prepare_data_dir(dir: &Path) -> Result<(), StartError> {
     if metadata.file_type().is_symlink() {
         return Err(refuse("it is a symlink".to_owned()));
     }
+    #[cfg(windows)]
+    if is_reparse_point(&metadata) {
+        return Err(refuse(
+            "it is a reparse point, such as a junction".to_owned(),
+        ));
+    }
     if !metadata.is_dir() {
         return Err(refuse("it is not a folder".to_owned()));
     }
-    let euid = rustix::process::geteuid().as_raw();
-    if metadata.uid() != euid {
-        return Err(refuse(format!(
-            "it belongs to uid {}, not {euid}",
-            metadata.uid()
-        )));
-    }
-    if metadata.mode() & 0o7777 != 0o700 {
-        fs::set_permissions(dir, Permissions::from_mode(0o700))
-            .map_err(|error| io_error("making private", error))?;
+    #[cfg(unix)]
+    {
+        let euid = rustix::process::geteuid().as_raw();
+        if metadata.uid() != euid {
+            return Err(refuse(format!(
+                "it belongs to uid {}, not {euid}",
+                metadata.uid()
+            )));
+        }
+        if metadata.mode() & 0o7777 != 0o700 {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+                .map_err(|error| io_error("making private", error))?;
+        }
     }
     Ok(())
 }
 
-/// The `flock` on `wispd.lock` that admits one `serve` per data folder.
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+/// The lock on `wispd.lock` that admits one `serve` per data folder: `flock` on Unix, and
+/// `LockFileEx` on Windows, both through std's `File::try_lock`.
 #[derive(Debug)]
 pub(crate) struct InstanceLock {
     file: File,
+    #[cfg(unix)]
     path: PathBuf,
+}
+
+/// Opens and locks the file at `path`, creating it if needed.
+fn lock(path: &Path, data_dir: &Path) -> Result<File, StartError> {
+    let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    // A symlink here fails the open, or on Windows is opened itself and refused, instead of
+    // creating its target.
+    #[cfg(unix)]
+    options
+        .mode(0o600)
+        .custom_flags(OFlags::NOFOLLOW.bits().cast_signed());
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    #[cfg_attr(
+        windows,
+        expect(unused_mut, reason = "only Unix reads the holder's pid")
+    )]
+    let mut file = options.open(path).map_err(io_error)?;
+    #[cfg(windows)]
+    if is_reparse_point(&file.metadata().map_err(io_error)?) {
+        return Err(io_error(io::Error::other(
+            "it is a reparse point, such as a symlink",
+        )));
+    }
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        // Windows' lock is mandatory, so there the holder's pid can't be read (0023).
+        Err(TryLockError::WouldBlock) => Err(StartError::AlreadyRunning {
+            data_dir: data_dir.to_owned(),
+            #[cfg(unix)]
+            pid: read_pid(&mut file),
+            #[cfg(windows)]
+            pid: None,
+        }),
+        Err(TryLockError::Error(error)) => Err(io_error(error)),
+    }
+}
+
+/// Writes this process's pid into the lock file it holds.
+fn write_pid(mut file: File, path: &Path) -> Result<File, StartError> {
+    let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
+    file.set_len(0).map_err(io_error)?;
+    writeln!(file, "{}", std::process::id()).map_err(io_error)?;
+    Ok(file)
 }
 
 impl InstanceLock {
     /// Locks the file at `path`, creating it if needed, and writes this process's pid into it.
+    ///
+    /// Windows can't remove an open file, and has no stable file identity in std, so there the
+    /// lock file is never removed and this skips Unix's identity check (0023).
+    #[cfg(windows)]
+    pub fn acquire(path: &Path, data_dir: &Path) -> Result<Self, StartError> {
+        Ok(Self {
+            file: write_pid(lock(path, data_dir)?, path)?,
+        })
+    }
+
+    /// Locks the file at `path`, creating it if needed, and writes this process's pid into it.
+    #[cfg(unix)]
     pub fn acquire(path: &Path, data_dir: &Path) -> Result<Self, StartError> {
         let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
         // A stopping instance removes the file before it lets go of the lock, so the file locked
         // here may no longer be the one at `path`. Locking until it is keeps a second instance
         // from holding a lock on a file nobody else can find.
         for _ in 0..LOCK_ATTEMPTS {
-            // O_NOFOLLOW: a symlink here fails the open instead of creating its target.
-            let mut file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .custom_flags(OFlags::NOFOLLOW.bits().cast_signed())
-                .open(path)
-                .map_err(io_error)?;
-            match file.try_lock() {
-                Ok(()) => {}
-                Err(TryLockError::WouldBlock) => {
-                    return Err(StartError::AlreadyRunning {
-                        data_dir: data_dir.to_owned(),
-                        pid: read_pid(&mut file),
-                    });
-                }
-                Err(TryLockError::Error(error)) => return Err(io_error(error)),
-            }
+            let file = lock(path, data_dir)?;
             let locked = file.metadata().map_err(io_error)?;
             let current = match fs::symlink_metadata(path) {
                 Ok(current) => current,
@@ -100,10 +170,8 @@ impl InstanceLock {
             if (locked.dev(), locked.ino()) != (current.dev(), current.ino()) {
                 continue;
             }
-            file.set_len(0).map_err(io_error)?;
-            writeln!(file, "{}", std::process::id()).map_err(io_error)?;
             return Ok(Self {
-                file,
+                file: write_pid(file, path)?,
                 path: path.to_owned(),
             });
         }
@@ -112,8 +180,15 @@ impl InstanceLock {
         )))
     }
 
+    /// Lets go of the lock by closing the file, which stays (0023).
+    #[cfg(windows)]
+    pub fn release(self) {
+        drop(self.file);
+    }
+
     /// Removes the lock file, if it is still the one this instance locked, then lets go of the
     /// lock by closing it.
+    #[cfg(unix)]
     pub fn release(self) {
         let locked = self.file.metadata().map(|m| (m.dev(), m.ino()));
         match (locked, fs::symlink_metadata(&self.path)) {
@@ -132,19 +207,22 @@ impl InstanceLock {
     }
 }
 
+#[cfg(unix)]
 fn read_pid(file: &mut File) -> Option<u32> {
     let mut text = String::new();
-    file.read_to_string(&mut text).ok()?;
+    io::Read::read_to_string(file, &mut text).ok()?;
     text.trim().parse().ok()
 }
 
 /// The socket this server bound, known by its inode, so wispd only ever removes its own.
+#[cfg(unix)]
 #[derive(Debug)]
 pub(crate) struct Socket {
     path: PathBuf,
     identity: (u64, u64),
 }
 
+#[cfg(unix)]
 impl Socket {
     /// Removes an old socket at `path`, but nothing that isn't a socket, then binds a new one
     /// there and makes it 0600. Only the holder of the instance lock may call it.
@@ -208,12 +286,58 @@ impl Socket {
     }
 }
 
+/// The named pipe this server listens on (0023): one instance that waits for the next client,
+/// with a DACL that grants only this user. Unlike a socket, a pipe can't be deleted or replaced
+/// while wispd holds an instance, so it needs no rebinding or removal.
+#[cfg(windows)]
+#[derive(Debug)]
+pub(crate) struct Pipe {
+    name: PathBuf,
+    sddl: String,
+    next: tokio::net::windows::named_pipe::NamedPipeServer,
+}
+
+#[cfg(windows)]
+impl Pipe {
+    /// Creates the pipe's first instance, which fails if any process, another user's included,
+    /// already created the name. Must be called inside a tokio runtime.
+    pub fn create(name: &Path) -> Result<Self, StartError> {
+        let io_error =
+            |error| StartError::io(format!("creating the pipe {}", name.display()), error);
+        let sddl = crate::windows::this_user_only_sddl().map_err(io_error)?;
+        let mut options = tokio::net::windows::named_pipe::ServerOptions::new();
+        options.first_pipe_instance(true);
+        let next =
+            crate::windows::create_pipe(&options, name.as_os_str(), &sddl).map_err(io_error)?;
+        Ok(Self {
+            name: name.to_owned(),
+            sddl,
+            next,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.name
+    }
+
+    /// Waits for a client, and puts a new instance in place for the one after it.
+    pub async fn accept(&mut self) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+        let connected = self.next.connect().await;
+        // An instance whose connect failed can't be used again, so it is replaced either way.
+        let options = tokio::net::windows::named_pipe::ServerOptions::new();
+        let next = crate::windows::create_pipe(&options, self.name.as_os_str(), &self.sddl)?;
+        let current = std::mem::replace(&mut self.next, next);
+        connected.map(|()| current)
+    }
+}
+
 // The directory is 0700 already, which keeps other users away from the socket between bind
 // and chmod.
+#[cfg(unix)]
 fn bind_at(path: &Path) -> io::Result<(UnixListener, (u64, u64))> {
     let listener = UnixListener::bind(path)?;
     let finish = || {
-        fs::set_permissions(path, Permissions::from_mode(0o600))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         listener.set_nonblocking(true)?;
         let metadata = fs::symlink_metadata(path)?;
         Ok((metadata.dev(), metadata.ino()))
@@ -227,7 +351,83 @@ fn bind_at(path: &Path) -> io::Result<(UnixListener, (u64, u64))> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::fs;
+    use std::process::Command;
+
+    use super::{InstanceLock, Pipe, prepare_data_dir};
+    use crate::server::StartError;
+
+    #[test]
+    fn a_junction_or_file_is_refused_as_the_data_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let fresh = temp.path().join("a").join("b");
+        prepare_data_dir(&fresh).unwrap();
+        assert!(fresh.is_dir());
+
+        let link = temp.path().join("link");
+        let made = Command::new("cmd")
+            .arg("/c")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&fresh)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        assert!(matches!(
+            prepare_data_dir(&link),
+            Err(StartError::DataDir { .. })
+        ));
+
+        let file = temp.path().join("file");
+        fs::write(&file, "").unwrap();
+        assert!(matches!(
+            prepare_data_dir(&file),
+            Err(StartError::DataDir { .. })
+        ));
+    }
+
+    #[test]
+    fn a_second_lock_is_refused_without_a_pid_and_the_file_stays() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("wispd.lock");
+        let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
+        match InstanceLock::acquire(&path, temp.path()) {
+            Err(StartError::AlreadyRunning { pid, .. }) => assert_eq!(pid, None),
+            other => panic!("expected AlreadyRunning, got {other:?}"),
+        }
+        lock.release();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap().trim(),
+            std::process::id().to_string()
+        );
+        InstanceLock::acquire(&path, temp.path()).unwrap().release();
+    }
+
+    #[tokio::test]
+    async fn the_pipe_takes_this_users_clients_and_its_name_only_once() {
+        let name = format!(r"\\.\pipe\wispd-test-{}", std::process::id());
+        let mut pipe = Pipe::create(name.as_ref()).unwrap();
+        assert!(matches!(
+            Pipe::create(name.as_ref()),
+            Err(StartError::Io { .. })
+        ));
+        let client = crate::transport::connect(name.as_ref()).await.unwrap();
+        let server = pipe.accept().await.unwrap();
+        assert_eq!(
+            crate::windows::pipe_client_pid(&server).unwrap(),
+            std::process::id()
+        );
+        drop((client, server));
+        // The next instance is in place.
+        let _again = crate::transport::connect(name.as_ref()).await.unwrap();
+        pipe.accept().await.unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use std::fs::{self, Permissions};
     use std::os::unix::fs::{PermissionsExt, symlink};
