@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm]
+        os: [blacksmith-6vcpu-macos-26, blacksmith-4vcpu-ubuntu-2404, blacksmith-4vcpu-ubuntu-2404-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, ubuntu-24.04, windows-2025]
+        os: [blacksmith-6vcpu-macos-26, blacksmith-4vcpu-ubuntu-2404, blacksmith-4vcpu-windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
@@ -129,7 +129,7 @@ jobs:
   # The app against a wispd running its fake backend, with Playwright (RYA-16). macOS only until
   # wispd runs on Linux and Windows (RYA-25).
   e2e:
-    runs-on: macos-26
+    runs-on: blacksmith-6vcpu-macos-26
     timeout-minutes: 20
     env:
       CARGO_TERM_COLOR: always
@@ -185,13 +185,13 @@ jobs:
         run: scripts/ci/e2e-app
 
   actionlint:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     env:
       ACTIONLINT_VERSION: 1.7.12
       ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: useblacksmith/checkout@v1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -219,7 +219,7 @@ jobs:
   ci:
     if: always()
     needs: [actionlint, app, e2e, rust]
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Require every job to succeed
