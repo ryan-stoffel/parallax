@@ -385,7 +385,7 @@ fn assert_worker_invocation(fake: &Fake) {
         serde_json::json!({
             "disableAllHooks": true,
             "permissions": {
-                "allow": ["WebFetch(domain:*)", "WebSearch"],
+                "allow": ["Bash", "WebFetch(domain:*)", "WebSearch"],
                 "deny": [
                     "WebFetch(domain:localhost)",
                     "WebFetch(domain:127.0.0.1)",
@@ -462,7 +462,7 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
     }
     assert_eq!(
         list("/permissions/allow"),
-        ["WebFetch(domain:*)", "WebSearch"]
+        ["Bash", "WebFetch(domain:*)", "WebSearch"]
     );
 }
 
