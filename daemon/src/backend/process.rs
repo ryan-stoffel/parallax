@@ -518,11 +518,7 @@ fn start(
     drop(command);
     // ponytail: a process the CLI starts before it joins the job escapes it. That window is the
     // few microseconds before this call; CREATE_SUSPENDED and resuming its thread would close it.
-    let assigned = child
-        .raw_handle()
-        .ok_or_else(|| io::Error::other("the process exited as it started"))
-        .and_then(|handle| job.assign(handle));
-    if let Err(error) = assigned {
+    if let Err(error) = job.assign(&child) {
         let _ = child.start_kill();
         return Err(error.into());
     }

@@ -185,8 +185,12 @@ fn sid_string(sid: &[u8]) -> io::Result<String> {
     // SAFETY: `sid` holds a valid SID (from `user_of`) and isn't written to; `text` is a valid
     // out pointer.
     check(unsafe { ConvertSidToStringSidW(sid.as_ptr().cast_mut().cast(), &raw mut text) })?;
-    // SAFETY: ConvertSidToStringSidW returned a NUL-terminated UTF-16 string.
-    let len = (0..).take_while(|&i| unsafe { *text.add(i) } != 0).count();
+    let mut len = 0;
+    // SAFETY: ConvertSidToStringSidW returned a NUL-terminated UTF-16 string, so every unit up
+    // to and including the NUL can be read.
+    while unsafe { *text.add(len) } != 0 {
+        len += 1;
+    }
     // SAFETY: the string has `len` UTF-16 units before its NUL.
     let string = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) });
     // SAFETY: the string came from ConvertSidToStringSidW, which says to free it with LocalFree,
@@ -250,13 +254,17 @@ impl Job {
         Ok(job)
     }
 
-    /// Puts the process behind `process` in the job. Processes it starts afterwards join too.
+    /// Puts `child` in the job. Processes it starts afterwards join too.
     ///
     /// # Errors
     ///
-    /// If Windows refuses, such as when the process has already exited.
-    pub fn assign(&self, process: RawHandle) -> io::Result<()> {
-        // SAFETY: both are open handles for the duration of the call.
+    /// If Windows refuses, or the child has already exited.
+    pub fn assign(&self, child: &tokio::process::Child) -> io::Result<()> {
+        let process = child
+            .raw_handle()
+            .ok_or_else(|| io::Error::other("the process has already exited"))?;
+        // SAFETY: tokio keeps the handle of a child it hasn't reaped open, and `child` is
+        // borrowed for the whole call; the job's handle is ours.
         check(unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), process) })
     }
 
@@ -273,8 +281,6 @@ impl Job {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
     #[test]
     fn this_process_runs_as_this_user() {
         assert!(super::runs_as_this_user(std::process::id()).unwrap());
@@ -282,18 +288,16 @@ mod tests {
         assert!(sddl.starts_with("D:P(A;;GA;;;S-1-5-"), "{sddl}");
     }
 
-    #[test]
-    fn terminating_a_job_kills_what_is_in_it() {
-        use std::os::windows::io::AsRawHandle as _;
-
+    #[tokio::test]
+    async fn terminating_a_job_kills_what_is_in_it() {
         let job = super::Job::new().unwrap();
-        let mut child = Command::new("cmd")
+        let mut child = tokio::process::Command::new("cmd")
             .args(["/c", "ping", "-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        job.assign(child.as_raw_handle()).unwrap();
+        job.assign(&child).unwrap();
         job.terminate().unwrap();
-        assert!(!child.wait().unwrap().success());
+        assert!(!child.wait().await.unwrap().success());
     }
 }
