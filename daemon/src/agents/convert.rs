@@ -23,9 +23,9 @@ pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 pub(super) const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;
 
 /// The longest free text field of any other `agent.output` item — `Text`, `TextDelta`,
-/// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result` — in bytes, at the same
-/// cap as a tool's output (#190 N8). Without this, one item near 0007's 8 MiB frame would close
-/// every subscriber and then be replayed again on every reconnect.
+/// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result`, `TurnStarted.text` — in
+/// bytes, at the same cap as a tool's output (#190 N8). Without this, one item near 0007's 8 MiB
+/// frame would close every subscriber and then be replayed again on every reconnect.
 pub(super) const MAX_TEXT_ITEM_BYTES: usize = 32 * 1024;
 
 /// The longest a short identifier gets to be, in bytes: `ToolCall`'s `call_id` and `name`,
@@ -289,7 +289,11 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             session_id: truncate(session_id, MAX_ID_BYTES),
             model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
         },
-        Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted { turn_id: *turn_id },
+        // The backend knows only the id; the run's actor adds a follow-up's text (RYA-92).
+        Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted {
+            turn_id: *turn_id,
+            text: None,
+        },
         Event::TextDelta { message_id, text } => AgentOutputItem::TextDelta {
             message_id: id(message_id.as_deref()),
             text: truncate(text, MAX_TEXT_ITEM_BYTES),

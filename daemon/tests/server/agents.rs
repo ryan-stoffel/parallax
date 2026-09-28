@@ -567,7 +567,8 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
     let transcript = items(&events);
     assert!(transcript.contains(&AgentOutputItem::TurnStarted {
-        turn_id: Some(first)
+        turn_id: Some(first),
+        text: Some("and the tests".to_owned()),
     }));
     assert!(transcript.contains(&AgentOutputItem::Text {
         message_id: None,
@@ -606,7 +607,8 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         "the resumed process continues the session: {transcript:?}"
     );
     assert!(transcript.contains(&AgentOutputItem::TurnStarted {
-        turn_id: Some(second)
+        turn_id: Some(second),
+        text: Some("one more thing".to_owned()),
     }));
     let third = TurnId::generate();
     client
@@ -778,6 +780,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         &mut client,
         has_item(AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
+            text: Some("carry on".to_owned()),
         }),
     )
     .await;
@@ -842,6 +845,7 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
         &mut client,
         has_item(AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
+            text: Some("carry on".to_owned()),
         }),
     )
     .await;
