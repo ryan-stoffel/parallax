@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { THEME_PREFERENCES } from "../preload/bridge";
 import { startHosts } from "./hosts";
-import { isOpenableExternally } from "./links";
+import { isOpenableExternally, isReload } from "./links";
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
 const devServerUrl = app.isPackaged ? undefined : process.env["WISP_DEV_SERVER_URL"];
@@ -41,9 +41,11 @@ function createWindow() {
   else void win.loadFile(path.join(__dirname, "../renderer/index.html"));
 }
 
-// No page may navigate or open windows. Https links go to the system browser.
+// No page may navigate, except to reload itself, or open windows. Https links go to the
+// system browser. `webContents.reload()` (the menu's Reload) never emits `will-navigate`.
 app.on("web-contents-created", (_event, contents) => {
   contents.on("will-navigate", (event) => {
+    if (isReload(event.url, contents.getURL())) return;
     event.preventDefault();
     if (isOpenableExternally(event.url)) void shell.openExternal(event.url);
   });
