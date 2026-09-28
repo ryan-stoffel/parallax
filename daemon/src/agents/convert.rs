@@ -23,9 +23,9 @@ pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 pub(super) const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;
 
 /// The longest free text field of any other `agent.output` item — `Text`, `TextDelta`,
-/// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result` — in bytes, at the same
-/// cap as a tool's output (#190 N8). Without this, one item near 0007's 8 MiB frame would close
-/// every subscriber and then be replayed again on every reconnect.
+/// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result`, `TurnStarted.text` — in
+/// bytes, at the same cap as a tool's output (#190 N8). Without this, one item near 0007's 8 MiB
+/// frame would close every subscriber and then be replayed again on every reconnect.
 pub(super) const MAX_TEXT_ITEM_BYTES: usize = 32 * 1024;
 
 /// The longest a short identifier gets to be, in bytes: `ToolCall`'s `call_id` and `name`,

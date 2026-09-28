@@ -101,8 +101,8 @@ pub(super) struct Actor {
     worktree: Option<Worktree>,
     live: Option<Live>,
     batch: Batch,
-    /// Messages sent to the run while this wispd runs, by turn id, for `agent/send`'s
-    /// idempotency across CLI processes.
+    /// Messages sent to the run, by turn id, reloaded from the store after a restart. They make
+    /// `agent/send` idempotent across CLI processes and fill in the logged `TurnStarted.text`.
     turns: HashMap<TurnId, String>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
