@@ -319,7 +319,8 @@ pub(super) async fn prepare(
 
 fn routing_error(error: &RoutingError) -> ErrorObject {
     match error {
-        RoutingError::NoAccount { .. } => ErrorObject::invalid_params(
+        RoutingError::NoAccount { .. } => ErrorObject::wisp(
+            ErrorKind::NoDefaultAccount,
             "no account was named, and the worker role has no default; set one with \
              accounts/defaults/set",
         ),

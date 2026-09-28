@@ -38,6 +38,8 @@ export function App() {
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
+  // A quiet note for the thread New Thread just started, such as the account it picked.
+  const [notice, setNotice] = useState<{ threadId: string; text: string }>();
 
   // Threads are live for this Mac only; other hosts arrive with RYA-26.
   const connection = useConnection("local");
@@ -48,6 +50,9 @@ export function App() {
   let group = groups[0]!;
   if (selection.kind === "thread") {
     const open = threads.state.threads.find((t) => t.id === selection.threadId);
+    // Deleted, maybe by another client: leave it rather than show a stale transcript. An open
+    // thread is always listed, since a start and a click both come after the thread is.
+    if (!open) setSelection({ kind: "new" });
     const id = open ? groupOf(threads.state, open) : noRepo;
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
@@ -166,16 +171,21 @@ export function App() {
                 key={`${host.id}/${selection.threadId}`}
                 hostId={host.id}
                 runId={selection.threadId}
+                notice={notice?.threadId === selection.threadId ? notice.text : undefined}
               />
             ) : selection.kind === "new" ? (
               <NewThread
+                hostId="local"
                 groups={groups}
                 groupId={group.id}
                 onGroupChange={(groupId) => setSelection({ kind: "new", groupId })}
                 local={host.local}
                 addRepo={threads.addRepo}
                 start={threads.start}
-                onStarted={(threadId) => setSelection({ kind: "thread", threadId })}
+                onStarted={(threadId, text) => {
+                  setNotice(text ? { threadId, text } : undefined);
+                  setSelection({ kind: "thread", threadId });
+                }}
                 disabledReason={
                   connection?.status === "failed"
                     ? "Disconnected from wispd"
