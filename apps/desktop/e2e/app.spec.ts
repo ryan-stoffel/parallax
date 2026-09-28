@@ -1,0 +1,80 @@
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { _electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+
+// The built app against a real wispd whose workers are the fake backend playing agent.json
+// (RYA-16). WISPD_PATH defaults to the repo's debug build, which must have the fake backend:
+// `cargo build -p wispd --features fake-backend`, then `pnpm build` and `pnpm e2e`.
+// Never point it at an installed wispd: without the feature, serve refuses to start.
+
+const desktop = path.join(import.meta.dirname, "..");
+const wispd = process.env["WISPD_PATH"] ?? path.join(desktop, "../../target/debug/wispd");
+
+test.describe.configure({ mode: "serial" });
+
+let app: ElectronApplication;
+let page: Page;
+let dataDir: string;
+
+test.beforeAll(async () => {
+  if (!existsSync(wispd)) throw new Error(`no wispd at ${wispd}; see the top of app.spec.ts`);
+  dataDir = mkdtempSync(path.join(tmpdir(), "wisp-e2e-"));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    WISPD_PATH: wispd,
+    WISPD_DATA_DIR: dataDir,
+    WISPD_FAKE_BACKEND: path.join(import.meta.dirname, "agent.json"),
+  };
+  // As in scripts/ci/launch-app: these would run Electron as Node, or load the dev server.
+  delete env["ELECTRON_RUN_AS_NODE"];
+  delete env["WISP_DEV_SERVER_URL"];
+  // Unset variables are undefined in `process.env`, and launch skips them.
+  app = await _electron.launch({ args: [desktop], env: env as Record<string, string> });
+  page = await app.firstWindow();
+});
+
+test.afterEach(() => {
+  const { status, expectedStatus } = test.info();
+  if (status === expectedStatus) return;
+  const log = path.join(dataDir, "logs/wispd.log");
+  if (existsSync(log)) console.log(`--- ${log}\n${readFileSync(log, "utf8")}`);
+});
+
+test.afterAll(async () => {
+  await app?.close();
+  // `wispd attach` started a detached `serve`, which outlives the app.
+  const lock = path.join(dataDir, "wispd.lock");
+  const pid = existsSync(lock) ? Number.parseInt(readFileSync(lock, "utf8"), 10) : NaN;
+  // Never pid 0 or below, which process.kill reads as a whole process group.
+  if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
+});
+
+test("connects to wispd", async () => {
+  await expect(page.getByRole("status").filter({ hasText: "Connected · wispd" })).toBeVisible();
+});
+
+test("starts a thread and shows the agent's output", async () => {
+  // A fresh host has no default account for threads, and the fake's is `fake`. The app only
+  // offers signed-in vendor CLIs, which wispd finds by running them, so set it directly.
+  const set = await page.evaluate(`window.wisp.request("local", "accounts/defaults/set", {
+    role: "worker",
+    account: { kind: "subscription", backend: "fake" },
+  })`);
+  expect(set).not.toHaveProperty("error");
+
+  await page.getByRole("textbox", { name: "Message" }).fill("Tidy up the README");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const transcript = page.getByRole("log", { name: "Transcript" });
+  await expect(transcript.getByText("Tidy up the README")).toBeVisible();
+  await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+});
+
+test("stops the thread", async () => {
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(page.getByRole("log", { name: "Transcript" }).getByText("Stopped")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+});

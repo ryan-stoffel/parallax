@@ -732,6 +732,21 @@ async fn backends_work_behind_trait_objects() {
     }
 }
 
+#[cfg(not(feature = "fake-backend"))]
+#[test]
+fn a_build_without_the_feature_refuses_a_script() {
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/backend/fake/fixtures/hang.json"
+    );
+    assert!(FakeBackend::from_script_path(Some(script.as_ref()), &launcher()).is_err());
+    assert!(
+        FakeBackend::from_script_path(None, &launcher())
+            .unwrap()
+            .is_none()
+    );
+}
+
 async fn wait_until_gone(pid: &str) {
     let pid = Pid::from_raw(pid.parse().unwrap()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
