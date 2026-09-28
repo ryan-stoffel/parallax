@@ -1,6 +1,6 @@
 # 0003: Wisp, `wisp`, and `wispd`
 
-- Status: accepted
+- Status: accepted; the `wisp` launcher went with the editor ([0020](0020-drop-the-editor-fork.md)), so there is no `wisp` command: the desktop app ([0022](0022-desktop-app.md)) is Wisp, and the daemon is `wispd`
 - Date: 2026-09-23
 - Issue: #17, #19
 
