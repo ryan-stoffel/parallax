@@ -1,0 +1,15 @@
+#!/bin/sh
+# Runs the desktop app's end-to-end tests (RYA-16): builds wispd with its fake backend and the
+# app, then runs Playwright in apps/desktop/e2e against them.
+set -eu
+
+cd "$(dirname "$0")/../.."
+set -x
+
+cargo build -p wispd --locked --features fake-backend
+export WISPD_PATH="$PWD/target/debug/wispd"
+
+cd apps/desktop
+pnpm install --frozen-lockfile
+pnpm build
+pnpm e2e
