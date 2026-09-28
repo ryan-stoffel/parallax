@@ -22,10 +22,10 @@
 //!   credentials (#114).
 //! - [`mcp`]: `wispd mcp`, the coordinator's wisp tools as an MCP server on stdio, bound to one
 //!   project and one coordinator thread (#195, 0019).
-//! - [`launch_agent`]: the launch agent that `attach` starts wispd through, when it is installed.
-//!   Only macOS has one; elsewhere `attach` starts `serve` itself (0023).
-//! - `service`: installs, removes, and reports on the per-user `LaunchAgent` that keeps `serve`
-//!   running (#61). macOS only.
+//! - [`launch_agent`]: the service that `attach` starts wispd through, when it is installed. On
+//!   Windows there is none yet, so `attach` starts `serve` itself (0023).
+//! - [`service`]: installs, removes, and reports on the per-user service that keeps `serve`
+//!   running: a `LaunchAgent` on macOS (#61), a systemd user unit on Linux (RYA-18). Unix only.
 //! - [`keystore`]: where API keys live: the macOS login Keychain (#117), and no store yet on Linux
 //!   or Windows.
 //! - [`usage`]: turns backend usage events into `wisp-store` rows (#120).
@@ -58,7 +58,7 @@ pub mod paths;
 mod repo;
 pub mod routing;
 pub mod server;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub mod service;
 #[cfg(unix)]
 mod spawn;

@@ -48,7 +48,7 @@ pub struct Options {
     pub program: PathBuf,
     /// How long to wait for wispd to accept a connection, including the time to start it.
     pub connect_timeout: Duration,
-    /// The launch agent that starts wispd, if one is installed for the data folder.
+    /// The service that starts wispd, if one is installed for the data folder.
     pub launch_agent: Option<LaunchAgent>,
 }
 
@@ -89,7 +89,7 @@ pub enum Unavailable {
     #[error(
         "nothing accepted a connection at {} within {timeout:?}{}. wispd's log is {}",
         .socket.display(),
-        .launch_agent.as_ref().map_or_else(String::new, |service| format!(" after `launchctl kickstart {service}`")),
+        .launch_agent.as_ref().map_or_else(String::new, |command| format!(" after `{command}`")),
         .log.display()
     )]
     TimedOut {
@@ -97,7 +97,7 @@ pub enum Unavailable {
         socket: PathBuf,
         /// How long `attach` waited.
         timeout: Duration,
-        /// The launch agent service that `attach` started, if it started wispd that way.
+        /// The command that `attach` started the service with, if it started wispd that way.
         launch_agent: Option<String>,
         /// The log.
         log: PathBuf,
@@ -125,8 +125,9 @@ pub type Connection = crate::transport::Stream;
 /// there. On Windows, it must run inside a tokio runtime (not in `block_on`), and the pipe's
 /// server must run as this user (0023).
 ///
-/// wispd is started once. That goes through the launch agent when [`Options::launch_agent`] names
-/// one. Otherwise, or if the launch agent can't be started, it spawns `serve` detached: in a new
+/// wispd is started once. That goes through the service (the `LaunchAgent` on macOS, the systemd
+/// user unit on Linux) when [`Options::launch_agent`] names one. Otherwise, or if the service
+/// can't be started, it spawns `serve` detached: in a new
 /// session (on Windows, a new process group outside the SSH session's job), with stdin on the
 /// null device, stdout and stderr appended to its log, and no other descriptors or handles. It
 /// then retries with backoff until [`Options::connect_timeout`] has passed. A `serve` that exits
@@ -236,7 +237,7 @@ fn try_connect(path: &Path) -> Result<Option<Connection>, Unavailable> {
 struct Starter<'a> {
     data_dir: &'a DataDir,
     options: &'a Options,
-    /// The launch agent service that was started, if wispd was started that way.
+    /// The command that started the service, if wispd was started that way.
     launched: Option<String>,
     /// The `serve` spawned last, until it exits.
     spawned: Option<Spawned>,
@@ -254,9 +255,9 @@ struct Spawned {
 impl Starter<'_> {
     fn start(&mut self, deadline: Instant) -> Result<(), Unavailable> {
         if let Some(agent) = &self.options.launch_agent {
-            match agent.kickstart(deadline) {
+            match agent.start(deadline) {
                 Ok(()) => {
-                    self.launched = Some(agent.service.clone());
+                    self.launched = Some(agent.to_string());
                     return Ok(());
                 }
                 Err(error) => report(format_args!("{error}; starting wispd serve instead")),

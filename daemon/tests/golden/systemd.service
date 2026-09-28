@@ -1,0 +1,12 @@
+[Unit]
+Description=wispd, the wisp host daemon
+
+[Service]
+ExecStart="/usr/local/bin/wispd" serve
+Environment="WISPD_DATA_DIR=/home/ryan/.local/share/wisp"
+Restart=on-failure
+StandardOutput=append:/home/ryan/.local/share/wisp/logs/wispd.log
+StandardError=append:/home/ryan/.local/share/wisp/logs/wispd.log
+
+[Install]
+WantedBy=default.target
