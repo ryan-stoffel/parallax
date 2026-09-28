@@ -587,6 +587,10 @@ mod tests {
         let keys = MemoryKeyStore::new();
 
         tracing::subscriber::with_default(subscriber, || {
+            // With one scoped subscriber in the whole test binary, as on Windows, tracing
+            // computes a callsite's interest from whichever thread hits it first, so another
+            // test adding a key can cache it as disabled for good (RYA-95). Recompute it here.
+            tracing::callsite::rebuild_interest_cache();
             add_account(
                 &mut db_store,
                 &keys,

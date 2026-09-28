@@ -5,7 +5,7 @@
 //!   new session and process group, so a terminal that started wispd can't signal it, and
 //!   cancelling can reach everything it started. On Windows (0023), it goes through tokio's
 //!   `Command` into a new process group and a job object of its own, which stands in for the
-//!   process group below; `serve` cleared the inherit flag on its std handles at startup, so the
+//!   process group below; `serve` cleared the inherit flag on all its handles at startup, so the
 //!   child gets only its three pipes.
 //! - **The environment is explicit**: a base (wispd's own with the usual install folders on
 //!   `PATH`, decision 0014; #96 may capture the login shell's instead), minus

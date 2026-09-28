@@ -358,7 +358,7 @@ fn detach(command: &mut std::process::Command, log: &File) -> io::Result<rustix:
 
 /// Starts `command` detached (0023): with no console, in a new process group, and broken away
 /// from the SSH session's job, which Win32-OpenSSH kills when the session ends. stdin is `NUL`,
-/// and stdout and stderr are `log`. attach cleared the inherit flag on its own std handles at
+/// and stdout and stderr are `log`. attach cleared the inherit flag on all its handles at
 /// startup, so those are the only handles `serve` gets. If the job forbids breaking away, it
 /// starts `serve` inside the job and warns that it ends with the session.
 #[cfg(windows)]

@@ -180,7 +180,7 @@ fn mcp(args: &McpArgs) -> ! {
 /// input arrives, and would keep the runtime from shutting down (0007).
 fn attach(args: &AttachArgs) -> ! {
     #[cfg(windows)]
-    wispd::windows::stop_inheriting_std_handles();
+    wispd::windows::stop_inheriting_handles();
     let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
         Ok(data_dir) => data_dir,
         Err(error) => unavailable(&format!("could not find the data folder: {error}")),
@@ -268,7 +268,7 @@ fn failed(message: &str) -> ! {
 fn serve(args: &ServeArgs) -> ExitCode {
     // So agent CLIs don't inherit the log, or whatever else started `serve` (0023).
     #[cfg(windows)]
-    wispd::windows::stop_inheriting_std_handles();
+    wispd::windows::stop_inheriting_handles();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

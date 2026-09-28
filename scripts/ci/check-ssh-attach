@@ -52,6 +52,34 @@ function readStatus(path) {
   return entries;
 }
 
+/** On Windows, what might hold an ssh session open: every wispd process, and the end of the log. */
+function diagnose(dataDir) {
+  if (!windows) {
+    return '';
+  }
+  let processes;
+  try {
+    processes = execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        "Get-CimInstance Win32_Process -Filter \"Name='wispd.exe'\" | Format-Table ProcessId,ParentProcessId,CommandLine -AutoSize | Out-String -Width 400",
+      ],
+      { encoding: 'utf8', timeout: 30_000 },
+    );
+  } catch (error) {
+    processes = `(could not list processes: ${error.message})`;
+  }
+  let log;
+  try {
+    log = readFileSync(join(dataDir, 'logs', 'wispd.log'), 'utf8').split('\n').slice(-20).join('\n');
+  } catch (error) {
+    log = `(no log: ${error.message})`;
+  }
+  return `\nwispd processes:\n${processes}\nend of wispd.log:\n${log}`;
+}
+
 async function main() {
   const [, , statusFile, wispd] = process.argv;
   if (!statusFile || !wispd) {
@@ -92,7 +120,7 @@ async function main() {
         { input: request, timeout: 60_000, encoding: 'utf8' },
       );
     } catch (error) {
-      fail(`ssh failed or timed out (60s): ${error.message}`);
+      fail(`ssh failed or timed out (60s): ${error.message}; stdout: ${JSON.stringify(error.stdout)}${diagnose(dataDir)}`);
     }
 
     // "stdout holds nothing else" (#95): exactly one line, once the single trailing newline (attach

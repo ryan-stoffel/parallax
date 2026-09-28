@@ -4,7 +4,7 @@
 //! - [`create_pipe`]: a named pipe instance whose DACL grants only this user.
 //! - [`pipe_client_pid`], [`pipe_server_pid`], and [`runs_as_this_user`]: the SID checks on both
 //!   ends of the pipe.
-//! - [`stop_inheriting_std_handles`]: so a process wispd starts gets only the handles it is given.
+//! - [`stop_inheriting_handles`]: so a process wispd starts gets only the handles it is given.
 //! - [`Job`]: the job object an agent CLI runs in.
 
 #![allow(unsafe_code)]
@@ -15,7 +15,9 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle as _, OwnedHandle, RawHand
 use std::ptr;
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
-use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation};
+use windows_sys::Win32::Foundation::{
+    GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
@@ -29,7 +31,8 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, GetProcessHandleCount, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 /// Turns a `BOOL` result into an `io::Result`, reading the error right after the call.
@@ -199,23 +202,43 @@ fn sid_string(sid: &[u8]) -> io::Result<String> {
     Ok(string)
 }
 
-/// Clears `HANDLE_FLAG_INHERIT` on this process's stdin, stdout, and stderr (0023).
+/// Clears `HANDLE_FLAG_INHERIT` on every handle this process has (0023). Call it before any other
+/// thread starts.
 ///
-/// std opens every handle of its own as non-inheritable, so the std handles that sshd or a
-/// parent passed in are the only inheritable ones. A process started with std's `Command` inherits
-/// every inheritable handle, so without this, `serve` and agent CLIs would inherit attach's SSH
-/// session pipes or `serve`'s log. A handle that isn't there, or can't be changed, is skipped.
-pub fn stop_inheriting_std_handles() {
-    let handles = [
-        io::stdin().as_raw_handle(),
-        io::stdout().as_raw_handle(),
-        io::stderr().as_raw_handle(),
-    ];
-    for handle in handles {
-        if !handle.is_null() {
-            // SAFETY: `handle` is one of this process's std handles, or an invalid one, which
-            // makes the call fail harmlessly. Only the inherit flag changes.
+/// A process started with std's `Command` inherits every inheritable handle. std opens its own
+/// handles as non-inheritable, so the inheritable ones are all inherited from the parent: the std
+/// handles, and whatever else it passed down. Under Windows' sshd, that includes more copies of
+/// the session's pipes than the three std handles, and a `serve` holding one keeps the session
+/// open after attach exits. So without this, `serve` and agent CLIs would inherit attach's SSH
+/// session pipes or `serve`'s log.
+///
+/// Windows has no call that lists a process's own handles, but their values are multiples of 4
+/// from 4 up, so this tries each one until it has seen as many as the process has, or up to a
+/// bound far past what a new process holds.
+pub fn stop_inheriting_handles() {
+    const MAX_HANDLE_VALUE: usize = 1 << 16;
+
+    let mut count = 0;
+    // SAFETY: the pseudo-handle is always valid, and `count` is a valid out pointer. On failure
+    // `count` stays 0 and the loop runs to its bound.
+    unsafe { GetProcessHandleCount(current_process(), &raw mut count) };
+    let mut seen = 0;
+    for value in (4..MAX_HANDLE_VALUE).step_by(4) {
+        let handle = ptr::without_provenance_mut(value);
+        let mut flags = 0;
+        // SAFETY: a value that isn't an open handle makes the call fail, and `flags` is a valid
+        // out pointer. Nothing but the flags is read.
+        if unsafe { GetHandleInformation(handle, &raw mut flags) } == 0 {
+            continue;
+        }
+        if flags & HANDLE_FLAG_INHERIT != 0 {
+            // SAFETY: `handle` is one of this process's open handles, and only its inherit flag
+            // changes, which nothing else in wispd relies on.
             unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+        }
+        seen += 1;
+        if count != 0 && seen >= count {
+            break;
         }
     }
 }
