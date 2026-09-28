@@ -50,7 +50,10 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
     assert_eq!(version.wispd, VERSION);
     assert_eq!(version.protocol, ProtocolRange::SUPPORTED);
     assert_eq!(version.arch, std::env::consts::ARCH);
+    #[cfg(target_os = "macos")]
     assert!(version.os.starts_with("macOS "), "{}", version.os);
+    #[cfg(target_os = "linux")]
+    assert_eq!(version.os, "linux");
 }
 
 #[tokio::test]

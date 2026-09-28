@@ -6,9 +6,10 @@
 //! nothing else there. Its own messages go to stderr, through [`report`].
 
 use std::fmt;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::fd::AsFd;
+use std::os::unix::fs::FileTypeExt as _;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -175,6 +176,17 @@ pub fn connect(data_dir: &DataDir, options: &Options) -> Result<StdUnixStream, U
 fn try_connect(path: &Path) -> Result<Option<StdUnixStream>, Unavailable> {
     match StdUnixStream::connect(path) {
         Ok(stream) => Ok(Some(stream)),
+        // Linux refuses a connection to a file that isn't a socket, where macOS says `ENOTSOCK`.
+        // Starting `serve` can't fix that either, so both report it the same way.
+        Err(error)
+            if error.kind() == io::ErrorKind::ConnectionRefused
+                && fs::metadata(path).is_ok_and(|metadata| !metadata.file_type().is_socket()) =>
+        {
+            Err(Unavailable::Connect {
+                path: path.to_owned(),
+                source: rustix::io::Errno::NOTSOCK.into(),
+            })
+        }
         Err(error)
             if matches!(
                 error.kind(),

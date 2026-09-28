@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // #95's own check: `wispd attach` through a real `ssh localhost`, once scripts/ci/ssh-localhost has
-// set it up. Mirrors daemon/README.md's own "Testing attach over ssh on your Mac" recipe, but
+// set it up. Mirrors daemon/README.md's own "Testing attach over ssh on your machine" recipe, but
 // checked instead of eyeballed: exactly one line on stdout, a JSON-RPC response with id 1, no
 // error, and result.protocol === 1; that ssh exits 0 once wispd has answered; and that `serve`
 // keeps running after the ssh session ends, then stops it.

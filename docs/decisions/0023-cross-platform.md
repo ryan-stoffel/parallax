@@ -124,11 +124,11 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 | --- | --- | --- | --- |
 | macOS arm64 | `aarch64-apple-darwin` | `check-rust`, ssh attach check, app | Yes |
 | Linux x86_64 | `x86_64-unknown-linux-musl` | `check-rust`, ssh attach check, app | Yes |
-| Linux arm64 | `aarch64-unknown-linux-musl` | No | Yes |
+| Linux arm64 | `aarch64-unknown-linux-musl` | `check-rust`, ssh attach check | Yes |
 | Windows x86_64 | `x86_64-pc-windows-msvc` | `check-rust`, app; the ssh attach check once the runner's `sshd` can be set up | Yes |
 | Windows arm64 | `aarch64-pc-windows-msvc` | No | Yes |
 
-- **PR CI** tests one arch per OS, to keep it fast. The arm64 builds for Linux and Windows run on GitHub's arm64 runners, with `wispd --version` and an attach handshake as a smoke check (RYA-29).
+- **PR CI** tests one arch per OS, to keep it fast, except Linux, where `wispd` is checked on both arches (RYA-17). The Windows arm64 build runs on GitHub's arm64 runners, with `wispd --version` and an attach handshake as a smoke check (RYA-29).
 - **Linux binaries** are static musl builds, so they run on any distro with no glibc floor. The spawn above needs only `POSIX_SPAWN_SETSID`, which musl has. Nothing links a system library: SQLite is bundled, and the Secret Service store is pure Rust.
 - **macOS x86_64 isn't built.** 0006's reason still holds: macOS 27 runs only on Apple silicon. Adding it later is one more target on the macOS runner.
 - **Windows** needs Windows 10 1809 or later, or Windows 11. That's the first version with the OpenSSH Client feature and ConPTY.

@@ -1,14 +1,15 @@
 # wispd
 
-wisp's host daemon. Each macOS user runs their own, and it keeps projects, and later agents, running in the background. Clients reach it through `wispd attach`, either on the same Mac or on a host over SSH.
+wisp's host daemon. Each user on a macOS or Linux host runs their own, and it keeps projects and agents running in the background. Clients reach it through `wispd attach`, either on the same machine or on a host over SSH.
 
-Build it with `cargo build --release -p wispd`. `WISP_VERSION`, if set at compile time, is what `wispd --version` prints (`daemon/src/lib.rs` reads it with `option_env!`); otherwise it prints `Cargo.toml`'s placeholder.
+Build it with `cargo build --release -p wispd`. On Linux that needs a C compiler for the bundled SQLite, such as Debian's `build-essential`. `WISP_VERSION`, if set at compile time, is what `wispd --version` prints (`daemon/src/lib.rs` reads it with `option_env!`); otherwise it prints `Cargo.toml`'s placeholder.
 
 The decisions behind it:
 
 - [0007](../docs/decisions/0007-editor-wispd-protocol.md): the protocol and transport.
 - [0009](../docs/decisions/0009-wispd-data-folder-and-project-host.md): the data folder and `serve`.
 - [0010](../docs/decisions/0010-wispd-attach.md): `attach`.
+- [0023](../docs/decisions/0023-cross-platform.md): what differs on each OS.
 
 ## Commands
 
@@ -16,9 +17,9 @@ The decisions behind it:
 | --- | --- |
 | `wispd serve` | Serves the protocol on this user's Unix socket until SIGTERM or SIGINT |
 | `wispd attach` | Connects stdin and stdout to that socket, and starts wispd first if nothing is listening |
-| `wispd service install`, `uninstall`, `status` | Manage the LaunchAgent that keeps `serve` running (#61) |
+| `wispd service install`, `uninstall`, `status` | macOS only: manage the LaunchAgent that keeps `serve` running (#61) |
 
-Both commands take `--data-dir` (or `WISPD_DATA_DIR`) to use a data folder other than `~/Library/Application Support/wisp`. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
+Both commands take `--data-dir` (or `WISPD_DATA_DIR`) to use a data folder other than the default: `~/Library/Application Support/wisp` on macOS, and `$XDG_DATA_HOME/wisp` on Linux, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset. The socket is `wispd.sock` in that folder. When that path is too long for a Unix socket, it moves to a per-user folder: the one `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
 
 `attach` passes bytes through unchanged and prints nothing else on stdout. You can send a request by hand:
 
@@ -29,7 +30,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 When its input ends, `attach` keeps printing until wispd has answered everything it was sent, and then exits. The same command works through `ssh <host> wispd attach`.
 
-If wispd isn't running, `attach` starts it through the LaunchAgent when one is installed and serves the same data folder. The LaunchAgent under the default label serves only the default data folder, so `wispd service install --data-dir <other>` needs `--label` as well. Otherwise it starts `wispd serve` in the background, in its own session. That `serve` keeps running after `attach` exits or the SSH connection drops, and `attach` never stops it.
+If wispd isn't running, `attach` on macOS starts it through the LaunchAgent when one is installed and serves the same data folder. The LaunchAgent under the default label serves only the default data folder, so `wispd service install --data-dir <other>` needs `--label` as well. Otherwise it starts `wispd serve` in the background, in its own session. That `serve` keeps running after `attach` exits or the SSH connection drops, and `attach` never stops it.
 
 ### Exit codes
 
@@ -72,13 +73,30 @@ It uses your own ssh config, keys, and agent (0007). For that command to work, t
    - A process started from SSH may not reach the Keychain, which the subscription CLIs use (0004).
    - The LaunchAgent runs wispd in your GUI session instead, and `attach` starts it with `launchctl kickstart` whenever it's installed.
 
+## Using a Linux host over SSH
+
+The client runs the same `ssh ... <host> wispd attach` command, and the host needs the same things as a Mac, apart from Homebrew and the LaunchAgent:
+
+1. **`wispd` on the `PATH` of a non-interactive SSH command.** sshd runs `wispd attach` with the `PATH` from `/etc/environment` or its built-in default, which on Debian and Ubuntu includes `/usr/local/bin` but not `~/.local/bin`. `~/.profile` adds `~/.local/bin` only for login shells, which a command over SSH isn't.
+   - Simplest: install `wispd` into `/usr/local/bin`.
+   - Or keep it in `~/.local/bin` and add it in the file your shell reads for SSH commands. bash reads `~/.bashrc`, but Debian's and Ubuntu's default one returns early for non-interactive shells, so put the line above that check. zsh reads `~/.zshenv`.
+
+     ```sh
+     export PATH="$HOME/.local/bin:$PATH"
+     ```
+
+   To check, run `ssh <host> 'command -v wispd'`.
+2. **Quiet shell startup files and a key that logs in without prompts**, as on a Mac.
+
+Linux has no service yet (systemd is RYA-18), so `attach` always starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. For now, a Linux host also can't store API keys (RYA-19) or run workers (RYA-20): key accounts fail with `keychainUnavailable`, and `agent/start` for a worker fails with `workerUnavailable`. Subscriptions and no-write runs work.
+
 wispd listens only on its Unix socket, never on a network port. SSH, with your own keys and config, is the only way in from another machine.
 
-## Testing `attach` over ssh on your Mac
+## Testing `attach` over ssh on your machine
 
 `cargo test -p wispd` tests `attach` through pipes, which are what ssh hands it. #95 adds a CI test through a real `ssh localhost`. To run one locally, you need these first:
 
-- Remote Login turned on in System Settings > General > Sharing.
+- An sshd: on a Mac, Remote Login turned on in System Settings > General > Sharing; on Linux, `openssh-server`.
 - A key authorized for your own account.
 - localhost's host key accepted once.
 

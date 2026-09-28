@@ -178,7 +178,8 @@ impl Socket {
     }
 
     /// Binds again if the socket file is gone. macOS deletes old files in the per-user
-    /// temporary folder that the fallback path uses, and a person may delete the socket too.
+    /// temporary folder that the fallback path uses, logind deletes Linux's runtime folder at the
+    /// last logout, and a person may delete the socket too.
     pub fn rebind_if_gone(&mut self) -> io::Result<Option<UnixListener>> {
         match fs::symlink_metadata(&self.path) {
             Ok(_) => Ok(None),

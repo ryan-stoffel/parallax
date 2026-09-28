@@ -1,7 +1,8 @@
 //! Where wispd keeps its files.
 //!
-//! Everything lives in one data folder, `~/Library/Application Support/wisp` by default (0006),
-//! which the editor shares. wispd's own entries are:
+//! Everything lives in one data folder (0009, 0023), which the editor shares:
+//! `~/Library/Application Support/wisp` on macOS, and `$XDG_DATA_HOME/wisp` or
+//! `~/.local/share/wisp` on Linux. wispd's own entries are:
 //!
 //! - `wispd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]).
 //! - `wispd.lock`: held with `flock` while a `wispd serve` runs. It contains that process's pid.
@@ -15,10 +16,10 @@
 //! `attach` always agree. Every process wispd starts is built with [`DataDir::command`], which
 //! passes the folder on, so a `wispd` that an agent runs reaches the same socket.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::io;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -28,10 +29,23 @@ use wisp_protocol::ProjectId;
 /// The environment variable that sets the data folder when `--data-dir` is not given.
 pub const DATA_DIR_ENV: &str = "WISPD_DATA_DIR";
 
-/// The longest socket path macOS accepts: `sun_path` holds 104 bytes, including the final NUL.
+/// The longest socket path the OS accepts: `sun_path` holds 104 bytes on macOS, including the
+/// final NUL.
+#[cfg(target_os = "macos")]
 pub const MAX_SOCKET_PATH_BYTES: usize = 103;
+/// The longest socket path the OS accepts: `sun_path` holds 108 bytes on Linux, including the
+/// final NUL.
+#[cfg(target_os = "linux")]
+pub const MAX_SOCKET_PATH_BYTES: usize = 107;
 
+/// The data folder under the home folder.
+#[cfg(target_os = "macos")]
 const DEFAULT_DATA_DIR: &str = "Library/Application Support/wisp";
+/// The data folder under the home folder, when `XDG_DATA_HOME` doesn't name one.
+#[cfg(target_os = "linux")]
+const DEFAULT_DATA_DIR: &str = ".local/share/wisp";
+
+#[cfg(target_os = "macos")]
 const GETCONF: &str = "/usr/bin/getconf";
 
 /// wispd's data folder, as an absolute path.
@@ -57,12 +71,21 @@ impl DataDir {
         })
     }
 
-    /// `~/Library/Application Support/wisp`.
+    /// The OS's data folder for wisp (0023): `~/Library/Application Support/wisp` on macOS. On
+    /// Linux, `$XDG_DATA_HOME/wisp`, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset or,
+    /// as the XDG spec says, not absolute.
     ///
     /// # Errors
     ///
-    /// If the home folder is unknown.
+    /// If the home folder is needed and unknown.
     pub fn default_location() -> io::Result<Self> {
+        #[cfg(target_os = "linux")]
+        if let Some(data_home) = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+        {
+            return Self::new(data_home.join("wisp"));
+        }
         let home = std::env::home_dir()
             .filter(|home| home.is_absolute())
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the home folder is unknown"))?;
@@ -134,14 +157,16 @@ impl DataDir {
     /// Where the socket goes.
     ///
     /// That is `wispd.sock` in the data folder, unless that path is longer than
-    /// [`MAX_SOCKET_PATH_BYTES`], which happens when the home folder's path is longer than 59
-    /// bytes. Then it is `wispd-<hash>.sock` in the folder that `getconf DARWIN_USER_TEMP_DIR`
-    /// prints, which is per user and 0700. `<hash>` is the first 8 hex digits of the SHA-256 of
-    /// the data folder's path, as [`DataDir::root`] spells it.
+    /// [`MAX_SOCKET_PATH_BYTES`], which on macOS happens when the home folder's path is longer
+    /// than 59 bytes. Then it is `wispd-<hash>.sock` in a per-user, 0700 folder (0023): the one
+    /// `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. `<hash>`
+    /// is the first 8 hex digits of the SHA-256 of the data folder's path, as [`DataDir::root`]
+    /// spells it.
     ///
     /// # Errors
     ///
-    /// When the fallback is needed and `getconf` fails, or the fallback path is too long too.
+    /// When the fallback is needed and its folder can't be found, or the fallback path is too
+    /// long too.
     pub fn socket_path(&self) -> io::Result<SocketPath> {
         let default = self.root.join("wispd.sock");
         if fits(&default) {
@@ -150,9 +175,7 @@ impl DataDir {
                 fallback: false,
             });
         }
-        let path = self
-            .darwin_user_temp_dir()?
-            .join(format!("wispd-{}.sock", self.hash()));
+        let path = fallback_socket_dir()?.join(format!("wispd-{}.sock", self.hash()));
         if !fits(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -175,24 +198,46 @@ impl DataDir {
             hex
         })
     }
+}
 
-    // No safe wrapper for confstr(_CS_DARWIN_USER_TEMP_DIR) exists, and the workspace denies
-    // unsafe code, so this asks getconf, as 0007 spells the rule. Only long home folders get
-    // here.
-    fn darwin_user_temp_dir(&self) -> io::Result<PathBuf> {
-        let output = self.command(GETCONF).arg("DARWIN_USER_TEMP_DIR").output()?;
-        let mut dir = output.stdout;
-        while dir.last() == Some(&b'\n') {
-            dir.pop();
-        }
-        if !output.status.success() || !dir.starts_with(b"/") {
-            return Err(io::Error::other(format!(
-                "`{GETCONF} DARWIN_USER_TEMP_DIR` failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(PathBuf::from(OsString::from_vec(dir)))
+// No safe wrapper for confstr(_CS_DARWIN_USER_TEMP_DIR) exists, and the workspace denies unsafe
+// code, so this asks getconf, as 0007 spells the rule. Only long home folders get here.
+#[cfg(target_os = "macos")]
+fn fallback_socket_dir() -> io::Result<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let output = Command::new(GETCONF).arg("DARWIN_USER_TEMP_DIR").output()?;
+    let mut dir = output.stdout;
+    while dir.last() == Some(&b'\n') {
+        dir.pop();
     }
+    if !output.status.success() || !dir.starts_with(b"/") {
+        return Err(io::Error::other(format!(
+            "`{GETCONF} DARWIN_USER_TEMP_DIR` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(PathBuf::from(OsString::from_vec(dir)))
+}
+
+// logind deletes the runtime folder at the last logout, while a `serve` that attach started keeps
+// running, which is why it is only the fallback (0023). The server's check that rebinds a missing
+// socket covers that.
+#[cfg(target_os = "linux")]
+fn fallback_socket_dir() -> io::Result<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "the socket path in the data folder is longer than {MAX_SOCKET_PATH_BYTES} \
+                     bytes, and XDG_RUNTIME_DIR isn't set to an absolute path for the fallback"
+                ),
+            )
+        })
 }
 
 /// Where the socket goes, from [`DataDir::socket_path`].
@@ -200,8 +245,9 @@ impl DataDir {
 pub struct SocketPath {
     /// The socket's path.
     pub path: PathBuf,
-    /// Whether this is the fallback in the per-user temporary folder. macOS deletes old files
-    /// there, so the server checks that the socket still exists.
+    /// Whether this is the fallback in the per-user temporary or runtime folder. macOS deletes
+    /// old files there, and logind deletes the runtime folder at the last logout, so the server
+    /// checks that the socket still exists.
     pub fallback: bool,
 }
 
@@ -272,12 +318,16 @@ mod tests {
     }
 
     #[test]
-    fn the_default_socket_is_used_up_to_103_bytes() {
-        // "/Users/" and "/Library/Application Support/wisp/wispd.sock" leave 59 bytes for the
-        // user name's folder, as 0007 says.
-        let home = format!("/Users/{}", "u".repeat(52));
+    fn the_default_socket_is_used_up_to_the_limit() {
+        let folder = "/Library/Application Support/wisp";
+        let home = format!(
+            "/Users/{}",
+            "u".repeat(MAX_SOCKET_PATH_BYTES - "/Users//wispd.sock".len() - folder.len())
+        );
+        // On macOS, that leaves 59 bytes for the home folder, as 0007 says.
+        #[cfg(target_os = "macos")]
         assert_eq!(home.len(), 59);
-        let dir = DataDir::new(format!("{home}/Library/Application Support/wisp")).unwrap();
+        let dir = DataDir::new(format!("{home}{folder}")).unwrap();
         let socket = dir.socket_path().unwrap();
         assert!(!socket.fallback);
         assert_eq!(socket.path.as_os_str().len(), MAX_SOCKET_PATH_BYTES);
@@ -290,7 +340,7 @@ mod tests {
         let dir = DataDir::new(format!("{home}/Library/Application Support/wisp")).unwrap();
         let socket = dir.socket_path().unwrap();
         assert!(socket.fallback);
-        let temp = dir.darwin_user_temp_dir().unwrap();
+        let temp = super::fallback_socket_dir().unwrap();
         assert_eq!(socket.path, temp.join(format!("wispd-{}.sock", dir.hash())));
         assert!(socket.path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES);
     }

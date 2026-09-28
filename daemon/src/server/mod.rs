@@ -29,7 +29,7 @@ use crate::backend::process::{Environment, Launcher};
 use crate::context::ContextIndex;
 use crate::detect::CliDetector;
 use crate::event_log::EventLog;
-use crate::keystore::{KeyStore, KeychainStore};
+use crate::keystore::{self, KeyStore};
 use crate::methods;
 use crate::paths::DataDir;
 use crate::routing::BackendRegistry;
@@ -196,7 +196,7 @@ pub(crate) struct Daemon {
     pub limits: Limits,
     /// Detects the vendor CLIs for `accounts/list` and `accounts/refresh` (#114).
     pub cli_detector: CliDetector,
-    /// Where key accounts' API keys live (#117): the real login Keychain, except in tests.
+    /// Where key accounts' API keys live (#117): the OS's real store, except in tests.
     pub keys: Arc<dyn KeyStore>,
     /// wispd's data folder, so `context/*` (#155) and the runner (#156) can find a project's
     /// shared context folder.
@@ -300,7 +300,7 @@ impl Server {
                 max_requests_in_flight: config.max_requests_in_flight.max(1),
                 outbound_queue: config.outbound_queue.max(1),
             },
-            keys: Arc::new(KeychainStore::new()),
+            keys: keystore::system_store(),
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
             agents: Agents::new(backends, worktrees),

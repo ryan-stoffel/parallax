@@ -15,6 +15,8 @@
 //! security delete-generic-password -s io.github.ryan-stoffel.wisp.keychain-manual-test
 //! ```
 
+#![cfg(target_os = "macos")]
+
 use std::process::Command;
 
 use wisp_protocol::AccountId;
