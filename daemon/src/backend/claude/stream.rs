@@ -44,9 +44,11 @@ const RUN_LIMITS: &[&str] = &[
     "error_max_structured_output_retries",
 ];
 
-/// Message types that carry nothing wisp shows, and are skipped without a warning.
+/// Message types that carry nothing wisp shows, and are skipped without a log line.
+/// `command_lifecycle` tracks a queued message's fate, which `result` already reports.
 const IGNORED_TYPES: &[&str] = &[
     "auth_status",
+    "command_lifecycle",
     "conversation_reset",
     "keep_alive",
     "prompt_suggestion",
@@ -149,10 +151,12 @@ impl Translator {
             Some("result") => self.result(&message),
             Some("rate_limit_event") => self.rate_limit(&message),
             Some(kind) if IGNORED_TYPES.contains(&kind) => Vec::new(),
-            Some(kind) => vec![warning(
-                WarningKind::UnknownEvent,
-                format!("a message of type {kind:?}"),
-            )],
+            // A newer CLI's unknown message types stay out of the chat, in the spirit of 0004's
+            // "ignore unknown fields". Runs still end and fail through `result` and the exit code.
+            Some(kind) => {
+                tracing::debug!(kind, "skipped a Claude Code message of an unknown type");
+                Vec::new()
+            }
             None => vec![warning(
                 WarningKind::MalformedLine,
                 "a message without a type".into(),
