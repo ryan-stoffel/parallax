@@ -81,7 +81,7 @@ Answered:
 * Shared context is a folder `wispd` owns and copies, not git commits ([0005](decisions/0005-shared-context-folder.md))
 * Providers: Claude Code first, then Codex, then Cursor once Cursor confirms in writing ([0004](decisions/0004-subscription-providers.md))
 * The UI follows T3 Code's layout rather than Cursor's ([0022](decisions/0022-desktop-app.md))
-* Triggers: schedules and PR watches first; Slack is out of scope
+* Triggers: schedules and PR watches first; Slack is out of scope ([RYA-59](https://linear.app/ryanstoffel/issue/RYA-59))
 
 Open:
 
