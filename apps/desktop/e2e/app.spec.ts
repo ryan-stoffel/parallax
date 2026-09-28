@@ -14,6 +14,10 @@ const wispd = process.env["WISPD_PATH"] ?? path.join(desktop, "../../target/debu
 
 test.describe.configure({ mode: "serial" });
 
+// Threads can't start on Windows yet: wispd refuses its own `\\?\` paths (RYA-109).
+const noThreads = process.platform === "win32";
+const noThreadsWhy = "threads can't start on Windows yet (RYA-109)";
+
 let app: ElectronApplication;
 let page: Page;
 let dataDir: string;
@@ -35,18 +39,23 @@ test.beforeAll(async () => {
   page = await app.firstWindow();
 });
 
-test.afterEach(() => {
+test.afterEach(async () => {
   const { status, expectedStatus } = test.info();
   if (status === expectedStatus) return;
   const log = path.join(dataDir, "logs/wispd.log");
   if (existsSync(log)) console.log(`--- ${log}\n${readFileSync(log, "utf8")}`);
+  console.log(`--- the window's text\n${await page.locator("body").innerText()}`);
 });
 
 test.afterAll(async () => {
   await app?.close();
-  // `wispd attach` started a detached `serve`, which outlives the app.
-  const lock = path.join(dataDir, "wispd.lock");
-  const pid = existsSync(lock) ? Number.parseInt(readFileSync(lock, "utf8"), 10) : NaN;
+  // `wispd attach` started a detached `serve`, which outlives the app. Its pid comes from the log,
+  // since Windows won't read wispd.lock while serve holds it locked.
+  const log = path.join(dataDir, "logs/wispd.log");
+  const listening = existsSync(log)
+    ? /listening.* pid=(\d+)/.exec(readFileSync(log, "utf8"))
+    : null;
+  const pid = Number.parseInt(listening?.[1] ?? "", 10);
   // Never pid 0 or below, which process.kill reads as a whole process group.
   if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
 });
@@ -56,6 +65,7 @@ test("connects to wispd", async () => {
 });
 
 test("starts a thread and shows the agent's output", async () => {
+  test.fixme(noThreads, noThreadsWhy);
   // A fresh host has no default account for threads, and the fake's is `fake`. The app only
   // offers signed-in vendor CLIs, which wispd finds by running them, so set it directly.
   const set = await page.evaluate(`window.wisp.request("local", "accounts/defaults/set", {
@@ -74,12 +84,14 @@ test("starts a thread and shows the agent's output", async () => {
 });
 
 test("stops the thread", async () => {
+  test.fixme(noThreads, noThreadsWhy);
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(page.getByRole("log", { name: "Transcript" }).getByText("Stopped")).toBeVisible();
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
 });
 
 test("a follow-up's text is still there after a reload (RYA-92)", async () => {
+  test.fixme(noThreads, noThreadsWhy);
   await page.getByRole("textbox", { name: "Message" }).fill("Check the links too");
   await page.getByRole("button", { name: "Send" }).click();
   // The resumed fake answers again, after wispd logged the follow-up's turnStarted.
