@@ -84,7 +84,7 @@ What it smooths over, beyond the table's differences:
 
 ## Consequences
 
-- Keys in the environment would reach the agent's shell, so `wispd` sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` [16] and Codex's `shell_environment_policy.ignore_default_excludes=false` [26].
+- Keys in the environment would reach the agent's shell, so `wispd` sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` [16] and Codex's `shell_environment_policy.ignore_default_excludes=false` [26]. Claude Code 2.1.283 changes a scrubbed worker's permission mode to `default`; 0013 explicitly allows Bash for workers so sandboxed commands still run.
 - On a remote Mac, SSH sessions may not reach the Keychain [12][46]. Running `wispd` as a LaunchAgent in the user's GUI session should avoid this, but that is unverified and requires the user to be logged in.
 
 ## Open risks
