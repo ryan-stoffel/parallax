@@ -883,21 +883,26 @@ mod tests {
             Arc::ptr_eq(&first, &retry),
             "a queued retry shares the first attempt's own lock"
         );
-        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let retry_task = tokio::spawn({
             let retry = Arc::clone(&retry);
-            let entered = Arc::clone(&entered);
             async move {
                 let _guard = retry.lock_owned().await;
-                entered.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         });
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!retry_task.is_finished(), "the retry is still queued");
 
-        // The first attempt "fails" (a real caller's `Starting` guard would drop here) and
-        // releases, exactly as `agents::start`/`actor_for` do on any error path.
-        drop(first_guard);
+        // Only the map, the first attempt's guard, and the queued retry may hold the lock when
+        // `release` runs, as in real use (RYA-91): the test's own `first`/`retry` clones would
+        // keep the entry alive by themselves and hide a `release` that removes it too eagerly.
+        // Checked with a `Weak`, which also serves the sweep check at the end.
+        let old = Arc::downgrade(&retry);
+        drop((first, retry));
+
+        // The first attempt "fails" and releases, exactly as `agents::start`/`actor_for` do on any
+        // error path. `Starting::drop` calls `release` while its guard is still alive, so the
+        // guard is dropped only after the check below (RYA-91): dropping it first let the retry
+        // take the lock on the other worker before the check ran.
         locks.release(id);
 
         // A caller arriving after the release, while the retry is still queued, must still be
@@ -905,25 +910,19 @@ mod tests {
         // actor(id)`/`existing()`) to protect a third caller from racing the retry.
         let fresh = locks.get(id);
         assert!(
-            Arc::ptr_eq(&retry, &fresh),
+            Arc::ptr_eq(&old.upgrade().unwrap(), &fresh),
             "a caller after the release still contends for the queued retry's own lock"
         );
-        assert!(
-            !entered.load(std::sync::atomic::Ordering::SeqCst),
-            "the retry has not run yet: nothing has bypassed it"
-        );
+        drop(first_guard);
 
         retry_task.await.unwrap();
-        assert!(entered.load(std::sync::atomic::Ordering::SeqCst));
 
-        // Once nobody but the map itself holds it — dropping every local clone this test kept
-        // around, not just the ones a real caller would have released already — the *next* `get`
-        // sweeps it away and a later caller gets a brand-new, uncontended lock: the entry doesn't
-        // leak forever. Checked with a `Weak` rather than comparing the new `Arc`'s address to
-        // the old one's: once the old allocation is freed, a new one is free to reuse the very
-        // same address, which would make a raw-pointer comparison an unreliable false negative.
-        let old = Arc::downgrade(&retry);
-        drop((first, retry, fresh));
+        // Once nobody but the map itself holds it, the *next* `get` sweeps it away and a later
+        // caller gets a brand-new, uncontended lock: the entry doesn't leak forever. Checked with
+        // the `Weak` rather than comparing the new `Arc`'s address to the old one's: once the old
+        // allocation is freed, a new one is free to reuse the very same address, which would make
+        // a raw-pointer comparison an unreliable false negative.
+        drop(fresh);
         let after = locks.get(id);
         assert!(
             old.upgrade().is_none(),
