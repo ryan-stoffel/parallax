@@ -55,8 +55,11 @@ export interface WispBridge {
   onHosts(listener: (hosts: SshHost[]) => void): () => void;
   /** Adds a host, or edits the one with `id`. Resolves to an error for people, or undefined. */
   saveHost(host: HostInput, id?: string): Promise<string | undefined>;
-  /** Forgets a host and disconnects from it. Nothing on the host changes. */
-  removeHost(id: string): Promise<void>;
+  /**
+   * Forgets a host and disconnects from it. Nothing on the host changes. Resolves to an error for
+   * people, or undefined.
+   */
+  removeHost(id: string): Promise<string | undefined>;
 }
 
 /** A host the user added, reached with `ssh <destination> wispd attach` (0022). */

@@ -15,12 +15,14 @@ const providers = ["Claude", "Codex"];
 
 interface SettingsProps {
   section: SettingsSection;
+  /** Hosts opens with the Add host form open, as the sidebar's "Add host" asks. */
+  addingHost: boolean;
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
 }
 
 /** The Settings page body. The sidebar's SettingsNav picks the section. */
-export function Settings({ section, theme, onThemeChange }: SettingsProps) {
+export function Settings({ section, addingHost, theme, onThemeChange }: SettingsProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-2xl px-8 pt-6 pb-16">
@@ -58,7 +60,7 @@ export function Settings({ section, theme, onThemeChange }: SettingsProps) {
             </Section>
           </>
         ) : section === "hosts" ? (
-          <HostsSettings />
+          <HostsSettings addingHost={addingHost} />
         ) : (
           <>
             <h1 className="mb-1.5 text-xl font-semibold">Providers</h1>
@@ -89,16 +91,12 @@ const quietButton =
   "rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground";
 
 /** Settings > Hosts: this computer, then the SSH hosts, which can be added, edited, and removed. */
-function HostsSettings() {
+function HostsSettings({ addingHost }: { addingHost: boolean }) {
   const hosts = useHosts();
   // The host whose form is open: its id, "new", or none.
-  const [editing, setEditing] = useState<string>();
+  const [editing, setEditing] = useState(addingHost ? "new" : undefined);
   const [removeError, setRemoveError] = useState<string>();
-  const remove = (id: string) =>
-    window.wisp.removeHost(id).then(
-      () => setRemoveError(undefined),
-      (error: Error) => setRemoveError(error.message),
-    );
+  const remove = async (id: string) => setRemoveError(await window.wisp.removeHost(id));
 
   return (
     <>

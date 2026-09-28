@@ -95,12 +95,11 @@ test("opening an SSH host shows its error and loads its threads from it", async 
   expect(crumbs[0]!.textContent).toBe("Mac mini");
 });
 
-test("Add host saves a name and destination, and shows the main process's error", async () => {
+test("the sidebar's Add host opens the form, which shows the main process's error", async () => {
   await renderApp();
   await click(document.querySelector<HTMLButtonElement>('[aria-label="Add host"]')!);
   expect(document.querySelector("h1")!.textContent).toBe("Hosts");
 
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Add host")!);
   const form = document.querySelector<HTMLFormElement>('form[aria-label="Add host"]')!;
   form.querySelector<HTMLInputElement>('[name="name"]')!.value = "Studio";
   form.querySelector<HTMLInputElement>('[name="destination"]')!.value = "-oProxyCommand=x";
@@ -113,4 +112,18 @@ test("Add host saves a name and destination, and shows the main process's error"
     undefined,
   );
   expect(form.querySelector('[role="alert"]')!.textContent).toContain("can't start with “-”");
+});
+
+test("a failed remove shows the main process's message", async () => {
+  window.wisp.removeHost = async () => "wisp couldn't save its settings: EACCES";
+  await renderApp();
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }));
+  });
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Hosts")!);
+  expect(document.querySelector('form[aria-label="Add host"]')).toBeNull();
+
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Remove")!);
+  const alert = document.querySelector('[role="alert"]')!.textContent;
+  expect(alert).toBe("wisp couldn't save its settings: EACCES");
 });

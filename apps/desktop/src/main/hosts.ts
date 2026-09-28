@@ -70,7 +70,7 @@ export function startHosts(): void {
   try {
     settings = readSettings(settingsFile());
   } catch (error) {
-    settingsError = `${settingsFile()} couldn't be read (${(error as Error).message}). Fix or remove it, then restart wisp.`;
+    settingsError = `wisp can't use ${settingsFile()}, so it won't save over it: ${(error as Error).message.replace(/\.$/, "")}. Fix or remove the file, then restart wisp.`;
     console.error(settingsError);
   }
   for (const host of settings.hosts) addSshConnection(host);
@@ -158,7 +158,6 @@ function addSshConnection({ id, destination }: SshHost): void {
 
 /** `window.wisp.saveHost`. Its input comes from the renderer, so it's checked here. */
 function saveHost(input: unknown, id: unknown): string | undefined {
-  if (settingsError) return settingsError;
   if (!isObject(input) || typeof input["name"] !== "string") return "invalid host";
   if (typeof input["destination"] !== "string") return "invalid host";
   const checked = checkHost({ name: input["name"], destination: input["destination"] });
@@ -174,16 +173,19 @@ function saveHost(input: unknown, id: unknown): string | undefined {
   return undefined;
 }
 
-function removeHost(id: unknown): void {
-  if (typeof id !== "string" || !settings.hosts.some((h) => h.id === id)) return;
+/** `window.wisp.removeHost`. Resolves to an error for people, as `saveHost` does. */
+function removeHost(id: unknown): string | undefined {
+  if (typeof id !== "string" || !settings.hosts.some((h) => h.id === id)) return undefined;
   const error = saveSettings({ ...settings, hosts: settings.hosts.filter((h) => h.id !== id) });
-  if (error) throw new Error(error);
+  if (error) return error;
   connections.get(id)?.dispose();
   connections.delete(id);
+  return undefined;
 }
 
 /** Writes the settings and tells every window about the hosts. Resolves to an error for people. */
 function saveSettings(next: Settings): string | undefined {
+  if (settingsError) return settingsError;
   try {
     writeSettings(settingsFile(), next);
   } catch (error) {

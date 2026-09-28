@@ -38,6 +38,12 @@ export function App() {
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const [selection, setSelection] = useState<Selection>({ kind: "new" });
   const [settings, setSettings] = useState<SettingsSection | null>(null);
+  // Set by the sidebar's "Add host", so Hosts opens on its form; any other way in clears it.
+  const [addingHost, setAddingHost] = useState(false);
+  const openSettings = (section: SettingsSection, addHost = false) => {
+    setSettings(section);
+    setAddingHost(addHost);
+  };
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
   // A quiet note for the thread New Thread just started, such as the account it picked.
@@ -88,7 +94,7 @@ export function App() {
       if (e.code === "KeyB" && e.altKey) setPanelOpen((open) => !open);
       else if (e.code === "KeyB") setSidebarOpen((open) => !open);
       else if (e.code === "KeyN" && !e.altKey) newThread();
-      else if (e.key === "," && !e.altKey) setSettings("general");
+      else if (e.key === "," && !e.altKey) openSettings("general");
       else return;
       e.preventDefault();
     };
@@ -116,7 +122,7 @@ export function App() {
         {settings ? (
           <SettingsNav
             section={settings}
-            onSection={setSettings}
+            onSection={(section) => openSettings(section)}
             onBack={() => setSettings(null)}
           />
         ) : (
@@ -130,7 +136,7 @@ export function App() {
             projects={host.id === localId ? projects : []}
             selection={selection}
             onSelect={setSelection}
-            onOpenSettings={setSettings}
+            onOpenSettings={openSettings}
             models={models}
             threads={threads}
             onDelete={deleteThread}
@@ -145,7 +151,12 @@ export function App() {
               {showSidebar}
               <Breadcrumb items={["Settings", settingsNames[settings]]} />
             </TopBar>
-            <Settings section={settings} theme={theme} onThemeChange={setTheme} />
+            <Settings
+              section={settings}
+              addingHost={addingHost}
+              theme={theme}
+              onThemeChange={setTheme}
+            />
           </>
         ) : (
           <>

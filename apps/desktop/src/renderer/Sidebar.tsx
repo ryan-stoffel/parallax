@@ -77,7 +77,7 @@ interface ThreadListProps {
   projects: Project[];
   selection: Selection;
   onSelect: (selection: Selection) => void;
-  onOpenSettings: (section: SettingsSection) => void;
+  onOpenSettings: (section: SettingsSection, addHost?: boolean) => void;
   models: ModelGroup[];
   threads: ThreadsView;
   /** Deletes a thread. Resolves to an error message, or undefined. */
@@ -224,7 +224,7 @@ export function ThreadList({
           <h2 id="hosts-heading" className={heading}>
             Hosts
           </h2>
-          <IconButton label="Add host" onClick={() => onOpenSettings("hosts")}>
+          <IconButton label="Add host" onClick={() => onOpenSettings("hosts", true)}>
             <Plus />
           </IconButton>
         </div>

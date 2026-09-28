@@ -8,9 +8,12 @@ import { checkHost, readSettings, writeSettings } from "./settings";
 
 const file = () => path.join(mkdtempSync(path.join(tmpdir(), "wisp-settings-")), "settings.json");
 
-test("a destination that ssh could read as an option or split is refused (0007)", () => {
-  for (const destination of ["", "  ", "-oProxyCommand=x", "mini wispd", "mini\u0000", "a\tb"]) {
-    expect(checkHost({ name: "x", destination })).toBeTypeOf("string");
+test("a destination that ssh could read as an option, split, or pass to a shell is refused", () => {
+  const bad = ["", "  ", "-oProxyCommand=x", "mini wispd", "mini\u0000", "a\tb"];
+  // OpenSSH 9.6's set (CVE-2023-51385).
+  bad.push(..."'`\"$\\;&<>|(){}".split("").map((c) => `me${c}@mini`));
+  for (const destination of bad) {
+    expect(checkHost({ name: "x", destination }), destination).toBeTypeOf("string");
   }
   expect(checkHost({ name: "  ", destination: " me@mini.local " })).toEqual({
     name: "me@mini.local",
@@ -22,30 +25,32 @@ test("a destination that ssh could read as an option or split is refused (0007)"
   });
 });
 
-test("settings round-trip, and a missing file is no hosts", () => {
+test("settings round-trip with keys this doesn't know, and a missing file is no hosts", () => {
   const settings = file();
   expect(readSettings(settings)).toEqual({ hosts: [] });
   const hosts = [{ id: "h1", name: "Mac mini", destination: "mini" }];
-  writeSettings(settings, { hosts, ssh: "C:\\ssh.exe" });
-  expect(readSettings(settings)).toEqual({ hosts, ssh: "C:\\ssh.exe" });
+  writeSettings(settings, { hosts, ssh: "C:\\ssh.exe", later: 1 } as never);
+  expect(readSettings(settings)).toEqual({ hosts, ssh: "C:\\ssh.exe", later: 1 });
 });
 
-test("hosts edited by hand into something unsafe are dropped", () => {
-  const settings = file();
+// Throwing is what stops a save from overwriting them (hosts.ts).
+test("a file this can't use as is throws, so a save can't overwrite what the user wrote", () => {
   const good = { id: "h1", name: "Mac mini", destination: "mini" };
-  const hosts = [
-    good,
-    { id: "local", name: "x", destination: "y" },
-    { id: "h2" },
-    null,
-    { id: "h3", name: "x", destination: "-oProxyCommand=evil" },
+  const unusable = [
+    "{ hosts: ",
+    "[]",
+    JSON.stringify({ hosts: {} }),
+    JSON.stringify({ hosts: [good], ssh: 3 }),
+    JSON.stringify({ hosts: [good, null] }),
+    JSON.stringify({ hosts: [good, { id: "h2" }] }),
+    JSON.stringify({ hosts: [good, { ...good, name: "again" }] }),
+    JSON.stringify({ hosts: [{ ...good, id: "local" }] }),
+    JSON.stringify({ hosts: [{ ...good, destination: "-oProxyCommand=evil" }] }),
+    JSON.stringify({ hosts: [{ ...good, destination: " mini" }] }),
   ];
-  writeFileSync(settings, JSON.stringify({ hosts, ssh: 3 }));
-  expect(readSettings(settings)).toEqual({ hosts: [good] });
-});
-
-test("a file that isn't JSON throws, so a save can't overwrite the user's hosts", () => {
-  const settings = file();
-  writeFileSync(settings, "{ hosts: ");
-  expect(() => readSettings(settings)).toThrow();
+  for (const text of unusable) {
+    const settings = file();
+    writeFileSync(settings, text);
+    expect(() => readSettings(settings), text).toThrow();
+  }
 });

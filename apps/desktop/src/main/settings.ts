@@ -14,8 +14,9 @@ export type Settings = {
 };
 
 /**
- * Reads the settings. A missing file is empty settings, and a host that doesn't pass `checkHost`
- * is dropped. Throws when the file can't be read or isn't JSON, so a save never overwrites it.
+ * Reads the settings. A missing file is empty settings. Throws when the file can't be read, isn't
+ * JSON, or holds anything this can't use as is, such as a host that fails `checkHost`, so a save
+ * never overwrites what the user wrote. Keys it doesn't know are kept, and saved back.
  */
 export function readSettings(file: string): Settings {
   let text: string;
@@ -25,15 +26,27 @@ export function readSettings(file: string): Settings {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { hosts: [] };
     throw error;
   }
-  const raw = JSON.parse(text) as { hosts?: unknown; ssh?: unknown } | null;
-  const hosts = (Array.isArray(raw?.hosts) ? raw.hosts : []).flatMap((entry: unknown) => {
+  const raw = JSON.parse(text) as unknown;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("it isn't a JSON object");
+  }
+  const { hosts = [], ssh } = raw as { hosts?: unknown; ssh?: unknown };
+  if (!Array.isArray(hosts)) throw new Error("`hosts` isn't a list");
+  if (ssh !== undefined && typeof ssh !== "string") throw new Error("`ssh` isn't a string");
+  const ids = new Set(["local"]);
+  for (const entry of hosts as unknown[]) {
     const { id, name, destination } = (entry ?? {}) as Record<string, unknown>;
-    if (typeof id !== "string" || !id || id === "local") return [];
-    if (typeof name !== "string" || typeof destination !== "string") return [];
+    const where = `host ${JSON.stringify(entry)}`;
+    if (typeof id !== "string" || !id || ids.has(id)) throw new Error(`${where} has a bad id`);
+    ids.add(id);
+    if (typeof name !== "string" || typeof destination !== "string") {
+      throw new Error(`${where} needs a name and a destination`);
+    }
     const checked = checkHost({ name, destination });
-    return typeof checked === "string" ? [] : [{ id, ...checked }];
-  });
-  return { hosts, ...(typeof raw?.ssh === "string" && raw.ssh && { ssh: raw.ssh }) };
+    if (typeof checked === "string") throw new Error(`${where}: ${checked}`);
+    if (checked.destination !== destination) throw new Error(`${where} has spaces around it`);
+  }
+  return { ...raw, hosts } as Settings;
 }
 
 /** Writes the settings whole, through a temporary file, so a crash never leaves half a file. */
@@ -47,13 +60,15 @@ export function writeSettings(file: string, settings: Settings): void {
 /**
  * Checks a host as the user typed it. Resolves to it trimmed, with the destination as the name
  * when there's none, or to an error for people. A destination may not start with `-` or contain
- * whitespace or control characters (0007).
+ * whitespace or control characters (0007), or the shell metacharacters OpenSSH 9.6 refuses in a
+ * user or host name (CVE-2023-51385), since a `%h` or `%r` in the user's ssh config could reach
+ * a shell.
  */
 export function checkHost({ name, destination }: HostInput): HostInput | string {
   const trimmed = destination.trim();
   if (!trimmed) return "Enter an ssh destination, such as mac-mini or me@192.168.1.20.";
-  if (trimmed.startsWith("-") || /[\s\p{Cc}]/u.test(trimmed)) {
-    return "An ssh destination can't start with “-” or contain spaces.";
+  if (trimmed.startsWith("-") || /[\s\p{Cc}'`"$\\;&<>|(){}]/u.test(trimmed)) {
+    return "An ssh destination can't start with “-”, or contain spaces, quotes, or characters such as $ ; & | < > ( ) { } \\.";
   }
   const label = name.replace(/\p{Cc}/gu, "").trim();
   return { name: label || trimmed, destination: trimmed };
