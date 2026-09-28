@@ -36,7 +36,7 @@ Numbers are assigned in order. Take the next free number when you start the reco
 
 - Status: accepted | superseded by NNNN
 - Date: YYYY-MM-DD
-- Issue: #n
+- Issue: RYA-n
 
 ## Context
 
