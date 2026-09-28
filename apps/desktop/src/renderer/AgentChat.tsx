@@ -42,6 +42,8 @@ export function AgentChat({ hostId, runId }: { hostId: string; runId: string }) 
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
+  const [resendError, setResendError] = useState<string>();
+  const resend = useCallback((text: string) => void send(text).then(setResendError), [send]);
   const { run, items } = transcript;
 
   // Sent from here, but no turnStarted (or followUpDropped) for it yet.
@@ -61,7 +63,7 @@ export function AgentChat({ hostId, runId }: { hostId: string; runId: string }) 
   return (
     <>
       {rows.length > 0 ? (
-        <TranscriptView rows={rows} sent={sent} live={isRunning(run?.status)} />
+        <TranscriptView rows={rows} sent={sent} live={isRunning(run?.status)} onResend={resend} />
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-[13px] text-faint-foreground">
           {error ? (
@@ -75,10 +77,10 @@ export function AgentChat({ hostId, runId }: { hostId: string; runId: string }) 
         </div>
       )}
       <div className="mx-auto w-full max-w-3xl px-6 pb-5">
-        {/* A loaded transcript that stopped updating, such as a failed subscription. */}
-        {error && rows.length > 0 && (
+        {/* A loaded transcript that stopped updating, or a failed Send again. */}
+        {(error ?? resendError) && rows.length > 0 && (
           <p role="alert" className="px-2 pb-2 text-[12.5px] text-danger">
-            {error}
+            {error ?? resendError}
           </p>
         )}
         <Composer
@@ -100,10 +102,12 @@ export function TranscriptView({
   rows,
   sent,
   live,
+  onResend,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, string>;
   live: boolean;
+  onResend: (text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -160,10 +164,11 @@ export function TranscriptView({
               <div className="mx-auto max-w-3xl px-6 py-2">
                 <RowView
                   row={row}
-                  sentText={row.kind === "user" && row.turnId ? sent.get(row.turnId) : undefined}
+                  sentText={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
                   live={live}
                   open={open.has(row.key)}
                   onToggle={toggle}
+                  onResend={onResend}
                 />
               </div>
             </div>
@@ -182,10 +187,19 @@ interface RowProps {
   live: boolean;
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
+  /** Sends a dropped follow-up again. */
+  onResend?: (text: string) => void;
 }
 
 /** One transcript row. Memoized: an unchanged item keeps its object, so it skips re-rendering. */
-export const RowView = memo(function RowView({ row, sentText, live, open, onToggle }: RowProps) {
+export const RowView = memo(function RowView({
+  row,
+  sentText,
+  live,
+  open,
+  onToggle,
+  onResend,
+}: RowProps) {
   switch (row.kind) {
     case "user":
     case "pending": {
@@ -195,7 +209,8 @@ export const RowView = memo(function RowView({ row, sentText, live, open, onTogg
           <div
             className={`max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap ${row.kind === "pending" ? "opacity-60" : ""}`}
           >
-            {text ?? <span className="text-muted-foreground italic">Sent from another window</span>}
+            {/* A follow-up sent from elsewhere: the log has no text for it until RYA-92. */}
+            {text ?? <span className="text-muted-foreground italic">Follow-up message</span>}
           </div>
         </div>
       );
@@ -252,7 +267,22 @@ export const RowView = memo(function RowView({ row, sentText, live, open, onTogg
           ) : (
             <Info aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           )}
-          {row.text}
+          <span>
+            {row.text}
+            {/* A dropped follow-up this window sent: offer it again, rather than lose it. */}
+            {sentText !== undefined && onResend && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  onClick={() => onResend(sentText)}
+                  className="font-medium text-foreground underline underline-offset-2"
+                >
+                  Send again
+                </button>
+              </>
+            )}
+          </span>
         </p>
       );
     case "end": {
@@ -402,6 +432,12 @@ const markdownComponents: Components = {
     </a>
   ),
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  // Never load images: a link with the alt text, which opens externally like any link.
+  img: ({ src, alt }) => (
+    <a href={typeof src === "string" ? src : undefined} target="_blank" rel="noreferrer">
+      {alt || "Image"}
+    </a>
+  ),
 };
 
 /** An agent message, rendered from Markdown with GitHub's extensions. */

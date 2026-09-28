@@ -73,6 +73,17 @@ test("a page and a live event with the same seq apply once, and other runs are s
   expect(after.seq).toBe(50);
 });
 
+test("kinds this version doesn't know are skipped, but still count their seq", () => {
+  const known = build(...upTo(1));
+  const newer = [
+    at({ kind: "agent.somethingNew", runId } as unknown as WispEvent),
+    output({ kind: "somethingNew" } as unknown as AgentOutputItem),
+  ];
+  const t = applyEvents(known, newer, runId);
+  expect(t.items).toEqual(known.items);
+  expect(t.seq).toBe(newer[1]!.seq);
+});
+
 test("an account fallback moves the run and says why", () => {
   const t = build(...upTo(9));
   expect(t.run!.accountId).toBe("01a0d34b-3c4d-7e5f-a061-7b8c9d0e1f22");

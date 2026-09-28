@@ -156,7 +156,7 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
         kind: "notice",
         key,
         tone: "warning",
-        text: "A message didn't reach the agent because it stopped first. Send it again to resume.",
+        text: "A message didn't reach the agent because it stopped first.",
         turnId: item.turnId,
       });
       break;

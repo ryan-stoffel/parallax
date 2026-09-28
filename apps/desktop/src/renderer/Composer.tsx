@@ -1,4 +1,4 @@
-import { ArrowUp, GitBranch, Laptop, Server, Square } from "lucide-react";
+import { ArrowUp, GitBranch, Laptop, LoaderCircle, Server, Square } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import type { ComposerOptions } from "./placeholder";
@@ -13,8 +13,11 @@ export interface ComposerProps {
   newThread?: { localHost: boolean; options: ComposerOptions };
   /** Sends the text. Resolves to an error message, which puts the text back. Absent: Send stays off. */
   onSend?: (text: string) => Promise<string | undefined>;
-  /** While set, an empty box shows Stop instead of Send. */
-  onStop?: () => void;
+  /**
+   * While set, an empty box shows Stop instead of Send. Resolves to an error message.
+   * Stop stays pending until the caller drops `onStop`, when the run stops.
+   */
+  onStop?: () => Promise<string | undefined>;
   /** Why sending is off right now, shown in place of the box's hint. */
   disabledReason?: string;
   /** What goes under the box for an open run: its footer. */
@@ -35,6 +38,9 @@ export function Composer({
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
+  const [stopping, setStopping] = useState(false);
+  // The run stopped (or never ran), so a later run's Stop starts fresh.
+  if (stopping && !onStop) setStopping(false);
   const canSend = !!onSend && !disabledReason && text.trim() !== "";
   const showStop = !!onStop && !disabledReason && text.trim() === "";
 
@@ -44,7 +50,18 @@ export function Composer({
     setError(undefined);
     const failed = await onSend(text);
     if (failed) {
-      setText(text);
+      // Put it back ahead of anything typed while it was in flight.
+      setText((typed) => (typed ? `${text}\n\n${typed}` : text));
+      setError(failed);
+    }
+  };
+
+  const stop = async () => {
+    setStopping(true);
+    setError(undefined);
+    const failed = await onStop?.();
+    if (failed) {
+      setStopping(false);
       setError(failed);
     }
   };
@@ -82,11 +99,16 @@ export function Composer({
           {showStop ? (
             <button
               type="button"
-              aria-label="Stop"
-              onClick={onStop}
-              className="ml-auto grid size-8 place-items-center rounded-full bg-primary text-primary-foreground"
+              aria-label={stopping ? "Stopping" : "Stop"}
+              disabled={stopping}
+              onClick={() => void stop()}
+              className="ml-auto grid size-8 place-items-center rounded-full bg-primary text-primary-foreground disabled:opacity-50"
             >
-              <Square className="size-3 fill-current" />
+              {stopping ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Square className="size-3 fill-current" />
+              )}
             </button>
           ) : (
             <button
