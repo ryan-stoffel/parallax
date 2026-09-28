@@ -17,7 +17,7 @@ The decisions behind it:
 | --- | --- |
 | `wispd serve` | Serves the protocol on this user's Unix socket, or named pipe on Windows, until SIGTERM or SIGINT (Ctrl-C or Ctrl-Break on Windows) |
 | `wispd attach` | Connects stdin and stdout to that socket or pipe, and starts wispd first if nothing is listening |
-| `wispd service install`, `uninstall`, `status` | macOS only: manage the LaunchAgent that keeps `serve` running (#61) |
+| `wispd service install`, `uninstall`, `status` | macOS and Linux: manage the service that keeps `serve` running, a LaunchAgent (#61) or a systemd user unit (RYA-18) |
 
 Both commands take `--data-dir` (or `WISPD_DATA_DIR`) to use a data folder other than the default: `~/Library/Application Support/wisp` on macOS, `$XDG_DATA_HOME/wisp` on Linux, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset, and `%LOCALAPPDATA%\wisp` on Windows. The socket is `wispd.sock` in that folder. When that path is too long for a Unix socket, it moves to a per-user folder: the one `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. On Windows, `serve` listens on the named pipe `\\.\pipe\wispd-<hash>` instead, where `<hash>` is the first 16 hex digits of the SHA-256 of the data folder's path. Its ACL admits only your user, and each end checks that the other runs as your user. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
 
@@ -30,7 +30,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 When its input ends, `attach` keeps printing until wispd has answered everything it was sent, and then exits. The same command works through `ssh <host> wispd attach`.
 
-If wispd isn't running, `attach` on macOS starts it through the LaunchAgent when one is installed and serves the same data folder. The LaunchAgent under the default label serves only the default data folder, so `wispd service install --data-dir <other>` needs `--label` as well. Otherwise it starts `wispd serve` in the background, in its own session. That `serve` keeps running after `attach` exits or the SSH connection drops, and `attach` never stops it.
+If wispd isn't running, `attach` starts it through the service (the LaunchAgent on macOS, the systemd user unit on Linux) when one is installed and serves the same data folder. The service under the default label serves only the default data folder, so `wispd service install --data-dir <other>` needs `--label` as well. Otherwise it starts `wispd serve` in the background, in its own session. That `serve` keeps running after `attach` exits or the SSH connection drops, and `attach` never stops it.
 
 ### Exit codes
 
@@ -87,8 +87,19 @@ The client runs the same `ssh ... <host> wispd attach` command, and the host nee
 
    To check, run `ssh <host> 'command -v wispd'`.
 2. **Quiet shell startup files and a key that logs in without prompts**, as on a Mac.
+3. **The systemd user unit, which is recommended** (RYA-18). `wispd service install` writes `~/.config/systemd/user/io.github.ryan-stoffel.wisp.wispd.service`, enables it, and starts it. `uninstall` and `status` work as on a Mac, and `attach` starts wispd with `systemctl --user start` whenever the unit is installed.
+   - **Turn on linger**, once. Without it, systemd stops your user services when your last session ends and starts them again at your next login. With it, the unit starts at boot and keeps running while nobody is logged in:
 
-Linux has no service yet (systemd is RYA-18), so `attach` always starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. Subscriptions and no-write runs work.
+     ```sh
+     loginctl enable-linger
+     ```
+
+     Some distros only let root do that, with `sudo loginctl enable-linger $USER`. To check, run `loginctl show-user $USER --property=Linger`.
+   - `systemctl --user` needs your user manager, which `pam_systemd` starts for an SSH login. Where it can't be reached, such as on a host without systemd, `attach` says so on stderr and starts `serve` itself.
+   - The unit's `serve` appends its output to `logs/wispd.log` in the data folder, as on a Mac. That needs systemd 240 or later; an older one sends it to the journal, `journalctl --user --unit io.github.ryan-stoffel.wisp.wispd`.
+   - The unit's `serve` gets the user manager's environment, not your shell's. If agent CLIs live on npm or nvm paths, add them to `PATH` in a `.conf` file in `~/.config/environment.d/`.
+
+Without the unit, `attach` starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. Subscriptions and no-write runs work.
 
 ### API keys on Linux
 

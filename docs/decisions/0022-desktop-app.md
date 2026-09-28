@@ -46,7 +46,7 @@ RYA-9 scaffolds the app, RYA-10 generates the protocol types, RYA-12 and RYA-26 
 - **Renderer:** it never spawns processes and never sees Node.
   - Every window has `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true`.
   - The preload exposes one typed `window.wisp` bridge through `contextBridge`: calls to wispd's methods by host id, event subscriptions, and app actions. Its types come from `src/protocol/`.
-  - The renderer names a host by its id. Only the main process stores hosts and builds the ssh command, so the renderer can't choose the process or the ssh destination.
+  - The renderer names a host by its id. Only the main process stores hosts and builds the ssh command, so the renderer can't choose the process. It can propose a host's ssh destination from Settings, which the main process checks (0007) before saving it.
   - The renderer can still call any wispd method through the bridge, including `agent/start`, whose agents run shell commands. A compromised renderer therefore has the user's full wispd access, which is 0007's trust boundary (the user).
   - The renderer shows untrusted agent output, such as markdown and diffs. These guards keep that output from taking the renderer over:
     - It loads only the app's bundled files, or the dev server in development.

@@ -298,12 +298,14 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     Ok(args)
 }
 
-/// The `--settings` a worker runs with (0013): hooks off; the web tools allowed; and Claude Code's
+/// The `--settings` a worker runs with (0013): hooks off; Bash and the web tools allowed; and Claude Code's
 /// Bash sandbox on, with no way around it, `sandbox`'s paths, and every host but
 /// [`WORKER_DENIED_HOSTS`]. `WebFetch(domain:*)` is what opens the network: the sandbox takes its
 /// allowlist from `WebFetch` allow rules, and a bare `*` matches every host. The denied hosts are
 /// `WebFetch` deny rules as well as `deniedDomains`, because the sandbox's list binds only
-/// commands, and a deny rule beats the `*` allow for the tool. `cwd`, the writable folders, and
+/// commands, and a deny rule beats the `*` allow for the tool. Bash needs an explicit allow rule
+/// because the subprocess environment scrub flag makes Claude Code use default permission mode.
+/// `cwd`, the writable folders, and
 /// the read-only git paths stay readable inside an unreadable path, such as wispd's data folder,
 /// which holds the worktree, the context folder, and a normal thread's scratch repository
 /// (#110). A second account's `config_home` is unreadable too.
@@ -329,7 +331,7 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
     serde_json::json!({
         "disableAllHooks": true,
         "permissions": {
-            "allow": ["WebFetch(domain:*)", "WebSearch"],
+            "allow": ["Bash", "WebFetch(domain:*)", "WebSearch"],
             "deny": denied_fetches,
         },
         "sandbox": {

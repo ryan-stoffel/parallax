@@ -65,7 +65,7 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
 {
   "disableAllHooks": true,
   "permissions": {
-    "allow": ["WebFetch(domain:*)", "WebSearch"],
+    "allow": ["Bash", "WebFetch(domain:*)", "WebSearch"],
     "deny": ["WebFetch(domain:localhost)", "WebFetch(domain:127.0.0.1)", "WebFetch(domain:[::1])",
              "WebFetch(domain:0.0.0.0)", "WebFetch(domain:[::])"]
   },
@@ -90,7 +90,7 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
 ```
 
 - **`--restricted`** loads only managed settings and `--settings`. It skips the user, project, and local settings files, so a repository can't add allow rules, directories, hooks, or an `env` block. It also confines the file tools to the working directories, and it removes the command tools and WebFetch unless `--tools` names them [2]. It needs Claude Code 2.1.248 or later (`WORKER_MIN_VERSION`). We chose it over `--setting-sources user`, which would still merge the user's own sandbox arrays and allow rules into a worker's [1].
-- **`--tools`** is an explicit list. `Bash` is on it without an allowlist, because the OS boundary holds whatever the command string says [1]. Argument patterns such as `Bash(npm test *)` are fragile by the vendor's own account [3], and the sandbox makes them unnecessary. The list leaves out `Agent`, `Skill`, `Monitor`, and every MCP tool. Leaving out `Skill` and `Agent` also means a repository's skills and subagents can't be invoked.
+- **`--tools`** is an explicit list. `Bash` is on it and in `permissions.allow`, because `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` makes Claude Code 2.1.283 force permission mode `default` and otherwise deny Bash before the sandbox runs (RYA-110). The OS boundary holds whatever the command string says [1]. Argument patterns such as `Bash(npm test *)` are fragile by the vendor's own account [3], and the sandbox makes them unnecessary. The list leaves out `Agent`, `Skill`, `Monitor`, and every MCP tool. Leaving out `Skill` and `Agent` also means a repository's skills and subagents can't be invoked.
 - **Network.** The sandbox takes its allowlist from `allowedDomains` and from `WebFetch(domain:...)` allow rules, and it honors a bare `*` in those rules [1]. So `WebFetch(domain:*)` opens every host to commands and approves WebFetch; `WebSearch` approves search. `strictAllowlist` makes any host outside the list, which is only `deniedDomains`, fail instead of prompting. `deniedDomains` wins over the allowlist, but it binds sandboxed commands only; WebFetch runs in-process and follows permission rules [4]. So each denied host is also a `WebFetch(domain:...)` deny rule, which beats the `*` allow for the tool [3].
 - **`failIfUnavailable`** makes a run fail when the sandbox can't start, instead of running commands unsandboxed. **`allowUnsandboxedCommands: false`** ignores `dangerouslyDisableSandbox`, the model's escape hatch [1][4].
 - **`--strict-mcp-config`** with no `--mcp-config` connects no MCP servers, including `.mcp.json` [2]. wispd's own MCP tools join in M4.

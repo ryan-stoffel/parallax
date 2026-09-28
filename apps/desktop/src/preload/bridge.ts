@@ -48,7 +48,25 @@ export interface WispBridge {
   onConnectionState(listener: (hostId: string, state: ConnectionState) => void): () => void;
   /** Reconnects a failed host now, including one that stopped retrying. */
   retry(hostId: string): Promise<void>;
+
+  /** The saved SSH hosts, oldest first. This computer is host `local`, which isn't one of them. */
+  hosts(): Promise<SshHost[]>;
+  /** Every later change to the saved hosts. Returns the unsubscribe function. */
+  onHosts(listener: (hosts: SshHost[]) => void): () => void;
+  /** Adds a host, or edits the one with `id`. Resolves to an error for people, or undefined. */
+  saveHost(host: HostInput, id?: string): Promise<string | undefined>;
+  /**
+   * Forgets a host and disconnects from it. Nothing on the host changes. Resolves to an error for
+   * people, or undefined.
+   */
+  removeHost(id: string): Promise<string | undefined>;
 }
+
+/** A host the user added, reached with `ssh <destination> wispd attach` (0022). */
+export type SshHost = { id: string; name: string; destination: string };
+
+/** What the Hosts settings edit. The main process checks it and picks the id. */
+export type HostInput = { name: string; destination: string };
 
 /** The methods the renderer may call. Main owns the handshake and event subscriptions. */
 export type RendererMethod = Exclude<
@@ -84,10 +102,18 @@ export type ConnectionState =
   | { status: "failed"; error: ConnectionError; retrying: boolean };
 
 export type ConnectionError = {
-  reason: "notFound" | "incompatibleProtocol" | "exited" | "unresponsive" | "protocolError";
+  /** `sshSetup`: the host needs the user, such as to accept its host key, so it isn't retried. */
+  reason:
+    | "notFound"
+    | "incompatibleProtocol"
+    | "exited"
+    | "unresponsive"
+    | "protocolError"
+    | "sshSetup";
+  /** For people: what went wrong and how to fix it. */
   message: string;
-  /** How `wispd attach` exited, for `exited`. */
+  /** How `wispd attach` exited, or ssh for a host. */
   exitCode?: number | null;
-  /** The end of attach's stderr, if it wrote any. */
+  /** The end of attach's stderr, and ssh's for a host, if they wrote any. */
   stderr?: string;
 };
