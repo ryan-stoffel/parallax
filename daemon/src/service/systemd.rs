@@ -51,6 +51,10 @@ pub fn unit_path(label: &str) -> Result<PathBuf, ServiceError> {
 /// deliberate stop stays stopped. `WantedBy=default.target` starts it with the user's manager,
 /// which with linger runs from boot.
 ///
+/// `Type=exec` makes `systemctl start` fail when `program` can't be run, so `attach` falls back
+/// to starting `serve` itself. `KillMode=mixed` sends the stop's SIGTERM to `serve` alone, as
+/// launchd does, so it can stop its agent CLIs itself; whatever is left then gets SIGKILL.
+///
 /// # Errors
 ///
 /// [`ServiceError::UnitPath`] if `program` or the data folder isn't UTF-8 or has a control
@@ -64,8 +68,10 @@ pub fn render_unit(program: &Path, data_dir: &DataDir) -> Result<String, Service
          Description=wispd, the wisp host daemon\n\
          \n\
          [Service]\n\
+         Type=exec\n\
          ExecStart={program} serve\n\
          Environment={data_dir_value}\n\
+         KillMode=mixed\n\
          Restart=on-failure\n\
          StandardOutput=append:{log}\n\
          StandardError=append:{log}\n\
@@ -125,7 +131,9 @@ pub fn install(label: &str, data_dir: &DataDir) -> Result<InstallOutcome, Servic
 }
 
 /// Removes the user unit for `label`: stops and disables it if systemd has it loaded, deletes
-/// the unit file, and reloads systemd so it forgets the unit.
+/// the unit file and its `default.target.wants` link, and reloads systemd so it forgets the
+/// unit. The link is deleted directly because a unit systemd couldn't load, such as one it can't
+/// parse, is never disabled.
 ///
 /// Idempotent: uninstalling a label that was never installed succeeds and reports
 /// [`UninstallOutcome::NotInstalled`].
@@ -138,7 +146,12 @@ pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
     if was_loaded {
         systemctl(&["disable", "--now", &unit_name(label)])?;
     }
-    let removed_file = remove_file(&unit_path(label)?)?;
+    let path = unit_path(label)?;
+    let link = path
+        .with_file_name("default.target.wants")
+        .join(unit_name(label));
+    let removed_link = remove_file(&link)?;
+    let removed_file = remove_file(&path)? || removed_link;
     if removed_file {
         systemctl(&["daemon-reload"])?;
     }

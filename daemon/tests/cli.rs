@@ -201,6 +201,15 @@ fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
 
     assert_eq!(service("uninstall"), format!("uninstalled {LABEL}\n"));
     assert!(!unit.exists());
+
+    // An enable link left behind for a unit systemd didn't load is removed too.
+    let wants = unit.with_file_name("default.target.wants");
+    let link = wants.join(format!("{LABEL}.service"));
+    fs::create_dir(&wants).unwrap();
+    std::os::unix::fs::symlink(&unit, &link).unwrap();
+    assert_eq!(service("uninstall"), format!("uninstalled {LABEL}\n"));
+    assert!(fs::symlink_metadata(&link).is_err());
+
     assert_eq!(service("uninstall"), format!("{LABEL} was not installed\n"));
 
     let show = format!("--user show --property=LoadState,MainPID {LABEL}.service");
@@ -214,6 +223,8 @@ fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
              {show}\n\
              {show}\n\
              --user disable --now {LABEL}.service\n\
+             --user daemon-reload\n\
+             {show}\n\
              --user daemon-reload\n\
              {show}\n"
         )

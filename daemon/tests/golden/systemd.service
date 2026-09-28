@@ -2,8 +2,10 @@
 Description=wispd, the wisp host daemon
 
 [Service]
+Type=exec
 ExecStart="/usr/local/bin/wispd" serve
 Environment="WISPD_DATA_DIR=/home/ryan/.local/share/wisp"
+KillMode=mixed
 Restart=on-failure
 StandardOutput=append:/home/ryan/.local/share/wisp/logs/wispd.log
 StandardError=append:/home/ryan/.local/share/wisp/logs/wispd.log
