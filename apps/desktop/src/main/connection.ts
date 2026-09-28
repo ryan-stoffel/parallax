@@ -8,14 +8,16 @@ import {
   type EventsSubscribeParams,
   type IncompatibleProtocolDetail,
   type InitializeResult,
+  type LogId,
   type SubscriptionId,
   type WispRequests,
 } from "../protocol/generated/protocol";
 import type {
   ConnectionError,
   ConnectionState,
+  HostResponse,
   RpcError,
-  RpcResponse,
+  SubscribeParams,
   SubscriptionMessage,
 } from "../preload/bridge";
 import { RpcClient } from "./rpc";
@@ -43,6 +45,8 @@ export type ConnectionOptions = {
 type Subscription = {
   /** `after` advances with every event, so a reconnect resumes from the last `seq`. */
   params: EventsSubscribeParams;
+  /** The log `params.after` counts in. */
+  logId: LogId;
   listener: (message: SubscriptionMessage) => void;
   /** wispd's id for it on the current connection. */
   id?: SubscriptionId;
@@ -57,7 +61,7 @@ export class Connection {
   state: ConnectionState = { status: "connecting" };
   private child?: ChildProcessWithoutNullStreams;
   private client?: RpcClient;
-  private logId?: string;
+  private logId?: LogId;
   private failures = 0;
   private retryTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
@@ -86,18 +90,25 @@ export class Connection {
   request<M extends keyof WispRequests>(
     method: M,
     params: WispRequests[M]["params"],
-  ): Promise<RpcResponse<WispRequests[M]["result"]>> {
-    if (this.state.status !== "connected" || !this.client) {
+  ): Promise<HostResponse<WispRequests[M]["result"]>> {
+    const { client, logId } = this;
+    if (this.state.status !== "connected" || !client || logId === undefined) {
       return Promise.resolve({
         error: { code: ErrorCodes.InternalError, message: "not connected" },
       });
     }
-    return this.client.request(method, params, REQUEST_TIMEOUT_MS);
+    // Only this client answers, and a new log needs a new connection, so this is its log.
+    return client
+      .request(method, params, REQUEST_TIMEOUT_MS)
+      .then((response) => ("result" in response ? { ...response, logId } : response));
   }
 
-  /** See `WispBridge.subscribe`. Returns the unsubscribe function. */
-  subscribe(params: EventsSubscribeParams, listener: Subscription["listener"]): () => void {
-    const subscription: Subscription = { params: { ...params }, listener };
+  /**
+   * See `WispBridge.subscribe`. The listener may get a `resync` before this returns.
+   * Returns the unsubscribe function.
+   */
+  subscribe({ logId, ...params }: SubscribeParams, listener: Subscription["listener"]): () => void {
+    const subscription: Subscription = { params, logId, listener };
     this.subscriptions.add(subscription);
     if (this.state.status === "connected") this.sendSubscribe(subscription);
     return () => {
@@ -185,19 +196,18 @@ export class Connection {
 
   private onInitialized(client: RpcClient, result: InitializeResult): void {
     client.maxFrameBytes = Math.min(MAX_FRAME_BYTES, result.maxFrameBytes);
-    // A new log numbers its events from scratch, so every `seq` held is meaningless.
-    const logChanged = this.logId !== undefined && this.logId !== result.logId;
     this.logId = result.logId;
     this.failures = 0;
     this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
     this.setState({ status: "connected", wispd: result.wispd, protocol: result.protocol });
-    for (const subscription of this.subscriptions) {
-      if (logChanged) this.endSubscription(subscription, { type: "resync" });
-      else this.sendSubscribe(subscription);
-    }
+    for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
   }
 
   private sendSubscribe(subscription: Subscription): void {
+    // A new log numbers its events from scratch, so a `seq` from another log is meaningless.
+    if (subscription.logId !== this.logId) {
+      return this.endSubscription(subscription, { type: "resync" });
+    }
     const client = this.client;
     // `send`'s callback runs before the next line is read, so the id is known before its events.
     client?.send("events/subscribe", subscription.params, REQUEST_TIMEOUT_MS, (response) => {

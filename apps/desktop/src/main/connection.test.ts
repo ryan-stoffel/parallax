@@ -166,7 +166,7 @@ test("resumes a subscription from the last seq after a reconnect", () => {
   const connection = connect();
   child().handshake();
   const messages: SubscriptionMessage[] = [];
-  connection.subscribe({ after: 0 }, (message) => messages.push(message));
+  connection.subscribe({ after: 0, logId: "log-1" }, (message) => messages.push(message));
   const subscribe = child().request("events/subscribe");
   expect(subscribe.params).toEqual({ after: 0 });
 
@@ -188,7 +188,7 @@ test("resyncRequired ends the subscription with a resync", () => {
   const connection = connect();
   child().handshake();
   const listener = vi.fn();
-  connection.subscribe({ after: 1 }, listener);
+  connection.subscribe({ after: 1, logId: "log-1" }, listener);
   child().reply({ id: child().request("events/subscribe").id, error: resyncRequired });
   expect(listener).toHaveBeenCalledWith({ type: "resync" });
 });
@@ -197,10 +197,29 @@ test("a new logId after a reconnect ends every subscription with a resync", () =
   const connection = connect();
   child().handshake("log-1");
   const listener = vi.fn();
-  connection.subscribe({ after: 5 }, listener);
+  connection.subscribe({ after: 5, logId: "log-1" }, listener);
   child().emit("close", 0, null);
   vi.advanceTimersByTime(1000);
   child().handshake("log-2");
+  expect(listener).toHaveBeenCalledWith({ type: "resync" });
+  expect(child().sent.some((message) => message.method === "events/subscribe")).toBe(false);
+});
+
+test("a subscribe after a new logId, with a seq from the old log, resyncs", async () => {
+  const connection = connect();
+  child().handshake("log-1");
+  const answer = connection.request("project/list", {});
+  child().reply({ id: child().request("project/list").id, result: { projects: [], seq: 40 } });
+  const snapshot = await answer;
+  expect(snapshot).toEqual({ result: { projects: [], seq: 40 }, logId: "log-1" });
+  if (!("result" in snapshot)) return;
+
+  // wispd starts over with a fresh log before the renderer subscribes.
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(1000);
+  child().handshake("log-2");
+  const listener = vi.fn();
+  connection.subscribe({ after: snapshot.result.seq, logId: snapshot.logId }, listener);
   expect(listener).toHaveBeenCalledWith({ type: "resync" });
   expect(child().sent.some((message) => message.method === "events/subscribe")).toBe(false);
 });

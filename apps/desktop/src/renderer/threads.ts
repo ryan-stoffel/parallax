@@ -123,7 +123,8 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
       if ("error" in runs) return setError(runs.error.message);
       dispatch({ type: "snapshot", ...list.result, runs: runs.result.runs });
       setError(undefined);
-      unsubscribe = window.wisp.subscribe(hostId, { after: list.result.seq }, (message) => {
+      const since = { after: list.result.seq, logId: list.logId };
+      unsubscribe = window.wisp.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
         if (message.type === "error") return setError(message.error.message);

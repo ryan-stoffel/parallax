@@ -4,6 +4,7 @@ import type {
   ErrorData,
   EventsEventParams,
   EventsSubscribeParams,
+  LogId,
   WispRequests,
 } from "../protocol/generated/protocol";
 
@@ -29,15 +30,16 @@ export interface WispBridge {
     hostId: string,
     method: M,
     params: WispRequests[M]["params"],
-  ): Promise<RpcResponse<WispRequests[M]["result"]>>;
+  ): Promise<HostResponse<WispRequests[M]["result"]>>;
   /**
    * Streams a host's events after `params.after`, surviving reconnects. Ends with a `resync`
-   * message when the events are gone: reload the snapshot, then subscribe again from its `seq`.
+   * message when the events are gone, or at once if the host's log isn't `params.logId`
+   * anymore: reload the snapshot, then subscribe again from its `seq`.
    * Returns the unsubscribe function.
    */
   subscribe(
     hostId: string,
-    params: EventsSubscribeParams,
+    params: SubscribeParams,
     listener: (message: SubscriptionMessage) => void,
   ): () => void;
   /** A host's connection state now. Rejects for an unknown host id, as `retry` does. */
@@ -58,6 +60,15 @@ export type RendererMethod = Exclude<
 export type RpcError = { code: number; message: string; data?: ErrorData };
 
 export type RpcResponse<R> = { result: R } | { error: RpcError };
+
+/**
+ * A host's answer. A result carries the `logId` of the event log it was read under (0007),
+ * for `subscribe` to check a `seq` from it against.
+ */
+export type HostResponse<R> = { result: R; logId: LogId } | { error: RpcError };
+
+/** `events/subscribe`'s params, plus the `logId` of the response `after` came from. */
+export type SubscribeParams = EventsSubscribeParams & { logId: LogId };
 
 export type SubscriptionMessage =
   | { type: "event"; event: EventsEventParams }
