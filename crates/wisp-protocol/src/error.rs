@@ -25,7 +25,7 @@ pub enum ErrorKind {
     /// No key account has the given id.
     AccountNotFound,
     /// The Keychain is locked, or access to an item was denied. Distinct from a bare internal
-    /// error so the editor can tell "locked" from "broken" (#117).
+    /// error so the client can tell "locked" from "broken" (#117).
     KeychainUnavailable,
     /// A create reused an existing id with different params.
     IdConflict,
@@ -86,7 +86,7 @@ pub struct ErrorData {
     pub detail: Option<Value>,
 }
 
-/// The `detail` of `incompatibleProtocol`. Its shape never changes, so every editor can read it
+/// The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it
 /// from every wispd.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -95,7 +95,7 @@ pub struct IncompatibleProtocolDetail {
     pub requested: ProtocolRange,
     /// The versions wispd speaks.
     pub supported: ProtocolRange,
-    /// wispd's release version, so the editor can say which side to update.
+    /// wispd's release version, so the client can say which side to update.
     pub wispd: String,
 }
 

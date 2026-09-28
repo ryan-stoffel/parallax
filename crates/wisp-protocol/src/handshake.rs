@@ -59,7 +59,7 @@ pub struct InitializeProtocol {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientInfo {
-    /// The client's name, such as `wisp` for the editor.
+    /// The client's name, such as `wisp` for the desktop app.
     pub name: String,
     /// The client's release version.
     pub version: String,
@@ -72,7 +72,7 @@ pub struct ClientInfo {
 /// Capabilities by name, such as `{"agents": {}}`. Each value holds that capability's options,
 /// and is empty when it has none. The map never changes shape.
 ///
-/// Later features are gated on a capability, so a newer editor still works with an older wispd.
+/// Later features are gated on a capability, so a newer client still works with an older wispd.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct Capabilities(pub BTreeMap<String, Map<String, Value>>);
 
