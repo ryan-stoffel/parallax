@@ -35,18 +35,23 @@ test.beforeAll(async () => {
   page = await app.firstWindow();
 });
 
-test.afterEach(() => {
+test.afterEach(async () => {
   const { status, expectedStatus } = test.info();
   if (status === expectedStatus) return;
   const log = path.join(dataDir, "logs/wispd.log");
   if (existsSync(log)) console.log(`--- ${log}\n${readFileSync(log, "utf8")}`);
+  console.log(`--- the window's text\n${await page.locator("body").innerText()}`);
 });
 
 test.afterAll(async () => {
   await app?.close();
-  // `wispd attach` started a detached `serve`, which outlives the app.
-  const lock = path.join(dataDir, "wispd.lock");
-  const pid = existsSync(lock) ? Number.parseInt(readFileSync(lock, "utf8"), 10) : NaN;
+  // `wispd attach` started a detached `serve`, which outlives the app. Its pid comes from the log,
+  // since Windows won't read wispd.lock while serve holds it locked.
+  const log = path.join(dataDir, "logs/wispd.log");
+  const listening = existsSync(log)
+    ? /listening.* pid=(\d+)/.exec(readFileSync(log, "utf8"))
+    : null;
+  const pid = Number.parseInt(listening?.[1] ?? "", 10);
   // Never pid 0 or below, which process.kill reads as a whole process group.
   if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
 });
