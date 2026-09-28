@@ -43,7 +43,27 @@ export function AgentChat({ hostId, runId }: { hostId: string; runId: string }) 
   const connected = connection?.status === "connected";
   const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
   const [resendError, setResendError] = useState<string>();
-  const resend = useCallback((text: string) => void send(text).then(setResendError), [send]);
+  // Dropped follow-ups already sent again, so their Send again goes away (back on failure).
+  const [resent, setResent] = useState<ReadonlySet<string>>(new Set());
+  const resend = useCallback(
+    (turnId: string, text: string) => {
+      setResent((prev) => new Set(prev).add(turnId));
+      void send(text).then((failed) => {
+        setResendError(failed);
+        if (failed)
+          setResent((prev) => {
+            const next = new Set(prev);
+            next.delete(turnId);
+            return next;
+          });
+      });
+    },
+    [send],
+  );
+  const unsent = useMemo(
+    () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
+    [sent, resent],
+  );
   const { run, items } = transcript;
 
   // Sent from here, but no turnStarted (or followUpDropped) for it yet.
@@ -63,7 +83,7 @@ export function AgentChat({ hostId, runId }: { hostId: string; runId: string }) 
   return (
     <>
       {rows.length > 0 ? (
-        <TranscriptView rows={rows} sent={sent} live={isRunning(run?.status)} onResend={resend} />
+        <TranscriptView rows={rows} sent={unsent} live={isRunning(run?.status)} onResend={resend} />
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-[13px] text-faint-foreground">
           {error ? (
@@ -107,7 +127,7 @@ export function TranscriptView({
   rows: Row[];
   sent: ReadonlyMap<string, string>;
   live: boolean;
-  onResend: (text: string) => void;
+  onResend: (turnId: string, text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -188,7 +208,7 @@ interface RowProps {
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
   /** Sends a dropped follow-up again. */
-  onResend?: (text: string) => void;
+  onResend?: (turnId: string, text: string) => void;
 }
 
 /** One transcript row. Memoized: an unchanged item keeps its object, so it skips re-rendering. */
@@ -270,12 +290,12 @@ export const RowView = memo(function RowView({
           <span>
             {row.text}
             {/* A dropped follow-up this window sent: offer it again, rather than lose it. */}
-            {sentText !== undefined && onResend && (
+            {row.turnId && sentText !== undefined && onResend && (
               <>
                 {" "}
                 <button
                   type="button"
-                  onClick={() => onResend(sentText)}
+                  onClick={() => onResend(row.turnId!, sentText)}
                   className="font-medium text-foreground underline underline-offset-2"
                 >
                   Send again
@@ -434,7 +454,8 @@ const markdownComponents: Components = {
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   // Never load images: a link with the alt text, which opens externally like any link.
   img: ({ src, alt }) => (
-    <a href={typeof src === "string" ? src : undefined} target="_blank" rel="noreferrer">
+    // An unsafe source arrives as "" from urlTransform: no href at all, then.
+    <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
       {alt || "Image"}
     </a>
   ),

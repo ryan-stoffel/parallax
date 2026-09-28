@@ -61,10 +61,10 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   expect(link.target).toBe("_blank");
   // A Markdown image is a link with its alt text, which main opens only if it's https.
   expect(document.querySelector("img")).toBeNull();
-  expect([...document.querySelectorAll("a")].map((a) => a.textContent)).toEqual([
-    "docs",
-    "a diagram",
-  ]);
+  const links = [...document.querySelectorAll("a")];
+  expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
+  // Its file: source is unsafe, so it has no href at all rather than an empty one.
+  expect(links[1]!.hasAttribute("href")).toBe(false);
 });
 
 test("a tool call collapses its input and output under its name", () => {
@@ -126,29 +126,6 @@ test("reasoning, checklists, and notices render quietly", () => {
 
   row({ kind: "notice", key: "n", tone: "warning", text: "skipped a malformed line" });
   expect(document.body.textContent).toBe("skipped a malformed line");
-});
-
-test("a dropped follow-up sent from here can be sent again", () => {
-  const onResend = vi.fn();
-  const dropped: Item = {
-    kind: "notice",
-    key: "n",
-    tone: "warning",
-    text: "Dropped.",
-    turnId: "t",
-  };
-  render(
-    <RowView
-      row={dropped}
-      sentText="Also mention the tests."
-      live={false}
-      open={false}
-      onToggle={() => {}}
-      onResend={onResend}
-    />,
-  );
-  act(() => document.querySelector("button")!.click());
-  expect(onResend).toHaveBeenCalledWith("Also mention the tests.");
 });
 
 test("a failed run shows why; other endings are a divider", () => {
@@ -279,6 +256,40 @@ test("Enter sends with a fresh v7 turn id, but not while an IME is composing", a
   expect(box.value).toBe("");
   // Shown as pending until its turn starts.
   expect(transcriptText()).toContain("Also mention the tests.");
+});
+
+test("a dropped follow-up sent from here can be sent again, once", async () => {
+  const { request, emit } = fakeBridge(4);
+  await renderChat();
+  const box = document.querySelector("textarea")!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      box,
+      "Also mention the tests.",
+    );
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  const sends = () => request.mock.calls.filter(([, method]) => method === "agent/send");
+  const { turnId } = sends()[0]![2] as { turnId: string };
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "followUpDropped", turnId }] },
+    },
+  });
+
+  const sendAgain = () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Send again");
+  await act(async () => sendAgain()!.click());
+  expect(sends()).toHaveLength(2);
+  expect(sends()[1]![2]).toMatchObject({ text: "Also mention the tests." });
+  expect(sendAgain()).toBeUndefined();
 });
 
 test("Stop cancels, and a failed cancel says why and allows another try", async () => {
