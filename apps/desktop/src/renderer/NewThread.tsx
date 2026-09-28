@@ -1,8 +1,8 @@
 import { Folder, House } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
-import type { AccountChoice, CliKind, Repo } from "../protocol/generated/protocol";
+import type { AccountChoice, Repo } from "../protocol/generated/protocol";
 import { Composer } from "./Composer";
 import { describeError } from "./errors";
 import { noRepo, type ThreadGroup } from "./threads";
@@ -22,8 +22,8 @@ interface NewThreadProps {
   local: boolean;
   addRepo: (path: string) => Promise<Repo | string>;
   start: (runId: string, groupId: string, prompt: string) => Promise<RpcError | undefined>;
-  /** Called once wispd has the thread. */
-  onStarted: (runId: string) => void;
+  /** Called once wispd has the thread, with a note for it, such as which account it picked. */
+  onStarted: (runId: string, notice?: string) => void;
   disabledReason?: string;
 }
 
@@ -40,32 +40,32 @@ interface AccountOption {
   account: AccountChoice;
 }
 
-const cliNames: Record<CliKind, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  cursor: "Cursor",
-};
-
 /**
- * The host's accounts a thread could run on: each signed-in vendor CLI's own login, then each key
- * account. wispd routes a subscription by its backend's name, which is the CLI's (0012).
+ * The host's accounts a thread can run on: its signed-in Claude Code login, then its Anthropic key
+ * accounts. Resolves to wispd's error, for people, when either list fails.
  */
-async function accountOptions(hostId: string): Promise<AccountOption[]> {
+async function accountOptions(hostId: string): Promise<AccountOption[] | string> {
   const [clis, keys] = await Promise.all([
     window.wisp.request(hostId, "accounts/list", {}),
     window.wisp.request(hostId, "accounts/keys/list", {}),
   ]);
+  if ("error" in clis) return describeError(clis.error);
+  if ("error" in keys) return describeError(keys.error);
+  // ponytail: mirrors wispd's backend registry, where only Claude runs workers today. RYA-99 has
+  // wispd report which accounts can run a thread, so this stops hard-coding it.
   return [
-    ...("result" in clis ? clis.result.clis : [])
-      .filter((c) => c.signedIn && Object.hasOwn(cliNames, c.cli))
+    ...clis.result.clis
+      .filter((c) => c.cli === "claude" && c.signedIn)
       .map((c) => ({
-        label: cliNames[c.cli],
+        label: "Claude Code",
         account: { kind: "subscription", backend: c.cli } as const,
       })),
-    ...("result" in keys ? keys.result.accounts : []).map((k) => ({
-      label: `${k.label} (API key)`,
-      account: { kind: "key", id: k.id } as const,
-    })),
+    ...keys.result.accounts
+      .filter((k) => k.provider === "anthropic")
+      .map((k) => ({
+        label: `${k.label} (API key)`,
+        account: { kind: "key", id: k.id } as const,
+      })),
   ];
 }
 
@@ -74,8 +74,8 @@ const noAccounts =
 
 /**
  * The New Thread screen: a centered composer, and under it where the thread runs. When the host
- * has no default account for threads, it picks the only one there is, or asks which to use, sets
- * it as the default, and retries the same start. wispd never picks one itself, so it never spends
+ * has no usable default account for threads, it picks the only one there is (and says so), or asks
+ * which to use, sets it as the default, and retries the same start. wispd never picks one itself, so it never spends
  * a subscription the user didn't choose.
  */
 export function NewThread({
@@ -98,35 +98,57 @@ export function NewThread({
   const failed = useRef<Attempt>(undefined);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
 
+  // Focus the chosen account when the chooser opens, so a screen reader announces it.
+  const chooser = useRef<HTMLFieldSetElement>(null);
+  useEffect(() => {
+    if (choices) chooser.current?.querySelector<HTMLInputElement>("input:checked")?.focus();
+  }, [choices]);
+
   // Starts `attempt`. Resolves to an error message, or "" when the account chooser opened.
+  // `notice` goes to the thread once it starts.
   const attemptStart = async (
     attempt: Attempt,
     askForAccount = true,
+    notice?: string,
   ): Promise<string | undefined> => {
     const error = await start(attempt.runId, attempt.groupId, attempt.prompt);
     failed.current = error ? attempt : undefined;
     if (!error) {
-      onStarted(attempt.runId);
+      onStarted(attempt.runId, notice);
       return undefined;
     }
-    if (error.data?.kind !== "noDefaultAccount" || !askForAccount) return describeError(error);
+    // No default, or one naming a removed key account: both need an account picked. Asks once
+    // per Send, so a default that doesn't take can't loop.
+    const kind = error.data?.kind;
+    if ((kind !== "noDefaultAccount" && kind !== "accountNotFound") || !askForAccount)
+      return describeError(error);
     const options = await accountOptions(hostId);
+    if (typeof options === "string") return options;
     if (options.length === 0) return noAccounts;
-    if (options.length === 1) return runOn(attempt, options[0]!.account);
+    if (options.length === 1)
+      return runOn(
+        attempt,
+        options[0]!,
+        `Using ${options[0]!.label} for new threads on this host.`,
+      );
     setPicked(0);
     setChooseError(undefined);
     setChoices(options);
     return "";
   };
 
-  // Makes `account` the worker default, then retries `attempt` with its run id.
-  const runOn = async (attempt: Attempt, account: AccountChoice): Promise<string | undefined> => {
+  // Makes `option` the worker default, then retries `attempt` with its run id.
+  const runOn = async (
+    attempt: Attempt,
+    option: AccountOption,
+    notice?: string,
+  ): Promise<string | undefined> => {
     const set = await window.wisp.request(hostId, "accounts/defaults/set", {
       role: "worker",
-      account,
+      account: option.account,
     });
     if ("error" in set) return describeError(set.error);
-    return attemptStart(attempt, false);
+    return attemptStart(attempt, false, notice);
   };
 
   const send = async (prompt: string) => {
@@ -137,10 +159,10 @@ export function NewThread({
     return attemptStart({ runId, groupId: group.id, prompt });
   };
 
-  const continueWith = async (account: AccountChoice) => {
+  const continueWith = async (option: AccountOption) => {
     setChoosing(true);
     setChooseError(undefined);
-    const error = await runOn(failed.current!, account);
+    const error = await runOn(failed.current!, option);
     setChoosing(false);
     if (error) setChooseError(error);
   };
@@ -193,7 +215,10 @@ export function NewThread({
                 </p>
               )}
               {choices && (
-                <fieldset className="mt-3 w-full rounded-xl border border-border px-4 py-3">
+                <fieldset
+                  ref={chooser}
+                  className="mt-3 w-full rounded-xl border border-border px-4 py-3"
+                >
                   <legend className="float-left mb-2.5 w-full">
                     <span className="block text-[13px] font-medium">
                       Choose an account to run this thread
@@ -227,7 +252,7 @@ export function NewThread({
                   <button
                     type="button"
                     disabled={choosing}
-                    onClick={() => void continueWith(choices[picked]!.account)}
+                    onClick={() => void continueWith(choices[picked]!)}
                     className="mt-3 rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
                   >
                     Continue

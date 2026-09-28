@@ -38,6 +38,8 @@ export function App() {
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
+  // A quiet note for the thread New Thread just started, such as the account it picked.
+  const [notice, setNotice] = useState<{ threadId: string; text: string }>();
 
   // Threads are live for this Mac only; other hosts arrive with RYA-26.
   const connection = useConnection("local");
@@ -169,6 +171,7 @@ export function App() {
                 key={`${host.id}/${selection.threadId}`}
                 hostId={host.id}
                 runId={selection.threadId}
+                notice={notice?.threadId === selection.threadId ? notice.text : undefined}
               />
             ) : selection.kind === "new" ? (
               <NewThread
@@ -179,7 +182,10 @@ export function App() {
                 local={host.local}
                 addRepo={threads.addRepo}
                 start={threads.start}
-                onStarted={(threadId) => setSelection({ kind: "thread", threadId })}
+                onStarted={(threadId, text) => {
+                  setNotice(text ? { threadId, text } : undefined);
+                  setSelection({ kind: "thread", threadId });
+                }}
                 disabledReason={
                   connection?.status === "failed"
                     ? "Disconnected from wispd"

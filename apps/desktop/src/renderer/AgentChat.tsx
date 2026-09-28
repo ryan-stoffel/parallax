@@ -38,7 +38,16 @@ type Row = Item | { kind: "pending"; key: string; text: string };
  * An agent run as a chat: its transcript, the composer, and the run's footer.
  * The same view serves normal threads, subagents, and a Project's coordinator.
  */
-export function AgentChat({ hostId, runId }: { hostId: string; runId: string }) {
+export function AgentChat({
+  hostId,
+  runId,
+  notice,
+}: {
+  hostId: string;
+  runId: string;
+  /** A quiet note shown over the composer, such as which account a new thread got. */
+  notice?: string;
+}) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
@@ -101,6 +110,11 @@ export function AgentChat({ hostId, runId }: { hostId: string; runId: string }) 
         {(error ?? resendError) && rows.length > 0 && (
           <p role="alert" className="px-2 pb-2 text-[12.5px] text-danger">
             {error ?? resendError}
+          </p>
+        )}
+        {notice && (
+          <p role="status" className="px-2 pb-2 text-[12.5px] text-muted-foreground">
+            {notice}
           </p>
         )}
         <Composer

@@ -11,7 +11,7 @@ export function describeError(error: RpcError): string {
     case "noDefaultAccount":
       return "Choose an account to run threads on this host.";
     case "accountNotFound":
-      return "That account isn't on this host anymore. Choose another one.";
+      return "The account for this thread isn't on this host anymore.";
     case "keychainUnavailable":
       return "wisp couldn't read the account's API key. Unlock your keychain, then try again.";
     case "repoNotFound":

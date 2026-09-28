@@ -216,14 +216,19 @@ test("Delete asks first, and only deletes once confirmed", async () => {
   expect(threadRow("Fix the flaky test")).toBeUndefined();
 });
 
-describe("a host with no default account for threads", () => {
+describe("a host with no usable default account for threads", () => {
   const cli = (name: string, signedIn?: boolean) => ({ cli: name, installed: true, signedIn });
+  const key = (id: string, provider: string) => ({ id, provider, label: id, masked: "sk-…abcd" });
   const accounts = (clis: object[], keys: object[] = []) => {
     answers["accounts/list"] = () => ({ result: { clis, checkedAt: "2026-09-26T12:00:00Z" } });
     answers["accounts/keys/list"] = () => ({ result: { accounts: keys } });
   };
-  // `thread/start` fails with noDefaultAccount until a default is set.
+  const chooserLabels = () =>
+    [...document.querySelectorAll("fieldset label")].map((l) => l.textContent);
+  // `thread/start` fails with `failure` until a default is set.
+  let failure: ErrorKind;
   beforeEach(() => {
+    failure = "noDefaultAccount";
     let worker: unknown;
     answers["accounts/defaults/set"] = (p) => {
       worker = p["account"];
@@ -237,19 +242,14 @@ describe("a host with no default account for threads", () => {
               run: run(p["runId"] as string, p["prompt"] as string),
             },
           }
-        : {
-            error: {
-              code: -32000,
-              message: "no account was named, and the worker role has no default",
-              data: { kind: "noDefaultAccount" },
-            },
-          };
+        : { error: { code: -32000, message: "raw protocol text", data: { kind: failure } } };
   });
 
   test("asks which account to use, sets it as the default, and retries the same start", async () => {
+    // Only Claude runs threads today, so Codex, Cursor, and an OpenAI key aren't offered.
     accounts(
       [cli("claude", true), cli("codex", true), cli("cursor", false)],
-      [{ id: "k-1", provider: "anthropic", label: "Work", masked: "sk-…abcd" }],
+      [key("Work", "anthropic"), key("Other", "openai")],
     );
     await renderApp();
     await send("Tidy the README");
@@ -258,28 +258,33 @@ describe("a host with no default account for threads", () => {
     expect(chooser.querySelector("legend")?.textContent).toContain(
       "Choose an account to run this thread",
     );
-    expect([...chooser.querySelectorAll("label")].map((l) => l.textContent)).toEqual([
-      "Claude Code",
-      "Codex",
-      "Work (API key)",
-    ]);
+    expect(chooserLabels()).toEqual(["Claude Code", "Work (API key)"]);
+    expect(document.activeElement).toBe(chooser.querySelector("input:checked"));
     // No raw protocol text, and the prompt stays in the box.
-    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("raw protocol text");
     expect(document.querySelector("textarea")!.value).toBe("Tidy the README");
 
-    await act(async () => chooser.querySelectorAll("input")[2]!.click());
+    await act(async () => chooser.querySelectorAll("input")[1]!.click());
     await act(async () => button("Continue")!.click());
     await settle();
     expect(calls("accounts/defaults/set")).toEqual([
-      { role: "worker", account: { kind: "key", id: "k-1" } },
+      { role: "worker", account: { kind: "key", id: "Work" } },
     ]);
     const [first, retry] = calls("thread/start");
     expect(retry).toEqual(first);
     expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
   });
 
-  test("uses the only account there is without asking", async () => {
-    accounts([cli("claude", true), cli("codex")]);
+  test("a default naming a removed key account asks again", async () => {
+    failure = "accountNotFound";
+    accounts([cli("claude", true)], [key("Work", "anthropic")]);
+    await renderApp();
+    await send("Hi");
+    expect(chooserLabels()).toEqual(["Claude Code", "Work (API key)"]);
+  });
+
+  test("uses the only account there is, and says so", async () => {
+    accounts([cli("claude", true), cli("codex", true)], [key("Other", "openai")]);
     await renderApp();
     await send("Hi");
     expect(document.querySelector("fieldset")).toBeNull();
@@ -289,6 +294,17 @@ describe("a host with no default account for threads", () => {
     const [first, retry] = calls("thread/start");
     expect(retry).toEqual(first);
     expect(crumbs()).toEqual(["This Mac", "wisp", "Hi"]);
+    expect(document.querySelector("main")!.textContent).toContain(
+      "Using Claude Code for new threads on this host.",
+    );
+  });
+
+  test("shows wispd's error when it can't list accounts", async () => {
+    accounts([]);
+    answers["accounts/list"] = () => ({ error: { code: -32601, message: "Method not found" } });
+    await renderApp();
+    await send("Hi");
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe("Method not found");
   });
 
   test("says how to add one when there is none", async () => {
@@ -305,15 +321,11 @@ describe("a host with no default account for threads", () => {
 test("known error kinds read plainly, and unknown ones show wispd's message", async () => {
   const alert = () => document.querySelector('[role="alert"]')?.textContent;
   answers["thread/start"] = () => ({
-    error: {
-      code: -32000,
-      message: "no key account has id k-9",
-      data: { kind: "accountNotFound" },
-    },
+    error: { code: -32000, message: "no repo entry has id r-9", data: { kind: "repoNotFound" } },
   });
   await renderApp();
   await send("Hi");
-  expect(alert()).toBe("That account isn't on this host anymore. Choose another one.");
+  expect(alert()).toBe("That repository isn't in wisp anymore. Choose another one.");
 
   answers["thread/start"] = () => ({
     // A kind from a newer wispd.
