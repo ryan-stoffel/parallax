@@ -575,7 +575,7 @@ mod windows_tests {
             let (mut stdin, input) = tokio::io::duplex(8192);
             let (output, mut stdout) = tokio::io::duplex(8192);
             let bridge = tokio::spawn(bridge(input, output, client));
-            let sent: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+            let sent: Vec<u8> = (0..size).map(|i| u8::try_from(i % 251).unwrap()).collect();
             let writing = tokio::spawn({
                 let sent = sent.clone();
                 async move {
