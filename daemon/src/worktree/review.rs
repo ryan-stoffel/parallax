@@ -854,6 +854,7 @@ impl WorktreeManager {
         for path in paths {
             match tokio::fs::symlink_metadata(repo_root.join(path)).await {
                 Ok(meta) if meta.is_file() => {
+                    #[cfg(unix)]
                     let mode = if std::os::unix::fs::PermissionsExt::mode(&meta.permissions())
                         & 0o111
                         != 0
@@ -862,6 +863,11 @@ impl WorktreeManager {
                     } else {
                         "100644"
                     };
+                    // ponytail: Windows files have no executable bit, so a tracked 100755 file
+                    // never matches and a rollback leaves it alone and names it. Read the
+                    // index's mode if that matters.
+                    #[cfg(windows)]
+                    let mode = "100644";
                     files.push((path, mode));
                 }
                 Ok(_) => {

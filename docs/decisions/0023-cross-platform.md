@@ -58,11 +58,14 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
   - `reject_remote_clients(true)` keeps out SMB clients. It is tokio's default.
   - The security descriptor is `D:P(A;;GA;;;<user SID>)`, so only the user has access. Windows' default one gives Everyone read access.
   - Like `getpeereid` in 0007, `serve` checks the client's SID through `GetNamedPipeClientProcessId`.
+  - A pipe has no half-close, and a byte pipe drops empty writes. So the pipe is a message pipe, and a client ends its input with an empty message, which `serve` reads as EOF. `serve` can then finish its responses, as after a socket's half-close (0007).
+  - The protocol stays NDJSON over a byte stream: `serve` reads messages back to back as bytes. Clients (`wispd::transport`) write at most 4 KiB per message. mio reads a pipe through a buffer of at least 4 KiB and reports a longer message that is already waiting as a 0-byte read, which would look like EOF partway through a frame. Tests push 64 KiB and 1 MiB through attach's bridge and a 32 KiB frame through the `wispd mcp` client.
 - **Client.**
   - Any user can create a pipe under any name. So `attach` and `wispd mcp` check that the server's process runs as their own user (`GetNamedPipeServerProcessId`) before sending anything. A mismatch fails at once with exit 4.
+  - Another user can squat the predictable pipe name before `serve` starts; this denies service but does not admit a connection.
   - `ERROR_FILE_NOT_FOUND` means no `serve` is running, so attach starts one, like `ENOENT` in 0010.
   - `ERROR_PIPE_BUSY` means retry within the connect timeout. Any other error fails at once.
-- **Unsafe code.** tokio's security-attributes hook is `unsafe`, and std wraps none of these calls. They are the pipe's security descriptor, the two SID checks, clearing the inherit flag on the std handles, and job objects. All of them live in one Windows-only module that calls `windows-sys`. That module is the only place with `#[allow(unsafe_code)]`, and each call gets a `SAFETY` comment. The workspace lint stays `deny`, and macOS and Linux need no unsafe code.
+- **Unsafe code.** tokio's security-attributes hook is `unsafe`, and std wraps none of these calls. They are the pipe's security descriptor, the two SID checks, clearing the inherit flag on open handles, and job objects. All of them live in one Windows-only module that calls `windows-sys`. That module is the only place with `#[allow(unsafe_code)]`, and each call gets a `SAFETY` comment. The workspace lint stays `deny`, and macOS and Linux need no unsafe code.
 
 ### Starting and stopping `serve`
 
@@ -73,7 +76,7 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
   - A listed descriptor that closes before the spawn is harmless, because glibc and musl both ignore that close failure.
 - **Windows.** Win32-OpenSSH puts each session in a job object and kills the job when the session ends. It has let processes break away from that job since v7.6.0.0p1.
   - attach starts `serve` with std `Command` and `creation_flags`, including `CREATE_BREAKAWAY_FROM_JOB`, so `serve` outlives the session. If the job forbids breakaway, attach retries without the flag and warns that `serve` will end with the session.
-  - std creates every handle it opens as non-inheritable. The only inheritable handles are the std handles that sshd passed in. attach and `serve` clear `HANDLE_FLAG_INHERIT` on those at startup, so `serve` gets only the three handles `Command` hands it. This is #86 on Windows. `serve` needs the same clearing, or agent CLIs would inherit its log.
+  - std creates every handle it opens as non-inheritable. sshd can pass more inheritable handles than the three std handles, including extra copies of its session pipes. attach and `serve` clear `HANDLE_FLAG_INHERIT` on every open handle at startup, so `serve` gets only the three handles `Command` hands it. This is #86 on Windows. `serve` needs the same clearing, or agent CLIs would inherit its log.
 - **The Windows lock.** 0009's scheme removes `wispd.lock` at shutdown, then checks its identity by device and inode. Windows has no stable equivalent (`file_index` is unstable in std), and it can't remove an open file anyway. So on Windows, `serve` never removes the lock file and skips that check. `LockFileEx` is mandatory, so a second `serve` can't read the pid either. Its exit-3 error leaves the pid out; nothing depends on it.
 - **Shutdown on Windows.** `serve` treats Ctrl-C, Ctrl-Break, console close, logoff, and shutdown (`tokio::signal::windows`) as it treats SIGTERM.
 - **Services.** Each one is named after 0010's label, and attach starts it the way 0010 uses `launchctl kickstart`:
@@ -143,7 +146,7 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 | Socket in `$XDG_RUNTIME_DIR` by default on Linux | `logind` deletes that folder at the last logout, while a `serve` started over ssh keeps running. |
 | glibc's `posix_spawn_file_actions_addclosefrom_np` on Linux | nix 0.31 doesn't wrap it, so it would need raw `libc` spawn calls in unsafe code, which 0010 rejected. It would also tie the build to glibc 2.34 or later. |
 | A per-OS `sys` module with unsafe code on Linux too | The `/proc/self/fd` scan does the same job with safe code. |
-| A hand-built `CreateProcessW` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` | std's `inherit_handles` and `spawn_with_attributes` are unstable, so it would mean building the command line and environment block in unsafe code. Clearing the inherit flag on three handles is smaller. |
+| A hand-built `CreateProcessW` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` | std's `inherit_handles` and `spawn_with_attributes` are unstable, so it would mean building the command line and environment block in unsafe code. Clearing the inherit flag on every open handle at startup is smaller. |
 | A glibc build for Linux | Its only draw was `addclosefrom_np`. A static musl binary has no distro floor. |
 | The `keyring` crate with every store | It pulls in stores wisp doesn't use. On macOS, it would swap working code for the same call with coarser errors. |
 | `dirs` or `directories` for the data folder | Three environment variables, one per OS. |

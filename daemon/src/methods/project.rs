@@ -139,7 +139,7 @@ fn check(params: &ProjectCreateParams) -> Result<(), ErrorObject> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use wisp_protocol::jsonrpc::INVALID_PARAMS;
     use wisp_protocol::{ProjectCreateParams, ProjectId};

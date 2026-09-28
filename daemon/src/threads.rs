@@ -550,7 +550,7 @@ fn remove_context(daemon: &Daemon, run_id: RunId) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use wisp_protocol::jsonrpc::INVALID_PARAMS;
 
