@@ -524,6 +524,7 @@ fn claude_refuses_the_coordinator_tools_on_a_worker() {
     ));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn start_passes_a_worker_its_sandbox() {
     let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(

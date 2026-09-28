@@ -297,13 +297,19 @@ pub(super) fn home() -> Result<PathBuf, ErrorObject> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::path::Path;
 
     use wisp_protocol::{CliKind, DetectedCli, ErrorKind};
 
-    use super::{allowlisted, check_claude, sandbox_path, with_extra_path};
-    use crate::backend::process::{ALWAYS_SCRUBBED, Environment};
+    use super::check_claude;
+    #[cfg(unix)]
+    use super::{allowlisted, sandbox_path, with_extra_path};
+    use crate::backend::process::ALWAYS_SCRUBBED;
+    #[cfg(unix)]
+    use crate::backend::process::Environment;
 
+    #[cfg(unix)]
     fn path_entries(env: &Environment) -> Vec<String> {
         env.get("PATH")
             .map(|path| {
@@ -349,6 +355,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_minimal_path_is_filled_in_after_the_users_own_folders() {
         let mut env = Environment::empty();
@@ -364,6 +371,7 @@ mod tests {
         assert_eq!(path_entries(&unset)[0], super::EXTRA_PATH[0]);
     }
 
+    #[cfg(unix)]
     /// wispd started from a shell that holds credentials for other services: a worker spawned
     /// from the agent environment sees none of them, but keeps what a CLI needs.
     #[tokio::test]
@@ -455,6 +463,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_path_with_a_wildcard_is_refused_plainly() {
         let dir = tempfile::tempdir().unwrap();

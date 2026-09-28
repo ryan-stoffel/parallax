@@ -289,6 +289,10 @@ impl Socket {
 /// The named pipe this server listens on (0023): one instance that waits for the next client,
 /// with a DACL that grants only this user. Unlike a socket, a pipe can't be deleted or replaced
 /// while wispd holds an instance, so it needs no rebinding or removal.
+///
+/// It is a message pipe, though the protocol is a byte stream, for one thing: a pipe has no
+/// half-close, so a client ends its input with an empty message, which reads here as the end
+/// of the stream (see [`crate::attach::bridge`]). A byte pipe drops empty writes.
 #[cfg(windows)]
 #[derive(Debug)]
 pub(crate) struct Pipe {
@@ -305,10 +309,8 @@ impl Pipe {
         let io_error =
             |error| StartError::io(format!("creating the pipe {}", name.display()), error);
         let sddl = crate::windows::this_user_only_sddl().map_err(io_error)?;
-        let mut options = tokio::net::windows::named_pipe::ServerOptions::new();
-        options.first_pipe_instance(true);
-        let next =
-            crate::windows::create_pipe(&options, name.as_os_str(), &sddl).map_err(io_error)?;
+        let next = crate::windows::create_pipe(&Self::options(true), name.as_os_str(), &sddl)
+            .map_err(io_error)?;
         Ok(Self {
             name: name.to_owned(),
             sddl,
@@ -324,10 +326,18 @@ impl Pipe {
     pub async fn accept(&mut self) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
         let connected = self.next.connect().await;
         // An instance whose connect failed can't be used again, so it is replaced either way.
-        let options = tokio::net::windows::named_pipe::ServerOptions::new();
+        let options = Self::options(false);
         let next = crate::windows::create_pipe(&options, self.name.as_os_str(), &self.sddl)?;
         let current = std::mem::replace(&mut self.next, next);
         connected.map(|()| current)
+    }
+
+    fn options(first: bool) -> tokio::net::windows::named_pipe::ServerOptions {
+        let mut options = tokio::net::windows::named_pipe::ServerOptions::new();
+        options
+            .first_pipe_instance(first)
+            .pipe_mode(tokio::net::windows::named_pipe::PipeMode::Message);
+        options
     }
 }
 
