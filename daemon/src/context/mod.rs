@@ -296,6 +296,8 @@ impl ContextIndex {
         content: &[u8],
         write: impl FnOnce() -> io::Result<T>,
     ) -> io::Result<T> {
+        // ponytail: one lock for every project's index, held across the write's fsync, so all
+        // context writes and watcher checks queue behind it. Per-path locks if write volume grows.
         let mut records = self.lock();
         let written = write()?;
         records.insert(

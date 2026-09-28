@@ -1,7 +1,8 @@
 # Every descriptor wispd opens must have close-on-exec, or a process it spawns on Linux can inherit
 # one opened after spawn's /proc/self/fd scan (0023). std, tokio, and SQLite set it; these don't.
-# nix's pipe2 and dup* would belong here too, but need nix's `fs` feature, which is off. Tests
-# that need a leaked descriptor allow the lint where they make one.
+# nix's pipe2 and dup* would belong here too, but need nix's `fs` feature, which is off, and
+# rustix has no fanotify. `allow-invalid` marks the Linux-only ones. Tests that need a leaked
+# descriptor allow the lint where they make one.
 disallowed-methods = [
     { path = "rustix::fs::open", reason = "doesn't set close-on-exec unless asked; use std::fs" },
     { path = "rustix::fs::openat", reason = "doesn't set close-on-exec unless asked; use std::fs" },
@@ -9,4 +10,7 @@ disallowed-methods = [
     { path = "rustix::io::dup", reason = "the copy lacks close-on-exec; use OwnedFd::try_clone" },
     { path = "rustix::io::dup2", reason = "the copy lacks close-on-exec; use OwnedFd::try_clone" },
     { path = "rustix::io::dup3", reason = "the copy lacks close-on-exec unless asked; use OwnedFd::try_clone" },
+    { path = "rustix::io::fcntl_setfd", reason = "can clear close-on-exec" },
+    { path = "rustix::fs::memfd_create", reason = "doesn't set close-on-exec unless asked", allow-invalid = true },
+    { path = "rustix::fs::inotify::init", reason = "doesn't set close-on-exec unless asked; use notify", allow-invalid = true },
 ]

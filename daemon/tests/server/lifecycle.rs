@@ -131,6 +131,49 @@ fn darwin_user_temp_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim_end())
 }
 
+/// With no `--data-dir`, Linux's data folder is `$XDG_DATA_HOME/wisp` when that is absolute, and
+/// `~/.local/share/wisp` otherwise (0023).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_default_linux_data_folder_follows_xdg_data_home() {
+    use rustix::process::{Pid, kill_process};
+
+    let home = temp_dir();
+    let data_home = temp_dir();
+    let in_home = home.path().join(".local/share/wisp");
+    let cases = [
+        (
+            Some(data_home.path().to_str().unwrap()),
+            data_home.path().join("wisp"),
+        ),
+        (Some("relative/data"), in_home.clone()),
+        (Some(""), in_home.clone()),
+        (None, in_home),
+    ];
+    for (xdg_data_home, expected) in cases {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_wispd"));
+        command
+            .arg("serve")
+            .env("HOME", home.path())
+            .env_remove("WISPD_DATA_DIR")
+            .env_remove("WISPD_LOG")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        match xdg_data_home {
+            Some(value) => command.env("XDG_DATA_HOME", value),
+            None => command.env_remove("XDG_DATA_HOME"),
+        };
+        let mut child = command.spawn().unwrap();
+        let socket = expected.join("wispd.sock");
+        eventually(&format!("{} exists", socket.display()), || socket.exists()).await;
+        let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+        kill_process(pid, Signal::TERM).unwrap();
+        assert!(child.wait().unwrap().success(), "{xdg_data_home:?}");
+        fs::remove_dir_all(&expected).unwrap();
+    }
+}
+
 #[tokio::test]
 async fn a_long_data_folder_puts_the_socket_in_the_per_user_fallback_folder() {
     let dir = temp_dir();

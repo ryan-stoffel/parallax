@@ -119,8 +119,8 @@ const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 /// What to do about a backend that can't sandbox a worker here. Linux's sandbox checks are
 /// RYA-20's (0023).
 #[cfg(not(target_os = "macos"))]
-const NO_SANDBOX_HINT: &str = "wispd can't check a worker sandbox on this OS yet, so run workers \
-                               on a macOS host";
+const NO_SANDBOX_HINT: &str = "wispd can't check a worker sandbox on this OS yet (decision \
+                               0023), so run workers on a macOS host";
 
 /// Refuses a worker on a backend that doesn't enforce the worker sandbox (0013).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
