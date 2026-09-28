@@ -38,6 +38,9 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       // answer every subscribe with another resync. Subscribing after the snapshot is
       // gap-free, since at least one page was read after it.
       let snapshot: number | undefined;
+      // The log the first page was read under. If it changes before the subscribe, main
+      // answers it with a resync, so a mix of two logs' seqs is never used.
+      let logId: string | undefined;
       for (let more = true; more || snapshot === undefined;) {
         // agent.started, the first event, carries the run's scope: its project, or its
         // thread's repo entry (0017).
@@ -52,17 +55,18 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         const page = await window.wisp.request(hostId, "agent/events", { runId, after: t.seq });
         if (stopped) return;
         if ("error" in page) return setError(page.error.message);
+        logId ??= page.logId;
         t = applyEvents(t, page.result.events, runId);
         more = page.result.more;
         if (!more && !t.run) return setError("This agent run hasn't started.");
       }
       // The loop only ends with both, but the types can't tell.
-      if (!t.run || snapshot === undefined) return;
+      if (!t.run || snapshot === undefined || logId === undefined) return;
       setTranscript(t);
       setError(undefined);
       unsubscribe = window.wisp.subscribe(
         hostId,
-        { after: Math.max(t.seq, snapshot), project: t.run.project },
+        { after: Math.max(t.seq, snapshot), project: t.run.project, logId },
         (message) => {
           if (stopped) return;
           if (message.type === "event")

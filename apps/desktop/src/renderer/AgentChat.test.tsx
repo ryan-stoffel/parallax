@@ -150,12 +150,12 @@ test("a failed run shows why; other endings are a divider", () => {
 function fakeBridge(seq: number, { listSeq = seq, resyncs = 0, cancelError = "" } = {}) {
   let listener: (m: SubscriptionMessage) => void = () => {};
   const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
-    if (method === "agent/list") return { result: { runs: [], seq: listSeq } };
+    if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
       return { error: { code: -32000, message: cancelError } };
-    if (method !== "agent/events") return { result: {} };
+    if (method !== "agent/events") return { result: {}, logId: "log-1" };
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
-    return { result: { events: rest.slice(0, 2), more: rest.length > 2 } };
+    return { result: { events: rest.slice(0, 2), more: rest.length > 2 }, logId: "log-1" };
   });
   const unsubscribe = vi.fn();
   const subscribe = vi.fn((_host: string, params: { after: number }, l: typeof listener) => {
@@ -195,7 +195,7 @@ test("loads every page, subscribes after the last seq, and appends live events",
   expect(request).toHaveBeenCalledWith("local", "agent/events", { runId, after: 0 });
   expect(subscribe).toHaveBeenCalledWith(
     "local",
-    { after: 2, project: "01a0d349-6e00-7c9e-80e2-0426486a8cae" },
+    { after: 2, project: "01a0d349-6e00-7c9e-80e2-0426486a8cae", logId: "log-1" },
     expect.any(Function),
   );
   expect(transcriptText()).toContain("Add a README");
