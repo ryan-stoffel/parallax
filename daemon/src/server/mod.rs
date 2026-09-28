@@ -24,7 +24,9 @@ use setup::{InstanceLock, Socket};
 
 use crate::VERSION;
 use crate::agents::{self, Agents};
+use crate::backend::Backend;
 use crate::backend::claude::ClaudeBackend;
+use crate::backend::fake::FakeBackend;
 use crate::backend::process::{Environment, Launcher};
 use crate::context::ContextIndex;
 use crate::detect::CliDetector;
@@ -83,7 +85,8 @@ pub struct Config {
     /// Replies one connection may have waiting to be written. 32 by default.
     pub outbound_queue: usize,
     /// The backends workers run on (#156). `None`, the default, registers Claude Code for
-    /// Anthropic accounts; tests register a fake.
+    /// Anthropic accounts, or the fake backend when `WISPD_FAKE_BACKEND` names a script
+    /// ([`FakeBackend::from_env`]); tests register a fake.
     pub backends: Option<BackendRegistry>,
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
     /// default, is wispd's own with the usual install folders on `PATH` (#96, decision 0014).
@@ -274,12 +277,15 @@ impl Server {
             .clone()
             .unwrap_or_else(agents::worker::agent_environment);
         let launcher = Launcher::new(data_dir.clone(), environment);
+        let fake = FakeBackend::from_env(&launcher)
+            .map_err(|error| StartError::io("setting up the fake backend", error))?;
         let backends = config.backends.clone().unwrap_or_else(|| {
+            let backend: Arc<dyn Backend> = match fake {
+                Some(fake) => Arc::new(fake),
+                None => Arc::new(ClaudeBackend::new(launcher.clone())),
+            };
             let mut backends = BackendRegistry::new();
-            backends.register(
-                wisp_protocol::Provider::Anthropic,
-                Arc::new(ClaudeBackend::new(launcher.clone())),
-            );
+            backends.register(wisp_protocol::Provider::Anthropic, backend);
             backends
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());

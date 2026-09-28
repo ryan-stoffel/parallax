@@ -8,6 +8,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "vp build && vp pack",
     "check": "vp check",
+    "e2e": "playwright test -c e2e",
     "fmt": "vp fmt",
     "test": "vp test run"
   },
@@ -20,6 +21,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.19.0",
     "@types/react": "^19.3.0",

@@ -126,6 +126,64 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/launch-app
 
+  # The app against a wispd running its fake backend, with Playwright (RYA-16). macOS only until
+  # wispd runs on Linux and Windows (RYA-25).
+  e2e:
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/*
+            !~/.rustup/toolchains/stable-*
+          key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Install pnpm
+        id: pnpm
+        working-directory: apps/desktop
+        run: |
+          corepack enable
+          echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+
+      # Keyed on the lockfile, since e2e-app installs node_modules only after this step.
+      - name: Cache Electron
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/electron
+          key: electron-e2e-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
+
+      - name: Run the end-to-end tests
+        env:
+          electron_config_cache: ${{ runner.temp }}/electron
+        run: scripts/ci/e2e-app
+
   actionlint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -160,7 +218,7 @@ jobs:
   # Branch protection requires this job's name, ci, as the only check (#6). Renaming it blocks every merge.
   ci:
     if: always()
-    needs: [actionlint, app, rust]
+    needs: [actionlint, app, e2e, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

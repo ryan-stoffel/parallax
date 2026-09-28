@@ -11,6 +11,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# `fake-backend` lets `WISPD_FAKE_BACKEND` run workers on the fake backend, for the app's end-to-end
+# tests (RYA-16). Test builds only: it refuses to compile without debug assertions.
+[features]
+fake-backend = []
+
 [dependencies]
 clap = { workspace = true, features = ["derive", "env"] }
 futures-util = { workspace = true, features = ["sink", "std"] }
