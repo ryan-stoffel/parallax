@@ -5,7 +5,10 @@ export interface ComposerProps {
   hero?: boolean;
   /** Whether it starts a new thread, which only changes its hint. */
   newThread?: boolean;
-  /** Sends the text. Resolves to an error message, which puts the text back. Absent: Send stays off. */
+  /**
+   * Sends the text. Resolves to an error message, which puts the text back; `""` puts it back
+   * with no message. Absent: Send stays off.
+   */
   onSend?: (text: string) => Promise<string | undefined>;
   /**
    * While set, an empty box shows Stop instead of Send. Resolves to an error message.
@@ -40,7 +43,7 @@ export function Composer({
     setText("");
     setError(undefined);
     const failed = await onSend(text);
-    if (failed) {
+    if (failed !== undefined) {
       // Put it back ahead of anything typed while it was in flight.
       setText((typed) => (typed ? `${text}\n\n${typed}` : text));
       setError(failed);
