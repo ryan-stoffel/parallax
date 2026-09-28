@@ -1,5 +1,5 @@
 //! `context/list`, `context/read`, and `context/write` (0005, #155): the shared context folder
-//! wispd keeps for each project, outside its git repository, that every agent and the editor read
+//! wispd keeps for each project, outside its git repository, that every agent and the app read
 //! and write.
 //!
 //! A path is always relative to the project's context folder, and is exactly one file name: no
@@ -30,7 +30,7 @@ pub struct ContextFile {
     pub size: u64,
     /// When it was last modified, in RFC 3339 UTC.
     pub modified_at: Timestamp,
-    /// Who wrote it last, such as `"editor"` or an agent's run id, when wispd knows. Absent for a
+    /// Who wrote it last, such as `"app"` or an agent's run id, when wispd knows. Absent for a
     /// file wispd has not seen written since it started, such as one already on disk at startup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -90,7 +90,7 @@ pub struct ContextWriteParams {
     pub path: String,
     /// The file's new content, in full: `context/write` replaces a file, it does not patch one.
     pub content: String,
-    /// A label for who is writing, such as `"editor"` or an agent's run id, shown later in
+    /// A label for who is writing, such as `"app"` or an agent's run id, shown later in
     /// `context/list` and in the `context.changed` event as `lastWriter`. Omitted when the caller
     /// has none to give.
     #[serde(default, skip_serializing_if = "Option::is_none")]

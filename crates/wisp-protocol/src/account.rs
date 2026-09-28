@@ -71,7 +71,7 @@ pub struct KeyAccount {
     pub id: AccountId,
     /// Who the key is for.
     pub provider: Provider,
-    /// A label the user chose, shown in the editor.
+    /// A label the user chose, shown in the app.
     pub label: String,
     /// When the key was added, in RFC 3339 UTC.
     pub created_at: Timestamp,
@@ -92,7 +92,7 @@ pub struct AccountsKeysAddParams {
     pub id: AccountId,
     /// Who the key is for.
     pub provider: Provider,
-    /// A label the user chose, shown in the editor.
+    /// A label the user chose, shown in the app.
     pub label: String,
     /// The key. Never logged, never written anywhere but the Keychain, and never sent back.
     pub key: RawKey,
