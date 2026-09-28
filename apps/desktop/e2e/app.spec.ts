@@ -78,3 +78,17 @@ test("stops the thread", async () => {
   await expect(page.getByRole("log", { name: "Transcript" }).getByText("Stopped")).toBeVisible();
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
 });
+
+test("a follow-up's text is still there after a reload (RYA-92)", async () => {
+  await page.getByRole("textbox", { name: "Message" }).fill("Check the links too");
+  await page.getByRole("button", { name: "Send" }).click();
+  // The resumed fake answers again, after wispd logged the follow-up's turnStarted.
+  const said = page.getByRole("log", { name: "Transcript" }).getByText("The fake agent is on it.");
+  await expect(said).toHaveCount(2);
+
+  await page.reload();
+  await page.getByRole("button", { name: /Tidy up the README/ }).click();
+  const transcript = page.getByRole("log", { name: "Transcript" });
+  await expect(transcript.getByText("Check the links too")).toBeVisible();
+  await expect(transcript.getByText("Follow-up message")).toHaveCount(0);
+});

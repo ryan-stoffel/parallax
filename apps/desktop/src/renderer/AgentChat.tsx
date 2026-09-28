@@ -243,7 +243,7 @@ export const RowView = memo(function RowView({
           <div
             className={`max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap ${row.kind === "pending" ? "opacity-60" : ""}`}
           >
-            {/* A follow-up sent from elsewhere: the log has no text for it until RYA-92. */}
+            {/* A follow-up from an older log, which has no text for it. */}
             {text ?? <span className="text-muted-foreground italic">Follow-up message</span>}
           </div>
         </div>

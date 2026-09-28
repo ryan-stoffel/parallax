@@ -305,6 +305,12 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         turn_id: Option<TurnId>,
+        /// A follow-up's message, as `agent/send` took it, cut short when it is long. Absent for
+        /// the prompt's turn, whose text is the run's `prompt`, and in logs from before wispd
+        /// recorded it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        text: Option<String>,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {

@@ -289,7 +289,11 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             session_id: truncate(session_id, MAX_ID_BYTES),
             model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
         },
-        Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted { turn_id: *turn_id },
+        // The backend knows only the id; the run's actor adds a follow-up's text (RYA-92).
+        Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted {
+            turn_id: *turn_id,
+            text: None,
+        },
         Event::TextDelta { message_id, text } => AgentOutputItem::TextDelta {
             message_id: id(message_id.as_deref()),
             text: truncate(text, MAX_TEXT_ITEM_BYTES),
