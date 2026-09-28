@@ -1,99 +1,98 @@
 # Wisp: Project Plan
 
-Updated Sep 24, 2026
+Updated Sep 28, 2026
 
-> Sep 27, 2026: the editor fork is dropped ([0020](decisions/0020-drop-the-editor-fork.md)). wisp is `wispd` only for now; the editor parts below are historical.
+Records in [decisions/](decisions/) supersede this plan where they differ. Work is tracked in the [Wisp project in Linear](https://linear.app/ryanstoffel/project/wisp-459c0ee45806) ([0021](decisions/0021-linear-work-record.md)).
 
 ## Overview
 
-An open-source macOS app that reproduces the Cursor Projects workflow. One coordinator chat plans the work and spawns subagents that share project context.
+An open-source desktop app that reproduces the Cursor Projects workflow on machines you own. A project is one coordinator chat: it plans the work and delegates it to subagents that share project context.
 
-The reference architecture is Cursor's [Introducing Projects](https://cursor.com/blog/projects) (Sep 10, 2026). The difference: the always-on host is a machine you own, and model calls go through your own AI subscriptions, managed inside the app.
+The reference architecture is Cursor's [Introducing Projects](https://cursor.com/blog/projects) (Sep 10, 2026). The differences: the host is any machine you own, local or over SSH, and agents run through your own AI subscriptions, managed inside the app.
 
 ## Goals and non-goals
 
 Goals:
 
-* Run projects on the MacBook, the Mac mini, or any machine reachable over SSH
-* Manage your AI subscriptions inside the app and route every model call through them, with raw API keys as a fallback
+* Run projects on this computer or any machine reachable over SSH
+* Run agents through your own subscriptions, using each vendor's official CLI, with API keys as a fallback ([0004](decisions/0004-subscription-providers.md))
+* The app and `wispd` on macOS, Windows, and Linux ([0023](decisions/0023-cross-platform.md))
 * Good performance
-* Include basic editor features for quick changes and commands, built on a stripped-down fork of VS Code (Code - OSS)
 
 Non-goals:
 
 * A hosted cloud service
-* Windows or Linux clients in v1
+* An editor. The Code - OSS fork was dropped ([0020](decisions/0020-drop-the-editor-fork.md)).
+* Slack triggers
 
 ## Core concepts
 
 | Concept | What it is | Cursor equivalent |
 | --- | --- | --- |
-| Project | A body of work that outlives one chat: a feature, a migration, or ongoing upkeep | Project |
-| Coordinator Agent | The chat you talk to. It plans and delegates but never writes code, so it is never blocked. | Coordinator Agent |
-| Subagent | A worker that runs one task in its own git worktree on an assigned machine | Subagent |
-| Shared context | A folder of Markdown files synced to every machine. Agents add research, test instructions, and your preferences. | Shared context |
-| Host | The machine running the project: the MacBook, or an external computer such as the Mac mini | Cloud computer |
-| Local agent | A subagent on your laptop, started when something must run there | Local agent |
-| Trigger | A schedule, Slack channel, or PR watch that wakes the coordinator | Subscription |
+| Project | A body of work that outlives one chat: a feature, a migration, or ongoing upkeep. It is one coordinator chat. | Project |
+| Coordinator | The project's chat. It plans and delegates but never writes code, so it is never blocked. | Coordinator Agent |
+| Subagent | A worker that runs one task in its own git worktree on the project's host | Subagent |
+| Thread | A single agent chat in a repository, or in none, with no coordinator ([0017](decisions/0017-normal-threads.md)) | Agent chat |
+| Shared context | A folder of Markdown files that `wispd` owns and mirrors to other machines. Agents add research, test instructions, and your preferences ([0005](decisions/0005-shared-context-folder.md)). | Shared context |
+| Host | A machine running `wispd`: this computer, or one reached over SSH, such as a Mac mini | Cloud computer |
+| Local agent | A subagent on your laptop, started by a coordinator on another host when something must run there | Local agent |
+| Trigger | A schedule or a PR watch that wakes the coordinator | Subscription |
 
 Cursor calls triggers subscriptions. This plan says triggers to avoid confusion with AI subscriptions.
 
 ## Architecture
 
-Two programs. An editor app built on a VS Code fork that renders and sends commands, and one Rust binary (`projectd`) that does everything else. The control role runs on the host, which can be the MacBook or an external computer. With an external host, closing the MacBook does not stop a project.
+Two programs: the desktop app, and `wispd`, a Rust daemon that does everything else. With an external host, closing the laptop does not stop a project.
 
 ```mermaid
 flowchart LR
-  E[Editor app<br/>VS Code fork] --> H[projectd on host<br/>coordinator + subscriptions]
+  A[Desktop app<br/>Electron] -- "wispd attach<br/>local or ssh" --> H[wispd on host<br/>coordinator, runs, state]
   T[Triggers] --> H
-  H --> W[Subagents<br/>host or MacBook]
+  H --> W[Subagents and threads<br/>vendor CLIs in worktrees]
   W <--> S[(Shared context)]
-
 ```
 
-* Editor app: a stripped-down VS Code fork. Chat with the coordinator, review diffs, and make quick edits.
-* Host daemon (`projectd`): runs the coordinator, listens for triggers, and stores project state.
-* Subagents: run tasks on the host by default, or on the MacBook when something must run locally.
-* Shared context: Markdown files synced to every machine.
-* Subscription manager: holds your AI logins and API keys and routes model calls through them.
+* Desktop app ([0022](decisions/0022-desktop-app.md)): Electron, React, and TypeScript in `apps/desktop/`, laid out like T3 Code. A sidebar of projects and threads, the chat, and a side panel for diffs and review. Its main process runs `wispd attach`, locally or over the user's `ssh`, and speaks JSON-RPC to it ([0007](decisions/0007-editor-wispd-protocol.md), [0010](decisions/0010-wispd-attach.md)).
+* Host daemon (`wispd`): one per user per host. It runs the coordinator, whose tools are `wispd mcp` ([0019](decisions/0019-coordinator-mcp-tools.md)), and agent runs, each a vendor CLI in its own worktree and sandbox ([0013](decisions/0013-worker-sandbox.md), [0014](decisions/0014-agent-runs.md)). It stores project state and the event log in SQLite, owns shared context, and listens for triggers.
+* Subscriptions: `wispd` never handles consumer credentials. You sign in to each vendor's CLI on the host, and `wispd` routes each run to an account ([0004](decisions/0004-subscription-providers.md), [0012](decisions/0012-account-routing.md)).
 
 ## MVP and milestones
 
-The MVP is one project on one host: a coordinator, two parallel subagents, shared context files, and diffs reviewable from the MacBook.
+The MVP is one project on one host: a coordinator, two parallel subagents, shared context files, and diffs reviewable from the app.
 
 | Milestone | Done when |
 | --- | --- |
-| M0: Editor fork | A stripped-down Code - OSS fork builds on macOS with the editor, file tree, and terminal |
-| M1: Host daemon | `projectd` runs on the MacBook or an external host and talks to the editor |
-| M2: Subscription manager | One subscription login and one API key work, model calls route through them, and usage shows per account |
-| M3: Single agent | One subagent completes a task in a worktree and writes to shared context |
-| M4: Coordinator | The coordinator plans and runs two subagents in parallel. On an external host it keeps working with the MacBook closed. |
-| M5: Local agent | With an external host, the coordinator starts a subagent on the MacBook to run something locally |
-| M6: Triggers | A schedule and a PR watch wake the coordinator without a prompt |
-| M7: Open source release | README, license, install steps, and a short demo |
+| [M0: Foundations](https://linear.app/ryanstoffel/issue/RYA-74) | The repo holds the desktop app and `wispd`, CI checks both on macOS, Windows, and Linux, and the decision records for Linear and cross-platform support are in |
+| [M1: App shell](https://linear.app/ryanstoffel/issue/RYA-75) | The Electron app launches on all three OSes, talks to a local `wispd`, and runs threads |
+| [M2: Hosts](https://linear.app/ryanstoffel/issue/RYA-76) | You add a local or SSH host from the app and connect to `wispd` on it. The daemon runs on macOS, Windows, and Linux. |
+| [M3: Subscriptions](https://linear.app/ryanstoffel/issue/RYA-77) | You sign in with your own subscriptions, with API keys as a fallback. Runs route through them and usage shows per account. |
+| [M4: Projects](https://linear.app/ryanstoffel/issue/RYA-78) | You describe a project once, and the coordinator plans it and runs parallel subagents in their own worktrees on a host. On an external host it keeps working with the laptop closed. |
+| [M5: Review](https://linear.app/ryanstoffel/issue/RYA-79) | You review each task's diff in the app and turn accepted work into commits or PRs |
+| [M6: Local agent + triggers](https://linear.app/ryanstoffel/issue/RYA-80) | With an external host, the coordinator starts a subagent on the laptop. Schedules and PR watches wake the coordinator without a prompt, with notifications. |
+| [M7: Release](https://linear.app/ryanstoffel/issue/RYA-81) | Installable builds for macOS, Windows, and Linux, plus README, license, install steps, and a short demo |
+
+Records dated before Sep 27, 2026 use the old numbering: M1 host daemon, M2 subscription manager, M3 single agent, M4 coordinator, M5 local agent, M6 triggers.
 
 ## Open questions and risks
 
-Decided: the VS Code fork is the client. There is no separate SwiftUI app.
+Answered:
 
-Open questions:
+* The name is Wisp, and the daemon is `wispd`, not shared with Roster ([0003](decisions/0003-naming.md))
+* Shared context is a folder `wispd` owns and copies, not git commits ([0005](decisions/0005-shared-context-folder.md))
+* Providers: Claude Code first, then Codex, then Cursor once Cursor confirms in writing ([0004](decisions/0004-subscription-providers.md))
+* The UI follows T3 Code's layout rather than Cursor's ([0022](decisions/0022-desktop-app.md))
+* Triggers: schedules and PR watches first; Slack is out of scope ([RYA-59](https://linear.app/ryanstoffel/issue/RYA-59))
 
-* Confirm the name wisp after conflict checks
-* How shared context syncs: git commits in the repo, or a separate folder the daemon copies?
-* Which triggers matter first: schedule, GitHub PRs, or Slack?
-* Is `projectd` shared with Roster?
-* Which providers does the subscription manager support first?
-* Which UI changes from Cursor's layout do you want?
+Open:
+
+* How a host's coordinator runs a local agent on the laptop ([RYA-55](https://linear.app/ryanstoffel/issue/RYA-55))
+* How triggers wake the coordinator ([RYA-59](https://linear.app/ryanstoffel/issue/RYA-59))
+* Whether workers may reach the host's own interface addresses ([RYA-45](https://linear.app/ryanstoffel/issue/RYA-45))
+* Versioning, packaging, and signing for three OSes ([RYA-64](https://linear.app/ryanstoffel/issue/RYA-64))
+* Name conflict checks before release: the Gleam web framework Wisp, GitHub, domains, trademarks, and package names ([RYA-71](https://linear.app/ryanstoffel/issue/RYA-71))
 
 Risks:
 
-* Subscription terms. Using consumer subscription logins from a third-party app may break vendor terms, and shipping it in a public open-source app makes that more visible. Keep API keys as a fallback.
+* Subscription terms. Running consumer subscriptions from a third-party app may break vendor terms, and a public open-source app makes that more visible. Running only the vendors' own CLIs reduces this, and API keys stay as a fallback ([0004](decisions/0004-subscription-providers.md)).
 * Coordinator quality. Weak task specs make workers fail. Start with the strongest model and grade plans by hand.
-* Fork upkeep. A VS Code fork must be rebased on upstream releases, and stripping it down is ongoing work. Use Open VSX, since the Microsoft extension marketplace is not licensed for forks.
-* Rust learning curve. Build the protocol and SQLite layers first.
-
-## Name
-
-Working name: wisp. A thin strand of smoke, and the will-o'-the-wisp light that leads travelers. It fits agents working quietly in the background. The command is `wisp`.
-
-Known overlap: a web framework for the Gleam language is also called Wisp. GitHub, domain, and trademark checks are still to do.
+* Three OSes. Each has its own transport, service, secret store, and sandbox, and native Windows can't sandbox Claude workers, which run in WSL2 instead ([0023](decisions/0023-cross-platform.md)).
