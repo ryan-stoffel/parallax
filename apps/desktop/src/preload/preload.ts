@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import { ErrorCodes } from "../protocol/generated/protocol";
-import type { ConnectionState, SubscriptionMessage, WispBridge } from "./bridge";
+import type { ConnectionState, SshHost, SubscriptionMessage, WispBridge } from "./bridge";
 
 // Subscription listeners by the key this preload gave them.
 const subscriptions = new Map<string, (message: SubscriptionMessage) => void>();
@@ -41,6 +41,15 @@ const bridge: WispBridge = {
     return () => ipcRenderer.removeListener("wisp:state", forward);
   },
   retry: (hostId) => ipcRenderer.invoke("wisp:retry", hostId),
+
+  hosts: () => ipcRenderer.invoke("wisp:hosts"),
+  onHosts(listener) {
+    const forward = (_event: unknown, hosts: SshHost[]) => listener(hosts);
+    ipcRenderer.on("wisp:hosts", forward);
+    return () => ipcRenderer.removeListener("wisp:hosts", forward);
+  },
+  saveHost: (host, id) => ipcRenderer.invoke("wisp:saveHost", host, id),
+  removeHost: (id) => ipcRenderer.invoke("wisp:removeHost", id),
 };
 
 contextBridge.exposeInMainWorld("wisp", bridge);
