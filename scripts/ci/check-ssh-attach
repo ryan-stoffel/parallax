@@ -136,8 +136,13 @@ async function main() {
 
     console.log(`check-ssh-attach: ok (serve pid ${pid} was running after ssh closed, then stopped)`);
   } finally {
-    // On Windows, the stopped serve's files stay open for a moment.
-    rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    // On Windows, a serve's files stay open until it has fully stopped, and one that a failed
+    // check left running keeps them open. Neither should hide the check's own result.
+    try {
+      rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    } catch (error) {
+      process.stderr.write(`check-ssh-attach: could not remove ${dataDir}: ${error.message}\n`);
+    }
   }
 }
 

@@ -88,6 +88,7 @@ jobs:
       # The same check through Windows' own OpenSSH server, which puts each session in a job
       # object that `serve` must break away from (0023).
       - name: Set up ssh to localhost
+        timeout-minutes: 5
         if: runner.os == 'Windows'
         shell: pwsh
         run: scripts/ci/ssh-localhost.ps1 -StatusFile "$env:RUNNER_TEMP\ssh-status"
@@ -96,7 +97,6 @@ jobs:
         if: runner.os == 'Windows'
         env:
           WISP_E2E_REQUIRE_SSH: "1"
-          WISP_E2E_SSH: C:\Windows\System32\OpenSSH\ssh.exe
         run: |
           scripts/ci/check-ssh-attach "$RUNNER_TEMP\\ssh-status" "$(cygpath -w "$PWD/target/debug/wispd.exe")"
 

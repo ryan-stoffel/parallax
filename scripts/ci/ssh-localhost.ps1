@@ -1,9 +1,11 @@
 # Sets up key-based `ssh localhost` on a disposable GitHub-hosted Windows runner, for #95's
 # check-ssh-attach, through Windows' own OpenSSH server (Win32-OpenSSH), the one wisp's Windows
-# hosts run (0023). It starts the image's sshd service (installing the capability if the image
-# lacks it), authorizes a throwaway key for the runner's user, and points a `Host localhost` block
-# in ~/.ssh/config at that key and a throwaway known_hosts, as scripts/ci/ssh-localhost does on
-# macOS and Linux.
+# hosts run (0023). It starts the image's sshd service, authorizes a throwaway key for the
+# runner's user, and points a `Host localhost` block in ~/.ssh/config at that key and a throwaway
+# known_hosts, as scripts/ci/ssh-localhost does on macOS and Linux. An image without the sshd
+# service (the Windows arm64 one) gets Win32-OpenSSH's pinned MSI instead, since installing the
+# Windows capability there takes longer than the job allows. The ssh client it used goes in
+# WISP_E2E_SSH for the next steps.
 #
 # Never runs outside a GitHub-hosted runner, and never fails the build on its own: it writes
 # WISP_E2E_SSH_READY=true or =false plus a reason to <status-file>, and the caller decides whether
@@ -13,6 +15,13 @@ param([Parameter(Mandatory = $true)][string] $StatusFile)
 
 $ErrorActionPreference = 'Stop'
 $openssh = Join-Path $env:SystemRoot 'System32\OpenSSH'
+
+# Win32-OpenSSH 10.0.0.0p2, with the SHA-256 GitHub lists for each asset.
+$msiRelease = 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview'
+$msi = @{
+    'X64'   = @('OpenSSH-Win64-v10.0.0.0.msi', 'ddec9c53864280759cf9f74791cefd387100e3946aa849a1c138a4ed1b96b7d9')
+    'ARM64' = @('OpenSSH-ARM64-v10.0.0.0.msi', '7a17d0e22d004fb47ca4bfd8fef926fa305de4ebf70a6f3c7a29c39aabef0023')
+}
 
 function Write-Status([string] $Ready, [string] $Reason = '') {
     $lines = @("WISP_E2E_SSH_READY=$Ready")
@@ -31,7 +40,13 @@ if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { Skip 'not a GitHub-hosted run
 
 try {
     if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
-        Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null
+        $name, $sha256 = $msi[$env:RUNNER_ARCH]
+        $file = Join-Path $env:RUNNER_TEMP $name
+        Invoke-WebRequest -Uri "$msiRelease/$name" -OutFile $file -MaximumRetryCount 3
+        if ((Get-FileHash -Algorithm SHA256 $file).Hash -ne $sha256) { Skip "$name's SHA-256 doesn't match" }
+        $install = Start-Process msiexec -ArgumentList "/i `"$file`" /qn ADDLOCAL=Client,Server" -Wait -PassThru
+        if ($install.ExitCode -ne 0) { Skip "installing $name failed ($($install.ExitCode))" }
+        $openssh = Join-Path $env:ProgramFiles 'OpenSSH'
     }
     Set-Service sshd -StartupType Manual
     Start-Service sshd
@@ -79,7 +94,8 @@ Add-Content -Path (Join-Path $sshDir 'config') -Encoding ascii -Value @(
 
 $probe = & "$openssh\ssh.exe" -T -o ConnectTimeout=5 -o ControlPath=none localhost 'echo ready' 2>&1
 if ($LASTEXITCODE -eq 0) {
-    Write-Host 'ssh-localhost: ready (Windows OpenSSH, port 22)'
+    Write-Host "ssh-localhost: ready (Windows OpenSSH in $openssh, port 22)"
+    if ($env:GITHUB_ENV) { Add-Content -Path $env:GITHUB_ENV -Value "WISP_E2E_SSH=$openssh\ssh.exe" }
     Write-Status 'true'
 } else {
     Skip "ssh localhost (probe) failed: $probe"
