@@ -19,12 +19,13 @@ defaults:
     shell: bash
 
 jobs:
-  # wispd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (RYA-17).
+  # wispd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (RYA-17),
+  # and Windows x86_64 and arm64 (RYA-21).
   rust:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm]
+        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -41,6 +42,18 @@ jobs:
             ~/.rustup/toolchains/*
             !~/.rustup/toolchains/stable-*
           key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      # The Windows arm64 image may not ship rustup.
+      - name: Install rustup
+        if: runner.os == 'Windows'
+        run: |
+          if ! command -v rustup > /dev/null; then
+            arch=$([ "$RUNNER_ARCH" = ARM64 ] && echo aarch64 || echo x86_64)
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/rustup-init.exe" \
+              "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe"
+            "$RUNNER_TEMP/rustup-init.exe" -y --default-toolchain none --profile minimal --no-modify-path
+            echo "$USERPROFILE\\.cargo\\bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
@@ -64,12 +77,28 @@ jobs:
       # scripts/ci/ssh-localhost sets up key-based ssh to localhost; check-ssh-attach runs
       # `wispd attach` through it (#95). On a runner, "ssh not ready" fails instead of skipping.
       - name: Check wispd attach over ssh
+        if: runner.os != 'Windows'
         env:
           WISP_E2E_REQUIRE_SSH: "1"
         run: |
           status=$(mktemp)
           scripts/ci/ssh-localhost "$status"
           scripts/ci/check-ssh-attach "$status" "$PWD/target/debug/wispd"
+
+      # The same check through Windows' own OpenSSH server, which puts each session in a job
+      # object that `serve` must break away from (0023).
+      - name: Set up ssh to localhost
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/ci/ssh-localhost.ps1 -StatusFile "$env:RUNNER_TEMP\ssh-status"
+
+      - name: Check wispd attach over Windows OpenSSH
+        if: runner.os == 'Windows'
+        env:
+          WISP_E2E_REQUIRE_SSH: "1"
+          WISP_E2E_SSH: C:\Windows\System32\OpenSSH\ssh.exe
+        run: |
+          scripts/ci/check-ssh-attach "$RUNNER_TEMP\\ssh-status" "$(cygpath -w "$PWD/target/debug/wispd.exe")"
 
   # The desktop app on every OS it ships to (0022): checked, built, then launched (RYA-84).
   app:

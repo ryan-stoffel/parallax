@@ -6,12 +6,17 @@
 // error, and result.protocol === 1; that ssh exits 0 once wispd has answered; and that `serve`
 // keeps running after the ssh session ends, then stops it.
 //
+// On Windows (0023), the host's shell is cmd.exe, so the data folder goes in `--data-dir`. The
+// lock can't be read while `serve` holds it, so `serve`'s pid comes from its log instead, and
+// WISP_E2E_SSH names the ssh client to use (Windows' own).
+//
 // Skips (exit 0) wherever scripts/ci/ssh-localhost was skipped, unless WISP_E2E_REQUIRE_SSH=1
 // (ci.yml's rust job sets it), in which case "not ready" is a failure instead, so a broken ssh
 // setup fails the build rather than silently dropping this coverage.
 
 const { execFileSync } = require('node:child_process');
 const { existsSync, mkdtempSync, readFileSync, rmSync } = require('node:fs');
+const windows = process.platform === 'win32';
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
@@ -76,11 +81,14 @@ async function main() {
       params: { protocol: { min: 1, max: 1 }, client: { name: 'ci-ssh-attach', version: '0' }, capabilities: {} },
     })}\n`;
 
+    const remote = windows
+      ? `"${wispd}" attach --data-dir "${dataDir}"`
+      : `WISPD_DATA_DIR='${dataDir}' '${wispd}' attach`;
     let stdout;
     try {
       stdout = execFileSync(
-        'ssh',
-        ['-T', '-o', 'BatchMode=yes', '-o', 'ControlPath=none', '--', 'localhost', `WISPD_DATA_DIR='${dataDir}' '${wispd}' attach`],
+        process.env.WISP_E2E_SSH || 'ssh',
+        ['-T', '-o', 'BatchMode=yes', '-o', 'ControlPath=none', '--', 'localhost', remote],
         { input: request, timeout: 60_000, encoding: 'utf8' },
       );
     } catch (error) {
@@ -109,12 +117,15 @@ async function main() {
     if (!existsSync(lockFile)) {
       fail(`no ${lockFile}; wispd never started serve`);
     }
-    const lockContent = readFileSync(lockFile, 'utf8');
-    const pid = Number.parseInt(lockContent.trim(), 10);
+    const pidSource = windows ? join(dataDir, 'logs', 'wispd.log') : lockFile;
+    const pidText = readFileSync(pidSource, 'utf8');
+    const pid = windows
+      ? Number.parseInt(/listening.* pid=(\d+)/.exec(pidText)?.[1] ?? '', 10)
+      : Number.parseInt(pidText.trim(), 10);
     // A lock holding 0, a negative number, or something unparseable must never be handed to
     // process.kill, whose pid 0 (or a negative pid) targets a whole process group, not one process.
     if (!Number.isSafeInteger(pid) || pid <= 1) {
-      fail(`${lockFile} does not hold a usable pid: ${JSON.stringify(lockContent)}`);
+      fail(`${pidSource} does not hold a usable pid: ${JSON.stringify(pidText)}`);
     }
     try {
       process.kill(pid, 0);
@@ -125,7 +136,8 @@ async function main() {
 
     console.log(`check-ssh-attach: ok (serve pid ${pid} was running after ssh closed, then stopped)`);
   } finally {
-    rmSync(dataDir, { recursive: true, force: true });
+    // On Windows, the stopped serve's files stay open for a moment.
+    rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 }
 
