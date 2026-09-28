@@ -60,6 +60,12 @@ windows-sys = { workspace = true, features = [
 notify = { workspace = true, features = ["macos_fsevent"] }
 security-framework.workspace = true
 
+# API keys go in the Secret Service over D-Bus, in pure Rust: tokio and Rust crypto only, so the
+# static musl build links neither libdbus nor OpenSSL (0023).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring-core = "1.0.0"
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
+
 [dev-dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { workspace = true, features = ["process"] }

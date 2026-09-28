@@ -1,8 +1,9 @@
-//! Where API keys live (#117, 0023): the login Keychain on macOS. Linux has no store yet; the
-//! Secret Service comes with RYA-19.
+//! Where API keys live (#117, 0023): the login Keychain on macOS, the Secret Service on Linux
+//! (RYA-19). Windows has no store yet (RYA-23).
 //!
 //! [`KeyStore`] is the interface. [`system_store`] is this OS's real one: `KeychainStore`, one
-//! generic password per account under a service name via the `security-framework` crate, or
+//! generic password per account under a service name via the `security-framework` crate;
+//! `SecretServiceStore`, one item per account in the default collection via `keyring-core`; or
 //! [`NoKeyStore`] where wispd has none. [`MemoryKeyStore`] is an in-memory mock for tests. Only
 //! these ever see a key in the clear, and only for as long as it takes to hand it to the OS or a
 //! caller; wisp's project store and event log never do (0004, decision record 0009).
@@ -17,6 +18,10 @@ use zeroize::Zeroizing;
 mod keychain;
 #[cfg(target_os = "macos")]
 pub use keychain::KeychainStore;
+#[cfg(target_os = "linux")]
+mod secret_service;
+#[cfg(target_os = "linux")]
+pub use secret_service::SecretServiceStore;
 
 /// The service name every real wisp key account is stored under: 0006's bundle id.
 pub const SERVICE: &str = "io.github.ryan-stoffel.wisp";
@@ -24,8 +29,13 @@ pub const SERVICE: &str = "io.github.ryan-stoffel.wisp";
 /// What `keychainUnavailable` tells the user: the store is locked or access was denied.
 #[cfg(target_os = "macos")]
 pub const UNAVAILABLE_MESSAGE: &str = "the keychain is locked or access was denied";
+/// What `keychainUnavailable` tells the user: there is no Secret Service, it is locked, or access
+/// was denied. A headless host has none until one is installed and unlocked (0023).
+#[cfg(target_os = "linux")]
+pub const UNAVAILABLE_MESSAGE: &str = "no unlocked Secret Service: install one, such as \
+     gnome-keyring or KeePassXC, and unlock it, or run wispd serve in a logged-in desktop session";
 /// What `keychainUnavailable` tells the user: this host has no store for API keys yet.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub const UNAVAILABLE_MESSAGE: &str =
     "this host can't store API keys yet: wispd has no Secret Service support on this OS";
 
@@ -56,12 +66,15 @@ pub trait KeyStore: Send + Sync {
     fn delete(&self, account: AccountId) -> Result<(), KeyStoreError>;
 }
 
-/// This OS's real key store: the login Keychain on macOS, [`NoKeyStore`] elsewhere.
+/// This OS's real key store: the login Keychain on macOS, the Secret Service on Linux,
+/// [`NoKeyStore`] elsewhere.
 #[must_use]
 pub fn system_store() -> Arc<dyn KeyStore> {
     #[cfg(target_os = "macos")]
     let store = KeychainStore::new();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    let store = SecretServiceStore::new();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let store = NoKeyStore;
     Arc::new(store)
 }
@@ -96,11 +109,11 @@ impl KeyStoreError {
 /// The store on an OS where wispd can't keep API keys yet: every call fails as unavailable, so
 /// key accounts fail with `keychainUnavailable` and a key never goes anywhere else (0023). There
 /// is never a plaintext fallback.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[derive(Debug, Clone, Copy)]
 pub struct NoKeyStore;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl KeyStore for NoKeyStore {
     fn set(&self, _account: AccountId, _key: &str) -> Result<(), KeyStoreError> {
         Err(KeyStoreError::unavailable(UNAVAILABLE_MESSAGE))
