@@ -5,7 +5,7 @@
 //! [`Shutdown::trigger`] is called, and shuts down gracefully.
 
 mod connection;
-mod setup;
+pub(crate) mod setup;
 
 use std::io;
 #[cfg(unix)]

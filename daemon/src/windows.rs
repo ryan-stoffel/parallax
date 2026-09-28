@@ -29,7 +29,10 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject,
 };
-use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
+use windows_sys::Win32::System::Pipes::{
+    GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
+    SetNamedPipeHandleState,
+};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetProcessHandleCount, OpenProcess, OpenProcessToken,
     PROCESS_QUERY_LIMITED_INFORMATION,
@@ -91,7 +94,21 @@ pub fn create_pipe(
     // SAFETY: `descriptor` came from ConvertStringSecurityDescriptorToSecurityDescriptorW, which
     // says to free it with LocalFree, and nothing uses it after this.
     unsafe { LocalFree(descriptor) };
-    created
+    // Keep the pipe's message type for the empty-message input marker, but read its data as
+    // bytes. mio can mistake a synchronously completed partial message read for EOF.
+    let pipe = created?;
+    // SAFETY: `pipe` owns a live server pipe handle, and `PIPE_READMODE_BYTE` is a valid mode
+    // value. The other two optional settings are not changed.
+    let mode = PIPE_READMODE_BYTE;
+    check(unsafe {
+        SetNamedPipeHandleState(
+            pipe.as_raw_handle(),
+            &raw const mode,
+            ptr::null(),
+            ptr::null(),
+        )
+    })?;
+    Ok(pipe)
 }
 
 /// The process id of the client connected to the server end `pipe`.
@@ -216,7 +233,7 @@ fn sid_string(sid: &[u8]) -> io::Result<String> {
 /// from 4 up, so this tries each one until it has seen as many as the process has, or up to a
 /// bound far past what a new process holds.
 pub fn stop_inheriting_handles() {
-    const MAX_HANDLE_VALUE: usize = 1 << 16;
+    const MAX_HANDLE_VALUE: usize = 1 << 24;
 
     let mut count = 0;
     // SAFETY: the pseudo-handle is always valid, and `count` is a valid out pointer. On failure

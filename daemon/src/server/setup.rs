@@ -290,9 +290,9 @@ impl Socket {
 /// with a DACL that grants only this user. Unlike a socket, a pipe can't be deleted or replaced
 /// while wispd holds an instance, so it needs no rebinding or removal.
 ///
-/// It is a message pipe, though the protocol is a byte stream, for one thing: a pipe has no
-/// half-close, so a client ends its input with an empty message, which reads here as the end
-/// of the stream (see [`crate::attach::bridge`]). A byte pipe drops empty writes.
+/// It is a message-type pipe in byte read mode. The message type preserves the empty write
+/// that ends a client's input (see [`crate::attach::bridge`]); byte read mode prevents mio from
+/// mistaking a partial message read for EOF when a large write is already queued.
 #[cfg(windows)]
 #[derive(Debug)]
 pub(crate) struct Pipe {
@@ -366,6 +366,12 @@ mod windows_tests {
     use std::fs;
     use std::process::Command;
 
+    use futures_util::SinkExt;
+    use tokio::io::AsyncReadExt;
+    use tokio::time::{Duration, timeout};
+    use tokio_util::codec::FramedWrite;
+    use wisp_protocol::framing::FrameCodec;
+
     use super::{InstanceLock, Pipe, prepare_data_dir};
     use crate::server::StartError;
 
@@ -434,6 +440,27 @@ mod windows_tests {
         // The next instance is in place.
         let _again = crate::transport::connect(name.as_ref()).await.unwrap();
         pipe.accept().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_large_framed_write_arrives_without_early_eof() {
+        let name = format!(r"\\.\pipe\wispd-test-framed-{}", std::process::id());
+        let mut pipe = Pipe::create(name.as_ref()).unwrap();
+        let client = crate::transport::connect(name.as_ref()).await.unwrap();
+        let mut server = pipe.accept().await.unwrap();
+        let payload = "x".repeat(32 << 10);
+        let expected = format!("{{\"payload\":\"{payload}\"}}\n");
+        let mut writer = FramedWrite::new(client, FrameCodec::new());
+        writer
+            .send(serde_json::json!({"payload": payload}))
+            .await
+            .unwrap();
+        let mut received = vec![0; expected.len()];
+        timeout(Duration::from_secs(10), server.read_exact(&mut received))
+            .await
+            .expect("server receives the whole frame")
+            .unwrap();
+        assert_eq!(received, expected.as_bytes());
     }
 }
 

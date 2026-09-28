@@ -382,7 +382,7 @@ fn detach(command: &mut std::process::Command, log: &File) -> io::Result<std::pr
     {
         Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.cast_signed()) => {
             report(
-                "this session's job doesn't allow breaking away, so wispd serve will stop when                  the session ends",
+                "this session's job doesn't allow breaking away, so wispd serve will stop when the session ends",
             );
             command.creation_flags(flags).spawn()
         }
@@ -517,6 +517,7 @@ mod windows_tests {
     use tokio::time::timeout;
 
     use super::bridge;
+    use crate::server::setup::Pipe;
 
     const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -559,6 +560,56 @@ mod windows_tests {
             .expect("the bridge ends")
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn large_bridge_inputs_arrive_byte_for_byte() {
+        for size in [64 << 10, 1 << 20] {
+            let name = format!(
+                r"\\.\pipe\wispd-test-bridge-large-{}-{size}",
+                std::process::id()
+            );
+            let mut pipe = Pipe::create(name.as_ref()).unwrap();
+            let client = crate::transport::connect(name.as_ref()).await.unwrap();
+            let server = pipe.accept().await.unwrap();
+            let (mut stdin, input) = tokio::io::duplex(8192);
+            let (output, mut stdout) = tokio::io::duplex(8192);
+            let bridge = tokio::spawn(bridge(input, output, client));
+            let sent: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+            let writing = tokio::spawn({
+                let sent = sent.clone();
+                async move {
+                    for chunk in sent.chunks(8192) {
+                        stdin.write_all(chunk).await.unwrap();
+                    }
+                    drop(stdin);
+                }
+            });
+            let reading = async move {
+                let mut server = server;
+                let mut received = Vec::new();
+                server.read_to_end(&mut received).await.unwrap();
+                server.write_all(b"done").await.unwrap();
+                drop(server);
+                received
+            };
+            let received = timeout(PATIENCE, reading)
+                .await
+                .expect("server reads all input");
+            assert_eq!(received, sent, "bridge lost bytes at {size}");
+            writing.await.unwrap();
+            let mut answer = Vec::new();
+            timeout(PATIENCE, stdout.read_to_end(&mut answer))
+                .await
+                .expect("bridge returns response")
+                .unwrap();
+            assert_eq!(answer, b"done");
+            timeout(PATIENCE, bridge)
+                .await
+                .expect("bridge ends")
+                .unwrap()
+                .unwrap();
+        }
     }
 }
 
