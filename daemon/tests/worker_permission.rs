@@ -1,5 +1,6 @@
-//! Real Claude Code regression for RYA-110. A local fake Messages API asks for Bash, so no
-//! account or Anthropic connection is needed. Set `WISP_SANDBOX_CLAUDE` to the CLI under test.
+//! Real Claude Code regression for RYA-110 and RYA-20: a worker can run Bash, and its commands
+//! don't see the key. A local fake Messages API asks for Bash, so no account or Anthropic
+//! connection is needed. Set `WISP_SANDBOX_CLAUDE` to the CLI under test.
 #![cfg(unix)]
 
 use std::ffi::OsStr;
@@ -18,7 +19,7 @@ use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, Work
 const KEY: &str = "sk-ant-wisp-test-key-never-send";
 
 #[tokio::test]
-async fn scrubbed_worker_can_run_bash_without_exposing_its_key() {
+async fn a_worker_can_run_bash_without_exposing_its_key() {
     let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
         eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
@@ -82,7 +83,8 @@ async fn scrubbed_worker_can_run_bash_without_exposing_its_key() {
 
 /// Runs `claude` with the arguments wispd gives `request`, against a fake Messages API whose one
 /// Bash call runs `sh probe.sh` in the worktree. Returns stdout, and stdout with stderr for
-/// failure messages.
+/// failure messages. Like wispd, it leaves `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` unset for a
+/// worker: on Linux it widens the sandbox's writes (RYA-20).
 async fn run_worker(
     claude: &OsStr,
     request: &RunRequest,
@@ -105,7 +107,6 @@ async fn run_worker(
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         .env("DISABLE_AUTOUPDATER", "1")
-        .env("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1")
         .env("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

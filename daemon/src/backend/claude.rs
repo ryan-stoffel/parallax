@@ -57,7 +57,8 @@
 //! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it wispd
 //! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
 //! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
-//! it.
+//! it. The CLI's own subprocesses don't get the key either: a no-write run sets [`SCRUB_ENV`],
+//! and a worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its commands.
 //!
 //! A project's `env` block can still set variables for a worker (0004, #134), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
@@ -201,12 +202,20 @@ pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// string as [`API_KEY_ENV`] (0004's table), but the two names are checked independently.
 pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
 
-/// Variables every run gets: keep credentials out of the agent's own subprocesses (0004
-/// Consequences), and report a startup failure as a `result` instead of on stderr alone.
-const ALWAYS_SET: &[(&str, &str)] = &[
-    ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
-    ("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1"),
-];
+/// Variables every run gets: report a startup failure as a `result` instead of on stderr alone.
+const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")];
+
+/// Set to `1` for a no-write run, to keep credentials out of the CLI's own subprocesses, such as
+/// wispd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
+/// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
+/// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
+/// from a worker's commands instead.
+const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
+
+/// Variables a worker's commands never see (0013): an API key account's key, and the token for
+/// Claude Code's own messaging socket. `sandbox.credentials` unsets them for each sandboxed
+/// command, as [`SCRUB_ENV`] would.
+pub const WORKER_WITHHELD_VARS: &[&str] = &[API_KEY_ENV, "CLAUDE_CODE_MESSAGING_TOKEN"];
 
 /// A [`Backend`] that runs Claude Code.
 #[derive(Clone, Debug)]
@@ -298,17 +307,17 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     Ok(args)
 }
 
-/// The `--settings` a worker runs with (0013): hooks off; Bash and the web tools allowed; and Claude Code's
-/// Bash sandbox on, with no way around it, `sandbox`'s paths, and every host but
-/// [`WORKER_DENIED_HOSTS`]. `WebFetch(domain:*)` is what opens the network: the sandbox takes its
-/// allowlist from `WebFetch` allow rules, and a bare `*` matches every host. The denied hosts are
-/// `WebFetch` deny rules as well as `deniedDomains`, because the sandbox's list binds only
-/// commands, and a deny rule beats the `*` allow for the tool. Bash needs an explicit allow rule
-/// because the subprocess environment scrub flag makes Claude Code use default permission mode.
-/// `cwd`, the writable folders, and
-/// the read-only git paths stay readable inside an unreadable path, such as wispd's data folder,
-/// which holds the worktree, the context folder, and a normal thread's scratch repository
-/// (#110). A second account's `config_home` is unreadable too.
+/// The `--settings` a worker runs with (0013): hooks off; Bash and the web tools allowed; and
+/// Claude Code's Bash sandbox on, with no way around it, `sandbox`'s paths, every host but
+/// [`WORKER_DENIED_HOSTS`], and no [`WORKER_WITHHELD_VARS`]. `WebFetch(domain:*)` is what opens
+/// the network: the sandbox takes its allowlist from `WebFetch` allow rules, and a bare `*`
+/// matches every host. The denied hosts are `WebFetch` deny rules as well as `deniedDomains`,
+/// because the sandbox's list binds only commands, and a deny rule beats the `*` allow for the
+/// tool. Bash is an allow rule as well, since Claude Code ignores `autoAllowBashIfSandboxed` when
+/// [`SCRUB_ENV`] is set (RYA-110). `cwd`, the writable folders, and the read-only git paths stay
+/// readable inside an unreadable path, such as wispd's data folder, which holds the worktree, the
+/// context folder, and a normal thread's scratch repository (#110). A second account's
+/// `config_home` is unreadable too.
 #[must_use]
 pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<&Path>) -> Value {
     let unreadable = strings(
@@ -327,6 +336,10 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
     let denied_fetches: Vec<String> = WORKER_DENIED_HOSTS
         .iter()
         .map(|host| format!("WebFetch(domain:{host})"))
+        .collect();
+    let withheld: Vec<Value> = WORKER_WITHHELD_VARS
+        .iter()
+        .map(|name| serde_json::json!({"name": name, "mode": "deny"}))
         .collect();
     serde_json::json!({
         "disableAllHooks": true,
@@ -350,6 +363,7 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
                 "allowRead": readable,
                 "denyWrite": read_only,
             },
+            "credentials": {"envVars": withheld},
         },
     })
 }
@@ -445,6 +459,9 @@ impl Backend for ClaudeBackend {
         let expected_key_source = apply_credential(&request.account.credential, &mut spec)?;
         for (name, value) in ALWAYS_SET {
             spec.inject.set(name, value);
+        }
+        if request.policy == ToolPolicy::NoWrite {
+            spec.inject.set(SCRUB_ENV, "1");
         }
         spec.stdin = StdinMode::Piped;
         spec.limits = self.limits;

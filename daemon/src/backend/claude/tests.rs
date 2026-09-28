@@ -411,6 +411,10 @@ fn assert_worker_invocation(fake: &Fake) {
                     ],
                     "denyWrite": [format!("{cwd}/.git"), "/Users/u/src/app/.git"],
                 },
+                "credentials": {"envVars": [
+                    {"name": "ANTHROPIC_API_KEY", "mode": "deny"},
+                    {"name": "CLAUDE_CODE_MESSAGING_TOKEN", "mode": "deny"},
+                ]},
             },
         })
     );
@@ -431,6 +435,13 @@ fn assert_worker_invocation(fake: &Fake) {
         assert!(!argv.iter().any(|arg| arg == flag), "{flag}: {argv:?}");
     }
     fake.assert_no_inherited_credentials(Some("/tmp/claude-second-account"));
+    // On Linux the flag would widen the sandbox's writes (RYA-20); `credentials` stands in for it.
+    let env = fake.env();
+    assert!(
+        !env.iter()
+            .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
+        "{env:?}"
+    );
 }
 
 #[test]

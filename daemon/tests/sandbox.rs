@@ -129,7 +129,8 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
 
 /// Runs `claude` with the arguments wispd gives `request`, against a fake Messages API whose one
 /// Bash call runs `sh probe.sh` in the worktree. Returns stdout, and stdout with stderr for
-/// failure messages.
+/// failure messages. Like wispd, it leaves `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` unset for a
+/// worker: on Linux it widens the sandbox's writes (RYA-20).
 async fn run_worker(
     claude: &OsStr,
     request: &RunRequest,
@@ -152,7 +153,6 @@ async fn run_worker(
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         .env("DISABLE_AUTOUPDATER", "1")
-        .env("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1")
         .env("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
