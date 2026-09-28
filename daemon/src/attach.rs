@@ -127,12 +127,11 @@ pub type Connection = crate::transport::Stream;
 ///
 /// wispd is started once. That goes through the service (the `LaunchAgent` on macOS, the systemd
 /// user unit on Linux) when [`Options::launch_agent`] names one. Otherwise, or if the service
-/// can't be started, it spawns `serve` detached: in a new
-/// session (on Windows, a new process group outside the SSH session's job), with stdin on the
-/// null device, stdout and stderr appended to its log, and no other descriptors or handles. It
-/// then retries with backoff until [`Options::connect_timeout`] has passed. A `serve` that exits
-/// 3, because another one holds the lock, is started again at the next retry (0009). One that
-/// stops any other way ends the wait.
+/// can't be started, it spawns `serve` detached: in a new session (on Windows, a new process
+/// group outside the SSH session's job), with stdin on the null device, stdout and stderr
+/// appended to its log, and no other descriptors or handles. It then retries with backoff until
+/// [`Options::connect_timeout`] has passed. A `serve` that exits 3, because another one holds the
+/// lock, is started again at the next retry (0009). One that stops any other way ends the wait.
 ///
 /// It never stops a wispd, including one it started.
 ///
