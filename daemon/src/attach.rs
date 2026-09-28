@@ -431,8 +431,9 @@ fn last_line(path: &Path, start: u64) -> Option<String> {
 /// When `input` ends, it shuts down the connection's write side and keeps copying, so wispd
 /// answers everything it was sent before it closes (0007). A named pipe has no half-close, so on
 /// Windows an empty message stands in for it: `serve`'s pipe is a message pipe, where a
-/// zero-byte write arrives as a zero-byte read, and tokio reads that as the end of the input. A
-/// peer that has gone away ends the bridge without an error.
+/// zero-byte write arrives as a zero-byte read, and tokio reads that as the end of the input
+/// (see [`crate::transport`] for how the other messages stay whole). A peer that has gone away
+/// ends the bridge without an error.
 ///
 /// # Errors
 ///
@@ -513,7 +514,6 @@ mod windows_tests {
     use std::time::Duration;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
     use tokio::time::timeout;
 
     use super::bridge;
@@ -525,12 +525,9 @@ mod windows_tests {
     #[tokio::test]
     async fn the_end_of_stdin_ends_the_servers_input_and_the_answer_still_arrives() {
         let name = format!(r"\\.\pipe\wispd-test-bridge-{}", std::process::id());
-        let mut wispd = ServerOptions::new()
-            .pipe_mode(PipeMode::Message)
-            .create(&name)
-            .unwrap();
-        let client = ClientOptions::new().open(&name).unwrap();
-        wispd.connect().await.unwrap();
+        let mut pipe = Pipe::create(name.as_ref()).unwrap();
+        let client = crate::transport::connect(name.as_ref()).await.unwrap();
+        let mut wispd = pipe.accept().await.unwrap();
         let (mut stdin, input) = tokio::io::duplex(1024);
         let (output, mut stdout) = tokio::io::duplex(1024);
         let bridge = tokio::spawn(bridge(input, output, client));

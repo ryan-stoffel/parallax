@@ -58,13 +58,14 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
   - `reject_remote_clients(true)` keeps out SMB clients. It is tokio's default.
   - The security descriptor is `D:P(A;;GA;;;<user SID>)`, so only the user has access. Windows' default one gives Everyone read access.
   - Like `getpeereid` in 0007, `serve` checks the client's SID through `GetNamedPipeClientProcessId`.
-  - The pipe has message type but its server handle uses byte read mode. A client sends an empty message to end its input without closing the connection, so `serve` can finish its responses. Byte read mode lets the NDJSON protocol handle large frames without a partial pipe message looking like EOF.
+  - A pipe has no half-close, and a byte pipe drops empty writes. So the pipe is a message pipe, and a client ends its input with an empty message, which `serve` reads as EOF. `serve` can then finish its responses, as after a socket's half-close (0007).
+  - The protocol stays NDJSON over a byte stream: `serve` reads messages back to back as bytes. Clients (`wispd::transport`) write at most 4 KiB per message. mio reads a pipe through a buffer of at least 4 KiB and reports a longer message that is already waiting as a 0-byte read, which would look like EOF partway through a frame. Tests push 64 KiB and 1 MiB through attach's bridge and a 32 KiB frame through the `wispd mcp` client.
 - **Client.**
   - Any user can create a pipe under any name. So `attach` and `wispd mcp` check that the server's process runs as their own user (`GetNamedPipeServerProcessId`) before sending anything. A mismatch fails at once with exit 4.
   - Another user can squat the predictable pipe name before `serve` starts; this denies service but does not admit a connection.
   - `ERROR_FILE_NOT_FOUND` means no `serve` is running, so attach starts one, like `ENOENT` in 0010.
   - `ERROR_PIPE_BUSY` means retry within the connect timeout. Any other error fails at once.
-- **Unsafe code.** tokio's security-attributes hook is `unsafe`, and std wraps none of these calls. They are the pipe's security descriptor and read mode, the two SID checks, clearing the inherit flag on open handles, and job objects. All of them live in one Windows-only module that calls `windows-sys`. That module is the only place with `#[allow(unsafe_code)]`, and each call gets a `SAFETY` comment. The workspace lint stays `deny`, and macOS and Linux need no unsafe code.
+- **Unsafe code.** tokio's security-attributes hook is `unsafe`, and std wraps none of these calls. They are the pipe's security descriptor, the two SID checks, clearing the inherit flag on open handles, and job objects. All of them live in one Windows-only module that calls `windows-sys`. That module is the only place with `#[allow(unsafe_code)]`, and each call gets a `SAFETY` comment. The workspace lint stays `deny`, and macOS and Linux need no unsafe code.
 
 ### Starting and stopping `serve`
 

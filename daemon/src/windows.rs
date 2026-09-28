@@ -29,10 +29,7 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject,
 };
-use windows_sys::Win32::System::Pipes::{
-    GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
-    SetNamedPipeHandleState,
-};
+use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetProcessHandleCount, OpenProcess, OpenProcessToken,
     PROCESS_QUERY_LIMITED_INFORMATION,
@@ -94,21 +91,7 @@ pub fn create_pipe(
     // SAFETY: `descriptor` came from ConvertStringSecurityDescriptorToSecurityDescriptorW, which
     // says to free it with LocalFree, and nothing uses it after this.
     unsafe { LocalFree(descriptor) };
-    // Keep the pipe's message type for the empty-message input marker, but read its data as
-    // bytes. mio can mistake a synchronously completed partial message read for EOF.
-    let pipe = created?;
-    // SAFETY: `pipe` owns a live server pipe handle, and `PIPE_READMODE_BYTE` is a valid mode
-    // value. The other two optional settings are not changed.
-    let mode = PIPE_READMODE_BYTE;
-    check(unsafe {
-        SetNamedPipeHandleState(
-            pipe.as_raw_handle(),
-            &raw const mode,
-            ptr::null(),
-            ptr::null(),
-        )
-    })?;
-    Ok(pipe)
+    created
 }
 
 /// The process id of the client connected to the server end `pipe`.

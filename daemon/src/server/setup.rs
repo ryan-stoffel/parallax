@@ -290,9 +290,10 @@ impl Socket {
 /// with a DACL that grants only this user. Unlike a socket, a pipe can't be deleted or replaced
 /// while wispd holds an instance, so it needs no rebinding or removal.
 ///
-/// It is a message-type pipe in byte read mode. The message type preserves the empty write
-/// that ends a client's input (see [`crate::attach::bridge`]); byte read mode prevents mio from
-/// mistaking a partial message read for EOF when a large write is already queued.
+/// It is a message pipe, though the protocol is a byte stream: a pipe has no half-close, so a
+/// client ends its input with an empty message, which reads here as the end of the stream (see
+/// [`crate::attach::bridge`]). A byte pipe drops empty writes. Clients keep each message within
+/// [`crate::transport::MAX_MESSAGE_BYTES`], so no read here stops partway through one.
 #[cfg(windows)]
 #[derive(Debug)]
 pub(crate) struct Pipe {
@@ -323,11 +324,26 @@ impl Pipe {
     }
 
     /// Waits for a client, and puts a new instance in place for the one after it.
+    ///
+    /// An instance whose connect failed can't be used again, so it is replaced either way. If
+    /// creating the next instance fails, which takes Windows running out of resources, this
+    /// retries with a growing wait of up to 5 s rather than return, so the server neither spins
+    /// nor loses the client already connected. It is cancel-safe: dropped while it waits, the
+    /// connected instance stays in place for the next call.
     pub async fn accept(&mut self) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
         let connected = self.next.connect().await;
-        // An instance whose connect failed can't be used again, so it is replaced either way.
         let options = Self::options(false);
-        let next = crate::windows::create_pipe(&options, self.name.as_os_str(), &self.sddl)?;
+        let mut wait = std::time::Duration::from_millis(100);
+        let next = loop {
+            match crate::windows::create_pipe(&options, self.name.as_os_str(), &self.sddl) {
+                Ok(next) => break next,
+                Err(error) => {
+                    tracing::warn!(%error, ?wait, "could not create the pipe's next instance");
+                    tokio::time::sleep(wait).await;
+                    wait = (wait * 2).min(std::time::Duration::from_secs(5));
+                }
+            }
+        };
         let current = std::mem::replace(&mut self.next, next);
         connected.map(|()| current)
     }
