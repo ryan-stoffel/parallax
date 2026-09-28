@@ -10,17 +10,14 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use super::stream::{Step, Translator};
-use super::{ClaudeBackend, NO_WRITE_ARGS};
-#[cfg(target_os = "macos")]
-use super::{WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS};
+use super::{ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
     AccountRef, ApiKey, Backend, Credential, Event, EventStream, FailureKind, FollowUp,
     LimitStatus, LimitWindow, ModelUsage, Outcome, Resume, RunId, RunRequest, SendError,
-    StartError, Started, ToolPolicy, TurnId, Usage, WarningKind, WorkerSandbox,
+    StartError, Started, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind,
+    WorkerSandbox,
 };
-#[cfg(target_os = "macos")]
-use crate::backend::{TodoItem, TodoStatus, ToolStatus};
 use crate::paths::DataDir;
 
 const SESSION: &str = "5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68";
@@ -358,7 +355,6 @@ fn worker_sandbox(cwd: &Path) -> WorkerSandbox {
 }
 
 /// A worker's policy, sandbox, model, and second account reached the CLI.
-#[cfg(target_os = "macos")]
 fn assert_worker_invocation(fake: &Fake) {
     let argv = fake.argv();
     let cwd = fake.root().display().to_string();
@@ -466,23 +462,6 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
     );
 }
 
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn a_worker_is_refused_where_wispd_cannot_check_the_sandbox() {
-    let fake = Fake::new("tool-call");
-    let mut worker = request(&fake.root());
-    worker.policy = ToolPolicy::WorkspaceWrite;
-    worker.sandbox = Some(worker_sandbox(&fake.root()));
-    assert!(!fake.backend.capabilities().worker_sandbox);
-    match fake.backend.start(worker) {
-        Err(StartError::Unsupported(message)) => assert!(message.contains("0023"), "{message}"),
-        Err(other) => panic!("expected Unsupported, got {other:?}"),
-        Ok(_) => panic!("expected Unsupported, got a run"),
-    }
-    assert_eq!(fake.argv(), Vec::<String>::new(), "nothing ran");
-}
-
-#[cfg(target_os = "macos")]
 #[test]
 fn a_worker_without_a_usable_sandbox_is_refused_before_anything_runs() {
     let fake = Fake::new("tool-call");
@@ -533,7 +512,6 @@ fn a_worker_without_a_usable_sandbox_is_refused_before_anything_runs() {
     assert_eq!(fake.argv(), Vec::<String>::new(), "nothing ran");
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
     let fake = Fake::new("tool-call");

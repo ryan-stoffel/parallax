@@ -17,19 +17,22 @@
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
 //!   - `--tools` names exactly [`WORKER_TOOLS`]. `Bash` is among them because Claude Code's own
-//!     Seatbelt sandbox holds every command: writes only to the working directories and the
-//!     session temp folder, no reads of the sandbox's `unreadable` paths, and no writes to git
-//!     metadata. `failIfUnavailable` and `allowUnsandboxedCommands: false` keep a command from
-//!     ever running outside it. Commands, `WebFetch`, and `WebSearch` reach any host but
-//!     [`WORKER_DENIED_HOSTS`] (Ryan, #137), so the unreadable paths are what keep secrets in.
+//!     sandbox (Seatbelt on macOS, bubblewrap on Linux) holds every command: writes only to the
+//!     working directories and the session temp folder, no reads of the sandbox's `unreadable`
+//!     paths, and no writes to git metadata. `failIfUnavailable` and
+//!     `allowUnsandboxedCommands: false` keep a command from ever running outside it. Commands,
+//!     `WebFetch`, and `WebSearch` reach any host but [`WORKER_DENIED_HOSTS`] (Ryan, #137), so
+//!     the unreadable paths are what keep secrets in.
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
 //!
 //!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`], or
 //!   a Claude Code older than [`WORKER_MIN_VERSION`], fails with
 //!   [`FailureKind::PolicyViolation`].
 //!
-//!   Only macOS runs workers. Linux's sandbox needs checks wispd doesn't make yet (0023,
-//!   RYA-20), so there the backend reports no `worker_sandbox` and refuses a workspace-write run.
+//!   Only macOS and Linux run workers, with the same settings. On Linux,
+//!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
+//!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). Elsewhere the
+//!   backend reports no `worker_sandbox` and refuses a workspace-write run.
 //!
 //! # Messages go on stdin
 //!
@@ -67,6 +70,8 @@
 //! `SIGINT`, closes stdin so the CLI exits after the interrupted turn, and kills the process
 //! group if it is still running after the grace period.
 
+#[cfg(target_os = "linux")]
+pub mod linux_sandbox;
 mod stream;
 #[cfg(all(test, unix))]
 mod tests;
@@ -418,7 +423,7 @@ impl Backend for ClaudeBackend {
             coordinator: true,
             reports_cost: true,
             rate_limits: true,
-            worker_sandbox: cfg!(target_os = "macos"),
+            worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
         }
     }
 

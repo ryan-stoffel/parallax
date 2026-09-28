@@ -1,6 +1,6 @@
 # 0013: The worker sandbox
 
-- Status: accepted; the sandbox on Linux, and the refusal of Claude workers on native Windows, are in [0023](0023-cross-platform.md)
+- Status: accepted; the Linux sandbox is under [Claude Code on Linux](#claude-code-on-linux) (RYA-20), and the refusal of Claude workers on native Windows is in [0023](0023-cross-platform.md)
 - Date: 2026-09-25
 - Issue: #137
 
@@ -24,8 +24,8 @@ A worker is a vendor CLI running headless in its own worktree (#154). The same l
 | | A worker may | A worker may not |
 | --- | --- | --- |
 | Write | Its worktree; the project's shared context folder (0005); its temp folder | Anything else. This includes the worktree's `.git` file and the repository's git folder, so wispd makes every commit (0004) |
-| Read | The whole disk | wispd's data folder, except its own worktree and context folder, and every path in `UNREADABLE_IN_HOME` (`daemon/src/backend/sandbox.rs`). That list covers keys and the Keychain folder; cloud, container, and infrastructure credentials; git and git-host credentials, including Copilot's token; package-registry and database credentials; password managers (`pass`, 1Password, Bitwarden); shell and REPL histories, including `~/.zsh_sessions`; browser profiles and cookies (Safari, Chrome, Firefox, Arc, Brave, Edge); and the agent CLIs' own folders |
-| Execute | Any command, inside the vendor's OS sandbox (Seatbelt on macOS) | Anything outside it: no unsandboxed retries, no hooks, no MCP servers, no repository-supplied settings |
+| Read | The whole disk | wispd's data folder, except its own worktree and context folder, and every path in `UNREADABLE_IN_HOME` and this OS's `UNREADABLE_IN_HOME_ON_THIS_OS` (`daemon/src/backend/sandbox.rs`). Those lists cover keys and the Keychain folder; cloud, container, and infrastructure credentials; git and git-host credentials, including Copilot's token; package-registry and database credentials; password managers (`pass`, 1Password, Bitwarden); shell and REPL histories, including `~/.zsh_sessions`; browser profiles and cookies (Safari, Chrome, Firefox, Arc, Brave, Edge); and the agent CLIs' own folders |
+| Execute | Any command, inside the vendor's OS sandbox (Seatbelt on macOS, bubblewrap and seccomp on Linux) | Anything outside it: no unsandboxed retries, no hooks, no MCP servers, no repository-supplied settings |
 | Network | Any public host, from commands and from the web search and fetch tools (Ryan, #137) | This Mac's loopback and unspecified addresses (`localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0`, `[::]`), until #168. Not this Mac's interface addresses: see the threat model |
 
 `WorkerSandbox` (`daemon/src/backend/sandbox.rs`) carries the paths. Every backend refuses a `workspace-write` run in any of these cases, with an error that names the problem:
@@ -103,6 +103,30 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
 
 **What a repository can still change for a Claude worker.** Only its `CLAUDE.md`, which is instructions and not configuration: it still loads. Everything else a repository supplies is either not loaded or is used only through a tool the worker doesn't have.
 
+### Claude Code on Linux
+
+On Linux and WSL2, Claude Code sandboxes Bash with bubblewrap and relays its proxy traffic with `socat` [1]. A Linux worker runs the same command with the same `worker_settings` as on macOS. wispd never sets `enableWeakerNestedSandbox`, which bind-mounts the host's `/proc` instead of a fresh one. It never sets `allowAllUnixSockets` either, which would drop the filter below.
+
+- **Reads.** `UNREADABLE_IN_HOME` holds the paths every OS shares, and `UNREADABLE_IN_HOME_ON_THIS_OS` adds Linux's:
+  - GNOME Keyring, KWallet, and NSS's `~/.pki`
+  - 1Password and Bitwarden
+  - Chrome, Chromium, Brave, Edge, and Firefox, with their snap and flatpak folders, since Ubuntu ships Firefox as a snap
+  - the Cursor and Claude apps under `~/.config`
+
+  wispd's data folder, `~/.local/share/wisp` (0023), is denied as on macOS. `$XDG_RUNTIME_DIR` is outside the home folder and isn't denied yet (RYA-107).
+- **The seccomp filter is required.** Without it, a sandboxed command can connect to any Unix socket. That includes the D-Bus session bus that serves the Secret Service, `ssh-agent`, and `docker.sock`. On macOS, Seatbelt blocks them. `failIfUnavailable` doesn't cover the filter, because Claude Code treats it as optional, so wispd checks it itself.
+- **Where the filter comes from.** Since 2.1.92, Claude Code ships the filter's helper, `apply-seccomp`, itself [15].
+  - The native build compiles the helper into the `claude` binary, and the npm package now installs the native build too.
+  - It runs every sandboxed command inside bwrap as `ARGV0=apply-seccomp /proc/self/fd/3 <shell> -c <command>`, where fd 3 is its own binary. That is what the 2.1.283 linux-x64 build does: `seccomp: {applyPath: "/proc/self/fd/3", argv0: "apply-seccomp"}` whenever it runs as a standalone executable [13].
+  - `npm install -g @anthropic-ai/sandbox-runtime`, which Claude's docs still suggest, is only a fallback for a build without the helper. So wispd doesn't look for that package: a native Claude never reads it.
+- **How wispd checks** (`backend::claude::linux_sandbox::check_host`). Before each Claude worker starts or resumes, after the version check, with no cache:
+  1. `bwrap` and `socat` must resolve on the agents' `PATH`, where Claude Code looks for them.
+  2. wispd listens on a Unix socket in a temp folder. bwrap runs `socat` to connect to it, with the namespaces Claude's sandbox uses: `--unshare-user --unshare-pid --proc /proc --cap-drop ALL`. The connect must succeed. If bwrap fails and `kernel.apparmor_restrict_unprivileged_userns` is 1, the error names AppArmor.
+  3. The same bwrap runs the detected `claude` as `ARGV0=apply-seccomp`, which runs the same connect. The connect must be refused.
+
+  Each failure is `workerUnavailable` and names what is missing: bubblewrap, socat, the AppArmor profile, or the filter. The check runs the same binary and helper the worker will use, so it can't pass on a file Claude Code doesn't load. It can't catch a later Claude Code that stops running its helper. `WORKER_MIN_VERSION` and `daemon/tests/sandbox.rs` cover that. CI runs the test against a pinned Claude Code on Linux.
+- **Setup.** Install `bubblewrap` and `socat`. On Ubuntu 24.04 and later, also add the AppArmor profile for `/usr/bin/bwrap` from Claude's docs [1]. WSL1 isn't supported. Nor is wispd running as root: Claude's sandbox adds `CAP_SETFCAP` for uid 0 and the check doesn't, so the check refuses.
+
 ### Codex (for #122)
 
 Codex sandboxes commands with Seatbelt. Its `:workspace` permission profile writes the workspace roots and the temp folders, and it protects `.git` (including the folder a `.git` file points to) and `.codex` [6][7]. Permission profiles, which are in beta, can also deny reads and turn the network on [7]. A worker runs:
@@ -174,6 +198,7 @@ wisp's own profile does have one use: commands wispd runs itself, such as a setu
 
 - Localhost and Unix sockets for tests, and this Mac's interface addresses (#168); dependency caches or a setup step (#167); and a check against a real Claude login (#124).
 - Denying other accounts' configuration folders, once #114's successors give wispd a list of them.
+- On Linux, denying `$XDG_RUNTIME_DIR`, which is outside the home folder (RYA-107).
 
 ## Consequences
 
@@ -185,7 +210,7 @@ wisp's own profile does have one use: commands wispd runs itself, such as a setu
 
 ## Evidence
 
-Local experiments on macOS 27.0 with Codex CLI 0.154.0 (`codex sandbox -P <profile>`), Cursor CLI 2026.09.10 (`agent sandbox run`), and `sandbox-exec`. None needs a vendor login. A probe script tried each operation from a simulated linked worktree whose `.git` file points to a separate git folder, with the context folder, the git folder, and a "secret" all outside the worktree and outside `/tmp`. The experiments ran with each vendor's default network setting (off), before Ryan chose network access, so the HTTPS row shows those defaults, not v1. Claude Code's sandbox needs a signed-in session, so it has no column here: its behavior comes from the docs [1] and is left for #124 to confirm.
+Local experiments on macOS 27.0 with Codex CLI 0.154.0 (`codex sandbox -P <profile>`), Cursor CLI 2026.09.10 (`agent sandbox run`), and `sandbox-exec`. None needs a vendor login. A probe script tried each operation from a simulated linked worktree whose `.git` file points to a separate git folder, with the context folder, the git folder, and a "secret" all outside the worktree and outside `/tmp`. The experiments ran with each vendor's default network setting (off), before Ryan chose network access, so the HTTPS row shows those defaults, not v1. Claude Code has no column here, because its sandbox runs only inside a session. The fake-API test after the table covers it.
 
 | Operation | Codex `:workspace` | Codex `wisp_worker` profile | Cursor sandbox | wisp `sandbox-exec` profile |
 | --- | --- | --- | --- | --- |
@@ -204,6 +229,16 @@ Local experiments on macOS 27.0 with Codex CLI 0.154.0 (`codex sandbox -P <profi
 
 Nesting: `sandbox-exec` inside `sandbox-exec` works only when the outer profile is `(allow default)` with nothing denied. With a single `deny` of writes, reads, or network, the inner `sandbox_apply` fails with `Operation not permitted` (exit 71). `codex sandbox` inside wisp's profile failed the same way.
 
+**Claude Code, against a fake API (RYA-20).** `daemon/tests/sandbox.rs` runs Claude Code with a worker's exact arguments against a fake Messages API on 127.0.0.1. So it needs no login and sends nothing to Anthropic. The fake asks for one Bash call that runs a script in the worktree, and Claude's permission checks can't see into a script.
+
+- **macOS.** On 2026-09-28, with Claude Code 2.1.283 on macOS 27.0, Seatbelt refused:
+  - reads of `~/.ssh`, and of another project's context folder;
+  - writes to the home folder, to a folder outside the data folder, and to the worktree's `.git` file.
+
+  Writes to the worktree and the context folder went through. With `.ssh` dropped from the denylist, the test failed.
+- **Linux.** CI runs the same test on x86_64 and arm64. There it also checks that a Unix-socket connect is refused.
+- **The permission mode.** wispd sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. With it, Claude Code 2.1.283 forces the permission mode to `default` and denies the Bash call before the sandbox is reached (RYA-110). The test leaves the variable unset until that's fixed.
+
 ## Sources
 
 Read on 2026-09-25, as raw Markdown (`.md` appended to each page URL).
@@ -220,5 +255,6 @@ Read on 2026-09-25, as raw Markdown (`.md` appended to each page URL).
 10. Cursor CLI parameters (`--sandbox`, `agent sandbox run`): https://cursor.com/docs/cli/reference/parameters
 11. Cursor CLI configuration (`sandbox.mode`, `sandbox.networkAccess`, project `.cursor/cli.json`): https://cursor.com/docs/cli/reference/configuration
 12. Git, `git commit --no-verify` and githooks: https://git-scm.com/docs/git-commit, https://git-scm.com/docs/githooks
-13. sandbox-runtime, the engine behind Claude Code's sandbox: its macOS profile (Mach lookups it allows), host canonicalization and the resolved-address guard (which skips IP literals), and glob characters in paths: https://github.com/anthropic-experimental/sandbox-runtime (`src/sandbox/macos-sandbox-utils.ts`, `parent-proxy.ts`, `resolved-address-guard.ts`, `sandbox-utils.ts`)
+13. sandbox-runtime, the engine behind Claude Code's sandbox: its macOS profile (Mach lookups it allows), host canonicalization and the resolved-address guard (which skips IP literals), and glob characters in paths: https://github.com/anthropic-experimental/sandbox-runtime (`src/sandbox/macos-sandbox-utils.ts`, `parent-proxy.ts`, `resolved-address-guard.ts`, `sandbox-utils.ts`). For Linux, read on 2026-09-28 at `ddbeb74`: its bubblewrap arguments, its dependency checks, and the `argv0` mode of its seccomp config (`linux-sandbox-utils.ts`, `generate-seccomp-filter.ts`, `sandbox-config.ts`, `vendor/seccomp-src/`). How Claude Code 2.1.283 sets that config was read from the strings in its linux-x64 binary.
 14. Claude Code environment variables (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`): https://code.claude.com/docs/en/env-vars
+15. Claude Code changelog, 2.1.92: "Linux sandbox now ships the `apply-seccomp` helper in both npm and native builds": https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md

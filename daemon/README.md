@@ -88,7 +88,7 @@ The client runs the same `ssh ... <host> wispd attach` command, and the host nee
    To check, run `ssh <host> 'command -v wispd'`.
 2. **Quiet shell startup files and a key that logs in without prompts**, as on a Mac.
 
-Linux has no service yet (systemd is RYA-18), so `attach` always starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. For now, a Linux host also can't run workers (RYA-20): `agent/start` for a worker fails with `workerUnavailable`. Subscriptions and no-write runs work.
+Linux has no service yet (systemd is RYA-18), so `attach` always starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. Subscriptions and no-write runs work.
 
 ### API keys on Linux
 
@@ -98,6 +98,8 @@ Key accounts go in the Secret Service, the D-Bus API that GNOME Keyring and KeeP
 - A headless host has none. Install one, such as `gnome-keyring`, and unlock it, or key accounts fail with `keychainUnavailable` and a message that says so. wispd never falls back to storing keys in a file. Subscriptions don't need it, because the vendor CLIs keep their own logins.
 
 To check a host by hand, run `cargo test -p wispd --test secret_service_manual -- --ignored` on it. The test uses a throwaway service name and cleans up after itself.
+
+Workers on Linux need `bubblewrap` and `socat`, and on Ubuntu 24.04 and later an AppArmor profile that lets `bwrap` create user namespaces ([0013](../docs/decisions/0013-worker-sandbox.md#claude-code-on-linux)). wispd checks for them before each worker starts, including Claude Code's seccomp filter, and `agent/start` fails with `workerUnavailable` naming whatever is missing.
 
 ## Using a Windows host over SSH
 
