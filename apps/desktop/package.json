@@ -12,9 +12,12 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.13",
     "lucide-react": "^1.48.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

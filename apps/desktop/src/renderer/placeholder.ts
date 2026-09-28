@@ -6,6 +6,8 @@ export interface Thread {
   title: string;
   /** How long ago it last changed, already formatted. */
   age: string;
+  /** Its agent run, which the chat shows. None of these have one; RYA-15 lists real threads. */
+  runId?: string;
 }
 
 /** The sidebar icons a Project can pick (Sidebar.tsx maps them to glyphs). */

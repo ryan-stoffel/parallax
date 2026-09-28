@@ -1,6 +1,7 @@
 import { PanelLeft, PanelRight, SquarePen } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { AgentChat } from "./AgentChat";
 import { Composer } from "./Composer";
 import { composerOptions, hosts, type Host } from "./placeholder";
 import { Settings } from "./Settings";
@@ -43,12 +44,14 @@ export function App() {
   // existing chat (a Project's, or a thread) docks the composer instead.
   let crumbs: string[];
   let heroHeading: string | null = null;
+  let runId: string | undefined;
   if (selection.kind === "project") {
     crumbs = [host.name, host.projects.find((p) => p.id === selection.projectId)!.name];
   } else {
     const repo = host.repositories.find((r) => r.id === selection.repoId)!;
     const thread = repo.threads.find((t) => t.id === selection.threadId);
     crumbs = [host.name, repo.name, thread?.title ?? "New thread"];
+    runId = thread?.runId;
     if (!thread)
       heroHeading = repo.scratch
         ? "What should we work on?"
@@ -147,13 +150,16 @@ export function App() {
                 </IconButton>
               </div>
             </TopBar>
-            {heroHeading === null ? (
+            {runId ? (
+              // Keyed, so another run starts from an empty transcript.
+              <AgentChat key={`${host.id}/${runId}`} hostId={host.id} runId={runId} />
+            ) : heroHeading === null ? (
               <>
                 <div className="flex flex-1 items-center justify-center text-[13px] text-faint-foreground">
                   No messages yet
                 </div>
                 <div className="mx-auto w-full max-w-3xl px-6 pb-5">
-                  <Composer hero={false} localHost={host.local} options={composerOptions} />
+                  <Composer newThread={{ localHost: host.local, options: composerOptions }} />
                 </div>
               </>
             ) : (
@@ -162,7 +168,7 @@ export function App() {
                   <h1 className="mb-6 text-center text-[22px] font-medium tracking-tight">
                     {heroHeading}
                   </h1>
-                  <Composer hero localHost={host.local} options={composerOptions} />
+                  <Composer hero newThread={{ localHost: host.local, options: composerOptions }} />
                 </div>
               </div>
             )}
