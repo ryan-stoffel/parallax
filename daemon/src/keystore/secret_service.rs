@@ -67,9 +67,19 @@ impl Default for SecretServiceStore {
 
 /// Runs `call` on its own thread. zbus's blocking API drives D-Bus on a tokio runtime of its own,
 /// and entering that panics on a thread that is already in one, like the tokio tasks that read a
-/// key before a run starts.
-fn off_runtime<T: Send>(call: impl FnOnce() -> T + Send) -> T {
-    thread::scope(|scope| scope.spawn(call).join()).unwrap_or_else(|panic| resume_unwind(panic))
+/// key before a run starts. A thread the OS won't create is a plain keychain failure.
+fn off_runtime<T: Send>(
+    call: impl FnOnce() -> Result<T, KeyStoreError> + Send,
+) -> Result<T, KeyStoreError> {
+    thread::scope(|scope| {
+        let thread = thread::Builder::new()
+            .spawn_scoped(scope, call)
+            .map_err(|error| KeyStoreError {
+                detail: format!("could not start a thread: {error}"),
+                unavailable: false,
+            })?;
+        thread.join().unwrap_or_else(|panic| resume_unwind(panic))
+    })
 }
 
 impl KeyStore for SecretServiceStore {
