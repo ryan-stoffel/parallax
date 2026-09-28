@@ -16,6 +16,7 @@ const bridge: WispBridge = {
   platform: process.platform,
   version: () => ipcRenderer.invoke("wisp:version") as Promise<string>,
   setThemeSource: (preference) => ipcRenderer.send("wisp:theme", preference),
+  pickFolder: () => ipcRenderer.invoke("wisp:pickFolder") as Promise<string | null>,
 
   request: (hostId, method, params) => ipcRenderer.invoke("wisp:request", hostId, method, params),
   subscribe(hostId, params, listener) {

@@ -1,14 +1,6 @@
-// Static data for the app frame until RYA-12 connects to wispd. The shapes are
-// the UI's, not the protocol's. Only App imports the data; the rest take props.
-
-export interface Thread {
-  id: string;
-  title: string;
-  /** How long ago it last changed, already formatted. */
-  age: string;
-  /** Its agent run, which the chat shows. None of these have one; RYA-15 lists real threads. */
-  runId?: string;
-}
+// Static data for what isn't wired to wispd yet: Projects (RYA-46) and other hosts (RYA-26).
+// Repositories and threads are live (threads.ts). The shapes are the UI's, not the protocol's.
+// Only App imports the data; the rest take props.
 
 /** The sidebar icons a Project can pick (Sidebar.tsx maps them to glyphs). */
 export type ProjectIcon = "code" | "flame" | "search" | "bug" | "user";
@@ -21,20 +13,11 @@ export interface Project {
   age: string;
 }
 
-/** A repository entry and its plain threads (0017). `scratch` is "No Repo". */
-export interface Repository {
-  id: string;
-  name: string;
-  scratch?: boolean;
-  threads: Thread[];
-}
-
 export interface Host {
   id: string;
   name: string;
   local: boolean;
   projects: Project[];
-  repositories: Repository[];
 }
 
 export const hosts: Host[] = [
@@ -49,59 +32,16 @@ export const hosts: Host[] = [
       { id: "p-formula", name: "formula-fly", icon: "bug", age: "6d" },
       { id: "p-site", name: "personal-site", icon: "user", age: "6d" },
     ],
-    repositories: [
-      {
-        id: "wisp",
-        name: "wisp",
-        threads: [
-          { id: "t1", title: "Fix sidebar focus order", age: "12m" },
-          { id: "t2", title: "Tighten the theme tokens", age: "3h" },
-          { id: "t3", title: "Draft the release notes", age: "2d" },
-        ],
-      },
-      {
-        id: "dotfiles",
-        name: "dotfiles",
-        threads: [{ id: "t4", title: "Clean up the zsh prompt", age: "4d" }],
-      },
-      {
-        id: "scratch",
-        name: "No Repo",
-        scratch: true,
-        threads: [{ id: "t5", title: "Explain this regex", age: "1d" }],
-      },
-    ],
-  },
-  {
-    id: "mini",
-    name: "mac-mini",
-    local: false,
-    projects: [{ id: "p-homelab", name: "homelab", icon: "code", age: "6h" }],
-    repositories: [
-      {
-        id: "homelab",
-        name: "homelab",
-        threads: [{ id: "t6", title: "Rotate the backup keys", age: "1w" }],
-      },
-      { id: "scratch-mini", name: "No Repo", scratch: true, threads: [] },
-    ],
   },
 ];
 
-/** What the composer's pickers offer. */
-export interface ComposerOptions {
-  models: { provider: string; models: string[] }[];
-  efforts: string[];
-  permissions: string[];
-  branches: string[];
+export interface ModelGroup {
+  provider: string;
+  models: string[];
 }
 
-export const composerOptions: ComposerOptions = {
-  models: [
-    { provider: "Claude", models: ["Opus 5.5", "Sonnet 5", "Haiku 5"] },
-    { provider: "Codex", models: ["GPT-5.5", "GPT-5.5 mini"] },
-  ],
-  efforts: ["Low effort", "Medium effort", "High effort"],
-  permissions: ["Ask before edits", "Auto-accept edits", "Full access"],
-  branches: ["main", "develop"],
-};
+/** The models Create Project offers. */
+export const models: ModelGroup[] = [
+  { provider: "Claude", models: ["Opus 5.5", "Sonnet 5", "Haiku 5"] },
+  { provider: "Codex", models: ["GPT-5.5", "GPT-5.5 mini"] },
+];
