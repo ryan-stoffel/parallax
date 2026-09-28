@@ -1,7 +1,8 @@
 import { X } from "lucide-react";
 import type { Ref } from "react";
 
-import type { ComposerOptions, Repository } from "./placeholder";
+import type { Repo } from "../protocol/generated/protocol";
+import type { ModelGroup } from "./placeholder";
 import { IconButton, Picker } from "./ui";
 
 /**
@@ -15,8 +16,8 @@ export function NewProjectDialog({
   models,
 }: {
   ref: Ref<HTMLDialogElement>;
-  repositories: Repository[];
-  models: ComposerOptions["models"];
+  repositories: Repo[];
+  models: ModelGroup[];
 }) {
   const row = "flex items-center justify-between gap-4 px-5 py-3";
   const workspaces = repositories.filter((r) => !r.scratch);
