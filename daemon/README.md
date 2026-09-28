@@ -97,8 +97,18 @@ The client runs the same `ssh ... <host> wispd attach` command, and the host nee
      Some distros only let root do that, with `sudo loginctl enable-linger $USER`. To check, run `loginctl show-user $USER --property=Linger`.
    - `systemctl --user` needs your user manager, which `pam_systemd` starts for an SSH login. Where it can't be reached, such as on a host without systemd, `attach` says so on stderr and starts `serve` itself.
    - The unit's `serve` appends its output to `logs/wispd.log` in the data folder, as on a Mac. That needs systemd 240 or later; an older one sends it to the journal, `journalctl --user --unit io.github.ryan-stoffel.wisp.wispd`.
+   - The unit's `serve` gets the user manager's environment, not your shell's. If agent CLIs live on npm or nvm paths, add them to `PATH` in a `.conf` file in `~/.config/environment.d/`.
 
-Without the unit, `attach` starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. For now, a Linux host also can't store API keys (RYA-19) or run workers (RYA-20): key accounts fail with `keychainUnavailable`, and `agent/start` for a worker fails with `workerUnavailable`. Subscriptions and no-write runs work.
+Without the unit, `attach` starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. For now, a Linux host also can't run workers (RYA-20): `agent/start` for a worker fails with `workerUnavailable`. Subscriptions and no-write runs work.
+
+### API keys on Linux
+
+Key accounts go in the Secret Service, the D-Bus API that GNOME Keyring and KeePassXC provide, as one item per account labeled "wisp API key" in the default collection. `serve` needs an unlocked Secret Service on your session bus:
+
+- On a desktop, the keyring your login unlocks works, including for a `serve` started over SSH while you're logged in.
+- A headless host has none. Install one, such as `gnome-keyring`, and unlock it, or key accounts fail with `keychainUnavailable` and a message that says so. wispd never falls back to storing keys in a file. Subscriptions don't need it, because the vendor CLIs keep their own logins.
+
+To check a host by hand, run `cargo test -p wispd --test secret_service_manual -- --ignored` on it. The test uses a throwaway service name and cleans up after itself.
 
 ## Using a Windows host over SSH
 
