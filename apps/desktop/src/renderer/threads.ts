@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useReducer, useState } from "react";
 
+import type { RpcError } from "../preload/bridge";
 import type { AgentRun, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
+import { describeError } from "./errors";
 import { uuidv7 } from "./uuidv7";
 
 /** A host's repo entries and normal threads (0017), and each thread's title. */
@@ -92,8 +94,8 @@ export interface ThreadsView {
   error?: string;
   /** Registers a repository (idempotent on its path). Resolves to its entry or an error message. */
   addRepo: (path: string) => Promise<Repo | string>;
-  /** Starts a thread in a group. Reuse `runId` to retry. Resolves to an error message, or undefined. */
-  start: (runId: string, groupId: string, prompt: string) => Promise<string | undefined>;
+  /** Starts a thread in a group. Reuse `runId` to retry. Resolves to wispd's error, or undefined. */
+  start: (runId: string, groupId: string, prompt: string) => Promise<RpcError | undefined>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
 }
@@ -150,7 +152,7 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     async (path: string) => {
       // A fresh id is safe to retry with: wispd returns the entry a path already has.
       const answer = await window.wisp.request(hostId, "repo/add", { id: uuidv7(), path });
-      if ("error" in answer) return answer.error.message;
+      if ("error" in answer) return describeError(answer.error);
       dispatch({ type: "event", event: { kind: "repo.added", repo: answer.result.repo } });
       return answer.result.repo;
     },
@@ -164,7 +166,7 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
         prompt,
         ...(groupId !== noRepo && { repo: groupId }),
       });
-      if ("error" in answer) return answer.error.message;
+      if ("error" in answer) return answer.error;
       dispatch({ type: "runs", runs: [answer.result.run] });
       dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
       return undefined;

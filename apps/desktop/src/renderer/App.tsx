@@ -48,6 +48,9 @@ export function App() {
   let group = groups[0]!;
   if (selection.kind === "thread") {
     const open = threads.state.threads.find((t) => t.id === selection.threadId);
+    // Deleted, maybe by another client: leave it rather than show a stale transcript. An open
+    // thread is always listed, since a start and a click both come after the thread is.
+    if (!open) setSelection({ kind: "new" });
     const id = open ? groupOf(threads.state, open) : noRepo;
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
@@ -169,6 +172,7 @@ export function App() {
               />
             ) : selection.kind === "new" ? (
               <NewThread
+                hostId="local"
                 groups={groups}
                 groupId={group.id}
                 onGroupChange={(groupId) => setSelection({ kind: "new", groupId })}

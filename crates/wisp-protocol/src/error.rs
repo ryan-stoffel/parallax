@@ -65,6 +65,9 @@ pub enum ErrorKind {
     RepoNotFound,
     /// No normal thread has the given run id (#110).
     ThreadNotFound,
+    /// A run named no account, and its role has no default (0012). Set one with
+    /// `accounts/defaults/set`, then retry with the same run id.
+    NoDefaultAccount,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -169,6 +172,7 @@ mod tests {
             (ErrorKind::MergeConflict, "mergeConflict"),
             (ErrorKind::RepoNotFound, "repoNotFound"),
             (ErrorKind::ThreadNotFound, "threadNotFound"),
+            (ErrorKind::NoDefaultAccount, "noDefaultAccount"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

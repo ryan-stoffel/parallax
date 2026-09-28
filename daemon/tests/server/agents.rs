@@ -730,7 +730,7 @@ async fn agent_start_is_idempotent_on_its_run_id() {
         })
         .await
         .unwrap_err();
-    assert_eq!(no_account.code, INVALID_PARAMS);
+    assert_eq!(kind(&no_account), ErrorKind::NoDefaultAccount);
     host.server.stop().await;
 }
 

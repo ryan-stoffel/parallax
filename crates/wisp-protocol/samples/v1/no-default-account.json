@@ -1,0 +1,20 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/start",
+    "params": {
+      "runId": "01a0d5c7-7a8b-7c9d-8e0f-1a2b3c4d5e08",
+      "prompt": "Update the changelog."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "no account was named, and the worker role has no default; set one with accounts/defaults/set",
+      "data": { "kind": "noDefaultAccount" }
+    }
+  }
+]

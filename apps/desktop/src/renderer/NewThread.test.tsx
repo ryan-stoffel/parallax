@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
-import type { RpcResponse, WispBridge } from "../preload/bridge";
-import type { Repo, Thread } from "../protocol/generated/protocol";
+import type { RpcResponse, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import type { ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -214,4 +214,140 @@ test("Delete asks first, and only deletes once confirmed", async () => {
   expect(calls("thread/delete")).toEqual([{ runId: thread.id }]);
   expect(dialog.open).toBe(false);
   expect(threadRow("Fix the flaky test")).toBeUndefined();
+});
+
+describe("a host with no default account for threads", () => {
+  const cli = (name: string, signedIn?: boolean) => ({ cli: name, installed: true, signedIn });
+  const accounts = (clis: object[], keys: object[] = []) => {
+    answers["accounts/list"] = () => ({ result: { clis, checkedAt: "2026-09-26T12:00:00Z" } });
+    answers["accounts/keys/list"] = () => ({ result: { accounts: keys } });
+  };
+  // `thread/start` fails with noDefaultAccount until a default is set.
+  beforeEach(() => {
+    let worker: unknown;
+    answers["accounts/defaults/set"] = (p) => {
+      worker = p["account"];
+      return { result: { worker } };
+    };
+    answers["thread/start"] = (p) =>
+      worker
+        ? {
+            result: {
+              thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+              run: run(p["runId"] as string, p["prompt"] as string),
+            },
+          }
+        : {
+            error: {
+              code: -32000,
+              message: "no account was named, and the worker role has no default",
+              data: { kind: "noDefaultAccount" },
+            },
+          };
+  });
+
+  test("asks which account to use, sets it as the default, and retries the same start", async () => {
+    accounts(
+      [cli("claude", true), cli("codex", true), cli("cursor", false)],
+      [{ id: "k-1", provider: "anthropic", label: "Work", masked: "sk-…abcd" }],
+    );
+    await renderApp();
+    await send("Tidy the README");
+
+    const chooser = document.querySelector("fieldset")!;
+    expect(chooser.querySelector("legend")?.textContent).toContain(
+      "Choose an account to run this thread",
+    );
+    expect([...chooser.querySelectorAll("label")].map((l) => l.textContent)).toEqual([
+      "Claude Code",
+      "Codex",
+      "Work (API key)",
+    ]);
+    // No raw protocol text, and the prompt stays in the box.
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector("textarea")!.value).toBe("Tidy the README");
+
+    await act(async () => chooser.querySelectorAll("input")[2]!.click());
+    await act(async () => button("Continue")!.click());
+    await settle();
+    expect(calls("accounts/defaults/set")).toEqual([
+      { role: "worker", account: { kind: "key", id: "k-1" } },
+    ]);
+    const [first, retry] = calls("thread/start");
+    expect(retry).toEqual(first);
+    expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
+  });
+
+  test("uses the only account there is without asking", async () => {
+    accounts([cli("claude", true), cli("codex")]);
+    await renderApp();
+    await send("Hi");
+    expect(document.querySelector("fieldset")).toBeNull();
+    expect(calls("accounts/defaults/set")).toEqual([
+      { role: "worker", account: { kind: "subscription", backend: "claude" } },
+    ]);
+    const [first, retry] = calls("thread/start");
+    expect(retry).toEqual(first);
+    expect(crumbs()).toEqual(["This Mac", "wisp", "Hi"]);
+  });
+
+  test("says how to add one when there is none", async () => {
+    accounts([cli("claude", false)]);
+    await renderApp();
+    await send("Hi");
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      "No account can run this thread yet. Sign in to Claude Code, or add an API key, then try again.",
+    );
+    expect(calls("accounts/defaults/set")).toEqual([]);
+  });
+});
+
+test("known error kinds read plainly, and unknown ones show wispd's message", async () => {
+  const alert = () => document.querySelector('[role="alert"]')?.textContent;
+  answers["thread/start"] = () => ({
+    error: {
+      code: -32000,
+      message: "no key account has id k-9",
+      data: { kind: "accountNotFound" },
+    },
+  });
+  await renderApp();
+  await send("Hi");
+  expect(alert()).toBe("That account isn't on this host anymore. Choose another one.");
+
+  answers["thread/start"] = () => ({
+    // A kind from a newer wispd.
+    error: {
+      code: -32000,
+      message: "wispd is shy today",
+      data: { kind: "somethingNew" as ErrorKind },
+    },
+  });
+  await send("Hi");
+  expect(alert()).toBe("wispd is shy today");
+});
+
+test("an open thread deleted by another client goes back to New Thread", async () => {
+  let deliver: (message: SubscriptionMessage) => void = () => {};
+  window.wisp.subscribe = (_host, _params, listener) => {
+    deliver = listener;
+    return () => {};
+  };
+  await renderApp();
+  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
+  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix the flaky test"]);
+
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s-1",
+        seq: 8,
+        time: "2026-09-26T12:06:00Z",
+        event: { kind: "thread.deleted", runId: thread.id, repo: wisp.id },
+      },
+    }),
+  );
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "wisp", "New thread"]);
 });
