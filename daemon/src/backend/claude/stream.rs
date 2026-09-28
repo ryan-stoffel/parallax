@@ -151,7 +151,8 @@ impl Translator {
             Some("result") => self.result(&message),
             Some("rate_limit_event") => self.rate_limit(&message),
             Some(kind) if IGNORED_TYPES.contains(&kind) => Vec::new(),
-            // 0004: adapters ignore unknown kinds, so a newer CLI's additions stay out of the chat.
+            // A newer CLI's unknown message types stay out of the chat, in the spirit of 0004's
+            // "ignore unknown fields". Runs still end and fail through `result` and the exit code.
             Some(kind) => {
                 tracing::debug!(kind, "skipped a Claude Code message of an unknown type");
                 Vec::new()

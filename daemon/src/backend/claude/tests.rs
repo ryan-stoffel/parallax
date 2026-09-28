@@ -1273,7 +1273,7 @@ fn an_init_that_does_not_say_where_its_credentials_came_from_is_refused() {
 fn command_lifecycle_messages_are_skipped_without_a_notice() {
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     // Shape from the claude-codes changelog, not recorded from a run.
-    let line = br#"{"type":"command_lifecycle","uuid":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01","state":"started","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68"}"#;
+    let line = br#"{"type":"command_lifecycle","command_uuid":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01","state":"started","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68"}"#;
     assert_eq!(translator.line(line), []);
 }
 
