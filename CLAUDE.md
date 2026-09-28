@@ -1,6 +1,6 @@
 # wisp
 
-`wispd`, an open-source Rust host daemon (the plan calls it `projectd`), and an Electron desktop app in `apps/desktop/` ([0022](docs/decisions/0022-desktop-app.md)), for macOS, Windows, and Linux ([0023](docs/decisions/0023-cross-platform.md)). The plan, milestones, and open questions live in [docs/PLAN.md](docs/PLAN.md). Read it before planning any work. Records in [docs/decisions/](docs/decisions/) supersede the plan where they differ.
+`wispd`, an open-source Rust host daemon, and an Electron desktop app in `apps/desktop/` ([0022](docs/decisions/0022-desktop-app.md)), for macOS, Windows, and Linux ([0023](docs/decisions/0023-cross-platform.md)). The plan and open questions live in [docs/PLAN.md](docs/PLAN.md). Read it before planning any work. Records in [docs/decisions/](docs/decisions/) supersede the plan where they differ.
 
 ## Roles
 
@@ -39,7 +39,7 @@ The Linear project [Wisp](https://linear.app/ryanstoffel/project/wisp-459c0ee458
 When something comes up mid-work (a bug, a follow-up, a question, out-of-scope work, a flaky test), open a Linear issue for it right away, under its milestone's epic, with labels and a link back to where it came up. Keep the current PR on its own issue.
 
 - Labels: a type (Feature, Bug, Chore, Docs, Improvement), an Area (app, daemon, ci, release), and Blocked when waiting. Priority is Linear's priority field.
-- Milestones M0 to M7 match the plan. Each milestone has an epic issue (label Epic), and its tasks are the epic's sub-issues.
+- Milestones M0 to M7 are the Linear project's milestones ([0021](docs/decisions/0021-linear-work-record.md)). Each has an epic issue (label Epic), and its tasks are the epic's sub-issues.
 - A task issue is small enough for one PR and contains: problem statement, acceptance criteria as a checklist, assigned role, dependencies.
 - Working an issue posts three comments in order:
   1. **Plan**: the approach, before any code.
@@ -58,7 +58,7 @@ When something comes up mid-work (a bug, a follow-up, a question, out-of-scope w
 
 ## CI/CD
 
-One GitHub Actions workflow, `ci.yml`, on every PR and every push to `develop` and `main`: lint, build, and test `wispd` on macOS, Linux, and Windows and check `wispd attach` over ssh; check, test, build, and launch the app on the same three OSes; run the app's end-to-end tests on macOS; lint the workflow. The `ci` job needs every other job, and a red `ci` check blocks merge. There is no release workflow until there is something to ship.
+One GitHub Actions workflow, `ci.yml`, on every PR and every push to `develop` and `main`: lint, type-check, build, and test `wispd` on macOS, Linux, and Windows and check `wispd attach` over ssh; lint, type-check, test, build, and launch the app on the same three OSes; run the app's end-to-end tests on macOS; lint the workflow. The `ci` job needs every other job, and a red `ci` check blocks merge. There is no release workflow until there is something to ship.
 
 ## Order of work
 
