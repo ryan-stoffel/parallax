@@ -1,7 +1,12 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "electron";
 
-import { ErrorCodes, type EventsSubscribeParams } from "../protocol/generated/protocol";
-import type { ConnectionState, RendererMethod, RpcResponse } from "../preload/bridge";
+import { ErrorCodes } from "../protocol/generated/protocol";
+import type {
+  ConnectionState,
+  RendererMethod,
+  RpcResponse,
+  SubscribeParams,
+} from "../preload/bridge";
 import { Connection } from "./connection";
 import { findWispd } from "./wispd";
 
@@ -77,8 +82,9 @@ export function startHosts(): void {
 
   ipcMain.handle("wisp:subscribe", (event, hostId: unknown, key: unknown, params: unknown) => {
     if (!isObject(params)) throw new Error("params must be an object");
-    const { after, project } = params;
+    const { after, project, logId } = params;
     if (typeof key !== "string") throw new Error("invalid subscription key");
+    if (typeof logId !== "string") throw new Error("logId must be a string");
     if (typeof after !== "number" || !Number.isSafeInteger(after) || after < 0) {
       throw new Error("after must be a non-negative integer");
     }
@@ -87,14 +93,19 @@ export function startHosts(): void {
     const sender = event.sender;
     // A reused key replaces its subscription instead of leaking the old one.
     windowSubscriptions(sender).get(key)?.();
+    let ended = false;
     const unsubscribe = host.subscribe(
-      { after, ...(project !== undefined && { project }) } satisfies EventsSubscribeParams,
+      { after, logId, ...(project !== undefined && { project }) } satisfies SubscribeParams,
       (message) => {
-        if (message.type !== "event") windowSubscriptions(sender).delete(key);
+        if (message.type !== "event") {
+          ended = true;
+          windowSubscriptions(sender).delete(key);
+        }
         if (!sender.isDestroyed()) sender.send("wisp:subscription", key, message);
       },
     );
-    windowSubscriptions(sender).set(key, unsubscribe);
+    // It ends at once when `logId` is stale.
+    if (!ended) windowSubscriptions(sender).set(key, unsubscribe);
   });
 
   ipcMain.handle("wisp:unsubscribe", (event, key: unknown) => {
