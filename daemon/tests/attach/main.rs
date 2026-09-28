@@ -375,8 +375,8 @@ fn fake_launchctl(dir: &Path, then: &str) -> LaunchAgent {
     .unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     LaunchAgent {
-        launchctl: script,
-        service: "gui/501/wispd-test".to_owned(),
+        program: script,
+        args: vec!["kickstart".to_owned(), "gui/501/wispd-test".to_owned()],
     }
 }
 
