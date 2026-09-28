@@ -13,6 +13,8 @@ const bridge: Partial<WispBridge> = {
   setThemeSource: vi.fn(),
   connectionState: async () => ({ status: "connecting" }),
   onConnectionState: () => () => {},
+  hosts: async () => [],
+  onHosts: () => () => {},
 };
 window.wisp = bridge as WispBridge;
 

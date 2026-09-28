@@ -32,9 +32,25 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 /** The wait before reconnect attempt `failures + 1`: 1 s, doubling, capped at 10 s. */
 export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10_000);
 
+/**
+ * The command that reaches an SSH host's wispd (0007, 0022). The destination was checked when it
+ * was saved (`checkHost`), and `--` keeps ssh from reading it as an option. `ssh` is the program,
+ * which a setting can override (0023).
+ */
+// prettier-ignore
+export const sshCommand = (destination: string, ssh = "ssh") => [
+  ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlPath=none",
+  "--", destination, "wispd", "attach",
+];
+
 export type ConnectionOptions = {
-  /** The wispd binary, or undefined if it can't be found. Asked again on every attempt. */
-  locate: () => string | undefined;
+  /**
+   * The program and arguments that run `wispd attach`, or undefined if wispd can't be found.
+   * Asked again on every attempt.
+   */
+  command: () => string[] | undefined;
+  /** An SSH host's destination, which its errors name. Undefined for this computer. */
+  destination?: string;
   /** The app's version, sent in `initialize`. */
   clientVersion: string;
   onState: (state: ConnectionState) => void;
@@ -138,19 +154,35 @@ export class Connection {
 
   private connect(): void {
     clearTimeout(this.retryTimer);
-    const file = this.options.locate();
+    const [file, ...args] = this.options.command() ?? [];
     if (!file) {
       return this.fail({
         reason: "notFound",
         message: "wispd wasn't found. Set WISPD_PATH to the wispd binary.",
       });
     }
+    const { destination } = this.options;
     this.setState({ status: "connecting" });
 
-    const child = (this.options.spawn ?? spawnAttach)(file, ["attach"]);
+    const child = (this.options.spawn ?? spawnAttach)(file, args);
     const client = new RpcClient((line) => child.stdin.write(line), {
       onNotification: (method, params) => this.onNotification(method, params),
       onFatal: (message) => this.end({ reason: "protocolError", message }),
+      onBadLine: (line) => {
+        if (child !== this.child) return;
+        if (this.state.status === "connected") {
+          return console.warn("wispd sent a line that isn't JSON:", line.slice(0, 200));
+        }
+        // attach writes nothing but wispd's frames to stdout, so this came from the host's shell
+        // as it started, and would keep corrupting the handshake.
+        this.end({
+          reason: "sshSetup",
+          message: destination
+            ? `${destination}'s shell printed text before wispd started. Keep its startup files quiet for commands that aren't interactive.`
+            : "wispd attach printed something that isn't wispd's protocol.",
+          stderr: `stdout: ${line.slice(0, 200)}`,
+        });
+      },
     });
     this.child = child;
     this.client = client;
@@ -169,13 +201,18 @@ export class Connection {
     });
     child.on("error", (error: NodeJS.ErrnoException) => {
       if (child !== this.child) return;
-      this.end({
-        reason: error.code === "ENOENT" ? "notFound" : "exited",
-        message: `${file} couldn't be started: ${error.message}`,
-      });
+      const missing = error.code === "ENOENT";
+      let message = `${file} couldn't be started: ${error.message}`;
+      if (missing && destination) {
+        message =
+          process.platform === "win32"
+            ? "ssh wasn't found. Add OpenSSH Client in Settings > System > Optional features."
+            : "ssh wasn't found. Install OpenSSH.";
+      }
+      this.end({ reason: missing ? "notFound" : "exited", message });
     });
     child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
-      if (child === this.child) this.end(exitError(code, signal, stderr));
+      if (child === this.child) this.end(exitError(code, signal, stderr, destination));
     });
 
     client.send(
@@ -251,11 +288,12 @@ export class Connection {
   }
 
   private fail(error: ConnectionError): void {
-    // These can't fix themselves: the binary is missing or incompatible, or rejects `attach`'s
-    // arguments (exit 2, a usage error).
+    // These can't fix themselves: the binary is missing or incompatible, rejects `attach`'s
+    // arguments (exit 2, a usage error), or the host needs setting up.
     const retrying =
       error.reason !== "notFound" &&
       error.reason !== "incompatibleProtocol" &&
+      error.reason !== "sshSetup" &&
       error.exitCode !== 2;
     this.setState({ status: "failed", error, retrying });
     if (retrying) this.retryTimer = setTimeout(() => this.connect(), backoffMs(this.failures++));
@@ -287,19 +325,71 @@ function spawnAttach(file: string, args: string[]): ChildProcessWithoutNullStrea
 
 const ignore = () => {};
 
-/** Why `wispd attach` exited (0010), or ssh for a remote host (0022). */
-function exitError(code: number | null, signal: string | null, stderr: string): ConnectionError {
+/**
+ * Why `wispd attach` exited (0010), or ssh for the host at `destination` (0022), in words that
+ * say what to do. ssh exits 255 for its own errors, and the remote shell 127 for a missing
+ * command. The raw stderr rides along for the tooltip.
+ */
+export function exitError(
+  code: number | null,
+  signal: string | null,
+  stderr: string,
+  destination?: string,
+  platform = process.platform,
+): ConnectionError {
   const details = { exitCode: code, ...(stderr.trim() && { stderr: stderr.trim() }) };
-  if (code === 127) return { reason: "notFound", message: "wispd isn't installed", ...details };
+  const error = (reason: ConnectionError["reason"], message: string): ConnectionError => ({
+    reason,
+    message,
+    ...details,
+  });
+  if (destination !== undefined) {
+    const inTerminal = `run \`ssh ${destination}\` once in a terminal`;
+    if (code === 255 && stderr.includes("REMOTE HOST IDENTIFICATION HAS CHANGED")) {
+      return error(
+        "sshSetup",
+        `${destination}'s host key has changed. If you expected that, remove its old key from known_hosts, then ${inTerminal}.`,
+      );
+    }
+    if (code === 255 && stderr.includes("Host key verification failed")) {
+      return error(
+        "sshSetup",
+        `${destination}'s host key isn't trusted yet. To accept it, ${inTerminal}.`,
+      );
+    }
+    if (code === 255 && stderr.includes("Permission denied")) {
+      // With BatchMode, a key whose passphrase isn't in an agent is skipped without a word.
+      const agent =
+        platform === "win32" ? "start the ssh-agent service, then run `ssh-add`" : "run `ssh-add`";
+      return error(
+        "sshSetup",
+        `ssh couldn't log in to ${destination} without a prompt. If your key has a passphrase, ${agent}. Otherwise, ${inTerminal}.`,
+      );
+    }
+    // cmd.exe, on a Windows host, exits 1.
+    if (code === 127 || /not recognized as an internal or external command/.test(stderr)) {
+      return error(
+        "notFound",
+        `wispd isn't on ${destination}'s PATH for ssh commands. Install it there, or add its folder to PATH in the shell file that ssh commands read.`,
+      );
+    }
+    if (code === 255 && stderr.includes("Could not resolve hostname")) {
+      return error("exited", `Couldn't find ${destination}. Check its name, or your ssh config.`);
+    }
+    if (code === 255) {
+      return error("exited", `Couldn't reach ${destination}. Check that it's on and accepts ssh.`);
+    }
+    if (code === 4)
+      return error("exited", `wispd couldn't be reached or started on ${destination}`);
+  }
+  if (code === 127) return error("notFound", "wispd isn't installed");
   const message =
     code === 4
       ? "wispd couldn't be reached or started"
       : code === 2
         ? "wispd attach rejected its arguments. Update wispd."
-        : code === 255
-          ? "ssh couldn't connect"
-          : `wispd attach exited with ${code ?? signal}`;
-  return { reason: "exited", message, ...details };
+        : `wispd attach exited with ${code ?? signal}`;
+  return error("exited", message);
 }
 
 function handshakeError(error: RpcError): ConnectionError {

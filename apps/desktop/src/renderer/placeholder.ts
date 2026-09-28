@@ -1,5 +1,5 @@
-// Static data for what isn't wired to wispd yet: Projects (RYA-46) and other hosts (RYA-26).
-// Repositories and threads are live (threads.ts). The shapes are the UI's, not the protocol's.
+// Static data for what isn't wired to wispd yet: Projects (RYA-46). Hosts (hosts.ts),
+// repositories, and threads (threads.ts) are live. The shapes are the UI's, not the protocol's.
 // Only App imports the data; the rest take props.
 
 /** The sidebar icons a Project can pick (Sidebar.tsx maps them to glyphs). */
@@ -13,26 +13,13 @@ export interface Project {
   age: string;
 }
 
-export interface Host {
-  id: string;
-  name: string;
-  local: boolean;
-  projects: Project[];
-}
-
-export const hosts: Host[] = [
-  {
-    id: "local",
-    name: "This Mac",
-    local: true,
-    projects: [
-      { id: "p-wisp", name: "wisp", icon: "code", age: "3h" },
-      { id: "p-ember", name: "ember", icon: "flame", age: "3d" },
-      { id: "p-photon", name: "photon", icon: "search", age: "5d" },
-      { id: "p-formula", name: "formula-fly", icon: "bug", age: "6d" },
-      { id: "p-site", name: "personal-site", icon: "user", age: "6d" },
-    ],
-  },
+/** This computer's Projects. Other hosts have none until RYA-46. */
+export const projects: Project[] = [
+  { id: "p-wisp", name: "wisp", icon: "code", age: "3h" },
+  { id: "p-ember", name: "ember", icon: "flame", age: "3d" },
+  { id: "p-photon", name: "photon", icon: "search", age: "5d" },
+  { id: "p-formula", name: "formula-fly", icon: "bug", age: "6d" },
+  { id: "p-site", name: "personal-site", icon: "user", age: "6d" },
 ];
 
 export interface ModelGroup {

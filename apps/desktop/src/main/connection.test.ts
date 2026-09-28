@@ -1,4 +1,4 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 
@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import { PROTOCOL_VERSION } from "../protocol/generated/protocol";
 import type { ConnectionState, SubscriptionMessage } from "../preload/bridge";
-import { backoffMs, Connection } from "./connection";
+import { backoffMs, Connection, exitError, sshCommand } from "./connection";
 
 type Message = Record<string, unknown> & {
   id?: number;
@@ -50,17 +50,26 @@ class FakeChild extends EventEmitter {
 }
 
 let children: FakeChild[];
+/** Each spawn's program and arguments. */
+let spawned: string[][];
 let states: ConnectionState[];
 let located: string | undefined;
 const child = () => children.at(-1)!;
 const state = () => states.at(-1);
 
-function connect() {
+function connect(destination?: string) {
   const connection = new Connection({
-    locate: () => located,
+    command: () =>
+      destination
+        ? sshCommand(destination)
+        : located === undefined
+          ? undefined
+          : [located, "attach"],
+    ...(destination !== undefined && { destination }),
     clientVersion: "0.0.1",
     onState: (next) => states.push(next),
-    spawn: () => {
+    spawn: (file, args) => {
+      spawned.push([file, ...args]);
       children.push(new FakeChild());
       return child() as unknown as ChildProcessWithoutNullStreams;
     },
@@ -72,6 +81,7 @@ function connect() {
 beforeEach(() => {
   vi.useFakeTimers();
   children = [];
+  spawned = [];
   states = [];
   located = "/bin/wispd";
 });
@@ -222,4 +232,102 @@ test("a subscribe after a new logId, with a seq from the old log, resyncs", asyn
   connection.subscribe({ after: snapshot.result.seq, logId: snapshot.logId }, listener);
   expect(listener).toHaveBeenCalledWith({ type: "resync" });
   expect(child().sent.some((message) => message.method === "events/subscribe")).toBe(false);
+});
+
+test("an SSH host runs attach through ssh with 0022's options", () => {
+  connect("mini");
+  expect(spawned.map((argv) => argv.join(" "))).toEqual([
+    "ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- mini wispd attach",
+  ]);
+  child().handshake();
+  expect(state()).toMatchObject({ status: "connected" });
+});
+
+// Proves this OS's ssh, Windows' OpenSSH included, accepts the options (0023). `-G` only prints
+// the resolved config, so nothing connects.
+test.skipIf(spawnSync("ssh", ["-V"]).error)("this OS's ssh accepts the command line", () => {
+  const [ssh, ...args] = sshCommand("example.invalid");
+  const run = spawnSync(ssh!, ["-G", ...args], { encoding: "utf8" });
+  expect(run.stderr).not.toMatch(/Bad configuration option|unsupported option/i);
+  expect(run.status).toBe(0);
+});
+
+test("text from the host's shell before the handshake fails at once, without retrying", () => {
+  connect("mini");
+  child().stdout.emit("data", Buffer.from("Welcome to mini!\n"));
+  expect(child().kill).toHaveBeenCalled();
+  expect(state()).toMatchObject({
+    status: "failed",
+    error: { reason: "sshSetup", message: expect.stringContaining("mini's shell printed text") },
+    retrying: false,
+  });
+  vi.advanceTimersByTime(60_000);
+  expect(children).toHaveLength(1);
+});
+
+test("a stray line after the handshake is skipped", () => {
+  connect("mini");
+  child().handshake();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  child().stdout.emit("data", Buffer.from("not json\n"));
+  expect(state()).toMatchObject({ status: "connected" });
+  expect(warn).toHaveBeenCalled();
+  warn.mockRestore();
+});
+
+test("an ssh error that needs the user stops retrying until retry()", () => {
+  const connection = connect("mini");
+  child().stderr.emit("data", Buffer.from("Host key verification failed.\r\n"));
+  child().emit("close", 255, null);
+  expect(state()).toMatchObject({
+    status: "failed",
+    error: { reason: "sshSetup", exitCode: 255, stderr: "Host key verification failed." },
+    retrying: false,
+  });
+  vi.advanceTimersByTime(60_000);
+  expect(children).toHaveLength(1);
+  connection.retry();
+  expect(children).toHaveLength(2);
+});
+
+test("ssh failures read as what to do", () => {
+  const ssh = (code: number, stderr: string, platform: NodeJS.Platform = "darwin") =>
+    exitError(code, null, stderr, "mini", platform);
+  expect(ssh(255, "Host key verification failed.")).toMatchObject({
+    reason: "sshSetup",
+    message: "mini's host key isn't trusted yet. To accept it, run `ssh mini` once in a terminal.",
+  });
+  const changed = "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@";
+  expect(ssh(255, `${changed}\nHost key verification failed.`)).toMatchObject({
+    reason: "sshSetup",
+    message: expect.stringContaining("host key has changed"),
+  });
+
+  const denied = "me@mini: Permission denied (publickey,password,keyboard-interactive).";
+  expect(ssh(255, denied)).toMatchObject({
+    reason: "sshSetup",
+    message: expect.stringContaining("If your key has a passphrase, run `ssh-add`."),
+  });
+  expect(ssh(255, denied, "win32").message).toContain("start the ssh-agent service");
+
+  const notOnPath = "wispd isn't on mini's PATH for ssh commands.";
+  expect(ssh(127, "zsh:1: command not found: wispd")).toMatchObject({
+    reason: "notFound",
+    message: expect.stringContaining(notOnPath),
+  });
+  const cmd = "'wispd' is not recognized as an internal or external command,";
+  expect(ssh(1, cmd).message).toContain(notOnPath);
+
+  const unknown = "ssh: Could not resolve hostname mini: nodename nor servname provided";
+  expect(ssh(255, unknown)).toMatchObject({
+    reason: "exited",
+    message: "Couldn't find mini. Check its name, or your ssh config.",
+  });
+  expect(ssh(255, "ssh: connect to host mini port 22: Operation timed out").message).toBe(
+    "Couldn't reach mini. Check that it's on and accepts ssh.",
+  );
+  // attach's own exit on the host keeps its meaning.
+  expect(ssh(4, "wispd attach: timed out").message).toBe(
+    "wispd couldn't be reached or started on mini",
+  );
 });

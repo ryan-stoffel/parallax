@@ -44,6 +44,8 @@ beforeEach(() => {
     subscribe: () => () => {},
     request,
     pickFolder,
+    hosts: async () => [],
+    onHosts: () => () => {},
   } as Partial<WispBridge> as WispBridge;
 });
 
