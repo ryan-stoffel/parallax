@@ -31,7 +31,7 @@ RYA-9 scaffolds the app, RYA-10 generates the protocol types, RYA-12 and RYA-26 
 - **No JS workspace.** `apps/desktop/` is one pnpm package that holds everything: its `package.json`, `pnpm-lock.yaml`, `.node-version`, `vite.config.ts`, and the generated protocol types. There's one app and nothing else to share with. A workspace would only add root files, so we add one when a second package appears.
 - pnpm is pinned exactly in `packageManager` to **11.10.0**, the version T3 Code uses, through corepack. We stay on 11 rather than the month-old pnpm 12 rewrite. Node is pinned to 24, the active LTS, in `.node-version`, which CI's `setup-node` also reads. T3 Code also uses Node 24.
 - Why pnpm: it's what T3 Code uses, and its strict `node_modules` fails on a dependency that isn't declared. Only dependencies allowed through pnpm's `allowBuilds`, such as `electron`, may run install scripts.
-- Commands run in `apps/desktop/`, or from the repo root with `pnpm -C apps/desktop <script>`.
+- Run pnpm inside `apps/desktop/`, not with `pnpm -C apps/desktop` from the repo root. Corepack picks the pnpm version from the current directory's `package.json`, and the root has none, so it runs its default pnpm, which rejects the `packageManager` pin with `ERR_PNPM_BAD_PM_VERSION`.
 
 ### Transport
 
