@@ -28,7 +28,7 @@ export type WispRequests = {
 	 */
 	"initialize": { params: InitializeParams, result: InitializeResult },
 	/**
-	 * `host/health`: uptime, store state, and running agents. The editor sends it every
+	 * `host/health`: uptime, store state, and running agents. The app sends it every
 	 * 30 seconds and on wake, as a heartbeat.
 	 */
 	"host/health": { params: HostHealthParams, result: HostHealthResult },
@@ -220,7 +220,7 @@ export type InitializeParams = {
  * Capabilities by name, such as `{"agents": {}}`. Each value holds that capability's options,
  * and is empty when it has none. The map never changes shape.
  *
- * Later features are gated on a capability, so a newer editor still works with an older wispd.
+ * Later features are gated on a capability, so a newer client still works with an older wispd.
  */
 export type Capabilities = { [key in string]: { [key in string]: JsonValue } };
 
@@ -231,7 +231,7 @@ export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in
  */
 export type ClientInfo = {
 	/**
-	 * The client's name, such as `wisp` for the editor.
+	 * The client's name, such as `wisp` for the desktop app.
 	 */
 	name: string,
 	/**
@@ -376,7 +376,7 @@ export type Project = {
 	 */
 	id: ProjectId,
 	/**
-	 * The name shown in the editor.
+	 * The name shown in the app.
 	 */
 	name: string,
 	/**
@@ -418,7 +418,7 @@ export type ProjectCreateParams = {
 	 */
 	id: ProjectId,
 	/**
-	 * The name shown in the editor.
+	 * The name shown in the app.
 	 */
 	name: string,
 	/**
@@ -505,7 +505,7 @@ export type AccountsKeysAddParams = {
 	 */
 	provider: Provider,
 	/**
-	 * A label the user chose, shown in the editor.
+	 * A label the user chose, shown in the app.
 	 */
 	label: string,
 	/**
@@ -563,7 +563,7 @@ export type KeyAccount = {
 	 */
 	provider: Provider,
 	/**
-	 * A label the user chose, shown in the editor.
+	 * A label the user chose, shown in the app.
 	 */
 	label: string,
 	/**
@@ -893,7 +893,7 @@ export type ContextFile = {
 	 */
 	modifiedAt: string,
 	/**
-	 * Who wrote it last, such as `"editor"` or an agent's run id, when wispd knows. Absent for a
+	 * Who wrote it last, such as `"app"` or an agent's run id, when wispd knows. Absent for a
 	 * file wispd has not seen written since it started, such as one already on disk at startup.
 	 */
 	lastWriter?: string,
@@ -953,7 +953,7 @@ export type ContextWriteParams = {
 	 */
 	content: string,
 	/**
-	 * A label for who is writing, such as `"editor"` or an agent's run id, shown later in
+	 * A label for who is writing, such as `"app"` or an agent's run id, shown later in
 	 * `context/list` and in the `context.changed` event as `lastWriter`. Omitted when the caller
 	 * has none to give.
 	 */
@@ -1607,7 +1607,7 @@ export type Repo = {
 	 */
 	id: RepoId,
 	/**
-	 * The name shown in the editor: the repository folder's name.
+	 * The name shown in the app: the repository folder's name.
 	 */
 	name: string,
 	/**
@@ -2088,7 +2088,7 @@ export type ErrorData = {
 export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount";
 
 /**
- * The `detail` of `incompatibleProtocol`. Its shape never changes, so every editor can read it
+ * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it
  * from every wispd.
  */
 export type IncompatibleProtocolDetail = {
@@ -2101,7 +2101,7 @@ export type IncompatibleProtocolDetail = {
 	 */
 	supported: ProtocolRange,
 	/**
-	 * wispd's release version, so the editor can say which side to update.
+	 * wispd's release version, so the client can say which side to update.
 	 */
 	wispd: string,
 };
