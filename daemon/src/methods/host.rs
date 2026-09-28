@@ -128,7 +128,7 @@ fn plist_string<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{os_version, plist_string};
+    use super::plist_string;
 
     #[test]
     fn reads_strings_from_a_property_list() {
@@ -143,6 +143,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn the_os_version_names_macos() {
-        assert!(os_version().starts_with("macOS "), "{}", os_version());
+        let version = super::os_version();
+        assert!(version.starts_with("macOS "), "{version}");
     }
 }

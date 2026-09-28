@@ -15,9 +15,11 @@ use crate::routing::KeyAccounts;
 
 /// Folders appended to an agent's `PATH` when it lacks them (#96): the vendors' own install
 /// folder (`~/.local/bin`, where Claude Code's installer puts `claude`), Homebrew on Apple silicon
-/// and on Intel, and the system folders. They go after whatever `PATH` wispd was started with, so
-/// the user's own order still wins; they only fill in what launchd or an SSH session left out.
+/// (macOS only) and `/usr/local/bin`, and the system folders (0023). They go after whatever
+/// `PATH` wispd was started with, so the user's own order still wins; they only fill in what
+/// launchd or an SSH session left out.
 const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin"];
+#[cfg(target_os = "macos")]
 const EXTRA_PATH: &[&str] = &[
     "/opt/homebrew/bin",
     "/usr/local/bin",
@@ -26,6 +28,8 @@ const EXTRA_PATH: &[&str] = &[
     "/usr/sbin",
     "/sbin",
 ];
+#[cfg(target_os = "linux")]
+const EXTRA_PATH: &[&str] = &["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 
 /// The variables of wispd's own environment that agent CLIs, CLI probes, and worktree git
 /// commands inherit; everything else stays with wispd (0013, decision 0014). A worker has network
@@ -109,14 +113,22 @@ pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
     ErrorObject::wisp(ErrorKind::WorkerUnavailable, message)
 }
 
+/// What to do about a backend that can't sandbox a worker here.
+#[cfg(target_os = "macos")]
+const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
+/// What to do about a backend that can't sandbox a worker here. Linux's sandbox checks are
+/// RYA-20's (0023).
+#[cfg(not(target_os = "macos"))]
+const NO_SANDBOX_HINT: &str = "wispd can't check a worker sandbox on this OS yet (decision \
+                               0023), so run workers on a macOS host";
+
 /// Refuses a worker on a backend that doesn't enforce the worker sandbox (0013).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().worker_sandbox {
         Ok(())
     } else {
         Err(worker_unavailable(format!(
-            "the {} backend can't run a sandboxed worker yet (decision 0013); choose a Claude \
-             Code account",
+            "the {} backend can't run a sandboxed worker yet (decision 0013); {NO_SANDBOX_HINT}",
             backend.name()
         )))
     }
@@ -304,21 +316,14 @@ mod tests {
         let mut env = Environment::empty();
         env.set("PATH", "/usr/bin:/custom/bin");
         let env = with_extra_path(env, Some(Path::new("/Users/me")));
-        assert_eq!(
-            path_entries(&env),
-            [
-                "/usr/bin",
-                "/custom/bin",
-                "/Users/me/.local/bin",
-                "/opt/homebrew/bin",
-                "/usr/local/bin",
-                "/bin",
-                "/usr/sbin",
-                "/sbin",
-            ]
-        );
+        let mut expected = vec!["/usr/bin", "/custom/bin", "/Users/me/.local/bin"];
+        if cfg!(target_os = "macos") {
+            expected.push("/opt/homebrew/bin");
+        }
+        expected.extend(["/usr/local/bin", "/bin", "/usr/sbin", "/sbin"]);
+        assert_eq!(path_entries(&env), expected);
         let unset = with_extra_path(Environment::empty(), None);
-        assert_eq!(path_entries(&unset)[0], "/opt/homebrew/bin");
+        assert_eq!(path_entries(&unset)[0], super::EXTRA_PATH[0]);
     }
 
     /// wispd started from a shell that holds credentials for other services: a worker spawned

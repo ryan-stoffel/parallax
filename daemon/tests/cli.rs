@@ -63,6 +63,7 @@ fn an_unknown_log_level_is_a_usage_error() {
 // This only ever reads: `launchctl print` on a label nobody bootstrapped, a socket connect
 // that finds nobody listening, and a file existence check. It never calls `install`, so running
 // `cargo test` never bootstraps a real LaunchAgent.
+#[cfg(target_os = "macos")]
 #[test]
 fn service_status_reports_a_fresh_label_as_absent() {
     let temp = tempfile::Builder::new()
@@ -89,6 +90,7 @@ fn service_status_reports_a_fresh_label_as_absent() {
 
 // The refusal comes before anything touches launchd or `~/Library/LaunchAgents`, so this never
 // installs a real LaunchAgent.
+#[cfg(target_os = "macos")]
 #[test]
 fn service_install_refuses_the_default_label_for_another_data_folder() {
     let temp = tempfile::Builder::new()

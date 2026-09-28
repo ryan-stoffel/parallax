@@ -1,5 +1,11 @@
 //! Starting a process in its own session with no descriptors but its stdio: `serve`, which
 //! `attach` starts detached (0010), and the agent CLIs that `backend::process` supervises.
+//!
+//! Closing every other descriptor works per OS (0023). macOS has `POSIX_SPAWN_CLOEXEC_DEFAULT`.
+//! Linux doesn't, so [`spawn_session`] lists `/proc/self/fd` and adds a close action for each
+//! descriptor above 2. A descriptor opened after that scan leaks only if it lacks close-on-exec,
+//! and wispd opens none without it: std, tokio, and SQLite set it, and clippy's
+//! `disallowed-methods` (`clippy.toml`) keeps out the calls that don't.
 
 use std::collections::BTreeMap;
 use std::ffi::{CString, OsStr, OsString};
@@ -15,9 +21,14 @@ use nix::sys::signal::SigSet;
 use rustix::process::Pid;
 use zeroize::Zeroize;
 
-/// `POSIX_SPAWN_SETSID` from `<sys/spawn.h>`, which the libc crate doesn't define for Apple
-/// platforms.
-const POSIX_SPAWN_SETSID: libc::c_int = 0x0400;
+/// The flags nix doesn't name: a new session, and on macOS, close-on-exec for every descriptor
+/// without a file action. `POSIX_SPAWN_SETSID` is `0x0400` in Apple's `<spawn.h>`, which the
+/// libc crate doesn't define for Apple platforms.
+#[cfg(target_os = "macos")]
+const SESSION_FLAGS: libc::c_int = 0x0400 | libc::POSIX_SPAWN_CLOEXEC_DEFAULT;
+/// The flags nix doesn't name: a new session. glibc and musl both have `POSIX_SPAWN_SETSID`.
+#[cfg(target_os = "linux")]
+const SESSION_FLAGS: libc::c_int = libc::POSIX_SPAWN_SETSID as libc::c_int;
 
 /// A detached process's stdin, stdout, and stderr, which are its only descriptors.
 #[derive(Clone, Copy, Debug)]
@@ -30,13 +41,13 @@ pub(crate) struct Stdio<'a> {
 /// Starts `command`'s program, with its arguments and environment, detached from this process:
 ///
 /// - In a new session, so no terminal or SSH session this process belongs to can signal it.
-/// - With `stdio` as descriptors 0 to 2 and no others. `POSIX_SPAWN_CLOEXEC_DEFAULT` closes
-///   everything else, including descriptors this process inherited without close-on-exec and
-///   ones another thread has just opened (#86).
+/// - With `stdio` as descriptors 0 to 2 and no others, including descriptors this process
+///   inherited without close-on-exec and ones another thread has just opened (#86). See the
+///   module's docs for how each OS does it.
 /// - With every signal at its default action and none blocked.
 ///
 /// The child keeps this process's working directory, so `command` must not set one. The caller
-/// reaps the child with `waitpid`, or exits first and leaves that to launchd.
+/// reaps the child with `waitpid`, or exits first and leaves that to launchd or init.
 ///
 /// # Errors
 ///
@@ -96,14 +107,14 @@ pub(crate) fn spawn_session(
     for (target, source) in (0..).zip(&sources) {
         actions.add_dup2(source.as_raw_fd(), target)?;
     }
+    #[cfg(target_os = "linux")]
+    close_the_rest(&mut actions)?;
 
     let mut attr = PosixSpawnAttr::init()?;
     attr.set_flags(
         PosixSpawnFlags::POSIX_SPAWN_SETSIGDEF
             | PosixSpawnFlags::POSIX_SPAWN_SETSIGMASK
-            | PosixSpawnFlags::from_bits_retain(
-                POSIX_SPAWN_SETSID | libc::POSIX_SPAWN_CLOEXEC_DEFAULT,
-            ),
+            | PosixSpawnFlags::from_bits_retain(SESSION_FLAGS),
     )?;
     attr.set_sigdefault(&SigSet::all())?;
     attr.set_sigmask(&SigSet::empty())?;
@@ -116,6 +127,34 @@ pub(crate) fn spawn_session(
     }
     let pid = spawned?;
     Pid::from_raw(pid.as_raw()).ok_or_else(|| io::Error::other("posix_spawn returned pid 0"))
+}
+
+/// Adds a close action for every descriptor above 2 that `/proc/self/fd` lists, in place of
+/// Apple's `POSIX_SPAWN_CLOEXEC_DEFAULT` (0023).
+///
+/// The actions must come after the `dup2`s, which may read a listed descriptor. A listed one that
+/// closes before the spawn, such as the directory this reads, is harmless: glibc and musl ignore
+/// a failed close action.
+#[cfg(target_os = "linux")]
+fn close_the_rest(actions: &mut PosixSpawnFileActions) -> io::Result<()> {
+    let listing = std::fs::read_dir("/proc/self/fd").map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "could not list /proc/self/fd, which wispd needs to start a process with only \
+                 its stdio; is /proc mounted? {error}"
+            ),
+        )
+    })?;
+    for entry in listing {
+        let name = entry?.file_name();
+        if let Some(fd) = name.to_str().and_then(|name| name.parse().ok())
+            && fd > 2
+        {
+            actions.add_close(fd)?;
+        }
+    }
+    Ok(())
 }
 
 /// This process's environment with `command`'s changes applied.
@@ -192,6 +231,10 @@ mod tests {
         // A pipe whose write end this process leaks: a copy without close-on-exec, which a child
         // started with `std::process::Command` would inherit.
         let (mut reader, writer) = std::io::pipe().unwrap();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test needs a leaked descriptor"
+        )]
         let leaked = rustix::io::dup(&writer).unwrap();
         drop(writer);
         let null = File::open("/dev/null").unwrap();

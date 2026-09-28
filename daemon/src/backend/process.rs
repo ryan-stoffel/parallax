@@ -1,13 +1,14 @@
 //! Supervising a vendor CLI's process, which every backend shares.
 //!
-//! - **Spawning** goes through `posix_spawn` with `POSIX_SPAWN_CLOEXEC_DEFAULT`, so the child
-//!   holds its three pipes and nothing else of wispd's, such as client sockets or the listener
-//!   (#86). It leads a new session and process group, so a terminal that started wispd can't
-//!   signal it, and cancelling can reach everything it started.
+//! - **Spawning** goes through `posix_spawn` in [`crate::spawn`], so the child holds its three
+//!   pipes and nothing else of wispd's, such as client sockets or the listener (#86). It leads a
+//!   new session and process group, so a terminal that started wispd can't signal it, and
+//!   cancelling can reach everything it started.
 //! - **The environment is explicit**: a base (wispd's own with the usual install folders on
-//!   `PATH`, decision 0014; #96 may capture the login shell's instead), minus [`ALWAYS_SCRUBBED`] and the
-//!   backend's scrub list, plus [`DATA_DIR_ENV`](crate::paths::DATA_DIR_ENV) from
-//!   [`DataDir::command`], plus the backend's injected variables, such as an API key.
+//!   `PATH`, decision 0014; #96 may capture the login shell's instead), minus
+//!   [`ALWAYS_SCRUBBED`] and the backend's scrub list, plus
+//!   [`DATA_DIR_ENV`](crate::paths::DATA_DIR_ENV) from [`DataDir::command`], plus the backend's
+//!   injected variables, such as an API key.
 //! - **Output**: stdout as lines with a size cap, stderr into a ring buffer whose tail goes into
 //!   failures, and one [`Output::Exited`] last.
 //! - **Cancelling**: a signal to the CLI, then `SIGKILL` to its whole process group after a grace
@@ -16,11 +17,12 @@
 //!   process group, then reaps it. Signals are never sent after the reap, so they can't reach a
 //!   process that reused the pid.
 //!
-//! **Limit:** a process that leaves the group, with `setsid` or `setpgid`, escapes all of this,
-//! since macOS has no way to follow it short of scanning the process table. It is reparented
-//! to launchd, which reaps it; wispd never waits for it. It can't hold a run open either: stdout
-//! gets [`OutputLimits::drain_after_exit`] after the CLI exits, and stdin writes stop at a
-//! timeout. Daemons an agent starts on purpose, such as a dev server, therefore outlive the run.
+//! **Limit:** a process that leaves the group, with `setsid` or `setpgid`, escapes all of this.
+//! macOS has no way to follow it short of scanning the process table, and wispd doesn't use
+//! Linux's ways (a child subreaper or a cgroup). It is reparented to launchd or init, which reaps
+//! it; wispd never waits for it. It can't hold a run open either: stdout gets
+//! [`OutputLimits::drain_after_exit`] after the CLI exits, and stdin writes stop at a timeout.
+//! Daemons an agent starts on purpose, such as a dev server, therefore outlive the run.
 
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
@@ -951,6 +953,10 @@ mod tests {
         // A descriptor without close-on-exec, which a child started with std's Command would
         // inherit.
         let (_reader, writer) = std::io::pipe().unwrap();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test needs a leaked descriptor"
+        )]
         let leaked = rustix::io::dup(&writer).unwrap();
         assert!(leaked.as_raw_fd() < 1024);
         // Testing /dev/fd/N opens nothing, unlike ls, which opens descriptors of its own.

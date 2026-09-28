@@ -62,8 +62,17 @@ impl Wispd {
     /// that another test's child inherited can accept connects at the same path and answer
     /// nothing (#86).
     pub async fn start_with(data_dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Self {
+        Self::start_at(data_dir, socket_path(data_dir), args, env).await
+    }
+
+    /// [`Wispd::start_with`], for a server whose `env` moves its socket to `socket`.
+    pub async fn start_at(
+        data_dir: &Path,
+        socket: PathBuf,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
         let mut child = spawn(data_dir, args, env);
-        let socket = socket_path(data_dir);
         let deadline = Instant::now() + PATIENCE;
         loop {
             if answers_handshake(&socket).await {

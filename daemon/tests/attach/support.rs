@@ -212,6 +212,10 @@ impl Attach {
             .kill_on_drop(true);
         let mut child = {
             let _lock = spawn_lock();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the copy must lack close-on-exec"
+            )]
             let leaked = inherit.map(|fd| rustix::io::dup(fd).expect("copy the descriptor"));
             let child = command.spawn().expect("spawn wispd attach");
             drop(leaked);
@@ -347,15 +351,42 @@ pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
 }
 
 /// The paths of `pid`'s descriptors 0 to 2, from `lsof`.
+#[cfg(target_os = "macos")]
 pub fn stdio_paths(pid: Pid) -> Vec<String> {
     lsof_names(pid, "0-2")
 }
 
 /// `pid`'s working directory, from `lsof`.
+#[cfg(target_os = "macos")]
 pub fn working_dir(pid: Pid) -> Vec<String> {
     lsof_names(pid, "cwd")
 }
 
+/// The paths of `pid`'s descriptors 0 to 2, from `/proc`.
+#[cfg(target_os = "linux")]
+pub fn stdio_paths(pid: Pid) -> Vec<String> {
+    ["fd/0", "fd/1", "fd/2"]
+        .into_iter()
+        .map(|entry| proc_link(pid, entry))
+        .collect()
+}
+
+/// `pid`'s working directory, from `/proc`.
+#[cfg(target_os = "linux")]
+pub fn working_dir(pid: Pid) -> Vec<String> {
+    vec![proc_link(pid, "cwd")]
+}
+
+#[cfg(target_os = "linux")]
+fn proc_link(pid: Pid, entry: &str) -> String {
+    let path = format!("/proc/{}/{entry}", pid.as_raw_nonzero());
+    fs::read_link(&path)
+        .unwrap_or_else(|error| panic!("read {path}: {error}"))
+        .display()
+        .to_string()
+}
+
+#[cfg(target_os = "macos")]
 fn lsof_names(pid: Pid, descriptors: &str) -> Vec<String> {
     let lsof = {
         let _lock = spawn_lock();
