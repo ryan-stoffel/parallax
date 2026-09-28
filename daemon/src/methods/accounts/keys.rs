@@ -587,19 +587,29 @@ mod tests {
         let keys = MemoryKeyStore::new();
 
         tracing::subscriber::with_default(subscriber, || {
-            // With one scoped subscriber in the whole test binary, as on Windows, tracing
-            // computes a callsite's interest from whichever thread hits it first, so another
-            // test adding a key can cache it as disabled for good (RYA-95). Recompute it here.
-            tracing::callsite::rebuild_interest_cache();
-            add_account(
-                &mut db_store,
-                &keys,
-                AccountId::generate(),
-                Provider::Anthropic,
-                "Personal".to_owned(),
-                secret,
-            )
-            .expect("add should succeed");
+            // A parallel test can replace the global callsite interest just after a rebuild.
+            // Retry until this scoped subscriber actually sees the add, then check its output.
+            for _ in 0..20 {
+                tracing::callsite::rebuild_interest_cache();
+                add_account(
+                    &mut db_store,
+                    &keys,
+                    AccountId::generate(),
+                    Provider::Anthropic,
+                    "Personal".to_owned(),
+                    secret,
+                )
+                .expect("add should succeed");
+                if buffer
+                    .lock()
+                    .unwrap()
+                    .windows("added a key account".len())
+                    .any(|window| window == b"added a key account")
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
         });
 
         let logged = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
