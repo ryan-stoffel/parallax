@@ -237,7 +237,7 @@ Nesting: `sandbox-exec` inside `sandbox-exec` works only when the outer profile 
 
   Writes to the worktree and the context folder went through. With `.ssh` dropped from the denylist, the test failed.
 - **Linux.** CI runs the same test on x86_64 and arm64. There it also checks that a Unix-socket connect is refused.
-- **The permission mode.** wispd sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. With it, Claude Code 2.1.283 forces the permission mode to `default` and denies the Bash call before the sandbox is reached (RYA-110). The test leaves the variable unset until that's fixed.
+- **The permission mode.** wispd sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. With it, Claude Code 2.1.283 forces the permission mode to `default` and denies the Bash call before the sandbox is reached (RYA-110). The test sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, the production value, now that RYA-110 has landed.
 
 ## Sources
 

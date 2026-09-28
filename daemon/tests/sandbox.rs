@@ -152,8 +152,7 @@ async fn run_worker(
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         .env("DISABLE_AUTOUPDATER", "1")
-        // wispd also sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, which forces the permission mode to
-        // `default`, so the Bash call would be denied before the sandbox is reached (RYA-110).
+        .env("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1")
         .env("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
