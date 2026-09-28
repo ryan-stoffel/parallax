@@ -101,8 +101,8 @@ pub(super) struct Actor {
     worktree: Option<Worktree>,
     live: Option<Live>,
     batch: Batch,
-    /// Messages sent to the run while this wispd runs, by turn id, for `agent/send`'s
-    /// idempotency across CLI processes.
+    /// Messages sent to the run, by turn id, reloaded from the store after a restart. They make
+    /// `agent/send` idempotent across CLI processes and fill in the logged `TurnStarted.text`.
     turns: HashMap<TurnId, String>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
@@ -630,7 +630,20 @@ impl Actor {
                 self.finish(&outcome).await;
             }
             _ => {
-                if let Some(item) = output_item(&event) {
+                if let Some(mut item) = output_item(&event) {
+                    // A follow-up's text, which `send` recorded before its CLI could report the
+                    // turn, so a transcript rebuilt from the log shows it (RYA-92). Capped like
+                    // every other text item.
+                    if let AgentOutputItem::TurnStarted {
+                        turn_id: Some(turn_id),
+                        text,
+                    } = &mut item
+                    {
+                        *text = self
+                            .turns
+                            .get(turn_id)
+                            .map(|sent| convert::truncate(sent, convert::MAX_TEXT_ITEM_BYTES));
+                    }
                     self.push(item).await;
                 }
             }

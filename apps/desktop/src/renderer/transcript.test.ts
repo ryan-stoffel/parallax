@@ -128,6 +128,12 @@ test("a turn's result that repeats its last message isn't shown twice", () => {
   expect(of(t.items, "assistant")).toHaveLength(1);
 });
 
+test("a follow-up shows the text its turnStarted logged", () => {
+  const turnId = uuidv7();
+  const t = build(...upTo(1), output({ kind: "turnStarted", turnId, text: "And the tests." }));
+  expect(of(t.items, "user").at(-1)).toMatchObject({ text: "And the tests.", turnId });
+});
+
 test("uuidv7 puts the time first and sets the version and variant", () => {
   const id = uuidv7(0x0190_1234_5678);
   expect(id).toMatch(/^01901234-5678-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);

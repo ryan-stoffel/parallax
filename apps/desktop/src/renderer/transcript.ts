@@ -15,7 +15,7 @@ import type {
 
 /** One row of the transcript. `key` is stable across re-renders. */
 export type Item =
-  /** `text` is null for a message sent from elsewhere: wispd logs its turn id, not its text (RYA-92). */
+  /** `text` is null for a follow-up logged by a wispd from before it recorded the text. */
   | { kind: "user"; key: string; text: string | null; turnId?: string }
   /** `partial` while it is still arriving as `textDelta`s. */
   | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
@@ -107,7 +107,8 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
   switch (item.kind) {
     case "turnStarted":
       // The run's first turn has no id; its prompt came with agent.started.
-      if (item.turnId) items.push({ kind: "user", key, text: null, turnId: item.turnId });
+      if (item.turnId)
+        items.push({ kind: "user", key, text: item.text ?? null, turnId: item.turnId });
       break;
     case "textDelta": {
       const found = target(item.messageId);

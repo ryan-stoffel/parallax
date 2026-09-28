@@ -1433,7 +1433,13 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The turn's id, when the caller gave one.
 	 */
-	turnId?: TurnId, } | { "kind": "textDelta",
+	turnId?: TurnId,
+	/**
+	 * A follow-up's message, as `agent/send` took it, cut short when it is long. Absent for
+	 * the prompt's turn, whose text is the run's `prompt`, and in logs from before wispd
+	 * recorded it.
+	 */
+	text?: string, } | { "kind": "textDelta",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
