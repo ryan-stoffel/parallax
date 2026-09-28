@@ -107,6 +107,13 @@ export interface ThreadsView {
 export function useThreads(hostId: string, connected: boolean): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
+  // Another host starts empty, rather than showing this one's threads until its list loads.
+  const [shownHost, setShownHost] = useState(hostId);
+  if (shownHost !== hostId) {
+    setShownHost(hostId);
+    dispatch({ type: "snapshot", repos: [], threads: [], runs: [] });
+    setError(undefined);
+  }
 
   useEffect(() => {
     if (!connected) return;

@@ -21,11 +21,12 @@ import { useId, useRef, useState, type ReactNode } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
 import type { Selection, SettingsSection } from "./App";
-import { ConnectionStatus } from "./ConnectionStatus";
+import { ConnectionStatus, StatusDot, statusLabel, useConnection } from "./ConnectionStatus";
+import type { Host } from "./hosts";
 import { NewProjectDialog } from "./NewProjectDialog";
-import type { Host, ModelGroup, ProjectIcon } from "./placeholder";
+import type { ModelGroup, Project, ProjectIcon } from "./placeholder";
 import { groupThreads, noRepo, type ThreadsView } from "./threads";
-import { IconButton, Picker, TopBar } from "./ui";
+import { IconButton, TopBar } from "./ui";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
@@ -69,11 +70,14 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
 
 interface ThreadListProps {
   hosts: Host[];
+  /** The open host, whose Projects and threads show under its row. */
   host: Host;
   onHostChange: (hostId: string) => void;
+  /** The open host's Projects. */
+  projects: Project[];
   selection: Selection;
   onSelect: (selection: Selection) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (section: SettingsSection, addHost?: boolean) => void;
   models: ModelGroup[];
   threads: ThreadsView;
   /** Deletes a thread. Resolves to an error message, or undefined. */
@@ -94,6 +98,7 @@ export function ThreadList({
   hosts,
   host,
   onHostChange,
+  projects,
   selection,
   onSelect,
   onOpenSettings,
@@ -136,93 +141,101 @@ export function ThreadList({
     else deleteDialog.current?.close();
   };
 
+  // The open host's Projects and repositories, under its row.
+  const openHost = (
+    <div className="pb-3">
+      <section aria-labelledby="projects-heading" className="mt-2">
+        <div className="flex items-center justify-between pr-0.5 pl-2">
+          <h2 id="projects-heading" className={heading}>
+            Projects
+          </h2>
+          <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
+            <Plus />
+          </IconButton>
+        </div>
+        <ul>
+          {projects.map((p) => {
+            const { Icon, color } = projectIcons[p.icon];
+            const selected = selection.kind === "project" && selection.projectId === p.id;
+            return (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  aria-current={selected ? "page" : undefined}
+                  onClick={() => onSelect({ kind: "project", projectId: p.id })}
+                  className={`${row} ${selected ? current : "text-foreground/80"}`}
+                >
+                  <Icon aria-hidden className={`size-4 shrink-0 ${color}`} />
+                  <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                  <span className="shrink-0 text-[11.5px] text-faint-foreground">{p.age}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section aria-labelledby="repositories-heading" className="mt-4">
+        <h2 id="repositories-heading" className={`${heading} px-2 pb-1`}>
+          Repositories
+        </h2>
+        {(threads.error ?? actionError) && (
+          <p role="alert" className="px-2 pb-1 text-[12px] text-danger">
+            {threads.error ?? actionError}
+          </p>
+        )}
+        {groups.map((g) => (
+          <div key={g.id} className="mb-1">
+            <button
+              type="button"
+              title={`New thread in ${g.name}`}
+              onClick={() => onSelect({ kind: "new", groupId: g.id })}
+              className={`${row} text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0`}
+            >
+              {g.id === noRepo ? <House aria-hidden /> : <Folder aria-hidden />}
+              <span className="truncate">{g.name}</span>
+            </button>
+            <ul>{g.threads.map(threadRow)}</ul>
+          </div>
+        ))}
+        {archived.length > 0 && (
+          <details className="group/archived mt-2">
+            <summary
+              className={`${row} list-none text-muted-foreground [&::-webkit-details-marker]:hidden`}
+            >
+              <ChevronRight
+                aria-hidden
+                className="size-4 shrink-0 transition-transform group-open/archived:rotate-90"
+              />
+              Archived
+              <span className="text-faint-foreground">{archived.length}</span>
+            </summary>
+            <ul>{archived.map(threadRow)}</ul>
+          </details>
+        )}
+      </section>
+    </div>
+  );
+
   return (
     <>
-      <div className="px-2">
-        <Picker
-          label="Host"
-          icon={host.local ? <Laptop /> : <Server />}
-          value={host.id}
-          onChange={(e) => onHostChange(e.target.value)}
-        >
-          {hosts.map((h) => (
-            <option key={h.id} value={h.id}>
-              {h.name}
-            </option>
-          ))}
-        </Picker>
-      </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <section aria-labelledby="projects-heading" className="mt-4">
-          <div className="flex items-center justify-between pr-0.5 pl-2">
-            <h2 id="projects-heading" className={heading}>
-              Projects
-            </h2>
-            <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
-              <Plus />
-            </IconButton>
-          </div>
-          <ul>
-            {host.projects.map((p) => {
-              const { Icon, color } = projectIcons[p.icon];
-              const selected = selection.kind === "project" && selection.projectId === p.id;
-              return (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    aria-current={selected ? "page" : undefined}
-                    onClick={() => onSelect({ kind: "project", projectId: p.id })}
-                    className={`${row} ${selected ? current : "text-foreground/80"}`}
-                  >
-                    <Icon aria-hidden className={`size-4 shrink-0 ${color}`} />
-                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                    <span className="shrink-0 text-[11.5px] text-faint-foreground">{p.age}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-
-        <section aria-labelledby="repositories-heading" className="mt-4">
-          <h2 id="repositories-heading" className={`${heading} px-2 pb-1`}>
-            Repositories
+        <div className="flex items-center justify-between pr-0.5 pl-2">
+          <h2 id="hosts-heading" className={heading}>
+            Hosts
           </h2>
-          {(threads.error ?? actionError) && (
-            <p role="alert" className="px-2 pb-1 text-[12px] text-danger">
-              {threads.error ?? actionError}
-            </p>
-          )}
-          {groups.map((g) => (
-            <div key={g.id} className="mb-1">
-              <button
-                type="button"
-                title={`New thread in ${g.name}`}
-                onClick={() => onSelect({ kind: "new", groupId: g.id })}
-                className={`${row} text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0`}
-              >
-                {g.id === noRepo ? <House aria-hidden /> : <Folder aria-hidden />}
-                <span className="truncate">{g.name}</span>
-              </button>
-              <ul>{g.threads.map(threadRow)}</ul>
-            </div>
+          <IconButton label="Add host" onClick={() => onOpenSettings("hosts", true)}>
+            <Plus />
+          </IconButton>
+        </div>
+        <ul aria-labelledby="hosts-heading">
+          {hosts.map((h) => (
+            <li key={h.id}>
+              <HostRow host={h} open={h.id === host.id} onOpen={() => onHostChange(h.id)} />
+              {h.id === host.id && openHost}
+            </li>
           ))}
-          {archived.length > 0 && (
-            <details className="group/archived mt-2">
-              <summary
-                className={`${row} list-none text-muted-foreground [&::-webkit-details-marker]:hidden`}
-              >
-                <ChevronRight
-                  aria-hidden
-                  className="size-4 shrink-0 transition-transform group-open/archived:rotate-90"
-                />
-                Archived
-                <span className="text-faint-foreground">{archived.length}</span>
-              </summary>
-              <ul>{archived.map(threadRow)}</ul>
-            </details>
-          )}
-        </section>
+        </ul>
       </div>
       <NewProjectDialog ref={newProject} repositories={threads.state.repos} models={models} />
       <dialog
@@ -263,14 +276,38 @@ export function ThreadList({
         </form>
       </dialog>
       <div className="border-t border-border p-2">
-        {/* Only this Mac's wispd is connected so far (RYA-12); SSH hosts come with RYA-26. */}
-        {host.local && <ConnectionStatus hostId="local" />}
-        <button type="button" onClick={onOpenSettings} className={`${row} text-muted-foreground`}>
+        <ConnectionStatus hostId={host.id} />
+        <button
+          type="button"
+          onClick={() => onOpenSettings("general")}
+          className={`${row} text-muted-foreground`}
+        >
           <Settings className="size-4" />
           Settings
         </button>
       </div>
     </>
+  );
+}
+
+/** A host's row: its name and a status dot. The open host's error is in the footer. */
+function HostRow({ host, open, onOpen }: { host: Host; open: boolean; onOpen: () => void }) {
+  const state = useConnection(host.id);
+  const Icon = host.destination ? Server : Laptop;
+  const status = state && statusLabel(state);
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={onOpen}
+      title={state?.status === "failed" ? state.error.message : status}
+      className={`${row} font-medium ${open ? "text-foreground" : "text-muted-foreground"}`}
+    >
+      <Icon aria-hidden className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{host.name}</span>
+      <StatusDot state={state} />
+      {status && <span className="sr-only">{status}</span>}
+    </button>
   );
 }
 
@@ -357,10 +394,16 @@ export function age(time: string, now = Date.now()): string {
   return days < 7 ? `${days}d` : `${Math.floor(days / 7)}w`;
 }
 
-const sections: { id: SettingsSection; name: string }[] = [
-  { id: "general", name: "General" },
-  { id: "providers", name: "Providers" },
-];
+/** Each Settings section's name, in the nav's order. */
+export const settingsNames: Record<SettingsSection, string> = {
+  general: "General",
+  hosts: "Hosts",
+  providers: "Providers",
+};
+const sections = Object.entries(settingsNames).map(([id, name]) => ({
+  id: id as SettingsSection,
+  name,
+}));
 
 /** The sidebar while Settings is open. */
 export function SettingsNav({

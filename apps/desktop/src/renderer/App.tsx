@@ -6,10 +6,11 @@ import { AgentChat } from "./AgentChat";
 import { Composer } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { NewThread } from "./NewThread";
-import { hosts, models } from "./placeholder";
+import { localId, useHosts } from "./hosts";
+import { models, projects } from "./placeholder";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
-import { SettingsNav, Sidebar, ThreadList } from "./Sidebar";
+import { SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
 import { groupOf, groupThreads, noRepo, useThreads } from "./threads";
 import { Breadcrumb, IconButton, TopBar } from "./ui";
@@ -23,9 +24,7 @@ export type Selection =
   | { kind: "thread"; threadId: string }
   | { kind: "new"; groupId?: string };
 
-export type SettingsSection = "general" | "providers";
-
-const firstHost = hosts[0]!;
+export type SettingsSection = "general" | "hosts" | "providers";
 
 /**
  * The app frame: sidebar, then the chat or Settings, then the side panel.
@@ -33,18 +32,26 @@ const firstHost = hosts[0]!;
  */
 export function App() {
   const [theme, setTheme] = useThemePreference();
-  const [host, setHost] = useState(firstHost);
+  const hosts = useHosts();
+  const [hostId, setHostId] = useState(localId);
+  // The open host, or this computer once the open one is removed.
+  const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const [selection, setSelection] = useState<Selection>({ kind: "new" });
   const [settings, setSettings] = useState<SettingsSection | null>(null);
+  // Set by the sidebar's "Add host", so Hosts opens on its form; any other way in clears it.
+  const [addingHost, setAddingHost] = useState(false);
+  const openSettings = (section: SettingsSection, addHost = false) => {
+    setSettings(section);
+    setAddingHost(addHost);
+  };
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
   // A quiet note for the thread New Thread just started, such as the account it picked.
   const [notice, setNotice] = useState<{ threadId: string; text: string }>();
 
-  // Threads are live for this Mac only; other hosts arrive with RYA-26.
-  const connection = useConnection("local");
+  const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
-  const threads = useThreads("local", connected);
+  const threads = useThreads(host.id, connected);
   const { groups } = groupThreads(threads.state);
   // The open thread's group (No Repo's until wispd lists it), or the new thread's.
   let group = groups[0]!;
@@ -60,7 +67,7 @@ export function App() {
 
   let crumbs: string[];
   if (selection.kind === "project")
-    crumbs = [host.name, host.projects.find((p) => p.id === selection.projectId)!.name];
+    crumbs = [host.name, projects.find((p) => p.id === selection.projectId)!.name];
   else if (selection.kind === "thread")
     crumbs = [host.name, group.name, threads.state.titles[selection.threadId] ?? "Thread"];
   else crumbs = [host.name, group.name, "New thread"];
@@ -87,7 +94,7 @@ export function App() {
       if (e.code === "KeyB" && e.altKey) setPanelOpen((open) => !open);
       else if (e.code === "KeyB") setSidebarOpen((open) => !open);
       else if (e.code === "KeyN" && !e.altKey) newThread();
-      else if (e.key === "," && !e.altKey) setSettings("general");
+      else if (e.key === "," && !e.altKey) openSettings("general");
       else return;
       e.preventDefault();
     };
@@ -115,7 +122,7 @@ export function App() {
         {settings ? (
           <SettingsNav
             section={settings}
-            onSection={setSettings}
+            onSection={(section) => openSettings(section)}
             onBack={() => setSettings(null)}
           />
         ) : (
@@ -123,12 +130,13 @@ export function App() {
             hosts={hosts}
             host={host}
             onHostChange={(id) => {
-              setHost(hosts.find((h) => h.id === id)!);
+              setHostId(id);
               setSelection({ kind: "new" });
             }}
+            projects={host.id === localId ? projects : []}
             selection={selection}
             onSelect={setSelection}
-            onOpenSettings={() => setSettings("general")}
+            onOpenSettings={openSettings}
             models={models}
             threads={threads}
             onDelete={deleteThread}
@@ -141,9 +149,14 @@ export function App() {
           <>
             <TopBar className={topBarInset}>
               {showSidebar}
-              <Breadcrumb items={["Settings", settings === "general" ? "General" : "Providers"]} />
+              <Breadcrumb items={["Settings", settingsNames[settings]]} />
             </TopBar>
-            <Settings section={settings} theme={theme} onThemeChange={setTheme} />
+            <Settings
+              section={settings}
+              addingHost={addingHost}
+              theme={theme}
+              onThemeChange={setTheme}
+            />
           </>
         ) : (
           <>
@@ -175,11 +188,12 @@ export function App() {
               />
             ) : selection.kind === "new" ? (
               <NewThread
-                hostId="local"
+                key={host.id}
+                hostId={host.id}
                 groups={groups}
                 groupId={group.id}
                 onGroupChange={(groupId) => setSelection({ kind: "new", groupId })}
-                local={host.local}
+                local={host.id === localId}
                 addRepo={threads.addRepo}
                 start={threads.start}
                 onStarted={(threadId, text) => {

@@ -8,6 +8,8 @@ export type RpcHandlers = {
   onNotification(method: string, params: unknown): void;
   /** The stream broke a framing rule (0007) and must be closed. */
   onFatal(message: string): void;
+  /** A line that isn't JSON. The client skips it. */
+  onBadLine?(line: string): void;
 };
 
 /**
@@ -111,7 +113,7 @@ export class RpcClient {
       message = JSON.parse(line);
     } catch {
       // NDJSON resyncs at the next newline, so one bad line costs only itself.
-      console.warn("wispd sent a line that isn't JSON:", line.slice(0, 200));
+      this.handlers.onBadLine?.(line);
       return;
     }
     if (typeof message !== "object" || message === null) return;

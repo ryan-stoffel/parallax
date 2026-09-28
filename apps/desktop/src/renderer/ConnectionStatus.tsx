@@ -2,42 +2,55 @@ import { useEffect, useState } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
 
-/** A host's connection state, kept current. Undefined until the first answer. */
+/** A host's connection state, kept current. Undefined until the first answer for this host. */
 export function useConnection(hostId: string): ConnectionState | undefined {
-  const [state, setState] = useState<ConnectionState>();
+  // Tagged with its host, so switching hosts never shows the last host's state.
+  const [known, setKnown] = useState<{ hostId: string; state: ConnectionState }>();
   useEffect(() => {
-    const stop = window.wisp.onConnectionState((id, next) => id === hostId && setState(next));
-    void window.wisp.connectionState(hostId).then(setState);
+    const set = (state: ConnectionState) => setKnown({ hostId, state });
+    const stop = window.wisp.onConnectionState((id, next) => id === hostId && set(next));
+    // It rejects only for a host just removed, whose views are going away.
+    window.wisp.connectionState(hostId).then(set, () => {});
     return stop;
   }, [hostId]);
-  return state;
+  return known?.hostId === hostId ? known.state : undefined;
+}
+
+/** A small dot in the state's color: green, pulsing amber, or red. */
+export function StatusDot({ state }: { state: ConnectionState | undefined }) {
+  const color = {
+    connected: "bg-emerald-500",
+    connecting: "bg-amber-500 animate-pulse",
+    failed: "bg-red-500",
+  }[state?.status ?? "connecting"];
+  return <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${color}`} />;
+}
+
+/** The state in a word or two. */
+export function statusLabel(state: ConnectionState): string {
+  if (state.status === "connected") return "Connected";
+  if (state.status === "connecting") return "Connecting…";
+  return state.retrying ? "Reconnecting…" : "Disconnected";
 }
 
 /**
- * A quiet status line for the sidebar's footer: a dot and a word while things
- * are fine; on failure, why, and Retry once wispd stops retrying by itself.
- * The tail of attach's stderr is only in the tooltip.
+ * A quiet status line for the sidebar's footer, for the open host: a dot and a
+ * word while things are fine; on failure, why, and Retry once it stops retrying
+ * by itself. The tail of attach's (and ssh's) stderr is only in the tooltip.
  */
 export function ConnectionStatus({ hostId }: { hostId: string }) {
   const state = useConnection(hostId);
   if (!state) return null;
 
   const failed = state.status === "failed";
-  const dot = {
-    connected: "bg-emerald-500",
-    connecting: "bg-amber-500 animate-pulse",
-    failed: "bg-red-500",
-  }[state.status];
-  let label = "Connected";
-  if (state.status === "connecting") label = "Connecting…";
-  if (state.status === "failed") label = state.retrying ? "Reconnecting…" : "Disconnected";
+  const label = statusLabel(state);
 
   return (
     <div role="status" className="px-2 py-1 text-[12px] text-muted-foreground">
       <div className="flex items-center gap-2">
         {/* As wide as the Settings icon below, so the two line up. */}
         <span aria-hidden className="grid w-4 shrink-0 place-items-center">
-          <span className={`size-1.5 rounded-full ${dot}`} />
+          <StatusDot state={state} />
         </span>
         <span className="min-w-0 flex-1 truncate">
           {label}
@@ -56,7 +69,7 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
         )}
       </div>
       {failed && (
-        <p title={state.error.stderr} className="mt-0.5 line-clamp-2 pl-6 text-faint-foreground">
+        <p title={state.error.stderr} className="mt-0.5 line-clamp-4 pl-6 text-faint-foreground">
           {state.error.message}
         </p>
       )}
