@@ -23,6 +23,7 @@ test.beforeAll(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), "wisp-e2e-"));
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    WISP_NO_NAMER: "1",
     WISPD_PATH: wispd,
     WISPD_DATA_DIR: dataDir,
     WISPD_FAKE_BACKEND: path.join(import.meta.dirname, "agent.json"),

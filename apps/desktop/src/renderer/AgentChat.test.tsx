@@ -204,7 +204,7 @@ test("loads every page, subscribes after the last seq, and appends live events",
     expect.any(Function),
   );
   expect(transcriptText()).toContain("Add a README");
-  expect(document.body.textContent).toContain("Working"); // the footer's status
+  expect(document.body.textContent).toContain("Worktree"); // the footer's tab
 
   emit({ type: "event", event: { subscription: "s", ...logged[2]! } });
   expect(transcriptText()).toContain("I'll add a README and note the build steps");
@@ -228,10 +228,10 @@ test("subscribes after the scope's snapshot seq, so repeated resyncs end", async
   expect(transcriptText()).toContain("Add a README");
 });
 
-test("the composer tab shows status, account, and worktree branch", () => {
+test("the composer tab shows the worktree and its branch", () => {
   const started = samples.find((m) => "result" in m && m.id === 2)!;
   render(<RunTab run={(started as unknown as { result: AgentRunResult }).result.run} />);
-  expect(document.body.textContent).toBe("WorkingClaude subscriptionwisp/1a2b3c4d");
+  expect(document.body.textContent).toBe("Worktreewisp/1a2b3c4d");
 });
 
 test("Enter sends with a fresh v7 turn id, but not while an IME is composing", async () => {

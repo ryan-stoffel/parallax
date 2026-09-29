@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import type { RpcError } from "../preload/bridge";
+import type { RpcError, ThreadName } from "../preload/bridge";
 import type { AgentRun, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import type { RunOptions } from "./models";
@@ -70,7 +70,30 @@ function byId(runs: AgentRun[]): Record<string, AgentRun> {
 }
 
 function titlesOf(runs: AgentRun[]): Record<string, string> {
-  return Object.fromEntries(runs.map((r) => [r.id, r.prompt.trim().split("\n")[0]!]));
+  return Object.fromEntries(
+    runs.map((r) => [r.id, readTitle(r.id) ?? r.prompt.trim().split("\n")[0]!]),
+  );
+}
+
+// A thread's generated title, kept in this app: wispd has no title of its own. Run ids are unique
+// across hosts. ponytail: not shared with other computers running the app, or with a cleared
+// browser profile; both fall back to the prompt's first line.
+const titleKey = (runId: string) => `wisp:title:${runId}`;
+
+function readTitle(runId: string): string | undefined {
+  try {
+    return localStorage.getItem(titleKey(runId)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveTitle(runId: string, title: string) {
+  try {
+    localStorage.setItem(titleKey(runId), title);
+  } catch {
+    // Storage is off: the thread keeps its prompt as its title.
+  }
 }
 
 /** The sidebar's id for "No Repo", which holds wispd's scratch entry's threads, made on first use. */
@@ -114,7 +137,8 @@ export interface ThreadsView {
   /** Registers a repository (idempotent on its path). Resolves to its entry or an error message. */
   addRepo: (path: string) => Promise<Repo | string>;
   /**
-   * Starts a thread in a group, with `options` sent as they are. Reuse `runId`, with the same
+   * Starts a thread in a group, with `options` sent as they are, and its branch and title from
+   * `name`. Reuse `runId`, with the same
    * options, to retry. Resolves to wispd's error, or undefined.
    */
   start: (
@@ -122,6 +146,7 @@ export interface ThreadsView {
     groupId: string,
     prompt: string,
     options: RunOptions,
+    name?: ThreadName,
   ) => Promise<RpcError | undefined>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
@@ -202,14 +227,22 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
   );
 
   const start = useCallback(
-    async (runId: string, groupId: string, prompt: string, options: RunOptions) => {
+    async (
+      runId: string,
+      groupId: string,
+      prompt: string,
+      options: RunOptions,
+      name?: ThreadName,
+    ) => {
       const answer = await window.wisp.request(hostId, "thread/start", {
         runId,
         prompt,
         ...(groupId !== noRepo && { repo: groupId }),
         ...options,
+        ...(name?.slug && { branchSlug: name.slug }),
       });
       if ("error" in answer) return answer.error;
+      if (name?.title) saveTitle(runId, name.title);
       dispatch({ type: "runs", runs: [answer.result.run] });
       dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
       return undefined;

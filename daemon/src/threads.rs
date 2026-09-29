@@ -29,6 +29,7 @@ use wisp_store::RepoFields;
 use crate::agents::{self, NewRun, NewThread, RunOptions};
 use crate::repo;
 use crate::server::Daemon;
+use crate::worktree::valid_branch_slug;
 
 /// The folder under wispd's data folder that holds threads' scratch repositories.
 const SCRATCH_DIR: &str = "scratch";
@@ -313,7 +314,16 @@ pub(crate) async fn start(
         model,
         effort,
         permission,
+        branch_slug,
     } = params;
+    if let Some(slug) = &branch_slug
+        && !valid_branch_slug(slug)
+    {
+        return Err(ErrorObject::invalid_params(
+            "branchSlug must be 1 to 40 lowercase letters, digits, and hyphens, \
+             with no leading or trailing hyphen",
+        ));
+    }
     let entry = match repo {
         Some(id) => {
             store(&daemon, move |db| {
@@ -371,6 +381,7 @@ pub(crate) async fn start(
         },
         thread: Some(NewThread {
             scratch: scratch.clone(),
+            branch_slug,
         }),
     };
     let created = match agents::create(Arc::clone(&daemon), new).await {
