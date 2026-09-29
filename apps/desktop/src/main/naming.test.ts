@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { cleanTitle, fallbackName, slugify } from "./naming";
+import { fallbackName, parseName, slugify } from "./naming";
 
 test("a slug is the first four words, lowercase, joined by hyphens", () => {
   expect(slugify("Fix the login page crash, again please")).toBe("fix-the-login-page");
@@ -10,11 +10,18 @@ test("a slug is the first four words, lowercase, joined by hyphens", () => {
   expect(slugify("!!!")).toBeUndefined();
 });
 
-test("a model's reply is a title only when it looks like one", () => {
-  expect(cleanTitle('"Fix flaky cancel test."\nSure!')).toBe("Fix flaky cancel test");
-  expect(cleanTitle("Hello! How can I assist you today?")).toBeUndefined();
-  expect(cleanTitle("one two three four five six seven eight nine")).toBeUndefined();
-  expect(cleanTitle("  ")).toBeUndefined();
+test("a model's reply is a title and a branch", () => {
+  expect(parseName("Title: Fix flaky cancel test\nBranch: cancel-test-windows")).toEqual({
+    title: "Fix flaky cancel test",
+    slug: "cancel-test-windows",
+  });
+  expect(parseName("Title: Fix the GitHub sign in flow for good\nBranch: github-sign-in")).toEqual({
+    title: "Fix the GitHub sign in flow",
+    slug: "github-sign-in",
+  });
+  expect(parseName("Title: Fix the build. \nBranch: fix-build")?.title).toBe("Fix the build");
+  expect(parseName("Hello! How can I assist you today?")).toBeUndefined();
+  expect(parseName("Title: Only a title")).toBeUndefined();
 });
 
 test("without the model, a thread keeps its prompt as its title and names its branch from it", () => {

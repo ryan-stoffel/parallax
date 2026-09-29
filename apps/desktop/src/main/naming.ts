@@ -1,6 +1,7 @@
 import type { ThreadName } from "../preload/bridge";
 
 const maxWords = 4;
+const maxTitleWords = 6;
 const maxSlugLength = 40;
 
 /**
@@ -13,14 +14,20 @@ export function slugify(text: string): string | undefined {
   return slug || undefined;
 }
 
-/** A model's reply as a title. Undefined when it isn't one, such as a chatty answer. */
-export function cleanTitle(reply: string): string | undefined {
-  const title = reply
-    .trim()
-    .split("\n")[0]!
-    .replace(/^["'\s]+|["'.\s]+$/g, "");
-  const words = title.split(/\s+/).length;
-  return title && words <= 8 && !/[?!]/.test(title) ? title : undefined;
+/**
+ * A thread's name from the model's reply, `Title: ...` then `Branch: ...` (see namer.ts). The
+ * title keeps its first six words. Undefined when the reply isn't in that shape.
+ */
+export function parseName(reply: string): ThreadName | undefined {
+  const match = /^Title: (.+)\nBranch: (.+)$/.exec(reply.trim());
+  if (!match) return undefined;
+  const title = match[1]!
+    .split(/\s+/)
+    .slice(0, maxTitleWords)
+    .join(" ")
+    .replace(/[\s.'-]+$/, "");
+  const slug = slugify(match[2]!);
+  return slug ? { title, slug } : undefined;
 }
 
 /** What a thread is named without the model: no title, and a branch from the prompt's words. */
