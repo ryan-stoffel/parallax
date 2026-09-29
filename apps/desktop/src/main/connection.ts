@@ -236,7 +236,12 @@ export class Connection {
     this.logId = result.logId;
     this.failures = 0;
     this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
-    this.setState({ status: "connected", wispd: result.wispd, protocol: result.protocol });
+    this.setState({
+      status: "connected",
+      wispd: result.wispd,
+      protocol: result.protocol,
+      capabilities: result.capabilities,
+    });
     for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
   }
 

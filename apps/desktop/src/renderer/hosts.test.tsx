@@ -9,7 +9,12 @@ import { App } from "./App";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
-const connected: ConnectionState = { status: "connected", wispd: "0.1.0", protocol: 1 };
+const connected: ConnectionState = {
+  status: "connected",
+  wispd: "0.1.0",
+  protocol: 1,
+  capabilities: {},
+};
 const untrusted: ConnectionState = {
   status: "failed",
   retrying: false,

@@ -8,14 +8,13 @@ import {
   type ToggleEvent,
 } from "react";
 
-import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
-import { models, type Model, type Provider } from "./models";
+import { ClaudeLogo, OpenAILogo } from "./logos";
+import type { Model, Provider } from "./models";
 import { menuButton, menuPanel, moveFocus } from "./ui";
 
 const providers: Record<Provider, ComponentType<SVGProps<SVGSVGElement>>> = {
   Claude: ClaudeLogo,
   Codex: OpenAILogo,
-  Cursor: CursorLogo,
 };
 
 // The same model can run under two providers, so a model is known by both.
@@ -25,14 +24,21 @@ const railButton =
   "grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-hover aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4";
 
 /**
- * The model picker: a button showing the chosen model that opens a searchable list, with a
- * rail to filter by favorites or provider. A native popover, so Escape and clicking away
+ * The model picker: a button showing the chosen model that opens a searchable list of `models`,
+ * with a rail to filter by favorites or provider. A native popover, so Escape and clicking away
  * close it, and it flips above the button when there's no room below.
  */
-export function ModelMenu() {
-  const [chosen, setChosen] = useState(models[0]!);
+export function ModelMenu({
+  models,
+  value: chosen,
+  onChange,
+}: {
+  models: Model[];
+  value: Model;
+  onChange: (model: Model) => void;
+}) {
   const [favorites, setFavorites] = useState(() => new Set([keyOf(models[0]!)]));
-  const [tab, setTab] = useState<"favorites" | Provider>("Claude");
+  const [tab, setTab] = useState<"favorites" | Provider>(chosen.provider);
   const [query, setQuery] = useState("");
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -49,7 +55,7 @@ export function ModelMenu() {
   const Logo = providers[chosen.provider];
 
   const pick = (m: Model) => {
-    setChosen(m);
+    onChange(m);
     menu.current?.hidePopover();
   };
 
@@ -95,7 +101,7 @@ export function ModelMenu() {
             <Star />
           </button>
           <span aria-hidden className="my-1 h-px w-6 bg-border" />
-          {(Object.keys(providers) as Provider[]).map((p) => {
+          {[...new Set(models.map((m) => m.provider))].map((p) => {
             const ProviderLogo = providers[p];
             return (
               <button
