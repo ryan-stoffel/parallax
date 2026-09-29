@@ -166,6 +166,7 @@ async fn an_api_key_account_gets_its_key_and_a_subscription_its_config_home() {
         &root(),
         Path::new("/Users/u/src/app/.git"),
         Path::new("/Users/u/wisp/context/p"),
+        Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
     ));
     request.account.credential = Credential::ApiKey(ApiKey::new("sk-fake-123".into()));
     let mut events = launch(&backend("context"), request.clone()).await.events;

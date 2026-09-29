@@ -26,13 +26,7 @@ async fn a_worker_can_run_bash_without_exposing_its_key() {
     let worktree = data.join("worktrees/run");
     let context = data.join("context/p");
     let git_dir = root.join("repo/.git");
-    for folder in [
-        &home.join(".ssh"),
-        &worktree,
-        &context,
-        &git_dir,
-        &root.join("tmp"),
-    ] {
+    for folder in [&home.join(".ssh"), &worktree, &context, &git_dir] {
         fs::create_dir_all(folder).unwrap();
     }
     fs::write(home.join(".ssh/id_ed25519"), "private-test-key").unwrap();
@@ -50,7 +44,7 @@ async fn a_worker_can_run_bash_without_exposing_its_key() {
         ),
     ).unwrap();
 
-    let request = worker_request(&home, &data, &worktree, &git_dir, &context);
+    let (request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
     let (stdout, transcript) = run_worker(
         &claude,
         &request,

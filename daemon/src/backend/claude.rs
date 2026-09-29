@@ -20,7 +20,7 @@
 //!     confines the file tools to the working directories.
 //!   - `--tools` names exactly [`WORKER_TOOLS`]. `Bash` is among them because Claude Code's own
 //!     sandbox (Seatbelt on macOS, bubblewrap on Linux) holds every command: writes only to the
-//!     working directories and the session temp folder, no reads of the sandbox's `unreadable`
+//!     working directories and the run's temp folder, no reads of the sandbox's `unreadable`
 //!     paths, and no writes to git metadata. `failIfUnavailable` and
 //!     `allowUnsandboxedCommands: false` keep a command from ever running outside it. Commands,
 //!     `WebFetch`, and `WebSearch` reach any host but [`WORKER_DENIED_HOSTS`] (Ryan, #137), so
@@ -39,6 +39,21 @@
 //!   set (RYA-112). That check runs in a separate process, so the permission mode check, which
 //!   the flag fails, backs it up from inside the worker's own (RYA-118). Elsewhere the backend
 //!   reports no `worker_sandbox` and refuses a workspace-write run.
+//!
+//! # A worker's temp folder
+//!
+//! Claude Code keeps its temp files in `$CLAUDE_CODE_TMPDIR/claude-<uid>`, `/tmp/claude-<uid>` by
+//! default, which every Claude Code session of the user shares, and its sandbox lets commands
+//! write there. So a worker's CLI gets [`TEMP_ENV`] set to the run's own folder,
+//! [`WorkerSandbox::temp`] (RYA-130), and its commands get `<temp>/claude-<uid>` as their
+//! `TMPDIR`. Claude Code does that only while the path fits in [`MAX_COMMAND_TEMP_BYTES`], and
+//! falls back to the shared folder otherwise, so a longer one refuses the worker
+//! ([`worker_temp`]). The rest of the run's folder stays hidden from commands, and the settings
+//! take back the paths the sandbox always lets them write ([`WORKER_DENIED_WRITES`]).
+//!
+//! The CLI's own `TMPDIR` stays wispd's. Claude Code keeps its sandbox's Linux proxy bridges
+//! there, which commands must reach, and Node's compile cache, which they must not write. In the
+//! run's folder the first would be hidden and cut commands off the network (RYA-107).
 //!
 //! # A worker's `PATH`
 //!
@@ -262,6 +277,59 @@ const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 /// command, as [`SCRUB_ENV`] would.
 pub const WORKER_WITHHELD_VARS: &[&str] = &[API_KEY_ENV, "CLAUDE_CODE_MESSAGING_TOKEN"];
 
+/// Paths Claude Code 2.1.283's sandbox lets every command write whatever the settings say, which
+/// a worker's `denyWrite` takes back (RYA-130): `/tmp/claude` in both spellings, npm's log folder,
+/// and Claude Code's debug logs. `~/` is the CLI's `HOME`. A `denyWrite` rule beats them.
+pub const WORKER_DENIED_WRITES: &[&str] = &[
+    "/tmp/claude",
+    "/private/tmp/claude",
+    "~/.npm/_logs",
+    "~/.claude/debug",
+];
+
+/// The variable naming Claude Code's temp folder, which it uses `claude-<uid>` in, apart from the
+/// process's own `TMPDIR`.
+pub const TEMP_ENV: &str = "CLAUDE_CODE_TMPDIR";
+
+/// The longest `$CLAUDE_CODE_TMPDIR/claude-<uid>` that Claude Code 2.1.283 gives a command as
+/// `TMPDIR`. A longer one gets the shared `/tmp/claude-<uid>` instead, which a worker can't use.
+pub const MAX_COMMAND_TEMP_BYTES: usize = 44;
+
+/// The folder a worker's CLI gets as [`TEMP_ENV`]: `temp`, the run's own (RYA-130), spelled as
+/// short as it can be. On macOS, `/private/tmp/...` becomes `/tmp/...`, where `/tmp`
+/// links, which saves 8 of the [`MAX_COMMAND_TEMP_BYTES`].
+///
+/// # Errors
+///
+/// [`StartError::Invalid`] if [`commands_temp`] in it is longer than [`MAX_COMMAND_TEMP_BYTES`].
+pub fn worker_temp(temp: &Path) -> Result<PathBuf, StartError> {
+    let temp = match temp.strip_prefix("/private/tmp") {
+        Ok(rest) if cfg!(target_os = "macos") => Path::new("/tmp").join(rest),
+        _ => temp.to_owned(),
+    };
+    let commands = commands_temp(&temp);
+    if commands.as_os_str().len() > MAX_COMMAND_TEMP_BYTES {
+        return Err(StartError::Invalid(format!(
+            "the worker's temp folder {} is longer than {MAX_COMMAND_TEMP_BYTES} bytes, so Claude \
+             Code would give its commands the one every session shares instead",
+            commands.display()
+        )));
+    }
+    Ok(temp)
+}
+
+/// `<temp>/claude-<uid>`: the folder Claude Code makes in its temp folder `temp` and gives
+/// sandboxed commands as their `TMPDIR`, which its sandbox lets them write.
+#[must_use]
+pub fn commands_temp(temp: &Path) -> PathBuf {
+    #[cfg(unix)]
+    let uid = rustix::process::getuid().as_raw();
+    // What Claude Code uses where there is no uid.
+    #[cfg(not(unix))]
+    let uid = 0;
+    temp.join(format!("claude-{uid}"))
+}
+
 /// The variable naming a script that Claude Code reads and runs before each Bash command, after
 /// the shell's startup files and its own shell snapshot (2.1.283). See [`write_env_file`].
 pub const ENV_FILE_ENV: &str = "CLAUDE_ENV_FILE";
@@ -408,9 +476,12 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
 /// because the sandbox's list binds only commands, and a deny rule beats the `*` allow for the
 /// tool. Bash is an allow rule as well, not only `autoAllowBashIfSandboxed`, so it stays allowed
 /// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders,
-/// and the read-only git paths stay readable inside an unreadable path, such as wispd's data
-/// folder, which holds the worktree, the context folder, and a normal thread's scratch repository
-/// (#110). A second account's `config_home` is unreadable too.
+/// the read-only git paths, and the commands' `TMPDIR` in the run's temp folder
+/// ([`commands_temp`], which Claude Code lets them write) stay readable inside an unreadable
+/// path, such as wispd's data folder, which holds the worktree, the context folder, and a normal
+/// thread's scratch repository (#110). The rest of the temp folder stays hidden: the CLI's own
+/// unsandboxed processes keep files there. A second account's `config_home` is unreadable too.
+/// [`WORKER_DENIED_WRITES`] aren't writable.
 #[must_use]
 pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<&Path>) -> Value {
     let unreadable = strings(
@@ -423,9 +494,11 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
     let readable = strings(
         std::iter::once(cwd)
             .chain(sandbox.writable.iter().map(PathBuf::as_path))
-            .chain(sandbox.read_only.iter().map(PathBuf::as_path)),
+            .chain(sandbox.read_only.iter().map(PathBuf::as_path))
+            .chain([commands_temp(&sandbox.temp).as_path()]),
     );
-    let read_only = strings(sandbox.read_only.iter().map(PathBuf::as_path));
+    let mut read_only = strings(sandbox.read_only.iter().map(PathBuf::as_path));
+    read_only.extend(WORKER_DENIED_WRITES.iter().map(|&path| path.to_owned()));
     let denied_fetches: Vec<String> = WORKER_DENIED_HOSTS
         .iter()
         .map(|host| format!("WebFetch(domain:{host})"))
@@ -579,6 +652,9 @@ impl Backend for ClaudeBackend {
         }
         let mut spec = ProcessSpec::new(self.program.clone(), &request.cwd);
         spec.args = arguments(&request)?;
+        if let Some(sandbox) = worker_sandbox(&request)? {
+            spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
+        }
         spec.scrub = scrubbed(self.launcher.base());
         let expected_key_source = apply_credential(&request.account.credential, &mut spec)?;
         for (name, value) in ALWAYS_SET {

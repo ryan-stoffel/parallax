@@ -11,12 +11,15 @@ mod common;
 
 use std::fmt::Write as _;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt};
 use std::os::unix::net::UnixListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use common::{run_worker, tool_result, worker_request};
 use wispd::backend::RunRequest;
+use wispd::backend::claude::{commands_temp, worker_temp};
+use wispd::backend::run_temp;
+use wispd::paths::DataDir;
 
 const SECRET: &str = "wisp-sandbox-test-secret";
 
@@ -40,7 +43,6 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
         &context,
         &data.join("context/other"),
         &git_dir,
-        &root.join("tmp"),
     ] {
         fs::create_dir_all(folder).unwrap();
     }
@@ -76,7 +78,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
         inside = path(&worktree.join("inside")),
         note = path(&context.join("note")),
     );
-    let mut request = worker_request(&home, &data, &worktree, &git_dir, &context);
+    let (mut request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
     if cfg!(target_os = "linux") {
         // The seccomp filter's job: no Unix sockets, such as the D-Bus session bus.
         writeln!(
@@ -128,4 +130,97 @@ fn probe_registry_login(probe: &mut String, request: &mut RunRequest, root: &Pat
     fs::write(&login, format!("{SECRET}-registry")).unwrap();
     request.sandbox.as_mut().unwrap().unreadable.push(runtime);
     writeln!(probe, "cat '{}'", login.display()).unwrap();
+}
+
+/// A worker's `TMPDIR` is its own run's (RYA-130): it can't read or write another run's temp
+/// folder, the `/tmp/claude-<uid>` every Claude Code session shares, or its CLI's own temp files,
+/// and it can't write the paths Claude Code's sandbox would always allow.
+#[tokio::test]
+async fn a_worker_s_temp_is_its_own() {
+    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: WISP_SANDBOX_CLAUDE doesn't name a Claude Code to test");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let data = root.join("data");
+    let worktree = data.join("worktrees/run");
+    let context = data.join("context/p");
+    let git_dir = root.join("repo/.git");
+    for folder in [
+        &home.join(".npm/_logs"),
+        &home.join(".claude/debug"),
+        &worktree,
+        &context,
+        &git_dir,
+    ] {
+        fs::create_dir_all(folder).unwrap();
+    }
+    let git_file = format!("gitdir: {}/worktrees/run\n", git_dir.display());
+    fs::write(worktree.join(".git"), git_file).unwrap();
+    let (request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
+    let temp = &request.sandbox.as_ref().unwrap().temp;
+    // Another run of the same wispd, and what another Claude Code session left in the shared
+    // folder, which this makes if it's missing.
+    let other = run_temp::create(&DataDir::new(&data).unwrap()).unwrap();
+    fs::write(other.path().join("secret"), format!("{SECRET}-other-run")).unwrap();
+    let uid = rustix::process::getuid().as_raw();
+    let shared = Path::new("/tmp").join(format!("claude-{uid}"));
+    if let Err(error) = fs::DirBuilder::new().mode(0o700).create(&shared) {
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
+    }
+    let session = tempfile::Builder::new()
+        .prefix("wisp-sandbox-test-")
+        .tempdir_in(&shared)
+        .unwrap();
+    fs::write(session.path().join("output"), format!("{SECRET}-session")).unwrap();
+    // One of the paths the sandbox always lets commands write, made to exist so only the rule
+    // can stop the write.
+    let made_tmp_claude = fs::create_dir("/tmp/claude").is_ok();
+
+    // What counts is what reaches the disk: on Linux, a write under a hidden folder lands in
+    // the tmpfs that hides it, which only that one command sees.
+    let planted = [
+        temp.join("planted"),
+        other.path().join("planted"),
+        session.path().join("planted"),
+        home.join(".npm/_logs/planted"),
+        home.join(".claude/debug/planted"),
+        PathBuf::from("/tmp/claude/wisp-sandbox-test"),
+    ];
+    let mut probe = format!(
+        "echo \"tmpdir=$TMPDIR\"\n\
+         echo x > \"$TMPDIR/file\"\n\
+         cat '{}/secret'\n\
+         cat '{}/output'\n",
+        other.path().display(),
+        session.path().display(),
+    );
+    for file in &planted {
+        writeln!(probe, "echo x > '{}'", file.display()).unwrap();
+    }
+    fs::write(worktree.join("probe.sh"), probe).unwrap();
+    let (stdout, transcript) = run_worker(
+        &claude,
+        &request,
+        &root,
+        &home,
+        &[("ANTHROPIC_API_KEY", "sk-ant-wisp-sandbox-test")],
+    )
+    .await;
+    let written: Vec<&PathBuf> = planted.iter().filter(|file| file.exists()).collect();
+    if made_tmp_claude {
+        fs::remove_dir_all("/tmp/claude").unwrap();
+    }
+
+    let result = tool_result(&stdout).unwrap_or_else(|| panic!("no Bash result:\n{transcript}"));
+    let own = worker_temp(temp).unwrap().join(format!("claude-{uid}"));
+    assert!(
+        result.contains(&format!("tmpdir={}\n", own.display())),
+        "{transcript}"
+    );
+    assert!(commands_temp(temp).join("file").exists(), "{result}");
+    assert!(!stdout.contains(SECRET), "a secret was read:\n{result}");
+    assert!(written.is_empty(), "wrote {written:?}:\n{result}");
 }

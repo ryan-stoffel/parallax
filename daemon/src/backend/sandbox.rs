@@ -2,11 +2,11 @@
 //! whichever backend runs it.
 //!
 //! A worker writes its cwd (its worktree), the project's shared context folder (0005), and its
-//! own temp folder. Its commands can't write git metadata or read credential stores or wispd's
-//! data folder. They do have network access (Ryan, #137), so the read denylist is what keeps a
-//! secret from leaving the machine. Each backend turns a [`WorkerSandbox`] into its own vendor's
-//! flags; wispd adds no OS sandbox of its own, because a vendor's sandbox can't start inside one
-//! (0013).
+//! own temp folder (RYA-130). Its commands can't write git metadata or read credential stores,
+//! wispd's data folder, or any other run's temp. They do have network access (Ryan, #137), so the
+//! read denylist is what keeps a secret from leaving the machine. Each backend turns a
+//! [`WorkerSandbox`] into its own vendor's flags; wispd adds no OS sandbox of its own, because a
+//! vendor's sandbox can't start inside one (0013).
 
 use std::path::{Path, PathBuf};
 
@@ -216,10 +216,18 @@ pub struct WorkerSandbox {
     /// `.git` file and the repository's git folder it points into. wispd commits for every
     /// backend (0013).
     pub read_only: Vec<PathBuf>,
-    /// Paths commands may not read: [`unreadable_in_home`], on Linux the user's runtime folder, and
-    /// wispd's data folder. The cwd and [`WorkerSandbox::writable`] stay readable where they fall
-    /// inside one of these.
+    /// Paths commands may not read: [`unreadable_in_home`], on Linux the user's runtime folder,
+    /// wispd's data folder, the folder that holds every run's temp folder, and Claude Code's
+    /// `/tmp/claude-<uid>`, which every Claude Code session of this user shares. The cwd,
+    /// [`WorkerSandbox::writable`], and the commands' `TMPDIR` in [`WorkerSandbox::temp`] stay
+    /// readable where they fall inside one of these.
     pub unreadable: Vec<PathBuf>,
+    /// The run's own temp folder, which wispd makes before the CLI starts and removes when it
+    /// exits (RYA-130). A backend points the vendor's temp setting at it (Claude Code's
+    /// `CLAUDE_CODE_TMPDIR`), so its commands' `TMPDIR` is this folder or one inside it. The CLI
+    /// keeps files of its own here too, so commands may use only their `TMPDIR` (for Claude Code,
+    /// `<temp>/claude-<uid>`).
+    pub temp: PathBuf,
 }
 
 impl WorkerSandbox {
@@ -227,7 +235,8 @@ impl WorkerSandbox {
     /// points into `git_dir`, the repository's shared git folder (`git rev-parse
     /// --git-common-dir`), and whose project's shared context folder is `context`. `home` is the
     /// user's home folder, and `data_dir` wispd's data folder, which holds both the worktree and
-    /// the context folder.
+    /// the context folder. `temp` is the run's temp folder from [`super::run_temp::create`],
+    /// `<root>/<run>`, so its parent holds every other run's.
     #[must_use]
     pub fn for_worktree(
         home: &Path,
@@ -235,16 +244,29 @@ impl WorkerSandbox {
         worktree: &Path,
         git_dir: &Path,
         context: &Path,
+        temp: &Path,
     ) -> Self {
+        let runs = temp.parent().unwrap_or(temp);
+        // Claude Code's shared folder is in `/tmp` whichever root `temp` is in.
+        #[cfg(unix)]
+        let claude_shared = {
+            let shared = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
+            let uid = rustix::process::getuid().as_raw();
+            Some(shared.join(format!("claude-{uid}")))
+        };
+        #[cfg(not(unix))]
+        let claude_shared = None;
         let unreadable = unreadable_in_home()
             .map(|path| home.join(path))
             .chain(unreadable_outside_home())
-            .chain([data_dir.to_owned()])
+            .chain([data_dir.to_owned(), runs.to_owned()])
+            .chain(claude_shared)
             .collect();
         Self {
             writable: vec![context.to_owned()],
             read_only: vec![worktree.join(".git"), git_dir.to_owned()],
             unreadable,
+            temp: temp.to_owned(),
         }
     }
 
@@ -254,6 +276,7 @@ impl WorkerSandbox {
             .iter()
             .chain(&self.read_only)
             .chain(&self.unreadable)
+            .chain([&self.temp])
             .map(PathBuf::as_path)
     }
 }
@@ -333,6 +356,8 @@ mod tests {
             Path::new("/Users/u/Library/Application Support/wisp/worktrees/app-1a2b/run"),
             Path::new("/Users/u/src/app/.git"),
             Path::new("/Users/u/Library/Application Support/wisp/context/p"),
+            // A fallback root in `$TMPDIR`, as when `/tmp` can't be written.
+            Path::new("/private/var/folders/x/T/wisp-625c7f6d/Ab12Cd"),
         );
         assert_eq!(
             sandbox.writable,
@@ -353,9 +378,32 @@ mod tests {
                 .unreadable
                 .contains(&"/Users/u/Library/Application Support/wisp".into())
         );
+        // Every other run's temp folder, and the one all of this user's Claude sessions share.
+        assert!(
+            sandbox
+                .unreadable
+                .contains(&"/private/var/folders/x/T/wisp-625c7f6d".into())
+        );
+        #[cfg(unix)]
+        {
+            let uid = rustix::process::getuid().as_raw();
+            let tmp = std::fs::canonicalize("/tmp").unwrap();
+            assert!(
+                sandbox
+                    .unreadable
+                    .contains(&tmp.join(format!("claude-{uid}")))
+            );
+        }
         assert_eq!(
             sandbox.unreadable.len(),
-            unreadable_in_home().count() + unreadable_outside_home().len() + 1
+            unreadable_in_home().count()
+                + unreadable_outside_home().len()
+                + 2
+                + usize::from(cfg!(unix))
+        );
+        assert_eq!(
+            sandbox.temp,
+            Path::new("/private/var/folders/x/T/wisp-625c7f6d/Ab12Cd")
         );
     }
 
@@ -397,6 +445,7 @@ mod tests {
             Path::new("/home/u/.local/share/wisp/worktrees/app-1a2b/run"),
             Path::new("/home/u/src/app/.git"),
             Path::new("/home/u/.local/share/wisp/context/p"),
+            Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
         );
         sandbox.unreadable.push("/run/user/1000".into());
         assert_eq!(worker_temp_dir(None), Path::new("/tmp"));
