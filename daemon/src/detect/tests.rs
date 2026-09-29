@@ -274,6 +274,33 @@ async fn a_cached_list_is_reused_until_a_refresh_or_the_ttl() {
     );
 }
 
+#[tokio::test]
+async fn get_probes_only_the_cli_asked_for() {
+    let fixture = Fixture::new();
+    fixture.install("claude", FAKE_CLAUDE);
+    // Cursor's status command leaves a marker when it runs.
+    let marker = fixture.root().join("cursor-ran");
+    fixture.install(
+        "agent",
+        &format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+    );
+    let mut env = fixture.env();
+    env.set("FAKE_CLI_STDOUT", r#"{"loggedIn":true}"#);
+    let detector = CliDetector::new(fixture.launcher(env), Duration::from_secs(2));
+
+    let claude = detector.get(CliKind::Claude).await;
+    assert_eq!(claude.signed_in, Some(true));
+    assert!(!marker.exists(), "asking for Claude ran Cursor's status");
+
+    // A second ask is served from what the first probed.
+    assert_eq!(detector.get(CliKind::Claude).await, claude);
+    // `refresh_one` re-probes, and the full list serves the newer entry.
+    detector.list().await;
+    let refreshed = detector.refresh_one(CliKind::Claude).await;
+    let listed = detector.list().await;
+    assert_eq!(find(&listed.clis, CliKind::Claude), &refreshed);
+}
+
 /// Proves detection never opens a vendor's credential files: with sentinel files under fake
 /// `.claude`, `.codex`, and `.cursor` folders made unreadable (mode 0), a full `refresh()` still
 /// succeeds and the files are exactly as they were. `detect.rs` has no code path that reads a path
