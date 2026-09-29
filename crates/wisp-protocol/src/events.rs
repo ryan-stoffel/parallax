@@ -163,6 +163,15 @@ pub enum WispEvent {
         /// What happened to the project's repository.
         merge: AgentMerge,
     },
+    /// wispd stopped waking a project's coordinator on its own (RYA-42, decision 0025): it took
+    /// 10 wake-up turns in a row without a message from the user, the user stopped it with
+    /// `agent/cancel`, or a wake-up couldn't start it. Runs that finish meanwhile are kept, and
+    /// the user's next `agent/send` to the coordinator lets them through.
+    #[serde(rename = "agent.wakeupsPaused")]
+    AgentWakeupsPaused {
+        /// The coordinator's run id.
+        run_id: RunId,
+    },
     /// `repo/add` registered a repository for normal threads, or wispd made its scratch entry
     /// (#110). Host-level.
     #[serde(rename = "repo.added")]

@@ -573,6 +573,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
     assert!(transcript.contains(&AgentOutputItem::TurnStarted {
         turn_id: Some(first),
         text: Some("and the tests".to_owned()),
+        wake: false,
     }));
     assert!(transcript.contains(&AgentOutputItem::Text {
         message_id: None,
@@ -613,6 +614,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
     assert!(transcript.contains(&AgentOutputItem::TurnStarted {
         turn_id: Some(second),
         text: Some("one more thing".to_owned()),
+        wake: false,
     }));
     let third = TurnId::generate();
     client
@@ -786,6 +788,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
+            wake: false,
         },
         AgentOutputItem::SessionStarted {
             session_id: "hang-1".to_owned(),
@@ -857,6 +860,7 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
         has_item(AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
+            wake: false,
         }),
     )
     .await;

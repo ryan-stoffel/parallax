@@ -4,13 +4,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use uuid::Uuid;
-use wisp_protocol::methods::{AgentEvents, AgentSend, ProjectList, ProjectStart};
+use wisp_protocol::methods::{AgentEvents, AgentSend, AgentStart, ProjectList, ProjectStart};
 use wisp_protocol::{
     AccountChoice, AgentEventsParams, AgentFailureKind, AgentOutcome, AgentOutputItem, AgentPolicy,
-    AgentStatus, CoordinatorThreadId, ErrorKind, EventsEventParams, ProjectId, ProjectListParams,
-    ProjectStartParams, Provider, RunId, TurnId, WispEvent,
+    AgentStartParams, AgentStatus, CoordinatorThreadId, ErrorKind, EventsEventParams, ProjectId,
+    ProjectListParams, ProjectStartParams, Provider, RunId, TurnId, WispEvent,
 };
 use wispd::backend::fake::{FakeBackend, Step};
 use wispd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
@@ -21,7 +22,7 @@ use crate::agents::{
     Host, create, end_turn, fake, fake_backend, git, init, items, outcomes, project_params,
     send_params, subscribe, text, until, updated_to,
 };
-use crate::support::{kind, temp_dir};
+use crate::support::{PATIENCE, kind, temp_dir};
 
 /// The fake backend, keeping every request it is asked to start.
 struct Recording {
@@ -336,5 +337,135 @@ async fn the_users_edits_and_commits_during_a_turn_never_stop_it() {
         "edited\n"
     );
     assert!(!worktree.join("notes.txt").exists());
+    host.server.stop().await;
+}
+
+/// Workers on one script, and each coordinator launch on the next of its own, keeping every
+/// request.
+struct Roles {
+    worker: FakeBackend,
+    coordinator: Mutex<Vec<FakeBackend>>,
+    seen: Arc<Mutex<Vec<RunRequest>>>,
+}
+
+impl Backend for Roles {
+    fn name(&self) -> &'static str {
+        self.worker.name()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.worker.capabilities()
+    }
+
+    fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        self.seen.lock().unwrap().push(request.clone());
+        if request.policy == ToolPolicy::NoWrite {
+            self.coordinator.lock().unwrap().remove(0).start(request)
+        } else {
+            self.worker.start(request)
+        }
+    }
+}
+
+/// RYA-42: two runs the coordinator started finish during its turn; once that turn ends, and with
+/// no client connected, wispd wakes it with one turn that names both.
+#[tokio::test]
+async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_connected() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(Roles {
+            worker: fake_backend(vec![init("worker-1"), end_turn("Added it.")]),
+            coordinator: Mutex::new(vec![
+                fake_backend(vec![
+                    init("coordinator-1"),
+                    Step::AwaitFollowUp,
+                    end_turn("Planned."),
+                ]),
+                fake_backend(vec![init("coordinator-1"), end_turn("Reviewed.")]),
+            ]),
+            seen: Arc::clone(&seen),
+        }),
+    );
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+
+    // As its spawn_agent would start them.
+    let thread = coordinator.coordinator_thread;
+    let mut workers = Vec::new();
+    for task in ["Add a README.", "Add a license."] {
+        let params = AgentStartParams {
+            coordinator_thread: thread,
+            ..crate::agents::start_params(project.id, task)
+        };
+        workers.push(client.call::<AgentStart>(params).await.unwrap().run.id);
+    }
+    let mut left = workers.len();
+    until(&mut client, |event| {
+        if matches!(&event.event, WispEvent::AgentUpdated { run_id, state }
+            if workers.contains(run_id) && state.status == AgentStatus::Completed)
+        {
+            left -= 1;
+        }
+        left == 0
+    })
+    .await;
+    let coordinator_launches = || {
+        let seen = seen.lock().unwrap();
+        seen.iter()
+            .filter(|request| request.policy == ToolPolicy::NoWrite)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    // Past wake-ups' 2 s batch: a turn in progress still holds them.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(coordinator_launches().len(), 1, "no wake-up during a turn");
+
+    // The user's message ends the coordinator's turn; then nobody is watching.
+    client
+        .call::<AgentSend>(send_params(coordinator.id, TurnId::generate(), "Go on."))
+        .await
+        .unwrap();
+    drop(client);
+    let deadline = Instant::now() + PATIENCE;
+    while coordinator_launches().len() < 2 {
+        assert!(Instant::now() < deadline, "the coordinator was never woken");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let wake = coordinator_launches()[1].clone();
+    assert!(wake.resume.is_some(), "a wake-up resumes the session");
+    for worker in &workers {
+        assert!(wake.prompt.contains(&worker.to_string()), "{}", wake.prompt);
+    }
+    assert!(
+        wake.prompt.contains("completed, saying: Added it."),
+        "{}",
+        wake.prompt
+    );
+
+    let mut client = host.client().await;
+    subscribe(&mut client, project.id, 0).await;
+    let events = until(&mut client, |event| {
+        matches!(&event.event, WispEvent::AgentOutput { items, .. } if items.iter().any(|item|
+            matches!(item, AgentOutputItem::TurnStarted { wake: true, .. })))
+    })
+    .await;
+    let Some(WispEvent::AgentOutput { run_id, items }) = events.last().map(|e| &e.event) else {
+        unreachable!();
+    };
+    assert_eq!(*run_id, coordinator.id);
+    assert!(items.contains(&AgentOutputItem::TurnStarted {
+        turn_id: wake.turn_id,
+        text: Some(wake.prompt.clone()),
+        wake: true,
+    }));
     host.server.stop().await;
 }

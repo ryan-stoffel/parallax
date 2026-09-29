@@ -314,10 +314,12 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             session_id: truncate(session_id, MAX_ID_BYTES),
             model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
         },
-        // The backend knows only the id; the run's actor adds a follow-up's text (RYA-92).
+        // The backend knows only the id; the run's actor adds a follow-up's text (RYA-92), and
+        // marks a coordinator's wake-up (RYA-42).
         Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted {
             turn_id: *turn_id,
             text: None,
+            wake: false,
         },
         Event::TextDelta { message_id, text } => AgentOutputItem::TextDelta {
             message_id: id(message_id.as_deref()),

@@ -4,9 +4,10 @@
 //! `thread/delete`) and the run's backend events in one loop, so nothing about a run needs a lock,
 //! and events are logged in the order they happened.
 //!
-//! A project's coordinator (0024) differs in three places: it starts in a detached worktree of
+//! A project's coordinator (0024) differs in four places: it starts in a detached worktree of
 //! the project's repository (RYA-171) with wispd's tools and no sandbox, that worktree is checked
-//! after every turn (0004), and it is never committed.
+//! after every turn (0004), it is never committed, and runs it started wake it when they finish
+//! (RYA-42, [`super::wake`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,7 @@ use wisp_protocol::{
 use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, Worktree};
 
 use super::convert::{self, agent_run, item_bytes, option_name, option_value, output_item};
+use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
@@ -75,6 +77,8 @@ pub(super) enum Command {
     Delete {
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
+    /// A run this coordinator started finished, as [`wake::summary`] tells it (RYA-42).
+    Wake(String),
 }
 
 impl Command {
@@ -93,6 +97,7 @@ impl Command {
             Self::Delete { reply } => {
                 let _ = reply.send(Err(error));
             }
+            Self::Wake(_) => {}
         }
     }
 }
@@ -141,6 +146,8 @@ pub(super) struct Actor {
     stopping: bool,
     /// Set once `thread/delete` removed the run: the actor stops, refusing what is still queued.
     deleted: bool,
+    /// A coordinator's wake-ups (RYA-42).
+    wakes: Wakes,
 }
 
 impl Actor {
@@ -173,6 +180,7 @@ impl Actor {
             violation: None,
             stopping: false,
             deleted: false,
+            wakes: Wakes::default(),
         }
     }
 
@@ -196,6 +204,8 @@ impl Actor {
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, shutdown: CancellationToken) {
         loop {
             let deadline = self.batch.since.map(|since| since + COALESCE);
+            // A coordinator's turn in progress gets its wake-ups next, once its CLI has exited.
+            let wake_at = self.wakes.due().filter(|_| self.live.is_none());
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
                 // event (#190 N6): while a CLI keeps its stream busy, that event branch is
@@ -219,6 +229,9 @@ impl Actor {
                 },
                 () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
                     self.flush().await;
+                }
+                () = sleep_until(wake_at.unwrap_or_else(Instant::now)), if wake_at.is_some() => {
+                    self.wake().await;
                 }
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
@@ -244,12 +257,20 @@ impl Actor {
                 reply,
             } => {
                 let answer = self.send(turn_id, text, options).await;
+                if answer.is_ok() {
+                    self.wakes.attended();
+                }
                 let _ = reply.send(answer);
             }
             Command::Cancel { reply } => {
                 if let Some(live) = &self.live {
                     info!(run = %self.id, "cancelling an agent run");
                     live.run.cancel();
+                }
+                // Stop means stop: a run finishing a moment later doesn't start the coordinator
+                // again before the user writes.
+                if self.is_coordinator() {
+                    self.pause_wakes().await;
                 }
                 let _ = reply.send(self.snapshot());
             }
@@ -273,6 +294,57 @@ impl Actor {
                 }
                 let _ = reply.send(answer);
             }
+            Command::Wake(summary) => {
+                if self.is_coordinator() {
+                    self.wakes.push(summary, Instant::now());
+                }
+            }
+        }
+    }
+
+    /// Sends what is waiting as the coordinator's next turn, through the same resume as
+    /// `agent/send` (RYA-42). Pauses wake-ups at the cap, or when this fails, keeping what is
+    /// waiting. Only the project's current coordinator wakes: a replaced one drops them, so a
+    /// project never has two live (0024).
+    async fn wake(&mut self) {
+        let project = self.project.into();
+        let current = store(&self.daemon, move |db| {
+            super::coordinator::coordinator_of(db, project)
+        })
+        .await;
+        match current {
+            Ok(Some(current)) if current == self.id => {}
+            Ok(_) => {
+                self.wakes.clear();
+                return;
+            }
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not check a coordinator before waking it");
+                self.pause_wakes().await;
+                return;
+            }
+        }
+        let Some((turn_id, text)) = self.wakes.next() else {
+            self.pause_wakes().await;
+            return;
+        };
+        info!(run = %self.id, "waking a coordinator: runs it started finished");
+        match self.resume(turn_id, text, RunOptions::default()).await {
+            Ok(_) if self.live.is_some() => self.wakes.delivered(),
+            Ok(_) => self.pause_wakes().await,
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not wake a coordinator");
+                self.pause_wakes().await;
+            }
+        }
+    }
+
+    /// Stops waking the coordinator until the user writes, and says so once (RYA-42).
+    async fn pause_wakes(&mut self) {
+        if self.wakes.pause() {
+            info!(run = %self.id, "pausing a coordinator's wake-ups until the user writes");
+            self.append(WispEvent::AgentWakeupsPaused { run_id: self.id })
+                .await;
         }
     }
 
@@ -924,8 +996,10 @@ impl Actor {
                     if let AgentOutputItem::TurnStarted {
                         turn_id: Some(turn_id),
                         text,
+                        wake,
                     } = &mut item
                     {
+                        *wake = self.wakes.was_sent(*turn_id);
                         *text = self
                             .turns
                             .get(turn_id)
@@ -966,7 +1040,7 @@ impl Actor {
 
     /// Records how a CLI process ended: as a coordinator's policy violation, if its turn broke
     /// it. Unless wispd stopped it, commits a worker's changes first, through #166's hardened
-    /// commit, and reports the commit.
+    /// commit, and reports the commit, then wakes the coordinator that started the run.
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
         let violation = self.violation.take().map(Outcome::Failed);
@@ -1005,7 +1079,7 @@ impl Actor {
         };
         self.append(WispEvent::AgentFinished {
             run_id: self.id,
-            outcome,
+            outcome: outcome.clone(),
         })
         .await;
         if let Some(diff) = diff {
@@ -1023,6 +1097,12 @@ impl Actor {
         self.row.state.error = error;
         info!(run = %self.id, status, "an agent run's CLI finished");
         self.save().await;
+        if let Some(thread) = self.row.fields.coordinator_thread
+            && !self.is_coordinator()
+            && let Ok(run) = self.snapshot()
+        {
+            wake::notify(&self.daemon, thread, wake::summary(&run, &outcome));
+        }
     }
 
     /// Commits whatever the run changed in its worktree, on its branch, and measures the branch

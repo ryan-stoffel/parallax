@@ -1503,7 +1503,11 @@ export type WispEvent = { "kind": "project.created",
 	/**
 	 * What happened to the project's repository.
 	 */
-	merge: AgentMerge, } | { "kind": "repo.added",
+	merge: AgentMerge, } | { "kind": "agent.wakeupsPaused",
+	/**
+	 * The coordinator's run id.
+	 */
+	runId: RunId, } | { "kind": "repo.added",
 	/**
 	 * The entry.
 	 */
@@ -1602,7 +1606,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 * the prompt's turn, whose text is the run's `prompt`, and in logs from before wispd
 	 * recorded it.
 	 */
-	text?: string, } | { "kind": "textDelta",
+	text?: string,
+	/**
+	 * True for a wake-up (RYA-42, decision 0025): a turn wispd sent a project's coordinator
+	 * on its own, not the user, because runs it started finished. `text` lists them.
+	 */
+	wake?: boolean, } | { "kind": "textDelta",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
