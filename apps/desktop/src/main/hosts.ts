@@ -47,6 +47,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "agent/file": true,
   "agent/accept": true,
   "agent/requestChanges": true,
+  "agent/openPr": true,
   "thread/list": true,
   "repo/add": true,
   "thread/start": true,
