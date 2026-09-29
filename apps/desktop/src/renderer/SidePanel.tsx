@@ -1,89 +1,165 @@
-import { Bot, FileDiff, NotebookText } from "lucide-react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import {
+  ChevronLeft,
+  FolderTree,
+  GitCompare,
+  Globe,
+  Maximize2,
+  Minimize2,
+  NotebookText,
+  PanelRight,
+  Terminal,
+  Workflow,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import { TopBar } from "./ui";
+import { IconButton, TopBar } from "./ui";
 
-const tabs = [
+interface Surface {
+  name: string;
+  icon: LucideIcon;
+  /** The letter that opens it from the list. */
+  key: string;
+  /** Its empty state, or absent while it isn't built. */
+  empty?: { title: string; hint: string };
+}
+
+const surfaces: Surface[] = [
   {
-    id: "diffs",
-    name: "Diffs",
-    icon: FileDiff,
-    empty: "No changes yet",
-    hint: "Edits from this thread show up here for review.",
+    name: "Changes",
+    icon: GitCompare,
+    key: "D",
+    empty: { title: "No changes yet", hint: "Edits from this thread show up here for review." },
   },
   {
-    id: "context",
     name: "Context",
     icon: NotebookText,
-    empty: "No context yet",
-    hint: "Notes your agents share show up here.",
+    key: "C",
+    empty: { title: "No context yet", hint: "Notes your agents share show up here." },
   },
   {
-    id: "agents",
     name: "Agents",
-    icon: Bot,
-    empty: "No agents running",
-    hint: "Subagents this thread starts show up here.",
+    icon: Workflow,
+    key: "A",
+    empty: { title: "No agents running", hint: "Subagents this thread starts show up here." },
   },
-] as const;
+  { name: "Terminal", icon: Terminal, key: "T" },
+  { name: "Files", icon: FolderTree, key: "F" },
+  { name: "Browser", icon: Globe, key: "B" },
+];
 
-/** The collapsible right column: diffs, shared context, and agents, as tabs. */
-export function SidePanel({ open }: { open: boolean }) {
-  const [active, setActive] = useState(0);
-  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+/**
+ * The collapsible right column. It opens on a list of views, each with a letter that opens it;
+ * the ones not built yet are dimmed. Its top bar keeps the hide button where the main pane
+ * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
+ * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner.
+ */
+export function SidePanel({
+  open,
+  onClose,
+  expanded,
+  onExpandedChange,
+  leading,
+  topBarClassName = "",
+}: {
+  open: boolean;
+  onClose: () => void;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  leading?: ReactNode;
+  topBarClassName?: string;
+}) {
+  const [surface, setSurface] = useState<Surface>();
 
-  // Arrow keys move between tabs, per the ARIA tabs pattern.
-  const onKeyDown = (e: KeyboardEvent) => {
-    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-    if (!step) return;
-    const next = (active + step + tabs.length) % tabs.length;
-    setActive(next);
-    tabRefs.current[next]?.focus();
-  };
+  // From the list, a view's letter opens it, unless the user is typing or in a dialog or menu.
+  useEffect(() => {
+    if (!open || surface) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.target as Element).closest("input, textarea, [contenteditable], dialog, [popover]"))
+        return;
+      const next = surfaces.find((s) => s.empty && s.key === e.key.toUpperCase());
+      if (!next) return;
+      e.preventDefault();
+      setSurface(next);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, surface]);
 
   return (
     <aside
       id="side-panel"
       aria-label="Side panel"
       hidden={!open}
-      className="flex w-[22rem] shrink-0 flex-col border-l border-border bg-sidebar"
+      className={`flex flex-col bg-background ${expanded ? "min-w-0 flex-1" : "w-[26rem] shrink-0 border-l border-border"}`}
     >
-      <TopBar className="window-controls-inset border-b border-border px-2">
-        <div role="tablist" aria-label="Side panel" onKeyDown={onKeyDown} className="flex gap-0.5">
-          {tabs.map((tab, i) => (
-            <button
-              key={tab.id}
-              ref={(el) => {
-                tabRefs.current[i] = el;
-              }}
-              type="button"
-              role="tab"
-              id={`tab-${tab.id}`}
-              aria-selected={i === active}
-              aria-controls={`panel-${tab.id}`}
-              tabIndex={i === active ? 0 : -1}
-              onClick={() => setActive(i)}
-              className={`rounded-md px-2.5 py-1 text-[13px] ${i === active ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
-            >
-              {tab.name}
-            </button>
-          ))}
+      <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
+        {leading}
+        {surface && (
+          <button
+            type="button"
+            onClick={() => setSurface(undefined)}
+            className="flex items-center gap-1 rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+          >
+            <ChevronLeft aria-hidden className="size-4" />
+            {surface.name}
+          </button>
+        )}
+        <div className="ml-auto flex items-center gap-0.5">
+          <IconButton
+            label={expanded ? "Shrink panel" : "Expand panel"}
+            onClick={() => onExpandedChange(!expanded)}
+          >
+            {expanded ? <Minimize2 /> : <Maximize2 />}
+          </IconButton>
+          <IconButton
+            label="Hide side panel"
+            keys="Alt+B"
+            aria-expanded
+            aria-controls="side-panel"
+            onClick={onClose}
+          >
+            <PanelRight />
+          </IconButton>
         </div>
       </TopBar>
-      {tabs.map((tab, i) => (
-        <div
-          key={tab.id}
-          role="tabpanel"
-          id={`panel-${tab.id}`}
-          aria-labelledby={`tab-${tab.id}`}
-          hidden={i !== active}
-          className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center"
-        >
-          <tab.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
-          <p className="text-[13px] font-medium text-foreground">{tab.empty}</p>
-          <p className="text-[12.5px] text-muted-foreground">{tab.hint}</p>
+      {surface?.empty ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
+          <surface.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
+          <p className="text-[13px] font-medium text-foreground">{surface.empty.title}</p>
+          <p className="text-[12.5px] text-muted-foreground">{surface.empty.hint}</p>
         </div>
-      ))}
+      ) : (
+        <nav
+          aria-labelledby="side-panel-views"
+          className="flex flex-1 flex-col items-center justify-center px-8 pb-16"
+        >
+          <h2 id="side-panel-views" className="mb-4 text-[14px] font-medium">
+            Open a view
+          </h2>
+          <ul className="w-full max-w-72">
+            {surfaces.map((s) => (
+              <li key={s.name}>
+                <button
+                  type="button"
+                  disabled={!s.empty}
+                  title={s.empty ? undefined : "Not built yet"}
+                  aria-keyshortcuts={s.empty ? s.key : undefined}
+                  onClick={() => setSurface(s)}
+                  className="group flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] enabled:hover:bg-hover disabled:text-faint-foreground"
+                >
+                  <s.icon aria-hidden className="size-4 shrink-0" />
+                  <span className="flex-1">{s.name}</span>
+                  <kbd className="grid size-6 place-items-center rounded-md bg-selected font-sans text-[11.5px] text-muted-foreground group-disabled:opacity-50">
+                    {s.key}
+                  </kbd>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
     </aside>
   );
 }

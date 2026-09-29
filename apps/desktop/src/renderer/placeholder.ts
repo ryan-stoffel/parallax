@@ -21,14 +21,3 @@ export const projects: Project[] = [
   { id: "p-formula", name: "formula-fly", icon: "bug", age: "6d" },
   { id: "p-site", name: "personal-site", icon: "user", age: "6d" },
 ];
-
-export interface ModelGroup {
-  provider: string;
-  models: string[];
-}
-
-/** The models Create Project offers. */
-export const models: ModelGroup[] = [
-  { provider: "Claude", models: ["Opus 5.5", "Sonnet 5", "Haiku 5"] },
-  { provider: "Codex", models: ["GPT-5.5", "GPT-5.5 mini"] },
-];

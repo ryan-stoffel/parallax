@@ -1,8 +1,8 @@
-import { X } from "lucide-react";
+import { Folder, X } from "lucide-react";
 import type { Ref } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
-import type { ModelGroup } from "./placeholder";
+import { ModelMenu } from "./ModelMenu";
 import { IconButton, Picker } from "./ui";
 
 /**
@@ -13,11 +13,9 @@ import { IconButton, Picker } from "./ui";
 export function NewProjectDialog({
   ref,
   repositories,
-  models,
 }: {
   ref: Ref<HTMLDialogElement>;
   repositories: Repo[];
-  models: ModelGroup[];
 }) {
   const row = "flex items-center justify-between gap-4 px-5 py-3";
   const workspaces = repositories.filter((r) => !r.scratch);
@@ -45,27 +43,17 @@ export function NewProjectDialog({
           <span aria-hidden className="text-[13px]">
             Workspace
           </span>
-          <Picker label="Workspace" defaultValue={workspaces[0]?.id}>
-            {workspaces.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))}
-          </Picker>
+          <Picker
+            label="Workspace"
+            align="end"
+            options={workspaces.map((r) => ({ value: r.id, label: r.name, icon: <Folder /> }))}
+          />
         </div>
         <div className={row}>
           <span aria-hidden className="text-[13px]">
             Model
           </span>
-          <Picker label="Model" defaultValue="Opus 5.5">
-            {models.map((group) => (
-              <optgroup key={group.provider} label={group.provider}>
-                {group.models.map((m) => (
-                  <option key={m}>{m}</option>
-                ))}
-              </optgroup>
-            ))}
-          </Picker>
+          <ModelMenu />
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3">
           <p className="text-[12px] text-muted-foreground">

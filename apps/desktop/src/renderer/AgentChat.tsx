@@ -26,7 +26,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import type { AgentRun, JsonValue } from "../protocol/generated/protocol";
-import { Composer } from "./Composer";
+import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { accountLabel, failureText, isRunning, statusLabel, type Item } from "./transcript";
 import { useAgentRun } from "./useAgentRun";
@@ -121,7 +121,7 @@ export function AgentChat({
           onSend={send}
           onStop={isRunning(run?.status) ? cancel : undefined}
           disabledReason={disabledReason}
-          footer={run && <RunFooter run={run} />}
+          tab={run && <RunFooter run={run} />}
         />
       </div>
     </>
@@ -515,7 +515,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
   );
 }
 
-/** The run's status, account, and worktree branch, under the composer. */
+/** An open run in the composer's tab: its status and account, then its worktree branch. */
 export function RunFooter({ run }: { run: AgentRun }) {
   const dot = isRunning(run.status)
     ? "bg-emerald-500 animate-pulse"
@@ -523,18 +523,20 @@ export function RunFooter({ run }: { run: AgentRun }) {
       ? "bg-danger"
       : "bg-faint-foreground/50";
   return (
-    <div className="flex min-w-0 items-center gap-4 px-2 pt-2 text-[12px] text-muted-foreground">
-      <span className="flex shrink-0 items-center gap-2">
-        <span aria-hidden className={`size-1.5 rounded-full ${dot}`} />
-        {statusLabel(run.status)}
+    <>
+      <span className="flex min-w-0 items-center gap-4 px-2 py-1 text-[13.5px] text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-2">
+          <span aria-hidden className={`size-1.5 rounded-full ${dot}`} />
+          {statusLabel(run.status)}
+        </span>
+        <span className="truncate">{accountLabel(run.accountId)}</span>
       </span>
-      <span className="shrink-0">{accountLabel(run.accountId)}</span>
       {run.branch && (
-        <span className="flex min-w-0 items-center gap-1.5" title="Worktree branch">
-          <GitBranch aria-hidden className="size-3.5 shrink-0" />
-          <span className="truncate font-mono text-[11.5px]">{run.branch}</span>
+        <span className={tabItem} title="Worktree branch">
+          <GitBranch aria-hidden />
+          <span className="truncate">{run.branch}</span>
         </span>
       )}
-    </div>
+    </>
   );
 }
