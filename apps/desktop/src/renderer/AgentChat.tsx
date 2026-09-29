@@ -179,7 +179,7 @@ export function TranscriptView({
       });
     return grouped;
   }, [rows, live]);
-  const activeKey = live ? view.findLast((r) => r.kind !== "assistant")?.key : undefined;
+  const activeIndex = live ? view.findLastIndex((r) => r.kind !== "assistant") : -1;
 
   const virtualizer = useVirtualizer({
     count: view.length,
@@ -225,7 +225,8 @@ export function TranscriptView({
                   live={live}
                   open={open.has(row.key)}
                   openKeys={row.kind === "work" ? open : undefined}
-                  active={row.key === activeKey}
+                  active={v.index === activeIndex}
+                  answering={v.index === activeIndex && activeIndex < view.length - 1}
                   onToggle={toggle}
                   onResend={onResend}
                 />
@@ -249,6 +250,8 @@ interface RowProps {
   openKeys?: ReadonlySet<string>;
   /** For a work row: whether it is the one the agent is working in now. */
   active?: boolean;
+  /** For the active work row: whether the agent has moved on to its closing message. */
+  answering?: boolean;
   onToggle: (key: string, open: boolean) => void;
   /** Sends a dropped follow-up again. */
   onResend?: (turnId: string, text: string) => void;
@@ -262,6 +265,7 @@ export const RowView = memo(function RowView({
   open,
   openKeys,
   active,
+  answering,
   onToggle,
   onResend,
 }: RowProps) {
@@ -271,6 +275,7 @@ export const RowView = memo(function RowView({
         <WorkGroup
           work={row}
           active={active ?? false}
+          answering={answering ?? false}
           live={live}
           open={open}
           openKeys={openKeys ?? new Set()}
@@ -399,6 +404,7 @@ export const RowView = memo(function RowView({
 function WorkGroup({
   work,
   active,
+  answering,
   live,
   open,
   openKeys,
@@ -406,17 +412,19 @@ function WorkGroup({
 }: {
   work: Work;
   active: boolean;
+  answering: boolean;
   live: boolean;
   open: boolean;
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
 }) {
-  const now = active ? activity(work.items.at(-1)) : undefined;
+  const now = active ? (answering ? { label: "Writing" } : activity(work.items.at(-1))) : undefined;
   return (
     <div>
       <button
         type="button"
         aria-expanded={open}
+        disabled={work.items.length === 0}
         onClick={() => onToggle(work.key, !open)}
         className="group/work flex max-w-full cursor-default items-center gap-1.5 rounded-md py-0.5 text-[13px] hover:text-foreground"
       >
@@ -428,10 +436,12 @@ function WorkGroup({
         ) : (
           <span className="text-muted-foreground">{workedFor(work.startedAt, work.endedAt)}</span>
         )}
-        <ChevronRight
-          aria-hidden
-          className={`size-3.5 shrink-0 text-faint-foreground transition-transform ${open ? "rotate-90" : ""}`}
-        />
+        {work.items.length > 0 && (
+          <ChevronRight
+            aria-hidden
+            className={`size-3.5 shrink-0 text-faint-foreground transition-transform ${open ? "rotate-90" : ""}`}
+          />
+        )}
       </button>
       {open && (
         <div className="mt-2 ml-1 space-y-2.5 border-l border-border pl-4">

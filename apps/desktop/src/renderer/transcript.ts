@@ -188,16 +188,17 @@ export interface Work {
 
 /**
  * Folds each run of agent activity into one `Work` row. The agent's closing messages, after its
- * last tool call or thought, stay out as the turn's answer. Other rows (user, notice, end, and
- * whatever the caller adds) split runs and pass through.
+ * last tool call or thought, stay out as the turn's answer, and so do notices after it. A notice
+ * for a dropped follow-up, and other rows (user, end, and whatever the caller adds), split runs
+ * and pass through.
  */
 export function groupWork<R extends { kind: string; at?: string }>(
   rows: readonly (Item | R)[],
 ): (Item | R | Work)[] {
   const out: (Item | R | Work)[] = [];
   let run: Item[] = [];
-  const flush = (next?: { at?: string }) => {
-    const last = run.findLastIndex((i) => i.kind !== "assistant");
+  const flush = (next?: { kind: string; at?: string }) => {
+    const last = run.findLastIndex((i) => i.kind !== "assistant" && i.kind !== "notice");
     if (last >= 0) {
       const items = run.slice(0, last + 1);
       out.push({
@@ -205,14 +206,20 @@ export function groupWork<R extends { kind: string; at?: string }>(
         key: `work:${items[0]!.key}`,
         items,
         startedAt: items[0]!.at,
-        endedAt: (run[last + 1] ?? next)?.at ?? items[last]!.at,
+        // A later follow-up's time would count the wait between turns as work.
+        endedAt:
+          (run[last + 1] ?? (next?.kind === "end" ? next : undefined))?.at ?? items[last]!.at,
       });
     }
     out.push(...run.slice(last + 1));
     run = [];
   };
   for (const row of rows) {
-    if (["assistant", "reasoning", "tool", "todo"].includes(row.kind)) run.push(row as Item);
+    if (
+      ["assistant", "reasoning", "tool", "todo"].includes(row.kind) ||
+      (row.kind === "notice" && !(row as Item & { turnId?: string }).turnId)
+    )
+      run.push(row as Item);
     else {
       flush(row);
       out.push(row);

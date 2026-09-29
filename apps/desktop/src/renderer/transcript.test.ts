@@ -164,3 +164,22 @@ test("a turn's activity folds into one work row, leaving the closing answer out"
   expect(workedFor("2026-01-01T00:00:00Z", "2026-01-01T00:00:12Z")).toBe("Worked for 12s");
   expect(workedFor("", "")).toBe("Worked briefly");
 });
+
+test("a mid-turn notice stays in the turn's one work row, and a follow-up's time isn't work", () => {
+  const at = (n: number) => `2026-01-01T00:00:${String(n).padStart(2, "0")}Z`;
+  const rows = [
+    { kind: "tool", key: "t1", callId: "1", name: "Bash", at: at(0) },
+    { kind: "assistant", key: "a1", text: "Checking.", at: at(5) },
+    { kind: "notice", key: "n", tone: "warning", text: "Retrying", at: at(6) },
+    { kind: "tool", key: "t2", callId: "2", name: "Bash", at: at(10) },
+    { kind: "assistant", key: "a2", text: "Done.", at: at(20) },
+    { kind: "notice", key: "n2", tone: "info", text: "Switched", at: at(21) },
+    { kind: "user", key: "u", text: "more", at: at(600) },
+  ] as Item[];
+  const grouped = groupWork(rows);
+  expect(grouped.map((r) => r.key)).toEqual(["work:t1", "a2", "n2", "u"]);
+  expect(grouped[0]).toMatchObject({ startedAt: at(0), endedAt: at(20) });
+
+  // A turn that ends on a tool ends with its last item, not the next turn's message.
+  expect(groupWork([rows[3]!, rows[6]!])[0]).toMatchObject({ endedAt: at(10) });
+});
