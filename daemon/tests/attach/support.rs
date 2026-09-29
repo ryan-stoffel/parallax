@@ -1,6 +1,6 @@
 //! Running `wispd attach`, and the `wispd serve` it reaches, in temporary data folders.
 //!
-//! Every data folder is under `/tmp`, which keeps socket paths under macOS's 103-byte limit and
+//! Every data folder comes from [`temp_dir`], which keeps socket paths under the OS's limit and
 //! keeps the tests away from the real data folder and any installed launch agent.
 
 use std::fmt;
@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use rustix::process::{Pid, Signal, WaitOptions};
-use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
@@ -28,18 +27,14 @@ use wisp_protocol::{
 };
 use wispd::paths::DataDir;
 
+#[path = "../common/temp.rs"]
+mod temp;
+pub use temp::temp_dir;
+
 /// How long a test waits for anything before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(10);
 
 pub const WISPD: &str = env!("CARGO_BIN_EXE_wispd");
-
-/// A fresh folder under `/tmp`, removed when dropped.
-pub fn temp_dir() -> TempDir {
-    tempfile::Builder::new()
-        .prefix("wispd-")
-        .tempdir_in("/tmp")
-        .expect("create a temp dir under /tmp")
-}
 
 /// Held while a test spawns a process or makes a descriptor without close-on-exec.
 ///

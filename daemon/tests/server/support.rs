@@ -1,7 +1,7 @@
 //! Starting servers in temporary folders and talking to them through `wisp_protocol`.
 //!
-//! Every test gets its own data folder under `/tmp`, which keeps socket paths well under macOS's
-//! 103-byte limit and keeps tests away from the real data folder.
+//! Every test gets its own data folder from [`temp_dir`], which keeps socket paths under the OS's
+//! limit and keeps tests away from the real data folder.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use rustix::process::{Pid, Signal, kill_process};
-use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::task::JoinHandle;
@@ -26,16 +25,12 @@ use wisp_protocol::{
 use wispd::paths::DataDir;
 use wispd::server::{Config, Server, Shutdown};
 
+#[path = "../common/temp.rs"]
+mod temp;
+pub use temp::temp_dir;
+
 /// How long a test waits for anything before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(10);
-
-/// A fresh folder under `/tmp`, removed when dropped.
-pub fn temp_dir() -> TempDir {
-    tempfile::Builder::new()
-        .prefix("wispd-")
-        .tempdir_in("/tmp")
-        .expect("create a temp dir under /tmp")
-}
 
 /// Where the server for `data_dir` listens, by the same rule `attach` will use.
 pub fn socket_path(data_dir: &Path) -> PathBuf {
