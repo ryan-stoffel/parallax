@@ -11,10 +11,12 @@ mod common;
 
 use std::fmt::Write as _;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 
 use common::{run_worker, tool_result, worker_request};
+use wispd::backend::RunRequest;
 
 const SECRET: &str = "wisp-sandbox-test-secret";
 
@@ -74,6 +76,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
         inside = path(&worktree.join("inside")),
         note = path(&context.join("note")),
     );
+    let mut request = worker_request(&home, &data, &worktree, &git_dir, &context);
     if cfg!(target_os = "linux") {
         // The seccomp filter's job: no Unix sockets, such as the D-Bus session bus.
         writeln!(
@@ -82,10 +85,10 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
             path(&socket)
         )
         .unwrap();
+        probe_registry_login(&mut probe, &mut request, &root);
     }
     fs::write(worktree.join("probe.sh"), probe).unwrap();
 
-    let request = worker_request(&home, &data, &worktree, &git_dir, &context);
     let (stdout, transcript) = run_worker(
         &claude,
         &request,
@@ -111,4 +114,18 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
             "a Unix socket connect got through"
         );
     }
+}
+
+/// Writes a registry login where rootless Podman keeps one, in a runtime folder under `root`,
+/// denies that folder as `WorkerSandbox::for_worktree` denies the user's runtime folders on Linux,
+/// and adds a read of the login to `probe` (RYA-107). Which folders those are is `sandbox.rs`'s
+/// unit tests' job; this checks that the sandbox holds a deny there.
+fn probe_registry_login(probe: &mut String, request: &mut RunRequest, root: &Path) {
+    let runtime = root.join("run");
+    let login = runtime.join("containers/auth.json");
+    fs::create_dir_all(login.parent().unwrap()).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&login, format!("{SECRET}-registry")).unwrap();
+    request.sandbox.as_mut().unwrap().unreadable.push(runtime);
+    writeln!(probe, "cat '{}'", login.display()).unwrap();
 }
