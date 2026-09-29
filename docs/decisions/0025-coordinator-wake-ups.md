@@ -43,7 +43,8 @@ A project's coordinator is a run (0024), and the runs it starts through `wispd m
 
 ## Consequences
 
-- What is waiting stays in memory; a restart rebuilds it from the store. A run that ended before the user's last message to the coordinator, while its wake-up still waited, isn't rebuilt: the coordinator can find it with `list_agents`.
+- What is waiting stays in memory; a restart rebuilds it from the store, only from runs that ended after the coordinator's newest recorded turn of any kind. So a run that ended before the coordinator's last recorded turn, while its wake-up still waited, isn't rebuilt: the coordinator can find it with `list_agents`. That covers one that ended before the user's last message, and, since a wake-up's turn is recorded only once its CLI starts, one that ended in the moment before, if wispd stops before the next wake-up. In that case the coordinator was usually interrupted too, and its own line wakes it.
+- A run whose CLI failed to start during the coordinator's last turn is named again after a restart, since recording the failure updates the run after that turn began, though the coordinator's tool already returned the error. It can cost one unattended turn.
 - The first start of a wispd with RYA-178 wakes a coordinator once for runs that ended after its last turn and were never named, which an older wispd dropped on restart.
 - A user message the coordinator gets while wake-ups wait costs one more turn than folding them in would.
 - A wake-up checks that its coordinator is still the project's before resuming it, but the run is recorded `running` only once its CLI starts. A `project/start` that lands in between finds no running coordinator and starts a second. `agent/send` has the same window (0024); a wake-up just opens it with nobody at the keyboard. It is narrow, so it stays.
