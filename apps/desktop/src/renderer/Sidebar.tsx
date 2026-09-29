@@ -69,7 +69,7 @@ interface SidebarProps {
 
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
- * spot the main pane shows it while this column is hidden.
+ * spot the main pane shows it while this column is hidden, then the app's name.
  */
 export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) {
   return (
@@ -79,7 +79,7 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
       hidden={!open}
       className="flex w-64 shrink-0 flex-col border-r border-border bg-sidebar"
     >
-      <TopBar className="traffic-light-inset justify-between">
+      <TopBar className="traffic-light-inset">
         <IconButton
           label="Hide sidebar"
           keys="B"
@@ -89,6 +89,7 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
         >
           <PanelLeft />
         </IconButton>
+        <span className="flex-1 text-[13px] font-medium text-muted-foreground">wisp</span>
         <IconButton label="New thread" keys="N" onClick={onNewThread}>
           <SquarePen />
         </IconButton>
