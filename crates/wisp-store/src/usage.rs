@@ -6,6 +6,7 @@
 //! `session_usage_totals` from replacing an existing row for the unnamed model.
 
 use jiff::Timestamp;
+use rusqlite::types::Type;
 use rusqlite::{TransactionBehavior, params};
 use uuid::Uuid;
 
@@ -47,6 +48,21 @@ pub struct UsageSummary {
     pub cache_write_tokens: u64,
     /// `None` when no delta in the range reported a cost — either there was no usage, or the
     /// vendor never reports one (0004: Codex, Cursor) — as opposed to a reported cost of zero.
+    pub cost_usd_micros: Option<u64>,
+}
+
+/// One account's summed usage of one model within one UTC hour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageHour {
+    /// The start of the UTC hour.
+    pub hour: Timestamp,
+    pub account_id: String,
+    pub model: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    /// `None` when no delta in the group reported a cost, as in [`UsageSummary`].
     pub cost_usd_micros: Option<u64>,
 }
 
@@ -170,6 +186,87 @@ impl Store {
                 },
             )
             .map_err(Into::into)
+    }
+
+    /// Every account's usage in `[since, until)`, summed per UTC hour, account, and model, ordered
+    /// by hour, then account, then model. Hours with no usage have no row.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error, including for a corrupt stored timestamp.
+    pub fn usage_hours(
+        &self,
+        since: Timestamp,
+        until: Timestamp,
+    ) -> Result<Vec<UsageHour>, StoreError> {
+        // `at` is fixed-width RFC 3339 UTC, so its first 13 characters (`2026-09-29T19`) name
+        // the UTC hour.
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                substr(at, 1, 13) || ':00:00Z' AS hour,
+                account_id,
+                model,
+                SUM(input_tokens),
+                SUM(output_tokens),
+                SUM(cache_read_tokens),
+                SUM(cache_write_tokens),
+                SUM(cost_usd_micros),
+                COUNT(cost_usd_micros)
+             FROM usage_deltas
+             WHERE at >= ?1 AND at < ?2
+             GROUP BY hour, account_id, model
+             ORDER BY hour ASC, account_id ASC, model ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![timestamp::format(since), timestamp::format(until)],
+            |row| {
+                let hour = row.get::<_, String>(0)?.parse().map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
+                })?;
+                let reported: i64 = row.get(8)?;
+                let cost_usd_micros = if reported > 0 {
+                    Some(row.get::<_, u64>(7)?)
+                } else {
+                    None
+                };
+                Ok(UsageHour {
+                    hour,
+                    account_id: row.get(1)?,
+                    model: model_value(row.get(2)?),
+                    input_tokens: row.get(3)?,
+                    output_tokens: row.get(4)?,
+                    cache_read_tokens: row.get(5)?,
+                    cache_write_tokens: row.get(6)?,
+                    cost_usd_micros,
+                })
+            },
+        )?;
+        rows.collect::<Result<_, _>>().map_err(Into::into)
+    }
+
+    /// How many distinct runs recorded a usage delta for each account in `[since, until)`,
+    /// ascending by account. Accounts with none have no entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error.
+    pub fn usage_run_counts(
+        &self,
+        since: Timestamp,
+        until: Timestamp,
+    ) -> Result<Vec<(String, u32)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT account_id, COUNT(DISTINCT run_id)
+             FROM usage_deltas
+             WHERE at >= ?1 AND at < ?2
+             GROUP BY account_id
+             ORDER BY account_id ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![timestamp::format(since), timestamp::format(until)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        rows.collect::<Result<_, _>>().map_err(Into::into)
     }
 
     /// Every account id with a recorded usage delta or limit snapshot, ascending.

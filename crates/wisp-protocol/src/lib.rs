@@ -101,7 +101,10 @@ pub use thread::{
     ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
     ThreadStartResult,
 };
-pub use usage::{AccountUsage, UsageGetParams, UsageGetResult, UsageLimitWindow, UsagePeriod};
+pub use usage::{
+    AccountRuns, AccountUsage, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod,
+};
 
 /// The newest protocol version this crate speaks. Versions start at 1.
 ///
@@ -402,6 +405,29 @@ mod tests {
                     cost_usd_micros: Some(1),
                 },
                 limits: Vec::new(),
+            }],
+        });
+        round_trip(&UsageHistoryParams {
+            since: project().created_at,
+        });
+        let hour = |model: Option<&str>, cost_usd_micros| UsageHour {
+            hour: "2026-09-29T19:00:00Z".parse().unwrap(),
+            account_id: "claude-max".to_owned(),
+            model: model.map(str::to_owned),
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            cost_usd_micros,
+        };
+        let unnamed = serde_json::to_value(hour(None, None)).unwrap();
+        assert!(unnamed.get("model").is_none());
+        assert!(unnamed.get("costUsdMicros").is_none());
+        round_trip(&UsageHistoryResult {
+            hours: vec![hour(None, None), hour(Some("opus"), Some(0))],
+            runs: vec![AccountRuns {
+                account_id: "claude-max".to_owned(),
+                runs: 2,
             }],
         });
     }

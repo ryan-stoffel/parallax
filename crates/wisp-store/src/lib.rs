@@ -35,7 +35,7 @@ pub use events::StoredEvent;
 pub use project::{Project, ProjectFields};
 pub use runs::{Run, RunAccept, RunFields, RunState};
 pub use threads::{Repo, RepoFields, Thread};
-pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageSummary};
+pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageHour, UsageSummary};
 pub use worktree::{Worktree, WorktreeFields};
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
