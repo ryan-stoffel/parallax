@@ -31,6 +31,8 @@ export const emptyThreads: ThreadsState = {
 export type ThreadsAction =
   | { type: "snapshot"; projects: Project[]; repos: Repo[]; threads: Thread[]; runs: AgentRun[] }
   | { type: "runs"; runs: AgentRun[] }
+  /** A Project's new coordinator, which no host-level event announces (0024). */
+  | { type: "coordinator"; run: AgentRun }
   | { type: "event"; event: WispEvent };
 
 /** Applies a snapshot, runs' titles, or a host-level event. Events are upserts, so a repeat is harmless. */
@@ -49,6 +51,13 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         ...state,
         titles: { ...state.titles, ...titlesOf(action.runs) },
         runs: { ...state.runs, ...byId(action.runs) },
+      };
+    case "coordinator":
+      return {
+        ...threadsReducer(state, { type: "runs", runs: [action.run] }),
+        projects: state.projects.map((p) =>
+          p.id === action.run.project ? { ...p, coordinator: action.run.id } : p,
+        ),
       };
     case "event": {
       const e = action.event;
@@ -170,6 +179,17 @@ export interface ThreadsView {
    * Resolves to the project or an error message.
    */
   createProject: (id: string, name: string, repoPath: string) => Promise<Project | string>;
+  /**
+   * Starts a Project's coordinator with its first message (0024), then keeps it as the Project's.
+   * Reuse `runId`, with the same prompt and options, to retry. Resolves to wispd's error, or
+   * undefined.
+   */
+  startCoordinator: (
+    project: string,
+    runId: string,
+    prompt: string,
+    options: Pick<RunOptions, "model" | "effort">,
+  ) => Promise<RpcError | undefined>;
 }
 
 /**
@@ -327,5 +347,36 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     [hostId],
   );
 
-  return { state, error, addRepo, start, archive, remove, refresh, createProject };
+  const startCoordinator = useCallback(
+    async (
+      project: string,
+      runId: string,
+      prompt: string,
+      { model, effort }: Pick<RunOptions, "model" | "effort">,
+    ) => {
+      const answer = await window.wisp.request(hostId, "project/start", {
+        project,
+        runId,
+        prompt,
+        ...(model && { model }),
+        ...(effort && { effort }),
+      });
+      if ("error" in answer) return answer.error;
+      if (shown.current === hostId) dispatch({ type: "coordinator", run: answer.result.run });
+      return undefined;
+    },
+    [hostId],
+  );
+
+  return {
+    state,
+    error,
+    addRepo,
+    start,
+    archive,
+    remove,
+    refresh,
+    createProject,
+    startCoordinator,
+  };
 }

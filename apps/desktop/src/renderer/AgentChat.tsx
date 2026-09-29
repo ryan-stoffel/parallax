@@ -33,7 +33,15 @@ import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { titleOf } from "./threads";
-import { failureText, groupWork, isRunning, workedFor, type Item, type Work } from "./transcript";
+import {
+  failureText,
+  groupWork,
+  isRunning,
+  workedFor,
+  wispdTools,
+  type Item,
+  type Work,
+} from "./transcript";
 import { useAgentRun } from "./useAgentRun";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
@@ -51,6 +59,7 @@ export function AgentChat({
   notice,
   prompt,
   noRepo,
+  tab,
 }: {
   hostId: string;
   runId: string;
@@ -60,6 +69,8 @@ export function AgentChat({
   prompt?: string;
   /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
   noRepo?: boolean;
+  /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
+  tab?: ReactNode;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -153,14 +164,16 @@ export function AgentChat({
           onStop={isRunning(run?.status) ? cancel : undefined}
           disabledReason={disabledReason}
           tab={
-            run && (
+            tab ??
+            (run && (
               <RunTab run={run}>
                 {canOpenPr && <OpenPr hostId={hostId} run={run} onError={setPrError} />}
               </RunTab>
-            )
+            ))
           }
           backend={run?.backend}
           started={run}
+          noWrite={run?.policy === "noWrite"}
           optionsDisabled={optionsDisabled}
         />
       </div>
@@ -394,16 +407,25 @@ export const RowView = memo(function RowView({
       );
     case "end": {
       const { outcome } = row;
-      if (outcome.status === "failed")
+      if (outcome.status === "failed") {
+        // A coordinator's no-write stop lists what it changed after its first line, one
+        // `git status` line each (0024).
+        const [first, ...changed] = outcome.message.split("\n");
         return (
           <div
             role="alert"
             className="rounded-lg border border-danger/30 px-3.5 py-2.5 text-[13px]"
           >
             <p className="font-medium text-danger">Failed: {failureText(outcome.failure)}</p>
-            <p className="mt-0.5 text-muted-foreground">{outcome.message}</p>
+            <p className="mt-0.5 text-muted-foreground">{first}</p>
+            {changed.length > 0 && (
+              <pre className="mt-2 max-h-60 overflow-auto rounded-lg border border-border bg-sidebar p-2.5 font-mono text-[12px]">
+                {changed.join("\n")}
+              </pre>
+            )}
           </div>
         );
+      }
       const label =
         outcome.status === "completed"
           ? "Done"
@@ -505,10 +527,12 @@ function activity(item?: Item): { label: string; detail?: string } {
     case "reasoning":
       return { label: "Thinking" };
     case "tool":
-      return {
-        label: verbs[item.name ?? ""] ?? item.name ?? "Working",
-        detail: toolHint(item.input),
-      };
+      return (
+        wispdCall(item) ?? {
+          label: verbs[item.name ?? ""] ?? item.name ?? "Working",
+          detail: toolHint(item.input),
+        }
+      );
     case "todo":
       return { label: "Planning" };
     default:
@@ -532,6 +556,7 @@ function ToolCall({
     error: <CircleX aria-label="Failed" className="text-danger" />,
     denied: <Ban aria-label="Denied" className="text-danger" />,
   };
+  const wispd = wispdCall(item);
   let icon = item.status ? icons[item.status] : undefined;
   icon ??=
     live && !item.status ? (
@@ -547,10 +572,14 @@ function ToolCall({
       summary={
         <>
           <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{icon}</span>
-          <span className="shrink-0 font-medium">{item.name ?? "Tool"}</span>
-          <span className="truncate font-mono text-[12px] text-muted-foreground">
-            {toolHint(item.input)}
-          </span>
+          <span className="shrink-0 font-medium">{wispd?.label ?? item.name ?? "Tool"}</span>
+          {wispd ? (
+            <span className="truncate text-muted-foreground">{wispd.detail}</span>
+          ) : (
+            <span className="truncate font-mono text-[12px] text-muted-foreground">
+              {toolHint(item.input)}
+            </span>
+          )}
         </>
       }
     >
@@ -608,10 +637,35 @@ function Block({ label, children }: { label: string; children: string }) {
 // The input field that says what a call does, by the names common tools use.
 const hintFields = ["command", "file_path", "path", "pattern", "url", "query", "description"];
 
-function toolHint(input?: JsonValue): string {
+function toolHint(input?: JsonValue, fields = hintFields): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) return "";
-  const value = hintFields.map((f) => input[f]).find((v) => typeof v === "string");
+  const value = fields.map((f) => input[f]).find((v) => typeof v === "string");
   return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
+}
+
+// A coordinator's wispd tools (0019), by what they did.
+const wispdLabels: Partial<Record<string, string>> = {
+  spawn_agent: "Started a subagent",
+  list_agents: "Listed subagents",
+  agent_status: "Checked on a subagent",
+  message_agent: "Messaged a subagent",
+  cancel_agent: "Stopped a subagent",
+  agent_diff: "Read a subagent's diff",
+  read_context: "Read shared context",
+  write_context: "Wrote shared context",
+};
+
+/**
+ * A wispd tool call as a short line: what it did, and what it did it to (the new subagent's task,
+ * the subagent it named, or the context file). Undefined for any other tool.
+ */
+function wispdCall(item: Extract<Item, { kind: "tool" }>) {
+  const label = item.name?.startsWith(wispdTools)
+    ? wispdLabels[item.name.slice(wispdTools.length)]
+    : undefined;
+  return label
+    ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path"]) }
+    : undefined;
 }
 
 function inputText(input: JsonValue): string {

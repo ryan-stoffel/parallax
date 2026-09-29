@@ -184,3 +184,36 @@ test("messages split work rows and stay in order; a mid-run notice folds, and a 
   // A turn that ends on a tool ends with its last item, not the next turn's message.
   expect(groupWork([rows[3]!, rows[6]!])[0]).toMatchObject({ endedAt: at(10) });
 });
+
+test("a coordinator's wispd tool that names a subagent gets its prompt's first line from an earlier answer", () => {
+  const call = (callId: string, tool: string, input: Record<string, string>) => ({
+    kind: "toolCall" as const,
+    callId,
+    name: `mcp__wispd__${tool}`,
+    input,
+  });
+  const answer = (callId: string, value: unknown) => ({
+    kind: "toolResult" as const,
+    callId,
+    status: "ok" as const,
+    output: JSON.stringify(value, null, 2),
+  });
+  const t = build(
+    output(
+      call("1", "spawn_agent", { prompt: "Fix the login bug\nwith a test" }),
+      answer("1", { runId: "r-1", prompt: "Fix the login bug\nwith a test", status: "starting" }),
+      call("2", "list_agents", {}),
+      answer("2", { runs: [{ runId: "r-0", prompt: "Write the plan" }] }),
+      call("3", "agent_status", { runId: "r-1" }),
+      call("4", "cancel_agent", { runId: "r-0" }),
+      call("5", "agent_diff", { runId: "r-9" }),
+    ),
+  );
+  expect(of(t.items, "tool").map((i) => i.subagent)).toEqual([
+    undefined,
+    undefined,
+    "Fix the login bug",
+    "Write the plan",
+    undefined, // no answer named it
+  ]);
+});

@@ -79,15 +79,20 @@ test.afterEach(async () => {
   console.log(`--- the window's text\n${await page.locator("body").innerText()}`);
 });
 
+/**
+ * The pid of each `serve` that `wispd attach` started, oldest first. They come from the log, since
+ * Windows won't read wispd.lock while serve holds it locked.
+ */
+function servePids(): number[] {
+  const log = path.join(dataDir, "logs/wispd.log");
+  const text = existsSync(log) ? readFileSync(log, "utf8") : "";
+  return [...text.matchAll(/listening.* pid=(\d+)/g)].map((m) => Number.parseInt(m[1]!, 10));
+}
+
 test.afterAll(async () => {
   await app?.close();
-  // `wispd attach` started a detached `serve`, which outlives the app. Its pid comes from the log,
-  // since Windows won't read wispd.lock while serve holds it locked.
-  const log = path.join(dataDir, "logs/wispd.log");
-  const listening = existsSync(log)
-    ? /listening.* pid=(\d+)/.exec(readFileSync(log, "utf8"))
-    : null;
-  const pid = Number.parseInt(listening?.[1] ?? "", 10);
+  // `wispd attach` started a detached `serve`, which outlives the app.
+  const pid = servePids().at(-1) ?? 0;
   // Never pid 0 or below, which process.kill reads as a whole process group.
   if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
 });
@@ -176,4 +181,49 @@ test("creates a project on a repository it adds, and opens it (RYA-166)", async 
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
   const projects = page.getByRole("region", { name: "Projects" });
   await expect(projects.getByRole("listitem")).toHaveText([/^ember/]);
+});
+
+test("chats with the project's coordinator, whose transcript outlives a reload and a wispd restart (RYA-46)", async () => {
+  // Reconnecting after the restart waits out the app's backoff.
+  test.slow();
+  // As for threads: the fake runs coordinators once it's their default.
+  const set = await page.evaluate(`window.wisp.request("local", "accounts/defaults/set", {
+    role: "coordinator",
+    account: { kind: "subscription", backend: "fake" },
+  })`);
+  expect(set).not.toHaveProperty("error");
+  // The project chat reads the default when it opens, to offer its backend's models, so reopen it.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Back to app" }).click();
+
+  // The last test left the ember project open.
+  const message = page.getByRole("textbox", { name: "Message" });
+  await message.fill("Plan the ember release");
+  await page.getByRole("button", { name: "Send" }).click();
+  const transcript = page.getByRole("log", { name: "Transcript" });
+  await expect(transcript.getByText("Plan the ember release")).toBeVisible();
+  await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(transcript.getByText("Stopped")).toBeVisible();
+  await message.fill("Start with the changelog");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
+
+  await page.reload();
+  const projects = page.getByRole("region", { name: "Projects" });
+  await projects.getByRole("button", { name: /^ember/ }).click();
+  await expect(transcript.getByText("Start with the changelog")).toBeVisible();
+
+  // Stop wispd with the coordinator running. The app reconnects through a new `serve`, which
+  // marks the run interrupted, and the transcript loads again.
+  const [pid] = servePids();
+  expect(pid).toBeGreaterThan(1);
+  process.kill(pid!, "SIGTERM");
+  await expect(transcript.getByText(/^Interrupted when wispd stopped/)).toBeVisible({
+    timeout: 45_000,
+  });
+  expect(servePids().length).toBeGreaterThan(1);
+  await expect(transcript.getByText("Plan the ember release")).toBeVisible();
+  await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 });

@@ -4,12 +4,18 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { RpcResponse, SubscriptionMessage, WispBridge } from "../preload/bridge";
-import type { Project, Repo } from "../protocol/generated/protocol";
+import type { AgentRun, LoggedEvent, Project, Repo } from "../protocol/generated/protocol";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The Repository menu's options are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
+// happy-dom lays nothing out: a tall transcript and short rows, so the virtualized list renders all.
+Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+  get(this: HTMLElement) {
+    return this.getAttribute("role") === "log" ? 10_000 : 20;
+  },
+});
 
 const wisp: Repo = {
   id: "r-wisp",
@@ -29,9 +35,12 @@ const now = Date.parse("2026-09-29T12:00:00Z");
 
 type Answer = (params: Record<string, unknown>) => RpcResponse<unknown>;
 let answers: Record<string, Answer>;
+let capabilities: Record<string, object>;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
   const answer = answers[method];
-  return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  return answer
+    ? { logId: "log-1", ...answer(params) }
+    : { error: { code: -32601, message: `${method} isn't faked` } };
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
 let deliver: (message: SubscriptionMessage) => void;
@@ -39,6 +48,7 @@ let deliver: (message: SubscriptionMessage) => void;
 beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
+  capabilities = {};
   answers = {
     "thread/list": () => ({ result: { repos: [wisp], threads: [], seq: 7 } }),
     "agent/list": () => ({ result: { runs: [], seq: 7 } }),
@@ -59,7 +69,7 @@ beforeEach(() => {
       status: "connected",
       wispd: "0.1.0",
       protocol: 1,
-      capabilities: {},
+      capabilities,
     }),
     onConnectionState: () => () => {},
     subscribe: (_host, _params, listener) => {
@@ -130,7 +140,7 @@ test("lists wispd's projects, most recently active first, and adds one from proj
   expect(projectRows()).toEqual(["wispnow", "photon3h", "ember3d"]);
 });
 
-test("a Project is one row that opens its chat: its repository and branch, with the composer off", async () => {
+test("a Project is one row that opens its chat: its repository and branch, with the composer off on an older wispd", async () => {
   await renderApp();
   const row = [...document.querySelectorAll("#sidebar li button")].find(
     (b) => b.textContent === "ember3d",
@@ -143,7 +153,7 @@ test("a Project is one row that opens its chat: its repository and branch, with 
   expect(main.textContent).toContain("/src/ember");
   expect(main.textContent).toContain("main");
   expect(main.querySelector("textarea")!.placeholder).toBe(
-    "Chatting with a Project's coordinator isn't available yet",
+    "This host's wispd can't run a Project's coordinator yet",
   );
   expect(main.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.disabled).toBe(true);
 });
@@ -215,4 +225,146 @@ test("Add repository… in Create Project adds a folder and names the project af
   expect(calls("project/create")).toEqual([
     { id: expect.any(String), name: "Other work", repoPath: "/src/other" },
   ]);
+});
+
+/** A Project's coordinator run, as `project/start` answers it (0024). */
+const coordinatorRun = (id: string, prompt: string): AgentRun => ({
+  id,
+  project: "p-ember",
+  prompt,
+  policy: "noWrite",
+  status: "running",
+  backend: "claude",
+  accountId: "claude",
+  coordinatorThread: id,
+  createdAt: "2026-09-29T12:00:00Z",
+  updatedAt: "2026-09-29T12:00:00Z",
+});
+/** `agent/events` for `run`: it started, then said it would plan. */
+const serveEvents = (run: () => AgentRun | undefined) => (params: Record<string, unknown>) => {
+  const r = run()!;
+  const events: LoggedEvent[] = [
+    { seq: 8, time: "", event: { kind: "agent.started", runId: r.id, run: r } },
+    {
+      seq: 9,
+      time: "",
+      event: {
+        kind: "agent.output",
+        runId: r.id,
+        items: [{ kind: "text", text: "I'll plan it." }],
+      },
+    },
+  ];
+  return { result: { events: events.filter((e) => e.seq > Number(params["after"])), more: false } };
+};
+const openEmber = () =>
+  click(
+    [...document.querySelectorAll("#sidebar li button")].find((b) => b.textContent === "ember3d"),
+  );
+const type = (text: string) => {
+  const box = document.querySelector("main textarea")!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+const button = (label: string) =>
+  document.querySelector<HTMLButtonElement>(`main button[aria-label="${label}"]`);
+const transcript = () => document.querySelector('[role="log"]')?.textContent ?? "";
+
+test("a Project's first message starts its coordinator; later ones and Stop go to its run", async () => {
+  capabilities = { coordinator: {} };
+  let started: AgentRun | undefined;
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  answers["project/start"] = (p) => {
+    started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
+    return { result: { run: started } };
+  };
+  answers["agent/events"] = serveEvents(() => started);
+  answers["agent/send"] = () => ({ result: { run: started } });
+  answers["agent/cancel"] = () => ({ result: { run: started } });
+  await renderApp();
+  await openEmber();
+  // Claude's models, and no Access: a coordinator never writes.
+  expect(button("Model: Claude Opus 5.5")).not.toBeNull();
+  expect(document.querySelector('main [aria-label^="Access"]')).toBeNull();
+
+  type("Add a dark mode");
+  await click(button("Send"));
+  expect(calls("project/start")).toEqual([
+    {
+      project: "p-ember",
+      runId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7/),
+      prompt: "Add a dark mode",
+      model: "claude-opus-5-5",
+      effort: "high",
+    },
+  ]);
+  expect(transcript()).toContain("Add a dark mode");
+  expect(transcript()).toContain("I'll plan it.");
+  // It works in the Project's repository, not a worktree.
+  const main = document.querySelector("main")!;
+  expect(main.textContent).toContain("/src/ember");
+  expect(main.textContent).not.toContain("Worktree");
+
+  type("Start with the settings page");
+  await click(button("Send"));
+  expect(calls("agent/send")).toEqual([
+    { runId: started!.id, turnId: expect.any(String), text: "Start with the settings page" },
+  ]);
+  await click(button("Stop"));
+  expect(calls("agent/cancel")).toEqual([{ runId: started!.id }]);
+  expect(calls("project/start")).toHaveLength(1);
+});
+
+test("a Project whose coordinator ran before opens on its transcript", async () => {
+  capabilities = { coordinator: {} };
+  const run = coordinatorRun("01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b", "Add a dark mode");
+  answers["project/list"] = () => ({
+    result: { projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: run.id }] },
+  });
+  answers["agent/events"] = serveEvents(() => run);
+  await renderApp();
+  await openEmber();
+  expect(transcript()).toContain("Add a dark mode");
+  expect(transcript()).toContain("I'll plan it.");
+  expect(calls("project/start")).toEqual([]);
+});
+
+test("with no coordinator account, the first message runs on the host's Claude Code login and says so", async () => {
+  capabilities = { coordinator: {} };
+  let started: AgentRun | undefined;
+  answers["accounts/defaults/get"] = () => ({ result: {} });
+  answers["accounts/list"] = () => ({ result: { clis: [{ cli: "claude", signedIn: true }] } });
+  answers["accounts/keys/list"] = () => ({ result: { accounts: [] } });
+  answers["accounts/defaults/set"] = () => ({ result: {} });
+  answers["project/start"] = (p) => {
+    if (calls("accounts/defaults/set").length === 0)
+      return {
+        error: {
+          code: -32000,
+          message: "no account was named",
+          data: { kind: "noDefaultAccount" },
+        },
+      };
+    started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
+    return { result: { run: started } };
+  };
+  answers["agent/events"] = serveEvents(() => started);
+  await renderApp();
+  await openEmber();
+  type("Add a dark mode");
+  await click(button("Send"));
+
+  expect(calls("accounts/defaults/set")).toEqual([
+    { role: "coordinator", account: { kind: "subscription", backend: "claude" } },
+  ]);
+  const [first, retry] = calls("project/start");
+  expect(retry).toEqual(first);
+  expect(document.querySelector('main [role="status"]')?.textContent).toBe(
+    "Using Claude Code for Project coordinators on this host.",
+  );
+  expect(transcript()).toContain("I'll plan it.");
 });
