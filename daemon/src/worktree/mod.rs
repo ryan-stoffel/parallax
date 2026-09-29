@@ -1196,9 +1196,6 @@ async fn collect(
     }
 }
 
-/// The first 8 hex digits of the SHA-256 of `text`. Used for both the short run id in a branch
-/// name and the repository hash in a worktree folder's name; a prefix of a `UUIDv7` would cluster
-/// collisions in time, since most of a `UUIDv7`'s own bits are a timestamp.
 /// Whether `slug` can follow `wisp/` in a branch name: 1 to 40 lowercase letters, digits, and
 /// hyphens, none leading or trailing.
 #[must_use]
@@ -1211,6 +1208,9 @@ pub fn valid_branch_slug(slug: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// The first 8 hex digits of the SHA-256 of `text`. Used for both the short run id in a branch
+/// name and the repository hash in a worktree folder's name; a prefix of a `UUIDv7` would cluster
+/// collisions in time, since most of a `UUIDv7`'s own bits are a timestamp.
 fn short_hash(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     digest[..4].iter().fold(String::new(), |mut hex, byte| {

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import type { RpcError } from "../preload/bridge";
+import type { RpcError, ThreadName } from "../preload/bridge";
 import type { AgentRun, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
-import type { ThreadName } from "../preload/bridge";
 import { describeError } from "./errors";
 import type { RunOptions } from "./models";
 import { uuidv7 } from "./uuidv7";

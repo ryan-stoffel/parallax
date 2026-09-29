@@ -719,9 +719,7 @@ async fn repo_entries_and_threads_refuse_what_they_cant_run() {
     assert_eq!(kind(&archive), ErrorKind::ThreadNotFound);
 }
 
-/// RYA-97: a thread's model, effort, and permission reach its backend when it starts and when it
-/// resumes, come back on its run, and count for `thread/start`'s idempotency. What the backend
-/// can't honor is refused before anything is made.
+/// `thread/start`'s `branchSlug` names the worktree branch, and an invalid one is refused.
 #[tokio::test]
 async fn a_thread_can_name_its_branch() {
     let host = Host::start(fake(editing()));
@@ -748,6 +746,9 @@ async fn a_thread_can_name_its_branch() {
     assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
 }
 
+/// RYA-97: a thread's model, effort, and permission reach its backend when it starts and when it
+/// resumes, come back on its run, and count for `thread/start`'s idempotency. What the backend
+/// can't honor is refused before anything is made.
 #[tokio::test]
 async fn a_thread_keeps_its_model_effort_and_permission() {
     let seen = Arc::new(Mutex::new(Vec::new()));
