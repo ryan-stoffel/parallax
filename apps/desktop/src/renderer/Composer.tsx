@@ -66,12 +66,12 @@ export interface ComposerProps {
    */
   backend?: string;
   /**
-   * An open run's model, effort, and access (an unset one is the CLI's default). Its model can't
-   * change, so that button is off. Effort and access start from the run's, and only one that
-   * differs from it is sent.
+   * An open run's model, effort, and access (an unset one is the CLI's default). They start from
+   * the run's, and only one that differs from it is sent. Its model can change only within its
+   * provider, since a session can't move to another CLI.
    */
   started?: Pick<AgentRun, "model" | "effort" | "permission">;
-  /** Why effort and access can't change right now, which turns them off. */
+  /** Why the model, effort, and access can't change right now, which turns them off. */
   optionsDisabled?: string;
 }
 
@@ -99,7 +99,7 @@ export function Composer({
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const run = backend === undefined ? undefined : backends[backend];
   const runModels = models.filter((m) => m.provider === run?.provider);
-  // An open run keeps its model, which may be one this list doesn't know, or the CLI's default.
+  // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
     started &&
     run &&
@@ -108,7 +108,7 @@ export function Composer({
       name: started.model ?? "Default model",
       provider: run.provider,
     });
-  const model = startedModel ?? runModels.find((m) => m === pickedModel) ?? runModels[0];
+  const model = runModels.find((m) => m === pickedModel) ?? startedModel ?? runModels[0];
   const startedEffort = started?.effort ?? "high";
   const startedPermission = started?.permission ?? "edit";
   const effort = pickedEffort ?? startedEffort;
@@ -117,6 +117,7 @@ export function Composer({
   let options: RunOptions = {};
   if (run && started)
     options = {
+      ...(model && model !== startedModel && { model: model.id }),
       ...(effort !== startedEffort && { effort }),
       ...(permission !== startedPermission && { permission }),
     };
@@ -204,24 +205,25 @@ export function Composer({
         <div className="flex items-center gap-0.5 px-3 pt-1 pb-3">
           {run && (
             <>
-              {model && (
-                <>
-                  {/* A disabled fieldset turns off every control in it, and its title says why. */}
-                  <fieldset
-                    disabled={!!started}
-                    title={started && "A thread keeps the model it started with"}
-                    className="flex min-w-0"
-                  >
-                    <ModelMenu key={backend} models={runModels} value={model} onChange={setModel} />
-                  </fieldset>
-                  {divider}
-                </>
-              )}
+              {/* A disabled fieldset turns off every control in it, and its title says why. */}
               <fieldset
                 disabled={!!optionsDisabled}
                 title={optionsDisabled}
-                className="flex items-center gap-0.5"
+                className="flex min-w-0 items-center gap-0.5"
               >
+                {model && (
+                  <>
+                    {/* An open run lists every provider, and can pick only its own. */}
+                    <ModelMenu
+                      key={backend}
+                      models={started ? models : runModels}
+                      provider={started && run.provider}
+                      value={model}
+                      onChange={setModel}
+                    />
+                    {divider}
+                  </>
+                )}
                 <EffortMenu value={effort} onChange={setEffort} />
                 {/* One permission is no choice, so there's nothing to show. */}
                 {run.permissions.length > 1 && (

@@ -448,6 +448,7 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     run_id,
                     turn_id: TurnId::generate(),
                     text,
+                    model: None,
                     effort: None,
                     permission: None,
                 })

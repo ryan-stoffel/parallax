@@ -11,7 +11,7 @@ export interface AgentRunView {
   /** Texts this window sent, by turn id, since the log holds only the id (RYA-92). */
   sent: ReadonlyMap<string, string>;
   /**
-   * Sends a message as the run's next turn, with a new effort or access for the run if given.
+   * Sends a message as the run's next turn, with a new model, effort, or access for the run if given.
    * Resolves to an error message, or undefined.
    */
   send: (text: string, options?: SendOptions) => Promise<string | undefined>;
@@ -19,8 +19,8 @@ export interface AgentRunView {
   cancel: () => Promise<string | undefined>;
 }
 
-/** A new effort or access for a run, sent only to a wispd that advertises `sendOptions`. */
-export type SendOptions = Pick<AgentSendParams, "effort" | "permission">;
+/** A new model, effort, or access for a run, sent only to a wispd that advertises `sendModel`. */
+export type SendOptions = Pick<AgentSendParams, "model" | "effort" | "permission">;
 
 /**
  * One run's transcript, kept live: pages through `agent/events`, then subscribes

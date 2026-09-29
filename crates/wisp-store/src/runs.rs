@@ -6,8 +6,9 @@ use crate::error::StoreError;
 use crate::worktree::insert_worktree;
 use crate::{Store, Worktree, WorktreeFields, timestamp};
 
-/// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only effort
-/// and permission change after the run is created, through `agent/send` (RYA-161).
+/// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only model,
+/// effort, and permission change after the run is created, through `agent/send` (RYA-161,
+/// RYA-163).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFields {
     pub project_id: Uuid,
@@ -267,7 +268,8 @@ impl Store {
         update(&self.conn, id, state)
     }
 
-    /// Replaces run `id`'s effort and permission (RYA-161), and returns the updated row.
+    /// Replaces run `id`'s model, effort, and permission (RYA-161, RYA-163), and returns the
+    /// updated row.
     ///
     /// # Errors
     ///
@@ -275,12 +277,14 @@ impl Store {
     pub fn set_run_options(
         &self,
         id: Uuid,
+        model: Option<&str>,
         effort: Option<&str>,
         permission: Option<&str>,
     ) -> Result<Run, StoreError> {
         let changed = self.conn.execute(
-            "UPDATE runs SET effort = ?2, permission = ?3, updated_at = ?4 WHERE id = ?1",
-            params![id.to_string(), effort, permission, timestamp::now()],
+            "UPDATE runs SET model = ?2, effort = ?3, permission = ?4, updated_at = ?5
+             WHERE id = ?1",
+            params![id.to_string(), model, effort, permission, timestamp::now()],
         )?;
         if changed == 0 {
             return Err(StoreError::NotFound { id });

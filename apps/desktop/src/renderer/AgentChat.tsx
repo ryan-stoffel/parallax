@@ -98,10 +98,11 @@ export function AgentChat({
   else if (!connected) disabledReason = "Connecting to wispd…";
   else if (!run) disabledReason = error ? "This chat couldn't load" : "Loading…";
   let optionsDisabled: string | undefined;
-  if (connected && !("sendOptions" in connection.capabilities))
-    optionsDisabled = "This host's wispd can't change a thread's effort or access";
+  // `sendModel` is `sendOptions`' successor, which also takes the model (RYA-163).
+  if (connected && !("sendModel" in connection.capabilities))
+    optionsDisabled = "This host's wispd can't change a thread's model, effort, or access";
   else if (isRunning(run?.status))
-    optionsDisabled = "Effort and access can change once it finishes";
+    optionsDisabled = "The model, effort, and access can change once it finishes";
 
   return (
     <>

@@ -46,7 +46,7 @@ pub(super) enum Command {
     Send {
         turn_id: TurnId,
         text: String,
-        /// A new effort or permission for the run (RYA-161); its model is always `None`.
+        /// A new model, effort, or permission for the run (RYA-161, RYA-163).
         options: RunOptions,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
@@ -377,10 +377,10 @@ impl Actor {
                 ))
             };
         }
-        // Only an effort or permission that differs from the run's changes anything (RYA-161).
+        // Only a model, effort, or permission that differs from the run's changes anything.
         let fields = &self.row.fields;
         let changes = RunOptions {
-            model: None,
+            model: options.model.filter(|m| Some(m) != fields.model.as_ref()),
             effort: options.effort.filter(|&e| option_name(e) != fields.effort),
             permission: options
                 .permission
@@ -390,8 +390,8 @@ impl Actor {
         if changing && self.live.is_some() {
             return Err(ErrorObject::wisp(
                 ErrorKind::UnsupportedOption,
-                "effort and access can't change while the run is working; send the message \
-                 again once it has finished",
+                "the model, effort, and access can't change while the run is working; send the \
+                 message again once it has finished",
             ));
         }
         if let Some(live) = &self.live {
@@ -431,7 +431,7 @@ impl Actor {
     }
 
     /// Starts a new CLI process for the run, resuming its vendor session with `text`, after
-    /// storing `changes` to its effort and permission, which the new process runs with.
+    /// storing `changes` to its model, effort, and permission, which the new process runs with.
     async fn resume(
         &mut self,
         turn_id: TurnId,
@@ -481,6 +481,7 @@ impl Actor {
         if changes != RunOptions::default() {
             changes.check(prepared.resolved.backend())?;
             let (id, fields) = (self.row.id, &self.row.fields);
+            let model = changes.model.clone().or(fields.model.clone());
             let effort = changes
                 .effort
                 .and_then(option_name)
@@ -490,8 +491,13 @@ impl Actor {
                 .and_then(option_name)
                 .or(fields.permission.clone());
             let row = store(&self.daemon, move |db| {
-                db.set_run_options(id, effort.as_deref(), permission.as_deref())
-                    .map_err(|error| store_error(&error))
+                db.set_run_options(
+                    id,
+                    model.as_deref(),
+                    effort.as_deref(),
+                    permission.as_deref(),
+                )
+                .map_err(|error| store_error(&error))
             })
             .await?;
             self.row.fields = row.fields;

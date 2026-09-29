@@ -157,6 +157,7 @@ fn message(run_id: RunId, text: &str) -> AgentSendParams {
         run_id,
         turn_id: TurnId::generate(),
         text: text.to_owned(),
+        model: None,
         effort: None,
         permission: None,
     }
@@ -839,14 +840,15 @@ async fn a_thread_keeps_its_model_effort_and_permission() {
     assert_eq!(seen.lock().unwrap().len(), 2, "no other run started");
 }
 
-/// RYA-161: a message to a finished thread can change its effort. The change is stored, reported
-/// on its run and on `agent.updated`, and used by the resumed CLI. An effort the backend can't
-/// honor is refused before anything changes.
+/// RYA-161, RYA-163: a message to a finished thread can change its model and effort. The change
+/// is stored, reported on its run and on `agent.updated`, and used by the resumed CLI. An effort
+/// the backend can't honor is refused before anything changes.
 #[tokio::test]
-async fn a_message_changes_a_finished_threads_effort() {
+async fn a_message_changes_a_finished_threads_model_and_effort() {
     let (host, seen) = with_options(editing());
     let mut client = host.client().await;
     let params = ThreadStartParams {
+        model: Some("opus".to_owned()),
         effort: Some(AgentEffort::High),
         permission: Some(AgentPermission::Plan),
         ..start_params(None, "Plan the notes")
@@ -859,6 +861,7 @@ async fn a_message_changes_a_finished_threads_effort() {
 
     let refused = client
         .call::<AgentSend>(AgentSendParams {
+            model: Some("sonnet".to_owned()),
             effort: Some(AgentEffort::Max),
             ..message(params.run_id, "Think harder")
         })
@@ -869,6 +872,7 @@ async fn a_message_changes_a_finished_threads_effort() {
     // The run's own permission changes nothing.
     let sent = client
         .call::<AgentSend>(AgentSendParams {
+            model: Some("sonnet".to_owned()),
             effort: Some(AgentEffort::Low),
             permission: Some(AgentPermission::Plan),
             ..message(params.run_id, "Just a summary")
@@ -876,26 +880,32 @@ async fn a_message_changes_a_finished_threads_effort() {
         .await
         .unwrap()
         .run;
+    assert_eq!(sent.model.as_deref(), Some("sonnet"));
     assert_eq!(sent.effort, Some(AgentEffort::Low));
     assert_eq!(sent.permission, Some(AgentPermission::Plan));
-    let efforts: Vec<_> = runs
+    let updates: Vec<_> = runs
         .until(updated_to(AgentStatus::Completed))
         .await
         .into_iter()
         .filter_map(|event| match event.event {
-            WispEvent::AgentUpdated { state, .. } => Some(state.effort),
+            WispEvent::AgentUpdated { state, .. } => Some((state.model, state.effort)),
             _ => None,
         })
         .collect();
     assert!(
-        !efforts.is_empty() && efforts.iter().all(|e| *e == Some(AgentEffort::Low)),
-        "agent.updated reports the new effort: {efforts:?}"
+        !updates.is_empty()
+            && updates
+                .iter()
+                .all(|u| *u == (Some("sonnet".to_owned()), Some(AgentEffort::Low))),
+        "agent.updated reports the new model and effort: {updates:?}"
     );
+    let opus = Some("opus".to_owned());
+    let sonnet = Some("sonnet".to_owned());
     assert_eq!(
         *seen.lock().unwrap(),
         [
-            (None, Some(AgentEffort::High), Some(AgentPermission::Plan)),
-            (None, Some(AgentEffort::Low), Some(AgentPermission::Plan)),
+            (opus, Some(AgentEffort::High), Some(AgentPermission::Plan)),
+            (sonnet, Some(AgentEffort::Low), Some(AgentPermission::Plan)),
         ]
     );
     let listed = client
@@ -905,13 +915,14 @@ async fn a_message_changes_a_finished_threads_effort() {
         .await
         .unwrap()
         .runs;
+    assert_eq!(listed[0].model.as_deref(), Some("sonnet"), "it was stored");
     assert_eq!(listed[0].effort, Some(AgentEffort::Low), "it was stored");
 }
 
-/// RYA-161: a running CLI can't change its effort, so a message asking for another one is
-/// refused, and nothing changes.
+/// RYA-161, RYA-163: a running CLI can't change its model or effort, so a message asking for
+/// another one is refused, and nothing changes.
 #[tokio::test]
-async fn a_running_thread_refuses_a_new_effort() {
+async fn a_running_thread_refuses_a_new_model_or_effort() {
     let (host, seen) = with_options(hang());
     let mut client = host.client().await;
     let params = ThreadStartParams {
@@ -923,18 +934,23 @@ async fn a_running_thread_refuses_a_new_effort() {
     client.subscribe(0, Some(scope)).await;
     client.until(updated_to(AgentStatus::Running)).await;
 
-    let refused = client
-        .call::<AgentSend>(AgentSendParams {
+    for change in [
+        AgentSendParams {
+            model: Some("sonnet".to_owned()),
+            ..message(params.run_id, "Hurry up")
+        },
+        AgentSendParams {
             effort: Some(AgentEffort::Low),
             ..message(params.run_id, "Hurry up")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&refused), ErrorKind::UnsupportedOption, "{refused:?}");
-    assert!(
-        refused.message.contains("while the run is working"),
-        "{refused:?}"
-    );
+        },
+    ] {
+        let refused = client.call::<AgentSend>(change).await.unwrap_err();
+        assert_eq!(kind(&refused), ErrorKind::UnsupportedOption, "{refused:?}");
+        assert!(
+            refused.message.contains("while the run is working"),
+            "{refused:?}"
+        );
+    }
 
     let listed = client
         .call::<AgentList>(AgentListParams {
@@ -943,6 +959,7 @@ async fn a_running_thread_refuses_a_new_effort() {
         .await
         .unwrap()
         .runs;
+    assert_eq!(listed[0].model, None);
     assert_eq!(listed[0].effort, Some(AgentEffort::High));
     assert_eq!(seen.lock().unwrap().len(), 1, "no other CLI started");
     host.server.stop().await;
