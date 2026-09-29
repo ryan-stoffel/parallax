@@ -11,14 +11,18 @@ import type {
   AgentToolStatus,
   JsonValue,
   LoggedEvent,
+  WispEvent,
 } from "../protocol/generated/protocol";
 
 /** One row of the transcript. `key` is stable across re-renders; `at` is when it began. */
 export type Item = ItemBody & { at?: string };
 
 type ItemBody =
-  /** `text` is null for a follow-up logged by a wispd from before it recorded the text. */
-  | { kind: "user"; key: string; text: string | null; turnId?: string }
+  /**
+   * `text` is null for a follow-up logged by a wispd from before it recorded the text. `wake` marks
+   * a turn wispd sent a coordinator itself, when runs it started finished (0025).
+   */
+  | { kind: "user"; key: string; text: string | null; turnId?: string; wake?: boolean }
   /** `partial` while it is still arriving as `textDelta`s. */
   | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
   | { kind: "reasoning"; key: string; text: string }
@@ -68,17 +72,12 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
     const key = (i: number | string = 0) => `${at}:${i}`;
     const before = items.length;
 
+    run = updateRun(run, event);
     switch (event.kind) {
       case "agent.started":
-        run = event.run;
-        if (run) push({ kind: "user", key: key(), text: run.prompt });
-        break;
-      case "agent.updated":
-        // `error` is absent once the run goes again; the rest only ever arrives.
-        if (run) run = { ...run, ...event.state, error: event.state.error };
+        if (event.run) push({ kind: "user", key: key(), text: event.run.prompt });
         break;
       case "agent.accountFallback":
-        if (run) run = { ...run, accountId: event.toAccount };
         push({
           kind: "notice",
           key: key(),
@@ -89,6 +88,14 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
       case "agent.finished":
         push({ kind: "end", key: key(), outcome: event.outcome });
         break;
+      case "agent.wakeupsPaused":
+        push({
+          kind: "notice",
+          key: key(),
+          tone: "info",
+          text: "Wake-ups are paused: finished subagents won't wake the coordinator. Your next message resumes them.",
+        });
+        break;
       case "agent.output":
         event.items.forEach((item, i) => applyOutput(items, item, key(i)));
         break;
@@ -96,6 +103,21 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
     for (let i = before; i < items.length; i++) items[i] = { ...items[i]!, at: time };
   }
   return { run, items, seq };
+}
+
+/** A run as `event` leaves it: `agent.started` sets it, and `agent.updated` and fallbacks change it. */
+export function updateRun(run: AgentRun | undefined, event: WispEvent): AgentRun | undefined {
+  switch (event.kind) {
+    case "agent.started":
+      return event.run;
+    case "agent.updated":
+      // `error` is absent once the run goes again; the rest only ever arrives.
+      return run && { ...run, ...event.state, error: event.state.error };
+    case "agent.accountFallback":
+      return run && { ...run, accountId: event.toAccount };
+    default:
+      return run;
+  }
 }
 
 // ponytail: copies the item list per event and scans back for matches; fine for
@@ -116,7 +138,13 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     case "turnStarted":
       // The run's first turn has no id; its prompt came with agent.started.
       if (item.turnId)
-        items.push({ kind: "user", key, text: item.text ?? null, turnId: item.turnId });
+        items.push({
+          kind: "user",
+          key,
+          text: item.text ?? null,
+          turnId: item.turnId,
+          ...(item.wake && { wake: true }),
+        });
       break;
     case "textDelta": {
       const found = target(item.messageId);

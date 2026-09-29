@@ -15,6 +15,7 @@ import {
   LoaderCircle,
   Ban,
   TriangleAlert,
+  Workflow,
 } from "lucide-react";
 import {
   memo,
@@ -370,6 +371,25 @@ export const RowView = memo(function RowView({
       );
     case "user":
     case "pending": {
+      // A wake-up is wisp's message to the coordinator, not the user's (0025).
+      if (row.kind === "user" && row.wake)
+        return (
+          <Disclosure
+            id={row.key}
+            open={open}
+            onToggle={onToggle}
+            summary={
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Workflow aria-hidden className="size-3.5" />
+                From wisp: subagents finished
+              </span>
+            }
+          >
+            <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+              {row.text}
+            </p>
+          </Disclosure>
+        );
       const text = row.text ?? sentText;
       return (
         <div className="flex justify-end">

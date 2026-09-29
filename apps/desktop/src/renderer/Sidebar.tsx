@@ -523,7 +523,8 @@ function HostRow({ host, open, onOpen }: { host: Host; open: boolean; onOpen: ()
   );
 }
 
-const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGElement>>>> = {
+/** Each backend's logo, by its name in `AgentRun.backend`. */
+export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGElement>>>> = {
   claude: ClaudeLogo,
   codex: OpenAILogo,
   cursor: CursorLogo,
@@ -665,8 +666,8 @@ function ThreadRow({
   );
 }
 
-// A run's status in the card: its icon and color.
-const statusLooks: Partial<Record<AgentStatus, { Icon: LucideIcon; color: string }>> = {
+/** A run's status as its icon and color, in a thread's card and the Agents list. */
+export const statusLooks: Partial<Record<AgentStatus, { Icon: LucideIcon; color: string }>> = {
   starting: { Icon: LoaderCircle, color: "text-emerald-500 [&_svg]:animate-spin" },
   running: { Icon: LoaderCircle, color: "text-emerald-500 [&_svg]:animate-spin" },
   completed: { Icon: CircleCheck, color: "text-muted-foreground" },

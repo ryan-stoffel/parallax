@@ -53,7 +53,7 @@ const surfaces: Surface[] = [
  * while focus is in the panel; the ones not built yet are dimmed. Its top bar keeps the hide
  * button where the main pane shows it while the panel is closed. Expanded, it fills everything
  * right of the sidebar, and `leading` and `topBarClassName` stand in for the hidden main pane's
- * top-left corner.
+ * top-left corner. `agents` is the Agents view, such as a Project's list, in place of its empty state.
  */
 export function SidePanel({
   open,
@@ -62,6 +62,7 @@ export function SidePanel({
   onExpandedChange,
   leading,
   topBarClassName = "",
+  agents,
 }: {
   open: boolean;
   onClose: () => void;
@@ -69,6 +70,7 @@ export function SidePanel({
   onExpandedChange: (expanded: boolean) => void;
   leading?: ReactNode;
   topBarClassName?: string;
+  agents?: ReactNode;
 }) {
   const [surface, setSurface] = useState<Surface>();
 
@@ -117,7 +119,9 @@ export function SidePanel({
           </IconButton>
         </div>
       </TopBar>
-      {surface?.empty ? (
+      {surface?.name === "Agents" && agents ? (
+        agents
+      ) : surface?.empty ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
           <surface.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
           <p className="text-[13px] font-medium text-foreground">{surface.empty.title}</p>
