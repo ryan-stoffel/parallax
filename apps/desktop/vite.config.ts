@@ -5,13 +5,15 @@ import type { PackUserConfig } from "vite-plus/pack";
 
 // The renderer's Content Security Policy, set as a <meta> tag because the
 // built app loads from file://, where response headers can't carry one.
-// The dev server needs two relaxations: React Refresh's inline preamble and
-// Vite's injected <style> tags. Its HMR websocket is same-origin, so 'self'.
+// Inline styles are allowed: xterm.js (SignInTerminal) sizes and colors its
+// rows with <style> tags it writes, as Vite's dev server does. Scripts stay
+// 'self', except for React Refresh's inline preamble in dev. The dev server's
+// HMR websocket is same-origin, so 'self'.
 const csp = (dev: boolean) =>
   [
     "default-src 'self'",
     dev && "script-src 'self' 'unsafe-inline'",
-    dev && "style-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
     "object-src 'none'",
     "base-uri 'none'",
   ]
@@ -30,8 +32,10 @@ const cspMeta: Plugin = {
 };
 
 // Main and preload are separate CommonJS bundles: a sandboxed preload must be
-// one self-contained file. Every dependency is inlined except Electron itself,
-// so the packaged app never needs node_modules.
+// one self-contained file. Every dependency is inlined except Electron itself
+// and node-pty, whose native binary can't be, so the packaged app needs only
+// node-pty's folder from node_modules (RYA-66).
+const external = ["electron", "node-pty"];
 const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
   entry: { [name]: `src/${name}/${name}.ts` },
   outDir: `dist/${name}`,
@@ -39,8 +43,8 @@ const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
   platform: "node",
   sourcemap: true,
   deps: {
-    neverBundle: ["electron"],
-    alwaysBundle: (id) => id !== "electron" && !id.startsWith("node:"),
+    neverBundle: external,
+    alwaysBundle: (id) => !external.includes(id) && !id.startsWith("node:"),
   },
 });
 

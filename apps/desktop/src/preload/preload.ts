@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import { ErrorCodes } from "../protocol/generated/protocol";
-import type { ConnectionState, SshHost, SubscriptionMessage, WispBridge } from "./bridge";
+import type {
+  ConnectionState,
+  SshHost,
+  SubscriptionMessage,
+  TerminalMessage,
+  WispBridge,
+} from "./bridge";
 
 // Subscription listeners by the key this preload gave them.
 const subscriptions = new Map<string, (message: SubscriptionMessage) => void>();
@@ -50,6 +56,17 @@ const bridge: WispBridge = {
   },
   saveHost: (host, id) => ipcRenderer.invoke("wisp:saveHost", host, id),
   removeHost: (id) => ipcRenderer.invoke("wisp:removeHost", id),
+
+  openTerminal: (hostId, cli, cols, rows) =>
+    ipcRenderer.invoke("wisp:openTerminal", hostId, cli, cols, rows),
+  terminalInput: (data) => ipcRenderer.send("wisp:terminalInput", data),
+  resizeTerminal: (cols, rows) => ipcRenderer.send("wisp:resizeTerminal", cols, rows),
+  closeTerminal: () => ipcRenderer.send("wisp:closeTerminal"),
+  onTerminal(listener) {
+    const forward = (_event: unknown, message: TerminalMessage) => listener(message);
+    ipcRenderer.on("wisp:terminal", forward);
+    return () => ipcRenderer.removeListener("wisp:terminal", forward);
+  },
 };
 
 contextBridge.exposeInMainWorld("wisp", bridge);

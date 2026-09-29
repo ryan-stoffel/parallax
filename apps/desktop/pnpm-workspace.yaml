@@ -1,8 +1,14 @@
 # One package, not a workspace (0022). This file exists because pnpm 11
 # reads these settings only from here, not from package.json.
 #
-# No allowBuilds entry: Electron 44 has no install script. It downloads its
-# binary the first time `electron` is required (scripts/dev.mjs does that).
+# Electron 44 has no install script. It downloads its binary the first time
+# `electron` is required (scripts/dev.mjs does that).
+#
+# node-pty's scripts only check for a prebuilt binary, or compile one with
+# node-gyp when there is none. Its N-API prebuilds cover every target in 0023,
+# and work in Electron without a rebuild, so its scripts never run.
+allowBuilds:
+  node-pty: false
 
 # Vite+ asks for these so every tool shares its Vite and Vitest.
 overrides:

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -27,13 +27,47 @@ test.beforeAll(async () => {
     WISPD_DATA_DIR: dataDir,
     WISPD_FAKE_BACKEND: path.join(import.meta.dirname, "agent.json"),
   };
+  // Windows spells it Path, and a second PATH key would leave which one wins to chance.
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+  env[pathKey] = `${fakeCodex()}${path.delimiter}${env[pathKey] ?? ""}`;
   // As in scripts/ci/launch-app: these would run Electron as Node, or load the dev server.
   delete env["ELECTRON_RUN_AS_NODE"];
   delete env["WISP_DEV_SERVER_URL"];
   // Unset variables are undefined in `process.env`, and launch skips them.
-  app = await _electron.launch({ args: [desktop], env: env as Record<string, string> });
+  // Its own userData too, so a local run never shares the developer's app profile or hosts.
+  const userData = `--user-data-dir=${mkdtempSync(path.join(tmpdir(), "wisp-e2e-app-"))}`;
+  app = await _electron.launch({ args: [desktop, userData], env: env as Record<string, string> });
   page = await app.firstWindow();
 });
+
+/**
+ * A fake Codex, for the sign-in test: signed out until `codex login` has read a line. Returns its
+ * folder, which goes first on PATH, so wispd finds it before any real Codex.
+ */
+function fakeCodex(): string {
+  const bin = mkdtempSync(path.join(tmpdir(), "wisp-e2e-bin-"));
+  const marker = path.join(bin, "signed-in");
+  if (process.platform === "win32") {
+    const script = [
+      "@echo off",
+      `if "%~1 %~2"=="login status" if exist "${marker}" (exit 0) else (exit 1)`,
+      `if "%~1"=="login" (echo Fake Codex sign-in. Press Enter.& set /p line=& type nul > "${marker}"& exit 0)`,
+      "exit 2",
+    ];
+    writeFileSync(path.join(bin, "codex.cmd"), script.join("\r\n"));
+  } else {
+    const script = [
+      "#!/bin/sh",
+      'case "$*" in',
+      `  "login status") test -f '${marker}' ;;`,
+      `  login) echo "Fake Codex sign-in. Press Enter."; read -r _; touch '${marker}' ;;`,
+      "  *) exit 2 ;;",
+      "esac",
+    ];
+    writeFileSync(path.join(bin, "codex"), script.join("\n"), { mode: 0o755 });
+  }
+  return bin;
+}
 
 test.afterEach(async () => {
   const { status, expectedStatus } = test.info();
@@ -96,4 +130,23 @@ test("a follow-up's text is still there after a reload (RYA-92)", async () => {
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("Check the links too")).toBeVisible();
   await expect(transcript.getByText("Follow-up message")).toHaveCount(0);
+});
+
+test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", async () => {
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Providers" }).click();
+  const host = page.getByRole("region", { name: /^This (Mac|computer)$/ });
+  const codex = (row: RegExp) => host.locator("div").filter({ hasText: row });
+  // wispd's status probes fail on Windows until RYA-144, so there Codex stays "Sign-in unknown".
+  const probes = process.platform !== "win32";
+  if (probes) await expect(codex(/^CodexInstalledNot signed inSign in$/)).toBeVisible();
+  await page.getByRole("button", { name: "Sign in to Codex" }).click();
+
+  const terminal = page.getByRole("group", { name: "Codex sign-in terminal" });
+  await expect(terminal).toContainText("Fake Codex sign-in. Press Enter.");
+  await terminal.click();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
+  // The sign-in's end ran accounts/refresh, which found the fake signed in.
+  if (probes) await expect(codex(/^CodexInstalledSigned in$/)).toBeVisible();
 });
