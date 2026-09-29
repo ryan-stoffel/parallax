@@ -82,7 +82,7 @@ pub(crate) fn initialize(
 /// `sendOptions` (RYA-161): `agent/send` takes `effort` and `permission`, likewise, and its
 /// successor `sendModel` (RYA-163): `agent/send` also takes `model`, which a `sendOptions`-only
 /// wispd would silently ignore. M4 adds `coordinator` (RYA-41, 0024): `project/start` and
-/// `Project.coordinator`. `openPr` (RYA-168): `agent/openPr`.
+/// `Project.coordinator`, and `openPr` (RYA-168): `agent/openPr`.
 fn capabilities_advertised() -> Capabilities {
     Capabilities(BTreeMap::from([
         ("accounts".to_owned(), serde_json::Map::new()),

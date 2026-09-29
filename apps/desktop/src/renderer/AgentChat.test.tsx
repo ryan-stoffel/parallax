@@ -193,8 +193,8 @@ const settle = async () => {
   for (let i = 0; i < 20; i++) await act(async () => {});
 };
 
-async function renderChat() {
-  render(<AgentChat hostId="local" runId={runId} />);
+async function renderChat(noRepo?: boolean) {
+  render(<AgentChat hostId="local" runId={runId} noRepo={noRepo} />);
   await settle(); // the connection state and the pages
 }
 
@@ -320,9 +320,13 @@ test("Stop cancels, and a failed cancel says why and allows another try", async 
 test("a finished run opens a pull request titled like its thread, then links to it", async () => {
   const openPr = () =>
     [...document.querySelectorAll("button")].find((b) => b.textContent === "Open PR");
-  // Not while the run goes, nor from a wispd that can't.
+  // Not while the run goes, nor in a thread with no repo, nor from a wispd that can't.
   fakeBridge(4, { capabilities: { openPr: {} } });
   await renderChat();
+  expect(openPr()).toBeUndefined();
+  act(() => unmount());
+  fakeBridge(8, { capabilities: { openPr: {} } });
+  await renderChat(true);
   expect(openPr()).toBeUndefined();
   act(() => unmount());
   fakeBridge(8);

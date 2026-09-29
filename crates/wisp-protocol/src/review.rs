@@ -255,7 +255,8 @@ pub struct AgentRequestChangesParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentOpenPrParams {
-    /// The run. It must have finished and have a commit.
+    /// The run. It must have finished, have a commit, and work in a repository: a thread with no
+    /// repo has no `origin`.
     pub run_id: RunId,
     /// The pull request's title, such as the thread's. wispd takes its first line, cut to 256
     /// characters.

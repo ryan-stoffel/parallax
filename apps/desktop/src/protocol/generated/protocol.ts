@@ -2071,7 +2071,8 @@ export type AgentRequestChangesParams = {
  */
 export type AgentOpenPrParams = {
 	/**
-	 * The run. It must have finished and have a commit.
+	 * The run. It must have finished, have a commit, and work in a repository: a thread with no
+	 * repo has no `origin`.
 	 */
 	runId: RunId,
 	/**

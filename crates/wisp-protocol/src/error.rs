@@ -73,8 +73,8 @@ pub enum ErrorKind {
     /// `thread/start` asked for, or the model's name can't be passed to its CLI (RYA-97). Nothing
     /// was created. The message names the option, the value, and the backend.
     UnsupportedOption,
-    /// `agent/openPr` refused before pushing anything: the run is still running, or it has no
-    /// commit beyond its base (RYA-168).
+    /// `agent/openPr` refused before pushing anything: the run is still running, it has no commit
+    /// beyond its base, or it is a thread with no repo, which has no `origin` (RYA-168).
     PrRefused,
     /// `agent/openPr` could not push the run's branch: the repository has no `origin`, or git
     /// failed. The message carries git's stderr.

@@ -24,8 +24,8 @@ use crate::support::{InProcess, kind, temp_dir};
 const URL: &str = "https://github.com/example/app/pull/7";
 
 /// A folder that is wispd's whole `PATH`: the real git, and a fake `gh` that logs its arguments to
-/// `gh.log`, answers `pr list` with the pull request `pr create` made, and fails as `gh-mode`
-/// says: `signed-out` (exit 4, as gh does) or `fail`.
+/// `gh.log`, answers `pr list` with a fork's pull request from a branch of the same name, then the
+/// one `pr create` made, and fails as `gh-mode` says: `signed-out` (exit 4, as gh does) or `fail`.
 struct Tools(TempDir);
 
 impl Tools {
@@ -46,7 +46,13 @@ case "$mode" in
   fail) echo 'GraphQL: Could not resolve to a Repository' >&2; exit 1 ;;
 esac
 case "$1 $2" in
-  'pr list') if [ -f "$dir/pr" ]; then read -r url < "$dir/pr"; printf '[{{"url":"%s"}}]\n' "$url"; else echo '[]'; fi ;;
+  'pr list')
+    list='{{"url":"https://github.com/someone/app/pull/3","isCrossRepository":true}}'
+    if [ -f "$dir/pr" ]; then
+      read -r url < "$dir/pr"
+      list="$list,{{\"url\":\"$url\",\"isCrossRepository\":false}}"
+    fi
+    echo "[$list]" ;;
   'pr create') echo '{URL}' > "$dir/pr"; echo 'Creating pull request' >&2; echo '{URL}' ;;
   *) exit 1 ;;
 esac
@@ -121,6 +127,21 @@ fn add_origin(repo: &Path, dir: &Path) -> PathBuf {
     origin
 }
 
+fn thread(repo: Option<RepoId>) -> ThreadStartParams {
+    ThreadStartParams {
+        run_id: RunId::generate(),
+        repo,
+        prompt: "Rewrite the README".to_owned(),
+        account: Some(AccountChoice::Subscription {
+            backend: "fake".to_owned(),
+        }),
+        model: None,
+        effort: None,
+        permission: None,
+        branch_slug: None,
+    }
+}
+
 fn open(run_id: RunId, title: &str, body: Option<&str>) -> AgentOpenPrParams {
     AgentOpenPrParams {
         run_id,
@@ -161,7 +182,10 @@ async fn a_finished_run_pushes_its_branch_and_opens_one_pull_request() {
     assert_eq!(
         tools.log(),
         [
-            format!("pr list --repo={origin} --head={branch} --state=open --json=url"),
+            format!(
+                "pr list --repo={origin} --head={branch} --state=open \
+                 --json=url,isCrossRepository"
+            ),
             format!(
                 "pr create --repo={origin} --head={branch} --title=Rewrite the README \
                  --body=Built in wisp."
@@ -203,22 +227,9 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
         0,
     )
     .await;
-    let run_id = RunId::generate();
-    client
-        .call::<ThreadStart>(ThreadStartParams {
-            run_id,
-            repo: Some(entry.id),
-            prompt: "Rewrite the README".to_owned(),
-            account: Some(AccountChoice::Subscription {
-                backend: "fake".to_owned(),
-            }),
-            model: None,
-            effort: None,
-            permission: None,
-            branch_slug: None,
-        })
-        .await
-        .unwrap();
+    let start = thread(Some(entry.id));
+    let run_id = start.run_id;
+    client.call::<ThreadStart>(start).await.unwrap();
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let refused = async |client: &mut Conn, expected: ErrorKind, says: &str| {
         let error = client
@@ -253,6 +264,20 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
         .await
         .unwrap();
     assert_eq!(opened.url, URL);
+
+    // A thread with no repo has only its scratch repository, with nowhere to push.
+    let start = thread(None);
+    let scratch = start.run_id;
+    let started = client.call::<ThreadStart>(start).await.unwrap();
+    let scope = ProjectId::try_from(uuid::Uuid::from(started.thread.repo)).unwrap();
+    subscribe(&mut client, scope, 0).await;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let error = client
+        .call::<AgentOpenPr>(open(scratch, "Rewrite the README", None))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::PrRefused);
+    assert!(error.message.contains("no repository"), "{}", error.message);
     host.server.stop().await;
 }
 

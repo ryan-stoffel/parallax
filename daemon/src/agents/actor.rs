@@ -412,6 +412,17 @@ impl Actor {
                 self.id
             )));
         }
+        let project = self.project;
+        if store(&self.daemon, move |db| {
+            crate::threads::is_scratch(db, project)
+        })
+        .await?
+        {
+            return Err(refused(format!(
+                "run {} is a thread with no repository, so it has no origin to push to",
+                self.id
+            )));
+        }
         let Some(worktree) = &self.worktree else {
             return Err(ErrorObject::internal_error(format!(
                 "run {} has no recorded worktree",

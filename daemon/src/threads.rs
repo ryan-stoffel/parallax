@@ -97,6 +97,14 @@ pub(crate) fn scope_path(db: &wisp_store::Store, scope: ProjectId) -> Result<Str
     ))
 }
 
+/// Whether `scope` is wispd's scratch entry, whose threads have no repository of the user's.
+pub(crate) fn is_scratch(db: &wisp_store::Store, scope: ProjectId) -> Result<bool, ErrorObject> {
+    Ok(db
+        .get_repo(scope.into())
+        .map_err(|e| store_error(&e))?
+        .is_some_and(|repo| repo.fields.scratch))
+}
+
 /// The scope whose context folder run `run` of `scope` writes notes to: the run's own id for a
 /// thread with no repo, so one quick chat never reads another's notes, and `scope` otherwise.
 pub(crate) fn context_scope(
@@ -104,11 +112,7 @@ pub(crate) fn context_scope(
     scope: ProjectId,
     run: RunId,
 ) -> Result<ProjectId, ErrorObject> {
-    let scratch = db
-        .get_repo(scope.into())
-        .map_err(|e| store_error(&e))?
-        .is_some_and(|repo| repo.fields.scratch);
-    if scratch {
+    if is_scratch(db, scope)? {
         ProjectId::try_from(Uuid::from(run)).map_err(|_| corrupt("run", run.into()))
     } else {
         Ok(scope)

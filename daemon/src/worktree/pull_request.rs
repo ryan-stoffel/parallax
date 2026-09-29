@@ -78,17 +78,25 @@ impl WorktreeManager {
         }
 
         // `--flag=value`, so a value is never read as a flag.
-        let repo = format!("--repo={origin}");
+        let repo = format!("--repo={}", without_userinfo(&origin));
         let head = format!("--head={branch}");
         let open = self
             .gh(
                 &repo_root,
-                &["pr", "list", &repo, &head, "--state=open", "--json=url"],
+                &[
+                    "pr",
+                    "list",
+                    &repo,
+                    &head,
+                    "--state=open",
+                    "--json=url,isCrossRepository",
+                ],
             )
             .await?;
         let open: Vec<Listed> = serde_json::from_str(&open)
             .map_err(|error| PrError::Gh(format!("could not read gh pr list's answer: {error}")))?;
-        if let Some(listed) = open.into_iter().next() {
+        // A fork's pull request from a branch of the same name isn't this branch's.
+        if let Some(listed) = open.into_iter().find(|pr| !pr.is_cross_repository) {
             return Ok(listed.url);
         }
         let title = format!("--title={title}");
@@ -149,8 +157,49 @@ impl WorktreeManager {
     }
 }
 
-/// One pull request in `gh pr list --json=url`.
+/// One pull request in `gh pr list --json=url,isCrossRepository`.
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Listed {
     url: String,
+    is_cross_repository: bool,
+}
+
+/// `url` without its userinfo (`https://user:token@host/path` becomes `https://host/path`), so a
+/// credential kept in the remote's URL never reaches `gh`'s argv. An scp-like `git@host:path`
+/// stays as it is: it can't hold a password.
+fn without_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
+    match authority.rfind('@') {
+        Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
+        None => url.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_userinfo;
+
+    #[test]
+    fn a_remote_url_loses_its_userinfo() {
+        assert_eq!(
+            without_userinfo("https://me:ghp_secret@github.com/me/app.git"),
+            "https://github.com/me/app.git"
+        );
+        assert_eq!(
+            without_userinfo("ssh://git@github.com/me/app.git"),
+            "ssh://github.com/me/app.git"
+        );
+        for kept in [
+            "https://github.com/me/app.git",
+            "https://github.com/me/a@b.git",
+            "git@github.com:me/app.git",
+            "/srv/git/app.git",
+        ] {
+            assert_eq!(without_userinfo(kept), kept);
+        }
+    }
 }

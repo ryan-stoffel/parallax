@@ -50,6 +50,7 @@ export function AgentChat({
   runId,
   notice,
   prompt,
+  noRepo,
 }: {
   hostId: string;
   runId: string;
@@ -57,6 +58,8 @@ export function AgentChat({
   notice?: string;
   /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
   prompt?: string;
+  /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
+  noRepo?: boolean;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -112,6 +115,7 @@ export function AgentChat({
   const canOpenPr =
     connected &&
     "openPr" in connection.capabilities &&
+    !noRepo &&
     !!run?.diff &&
     !isRunning(run.status) &&
     run.status !== "accepted";
@@ -703,7 +707,8 @@ export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode 
 
 /**
  * Open PR: wispd pushes the run's branch and opens a pull request titled like the thread, then
- * this links to it, in the browser. A newer commit brings the button back, to push it too.
+ * this links to it, in the browser. It unmounts while the run works, so after another turn the
+ * button is back, to push the new commit to the same pull request.
  */
 function OpenPr({
   hostId,
@@ -714,17 +719,16 @@ function OpenPr({
   run: AgentRun;
   onError: (error?: string) => void;
 }) {
-  const [pr, setPr] = useState<{ url: string; commit?: string }>();
+  const [url, setUrl] = useState<string>();
   const [opening, setOpening] = useState(false);
-  const commit = run.diff?.commit;
-  if (pr && pr.commit === commit) {
-    const number = /\/pull\/(\d+)$/.exec(pr.url)?.[1];
+  if (url) {
+    const number = /\/pull\/(\d+)$/.exec(url)?.[1];
     return (
       <a
-        href={pr.url}
+        href={url}
         target="_blank"
         rel="noreferrer"
-        title={pr.url}
+        title={url}
         className={`${tabItem} rounded-md hover:bg-hover hover:text-foreground`}
       >
         <GitPullRequest aria-hidden />
@@ -741,7 +745,7 @@ function OpenPr({
     });
     setOpening(false);
     if ("error" in answer) onError(describeError(answer.error));
-    else setPr({ url: answer.result.url, commit });
+    else setUrl(answer.result.url);
   };
   return (
     <button
@@ -751,7 +755,7 @@ function OpenPr({
       className={`${tabItem} rounded-md enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-60`}
     >
       <GitPullRequestArrow aria-hidden />
-      {opening ? "Opening PR…" : pr ? "Update PR" : "Open PR"}
+      {opening ? "Opening PR…" : "Open PR"}
     </button>
   );
 }
