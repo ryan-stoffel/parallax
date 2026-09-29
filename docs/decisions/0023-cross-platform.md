@@ -36,7 +36,7 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 | Keeps `serve` running | LaunchAgent in `gui/<uid>` | systemd user unit `<label>.service`, with `loginctl enable-linger` | Per-user scheduled task with a logon trigger |
 | API keys | Keychain, through `security-framework` | Secret Service, through `keyring-core` and `zbus-secret-service-keyring-store` | Credential Manager, through `keyring-core` and `windows-native-keyring-store` |
 | Context watcher | `notify`: FSEvents | `notify`: inotify | `notify`: `ReadDirectoryChangesW` |
-| `PATH` fill-in (0014) | `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, system folders | `~/.local/bin`, `/usr/local/bin`, system folders | `%USERPROFILE%\.local\bin` |
+| `PATH` fill-in (0014) | `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, system folders | `~/.local/bin`, `~/.cargo/bin`, `/usr/local/bin`, system folders | `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.cargo\bin` |
 | Claude workers | Seatbelt (0013) | bubblewrap, `socat`, and the seccomp filter | Refused natively. Run `wispd` in WSL2 |
 | The app's `ssh` | `ssh` on `PATH` | `ssh` on `PATH` | `ssh.exe` on `PATH`, from Windows' OpenSSH Client |
 

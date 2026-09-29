@@ -10,7 +10,10 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use super::stream::{Step, Translator};
-use super::{ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS};
+use super::{
+    ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS,
+    write_env_file,
+};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, Credential, Event, EventStream,
@@ -329,6 +332,7 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
     assert!(env.contains(&working_dir), "{env:?}");
     fake.assert_no_inherited_credentials(None);
     assert!(!env.iter().any(|var| var.starts_with("SSH_CONNECTION=")));
+    assert!(!env.iter().any(|var| var.starts_with("CLAUDE_ENV_FILE=")));
     for set in [
         "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
         "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1",
@@ -451,6 +455,57 @@ fn assert_worker_invocation(fake: &Fake) {
             .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
         "{env:?}"
     );
+}
+
+/// A worker gets a script that keeps the CLI's `PATH` in its Bash commands (RYA-126), in the data
+/// folder, and it's gone once the run has ended.
+#[tokio::test]
+async fn a_worker_s_env_file_restores_its_path_and_ends_with_the_run() {
+    let fake = Fake::new("tool-call");
+    let mut request = request(&fake.root());
+    request.policy = ToolPolicy::WorkspaceWrite;
+    request.sandbox = Some(worker_sandbox(&fake.root()));
+    run(&fake, request).await;
+    let env_file = fake
+        .env()
+        .iter()
+        .find_map(|var| var.strip_prefix("CLAUDE_ENV_FILE="))
+        .map(PathBuf::from)
+        .unwrap();
+    assert_eq!(
+        env_file.parent(),
+        Some(fake.root().join("data/tmp").as_path())
+    );
+    assert_eq!(
+        fake.recorded("env-file"),
+        format!(
+            "export PATH='{}/bin:/usr/bin:/bin'${{PATH:+:$PATH}}\n",
+            fake.root().display()
+        )
+    );
+    assert!(!env_file.exists());
+}
+
+/// The script quotes the `PATH` it restores, keeps what the shell had after it, and is private.
+#[test]
+fn the_env_file_puts_the_path_back_in_front_and_is_private() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = write_env_file(&dir.path().join("tmp"), "/it's/bin:/usr/bin".as_ref()).unwrap();
+    let mode = fs::metadata(&file).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", ". \"$0\"; printf %s \"$PATH\""])
+        .arg(&*file)
+        .env("PATH", "/set/by/zshenv")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "/it's/bin:/usr/bin:/set/by/zshenv"
+    );
+    let path = file.to_path_buf();
+    drop(file);
+    assert!(!path.exists());
 }
 
 #[test]
