@@ -40,6 +40,16 @@
 //!   the flag fails, backs it up from inside the worker's own (RYA-118). Elsewhere the backend
 //!   reports no `worker_sandbox` and refuses a workspace-write run.
 //!
+//! # A worker's `PATH`
+//!
+//! Claude Code runs each Bash command through the user's `$SHELL`, and zsh reads `/etc/zshenv`
+//! and `~/.zshenv` for every command, so startup files that set `PATH` outright replace the
+//! `PATH` wispd gave the CLI. Claude Code's shell snapshot would put it back, but the snapshot
+//! sits in the configuration folder, which a worker's commands can't read (RYA-126). So a worker
+//! also gets [`ENV_FILE_ENV`]: [`write_env_file`] writes a script into the data folder's `tmp/`
+//! that puts the CLI's `PATH` back in front, which the CLI reads itself and runs before each
+//! command. The run's driver deletes it once the CLI has exited.
+//!
 //! # Messages go on stdin
 //!
 //! With `--input-format stream-json`, the prompt and every follow-up are user messages on stdin,
@@ -87,11 +97,13 @@ mod tests;
 
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
+use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 
@@ -100,7 +112,7 @@ use self::stream::{Step, Translator, TurnDone};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
-    StdinMode, StdinPipe,
+    SpawnError, StdinMode, StdinPipe,
 };
 use super::sandbox::worker_sandbox;
 use super::{
@@ -249,6 +261,38 @@ const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 /// Claude Code's own messaging socket. `sandbox.credentials` unsets them for each sandboxed
 /// command, as [`SCRUB_ENV`] would.
 pub const WORKER_WITHHELD_VARS: &[&str] = &[API_KEY_ENV, "CLAUDE_CODE_MESSAGING_TOKEN"];
+
+/// The variable naming a script that Claude Code reads and runs before each Bash command, after
+/// the shell's startup files and its own shell snapshot (2.1.283). See [`write_env_file`].
+pub const ENV_FILE_ENV: &str = "CLAUDE_ENV_FILE";
+
+/// Writes a worker's [`ENV_FILE_ENV`] script into `dir`, which no worker may read or write
+/// (wispd's data folder's `tmp/`), and returns its path, which deletes the file when dropped. The
+/// script puts `path`, the `PATH` the CLI started with, in front of whatever `PATH` the shell's
+/// startup files left (RYA-126). The file is new, has a random name, and only its owner may read
+/// or write it.
+///
+/// # Errors
+///
+/// If `dir` can't be created or the file can't be written.
+pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
+    std::fs::create_dir_all(dir)?;
+    let mut script = b"export PATH='".to_vec();
+    for &byte in path.as_encoded_bytes() {
+        if byte == b'\'' {
+            script.extend_from_slice(b"'\\''");
+        } else {
+            script.push(byte);
+        }
+    }
+    script.extend_from_slice(b"'${PATH:+:$PATH}\n");
+    let mut file = tempfile::Builder::new()
+        .prefix("claude-env-")
+        .suffix(".sh")
+        .tempfile_in(dir)?;
+    file.write_all(&script)?;
+    Ok(file.into_temp_path())
+}
 
 /// A [`Backend`] that runs Claude Code.
 #[derive(Clone, Debug)]
@@ -543,6 +587,15 @@ impl Backend for ClaudeBackend {
         if request.policy == ToolPolicy::NoWrite {
             spec.inject.set(SCRUB_ENV, "1");
         }
+        let env_file = match self.launcher.base().get("PATH") {
+            Some(path) if request.policy == ToolPolicy::WorkspaceWrite => {
+                let dir = self.launcher.data_dir().temp_dir();
+                let file = write_env_file(&dir, path).map_err(SpawnError::Io)?;
+                spec.inject.set(ENV_FILE_ENV, file.as_os_str());
+                Some(file)
+            }
+            _ => None,
+        };
         spec.stdin = StdinMode::Piped;
         spec.limits = self.limits;
 
@@ -567,6 +620,7 @@ impl Backend for ClaudeBackend {
                 .with_permission_mode(worker_permission_mode(request.permission)?),
             turns: VecDeque::new(),
             violation: None,
+            env_file,
         };
         tokio::spawn(driver.run(Message::new(request.turn_id, &request.prompt, false)));
         Ok(Started {
@@ -713,6 +767,8 @@ struct Driver {
     /// Turns the CLI has been sent but hasn't finished, oldest first: their ids and `uuid`s.
     turns: VecDeque<(Option<TurnId>, String)>,
     violation: Option<Failure>,
+    /// A worker's [`ENV_FILE_ENV`] script, deleted once the CLI has exited.
+    env_file: Option<TempPath>,
 }
 
 impl Driver {
@@ -791,6 +847,7 @@ impl Driver {
         };
 
         self.drop_undelivered(stdin).await;
+        self.env_file = None;
         let outcome = self.outcome(exit);
         let _ = self.sink.finish(outcome).await;
     }

@@ -16,10 +16,11 @@ use crate::routing::KeyAccounts;
 
 /// Folders appended to an agent's `PATH` when it lacks them (#96): the vendors' own install
 /// folder (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
-/// on Windows), Homebrew on Apple silicon (macOS only) and `/usr/local/bin`, and the system
-/// folders (0023). They go after whatever `PATH` wispd was started with, so the user's own order
-/// still wins; they only fill in what launchd or an SSH session left out.
-const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin"];
+/// on Windows), rustup's `~/.cargo/bin` (RYA-126), Homebrew on Apple silicon (macOS only) and
+/// `/usr/local/bin`, and the system folders (0023). They go after whatever `PATH` wispd was
+/// started with, so the user's own order still wins; they only fill in what launchd or an SSH
+/// session left out.
+const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin", ".cargo/bin"];
 #[cfg(target_os = "macos")]
 const EXTRA_PATH: &[&str] = &[
     "/opt/homebrew/bin",
@@ -384,7 +385,12 @@ mod tests {
         let mut env = Environment::empty();
         env.set("PATH", "/usr/bin:/custom/bin");
         let env = with_extra_path(env, Some(Path::new("/Users/me")));
-        let mut expected = vec!["/usr/bin", "/custom/bin", "/Users/me/.local/bin"];
+        let mut expected = vec![
+            "/usr/bin",
+            "/custom/bin",
+            "/Users/me/.local/bin",
+            "/Users/me/.cargo/bin",
+        ];
         if cfg!(target_os = "macos") {
             expected.push("/opt/homebrew/bin");
         }

@@ -11,6 +11,8 @@
 //! - `wispd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
+//! - `tmp/`: files wispd writes for a run and deletes when it ends, such as a Claude worker's
+//!   `CLAUDE_ENV_FILE` (RYA-126). See [`DataDir::temp_dir`].
 //! - `logs/wispd.log`: the log.
 //!
 //! `--data-dir` or [`DATA_DIR_ENV`] moves the whole folder. Every subcommand that reaches the
@@ -149,6 +151,14 @@ impl DataDir {
     #[must_use]
     pub fn log_file(&self) -> PathBuf {
         self.root.join("logs").join("wispd.log")
+    }
+
+    /// `tmp/`: files wispd writes for a run and deletes when the run ends, such as a Claude
+    /// worker's `CLAUDE_ENV_FILE` (RYA-126). No worker's commands can read or write them, since
+    /// the data folder is unreadable to every worker (0013).
+    #[must_use]
+    pub fn temp_dir(&self) -> PathBuf {
+        self.root.join("tmp")
     }
 
     /// The folder holding every project's shared context (0005, #155): `context/` in the data
