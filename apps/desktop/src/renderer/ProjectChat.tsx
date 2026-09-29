@@ -33,7 +33,8 @@ export function ProjectChat({
   const connected = connection?.status === "connected";
   // The first message's run id, reused when it's sent again after failing (0007).
   const [runId] = useState(uuidv7);
-  // Which account the first message picked, when the host had no coordinator account.
+  const [starting, setStarting] = useState(false);
+  // Which account the coordinator got, when the host had no coordinator account.
   const [notice, setNotice] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
   const [backend, setBackend] = useState<string>();
@@ -46,7 +47,7 @@ export function ProjectChat({
     };
   }, [hostId, connected]);
 
-  // The coordinator works in the Project's repository itself, not a worktree.
+  // The Project's repository and branch, whose latest commit the coordinator reads (0024).
   const tab = (
     <>
       <span className={tabItem} title={project.repoPath}>
@@ -62,6 +63,27 @@ export function ProjectChat({
     </>
   );
 
+  // Starts the coordinator as run `id`. With no coordinator account on the host, the run gets the
+  // host's first Claude account, its login before its keys (0004), and the chat says so.
+  const start = async (id: string, text: string, { model, effort }: RunOptions) => {
+    let error = await startCoordinator(project.id, id, text, { model, effort });
+    const kind = error?.data?.kind;
+    if (kind === "noDefaultAccount" || kind === "accountNotFound") {
+      const accounts = await accountOptions(hostId);
+      if (typeof accounts === "string") return accounts;
+      const first = accounts[0];
+      if (!first)
+        return "No account can run the coordinator yet. Sign in to Claude Code, or add an API key, then try again.";
+      error = await startCoordinator(project.id, id, text, {
+        model,
+        effort,
+        account: first.account,
+      });
+      if (!error) setNotice(`Using ${first.label} for this Project's coordinator.`);
+    }
+    return error && describeError(error);
+  };
+
   if (project.coordinator)
     return (
       <AgentChat
@@ -71,33 +93,21 @@ export function ProjectChat({
         prompt={prompt}
         notice={notice}
         tab={tab}
+        // A new coordinator replaces one that can't take messages (0024).
+        startOver={(text, options) => start(uuidv7(), text, options)}
       />
     );
 
   const send = async (text: string, options: RunOptions) => {
-    let error = await startCoordinator(project.id, runId, text, options);
-    const kind = error?.data?.kind;
-    if (kind === "noDefaultAccount" || kind === "accountNotFound") {
-      // The host's first Claude account from now on: its Claude Code login, then its API keys,
-      // subscriptions first as 0004 has it.
-      const accounts = await accountOptions(hostId);
-      if (typeof accounts === "string") return accounts;
-      const first = accounts[0];
-      if (!first)
-        return "No account can run the coordinator yet. Sign in to Claude Code, or add an API key, then try again.";
-      const set = await window.wisp.request(hostId, "accounts/defaults/set", {
-        role: "coordinator",
-        account: first.account,
-      });
-      if ("error" in set) return describeError(set.error);
-      setNotice(`Using ${first.label} for Project coordinators on this host.`);
-      error = await startCoordinator(project.id, runId, text, options);
-    }
-    return error && describeError(error);
+    setStarting(true);
+    const failed = await start(runId, text, options);
+    setStarting(false);
+    return failed;
   };
 
   let disabledReason: string | undefined;
-  if (connection?.status === "failed") disabledReason = "Disconnected from wispd";
+  if (starting) disabledReason = "Starting the coordinator…";
+  else if (connection?.status === "failed") disabledReason = "Disconnected from wispd";
   else if (!connected) disabledReason = "Connecting to wispd…";
   else if (!("coordinator" in connection.capabilities))
     disabledReason = "This host's wispd can't run a Project's coordinator yet";

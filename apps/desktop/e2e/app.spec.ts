@@ -163,6 +163,9 @@ test("creates a project on a repository it adds, and opens it (RYA-166)", async 
   const repo = path.join(mkdtempSync(path.join(tmpdir(), "wisp-e2e-repo-")), "ember");
   mkdirSync(repo);
   execFileSync("git", ["init", "-q", repo]);
+  // A coordinator runs on a copy of the latest commit, so the repository needs one (0024).
+  const identity = ["-c", "user.name=wisp", "-c", "user.email=wisp@localhost"];
+  execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The native folder picker can't be driven, so it answers with the repository.
   await app.evaluate(({ dialog }, folder) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });

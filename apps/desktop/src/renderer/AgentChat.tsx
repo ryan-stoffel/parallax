@@ -32,6 +32,7 @@ import type { AgentRun, JsonValue } from "../protocol/generated/protocol";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
+import type { RunOptions } from "./models";
 import { titleOf } from "./threads";
 import {
   failureText,
@@ -60,6 +61,7 @@ export function AgentChat({
   prompt,
   noRepo,
   tab,
+  startOver,
 }: {
   hostId: string;
   runId: string;
@@ -71,6 +73,11 @@ export function AgentChat({
   noRepo?: boolean;
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
   tab?: ReactNode;
+  /**
+   * Starts a new run with `text` in place of this one once this one can't take messages, as a
+   * Project's coordinator can (0024). Resolves to an error message, or undefined.
+   */
+  startOver?: (text: string, options: RunOptions) => Promise<string | undefined>;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -83,7 +90,7 @@ export function AgentChat({
     (turnId: string, text: string) => {
       setResent((prev) => new Set(prev).add(turnId));
       void send(text).then((failed) => {
-        setResendError(failed);
+        setResendError(failed?.message);
         if (failed)
           setResent((prev) => {
             const next = new Set(prev);
@@ -99,6 +106,33 @@ export function AgentChat({
     [sent, resent],
   );
   const { run, items } = transcript;
+
+  // A message wispd wouldn't send because the run can't be resumed, which `startOver` can take.
+  const [refused, setRefused] = useState<{ text: string; options: RunOptions; why: string }>();
+  const [startingOver, setStartingOver] = useState(false);
+  const sendText = async (text: string, options: RunOptions) => {
+    const failed = await send(text, options);
+    if (!startOver || failed?.data?.kind !== "runNotResumable") return failed?.message;
+    setRefused({ text, options, why: failed.message });
+    return ""; // Back in the box; the line above it says why and offers Start over.
+  };
+  // A run that ended before its CLI reported a session never answered: it starts over with its
+  // own first message.
+  const stuck =
+    startOver &&
+    (refused ??
+      (run && !isRunning(run.status) && !run.sessionId
+        ? { text: run.prompt, options: {}, why: "it stopped before its session started." }
+        : undefined));
+  const restart = async () => {
+    if (!stuck) return;
+    setStartingOver(true);
+    // The new run keeps this one's model and effort unless the message changed them.
+    const { model = run?.model, effort = run?.effort } = stuck.options;
+    const failed = await startOver(stuck.text, { model, effort });
+    setStartingOver(false);
+    if (failed) setRefused({ ...stuck, why: failed });
+  };
 
   // Sent from here, but no turnStarted (or followUpDropped) for it yet.
   const rows = useMemo<Row[]>(() => {
@@ -159,8 +193,21 @@ export function AgentChat({
             {notice}
           </p>
         )}
+        {stuck && (
+          <p role="alert" className="px-2 pb-2 text-[12.5px] text-danger">
+            This chat can't continue: {stuck.why}{" "}
+            <button
+              type="button"
+              disabled={startingOver}
+              onClick={() => void restart()}
+              className="font-medium text-foreground underline underline-offset-2 disabled:opacity-50"
+            >
+              Start over
+            </button>
+          </p>
+        )}
         <Composer
-          onSend={send}
+          onSend={sendText}
           onStop={isRunning(run?.status) ? cancel : undefined}
           disabledReason={disabledReason}
           tab={

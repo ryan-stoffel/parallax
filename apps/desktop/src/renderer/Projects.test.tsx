@@ -33,13 +33,15 @@ const project = (name: string, updatedAt: string): Project => ({
 });
 const now = Date.parse("2026-09-29T12:00:00Z");
 
-type Answer = (params: Record<string, unknown>) => RpcResponse<unknown>;
+type Answer = (
+  params: Record<string, unknown>,
+) => RpcResponse<unknown> | Promise<RpcResponse<unknown>>;
 let answers: Record<string, Answer>;
 let capabilities: Record<string, object>;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
   const answer = answers[method];
   return answer
-    ? { logId: "log-1", ...answer(params) }
+    ? { logId: "log-1", ...(await answer(params)) }
     : { error: { code: -32601, message: `${method} isn't faked` } };
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
@@ -240,9 +242,9 @@ const coordinatorRun = (id: string, prompt: string): AgentRun => ({
   createdAt: "2026-09-29T12:00:00Z",
   updatedAt: "2026-09-29T12:00:00Z",
 });
-/** `agent/events` for `run`: it started, then said it would plan. */
-const serveEvents = (run: () => AgentRun | undefined) => (params: Record<string, unknown>) => {
-  const r = run()!;
+/** `agent/events` for whichever of `runs` is asked for: it started, then said it would plan. */
+const serveEvents = (runs: () => (AgentRun | undefined)[]) => (params: Record<string, unknown>) => {
+  const r = runs().find((run) => run?.id === params["runId"])!;
   const events: LoggedEvent[] = [
     { seq: 8, time: "", event: { kind: "agent.started", runId: r.id, run: r } },
     {
@@ -278,11 +280,13 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   answers["accounts/defaults/get"] = () => ({
     result: { coordinator: { kind: "subscription", backend: "claude" } },
   });
-  answers["project/start"] = (p) => {
+  let release = () => {};
+  answers["project/start"] = async (p) => {
+    await new Promise<void>((resolve) => (release = resolve));
     started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
     return { result: { run: started } };
   };
-  answers["agent/events"] = serveEvents(() => started);
+  answers["agent/events"] = serveEvents(() => [started]);
   answers["agent/send"] = () => ({ result: { run: started } });
   answers["agent/cancel"] = () => ({ result: { run: started } });
   await renderApp();
@@ -293,6 +297,12 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
 
   type("Add a dark mode");
   await click(button("Send"));
+  // Off while it starts, so a second Send can't race the first.
+  expect(document.querySelector<HTMLTextAreaElement>("main textarea")!.placeholder).toBe(
+    "Starting the coordinator…",
+  );
+  await act(async () => release());
+  await settle();
   expect(calls("project/start")).toEqual([
     {
       project: "p-ember",
@@ -304,7 +314,7 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   ]);
   expect(transcript()).toContain("Add a dark mode");
   expect(transcript()).toContain("I'll plan it.");
-  // It works in the Project's repository, not a worktree.
+  // The tab is the Project's repository, not a thread's worktree.
   const main = document.querySelector("main")!;
   expect(main.textContent).toContain("/src/ember");
   expect(main.textContent).not.toContain("Worktree");
@@ -325,7 +335,7 @@ test("a Project whose coordinator ran before opens on its transcript", async () 
   answers["project/list"] = () => ({
     result: { projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: run.id }] },
   });
-  answers["agent/events"] = serveEvents(() => run);
+  answers["agent/events"] = serveEvents(() => [run]);
   await renderApp();
   await openEmber();
   expect(transcript()).toContain("Add a dark mode");
@@ -333,15 +343,14 @@ test("a Project whose coordinator ran before opens on its transcript", async () 
   expect(calls("project/start")).toEqual([]);
 });
 
-test("with no coordinator account, the first message runs on the host's Claude Code login and says so", async () => {
+test("with no coordinator account, the coordinator runs on the host's Claude Code login and says so", async () => {
   capabilities = { coordinator: {} };
   let started: AgentRun | undefined;
   answers["accounts/defaults/get"] = () => ({ result: {} });
   answers["accounts/list"] = () => ({ result: { clis: [{ cli: "claude", signedIn: true }] } });
   answers["accounts/keys/list"] = () => ({ result: { accounts: [] } });
-  answers["accounts/defaults/set"] = () => ({ result: {} });
   answers["project/start"] = (p) => {
-    if (calls("accounts/defaults/set").length === 0)
+    if (!p["account"])
       return {
         error: {
           code: -32000,
@@ -352,19 +361,83 @@ test("with no coordinator account, the first message runs on the host's Claude C
     started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
     return { result: { run: started } };
   };
-  answers["agent/events"] = serveEvents(() => started);
+  answers["agent/events"] = serveEvents(() => [started]);
   await renderApp();
   await openEmber();
   type("Add a dark mode");
   await click(button("Send"));
 
-  expect(calls("accounts/defaults/set")).toEqual([
-    { role: "coordinator", account: { kind: "subscription", backend: "claude" } },
-  ]);
+  // On the run, not as the host's default.
   const [first, retry] = calls("project/start");
-  expect(retry).toEqual(first);
+  expect(retry).toEqual({ ...first, account: { kind: "subscription", backend: "claude" } });
+  expect(calls("accounts/defaults/set")).toEqual([]);
   expect(document.querySelector('main [role="status"]')?.textContent).toBe(
-    "Using Claude Code for Project coordinators on this host.",
+    "Using Claude Code for this Project's coordinator.",
   );
   expect(transcript()).toContain("I'll plan it.");
+});
+
+const startOverButton = () =>
+  [...document.querySelectorAll("main button")].find((b) => b.textContent === "Start over");
+/** Ember, whose coordinator is `old`, which `agent/events` serves along with any new one. */
+function emberWith(old: AgentRun) {
+  capabilities = { coordinator: {} };
+  const runs: AgentRun[] = [old];
+  answers["project/list"] = () => ({
+    result: { projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: old.id }] },
+  });
+  answers["agent/events"] = serveEvents(() => runs);
+  answers["project/start"] = (p) => {
+    runs.push(coordinatorRun(p["runId"] as string, p["prompt"] as string));
+    return { result: { run: runs.at(-1) } };
+  };
+}
+const oldId = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
+
+test("a coordinator wispd can't resume offers Start over, which replaces it with the refused message", async () => {
+  emberWith({
+    ...coordinatorRun(oldId, "Add a dark mode"),
+    status: "completed",
+    sessionId: "s-1",
+    model: "claude-sonnet-5",
+    effort: "low",
+  });
+  answers["agent/send"] = () => ({
+    error: {
+      code: -32000,
+      message: `run ${oldId} can't be resumed: its session's account claude no longer exists`,
+      data: { kind: "runNotResumable" },
+    },
+  });
+  await renderApp();
+  await openEmber();
+  expect(startOverButton()).toBeUndefined();
+
+  type("Keep going");
+  await click(button("Send"));
+  expect(startOverButton()!.parentElement!.textContent).toBe(
+    `This chat can't continue: run ${oldId} can't be resumed: its session's account claude no longer exists Start over`,
+  );
+  await click(startOverButton());
+  // A new run id, which 0024 lets replace a coordinator that isn't running, on the old one's model.
+  expect(calls("project/start")).toEqual([
+    {
+      project: "p-ember",
+      runId: expect.not.stringMatching(oldId),
+      prompt: "Keep going",
+      model: "claude-sonnet-5",
+      effort: "low",
+    },
+  ]);
+  expect(transcript()).toContain("Keep going");
+  expect(startOverButton()).toBeUndefined();
+});
+
+test("a coordinator that stopped before its session started offers Start over with its first message", async () => {
+  emberWith({ ...coordinatorRun(oldId, "Add a dark mode"), status: "failed" });
+  await renderApp();
+  await openEmber();
+  await click(startOverButton());
+  expect(calls("project/start")).toMatchObject([{ prompt: "Add a dark mode" }]);
+  expect(calls("agent/send")).toEqual([]);
 });
