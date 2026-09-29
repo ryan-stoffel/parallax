@@ -1,0 +1,207 @@
+//! Waking a project's coordinator when runs it started finish (RYA-42, decision 0025).
+//!
+//! When a worker with a `coordinatorThread` ends a CLI process, [`notify`] hands a summary of it
+//! to the coordinator's actor, which keeps it in [`Wakes`]. The actor sends what is waiting as one
+//! turn, through the same resume as `agent/send`, once [`BATCH`] has passed since the first
+//! summary arrived and its own CLI isn't running: a turn in progress gets them next. After
+//! [`CAP`] wake-ups in a row with no message from the user, it pauses them and reports
+//! `agent.wakeupsPaused`.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::time::Instant;
+use tracing::warn;
+use uuid::Uuid;
+use wisp_protocol::{AgentOutcome, AgentRun, RunId, TurnId};
+
+use super::actor::Command;
+use super::convert::{option_name, truncate};
+use crate::server::Daemon;
+
+/// How long wake-ups wait after the first arrives, so runs that finish together make one turn.
+const BATCH: Duration = Duration::from_secs(2);
+
+/// Wake-up turns a coordinator takes in a row, with no message from the user, before wispd
+/// pauses them.
+pub(super) const CAP: u32 = 10;
+
+/// How much of a run's task and last message a summary quotes.
+const TASK_BYTES: usize = 200;
+const EXCERPT_BYTES: usize = 500;
+
+/// A coordinator's waiting wake-ups, and how many it has taken since the user last wrote.
+// ponytail: in memory, so a restart loses what is waiting, the count, and a pause; store them if
+// restarts in the middle of a project start to matter (RYA-178).
+#[derive(Debug, Default)]
+pub(super) struct Wakes {
+    waiting: Vec<String>,
+    since: Option<Instant>,
+    in_a_row: u32,
+    paused: bool,
+    /// Turns sent as wake-ups whose `turnStarted` isn't logged yet.
+    sent: HashSet<TurnId>,
+}
+
+impl Wakes {
+    /// Adds a finished run's summary.
+    pub fn push(&mut self, summary: String, now: Instant) {
+        self.waiting.push(summary);
+        self.since.get_or_insert(now);
+    }
+
+    /// When what is waiting is due, unless nothing is or wake-ups are paused.
+    pub fn due(&self) -> Option<Instant> {
+        self.since
+            .filter(|_| !self.paused)
+            .map(|since| since + BATCH)
+    }
+
+    /// The next wake-up turn's id and message, counted against the cap. `None` once the cap is
+    /// reached, which pauses wake-ups and keeps what is waiting.
+    pub fn take(&mut self) -> Option<(TurnId, String)> {
+        if self.in_a_row >= CAP {
+            self.paused = true;
+            return None;
+        }
+        self.in_a_row += 1;
+        self.since = None;
+        let turn = TurnId::generate();
+        self.sent.insert(turn);
+        Some((turn, message(&std::mem::take(&mut self.waiting))))
+    }
+
+    /// The user wrote to the coordinator: the count starts over, and a pause ends.
+    pub fn attended(&mut self) {
+        self.in_a_row = 0;
+        self.paused = false;
+    }
+
+    /// The user stopped the coordinator: nothing wakes it until they write again.
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// Drops what is waiting, for a coordinator a newer one replaced (0024).
+    pub fn clear(&mut self) {
+        self.waiting.clear();
+        self.since = None;
+    }
+
+    /// Whether `turn` was sent as a wake-up, forgetting it.
+    pub fn was_sent(&mut self, turn: TurnId) -> bool {
+        self.sent.remove(&turn)
+    }
+}
+
+/// Hands `summary` to coordinator `thread`'s actor, spawning one after a restart, without waiting
+/// for it.
+pub(super) fn notify(daemon: &Arc<Daemon>, thread: Uuid, summary: String) {
+    let Ok(id) = RunId::try_from(thread) else {
+        return;
+    };
+    let owned = Arc::clone(daemon);
+    daemon.agents.tracker.spawn(async move {
+        match super::actor_for(&owned, id).await {
+            Ok(actor) => {
+                // A closed channel is a coordinator that stopped or was deleted: nothing to wake.
+                let _ = actor.send(Command::Wake(summary)).await;
+            }
+            Err(error) => {
+                warn!(coordinator = %id, error = %error.message, "could not wake a coordinator");
+            }
+        }
+    });
+}
+
+/// One line on how `run`'s CLI process ended: its id, task, outcome, and branch.
+pub(super) fn summary(run: &AgentRun, outcome: &AgentOutcome) -> String {
+    let task = run
+        .prompt
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .trim();
+    let ended = match outcome {
+        AgentOutcome::Completed {
+            result: Some(result),
+        } => format!("completed, saying: {}", truncate(result, EXCERPT_BYTES)),
+        AgentOutcome::Completed { result: None } => "completed".to_owned(),
+        AgentOutcome::Failed { failure, message } => format!(
+            "failed ({}): {}",
+            option_name(failure).unwrap_or_default(),
+            truncate(message, EXCERPT_BYTES)
+        ),
+        AgentOutcome::Cancelled => "cancelled".to_owned(),
+        AgentOutcome::Interrupted | AgentOutcome::Unknown => "stopped".to_owned(),
+    };
+    let changes = match (&run.diff, &run.branch) {
+        (Some(diff), Some(branch)) => format!(
+            "Branch {branch} changes {} files (+{} -{}).",
+            diff.files, diff.insertions, diff.deletions
+        ),
+        _ => "It has committed no changes.".to_owned(),
+    };
+    format!(
+        "- Run {} ({}): {ended}. {changes}",
+        run.id,
+        truncate(task, TASK_BYTES)
+    )
+}
+
+/// A wake-up turn's message: the summaries, and what to do with them.
+fn message(summaries: &[String]) -> String {
+    format!(
+        "wisp, not the user: runs you started finished.\n\n{}\n\nReview them with agent_status \
+         and agent_diff, message or start runs if more is needed, and tell the user where things \
+         stand.",
+        summaries.join("\n")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::time::Instant;
+
+    use super::{BATCH, CAP, Wakes};
+
+    #[test]
+    fn runs_finishing_together_make_one_turn_after_the_first_waits_its_batch() {
+        let mut wakes = Wakes::default();
+        assert_eq!(wakes.due(), None, "nothing waiting");
+        let first = Instant::now();
+        wakes.push("- Run a".to_owned(), first);
+        wakes.push("- Run b".to_owned(), first + BATCH / 2);
+        assert_eq!(
+            wakes.due(),
+            Some(first + BATCH),
+            "the first one sets the time"
+        );
+
+        let (turn, message) = wakes.take().unwrap();
+        assert!(message.contains("- Run a\n- Run b"), "{message}");
+        assert_eq!(wakes.due(), None, "both went out in one turn");
+        assert!(wakes.was_sent(turn));
+        assert!(!wakes.was_sent(turn), "each turn is marked once");
+    }
+
+    #[test]
+    fn the_cap_pauses_wake_ups_until_the_user_writes() {
+        let mut wakes = Wakes::default();
+        let now = Instant::now();
+        for _ in 0..CAP {
+            wakes.push("- Run".to_owned(), now);
+            assert!(wakes.take().is_some());
+        }
+        wakes.push("- Run late".to_owned(), now);
+        assert!(wakes.take().is_none(), "one past the cap pauses");
+        wakes.push("- Run later".to_owned(), now);
+        assert_eq!(wakes.due(), None, "paused: nothing is due");
+
+        wakes.attended();
+        assert_eq!(wakes.due(), Some(now + BATCH), "what waited is due again");
+        let (_, message) = wakes.take().unwrap();
+        assert!(message.contains("late\n- Run later"), "{message}");
+    }
+}

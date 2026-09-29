@@ -15,12 +15,14 @@
 //! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`.
 //!
 //! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
-//! no recorded worktree; the same actor runs it.
+//! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
+//! ([`wake`]).
 
 mod actor;
 mod convert;
 pub(crate) mod coordinator;
 pub(crate) mod review;
+mod wake;
 pub(crate) mod worker;
 
 use std::collections::HashMap;

@@ -383,6 +383,10 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         text: Option<String>,
+        /// True for a wake-up (RYA-42, decision 0025): a turn wispd sent a project's coordinator
+        /// on its own, not the user, because runs it started finished. `text` lists them.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        wake: bool,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {

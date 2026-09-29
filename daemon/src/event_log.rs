@@ -229,7 +229,8 @@ pub(crate) fn run_of(event: &WispEvent) -> Option<RunId> {
         | WispEvent::AgentAccountFallback { run_id, .. }
         | WispEvent::AgentFinished { run_id, .. }
         | WispEvent::AgentDiffReady { run_id, .. }
-        | WispEvent::AgentAccepted { run_id, .. } => Some(*run_id),
+        | WispEvent::AgentAccepted { run_id, .. }
+        | WispEvent::AgentWakeupsPaused { run_id } => Some(*run_id),
         WispEvent::ProjectCreated { .. }
         | WispEvent::ContextChanged { .. }
         | WispEvent::RepoAdded { .. }
