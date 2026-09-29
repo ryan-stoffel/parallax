@@ -148,8 +148,8 @@ pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
     ErrorObject::wisp(ErrorKind::WorkerUnavailable, message)
 }
 
-/// What to do about a backend that can't sandbox a worker here: only Claude Code's is checked
-/// on Linux (0013).
+/// What to do about a backend that can't sandbox a worker here: Claude Code's sandbox is checked
+/// on macOS and Linux (0013).
 #[cfg(not(windows))]
 const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 

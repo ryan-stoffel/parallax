@@ -311,3 +311,127 @@ fn truncate(text: &str) -> String {
         None => text.to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Step, Translator, classify};
+    use crate::backend::TurnId;
+    use crate::backend::event::{
+        Event, FailureKind, TodoItem, TodoStatus, ToolStatus, WarningKind,
+    };
+
+    fn translate(lines: &[&str]) -> Vec<Step> {
+        let mut translator = Translator::new("t".into());
+        lines
+            .iter()
+            .flat_map(|line| translator.line(line.as_bytes()))
+            .collect()
+    }
+
+    #[test]
+    fn turn_failures_say_when_routing_should_fall_back() {
+        for (message, kind) in [
+            (
+                "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+                FailureKind::NotSignedIn,
+            ),
+            (
+                "Your access token could not be refreshed because your refresh token has expired. \
+                 Please log out and sign in again.",
+                FailureKind::NotSignedIn,
+            ),
+            (
+                "You’ve hit your usage limit. Try again later.",
+                FailureKind::RateLimited,
+            ),
+            (
+                "Quota exceeded. Check your plan and billing details.",
+                FailureKind::RateLimited,
+            ),
+            ("rate limit exceeded: slow down", FailureKind::RateLimited),
+            (
+                "stream disconnected before completion: reset",
+                FailureKind::VendorError,
+            ),
+        ] {
+            assert_eq!(classify(message), kind, "{message}");
+        }
+    }
+
+    #[test]
+    fn items_map_by_their_documented_shapes() {
+        let steps = translate(&[
+            // Real: a command the sandbox's proxy refused (codex-cli 0.157.1).
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'curl -fsS -m 5 http://127.0.0.1:38765/'","aggregated_output":"curl: (22) The requested URL returned error: 403\n","exit_code":-1,"status":"failed"}}"#,
+            // The rest in exec_events.rs's shapes at rust-v0.157.1.
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"rm -rf /","aggregated_output":"","exit_code":null,"status":"declined"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_3","type":"reasoning","text":"Checking the tests"}}"#,
+            r#"{"type":"item.updated","item":{"id":"item_4","type":"todo_list","items":[{"text":"Read","completed":true},{"text":"Fix","completed":false}]}}"#,
+            r#"{"type":"item.started","item":{"id":"item_5","type":"web_search","query":"tokio select","action":{"type":"search","query":"tokio select"}}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_6","type":"error","message":"model rerouted"}}"#,
+            r#"{"type":"turn.bogus"}"#,
+            "not json",
+        ]);
+        let events: Vec<&Event> = steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Emit(event) => Some(event),
+                _ => None,
+            })
+            .collect();
+        let statuses: Vec<ToolStatus> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::ToolResult { status, .. } => Some(*status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(statuses, [ToolStatus::Error, ToolStatus::Denied]);
+        assert!(events.contains(&&Event::Reasoning {
+            message_id: None,
+            text: "Checking the tests".into()
+        }));
+        assert!(events.contains(&&Event::TodoList {
+            items: vec![
+                TodoItem {
+                    text: "Read".into(),
+                    status: TodoStatus::Completed
+                },
+                TodoItem {
+                    text: "Fix".into(),
+                    status: TodoStatus::Pending
+                },
+            ]
+        }));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::ToolCall { name, input, .. }
+                if name == "web_search" && input["query"] == "tokio select"
+        )));
+        assert!(events.contains(&&Event::Notice {
+            detail: "model rerouted".into()
+        }));
+        assert!(matches!(
+            events.last(),
+            Some(Event::Warning {
+                warning: WarningKind::MalformedLine,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn tool_call_ids_differ_between_a_thread_s_processes() {
+        let line = r#"{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}"#;
+        let ids: Vec<String> = [TurnId::generate(), TurnId::generate()]
+            .into_iter()
+            .flat_map(|turn| Translator::new(turn.to_string()).line(line.as_bytes()))
+            .filter_map(|step| match step {
+                Step::Emit(Event::ToolCall { call_id, .. }) => Some(call_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+    }
+}

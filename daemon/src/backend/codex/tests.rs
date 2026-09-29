@@ -1,7 +1,7 @@
 //! The Codex backend against a fake `codex` on `PATH` that replays fixtures, most of them captured
 //! from real `codex exec --json` runs, so every test spawns a real process through the
-//! supervisor. No test runs the real CLI. Only macOS runs Codex workers, so the tests that start
-//! one are macOS-only; the translator's run everywhere.
+//! supervisor. No test runs the real CLI. Only macOS runs Codex workers, so these tests are
+//! macOS-only; the translator's own tests in `stream.rs` run everywhere.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -13,14 +13,13 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
 
-use super::stream::{Step, Translator, classify};
 use super::{CodexBackend, WORKER_FEATURES, worker_overrides};
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::sandbox::unreadable_in_home;
 use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, Credential, Event, EventStream,
-    FailureKind, ModelUsage, Outcome, Resume, RunId, RunRequest, StartError, Started, TodoItem,
-    TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
+    FailureKind, ModelUsage, Outcome, Resume, RunId, RunRequest, StartError, Started, ToolPolicy,
+    ToolStatus, Usage, WarningKind, WorkerSandbox,
 };
 use crate::keystore::{KeyStore, MemoryKeyStore};
 use crate::paths::DataDir;
@@ -214,7 +213,6 @@ fn overrides(argv: &[String]) -> Vec<&str> {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn a_worker_run_maps_the_real_stream_and_holds_codex_to_0013() {
     let fake = Fake::new("worker");
@@ -376,7 +374,6 @@ fn assert_worker_invocation(fake: &Fake) {
     );
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn a_resumed_thread_reports_only_what_it_adds() {
     let fake = Fake::new("resume");
@@ -410,7 +407,6 @@ async fn a_resumed_thread_reports_only_what_it_adds() {
     );
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn an_api_key_account_gets_only_its_key() {
     let fake = Fake::new("worker");
@@ -438,7 +434,6 @@ impl KeyAccounts for OneKey {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn a_signed_out_or_limited_login_falls_back_to_an_openai_key() {
     for (first, reason) in [
@@ -489,7 +484,6 @@ async fn a_signed_out_or_limited_login_falls_back_to_an_openai_key() {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn an_mcp_call_stops_the_worker_at_once() {
     let fake = Fake::new("mcp-call");
@@ -499,7 +493,6 @@ async fn an_mcp_call_stops_the_worker_at_once() {
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn cancel_interrupts_codex_with_sigint() {
     let fake = Fake::new("cancel");
@@ -535,16 +528,12 @@ async fn requests_codex_can_t_run_are_refused_before_spawning() {
     let mut no_write = request(&cwd);
     no_write.policy = ToolPolicy::NoWrite;
     assert!(matches!(refuse(no_write), StartError::Unsupported(_)));
-    if cfg!(target_os = "macos") {
-        let mut no_sandbox = request(&cwd);
-        no_sandbox.sandbox = None;
-        assert!(matches!(refuse(no_sandbox), StartError::Invalid(_)));
-        let mut option = request(&cwd);
-        option.model = Some("--dangerously-bypass-approvals-and-sandbox".into());
-        assert!(matches!(refuse(option), StartError::Invalid(_)));
-    } else {
-        assert!(matches!(refuse(request(&cwd)), StartError::Unsupported(_)));
-    }
+    let mut no_sandbox = request(&cwd);
+    no_sandbox.sandbox = None;
+    assert!(matches!(refuse(no_sandbox), StartError::Invalid(_)));
+    let mut option = request(&cwd);
+    option.model = Some("--dangerously-bypass-approvals-and-sandbox".into());
+    assert!(matches!(refuse(option), StartError::Invalid(_)));
     assert!(fake.argv().is_empty(), "nothing was spawned");
 }
 
@@ -556,119 +545,4 @@ fn paths_are_quoted_as_toml_strings() {
         values[3],
         r#"projects={"/Users/u/we\"ird\\dir\u007F"={trust_level="untrusted"}}"#
     );
-}
-
-fn translate(lines: &[&str]) -> Vec<Step> {
-    let mut translator = Translator::new("t".into());
-    lines
-        .iter()
-        .flat_map(|line| translator.line(line.as_bytes()))
-        .collect()
-}
-
-#[test]
-fn turn_failures_say_when_routing_should_fall_back() {
-    for (message, kind) in [
-        (
-            "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
-            FailureKind::NotSignedIn,
-        ),
-        (
-            "Your access token could not be refreshed because your refresh token has expired. \
-             Please log out and sign in again.",
-            FailureKind::NotSignedIn,
-        ),
-        (
-            "You’ve hit your usage limit. Try again later.",
-            FailureKind::RateLimited,
-        ),
-        (
-            "Quota exceeded. Check your plan and billing details.",
-            FailureKind::RateLimited,
-        ),
-        ("rate limit exceeded: slow down", FailureKind::RateLimited),
-        (
-            "stream disconnected before completion: reset",
-            FailureKind::VendorError,
-        ),
-    ] {
-        assert_eq!(classify(message), kind, "{message}");
-    }
-}
-
-#[test]
-fn items_map_by_their_documented_shapes() {
-    let steps = translate(&[
-        // Real: a command the sandbox's proxy refused (codex-cli 0.157.1).
-        r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'curl -fsS -m 5 http://127.0.0.1:38765/'","aggregated_output":"curl: (22) The requested URL returned error: 403\n","exit_code":-1,"status":"failed"}}"#,
-        // The rest in exec_events.rs's shapes at rust-v0.157.1.
-        r#"{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"rm -rf /","aggregated_output":"","exit_code":null,"status":"declined"}}"#,
-        r#"{"type":"item.completed","item":{"id":"item_3","type":"reasoning","text":"Checking the tests"}}"#,
-        r#"{"type":"item.updated","item":{"id":"item_4","type":"todo_list","items":[{"text":"Read","completed":true},{"text":"Fix","completed":false}]}}"#,
-        r#"{"type":"item.started","item":{"id":"item_5","type":"web_search","query":"tokio select","action":{"type":"search","query":"tokio select"}}}"#,
-        r#"{"type":"item.completed","item":{"id":"item_6","type":"error","message":"model rerouted"}}"#,
-        r#"{"type":"turn.bogus"}"#,
-        "not json",
-    ]);
-    let events: Vec<&Event> = steps
-        .iter()
-        .filter_map(|step| match step {
-            Step::Emit(event) => Some(event),
-            _ => None,
-        })
-        .collect();
-    let statuses: Vec<ToolStatus> = events
-        .iter()
-        .filter_map(|event| match event {
-            Event::ToolResult { status, .. } => Some(*status),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(statuses, [ToolStatus::Error, ToolStatus::Denied]);
-    assert!(events.contains(&&Event::Reasoning {
-        message_id: None,
-        text: "Checking the tests".into()
-    }));
-    assert!(events.contains(&&Event::TodoList {
-        items: vec![
-            TodoItem {
-                text: "Read".into(),
-                status: TodoStatus::Completed
-            },
-            TodoItem {
-                text: "Fix".into(),
-                status: TodoStatus::Pending
-            },
-        ]
-    }));
-    assert!(events.iter().any(|event| matches!(
-        event,
-        Event::ToolCall { name, input, .. }
-            if name == "web_search" && input["query"] == "tokio select"
-    )));
-    assert!(events.contains(&&Event::Notice {
-        detail: "model rerouted".into()
-    }));
-    assert!(matches!(
-        events.last(),
-        Some(Event::Warning {
-            warning: WarningKind::MalformedLine,
-            ..
-        })
-    ));
-}
-
-#[test]
-fn tool_call_ids_differ_between_a_thread_s_processes() {
-    let line = r#"{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}"#;
-    let ids: Vec<String> = [TurnId::generate(), TurnId::generate()]
-        .into_iter()
-        .flat_map(|turn| Translator::new(turn.to_string()).line(line.as_bytes()))
-        .filter_map(|step| match step {
-            Step::Emit(Event::ToolCall { call_id, .. }) => Some(call_id),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(ids.len(), 2);
-    assert_ne!(ids[0], ids[1]);
 }
