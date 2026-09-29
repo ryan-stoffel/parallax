@@ -28,9 +28,7 @@ use wisp_protocol::{
 };
 use wispd::backend::fake::{FakeBackend, Script, Step};
 use wispd::backend::process::{CancelPolicy, Environment, Launcher};
-use wispd::backend::{
-    Backend, Capabilities, Event, FailureKind, ModelUsage, RunRequest, StartError, Started, Usage,
-};
+use wispd::backend::{Event, FailureKind, ModelUsage, Usage};
 use wispd::paths::DataDir;
 use wispd::routing::BackendRegistry;
 
@@ -973,23 +971,6 @@ async fn a_worker_learns_its_limits_and_a_fallback_moves_its_usage_to_the_new_ac
     host.server.stop().await;
 }
 
-/// A backend that doesn't implement the worker sandbox, as Codex doesn't until #122.
-struct Unsandboxed;
-
-impl Backend for Unsandboxed {
-    fn name(&self) -> &'static str {
-        "codex"
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::default()
-    }
-
-    fn start(&self, _: RunRequest) -> Result<Started, StartError> {
-        panic!("a worker must never start on a backend without the sandbox")
-    }
-}
-
 #[tokio::test]
 async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
     let dir = temp_dir();
@@ -1011,14 +992,15 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
     let mut config = InProcess::config(dir.path());
     config.agent_environment = Some(environment.clone());
     let mut backends = BackendRegistry::new();
+    let launcher = Launcher::new(DataDir::new(dir.path()).unwrap(), environment);
     backends.register(
         Provider::Anthropic,
-        Arc::new(wispd::backend::claude::ClaudeBackend::new(Launcher::new(
-            DataDir::new(dir.path()).unwrap(),
-            environment,
-        ))),
+        Arc::new(wispd::backend::claude::ClaudeBackend::new(launcher.clone())),
     );
-    backends.register(Provider::Openai, Arc::new(Unsandboxed));
+    backends.register(
+        Provider::Openai,
+        Arc::new(wispd::backend::codex::CodexBackend::new(launcher)),
+    );
     config.backends = Some(backends);
     let server = InProcess::start(config);
     let mut client = Conn::ready(&server.socket).await;
@@ -1037,7 +1019,8 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
     assert!(old.message.contains("2.1.100"), "{}", old.message);
     assert!(old.message.contains("2.1.248"), "{}", old.message);
 
-    let unsandboxed = client
+    // Codex workers are off until RYA-145 isolates their temp folder (RYA-153).
+    let codex = client
         .call::<AgentStart>(AgentStartParams {
             account: Some(AccountChoice::Subscription {
                 backend: "codex".to_owned(),
@@ -1046,12 +1029,8 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
         })
         .await
         .unwrap_err();
-    assert_eq!(kind(&unsandboxed), ErrorKind::WorkerUnavailable);
-    assert!(
-        unsandboxed.message.contains("codex"),
-        "{}",
-        unsandboxed.message
-    );
+    assert_eq!(kind(&codex), ErrorKind::WorkerUnavailable);
+    assert!(codex.message.contains("RYA-145"), "{}", codex.message);
 
     server.stop().await;
 }

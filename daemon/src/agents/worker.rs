@@ -162,13 +162,19 @@ const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so 
 /// Refuses a worker on a backend that doesn't enforce the worker sandbox (0013).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().worker_sandbox {
-        Ok(())
-    } else {
-        Err(worker_unavailable(format!(
-            "the {} backend can't run a sandboxed worker yet (decision 0013); {NO_SANDBOX_HINT}",
-            backend.name()
-        )))
+        return Ok(());
     }
+    let why = if backend.name() == codex::PROGRAM {
+        "Codex workers are turned off until RYA-145 keeps their commands out of the shared temp \
+         folders"
+            .to_owned()
+    } else {
+        format!(
+            "the {} backend can't run a sandboxed worker yet (decision 0013)",
+            backend.name()
+        )
+    };
+    Err(worker_unavailable(format!("{why}; {NO_SANDBOX_HINT}")))
 }
 
 /// Refuses a worker unless the detected `cli` is at least its backend's oldest version with
