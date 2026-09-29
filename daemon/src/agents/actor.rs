@@ -24,11 +24,12 @@ use wisp_protocol::{
 use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, Worktree};
 
 use super::convert::{self, agent_run, item_bytes, option_value, output_item};
-use super::worker::sandbox_path;
+use super::worker::{sandbox_path, worker_unavailable};
 use super::{Prepared, prepare, store, store_error};
 use crate::backend::{
     AccountRef, Credential, Event, EventStream, FollowUp, ModelUsage, Outcome, Resume, Run,
     RunRequest, SendError, ToolPolicy, Usage, WorkerSandbox,
+    run_temp::{self, RunTemp},
 };
 use crate::routing;
 use crate::server::Daemon;
@@ -83,6 +84,9 @@ impl Command {
 struct Live {
     run: Arc<dyn Run>,
     events: EventStream,
+    /// The run's temp folder (RYA-130), removed once the CLI has exited: `events` ends only
+    /// then.
+    temp: RunTemp,
 }
 
 #[derive(Default)]
@@ -518,8 +522,21 @@ impl Actor {
             data_dir,
             context,
         } = prepared;
-        let sandbox =
-            WorkerSandbox::for_worktree(&home, &data_dir, &cwd, &git_common_dir, &context);
+        let (temp, temp_path) = match self.run_temp() {
+            Ok(temp) => temp,
+            Err(error) => {
+                self.failed_to_start(error.message).await;
+                return false;
+            }
+        };
+        let sandbox = WorkerSandbox::for_worktree(
+            &home,
+            &data_dir,
+            &cwd,
+            &git_common_dir,
+            &context,
+            &temp_path,
+        );
         let account_id = resolved.account_id();
         let request = RunRequest {
             run_id: self.id,
@@ -543,6 +560,7 @@ impl Actor {
                 self.live = Some(Live {
                     run: started.run,
                     events: started.events,
+                    temp,
                 });
                 self.daemon.agents.running.fetch_add(1, Ordering::Relaxed);
                 convert::RUNNING.clone_into(&mut self.row.state.status);
@@ -556,6 +574,16 @@ impl Actor {
                 false
             }
         }
+    }
+
+    /// A new temp folder for the run's CLI (RYA-130), a resumed run's too, and its canonical
+    /// path for the sandbox.
+    fn run_temp(&self) -> Result<(RunTemp, PathBuf), ErrorObject> {
+        let temp = run_temp::create(&self.daemon.data_dir).map_err(|error| {
+            worker_unavailable(format!("could not make the run's temp folder: {error}"))
+        })?;
+        let path = sandbox_path(temp.path(), "the run's temp folder")?;
+        Ok((temp, path))
     }
 
     async fn worker_paths(&self) -> Result<(PathBuf, PathBuf), ErrorObject> {
@@ -653,8 +681,10 @@ impl Actor {
     }
 
     fn clear_live(&mut self) {
-        if self.live.take().is_some() {
+        if let Some(live) = self.live.take() {
             self.daemon.agents.running.fetch_sub(1, Ordering::Relaxed);
+            // A worker's temp can hold a whole package store, so it goes off this task's thread.
+            tokio::task::spawn_blocking(move || drop(live.temp));
         }
     }
 
@@ -1011,6 +1041,7 @@ mod tests {
         actor.live = Some(Live {
             run: Arc::new(NoopRun),
             events,
+            temp: crate::backend::run_temp::create(&daemon.data_dir).unwrap(),
         });
 
         let (commands, receiver) = mpsc::channel(4);

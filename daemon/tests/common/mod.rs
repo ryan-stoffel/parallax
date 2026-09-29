@@ -10,27 +10,32 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use wispd::backend::claude::arguments;
+use wispd::backend::claude::{TEMP_ENV, arguments, worker_temp};
+use wispd::backend::run_temp::{self, RunTemp};
 use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
+use wispd::paths::DataDir;
 
 /// A worker's request as wispd builds it (0013): a worktree at `worktree` in wispd's data folder
-/// `data`, whose repository's git folder is `git_dir`, with `context` writable. It runs the probe
-/// that [`run_worker`]'s fake API asks for.
+/// `data`, whose repository's git folder is `git_dir`, with `context` writable, and a temp
+/// folder made as wispd makes one (RYA-130). It runs the probe that [`run_worker`]'s fake API
+/// asks for. Keep the [`RunTemp`] until the run is over.
 pub fn worker_request(
     home: &Path,
     data: &Path,
     worktree: &Path,
     git_dir: &Path,
     context: &Path,
-) -> RunRequest {
-    RunRequest {
+) -> (RunRequest, RunTemp) {
+    let temp = run_temp::create(&DataDir::new(data).unwrap()).unwrap();
+    let canonical = temp.path().canonicalize().unwrap();
+    let request = RunRequest {
         run_id: RunId::generate(),
         turn_id: None,
         cwd: worktree.to_owned(),
         prompt: "Run the probe.".into(),
         policy: ToolPolicy::WorkspaceWrite,
         sandbox: Some(WorkerSandbox::for_worktree(
-            home, data, worktree, git_dir, context,
+            home, data, worktree, git_dir, context, &canonical,
         )),
         account: AccountRef {
             id: "test".into(),
@@ -41,14 +46,16 @@ pub fn worker_request(
         effort: None,
         permission: None,
         coordinator_tools: None,
-    }
+    };
+    (request, temp)
 }
 
 /// Runs `claude` with the arguments wispd gives `request`, against a fake Messages API whose one
 /// Bash call runs `sh probe.sh` in the worktree. Returns stdout, and stdout with stderr for
 /// failure messages. `env` adds the test's own variables, such as its API key, to the worker's
-/// environment. Like wispd, it leaves `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` unset for a worker: on
-/// Linux it widens the sandbox's writes (RYA-20).
+/// environment. Like wispd, it gives the CLI the run's temp folder as `CLAUDE_CODE_TMPDIR`, and
+/// leaves `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` unset for a worker: on Linux it widens the sandbox's
+/// writes (RYA-20).
 pub async fn run_worker(
     claude: &OsStr,
     request: &RunRequest,
@@ -59,6 +66,9 @@ pub async fn run_worker(
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", api.local_addr().unwrap());
     tokio::spawn(serve(api, "sh probe.sh".to_owned()));
+    let temp = worker_temp(&request.sandbox.as_ref().unwrap().temp).unwrap();
+    // The CLI's own `TMPDIR`, wispd's in a real run.
+    std::fs::create_dir_all(root.join("tmp")).unwrap();
 
     let mut child = tokio::process::Command::new(claude)
         .args(arguments(request).unwrap())
@@ -67,6 +77,7 @@ pub async fn run_worker(
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", home)
         .env("TMPDIR", root.join("tmp"))
+        .env(TEMP_ENV, temp)
         .env("CLAUDE_CONFIG_DIR", root.join("config"))
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")

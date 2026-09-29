@@ -15,6 +15,9 @@
 //!   `CLAUDE_ENV_FILE` (RYA-126). See [`DataDir::temp_dir`].
 //! - `logs/wispd.log`: the log.
 //!
+//! One folder is outside it: `/tmp/wisp-<hash>/`, which holds each worker run's own temp folder
+//! (RYA-130). See [`DataDir::run_temp_roots`].
+//!
 //! `--data-dir` or [`DATA_DIR_ENV`] moves the whole folder. Every subcommand that reaches the
 //! socket must resolve the folder and the socket path with [`DataDir`], so that `serve` and
 //! `attach` always agree. Every process wispd starts is built with [`DataDir::command`], which
@@ -154,11 +157,28 @@ impl DataDir {
     }
 
     /// `tmp/`: files wispd writes for a run and deletes when the run ends, such as a Claude
-    /// worker's `CLAUDE_ENV_FILE` (RYA-126). No worker's commands can read or write them, since
-    /// the data folder is unreadable to every worker (0013).
+    /// worker's `CLAUDE_ENV_FILE` (RYA-126), and `serve` sweeps at startup. No worker's commands
+    /// can read or write them, since the data folder is unreadable to every worker (0013).
     #[must_use]
     pub fn temp_dir(&self) -> PathBuf {
         self.root.join("tmp")
+    }
+
+    /// Where each worker run gets its own temp folder (RYA-130), in order: `/tmp/wisp-<hash>`,
+    /// then `wisp-<hash>` in `$TMPDIR`, for when `/tmp` can't be written, such as inside a
+    /// worker's sandbox running wispd's own tests. `<hash>` is the socket fallback's, so each
+    /// wispd has its own. They are outside the data folder because the path has to be short:
+    /// Claude Code gives a worker's commands `$CLAUDE_CODE_TMPDIR/claude-<uid>` as `TMPDIR` only
+    /// when that fits in 44 bytes. Windows, which runs no workers (0023), has only the second.
+    #[must_use]
+    pub fn run_temp_roots(&self) -> Vec<PathBuf> {
+        let name = format!("wisp-{}", self.hash(4));
+        let mut roots = vec![std::env::temp_dir().join(&name)];
+        if cfg!(unix) {
+            roots.insert(0, Path::new("/tmp").join(&name));
+        }
+        roots.dedup();
+        roots
     }
 
     /// The folder holding every project's shared context (0005, #155): `context/` in the data
@@ -435,6 +455,12 @@ mod tests {
         assert_eq!(dir.store_file(), Path::new("/d/wispd.sqlite3"));
         assert_eq!(dir.log_file(), Path::new("/d/logs/wispd.log"));
         assert_eq!(dir.context_root(), Path::new("/d/context"));
+        let runs = format!("wisp-{}", dir.hash(4));
+        assert_eq!(dir.run_temp_roots()[0], Path::new("/tmp").join(&runs));
+        assert_eq!(
+            dir.run_temp_roots().last(),
+            Some(&std::env::temp_dir().join(runs))
+        );
         let project = wisp_protocol::ProjectId::generate();
         assert_eq!(
             dir.context_dir(project),

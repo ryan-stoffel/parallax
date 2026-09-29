@@ -361,6 +361,7 @@ fn worker_sandbox(cwd: &Path) -> WorkerSandbox {
         cwd,
         Path::new("/Users/u/src/app/.git"),
         Path::new("/Users/u/Library/Application Support/wisp/context/p"),
+        Path::new("/tmp/wisp-625c7f6d/Ab12Cd"),
     )
 }
 
@@ -386,6 +387,7 @@ fn assert_worker_invocation(fake: &Fake) {
         .map(|path| path.display().to_string())
         .collect();
     deny_read.push("/tmp/claude-second-account".into());
+    let uid = rustix::process::getuid().as_raw();
     assert_eq!(
         settings,
         serde_json::json!({
@@ -418,8 +420,16 @@ fn assert_worker_invocation(fake: &Fake) {
                         "/Users/u/Library/Application Support/wisp/context/p",
                         format!("{cwd}/.git"),
                         "/Users/u/src/app/.git",
+                        format!("/tmp/wisp-625c7f6d/Ab12Cd/claude-{uid}"),
                     ],
-                    "denyWrite": [format!("{cwd}/.git"), "/Users/u/src/app/.git"],
+                    "denyWrite": [
+                        format!("{cwd}/.git"),
+                        "/Users/u/src/app/.git",
+                        "/tmp/claude",
+                        "/private/tmp/claude",
+                        "~/.npm/_logs",
+                        "~/.claude/debug",
+                    ],
                 },
                 "credentials": {"envVars": [
                     {"name": "ANTHROPIC_API_KEY", "mode": "deny"},
@@ -455,6 +465,36 @@ fn assert_worker_invocation(fake: &Fake) {
             .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
         "{env:?}"
     );
+    // The run's own temp folder (RYA-130).
+    let temp = "CLAUDE_CODE_TMPDIR=/tmp/wisp-625c7f6d/Ab12Cd".to_owned();
+    assert!(env.contains(&temp), "{env:?}");
+}
+
+/// Claude Code gives commands its temp folder only while `<folder>/claude-<uid>` fits in 44
+/// bytes, and the shared one otherwise, so a longer folder refuses the worker (RYA-130).
+#[test]
+fn a_worker_s_temp_folder_must_leave_claude_code_room() {
+    let uid = rustix::process::getuid().as_raw().to_string();
+    let fits = format!(
+        "/tmp/{}",
+        "x".repeat(44 - "/tmp//claude-".len() - uid.len())
+    );
+    assert_eq!(
+        super::worker_temp(Path::new(&fits)).unwrap(),
+        Path::new(&fits)
+    );
+    let error = super::worker_temp(Path::new(&format!("{fits}x"))).unwrap_err();
+    assert!(
+        error.to_string().contains("every session shares"),
+        "{error}"
+    );
+    // macOS's canonical `/private/tmp` is spelled `/tmp`, where it links, to save the room.
+    let canonical = super::worker_temp(Path::new(&format!("/private{fits}")));
+    if cfg!(target_os = "macos") {
+        assert_eq!(canonical.unwrap(), Path::new(&fits));
+    } else {
+        assert!(canonical.is_err());
+    }
 }
 
 /// A worker gets a script that keeps the CLI's `PATH` in its Bash commands (RYA-126), in the data

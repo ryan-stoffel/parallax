@@ -135,6 +135,7 @@ fn sandbox(cwd: &Path) -> WorkerSandbox {
         cwd,
         Path::new("/Users/u/src/app/.git"),
         Path::new(CONTEXT),
+        Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
     )
 }
 
@@ -324,8 +325,11 @@ fn assert_worker_invocation(fake: &Fake) {
     let mut expected: BTreeSet<String> = unreadable_in_home()
         .map(|path| format!(r#""/Users/u/{path}"="deny""#))
         .collect();
+    let uid = rustix::process::getuid().as_raw();
     expected.extend([
         format!(r#""{DATA}"="deny""#),
+        r#""/tmp/wisp-1a2b3c4d"="deny""#.to_owned(),
+        format!(r#""/tmp/claude-{uid}"="deny""#),
         r#""/tmp/codex-second-account"="deny""#.to_owned(),
         format!(r#""{cwd_text}/.git"="read""#),
         r#""/Users/u/src/app/.git"="read""#.to_owned(),

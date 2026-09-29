@@ -33,6 +33,7 @@ fn request(cwd: &Path) -> RunRequest {
             cwd,
             Path::new("/Users/u/src/app/.git"),
             Path::new("/Users/u/wisp/context/p"),
+            Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
         )),
         account: AccountRef {
             id: "unset".into(),
