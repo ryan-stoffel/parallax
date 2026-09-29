@@ -5,13 +5,13 @@ import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/ge
 /** The two periods `usage/get` reports: today, and this week from Monday, in the host's local time. */
 export type Period = "today" | "week";
 
-export const periodWords: Record<Period, string> = { today: "today", week: "this week" };
+const periodWords: Record<Period, string> = { today: "today", week: "this week" };
 
 /**
  * How long after each answer the Providers page asks for usage again. wispd sends no host-level
  * usage or limit event, so this is what keeps them live while runs go.
  */
-export const USAGE_POLL_MS = 5000;
+const USAGE_POLL_MS = 5000;
 
 /**
  * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`.
