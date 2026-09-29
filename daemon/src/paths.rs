@@ -11,6 +11,8 @@
 //! - `wispd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
+//! - `coordinators/`: each project's coordinator's detached worktree (RYA-171). See
+//!   [`DataDir::coordinator_dir`].
 //! - `tmp/`: files wispd writes for a run and deletes when it ends, such as a Claude worker's
 //!   `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141). See
 //!   [`DataDir::temp_dir`].
@@ -196,6 +198,14 @@ impl DataDir {
     #[must_use]
     pub fn context_dir(&self, project: ProjectId) -> PathBuf {
         self.context_root().join(project.to_string())
+    }
+
+    /// Where a project's coordinator runs: `coordinators/<project-id>/` in the data folder, a
+    /// detached worktree of the project's repository that wispd moves to its `HEAD` before each
+    /// of the coordinator's CLI processes (RYA-171, 0024).
+    #[must_use]
+    pub fn coordinator_dir(&self, project: ProjectId) -> PathBuf {
+        self.root.join("coordinators").join(project.to_string())
     }
 
     /// A command for `program` with [`DATA_DIR_ENV`] set to this folder.

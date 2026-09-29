@@ -4,9 +4,9 @@
 //! `thread/delete`) and the run's backend events in one loop, so nothing about a run needs a lock,
 //! and events are logged in the order they happened.
 //!
-//! A project's coordinator (0024) differs in three places: it starts in the project's repository
-//! with wispd's tools and no sandbox, its working tree is checked after every turn (0004), and it
-//! is never committed.
+//! A project's coordinator (0024) differs in three places: it starts in a detached worktree of
+//! the project's repository (RYA-171) with wispd's tools and no sandbox, that worktree is checked
+//! after every turn (0004), and it is never committed.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -134,7 +134,7 @@ pub(super) struct Actor {
     turns: HashMap<TurnId, String>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
-    /// A coordinator's repository, and its working tree as it was when the CLI started (0004).
+    /// A coordinator's worktree, and its state when the CLI started (0004).
     tree: Option<(PathBuf, TreeSnapshot)>,
     /// How a coordinator's turn broke its no-write policy, which ends its CLI's run.
     violation: Option<Failure>,
@@ -560,6 +560,18 @@ impl Actor {
             )
         };
         let role = if self.is_coordinator() {
+            // A replaced coordinator stays stopped: the project's worktree is its successor's
+            // (RYA-171), and a project has one live coordinator (0024).
+            let project = self.project;
+            let current = store(&self.daemon, move |db| {
+                super::coordinator::coordinator_of(db, project.into())
+            })
+            .await?;
+            if let Some(current) = current.filter(|current| *current != self.id) {
+                return Err(not_resumable(format!(
+                    "project {project}'s coordinator is now run {current}"
+                )));
+            }
             Role::Coordinator
         } else {
             Role::Worker
@@ -754,12 +766,21 @@ impl Actor {
         })
     }
 
-    /// A coordinator's repository and its wisp tools, bound to its project and to its own thread
-    /// (0019), after a snapshot of the repository's working tree for [`Actor::check_tree`].
+    /// A coordinator's worktree, moved to the repository's `HEAD` (RYA-171), and its wisp tools,
+    /// bound to its project and to its own thread (0019), after a snapshot of the worktree for
+    /// [`Actor::check_tree`]. Only the coordinator writes there, so the user's own edits, commits,
+    /// and stray files in the checkout never trip the check.
     async fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
-        let before = routing::snapshot(&repo)
+        let cwd = self.daemon.data_dir.coordinator_dir(self.project);
+        self.daemon
+            .agents
+            .worktrees
+            .refresh_detached(&repo, &cwd)
             .await
-            .map_err(|error| format!("could not read the project's working tree: {error}"))?;
+            .map_err(|error| format!("could not prepare the coordinator's worktree: {error}"))?;
+        let before = routing::snapshot(&cwd)
+            .await
+            .map_err(|error| format!("could not read the coordinator's worktree: {error}"))?;
         let program = std::env::current_exe()
             .map_err(|error| format!("could not find wispd's own executable: {error}"))?;
         let thread = self
@@ -774,9 +795,9 @@ impl Actor {
             project: self.project,
             thread,
         };
-        self.tree = Some((repo.clone(), before));
+        self.tree = Some((cwd.clone(), before));
         Ok(Setup {
-            cwd: repo,
+            cwd,
             sandbox: None,
             temp: None,
             tools: Some(tools),
@@ -784,22 +805,22 @@ impl Actor {
     }
 
     /// 0004's second check on a coordinator's no-write policy, after each turn and when its CLI
-    /// exits: compares the repository's working tree with the snapshot taken before the CLI
-    /// started. A change stops the CLI and fails the run with the files that changed, and wispd
-    /// reverts nothing. Does nothing for any other run.
+    /// exits: compares its worktree with the snapshot taken before the CLI started. A change
+    /// stops the CLI and fails the run with the files that changed. wispd reverts nothing until
+    /// the next CLI process refreshes the worktree. Does nothing for any other run.
     async fn check_tree(&mut self) {
-        let Some((repo, before)) = &self.tree else {
+        let Some((worktree, before)) = &self.tree else {
             return;
         };
         if self.violation.is_some() {
             return;
         }
-        let failure = match routing::check(repo, before).await {
+        let failure = match routing::check(worktree, before).await {
             Ok(None) => return,
             Ok(Some(failure)) => failure,
             Err(error) => Failure {
                 failure: FailureKind::Internal,
-                message: format!("could not check the project's working tree: {error}"),
+                message: format!("could not check the coordinator's worktree: {error}"),
                 exit: None,
                 stderr_tail: None,
             },

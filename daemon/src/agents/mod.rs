@@ -15,7 +15,7 @@
 //! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`.
 //!
 //! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
-//! no worktree; the same actor runs it.
+//! no recorded worktree; the same actor runs it.
 
 mod actor;
 mod convert;
@@ -153,7 +153,8 @@ pub(super) enum Place {
         data_dir: PathBuf,
         context: PathBuf,
     },
-    /// A project's coordinator, in the project's repository itself, with no sandbox (0024).
+    /// A project's coordinator, with no sandbox (0024), in a detached worktree of `repo` that the
+    /// actor refreshes before each CLI process (RYA-171).
     Coordinator { repo: PathBuf },
 }
 

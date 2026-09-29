@@ -1,5 +1,6 @@
 //! A project's coordinator chat end to end (RYA-41, decision 0024): `project/start` against an
-//! in-process wispd whose backend is the fake CLI, in a real git repository.
+//! in-process wispd whose backend is the fake CLI, in a real git repository. The coordinator runs
+//! in a detached worktree of its own (RYA-171).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -8,11 +9,12 @@ use uuid::Uuid;
 use wisp_protocol::methods::{AgentEvents, AgentSend, ProjectList, ProjectStart};
 use wisp_protocol::{
     AccountChoice, AgentEventsParams, AgentFailureKind, AgentOutcome, AgentOutputItem, AgentPolicy,
-    AgentStatus, CoordinatorThreadId, ErrorKind, ProjectId, ProjectListParams, ProjectStartParams,
-    Provider, RunId, TurnId, WispEvent,
+    AgentStatus, CoordinatorThreadId, ErrorKind, EventsEventParams, ProjectId, ProjectListParams,
+    ProjectStartParams, Provider, RunId, TurnId, WispEvent,
 };
 use wispd::backend::fake::{FakeBackend, Step};
 use wispd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
+use wispd::paths::DataDir;
 use wispd::routing::BackendRegistry;
 
 use crate::agents::{
@@ -71,8 +73,19 @@ fn head(repo: &Path) -> String {
     git(repo, &["rev-parse", "HEAD"])
 }
 
+/// Where `host` runs `project`'s coordinator.
+fn worktree(host: &Host, project: ProjectId) -> PathBuf {
+    DataDir::new(host.dir.path())
+        .unwrap()
+        .coordinator_dir(project)
+}
+
+fn finished(event: &EventsEventParams) -> bool {
+    matches!(event.event, WispEvent::AgentFinished { .. })
+}
+
 #[tokio::test]
-async fn a_coordinator_runs_no_write_in_the_repository_and_resumes_after_a_restart() {
+async fn a_coordinator_runs_no_write_in_its_own_worktree_and_resumes_there_after_a_restart() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let script = || {
         vec![
@@ -85,8 +98,9 @@ async fn a_coordinator_runs_no_write_in_the_repository_and_resumes_after_a_resta
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
     let repo = PathBuf::from(&project.repo_path);
+    let worktree = worktree(&host, project.id);
     let before = head(&repo);
-    // The user's own uncommitted work, there before the turn, is not the coordinator's change.
+    // The user's own uncommitted work stays in the checkout.
     std::fs::write(repo.join("notes.txt"), "mine\n").unwrap();
     subscribe(&mut client, project.id, 0).await;
 
@@ -120,7 +134,8 @@ async fn a_coordinator_runs_no_write_in_the_repository_and_resumes_after_a_resta
     }));
     let first = seen.lock().unwrap()[0].clone();
     assert_eq!(first.policy, ToolPolicy::NoWrite);
-    assert_eq!(first.cwd, repo, "it runs in the repository itself");
+    assert_eq!(first.cwd, worktree, "it runs in its own worktree");
+    assert_eq!(head(&worktree), before, "at the repository's HEAD");
     assert!(first.sandbox.is_none());
     let tools = first.coordinator_tools.expect("wispd's tools are attached");
     assert_eq!((tools.project, tools.thread), (project.id, thread));
@@ -168,6 +183,10 @@ async fn a_coordinator_runs_no_write_in_the_repository_and_resumes_after_a_resta
         "a message resumes the session"
     );
     assert_eq!(resumed.prompt, "Go on.");
+    assert_eq!(
+        resumed.cwd, worktree,
+        "the session resumes where it started"
+    );
     assert_eq!(resumed.policy, ToolPolicy::NoWrite);
     assert!(resumed.coordinator_tools.is_some());
     host.server.stop().await;
@@ -203,9 +222,14 @@ async fn a_turn_that_changes_the_working_tree_stops_and_names_the_change_without
     assert!(message.contains("README.md"), "{message}");
     let repo = PathBuf::from(&project.repo_path);
     assert_eq!(
-        std::fs::read_to_string(repo.join("README.md")).unwrap(),
+        std::fs::read_to_string(worktree(&host, project.id).join("README.md")).unwrap(),
         "rewritten\n",
-        "wispd reverts nothing"
+        "wispd reverts nothing during the turn"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("README.md")).unwrap(),
+        "hello\n",
+        "the user's checkout is untouched"
     );
     assert_eq!(run.policy, AgentPolicy::NoWrite);
     host.server.stop().await;
@@ -255,5 +279,62 @@ async fn a_new_start_replaces_the_coordinator_only_once_it_stops_running() {
         .unwrap()
         .projects;
     assert_eq!(projects[0].coordinator, Some(second.id));
+    // The replaced one stays stopped, so the project's worktree has one coordinator.
+    let refused = client
+        .call::<AgentSend>(send_params(first.id, TurnId::generate(), "Still there?"))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::RunNotResumable);
+    host.server.stop().await;
+}
+
+#[tokio::test]
+async fn the_users_edits_and_commits_during_a_turn_never_stop_it() {
+    let script = vec![
+        init("coordinator-1"),
+        Step::AwaitFollowUp,
+        end_turn("Done."),
+    ];
+    let host = Host::start(temp_dir(), fake(script));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let repo = PathBuf::from(&project.repo_path);
+    let worktree = worktree(&host, project.id);
+    subscribe(&mut client, project.id, 0).await;
+
+    let run = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    // While its turn runs: an editor save, a commit that moves HEAD, and stray files.
+    std::fs::write(repo.join("README.md"), "edited\n").unwrap();
+    git(&repo, &["commit", "-qam", "Edit the README."]);
+    std::fs::write(repo.join("notes.txt"), "draft\n").unwrap();
+    std::fs::write(repo.join(".DS_Store"), "\0").unwrap();
+    client
+        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Go on."))
+        .await
+        .unwrap();
+    let events = until(&mut client, finished).await;
+    assert!(
+        matches!(
+            outcomes(&events).as_slice(),
+            [AgentOutcome::Completed { .. }]
+        ),
+        "{events:#?}"
+    );
+
+    // Its next CLI process reads the new commit.
+    client
+        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Look again."))
+        .await
+        .unwrap();
+    assert_eq!(head(&worktree), head(&repo));
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("README.md")).unwrap(),
+        "edited\n"
+    );
+    assert!(!worktree.join("notes.txt").exists());
     host.server.stop().await;
 }
