@@ -14,7 +14,9 @@
 //! table, and a finished run is committed with [`WorktreeManager::commit_all`] and measured with
 //! [`WorktreeManager::diff_stat`]. A client reviews the commit through
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
-//! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (RYA-168).
+//! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (RYA-168). A
+//! project's coordinator reads a detached worktree that [`WorktreeManager::refresh_detached`]
+//! keeps at the repository's `HEAD` (RYA-171).
 //!
 //! # Layout and naming
 //!
@@ -759,6 +761,67 @@ impl WorktreeManager {
         }
         let _ = self.run_git(&repo_root, &["worktree", "prune"]).await;
         Ok(())
+    }
+
+    /// Makes `path` a detached worktree of `repo_path` at the repository's current `HEAD`, and
+    /// returns that commit. This is the folder a project's coordinator reads (RYA-171, 0024). An
+    /// existing worktree is checked out again with `--force`, and every untracked and ignored
+    /// file is removed. Only the coordinator writes there, and 0004's check has already stopped
+    /// the turn that did, so this discards nothing of the user's. When that can't be done in
+    /// place, because the folder has no `.git` file (so git would look above it for a repository)
+    /// or git fails there, the folder is removed and added again.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::UnknownRevision`] for a repository with no
+    /// commits yet, [`WorktreeError::Io`], or [`WorktreeError::GitFailed`],
+    /// [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`] from adding it.
+    pub async fn refresh_detached(
+        &self,
+        repo_path: &Path,
+        path: &Path,
+    ) -> Result<String, WorktreeError> {
+        let repo_root = self.repo_root(repo_path).await?;
+        let _guard = self.lock_repo(&repo_root).await;
+        let head = self.resolve_commit(&repo_root, "HEAD").await?;
+        if tokio::fs::symlink_metadata(path.join(".git"))
+            .await
+            .is_ok_and(|meta| meta.is_file())
+        {
+            let refreshed = async {
+                self.run_git_ok(path, &["checkout", "--quiet", "--force", "--detach", &head])
+                    .await?;
+                self.run_git_ok(path, &["clean", "-ffdxq"]).await
+            }
+            .await;
+            match refreshed {
+                Ok(_) => return Ok(head),
+                Err(error) => {
+                    warn!(path = %path.display(), %error, "could not refresh a detached worktree; adding it again");
+                }
+            }
+        }
+        if tokio::fs::symlink_metadata(path).await.is_ok() {
+            self.remove_orphan(path).await?;
+        }
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|source| WorktreeError::Io {
+                    path: parent.to_owned(),
+                    source,
+                })?;
+        }
+        let path_arg = path.to_string_lossy().into_owned();
+        // `--force`: a removed folder can still be registered, with a stale `index.lock`.
+        self.run_git_ok(
+            &repo_root,
+            &[
+                "worktree", "add", "--quiet", "--force", "--detach", &path_arg, &head,
+            ],
+        )
+        .await?;
+        Ok(head)
     }
 
     /// Removes every worktree folder under [`WorktreeManager::root`] that isn't in `known`

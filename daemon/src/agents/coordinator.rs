@@ -1,11 +1,12 @@
-//! A project's coordinator chat (RYA-41, decision 0024): a no-write run in the project's
-//! repository, with wispd's MCP tools bound to the project and to the run's own id as its
-//! coordinator thread (0019).
+//! A project's coordinator chat (RYA-41, decision 0024): a no-write run with wispd's MCP tools
+//! bound to the project and to the run's own id as its coordinator thread (0019).
 //!
-//! `project/start` records it like any run, without a worktree, and hands it to the same actor as
-//! a worker's, so `agent/send`, `agent/cancel`, `agent/events`, the `agent.*` events, and resuming
-//! after a restart work unchanged. A project has one live coordinator: a new run replaces the
-//! last one unless that one is still starting or running.
+//! `project/start` records it like any run, without a worktree row, and hands it to the same
+//! actor as a worker's, so `agent/send`, `agent/cancel`, `agent/events`, the `agent.*` events, and
+//! resuming after a restart work unchanged. The actor runs it in the project's own detached
+//! worktree, [`crate::paths::DataDir::coordinator_dir`], which it moves to the repository's `HEAD`
+//! before each CLI process (RYA-171). A project has one live coordinator: a new run replaces the
+//! last one unless that one is still starting or running, and takes over the same worktree.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -160,5 +161,9 @@ fn newest(db: &wisp_store::Store, project: Uuid) -> Result<Option<wisp_store::Ru
 
 /// The coordinator's first message: its instructions, where it is, then the user's message.
 fn first_message(message: &str, repo: &str) -> String {
-    format!("{INSTRUCTIONS}\nThe project's repository is {repo}.\n\nThe user's message:\n{message}")
+    format!(
+        "{INSTRUCTIONS}\nThe project's repository is {repo}. Your working directory is a copy of \
+         its latest commit, updated each time wispd starts you, so it doesn't have the user's \
+         uncommitted changes.\n\nThe user's message:\n{message}"
+    )
 }
