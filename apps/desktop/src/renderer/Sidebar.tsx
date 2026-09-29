@@ -31,7 +31,15 @@ import {
   User,
   type LucideIcon,
 } from "lucide-react";
-import { useId, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type SVGProps,
+  type ToggleEvent,
+} from "react";
 
 import type { AgentRun, AgentStatus, Thread } from "../protocol/generated/protocol";
 import type { Selection, SettingsSection } from "./App";
@@ -143,6 +151,8 @@ export function ThreadList({
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [card, setCard] = useState<{ thread: Thread; top: number; left: number }>();
   const cardTimer = useRef<number>(undefined);
+  // Repositories listed again since the card opened, so sweeping across rows lists each once.
+  const refreshed = useRef(new Set<string>());
   const { groups, archived } = groupThreads(threads.state);
   const title = (t: Thread) => threads.state.titles[t.id] ?? "Thread";
 
@@ -161,13 +171,17 @@ export function ThreadList({
       // A little clear of the sidebar, and kept on screen: it is at most about 15rem tall.
       const edge = (row.closest("#sidebar") ?? row).getBoundingClientRect().right;
       setCard({ thread, top: Math.min(rect.top, window.innerHeight - 248), left: edge + 12 });
-      threads.refresh(thread.repo);
+      if (!refreshed.current.has(thread.repo)) {
+        refreshed.current.add(thread.repo);
+        threads.refresh(thread.repo);
+      }
     };
     if (card) open();
     else cardTimer.current = window.setTimeout(open, cardDelay);
   };
   const hideCard = () => {
     window.clearTimeout(cardTimer.current);
+    refreshed.current.clear();
     setCard(undefined);
   };
 
@@ -508,6 +522,7 @@ function ThreadRow({
   const actions = useRef<HTMLButtonElement>(null);
   const choose = (action: () => void) => () => {
     menu.current?.hidePopover();
+    onLeave();
     action();
   };
   const Logo = run?.backend ? backendLogos[run.backend] : undefined;
@@ -562,7 +577,10 @@ function ThreadRow({
       <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
         <button
           type="button"
-          onClick={onArchive}
+          onClick={() => {
+            onLeave();
+            onArchive();
+          }}
           className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
           {thread.archived ? <ArchiveRestore aria-hidden /> : <Check aria-hidden />}
@@ -585,6 +603,10 @@ function ThreadRow({
         popover="auto"
         role="menu"
         aria-label="Thread actions"
+        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+          if (e.newState === "open")
+            e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        }}
         onKeyDown={moveFocus}
         className={`${menuPanel("end")} min-w-36 p-1`}
       >

@@ -6,7 +6,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
 import type { SubscriptionMessage, WispBridge } from "../preload/bridge";
 import type { AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
-import { AgentChat, RowView, RunFooter } from "./AgentChat";
+import { AgentChat, RowView, RunTab } from "./AgentChat";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -223,9 +223,9 @@ test("subscribes after the scope's snapshot seq, so repeated resyncs end", async
   expect(transcriptText()).toContain("Add a README");
 });
 
-test("the footer shows status, account, and worktree branch", () => {
+test("the composer tab shows status, account, and worktree branch", () => {
   const started = samples.find((m) => "result" in m && m.id === 2)!;
-  render(<RunFooter run={(started as unknown as { result: AgentRunResult }).result.run} />);
+  render(<RunTab run={(started as unknown as { result: AgentRunResult }).result.run} />);
   expect(document.body.textContent).toBe("WorkingClaude subscriptionwisp/1a2b3c4d");
 });
 

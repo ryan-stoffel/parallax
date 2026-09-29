@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowLeft, ArrowUp, FolderPlus, Search } from "lucide-react";
-import { useState, type ReactNode, type Ref } from "react";
+import { useId, useState, type ReactNode, type Ref } from "react";
 
 import { GitHubLogo } from "./logos";
 
@@ -31,6 +31,7 @@ export function AddRepositoryDialog({
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const listId = useId();
 
   const sources: Source[] = [
     {
@@ -96,6 +97,10 @@ export function AddRepositoryDialog({
           <input
             // The native attribute, so showModal focuses the search box rather than Close.
             ref={(el) => el?.setAttribute("autofocus", "")}
+            role="combobox"
+            aria-expanded
+            aria-controls={listId}
+            aria-activedescendant={current && `${listId}-${current.id}`}
             aria-label="Search sources"
             placeholder="Search…"
             value={query}
@@ -107,32 +112,40 @@ export function AddRepositoryDialog({
           />
         </div>
         <div className="px-2 pb-2">
-          <p className="px-2.5 pt-1 pb-1.5 text-[12px] font-medium text-faint-foreground">
+          <p
+            id={`${listId}-heading`}
+            className="px-2.5 pt-1 pb-1.5 text-[12px] font-medium text-faint-foreground"
+          >
             Sources
           </p>
-          {shown.map((s) => (
-            <button
-              key={s.id}
-              type="submit"
-              name="source"
-              value={s.id}
-              disabled={!!s.unavailable}
-              data-active={s === current || undefined}
-              onMouseMove={() => !s.unavailable && setActive(pickable.indexOf(s))}
-              className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left data-active:bg-hover disabled:opacity-60 [&>svg]:size-5 [&>svg]:shrink-0"
-            >
-              {s.icon}
-              <span className="min-w-0 flex-1">
-                <span className="block text-[14px]">{s.name}</span>
-                <span className="block text-[12.5px] text-muted-foreground">{s.description}</span>
-              </span>
-              {s.unavailable && (
-                <span className="shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-[12px] text-amber-500">
-                  {s.unavailable}
+          <div id={listId} role="listbox" aria-labelledby={`${listId}-heading`}>
+            {shown.map((s) => (
+              <button
+                key={s.id}
+                id={`${listId}-${s.id}`}
+                type="submit"
+                role="option"
+                aria-selected={s === current}
+                name="source"
+                value={s.id}
+                disabled={!!s.unavailable}
+                data-active={s === current || undefined}
+                onMouseMove={() => !s.unavailable && setActive(pickable.indexOf(s))}
+                className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left data-active:bg-hover disabled:opacity-60 [&>svg]:size-5 [&>svg]:shrink-0"
+              >
+                {s.icon}
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[14px]">{s.name}</span>
+                  <span className="block text-[12.5px] text-muted-foreground">{s.description}</span>
                 </span>
-              )}
-            </button>
-          ))}
+                {s.unavailable && (
+                  <span className="shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-[12px] text-amber-500">
+                    {s.unavailable}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
           {shown.length === 0 && (
             <p className="px-2.5 py-2 text-[13px] text-faint-foreground">No sources match</p>
           )}

@@ -121,7 +121,7 @@ export function AgentChat({
           onSend={send}
           onStop={isRunning(run?.status) ? cancel : undefined}
           disabledReason={disabledReason}
-          tab={run && <RunFooter run={run} />}
+          tab={run && <RunTab run={run} />}
         />
       </div>
     </>
@@ -516,7 +516,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
 }
 
 /** An open run in the composer's tab: its status and account, then its worktree branch. */
-export function RunFooter({ run }: { run: AgentRun }) {
+export function RunTab({ run }: { run: AgentRun }) {
   const dot = isRunning(run.status)
     ? "bg-emerald-500 animate-pulse"
     : run.status === "failed"

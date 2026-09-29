@@ -31,7 +31,13 @@ export function EffortMenu() {
   const full = level === last;
   return (
     <>
-      <button type="button" popoverTarget={id} aria-label="Reasoning effort" className={menuButton}>
+      <button
+        type="button"
+        popoverTarget={id}
+        aria-haspopup="dialog"
+        aria-label={`Reasoning effort: ${name}`}
+        className={menuButton}
+      >
         {name}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>

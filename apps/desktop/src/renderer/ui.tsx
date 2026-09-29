@@ -151,9 +151,12 @@ export function Picker({
   const menuId = id ?? ownId;
   const menu = useRef<HTMLDivElement>(null);
   const searchBox = useRef<HTMLInputElement>(null);
-  const [own, setOwn] = useState(defaultValue ?? options[0]?.value);
+  const [own, setOwn] = useState(defaultValue);
   const [query, setQuery] = useState("");
-  const current = options.find((o) => o.value === (value ?? own));
+  // Uncontrolled, it shows the first option until one is picked, even if options arrive later.
+  const current =
+    options.find((o) => o.value === (value ?? own)) ??
+    (value === undefined ? options[0] : undefined);
   const q = query.trim().toLowerCase();
   const shown = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
 

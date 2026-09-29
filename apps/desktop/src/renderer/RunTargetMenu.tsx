@@ -1,5 +1,5 @@
 import { ChevronDown, Folder, FolderGit2, Laptop, Server } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useState, type ToggleEvent } from "react";
 
 import { localId, type Host } from "./hosts";
 import { MenuOption, menuButton, menuHeading, menuPanel, moveFocus, type PickerOption } from "./ui";
@@ -54,6 +54,10 @@ export function RunTargetMenu({ hosts, hostId }: { hosts: Host[]; hostId: string
         popover="auto"
         role="menu"
         aria-label="Runs on"
+        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+          if (e.newState === "open")
+            e.currentTarget.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+        }}
         onKeyDown={moveFocus}
         className={`${menuPanel()} w-[26rem] p-1`}
       >

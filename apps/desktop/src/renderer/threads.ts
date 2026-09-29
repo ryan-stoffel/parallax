@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
@@ -121,7 +121,7 @@ export interface ThreadsView {
 }
 
 /**
- * A host's threads, kept live: `thread/list` and `agent/list` (for titles), then host-level
+ * A host's threads, kept live: `thread/list` and `agent/list` (for titles and runs), then host-level
  * events after the list's `seq`, starting over on `resync`. Loads only while `connected`.
  */
 export function useThreads(hostId: string, connected: boolean): ThreadsView {
@@ -134,6 +134,11 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     dispatch({ type: "snapshot", repos: [], threads: [], runs: [] });
     setError(undefined);
   }
+  // The host shown now, so `refresh` drops a late answer from one the user has left.
+  const shown = useRef(hostId);
+  useEffect(() => {
+    shown.current = hostId;
+  }, [hostId]);
 
   useEffect(() => {
     if (!connected) return;
@@ -228,7 +233,8 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
   const refresh = useCallback(
     (repo: string) => {
       void window.wisp.request(hostId, "agent/list", { project: repo }).then((answer) => {
-        if ("result" in answer) dispatch({ type: "runs", runs: answer.result.runs });
+        if (shown.current === hostId && "result" in answer)
+          dispatch({ type: "runs", runs: answer.result.runs });
       });
     },
     [hostId],

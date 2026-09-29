@@ -11,7 +11,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { IconButton, TopBar } from "./ui";
 
@@ -49,10 +49,11 @@ const surfaces: Surface[] = [
 ];
 
 /**
- * The collapsible right column. It opens on a list of views, each with a letter that opens it;
- * the ones not built yet are dimmed. Its top bar keeps the hide button where the main pane
- * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
- * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner.
+ * The collapsible right column. It opens on a list of views, each with a letter that opens it
+ * while focus is in the panel; the ones not built yet are dimmed. Its top bar keeps the hide
+ * button where the main pane shows it while the panel is closed. Expanded, it fills everything
+ * right of the sidebar, and `leading` and `topBarClassName` stand in for the hidden main pane's
+ * top-left corner.
  */
 export function SidePanel({
   open,
@@ -71,27 +72,19 @@ export function SidePanel({
 }) {
   const [surface, setSurface] = useState<Surface>();
 
-  // From the list, a view's letter opens it, unless the user is typing or in a dialog or menu.
-  useEffect(() => {
-    if (!open || surface) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if ((e.target as Element).closest("input, textarea, [contenteditable], dialog, [popover]"))
-        return;
-      const next = surfaces.find((s) => s.empty && s.key === e.key.toUpperCase());
-      if (!next) return;
-      e.preventDefault();
-      setSurface(next);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, surface]);
-
   return (
     <aside
       id="side-panel"
       aria-label="Side panel"
       hidden={!open}
+      // From the list, a view's letter opens it while focus is in the panel.
+      onKeyDown={(e) => {
+        if (surface || e.metaKey || e.ctrlKey || e.altKey) return;
+        const next = surfaces.find((s) => s.empty && s.key === e.key.toUpperCase());
+        if (!next) return;
+        e.preventDefault();
+        setSurface(next);
+      }}
       className={`flex flex-col bg-background ${expanded ? "min-w-0 flex-1" : "w-[26rem] shrink-0 border-l border-border"}`}
     >
       <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
