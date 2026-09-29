@@ -85,6 +85,11 @@ export type WispRequests = {
 	 */
 	"usage/get": { params: UsageGetParams, result: UsageGetResult },
 	/**
+	 * `usage/history`: tokens and cost since a time, summed per UTC hour, account, and
+	 * model, and each account's run count over the same range.
+	 */
+	"usage/history": { params: UsageHistoryParams, result: UsageHistoryResult },
+	/**
 	 * `accounts/defaults/get`: this host's default account for the coordinator role and for
 	 * a worker role, absent where none is set (#119).
 	 */
@@ -796,6 +801,84 @@ export type UsagePeriod = {
 	/**
 	 * The cost, when the vendor reports one for this account in the period. Absent, not zero,
 	 * when it never does (0004: Codex and Cursor report no cost).
+	 */
+	costUsdMicros?: number,
+};
+
+/**
+ * Params of `usage/history`.
+ */
+export type UsageHistoryParams = {
+	/**
+	 * The start of the range, inclusive. The range ends now.
+	 */
+	since: string,
+};
+
+/**
+ * Result of `usage/history`.
+ */
+export type UsageHistoryResult = {
+	/**
+	 * Usage summed per UTC hour, account, and model, oldest hour first. Hours with no usage are
+	 * left out.
+	 */
+	hours: Array<UsageHour>,
+	/**
+	 * How many runs each account used in the range. Accounts with none are left out.
+	 */
+	runs: Array<AccountRuns>,
+};
+
+/**
+ * How many distinct runs used an account in a range.
+ */
+export type AccountRuns = {
+	/**
+	 * wispd's id for the account (#114, #117).
+	 */
+	accountId: string,
+	/**
+	 * Runs with at least one usage delta in the range.
+	 */
+	runs: number,
+};
+
+/**
+ * One account's usage of one model within one UTC hour.
+ */
+export type UsageHour = {
+	/**
+	 * The start of the UTC hour, such as `2026-09-29T19:00:00Z`.
+	 */
+	hour: string,
+	/**
+	 * wispd's id for the account (#114, #117).
+	 */
+	accountId: string,
+	/**
+	 * The model, when the vendor named one.
+	 */
+	model?: string,
+	/**
+	 * Input tokens, not counting cache reads and writes.
+	 */
+	inputTokens: number,
+	/**
+	 * Output tokens, including reasoning.
+	 */
+	outputTokens: number,
+	/**
+	 * Input tokens read from the prompt cache.
+	 */
+	cacheReadTokens: number,
+	/**
+	 * Input tokens written to the prompt cache.
+	 */
+	cacheWriteTokens: number,
+	/**
+	 * The cost, when the vendor reported one in this hour. Absent, not zero, when it did not
+	 * (0004: Codex and Cursor report no cost).
 	 */
 	costUsdMicros?: number,
 };
