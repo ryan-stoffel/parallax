@@ -47,6 +47,49 @@ pub enum AgentPolicy {
     Unknown,
 }
 
+/// How hard a run's model thinks, behind the `runOptions` capability (RYA-97). Claude Code takes
+/// every level as `--effort`, and downgrades `xhigh` on models that lack it. A backend that can't
+/// honor a level refuses the run with `unsupportedOption`.
+///
+/// A newer peer may send a level this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentEffort {
+    /// The least thinking.
+    Low,
+    /// Some thinking.
+    Medium,
+    /// More thinking.
+    High,
+    /// More than `high`, on models that offer it.
+    Xhigh,
+    /// The most thinking.
+    Max,
+    /// A level this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// How a run's agent may act inside its sandbox, behind the `runOptions` capability (RYA-97).
+/// Every value stays inside the worker sandbox (0013); none loosens it.
+///
+/// A newer peer may send a value this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentPermission {
+    /// Edits its worktree and runs commands without asking: the default. Claude Code's
+    /// `acceptEdits`.
+    Edit,
+    /// Reads and plans without editing: Claude Code's plan mode, whose file tools refuse to
+    /// write. Its commands still run, in the same sandbox.
+    Plan,
+    /// A value this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
 /// Where a run is.
 ///
 /// A newer wispd may send a status this version does not know; treat it as unknown, and don't
@@ -138,6 +181,18 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// The model it was started with. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// The effort it was started with. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// The permission it was started with. Absent means `edit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -440,6 +495,20 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
+    /// it, `effort`, and `permission` only to a wispd that advertises `runOptions`. The run keeps
+    /// all three when it resumes, and a retry must repeat them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// How hard the model thinks. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// How the agent may act inside its sandbox. Absent means `edit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
 }
 
 /// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.

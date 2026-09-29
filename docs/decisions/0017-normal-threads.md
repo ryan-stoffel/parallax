@@ -1,6 +1,6 @@
 # 0017: Normal threads are agent runs that belong to a repo entry
 
-- Status: accepted
+- Status: accepted; model, effort, and permission added by RYA-97
 - Date: 2026-09-26
 - Issue: #110
 
@@ -26,7 +26,7 @@
 | --- | --- | --- |
 | `thread/list` | `{}` | `{repos, threads, seq}` |
 | `repo/add` | `{id, path}` | `{repo}`; idempotent on `id`, and on `path` |
-| `thread/start` | `{runId, repo?, prompt, account?}` | `{thread, run}`; without `repo`, a thread with no repo; idempotent on `runId` |
+| `thread/start` | `{runId, repo?, prompt, account?, model?, effort?, permission?}` | `{thread, run}`; without `repo`, a thread with no repo; idempotent on `runId`. `model`, `effort`, and `permission` are `agent/start`'s (0014), behind `runOptions` |
 | `thread/archive` | `{runId, archived}` | `{thread}` |
 | `thread/delete` | `{runId}` | `{}` |
 

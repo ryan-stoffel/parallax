@@ -24,6 +24,9 @@ fn run_fields(repo: Uuid) -> RunFields {
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
         coordinator_thread: None,
+        model: None,
+        effort: None,
+        permission: None,
     }
 }
 

@@ -14,8 +14,7 @@ use std::fs;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 
-use common::{run_worker, tool_result};
-use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
+use common::{run_worker, tool_result, worker_request};
 
 const SECRET: &str = "wisp-sandbox-test-secret";
 
@@ -86,23 +85,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
     }
     fs::write(worktree.join("probe.sh"), probe).unwrap();
 
-    let request = RunRequest {
-        run_id: RunId::generate(),
-        turn_id: None,
-        cwd: worktree.clone(),
-        prompt: "Run the probe.".into(),
-        policy: ToolPolicy::WorkspaceWrite,
-        sandbox: Some(WorkerSandbox::for_worktree(
-            &home, &data, &worktree, &git_dir, &context,
-        )),
-        account: AccountRef {
-            id: "test".into(),
-            credential: Credential::Subscription { config_home: None },
-        },
-        resume: None,
-        model: Some("claude-sonnet-4-6".into()),
-        coordinator_tools: None,
-    };
+    let request = worker_request(&home, &data, &worktree, &git_dir, &context);
     let (stdout, transcript) = run_worker(
         &claude,
         &request,

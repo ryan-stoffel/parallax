@@ -91,6 +91,8 @@ pub(super) struct Translator {
     expected_key_source: &'static str,
     /// wispd's MCP tools were attached, so `system/init` may list [`mcp::ALLOWED_TOOLS`] too.
     coordinator_tools: bool,
+    /// The permission mode a worker asked for, which its `system/init` must report.
+    permission_mode: &'static str,
     verified: bool,
     session_id: Option<String>,
     denied: HashSet<String>,
@@ -112,6 +114,7 @@ impl Translator {
             policy,
             expected_key_source,
             coordinator_tools: false,
+            permission_mode: WORKER_PERMISSION_MODE,
             verified: false,
             session_id: None,
             denied: HashSet::new(),
@@ -126,6 +129,13 @@ impl Translator {
     /// Also admits wispd's MCP tools in `system/init`, when `attached` (0019).
     pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
         self.coordinator_tools = attached;
+        self
+    }
+
+    /// Expects a worker's `system/init` to report `mode` instead of [`WORKER_PERMISSION_MODE`],
+    /// for a worker that asked for another permission (RYA-97).
+    pub fn with_permission_mode(mut self, mode: &'static str) -> Self {
+        self.permission_mode = mode;
         self
     }
 
@@ -266,18 +276,18 @@ impl Translator {
             // Claude Code writes init before its first request, so this stops the worker before
             // any tool runs.
             let mode = text(message, "permissionMode");
-            if mode != Some(WORKER_PERMISSION_MODE) {
+            if mode != Some(self.permission_mode) {
                 let reported = match mode {
                     Some(mode) => format!("permission mode {mode:?}"),
                     None => "no permission mode".to_owned(),
                 };
                 let message = format!(
-                    "Claude Code reported {reported} for a worker instead of \
-                     {WORKER_PERMISSION_MODE:?}. It forces \"default\" when \
-                     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, which on Linux lets a worker's \
-                     commands write all of /home, /tmp, /var, /opt, /run, /mnt, and /root. wispd \
-                     doesn't set it for a worker, so check the env block of Claude Code's managed \
-                     settings"
+                    "Claude Code reported {reported} for a worker instead of {expected:?}. It \
+                     forces \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, which on \
+                     Linux lets a worker's commands write all of /home, /tmp, /var, /opt, /run, \
+                     /mnt, and /root. wispd doesn't set it for a worker, so check the env block \
+                     of Claude Code's managed settings",
+                    expected = self.permission_mode,
                 );
                 steps.push(violation(FailureKind::PolicyViolation, message));
                 return steps;

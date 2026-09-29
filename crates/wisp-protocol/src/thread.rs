@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{AccountChoice, AgentRun, RunId};
+use crate::{AccountChoice, AgentEffort, AgentPermission, AgentRun, RunId};
 
 uuid_v7_id! {
     /// A repo entry's id: a version 7 UUID that the client generates once and sends again on
@@ -118,6 +118,18 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<AccountChoice>,
+    /// The model, as `agent/start` takes it. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// How hard the model thinks, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// How the agent may act inside its sandbox, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
 }
 
 /// Result of `thread/start`.
