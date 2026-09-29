@@ -161,13 +161,14 @@ Codex sandboxes commands with Seatbelt on macOS. Its `:workspace` permission pro
 codex exec [resume] --json --ignore-user-config --ignore-rules \
   -c 'default_permissions="wisp_worker"' \
   -c 'permissions={wisp_worker={extends=":workspace", workspace_roots={"<context>"=true},
-        filesystem={"<unreadable path>"="deny", ..., "<worktree>/.git"="read", "<git folder>"="read"},
+        filesystem={"<unreadable path>"="deny", ..., "<worktree>/.git"="read", "<git folder>"="read",
+          "<zdotdir>"="read"},
         network={enabled=true, domains={"*"="allow"}}}}' \
   -c 'features={network_proxy=true, hooks=false, apps=false, plugins=false, remote_plugin=false,
         multi_agent=false, skill_mcp_dependency_install=false, shell_snapshot=false}' \
   -c 'projects={"<worktree>"={trust_level="untrusted"}}' \
-  -c 'approval_policy="never"' -c 'web_search="live"' \
-  -c 'shell_environment_policy={ignore_default_excludes=false}' \
+  -c 'approval_policy="never"' -c 'web_search="live"' -c 'allow_login_shell=false' \
+  -c 'shell_environment_policy={ignore_default_excludes=false, set={ZDOTDIR="<zdotdir>"}}' \
   [-c 'model_reasoning_effort="<effort>"'] [-m <model>] [<thread id>] -
 ```
 
@@ -180,7 +181,7 @@ codex exec [resume] --json --ignore-user-config --ignore-rules \
 - **The environment.** `shell_environment_policy.ignore_default_excludes=false` keeps variables named `*KEY*`, `*SECRET*`, or `*TOKEN*` out of commands, including an API key account's `CODEX_API_KEY`. Shell snapshots are off, because a snapshot restored a `*KEY*` variable that the policy had removed (Evidence). Inherited `OPENAI_*` and `CODEX_*` variables never reach the CLI. A second account's `CODEX_HOME` is denied, as `~/.codex` is.
 - **Version.** Codex older than `codex::WORKER_MIN_VERSION` (0.157.1, the version checked here) is refused before a worker starts, since one that doesn't know permission profiles would ignore them rather than fail. Detection reads it from `codex --version`.
 - **Gap: threads with no repo.** A scratch repository's git folder is inside the data folder. Reading its files works, but git `lstat`s every parent folder, and a profile can't grant metadata alone, so `git status` fails in those threads. The worker still edits files, and wispd commits (RYA-134).
-- **Gap: `PATH`.** Codex runs each command with `$SHELL -c`, and a zsh startup file that sets `PATH` outright, such as nix-darwin's `/etc/zshenv`, replaces wispd's. The shell snapshot that would restore it is off (above), so on such a Mac a Codex worker can lose tools like `cargo` (RYA-141; Claude's fix is RYA-126).
+- **`PATH` (RYA-141).** Codex runs each command with the user's shell from the password database, as `-lc` unless `allow_login_shell` is off, and a zsh startup file that sets `PATH` outright, such as nix-darwin's `/etc/zshenv`, replaces wispd's. The shell snapshot that would restore it is off (above), and without one Codex adds nothing to the command. So each worker gets a `ZDOTDIR` folder in the data folder's `tmp/`. zsh reads its `.zshenv` right after `/etc/zshenv`, and it unsets `ZDOTDIR`, runs the user's `~/.zshenv`, and puts wispd's `PATH` back in front, as Claude's env file does (0014). `allow_login_shell=false` makes every command `-c`, so no `.zprofile` or `.zlogin` runs after it; Claude workers get the same startup files. The folder is `read` in the profile, because the sandboxed zsh reads it, so a worker's commands can read it: it holds only the `PATH` they already have. They can't write it or read another run's. wispd deletes it when the run ends, or at the next `serve` start after a crash (RYA-130). bash reads no startup files for `-c`.
 - **Gap: temp.** A Codex worker gets the denies of [the run's temp folder](#the-runs-temp-folder): every other run's folder and `/tmp/claude-<uid>`, whose `deny` entries win over `:workspace`'s `/tmp` (checked with `codex sandbox` 0.157.1). But its commands still write the shared `$TMPDIR` and `/tmp`, not their run's folder (RYA-145).
 - **Gap: the Keychain.** With network on, Codex's Seatbelt profile allows `mach-lookup` of `com.apple.SecurityServer` for TLS, as Claude's runtime does. The login keychain file is unreadable, which is the same open item as Claude's.
 - **Gap: the credential source.** Exec doesn't say which credentials it used, unlike Claude's `apiKeySource`. A subscription run bills whatever `codex login` stored; if that is an API key, wisp can't tell yet (RYA-136).
@@ -272,6 +273,7 @@ Real `codex exec --json` runs on a ChatGPT login with the backend's flags then c
 - A repository `.codex/config.toml` naming an MCP server and a `notify` program, and a `.codex/hooks.json`, each writing a marker file outside the sandbox: no marker appeared.
 - A `curl` to `127.0.0.1` got the proxy's 403. Asked to read a denied file, write outside the worktree, and `apply_patch` outside it, the model declined all three, citing the permission profile Codex describes to it, and nothing was written.
 - A `WISP_PROBE_API_KEY` variable reached commands through the shell snapshot, and not once snapshots were off.
+- `PATH` (RYA-141, on a nix-darwin Mac whose `/etc/zshenv` sets it outright): through a `wispd` built with the `ZDOTDIR` folder, a worker's command ran as `/bin/zsh -c`, found a tool that only wispd's `PATH` had, found `cargo` in `~/.cargo/bin`, and had wispd's entries first with nix-darwin's after. `*KEY*`, `*TOKEN*`, and `*SECRET*` variables still didn't reach it. Under `codex sandbox -P`, the command could read its own folder but not write it, create files in it, read another run's, or list the data folder's `tmp/`.
 - A worker ran through `wispd` end to end: wispd committed its file, and `agent/send` resumed the thread.
 
 The backend's fixtures are those runs.
