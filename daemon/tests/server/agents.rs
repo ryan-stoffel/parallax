@@ -779,18 +779,25 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         .await
         .unwrap();
     assert_eq!(resumed.run.status, AgentStatus::Running);
-    let events = until(
-        &mut client,
-        has_item(AgentOutputItem::TurnStarted {
+    // The resumed CLI reports its session after the turn has started, so the two can land in
+    // separate 50 ms `agent.output` batches (RYA-132): wait for both.
+    let mut wanted = vec![
+        AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
-        }),
-    )
+        },
+        AgentOutputItem::SessionStarted {
+            session_id: "hang-1".to_owned(),
+            model: None,
+        },
+    ];
+    until(&mut client, |event| {
+        if let WispEvent::AgentOutput { items, .. } = &event.event {
+            wanted.retain(|item| !items.contains(item));
+        }
+        wanted.is_empty()
+    })
     .await;
-    assert!(items(&events).contains(&AgentOutputItem::SessionStarted {
-        session_id: "hang-1".to_owned(),
-        model: None,
-    }));
     drop(client);
 
     // A crash: the store still says `running` when wispd starts.
