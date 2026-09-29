@@ -40,7 +40,7 @@ use crate::{
     ProjectCreateResult, ProjectListParams, ProjectListResult, RepoAddParams, RepoAddResult,
     ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
     ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
-    UsageGetResult,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -149,6 +149,9 @@ method_table! {
         /// `usage/get`: per-account tokens and cost for today and this week (local time on this
         /// host), and the latest limit windows.
         UsageGet = "usage/get": UsageGetParams => UsageGetResult;
+        /// `usage/history`: tokens and cost since a time, summed per UTC hour, account, and
+        /// model, and each account's run count over the same range.
+        UsageHistory = "usage/history": UsageHistoryParams => UsageHistoryResult;
         /// `accounts/defaults/get`: this host's default account for the coordinator role and for
         /// a worker role, absent where none is set (#119).
         AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
@@ -258,6 +261,7 @@ mod tests {
                 "accounts/list",
                 "accounts/refresh",
                 "usage/get",
+                "usage/history",
                 "accounts/defaults/get",
                 "accounts/defaults/set",
                 "context/list",
