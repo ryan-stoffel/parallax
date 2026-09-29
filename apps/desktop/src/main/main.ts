@@ -2,17 +2,15 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electro
 import path from "node:path";
 
 import { THEME_PREFERENCES } from "../preload/bridge";
+import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { startHosts } from "./hosts";
 import { isOpenableExternally, isReload } from "./links";
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
 const devServerUrl = app.isPackaged ? undefined : process.env["WISP_DEV_SERVER_URL"];
 
-// The window's color before the renderer paints. Matches --background in the
-// renderer's index.css.
-const windowBackground = () => (nativeTheme.shouldUseDarkColors ? "#0d0d0f" : "#ffffff");
-
 function createWindow() {
+  const dark = nativeTheme.shouldUseDarkColors;
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -21,13 +19,8 @@ function createWindow() {
     // Hidden until the renderer's first paint, which already has the saved
     // theme, so a theme that differs from the OS's never flashes.
     show: false,
-    backgroundColor: windowBackground(),
-    // macOS: no title bar, the traffic lights inset over the app's 52px top
-    // row, which the renderer makes draggable. Windows and Linux keep the
-    // native frame, which follows nativeTheme, and hide the menu bar until Alt.
-    ...(process.platform === "darwin"
-      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 19 } }
-      : { autoHideMenuBar: true }),
+    backgroundColor: windowBackground(dark),
+    ...frameOptions(process.platform, dark),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.cjs"),
       contextIsolation: true,
@@ -72,8 +65,14 @@ ipcMain.on("wisp:theme", (_event, preference: unknown) => {
   const source = THEME_PREFERENCES.find((p) => p === preference);
   if (source) nativeTheme.themeSource = source;
 });
+// Fires for the setting above, and for an OS theme change while it's "system".
 nativeTheme.on("updated", () => {
-  for (const win of BrowserWindow.getAllWindows()) win.setBackgroundColor(windowBackground());
+  const dark = nativeTheme.shouldUseDarkColors;
+  const overlay = titleBarOverlay(process.platform, dark);
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.setBackgroundColor(windowBackground(dark));
+    if (overlay) win.setTitleBarOverlay(overlay);
+  }
 });
 
 void app.whenReady().then(() => {

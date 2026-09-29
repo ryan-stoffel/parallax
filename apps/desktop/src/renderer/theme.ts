@@ -34,7 +34,8 @@ export function useThemePreference() {
   // Layout effect, so the first paint already has the right theme.
   useLayoutEffect(() => {
     localStorage.setItem(STORAGE_KEY, preference);
-    // Scrollbars, native controls, and the Windows and Linux title bars.
+    // Scrollbars, native controls, the Linux title bar, and Windows' window
+    // buttons (main.ts).
     window.wisp.setThemeSource(preference);
 
     const media = matchMedia(darkQuery);
