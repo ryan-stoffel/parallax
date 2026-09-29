@@ -60,8 +60,9 @@ export interface ComposerProps {
   /** What goes under the tab, such as a new thread's account chooser. */
   footer?: ReactNode;
   /**
-   * The backend the thread runs on, when wispd takes run options: shows the model, effort, and
-   * access choices it can honor. Absent (or unknown): no choices, and none are sent.
+   * The backend the thread runs on: shows the model, effort, and access choices it can honor. A
+   * new thread passes it only when wispd takes run options. Absent (or unknown): no choices, and
+   * none are sent.
    */
   backend?: string;
   /**
