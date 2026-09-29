@@ -27,7 +27,7 @@ use wisp_protocol::methods::{
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
     AgentEvents, AgentFile, AgentList, AgentRequestChanges, AgentSend, AgentStart, ContextList,
     ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
-    Initialize, ProjectCreate, ProjectList, RequestMethod, UsageGet,
+    Initialize, ProjectCreate, ProjectList, RequestMethod, UsageGet, UsageHistory,
 };
 use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
@@ -96,6 +96,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
                 .await
         }
         UsageGet::NAME => handle::<UsageGet, _, _>(&request, |p| usage::get(&context, p)).await,
+        UsageHistory::NAME => {
+            handle::<UsageHistory, _, _>(&request, |p| usage::history(&context, p)).await
+        }
         AccountsDefaultsGet::NAME => {
             handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
         }
