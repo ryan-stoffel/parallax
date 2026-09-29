@@ -139,6 +139,22 @@ test("a follow-up shows the text its turnStarted logged", () => {
   expect(of(t.items, "user").at(-1)).toMatchObject({ text: "And the tests.", turnId });
 });
 
+test("a wake-up is marked as wisp's, and a pause says the next message resumes them (0025)", () => {
+  const turnId = uuidv7();
+  const text = "wisp, not the user: runs you started finished.";
+  const t = build(
+    ...upTo(1),
+    output({ kind: "turnStarted", turnId, text, wake: true }),
+    at({ kind: "agent.wakeupsPaused", runId }),
+  );
+  expect(of(t.items, "user").at(-1)).toMatchObject({ text, turnId, wake: true });
+  expect(of(t.items, "user")[0]).not.toHaveProperty("wake");
+  expect(t.items.at(-1)).toMatchObject({
+    kind: "notice",
+    text: "Wake-ups are paused: finished subagents won't wake the coordinator. Your next message resumes them.",
+  });
+});
+
 test("uuidv7 puts the time first and sets the version and variant", () => {
   const id = uuidv7(0x0190_1234_5678);
   expect(id).toMatch(/^01901234-5678-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);

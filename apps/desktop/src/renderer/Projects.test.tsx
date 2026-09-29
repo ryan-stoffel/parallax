@@ -4,7 +4,13 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { RpcResponse, SubscriptionMessage, WispBridge } from "../preload/bridge";
-import type { AgentRun, LoggedEvent, Project, Repo } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  LoggedEvent,
+  Project,
+  Repo,
+  WispEvent,
+} from "../protocol/generated/protocol";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -45,11 +51,14 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
     : { error: { code: -32601, message: `${method} isn't faked` } };
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
-let deliver: (message: SubscriptionMessage) => void;
+// Every subscription gets every event; each keeps what's its own.
+let listeners: Set<(message: SubscriptionMessage) => void>;
+const deliver = (message: SubscriptionMessage) => listeners.forEach((l) => l(message));
 
 beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
+  listeners = new Set();
   capabilities = {};
   answers = {
     "thread/list": () => ({ result: { repos: [wisp], threads: [], seq: 7 } }),
@@ -75,8 +84,8 @@ beforeEach(() => {
     }),
     onConnectionState: () => () => {},
     subscribe: (_host, _params, listener) => {
-      deliver = listener;
-      return () => {};
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
     request,
     pickFolder,
@@ -440,4 +449,206 @@ test("a coordinator that stopped before its session started offers Start over wi
   await click(startOverButton());
   expect(calls("project/start")).toMatchObject([{ prompt: "Add a dark mode" }]);
   expect(calls("agent/send")).toEqual([]);
+});
+
+const coordinatorId = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
+/** A subagent of ember's coordinator, which started it unless `coordinatorThread` is cleared. */
+const subagent = (id: string, prompt: string, more: Partial<AgentRun> = {}): AgentRun => ({
+  ...coordinatorRun(id, prompt),
+  policy: "workspaceWrite",
+  coordinatorThread: coordinatorId,
+  ...more,
+});
+const login = subagent("01a0d391-0000-7000-8000-000000000001", "Fix the login bug\nwith a test", {
+  status: "completed",
+  branch: "wisp/login",
+  diff: { commit: "c1", files: 2, insertions: 12, deletions: 3 },
+  sessionId: "s-1",
+});
+const docs = subagent("01a0d391-0000-7000-8000-000000000002", "Write the docs", {
+  coordinatorThread: undefined,
+  accountId: "01a0d34b-3c4d-7e5f-a061-7b8c9d0e1f22",
+  branch: "wisp/docs",
+});
+/**
+ * Ember with a coordinator and `runs` after it, served by `agent/list` and `agent/events`, open
+ * with its Agents view. Photon has no runs.
+ */
+async function openEmberAgents(...runs: AgentRun[]) {
+  capabilities = { coordinator: {}, openPr: {} };
+  const all = [coordinatorRun(coordinatorId, "Plan the release"), ...runs];
+  answers["project/list"] = () => ({
+    result: {
+      projects: [
+        { ...project("ember", "2026-09-26T12:00:00Z"), coordinator: coordinatorId },
+        project("photon", "2026-09-29T09:00:00Z"),
+      ],
+    },
+  });
+  answers["agent/list"] = (p) => ({
+    result: { runs: p["project"] === "p-ember" ? all : [], seq: 7 },
+  });
+  answers["agent/events"] = serveEvents(() => all);
+  await renderApp();
+  await openEmber();
+  await click(button("Show side panel"));
+  await click(
+    [...document.querySelectorAll("#side-panel button")].find((b) =>
+      b.textContent?.startsWith("Agents"),
+    ),
+  );
+}
+const agentRows = () =>
+  [...document.querySelectorAll('#side-panel [aria-label="Agents"] button')].map(
+    (b) => b.textContent,
+  );
+const agentRow = (title: string) =>
+  [...document.querySelectorAll('#side-panel [aria-label="Agents"] button')].find((b) =>
+    b.textContent?.startsWith(title),
+  );
+
+test("a Project's Agents view lists its subagents newest first, without its coordinator, and keeps them live", async () => {
+  await openEmberAgents(login, docs);
+  expect(agentRows()).toEqual([
+    "Write the docsby youWorkingwisp/docsAPI key",
+    "Fix the login bugby coordinatorDonewisp/login+12 −3Claude subscription",
+  ]);
+
+  const event = (seq: number, e: WispEvent) =>
+    act(async () =>
+      deliver({ type: "event", event: { subscription: "s-2", seq, time: "", event: e } }),
+    );
+  const tests = subagent("01a0d391-0000-7000-8000-000000000003", "Add the tests");
+  await event(8, { kind: "agent.started", runId: tests.id, run: tests });
+  await event(9, {
+    kind: "agent.updated",
+    runId: docs.id,
+    state: {
+      status: "completed",
+      accountId: docs.accountId,
+      diff: { commit: "c2", files: 1, insertions: 4, deletions: 0 },
+      updatedAt: "2026-09-29T12:05:00Z",
+    },
+  });
+  expect(agentRows()).toEqual([
+    "Add the testsby coordinatorWorkingClaude subscription",
+    "Write the docsby youDonewisp/docs+4 −0API key",
+    "Fix the login bugby coordinatorDonewisp/login+12 −3Claude subscription",
+  ]);
+});
+
+test("opening a subagent shows its chat, with Open PR, and the Project crumb goes back to the coordinator", async () => {
+  answers["agent/send"] = () => ({ result: { run: login } });
+  await openEmberAgents(login, docs);
+  await click(agentRow("Fix the login bug"));
+  expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);
+  expect(agentRow("Fix the login bug")!.getAttribute("aria-current")).toBe("page");
+  // The Project stays selected in the sidebar.
+  const ember = [...document.querySelectorAll("#sidebar li button")].find(
+    (b) => b.textContent === "ember3d",
+  );
+  expect(ember!.getAttribute("aria-current")).toBe("page");
+  expect(transcript()).toContain("Fix the login bug");
+  const main = document.querySelector("main")!;
+  expect(main.textContent).toContain("Open PR");
+
+  type("Cover the logout path too");
+  await click(button("Send"));
+  expect(calls("agent/send")).toEqual([
+    { runId: login.id, turnId: expect.any(String), text: "Cover the logout path too" },
+  ]);
+
+  await click(document.querySelector('[aria-label="Breadcrumb"] button'));
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(transcript()).toContain("Plan the release");
+});
+
+test("opening a subagent from an expanded side panel shrinks it, so the chat shows", async () => {
+  await openEmberAgents(login);
+  await click(document.querySelector('#side-panel button[aria-label="Expand panel"]'));
+  expect(document.querySelector("main")!.hidden).toBe(true);
+  await click(agentRow("Fix the login bug"));
+  expect(document.querySelector("main")!.hidden).toBe(false);
+  expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);
+});
+
+test("a running subagent's chat stops it", async () => {
+  answers["agent/cancel"] = () => ({ result: { run: docs } });
+  await openEmberAgents(docs);
+  await click(agentRow("Write the docs"));
+  await click(button("Stop"));
+  expect(calls("agent/cancel")).toEqual([{ runId: docs.id }]);
+});
+
+test("the Agents view starts a subagent by hand, reusing its id to retry", async () => {
+  let fail = true;
+  answers["agent/start"] = (p) =>
+    fail
+      ? {
+          error: {
+            code: -32000,
+            message: "no account was named",
+            data: { kind: "noDefaultAccount" },
+          },
+        }
+      : { result: { run: subagent(p["runId"] as string, p["prompt"] as string) } };
+  await openEmberAgents();
+  const box = document.querySelector<HTMLTextAreaElement>(
+    '#side-panel textarea[aria-label="New subagent\'s task"]',
+  )!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      box,
+      "Bump the version",
+    );
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const start = document.querySelector('#side-panel button[aria-label="Start subagent"]');
+  await click(start);
+  expect(document.querySelector('#side-panel [role="alert"]')?.textContent).toBe(
+    "Choose an account to run threads on this host.",
+  );
+
+  fail = false;
+  await click(start);
+  const [first, retry] = calls("agent/start");
+  expect(first).toEqual({
+    runId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7/),
+    project: "p-ember",
+    prompt: "Bump the version",
+    policy: "workspaceWrite",
+  });
+  expect(retry).toEqual(first);
+  expect(box.value).toBe("");
+  expect(agentRows()[0]).toMatch(/^Bump the version/);
+});
+
+test("another Project's Agents view starts with an empty box and never gets a late start", async () => {
+  let release = () => {};
+  answers["agent/start"] = async (p) => {
+    await new Promise<void>((resolve) => (release = resolve));
+    return { result: { run: subagent(p["runId"] as string, p["prompt"] as string) } };
+  };
+  await openEmberAgents();
+  const box = () =>
+    document.querySelector<HTMLTextAreaElement>(
+      '#side-panel textarea[aria-label="New subagent\'s task"]',
+    )!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      box(),
+      "Bump the version",
+    );
+    box().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(document.querySelector('#side-panel button[aria-label="Start subagent"]'));
+
+  await click(
+    [...document.querySelectorAll("#sidebar li button")].find((b) => b.textContent === "photon3h"),
+  );
+  expect(crumbs()).toEqual(["This Mac", "photon"]);
+  expect(box().value).toBe("");
+  await act(async () => release());
+  await settle();
+  expect(agentRows()).toEqual([]);
 });

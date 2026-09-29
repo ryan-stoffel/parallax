@@ -1,4 +1,4 @@
-import { Folder, House, PanelLeft, PanelRight } from "lucide-react";
+import { Folder, House, PanelLeft, PanelRight, Workflow } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
@@ -6,20 +6,22 @@ import { AgentChat } from "./AgentChat";
 import { useConnection } from "./ConnectionStatus";
 import { NewThread } from "./NewThread";
 import { localId, useHosts } from "./hosts";
+import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { ProjectIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
-import { groupOf, groupThreads, noRepo, useThreads } from "./threads";
+import { groupOf, groupThreads, noRepo, titleOf, useThreads } from "./threads";
 import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 
 /**
- * The open chat: a Project's coordinator chat, a thread (its id is its run's), or a new
- * thread in a sidebar group (`threads.ts`). With no group, it's the first repository's.
+ * The open chat: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
+ * thread (its id is its run's), or a new thread in a sidebar group (`threads.ts`). With no group,
+ * it's the first repository's.
  */
 export type Selection =
-  | { kind: "project"; projectId: string }
+  | { kind: "project"; projectId: string; agentId?: string }
   | { kind: "thread"; threadId: string }
   | { kind: "new"; groupId?: string };
 
@@ -71,11 +73,30 @@ export function App() {
       ? threads.state.projects.find((p) => p.id === selection.projectId)
       : undefined;
   if (selection.kind === "project" && !project) setSelection({ kind: "new" });
+  const agents = useProjectAgents(host.id, project?.id, connected);
+  // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
+  const agentId = selection.kind === "project" ? selection.agentId : undefined;
+  const agent = agents.runs.find((r) => r.id === agentId);
+  // Shrinks an expanded side panel, which hides the main pane the chat opens in.
+  const openAgent = (id?: string) => {
+    if (!project) return;
+    setSelection({ kind: "project", projectId: project.id, agentId: id });
+    setPanelExpanded(false);
+  };
 
-  // The Project or repository crumb wears its sidebar icon.
+  // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
+  // back to the coordinator.
   let crumbs: Crumb[];
   if (project) {
-    crumbs = [{ label: host.name }, { label: project.name, icon: <ProjectIcon /> }];
+    crumbs = [
+      { label: host.name },
+      {
+        label: project.name,
+        icon: <ProjectIcon />,
+        onClick: agentId ? () => openAgent() : undefined,
+      },
+    ];
+    if (agentId) crumbs.push({ label: agent ? titleOf(agent) : "Subagent", icon: <Workflow /> });
   } else {
     const repo = { label: group.name, icon: group.id === noRepo ? <House /> : <Folder /> };
     const page =
@@ -95,6 +116,13 @@ export function App() {
       setSelection({ kind: "new", groupId: groupOf(threads.state, thread) });
     return error;
   };
+
+  const offline =
+    connection?.status === "failed"
+      ? "Disconnected from wispd"
+      : connected
+        ? undefined
+        : "Connecting to wispd…";
 
   // Mod+B: sidebar. Mod+Alt+B: side panel. Mod+N: new thread. Mod+,: Settings.
   useEffect(() => {
@@ -225,13 +253,14 @@ export function App() {
                   setNotice(text ? { threadId, text } : undefined);
                   setSelection({ kind: "thread", threadId });
                 }}
-                disabledReason={
-                  connection?.status === "failed"
-                    ? "Disconnected from wispd"
-                    : connected
-                      ? undefined
-                      : "Connecting to wispd…"
-                }
+                disabledReason={offline}
+              />
+            ) : agentId ? (
+              <AgentChat
+                key={`${host.id}/${agentId}`}
+                hostId={host.id}
+                runId={agentId}
+                prompt={agent?.prompt}
               />
             ) : (
               project && (
@@ -255,6 +284,18 @@ export function App() {
         onExpandedChange={setPanelExpanded}
         leading={expanded && showSidebar}
         topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
+        agents={
+          project && (
+            <AgentsPanel
+              // Another Project's start box starts empty, with its own retry id.
+              key={`${host.id}/${project.id}`}
+              agents={agents}
+              openId={agentId}
+              onOpen={openAgent}
+              disabledReason={offline}
+            />
+          )
+        }
       />
     </div>
   );
