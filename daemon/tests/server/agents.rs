@@ -126,6 +126,8 @@ fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSendParams {
         run_id,
         turn_id,
         text: text.to_owned(),
+        effort: None,
+        permission: None,
     }
 }
 

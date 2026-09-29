@@ -37,7 +37,7 @@ export function IconButton({
 // Every dropdown shares these: a quiet trigger, and a panel 8px under it with the same radius.
 /** A menu's trigger: sized to its content, highlighted on hover. */
 export const menuButton =
-  "flex items-center gap-1.5 rounded-lg py-1 pr-1.5 pl-2 text-[13.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0";
+  "flex items-center gap-1.5 rounded-lg py-1 pr-1.5 pl-2 text-[13.5px] text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
 
 /**
  * A menu's panel, a native popover: under its trigger and lined up with its left edge (`end`:

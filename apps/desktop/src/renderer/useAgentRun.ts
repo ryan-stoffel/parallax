@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import type { AgentSendParams } from "../protocol/generated/protocol";
 import { applyEvents, emptyTranscript, type Transcript } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
@@ -9,11 +10,17 @@ export interface AgentRunView {
   error?: string;
   /** Texts this window sent, by turn id, since the log holds only the id (RYA-92). */
   sent: ReadonlyMap<string, string>;
-  /** Sends a message as the run's next turn. Resolves to an error message, or undefined. */
-  send: (text: string) => Promise<string | undefined>;
+  /**
+   * Sends a message as the run's next turn, with a new effort or access for the run if given.
+   * Resolves to an error message, or undefined.
+   */
+  send: (text: string, options?: SendOptions) => Promise<string | undefined>;
   /** Stops the run. Resolves to an error message, or undefined. */
   cancel: () => Promise<string | undefined>;
 }
+
+/** A new effort or access for a run, sent only to a wispd that advertises `sendOptions`. */
+export type SendOptions = Pick<AgentSendParams, "effort" | "permission">;
 
 /**
  * One run's transcript, kept live: pages through `agent/events`, then subscribes
@@ -85,10 +92,15 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
   }, [hostId, runId, connected]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, options?: SendOptions) => {
       const turnId = uuidv7();
       setSent((prev) => new Map(prev).set(turnId, text));
-      const answer = await window.wisp.request(hostId, "agent/send", { runId, turnId, text });
+      const answer = await window.wisp.request(hostId, "agent/send", {
+        runId,
+        turnId,
+        text,
+        ...options,
+      });
       if (!("error" in answer)) return undefined;
       setSent((prev) => {
         const next = new Map(prev);

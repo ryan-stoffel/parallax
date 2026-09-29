@@ -326,16 +326,43 @@ test("while disconnected, nothing loads and the composer says why", async () => 
   expect(send.disabled).toBe(true);
 });
 
-test("an open thread's composer shows what its run started with, without choices", () => {
-  render(<Composer started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }} />);
-  expect(document.body.textContent).toContain("Claude Opus 5.5");
-  expect(document.body.textContent).toContain("Extra high");
-  expect(document.body.textContent).toContain("Plan");
-  expect(document.querySelector("[popovertarget]")).toBeNull();
+test("an open thread's composer is New Thread's, with its model fixed and only changes sent", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const open = (optionsDisabled?: string) =>
+    render(
+      <Composer
+        backend="claude"
+        started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
+        onSend={onSend}
+        optionsDisabled={optionsDisabled}
+      />,
+    );
+  // happy-dom doesn't disable a disabled fieldset's controls, which browsers do.
+  const off = (label: string) =>
+    document.querySelector(`[aria-label="${label}"]`)!.closest("fieldset")!.disabled;
+
+  open("Effort and access can change once it finishes");
+  expect(off("Model: Claude Opus 5.5")).toBe(true);
+  expect(off("Reasoning effort: Extra high")).toBe(true);
+  expect(off("Access: Plan")).toBe(true);
   act(() => unmount());
-  // Nothing recorded means the CLI's defaults.
-  render(<Composer started={{}} />);
-  expect(document.body.textContent).toContain("Default modelDefault effortEdit");
+
+  open();
+  expect(off("Model: Claude Opus 5.5")).toBe(true);
+  expect(off("Reasoning effort: Extra high")).toBe(false);
+  expect(off("Access: Plan")).toBe(false);
+  const set = (el: HTMLInputElement | HTMLTextAreaElement, value: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  set(document.querySelector<HTMLInputElement>('input[type="range"]')!, "0");
+  set(document.querySelector("textarea")!, "Just the summary");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
+  );
+  // Access is still the run's, so only the effort goes.
+  expect(onSend).toHaveBeenCalledWith("Just the summary", { effort: "low" });
 });
 
 test("while a run goes, only the last work row shows what the agent is doing", () => {

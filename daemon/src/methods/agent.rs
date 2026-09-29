@@ -161,6 +161,8 @@ pub(crate) async fn request_changes(
             run_id,
             turn_id,
             text,
+            effort: None,
+            permission: None,
         },
     )
     .await

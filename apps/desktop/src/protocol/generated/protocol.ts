@@ -1140,11 +1140,12 @@ export type AgentRun = {
 	 */
 	model?: string,
 	/**
-	 * The effort it was started with. Absent means the CLI's default.
+	 * Its effort: what it was started with, or what `agent/send` last changed it to. Absent
+	 * means the CLI's default.
 	 */
 	effort?: AgentEffort,
 	/**
-	 * The permission it was started with. Absent means `edit`.
+	 * Its permission, as `effort`. Absent means `edit`.
 	 */
 	permission?: AgentPermission,
 	/**
@@ -1207,6 +1208,16 @@ export type AgentSendParams = {
 	 * The message.
 	 */
 	text: string,
+	/**
+	 * A new effort for the run and every later resume (RYA-161), sent only to a wispd that
+	 * advertises `sendOptions`. Absent, or the run's own, changes nothing. A different one fails
+	 * with `unsupportedOption` while the run's CLI is running, since it can't change mid-process.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * A new permission, as `effort`.
+	 */
+	permission?: AgentPermission,
 };
 
 /**
@@ -1612,7 +1623,7 @@ export type AgentToolStatus = "ok" | "error" | "denied";
 
 /**
  * The part of a run that changes while it runs, as `agent.updated` reports it. The rest of
- * [`AgentRun`], including its prompt, never changes after `agent.started`.
+ * [`AgentRun`], including its prompt and model, never changes after `agent.started`.
  */
 export type AgentRunState = {
 	/**
@@ -1635,6 +1646,14 @@ export type AgentRunState = {
 	 * Its latest commit, once wispd made one.
 	 */
 	diff?: DiffSummary,
+	/**
+	 * Its effort, which `agent/send` can change (RYA-161). Absent means the CLI's default.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
+	 */
+	permission?: AgentPermission,
 	/**
 	 * When it changed, in RFC 3339 UTC.
 	 */
