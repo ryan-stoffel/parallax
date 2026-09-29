@@ -7,6 +7,7 @@ import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
 import type { SubscriptionMessage, WispBridge } from "../preload/bridge";
 import type { AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
 import { AgentChat, RowView, RunTab } from "./AgentChat";
+import { Composer } from "./Composer";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -326,4 +327,16 @@ test("while disconnected, nothing loads and the composer says why", async () => 
   expect(document.querySelector("textarea")!.placeholder).toBe("Disconnected from wispd");
   const send = document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
   expect(send.disabled).toBe(true);
+});
+
+test("an open thread's composer shows what its run started with, without choices", () => {
+  render(<Composer started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }} />);
+  expect(document.body.textContent).toContain("Claude Opus 5.5");
+  expect(document.body.textContent).toContain("Extra high");
+  expect(document.body.textContent).toContain("Plan");
+  expect(document.querySelector("[popovertarget]")).toBeNull();
+  act(() => unmount());
+  // Nothing recorded means the CLI's defaults.
+  render(<Composer started={{}} />);
+  expect(document.body.textContent).toContain("Default modelDefault effortEdit");
 });
