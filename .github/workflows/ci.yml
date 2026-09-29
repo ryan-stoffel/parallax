@@ -62,6 +62,39 @@ jobs:
         with:
           key: ${{ runner.os }}-${{ runner.arch }}
 
+      # What Claude Code's worker sandbox needs on Linux (0013): bubblewrap, socat, and the AppArmor
+      # profile from Claude Code's docs that lets bwrap make user namespaces. Plus a pinned Claude
+      # Code, which the sandbox tests run against a fake API (RYA-20).
+      - name: Install the Linux worker sandbox
+        if: runner.os == 'Linux'
+        env:
+          CLAUDE_VERSION: 2.1.283
+          CLAUDE_SHA256_X64: 1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2
+          CLAUDE_SHA256_ARM64: 346d294f0103d6fc0de11ac953579b5c62dfa90698a4cfc486b6f927c615e697
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          if [ "$RUNNER_ARCH" = ARM64 ]; then
+            platform=linux-arm64 sha256=$CLAUDE_SHA256_ARM64
+          else
+            platform=linux-x64 sha256=$CLAUDE_SHA256_X64
+          fi
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/claude" \
+            "https://downloads.claude.ai/claude-code-releases/$CLAUDE_VERSION/$platform/claude"
+          echo "$sha256  $RUNNER_TEMP/claude" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/claude"
+          echo "WISP_SANDBOX_CLAUDE=$RUNNER_TEMP/claude" >> "$GITHUB_ENV"
+
       - name: Lint, type-check, build, and test
         run: scripts/ci/check-rust
 

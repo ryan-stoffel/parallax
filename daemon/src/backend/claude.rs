@@ -17,19 +17,22 @@
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
 //!   - `--tools` names exactly [`WORKER_TOOLS`]. `Bash` is among them because Claude Code's own
-//!     Seatbelt sandbox holds every command: writes only to the working directories and the
-//!     session temp folder, no reads of the sandbox's `unreadable` paths, and no writes to git
-//!     metadata. `failIfUnavailable` and `allowUnsandboxedCommands: false` keep a command from
-//!     ever running outside it. Commands, `WebFetch`, and `WebSearch` reach any host but
-//!     [`WORKER_DENIED_HOSTS`] (Ryan, #137), so the unreadable paths are what keep secrets in.
+//!     sandbox (Seatbelt on macOS, bubblewrap on Linux) holds every command: writes only to the
+//!     working directories and the session temp folder, no reads of the sandbox's `unreadable`
+//!     paths, and no writes to git metadata. `failIfUnavailable` and
+//!     `allowUnsandboxedCommands: false` keep a command from ever running outside it. Commands,
+//!     `WebFetch`, and `WebSearch` reach any host but [`WORKER_DENIED_HOSTS`] (Ryan, #137), so
+//!     the unreadable paths are what keep secrets in.
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
 //!
 //!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`], or
 //!   a Claude Code older than [`WORKER_MIN_VERSION`], fails with
 //!   [`FailureKind::PolicyViolation`].
 //!
-//!   Only macOS runs workers. Linux's sandbox needs checks wispd doesn't make yet (0023,
-//!   RYA-20), so there the backend reports no `worker_sandbox` and refuses a workspace-write run.
+//!   Only macOS and Linux run workers, with the same settings. On Linux,
+//!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
+//!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). Elsewhere the
+//!   backend reports no `worker_sandbox` and refuses a workspace-write run.
 //!
 //! # Messages go on stdin
 //!
@@ -54,7 +57,9 @@
 //! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it wispd
 //! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
 //! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
-//! it.
+//! it. A no-write run sets [`SCRUB_ENV`], so the CLI's own subprocesses don't get the key. A
+//! worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed commands only: the
+//! helpers Claude Code runs outside the sandbox, such as `git` and `rg`, still inherit it.
 //!
 //! A project's `env` block can still set variables for a worker (0004, #134), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
@@ -67,6 +72,8 @@
 //! `SIGINT`, closes stdin so the CLI exits after the interrupted turn, and kills the process
 //! group if it is still running after the grace period.
 
+#[cfg(target_os = "linux")]
+pub mod linux_sandbox;
 mod stream;
 #[cfg(all(test, unix))]
 mod tests;
@@ -196,12 +203,20 @@ pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// string as [`API_KEY_ENV`] (0004's table), but the two names are checked independently.
 pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
 
-/// Variables every run gets: keep credentials out of the agent's own subprocesses (0004
-/// Consequences), and report a startup failure as a `result` instead of on stderr alone.
-const ALWAYS_SET: &[(&str, &str)] = &[
-    ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
-    ("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1"),
-];
+/// Variables every run gets: report a startup failure as a `result` instead of on stderr alone.
+const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")];
+
+/// Set to `1` for a no-write run, to keep credentials out of the CLI's own subprocesses, such as
+/// wispd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
+/// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
+/// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
+/// from a worker's commands instead.
+const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
+
+/// Variables a worker's commands never see (0013): an API key account's key, and the token for
+/// Claude Code's own messaging socket. `sandbox.credentials` unsets them for each sandboxed
+/// command, as [`SCRUB_ENV`] would.
+pub const WORKER_WITHHELD_VARS: &[&str] = &[API_KEY_ENV, "CLAUDE_CODE_MESSAGING_TOKEN"];
 
 /// A [`Backend`] that runs Claude Code.
 #[derive(Clone, Debug)]
@@ -293,17 +308,17 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     Ok(args)
 }
 
-/// The `--settings` a worker runs with (0013): hooks off; Bash and the web tools allowed; and Claude Code's
-/// Bash sandbox on, with no way around it, `sandbox`'s paths, and every host but
-/// [`WORKER_DENIED_HOSTS`]. `WebFetch(domain:*)` is what opens the network: the sandbox takes its
-/// allowlist from `WebFetch` allow rules, and a bare `*` matches every host. The denied hosts are
-/// `WebFetch` deny rules as well as `deniedDomains`, because the sandbox's list binds only
-/// commands, and a deny rule beats the `*` allow for the tool. Bash needs an explicit allow rule
-/// because the subprocess environment scrub flag makes Claude Code use default permission mode.
-/// `cwd`, the writable folders, and
-/// the read-only git paths stay readable inside an unreadable path, such as wispd's data folder,
-/// which holds the worktree, the context folder, and a normal thread's scratch repository
-/// (#110). A second account's `config_home` is unreadable too.
+/// The `--settings` a worker runs with (0013): hooks off; Bash and the web tools allowed; and
+/// Claude Code's Bash sandbox on, with no way around it, `sandbox`'s paths, every host but
+/// [`WORKER_DENIED_HOSTS`], and no [`WORKER_WITHHELD_VARS`]. `WebFetch(domain:*)` is what opens
+/// the network: the sandbox takes its allowlist from `WebFetch` allow rules, and a bare `*`
+/// matches every host. The denied hosts are `WebFetch` deny rules as well as `deniedDomains`,
+/// because the sandbox's list binds only commands, and a deny rule beats the `*` allow for the
+/// tool. Bash is an allow rule as well, not only `autoAllowBashIfSandboxed`, so it stays allowed
+/// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders, and the read-only git paths stay
+/// readable inside an unreadable path, such as wispd's data folder, which holds the worktree, the
+/// context folder, and a normal thread's scratch repository (#110). A second account's
+/// `config_home` is unreadable too.
 #[must_use]
 pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<&Path>) -> Value {
     let unreadable = strings(
@@ -322,6 +337,10 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
     let denied_fetches: Vec<String> = WORKER_DENIED_HOSTS
         .iter()
         .map(|host| format!("WebFetch(domain:{host})"))
+        .collect();
+    let withheld: Vec<Value> = WORKER_WITHHELD_VARS
+        .iter()
+        .map(|name| serde_json::json!({"name": name, "mode": "deny"}))
         .collect();
     serde_json::json!({
         "disableAllHooks": true,
@@ -345,6 +364,7 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
                 "allowRead": readable,
                 "denyWrite": read_only,
             },
+            "credentials": {"envVars": withheld},
         },
     })
 }
@@ -420,7 +440,7 @@ impl Backend for ClaudeBackend {
             coordinator: true,
             reports_cost: true,
             rate_limits: true,
-            worker_sandbox: cfg!(target_os = "macos"),
+            worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
         }
     }
 
@@ -440,6 +460,9 @@ impl Backend for ClaudeBackend {
         let expected_key_source = apply_credential(&request.account.credential, &mut spec)?;
         for (name, value) in ALWAYS_SET {
             spec.inject.set(name, value);
+        }
+        if request.policy == ToolPolicy::NoWrite {
+            spec.inject.set(SCRUB_ENV, "1");
         }
         spec.stdin = StdinMode::Piped;
         spec.limits = self.limits;

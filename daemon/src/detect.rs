@@ -92,17 +92,23 @@ impl CliDetector {
         *self.cache.lock().await = Some((Instant::now(), probe.clone()));
         probe
     }
+
+    /// The launcher probes run through, whose environment agents' CLIs start from.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn launcher(&self) -> &Launcher {
+        &self.launcher
+    }
 }
 
 /// The result of running a status command to completion within the timeout.
-struct Ran {
+pub(crate) struct Ran {
     stdout: String,
-    stderr_tail: String,
-    exit_code: Option<i32>,
+    pub(crate) stderr_tail: String,
+    pub(crate) exit_code: Option<i32>,
 }
 
 /// Resolves `program` on `launcher`'s effective `PATH` (#96), without running it.
-fn resolve(launcher: &Launcher, program: &str) -> Option<PathBuf> {
+pub(crate) fn resolve(launcher: &Launcher, program: &str) -> Option<PathBuf> {
     let spec = ProcessSpec::new(program, "/");
     let env = launcher.environment(&spec);
     find_program(program.as_ref(), env.get("PATH")).ok()
@@ -137,7 +143,7 @@ fn installed(cli: CliKind, path: &Path) -> DetectedCli {
 /// Runs `program args` in `/`, with `launcher`'s scrubbing, stdin closed, and no output beyond
 /// wispd's usual limits. Waits at most `timeout`; on a timeout, the process's group is killed
 /// (dropping it does that) and `Err` explains why.
-async fn run(
+pub(crate) async fn run(
     launcher: &Launcher,
     program: &str,
     args: &[&str],
