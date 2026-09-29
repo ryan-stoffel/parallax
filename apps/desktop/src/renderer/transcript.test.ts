@@ -2,7 +2,7 @@ import { expect, test } from "vite-plus/test";
 
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
 import type { AgentOutputItem, LoggedEvent, WispEvent } from "../protocol/generated/protocol";
-import { applyEvents, emptyTranscript, type Item } from "./transcript";
+import { applyEvents, emptyTranscript, groupWork, workedFor, type Item } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
 const runId = "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01";
@@ -117,7 +117,12 @@ test("deltas without a message id stream into one message that the full text rep
 
   const done = applyEvents(t, [output({ kind: "text", text: "Hello!" })], runId);
   expect(done.items).toHaveLength(2);
-  expect(done.items.at(-1)).toEqual({ kind: "assistant", key: streaming.key, text: "Hello!" });
+  expect(done.items.at(-1)).toEqual({
+    kind: "assistant",
+    key: streaming.key,
+    text: "Hello!",
+    at: "",
+  });
 });
 
 test("a turn's result that repeats its last message isn't shown twice", () => {
@@ -138,4 +143,24 @@ test("uuidv7 puts the time first and sets the version and variant", () => {
   const id = uuidv7(0x0190_1234_5678);
   expect(id).toMatch(/^01901234-5678-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(uuidv7()).not.toBe(uuidv7());
+});
+
+test("a turn's activity folds into one work row, leaving the closing answer out", () => {
+  const item = (kind: "reasoning" | "tool" | "assistant", n: number, time: string) =>
+    ({ kind, key: `k${n}`, text: "", callId: "", name: null, at: time }) as Item;
+  const rows = [
+    { kind: "user", key: "u", text: "go" } as Item,
+    item("reasoning", 1, "2026-01-01T00:00:00Z"),
+    item("tool", 2, "2026-01-01T00:00:20Z"),
+    item("assistant", 3, "2026-01-01T00:01:29Z"),
+  ];
+  const grouped = groupWork(rows);
+  expect(grouped.map((r) => r.kind)).toEqual(["user", "work", "assistant"]);
+  expect(grouped[1]).toMatchObject({ startedAt: rows[1]!.at, endedAt: rows[3]!.at });
+  // Narration alone isn't work.
+  expect(groupWork([rows[3]!]).map((r) => r.kind)).toEqual(["assistant"]);
+
+  expect(workedFor("2026-01-01T00:00:00Z", "2026-01-01T00:01:29Z")).toBe("Worked for 1m 29s");
+  expect(workedFor("2026-01-01T00:00:00Z", "2026-01-01T00:00:12Z")).toBe("Worked for 12s");
+  expect(workedFor("", "")).toBe("Worked briefly");
 });

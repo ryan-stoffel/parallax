@@ -13,8 +13,10 @@ import type {
   LoggedEvent,
 } from "../protocol/generated/protocol";
 
-/** One row of the transcript. `key` is stable across re-renders. */
-export type Item =
+/** One row of the transcript. `key` is stable across re-renders; `at` is when it began. */
+export type Item = ItemBody & { at?: string };
+
+type ItemBody =
   /** `text` is null for a follow-up logged by a wispd from before it recorded the text. */
   | { kind: "user"; key: string; text: string | null; turnId?: string }
   /** `partial` while it is still arriving as `textDelta`s. */
@@ -55,11 +57,12 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
   const items = [...t.items];
   const push = (item: Item) => items.push(item);
 
-  for (const { seq: at, event } of events) {
+  for (const { seq: at, time, event } of events) {
     if (at <= seq) continue;
     seq = at;
     if (!("runId" in event) || event.runId !== runId) continue;
     const key = (i: number | string = 0) => `${at}:${i}`;
+    const before = items.length;
 
     switch (event.kind) {
       case "agent.started":
@@ -86,6 +89,7 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
         event.items.forEach((item, i) => applyOutput(items, item, key(i)));
         break;
     }
+    for (let i = before; i < items.length; i++) items[i] = { ...items[i]!, at: time };
   }
   return { run, items, seq };
 }
@@ -126,7 +130,7 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     case "text": {
       const found = target(item.messageId);
       const message = { kind: "assistant", text: item.text, messageId: item.messageId } as const;
-      if (found) items[found.i] = { ...message, key: found.item.key };
+      if (found) items[found.i] = { ...message, key: found.item.key, at: found.item.at };
       else items.push({ ...message, key });
       break;
     }
@@ -170,6 +174,61 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     }
     // sessionStarted and usage aren't shown.
   }
+}
+
+/** A turn's agent activity, collapsed to one row: thinking, tool calls, checklists, and narration. */
+export interface Work {
+  kind: "work";
+  key: string;
+  items: Item[];
+  /** When the work began, and when what followed it (the answer, or the end) did. */
+  startedAt?: string;
+  endedAt?: string;
+}
+
+/**
+ * Folds each run of agent activity into one `Work` row. The agent's closing messages, after its
+ * last tool call or thought, stay out as the turn's answer. Other rows (user, notice, end, and
+ * whatever the caller adds) split runs and pass through.
+ */
+export function groupWork<R extends { kind: string; at?: string }>(
+  rows: readonly (Item | R)[],
+): (Item | R | Work)[] {
+  const out: (Item | R | Work)[] = [];
+  let run: Item[] = [];
+  const flush = (next?: { at?: string }) => {
+    const last = run.findLastIndex((i) => i.kind !== "assistant");
+    if (last >= 0) {
+      const items = run.slice(0, last + 1);
+      out.push({
+        kind: "work",
+        key: `work:${items[0]!.key}`,
+        items,
+        startedAt: items[0]!.at,
+        endedAt: (run[last + 1] ?? next)?.at ?? items[last]!.at,
+      });
+    }
+    out.push(...run.slice(last + 1));
+    run = [];
+  };
+  for (const row of rows) {
+    if (["assistant", "reasoning", "tool", "todo"].includes(row.kind)) run.push(row as Item);
+    else {
+      flush(row);
+      out.push(row);
+    }
+  }
+  flush();
+  return out;
+}
+
+/** "Worked for 1m 29s", or "Worked briefly" when the times are missing or under a second. */
+export function workedFor(startedAt?: string, endedAt?: string): string {
+  const s = Math.round((Date.parse(endedAt ?? "") - Date.parse(startedAt ?? "")) / 1000);
+  if (!(s >= 1)) return "Worked briefly";
+  const [h, m] = [Math.floor(s / 3600), Math.floor((s % 3600) / 60)];
+  const parts = h ? [`${h}h`, `${m}m`] : m ? [`${m}m`, `${s % 60}s`] : [`${s}s`];
+  return `Worked for ${parts.join(" ")}`;
 }
 
 /** An account for people: a subscription is named by its backend, a key account by its id. */
