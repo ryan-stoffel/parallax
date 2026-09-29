@@ -10,6 +10,12 @@ import { App } from "./App";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The row menu's buttons are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
+// happy-dom lays nothing out. A tall transcript with small rows renders every row.
+Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+  get(this: HTMLElement) {
+    return this.getAttribute("role") === "log" ? 10_000 : 20;
+  },
+});
 
 const wisp: Repo = {
   id: "r-wisp",
@@ -144,6 +150,23 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
   // The thread opens, and its row is in the sidebar under its repository.
   expect(crumbs()).toEqual(["This Mac", "other", "Tidy the README"]);
   expect(threadRow("Tidy the README")?.getAttribute("aria-current")).toBe("page");
+});
+
+test("Send shows the prompt at once while wispd starts the thread, and a failure puts it back", async () => {
+  let answer: (response: RpcResponse<unknown>) => void = () => {};
+  answers["thread/start"] = () =>
+    new Promise((resolve) => (answer = resolve)) as unknown as RpcResponse<unknown>;
+  await renderApp();
+  await send("Tidy the README");
+  expect(heading()).toBeUndefined();
+  expect(document.querySelector('[role="log"]')?.textContent).toBe("Tidy the README");
+  expect(document.querySelector("textarea")!.placeholder).toBe("Starting thread…");
+
+  await act(async () => answer({ error: { code: -32000, message: "wispd is busy" } }));
+  await settle();
+  expect(heading()).toBe("What should we build in wisp?");
+  expect(document.querySelector("textarea")!.value).toBe("Tidy the README");
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe("wispd is busy");
 });
 
 test("No Repo starts a thread with no repo", async () => {
