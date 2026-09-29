@@ -24,8 +24,9 @@
 //! **Limit:** a process that leaves the group, with `setsid` or `setpgid`, escapes all of this.
 //! macOS has no way to follow it short of scanning the process table, and wispd doesn't use
 //! Linux's ways (a child subreaper or a cgroup). It is reparented to launchd or init, which reaps
-//! it; wispd never waits for it. It can't hold a run open either: stdout gets
-//! [`OutputLimits::drain_after_exit`] after the CLI exits, and stdin writes stop at a timeout.
+//! it; wispd never waits for it. It can't hold a run open either: once the CLI exits, stdout is
+//! cut off after [`OutputLimits::drain_after_exit`], though never before what the CLI itself wrote
+//! has been read, and stdin writes stop at a timeout.
 //! Daemons an agent starts on purpose, such as a dev server, therefore outlive the run.
 
 use std::collections::BTreeMap;
@@ -91,8 +92,20 @@ pub const DEFAULT_MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 pub const DEFAULT_STDERR_TAIL_BYTES: usize = 64 * 1024;
 
 /// How long stdout may stay open after the process exited, by default. Something the CLI started
-/// can hold the pipe open; this keeps it from delaying the end of the run.
+/// can hold the pipe open; this keeps it from delaying the end of the run. A stdout that is still
+/// busy is cut only once the drain has passed and more than `READ_BEFORE_CUT` has been read since
+/// the exit.
 pub const DEFAULT_DRAIN_AFTER_EXIT: Duration = Duration::from_millis(500);
+
+/// How much stdout [`LineReader`] asks for at a time.
+const READ_CHUNK: usize = 64 * 1024;
+
+/// How much stdout is read after the exit before the drain may cut off a stdout that is still
+/// ready. What the process wrote before it exited is unread then: at most a pipe's worth (64 KiB
+/// by default on macOS and Linux, and up to Linux's default `pipe-max-size`, 1 MiB, if the
+/// process grows its pipe; Windows adds tokio's 64 KiB read-ahead) plus one read. A slow reader
+/// can take longer than the drain to get through it (RYA-140).
+const READ_BEFORE_CUT: u64 = 1024 * 1024 + READ_CHUNK as u64;
 
 // Sets the working directory, which the safe posix_spawn wrappers can't, then runs the program.
 #[cfg(unix)]
@@ -209,7 +222,8 @@ pub struct OutputLimits {
     pub max_line_bytes: usize,
     /// How much of the end of stderr to keep.
     pub stderr_tail_bytes: usize,
-    /// How long stdout may stay open after the process exited.
+    /// How long stdout may stay open after the process exited. A stdout that is still busy is cut
+    /// only once this has passed and more than `READ_BEFORE_CUT` has been read since the exit.
     pub drain_after_exit: Duration,
 }
 
@@ -899,8 +913,9 @@ struct StderrTail {
     tail: Arc<Mutex<Tail>>,
 }
 
-/// Forwards stdout's lines until it ends, or until `drain` after the process exited, then sends
-/// the exit last.
+/// Forwards stdout's lines until it ends, then sends the exit last. After the process exits,
+/// stdout is cut off once `drain` has passed and it either has nothing ready or has had more than
+/// [`READ_BEFORE_CUT`] read since the exit.
 async fn pump<R: AsyncRead + Unpin>(
     mut lines: LineReader<R>,
     mut exited: oneshot::Receiver<ExitInfo>,
@@ -914,6 +929,8 @@ async fn pump<R: AsyncRead + Unpin>(
     };
     let mut exit = None;
     let mut deadline = None;
+    // How much stdout had been read when the exit was seen.
+    let mut read_at_exit = 0;
     loop {
         tokio::select! {
             biased;
@@ -924,14 +941,18 @@ async fn pump<R: AsyncRead + Unpin>(
                     }
                     // Something outside the process group may keep writing after the exit. With
                     // `biased`, a stdout that is always ready would keep the other arms from
-                    // ever seeing the exit or the deadline, so check both here too.
+                    // ever seeing the exit or the deadline, so check both here too, once the
+                    // process's own output has been read.
                     if exit.is_none()
                         && let Ok(info) = exited.try_recv()
                     {
                         exit = Some(info);
                         deadline = Some(Instant::now() + drain);
+                        read_at_exit = lines.read;
                     }
-                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    if deadline.is_some_and(|deadline| Instant::now() >= deadline)
+                        && lines.read - read_at_exit > READ_BEFORE_CUT
+                    {
                         break;
                     }
                 }
@@ -940,6 +961,7 @@ async fn pump<R: AsyncRead + Unpin>(
             info = &mut exited, if exit.is_none() => {
                 exit = Some(info.unwrap_or(unknown));
                 deadline = Some(Instant::now() + drain);
+                read_at_exit = lines.read;
             }
             () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => break,
         }
@@ -1015,6 +1037,8 @@ struct LineReader<R> {
     scanned: usize,
     skipping: Option<usize>,
     eof: bool,
+    /// Bytes read from `inner` so far.
+    read: u64,
 }
 
 impl<R: AsyncRead + Unpin> LineReader<R> {
@@ -1022,12 +1046,13 @@ impl<R: AsyncRead + Unpin> LineReader<R> {
         Self {
             inner,
             max,
-            chunk: vec![0; 64 * 1024],
+            chunk: vec![0; READ_CHUNK],
             buf: Vec::new(),
             start: 0,
             scanned: 0,
             skipping: None,
             eof: false,
+            read: 0,
         }
     }
 
@@ -1090,6 +1115,7 @@ impl<R: AsyncRead + Unpin> LineReader<R> {
             if n == 0 {
                 self.eof = true;
             }
+            self.read += n as u64;
             self.buf.extend_from_slice(&self.chunk[..n]);
         }
     }
@@ -1470,10 +1496,11 @@ mod tests {
         assert_eq!(reader.next().await.unwrap(), None);
     }
 
-    #[tokio::test]
-    async fn stdout_that_never_ends_cannot_hold_the_exit_back() {
-        // Like a process outside the group that keeps writing after the CLI exited.
-        let endless = LineReader::new(tokio::io::repeat(b'\n'), 1024);
+    /// Pumps `stdout` for a process that has already exited, with a drain of `drain`.
+    fn pump_exited(
+        stdout: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+        drain: Duration,
+    ) -> tokio::sync::mpsc::Receiver<Output> {
         let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
         exit_tx
             .send(ExitInfo {
@@ -1485,15 +1512,43 @@ mod tests {
             task: tokio::spawn(async {}),
             tail: std::sync::Arc::new(std::sync::Mutex::new(Tail::new(16))),
         };
-        let (output_tx, mut output) = tokio::sync::mpsc::channel(64);
+        let (output_tx, output) = tokio::sync::mpsc::channel(64);
         tokio::spawn(super::pump(
-            endless,
+            LineReader::new(stdout, 1024),
             exit_rx,
             stderr,
             output_tx,
-            Duration::from_millis(100),
+            drain,
         ));
-        let exit = tokio::time::timeout(Duration::from_secs(5), async {
+        output
+    }
+
+    #[tokio::test]
+    async fn the_drain_never_drops_what_the_process_wrote() {
+        // More than one read's worth, left unread at the exit, in a pipe something else keeps
+        // open. However long the reader takes, all of it comes through (RYA-140).
+        let (mut writer, reader) = tokio::io::duplex(1024 * 1024);
+        let written: Vec<String> = (0..20_000).map(|n| format!("line {n}")).collect();
+        let text = format!("{}\n", written.join("\n"));
+        tokio::io::AsyncWriteExt::write_all(&mut writer, text.as_bytes())
+            .await
+            .unwrap();
+        let mut output = pump_exited(reader, Duration::ZERO);
+        let mut lines = Vec::new();
+        while let Some(Output::Line(line)) = output.recv().await {
+            lines.push(String::from_utf8(line).unwrap());
+        }
+        assert_eq!(lines, written);
+        drop(writer);
+    }
+
+    #[tokio::test]
+    async fn stdout_that_never_ends_cannot_hold_the_exit_back() {
+        // Like a process outside the group that keeps writing after the CLI exited. It is cut
+        // off after `READ_BEFORE_CUT`, a million empty lines, which takes a second in a debug
+        // build; the timeout only catches it never ending.
+        let mut output = pump_exited(tokio::io::repeat(b'\n'), Duration::from_millis(100));
+        let exit = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if let Some(Output::Exited(exit)) = output.recv().await {
                     return exit;
