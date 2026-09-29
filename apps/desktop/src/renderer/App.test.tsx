@@ -63,3 +63,31 @@ test("a Project is one row that opens its chat, with no thread level", () => {
   expect(crumbs.map((li) => li.textContent)).toEqual(["This Mac", "ember"]);
   expect(project.getAttribute("aria-current")).toBe("page");
 });
+
+test("the footer's Usage opens Providers, and Update shows its answer", async () => {
+  const button = (name: string) =>
+    document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
+  renderApp();
+  // Update is only for `pnpm dev`.
+  expect(button("Update from develop")).toBeNull();
+
+  act(() => button("Usage")!.click());
+  expect(document.querySelector('[aria-current="page"]')?.textContent).toBe("Providers");
+  act(() => unmount());
+
+  let answer: (text: string) => void = () => {};
+  Object.assign(bridge, {
+    updatable: true,
+    update: () => new Promise<string>((resolve) => (answer = resolve)),
+  });
+  renderApp();
+  act(() => button("Update from develop")!.click());
+  // The connection's status line shares the footer.
+  const status = () =>
+    [...document.querySelectorAll('#sidebar [role="status"]')].map((s) => s.textContent);
+  expect(status()).toContain("Updating…");
+  expect(button("Update from develop")!.disabled).toBe(true);
+  await act(async () => answer("Up to date"));
+  expect(status()).toContain("Up to date");
+  expect(button("Update from develop")!.disabled).toBe(false);
+});
