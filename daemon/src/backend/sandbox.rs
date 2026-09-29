@@ -142,6 +142,40 @@ pub fn unreadable_in_home() -> impl Iterator<Item = &'static str> {
         .copied()
 }
 
+/// Paths outside the home folder that no worker may read on this OS (0013). On Linux that is the
+/// user's runtime folder, which can hold credentials: rootless Podman, Buildah, and Skopeo keep
+/// registry logins in its `containers/auth.json` (RYA-107).
+#[cfg(target_os = "linux")]
+fn unreadable_outside_home() -> Vec<PathBuf> {
+    runtime_dirs(
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        rustix::process::getuid().as_raw(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unreadable_outside_home() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// The runtime folders to deny: wispd's `$XDG_RUNTIME_DIR` when it is set and not empty, and
+/// `/run/user/<uid>`, where logind makes it and where tools look when the variable is unset, as it
+/// is for a worker (0014). A value that isn't absolute UTF-8 is kept as it is, so
+/// [`worker_sandbox`] refuses the run instead of leaving the folder readable.
+#[cfg(target_os = "linux")]
+fn runtime_dirs(xdg_runtime_dir: Option<std::ffi::OsString>, uid: u32) -> Vec<PathBuf> {
+    let standard = PathBuf::from(format!("/run/user/{uid}"));
+    let mut dirs: Vec<PathBuf> = xdg_runtime_dir
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
+    if !dirs.contains(&standard) {
+        dirs.push(standard);
+    }
+    dirs
+}
+
 /// Characters the vendors' sandbox settings read as wildcards in a path. A path holding one would
 /// become a pattern that may not match itself, and a deny rule would fail open.
 const GLOB_CHARACTERS: &[char] = &['*', '?', '[', ']'];
@@ -157,8 +191,9 @@ pub struct WorkerSandbox {
     /// `.git` file and the repository's git folder it points into. wispd commits for every
     /// backend (0013).
     pub read_only: Vec<PathBuf>,
-    /// Paths commands may not read: [`unreadable_in_home`] and wispd's data folder. The cwd and
-    /// [`WorkerSandbox::writable`] stay readable where they fall inside one of these.
+    /// Paths commands may not read: [`unreadable_in_home`], on Linux the user's runtime folder, and
+    /// wispd's data folder. The cwd and [`WorkerSandbox::writable`] stay readable where they fall
+    /// inside one of these.
     pub unreadable: Vec<PathBuf>,
 }
 
@@ -178,6 +213,7 @@ impl WorkerSandbox {
     ) -> Self {
         let unreadable = unreadable_in_home()
             .map(|path| home.join(path))
+            .chain(unreadable_outside_home())
             .chain([data_dir.to_owned()])
             .collect();
         Self {
@@ -248,7 +284,7 @@ fn usable(path: &Path) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{WorkerSandbox, unreadable_in_home};
+    use super::{WorkerSandbox, unreadable_in_home, unreadable_outside_home};
 
     #[test]
     fn a_worktree_sandbox_writes_the_context_and_hides_secrets_and_the_data_folder() {
@@ -278,7 +314,39 @@ mod tests {
                 .unreadable
                 .contains(&"/Users/u/Library/Application Support/wisp".into())
         );
-        assert_eq!(sandbox.unreadable.len(), unreadable_in_home().count() + 1);
+        assert_eq!(
+            sandbox.unreadable.len(),
+            unreadable_in_home().count() + unreadable_outside_home().len() + 1
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_runtime_folder_is_denied_wherever_it_is_and_an_unusable_one_refused() {
+        use std::os::unix::ffi::OsStringExt;
+
+        use super::{runtime_dirs, usable};
+
+        let standard = Path::new("/run/user/1000");
+        assert_eq!(runtime_dirs(None, 1000), [standard]);
+        assert_eq!(runtime_dirs(Some("".into()), 1000), [standard]);
+        assert_eq!(
+            runtime_dirs(Some("/run/user/1000/".into()), 1000),
+            [standard]
+        );
+        assert_eq!(
+            runtime_dirs(Some("/tmp/run".into()), 1000),
+            [Path::new("/tmp/run"), standard]
+        );
+        // Kept, so that `worker_sandbox` refuses the run.
+        for unusable in [
+            "run".into(),
+            std::ffi::OsString::from_vec(b"/run/\xff".to_vec()),
+        ] {
+            let dirs = runtime_dirs(Some(unusable), 1000);
+            assert!(!usable(&dirs[0]), "{dirs:?}");
+            assert_eq!(dirs[1], standard);
+        }
     }
 
     /// Paths in the home folder this OS's denylist must hold, on top of every OS's.
