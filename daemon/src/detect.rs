@@ -17,6 +17,7 @@
 //! thing: one request, one response, then the process is killed. A real Codex backend (#122)
 //! will want a proper client with its own handshake; this is not it.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -51,6 +52,8 @@ pub struct CliDetector {
     launcher: Launcher,
     timeout: Duration,
     cache: Mutex<Option<(Instant, Probe)>>,
+    /// CLIs probed alone by [`Self::get`], while the full `cache` is empty or stale.
+    single: Mutex<HashMap<CliKind, (Instant, DetectedCli)>>,
 }
 
 impl CliDetector {
@@ -62,6 +65,7 @@ impl CliDetector {
             launcher,
             timeout,
             cache: Mutex::new(None),
+            single: Mutex::new(HashMap::new()),
         }
     }
 
@@ -76,6 +80,44 @@ impl CliDetector {
             }
         }
         self.refresh().await
+    }
+
+    /// One CLI's status, from the cache while it's fresh, else a probe of that CLI alone. For a run
+    /// that starts on `cli`: [`Self::list`] would also wait on the other two, and Cursor's status
+    /// command takes seconds.
+    pub async fn get(&self, cli: CliKind) -> DetectedCli {
+        if let Some((checked, probe)) = &*self.cache.lock().await
+            && checked.elapsed() < CACHE_TTL
+            && let Some(found) = probe.clis.iter().find(|found| found.cli == cli)
+        {
+            return found.clone();
+        }
+        if let Some((checked, found)) = self.single.lock().await.get(&cli)
+            && checked.elapsed() < CACHE_TTL
+        {
+            return found.clone();
+        }
+        self.refresh_one(cli).await
+    }
+
+    /// A fresh probe of `cli` alone. Updates what [`Self::get`] and [`Self::list`] serve for it.
+    pub async fn refresh_one(&self, cli: CliKind) -> DetectedCli {
+        let found = match cli {
+            CliKind::Claude => probe_claude(&self.launcher, self.timeout).await,
+            CliKind::Codex => probe_codex(&self.launcher, self.timeout).await,
+            CliKind::Cursor => probe_cursor(&self.launcher, self.timeout).await,
+            CliKind::Unknown => return not_installed(cli),
+        };
+        if let Some((_, probe)) = &mut *self.cache.lock().await
+            && let Some(entry) = probe.clis.iter_mut().find(|entry| entry.cli == cli)
+        {
+            entry.clone_from(&found);
+        }
+        self.single
+            .lock()
+            .await
+            .insert(cli, (Instant::now(), found.clone()));
+        found
     }
 
     /// A fresh probe of every CLI. Updates the cache [`Self::list`] reads from.
