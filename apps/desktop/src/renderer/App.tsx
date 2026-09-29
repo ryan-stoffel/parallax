@@ -14,7 +14,7 @@ import { projectIcons, SettingsNav, settingsNames, Sidebar, ThreadList } from ".
 import { useThemePreference } from "./theme";
 import { groupOf, groupThreads, noRepo, useThreads } from "./threads";
 import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
-import { UsagePage } from "./Usage";
+import { UsagePage } from "./UsagePage";
 
 /**
  * The main pane: a Project's coordinator chat, a thread (its id is its run's), a new thread in
@@ -72,8 +72,7 @@ export function App() {
   const project =
     selection.kind === "project" ? projects.find((p) => p.id === selection.projectId)! : undefined;
   let crumbs: Crumb[];
-  if (selection.kind === "usage") crumbs = [{ label: "Usage" }, { label: "All hosts" }];
-  else if (project) {
+  if (project) {
     const { Icon, color } = projectIcons[project.icon];
     crumbs = [{ label: host.name }, { label: project.name, icon: <Icon className={color} /> }];
   } else {
@@ -180,13 +179,15 @@ export function App() {
               onThemeChange={setTheme}
             />
           </>
+        ) : selection.kind === "usage" ? (
+          <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
         ) : (
           <>
             <TopBar className={topBarInset}>
               {showSidebar}
               <Breadcrumb items={crumbs} />
               {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
-              {chat && !panelOpen && (
+              {!panelOpen && (
                 <div className="ml-auto">
                   <IconButton
                     label="Show side panel"
@@ -200,9 +201,7 @@ export function App() {
                 </div>
               )}
             </TopBar>
-            {selection.kind === "usage" ? (
-              <UsagePage hosts={hosts} />
-            ) : selection.kind === "thread" ? (
+            {selection.kind === "thread" ? (
               // Keyed, so another run starts from an empty transcript.
               <AgentChat
                 key={`${host.id}/${selection.threadId}`}

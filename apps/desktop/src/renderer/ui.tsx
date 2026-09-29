@@ -38,6 +38,46 @@ export function IconButton({
 export const segment =
   "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
 
+/**
+ * A row of radios drawn as one segmented control, named by `label`. Disabled, it stays in place
+ * but can't be changed.
+ */
+export function Segmented<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  options: { value: T; name: string }[];
+  value: T;
+  onChange: (value: T) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <fieldset
+      aria-label={label}
+      disabled={disabled}
+      className="flex shrink-0 gap-0.5 rounded-lg border border-border p-0.5 disabled:pointer-events-none disabled:opacity-50"
+    >
+      {options.map((o) => (
+        <label key={o.value} className={segment}>
+          <input
+            type="radio"
+            name={label}
+            value={o.value}
+            checked={value === o.value}
+            onChange={() => onChange(o.value)}
+            className="sr-only"
+          />
+          {o.name}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 // Every dropdown shares these: a quiet trigger, and a panel 8px under it with the same radius.
 /** A menu's trigger: sized to its content, highlighted on hover. */
 export const menuButton =

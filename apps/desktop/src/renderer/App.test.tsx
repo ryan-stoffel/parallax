@@ -78,10 +78,14 @@ test("the footer's Usage opens the Usage page, and Update shows its answer", asy
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
   expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
-  expect(document.querySelector("main h1")?.textContent).toBe("Usage");
   // The sidebar stays on the thread list, and the side panel is a chat's.
   expect(button("Usage")).not.toBeNull();
   expect(document.querySelector('main [aria-controls="side-panel"]')).toBeNull();
+  // The range stays in the top bar on Limits, but can't be changed there.
+  const range = document.querySelector<HTMLFieldSetElement>('main [aria-label="Usage range"]')!;
+  expect(range.disabled).toBe(false);
+  act(() => document.querySelector<HTMLInputElement>('main input[value="limits"]')!.click());
+  expect(range.disabled).toBe(true);
   act(() => unmount());
 
   let answer: (text: string) => void = () => {};

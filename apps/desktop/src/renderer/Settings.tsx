@@ -13,8 +13,8 @@ import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
-import { segment } from "./ui";
-import { UsageLines, useUsage, type Period } from "./Usage";
+import { segment, Segmented } from "./ui";
+import { periods, UsageLines, useUsage, type Period } from "./Usage";
 import { uuidv7 } from "./uuidv7";
 
 // xterm.js is large, so it loads when a sign-in first opens.
@@ -246,11 +246,6 @@ function accountsError(error: RpcError): string {
   return describeError(error);
 }
 
-const periods: { value: Period; name: string }[] = [
-  { value: "today", name: "Today" },
-  { value: "week", name: "This week" },
-];
-
 /** Settings > Providers: each host's vendor CLIs and API keys, with each one's usage. */
 function ProvidersSettings() {
   const hosts = useHosts();
@@ -261,24 +256,7 @@ function ProvidersSettings() {
     <>
       <div className="mb-1.5 flex items-center justify-between gap-4">
         <h1 className="text-xl font-semibold">Providers</h1>
-        <fieldset
-          aria-label="Usage period"
-          className="flex gap-0.5 rounded-lg border border-border p-0.5"
-        >
-          {periods.map((p) => (
-            <label key={p.value} className={segment}>
-              <input
-                type="radio"
-                name="usage-period"
-                value={p.value}
-                checked={period === p.value}
-                onChange={() => setPeriod(p.value)}
-                className="sr-only"
-              />
-              {p.name}
-            </label>
-          ))}
-        </fieldset>
+        <Segmented label="Usage period" options={periods} value={period} onChange={setPeriod} />
       </div>
       <p className="mb-6 text-[13px] text-muted-foreground">
         The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
@@ -323,7 +301,7 @@ function HostAccounts({
   const [checking, setChecking] = useState(false);
   const [adding, setAdding] = useState(false);
   // By account id: a subscription's is its CLI's kind, the backend that runs it (0012).
-  const usage = useUsage(host.id, connected);
+  const { usage } = useUsage(host.id, connected);
   const usageOf = (id: string) => usage && <UsageLines usage={usage.get(id)} period={period} />;
 
   // `accounts/list` may answer from wispd's cache; `accounts/refresh` always probes again. Keys
