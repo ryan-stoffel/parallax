@@ -87,17 +87,24 @@ body {
   }
 }
 
-/* The top row doubles as the macOS title bar (main.ts uses hiddenInset).
-   Windows and Linux keep a native frame, so nothing there drags. */
-[data-platform="darwin"] .titlebar {
+/* The top row doubles as the title bar on macOS and Windows (frame.ts hides
+   theirs). Linux keeps a native frame, so nothing there drags. */
+:is([data-platform="darwin"], [data-platform="win32"]) .titlebar {
   -webkit-app-region: drag;
 }
-[data-platform="darwin"] .titlebar :is(button, a, input, select, textarea, [role="tab"]) {
+:is([data-platform="darwin"], [data-platform="win32"])
+  .titlebar
+  :is(button, a, input, select, textarea, [role="tab"]) {
   -webkit-app-region: no-drag;
 }
 /* Room for the traffic lights, where a row starts at the window's left edge. */
 [data-platform="darwin"] .traffic-light-inset {
   padding-left: 80px;
+}
+/* Room for Windows' window buttons, where a row ends at the window's right
+   edge: whatever the title bar area leaves free on the right. */
+[data-platform="win32"] .window-controls-inset {
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 
 /* Agent messages rendered from Markdown (AgentChat.tsx), with no typography

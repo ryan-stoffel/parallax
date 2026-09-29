@@ -114,7 +114,13 @@ export function App() {
       <PanelLeft />
     </IconButton>
   );
-  const topBarInset = sidebarOpen ? "" : "traffic-light-inset";
+  const sidePanelOpen = panelOpen && !settings;
+  // The main pane's top row meets the traffic lights without the sidebar, and
+  // Windows' window buttons without the side panel.
+  const topBarInset = [
+    sidebarOpen ? "" : "traffic-light-inset",
+    sidePanelOpen ? "" : "window-controls-inset",
+  ].join(" ");
 
   return (
     <div className="flex h-full">
@@ -223,7 +229,7 @@ export function App() {
         )}
       </main>
 
-      <SidePanel open={panelOpen && !settings} />
+      <SidePanel open={sidePanelOpen} />
     </div>
   );
 }

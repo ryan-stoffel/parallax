@@ -48,7 +48,7 @@ export function SidePanel({ open }: { open: boolean }) {
       hidden={!open}
       className="flex w-[22rem] shrink-0 flex-col border-l border-border bg-sidebar"
     >
-      <TopBar className="border-b border-border px-2">
+      <TopBar className="window-controls-inset border-b border-border px-2">
         <div role="tablist" aria-label="Side panel" onKeyDown={onKeyDown} className="flex gap-0.5">
           {tabs.map((tab, i) => (
             <button
