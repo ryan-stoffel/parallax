@@ -208,10 +208,7 @@ test("loads every page, subscribes after the last seq, and appends live events",
   expect(document.body.textContent).toContain("Worktree"); // the footer's tab
 
   emit({ type: "event", event: { subscription: "s", ...logged[2]! } });
-  // The agent's work folds under one dropdown until it's opened.
-  expect(transcriptText()).not.toContain("I'll add a README and note the build steps");
-  const work = document.querySelector<HTMLButtonElement>('[role="log"] button[aria-expanded]')!;
-  act(() => work.click());
+  // The agent's messages are never folded into a work dropdown.
   expect(transcriptText()).toContain("I'll add a README and note the build steps");
 
   // A resync reloads from the start.
