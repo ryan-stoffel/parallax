@@ -151,9 +151,22 @@ pub(crate) async fn run(
 ) -> Result<Ran, String> {
     let mut spec = ProcessSpec::new(program, "/");
     spec.args = args.iter().map(|arg| (*arg).into()).collect();
-    let mut process = match launcher.spawn(&spec) {
+    run_spec(launcher, &spec, timeout).await
+}
+
+/// [`run`] for a caller that builds its own `spec`, such as one that scrubs more of the
+/// environment.
+pub(crate) async fn run_spec(
+    launcher: &Launcher,
+    spec: &ProcessSpec,
+    timeout: Duration,
+) -> Result<Ran, String> {
+    let mut process = match launcher.spawn(spec) {
         Ok(process) => process,
-        Err(error) => return Err(format!("could not start {program}: {error}")),
+        Err(error) => {
+            let program = spec.program.to_string_lossy();
+            return Err(format!("could not start {program}: {error}"));
+        }
     };
     let mut stdout = String::new();
     let mut exit_code = None;

@@ -95,6 +95,9 @@ impl Fake {
             ("FAKE_CLAUDE_FIXTURE", fixture_path.display().to_string()),
             ("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22".into()),
             ("KEPT", "yes".into()),
+            // Set in wispd's own environment: a no-write run sets it anyway, and a worker must
+            // not get it (RYA-112).
+            ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "0".into()),
         ]
         .into_iter()
         .chain(
@@ -436,6 +439,7 @@ fn assert_worker_invocation(fake: &Fake) {
     }
     fake.assert_no_inherited_credentials(Some("/tmp/claude-second-account"));
     // On Linux the flag would widen the sandbox's writes (RYA-20); `credentials` stands in for it.
+    // The fake's base environment sets it, so this also checks that a worker drops it (RYA-112).
     let env = fake.env();
     assert!(
         !env.iter()

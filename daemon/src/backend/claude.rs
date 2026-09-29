@@ -32,8 +32,9 @@
 //!   Only macOS and Linux run workers, with the same settings. On Linux,
 //!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
 //!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). It also
-//!   refuses a worker whose managed settings turn on [`SCRUB_ENV`] (RYA-112). Elsewhere the
-//!   backend reports no `worker_sandbox` and refuses a workspace-write run.
+//!   refuses a worker when Claude Code runs with [`SCRUB_ENV`] on, which managed settings can
+//!   set (RYA-112). Elsewhere the backend reports no `worker_sandbox` and refuses a
+//!   workspace-write run.
 //!
 //! # Messages go on stdin
 //!
@@ -58,9 +59,10 @@
 //! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it wispd
 //! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
 //! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
-//! it. A no-write run sets [`SCRUB_ENV`], so the CLI's own subprocesses don't get the key. A
-//! worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed commands only: the
-//! helpers Claude Code runs outside the sandbox, such as `git` and `rg`, still inherit it.
+//! it. No run inherits [`SCRUB_ENV`]; a no-write run sets it, so the CLI's own subprocesses
+//! don't get the key. A worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed
+//! commands only: the helpers Claude Code runs outside the sandbox, such as `git` and `rg`, still
+//! inherit it.
 //!
 //! A project's `env` block can still set variables for a worker (0004, #134), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
@@ -178,7 +180,8 @@ pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
 /// The oldest Claude Code that has every flag and setting a worker relies on: `--restricted`
 /// arrived in 2.1.248, the last of them (0013). An older CLI rejects the unknown flag, and a
 /// worker whose `system/init` reports an older version fails, but #156 also checks the detected
-/// version before it starts one, for a clearer error.
+/// version before it starts one, for a clearer error. Linux workers need 2.1.275 or later:
+/// `linux_sandbox::check_host` reads a `sandbox status` field that arrived then (RYA-112).
 pub const WORKER_MIN_VERSION: &str = "2.1.248";
 
 /// Prefixes of inherited variables no run gets: Anthropic credentials, endpoints, profiles, and
@@ -187,9 +190,10 @@ pub const WORKER_MIN_VERSION: &str = "2.1.248";
 /// OAuth tokens (`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`).
 pub const SCRUBBED_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_OAUTH_"];
 
-/// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key, and the
-/// configuration folder, which [`apply_credential`] sets only to the account's own.
-pub const SCRUBBED_VARS: &[&str] = &["AWS_BEARER_TOKEN_BEDROCK", CONFIG_DIR_ENV];
+/// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key; the
+/// configuration folder, which [`apply_credential`] sets only to the account's own; and
+/// [`SCRUB_ENV`], which a no-write run sets itself and a worker must not get (RYA-112).
+pub const SCRUBBED_VARS: &[&str] = &["AWS_BEARER_TOKEN_BEDROCK", CONFIG_DIR_ENV, SCRUB_ENV];
 
 /// The variable that picks a second account's configuration folder.
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
@@ -211,8 +215,9 @@ const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1
 /// wispd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
 /// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
 /// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
-/// from a worker's commands instead. Managed settings can still set it, and their `env` beats
-/// wispd's, so on Linux `linux_sandbox::check_host` refuses a worker when they do (RYA-112).
+/// from a worker's commands instead, and [`SCRUBBED_VARS`] keeps an inherited one out. Managed
+/// settings can still set it, and their `env` beats wispd's, so on Linux
+/// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (RYA-112).
 const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 
 /// Variables a worker's commands never see (0013): an API key account's key, and the token for
