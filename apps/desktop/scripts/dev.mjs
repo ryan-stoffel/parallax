@@ -84,9 +84,10 @@ let base;
  * config, need a manual restart of `pnpm dev`.
  */
 async function update() {
+  // Another branch is someone's work, which Update leaves alone. A detached HEAD fast-forwards.
   const branch = (await run("git", ["branch", "--show-current"])).out;
-  if (branch !== "develop")
-    return `Update follows develop, and this checkout is on ${branch || "a detached HEAD"}.`;
+  if (branch && branch !== "develop")
+    return `Update follows develop, and this checkout is on ${branch}.`;
   base ??= (await run("git", ["rev-parse", "HEAD"])).out;
   const pull = await run("git", ["pull", "--ff-only", "origin", "develop"]);
   if (pull.code !== 0) return `git pull failed: ${errorLine(pull.out)}`;
