@@ -59,8 +59,13 @@ pub fn create(data_dir: &DataDir) -> io::Result<RunTemp> {
     let mut made = Err(io::ErrorKind::NotFound.into());
     for root in data_dir.run_temp_roots() {
         made = make_private(&root).and_then(|()| new_folder(&root));
+        // Linux's worker sandbox mounts `/` read-only, macOS's refuses: try the next root.
         match &made {
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+                ) => {}
             _ => break,
         }
     }

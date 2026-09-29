@@ -329,7 +329,7 @@ fn assert_worker_invocation(fake: &Fake) {
     expected.extend([
         format!(r#""{DATA}"="deny""#),
         r#""/tmp/wisp-1a2b3c4d"="deny""#.to_owned(),
-        format!(r#""/tmp/claude-{uid}"="deny""#),
+        format!(r#""/private/tmp/claude-{uid}"="deny""#),
         r#""/tmp/codex-second-account"="deny""#.to_owned(),
         format!(r#""{cwd_text}/.git"="read""#),
         r#""/Users/u/src/app/.git"="read""#.to_owned(),

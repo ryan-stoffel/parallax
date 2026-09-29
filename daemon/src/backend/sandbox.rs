@@ -236,8 +236,7 @@ impl WorkerSandbox {
     /// --git-common-dir`), and whose project's shared context folder is `context`. `home` is the
     /// user's home folder, and `data_dir` wispd's data folder, which holds both the worktree and
     /// the context folder. `temp` is the run's temp folder from [`super::run_temp::create`],
-    /// `<tmp>/wisp-<hash>/<run>`, so its parent holds every other run's and `<tmp>` holds Claude
-    /// Code's shared one.
+    /// `<root>/<run>`, so its parent holds every other run's.
     #[must_use]
     pub fn for_worktree(
         home: &Path,
@@ -248,11 +247,13 @@ impl WorkerSandbox {
         temp: &Path,
     ) -> Self {
         let runs = temp.parent().unwrap_or(temp);
+        // Claude Code's shared folder is in `/tmp` whichever root `temp` is in.
         #[cfg(unix)]
-        let claude_shared = runs.parent().map(|tmp| {
+        let claude_shared = {
+            let shared = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
             let uid = rustix::process::getuid().as_raw();
-            tmp.join(format!("claude-{uid}"))
-        });
+            Some(shared.join(format!("claude-{uid}")))
+        };
         #[cfg(not(unix))]
         let claude_shared = None;
         let unreadable = unreadable_in_home()
@@ -355,7 +356,8 @@ mod tests {
             Path::new("/Users/u/Library/Application Support/wisp/worktrees/app-1a2b/run"),
             Path::new("/Users/u/src/app/.git"),
             Path::new("/Users/u/Library/Application Support/wisp/context/p"),
-            Path::new("/private/tmp/wisp-625c7f6d/Ab12Cd"),
+            // A fallback root in `$TMPDIR`, as when `/tmp` can't be written.
+            Path::new("/private/var/folders/x/T/wisp-625c7f6d/Ab12Cd"),
         );
         assert_eq!(
             sandbox.writable,
@@ -380,13 +382,17 @@ mod tests {
         assert!(
             sandbox
                 .unreadable
-                .contains(&"/private/tmp/wisp-625c7f6d".into())
+                .contains(&"/private/var/folders/x/T/wisp-625c7f6d".into())
         );
         #[cfg(unix)]
         {
             let uid = rustix::process::getuid().as_raw();
-            let shared = format!("/private/tmp/claude-{uid}");
-            assert!(sandbox.unreadable.contains(&shared.into()));
+            let tmp = std::fs::canonicalize("/tmp").unwrap();
+            assert!(
+                sandbox
+                    .unreadable
+                    .contains(&tmp.join(format!("claude-{uid}")))
+            );
         }
         assert_eq!(
             sandbox.unreadable.len(),
@@ -395,7 +401,10 @@ mod tests {
                 + 2
                 + usize::from(cfg!(unix))
         );
-        assert_eq!(sandbox.temp, Path::new("/private/tmp/wisp-625c7f6d/Ab12Cd"));
+        assert_eq!(
+            sandbox.temp,
+            Path::new("/private/var/folders/x/T/wisp-625c7f6d/Ab12Cd")
+        );
     }
 
     #[cfg(target_os = "linux")]
