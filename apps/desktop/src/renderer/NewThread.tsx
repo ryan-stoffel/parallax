@@ -124,7 +124,8 @@ export function NewThread({
   disabledReason,
 }: NewThreadProps) {
   // ponytail: read as the screen opens, since wispd has no event for a changed default. One
-  // changed elsewhere shows once New Thread opens again; until then wispd refuses what it can't run.
+  // changed elsewhere shows once New Thread opens again. Until then wispd refuses an effort or
+  // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
   const [backend, setBackend] = useState<string>();
   useEffect(() => {
     if (!runOptions) return;

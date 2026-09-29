@@ -33,7 +33,7 @@ export const models: Model[] = [
 /**
  * The wispd backends a thread can run on, by name (`AccountChoice`'s `backend`): whose models
  * they take, and the permissions they map. Every backend maps every effort (RYA-97, RYA-38).
- * ponytail: mirrors wispd's `Backend::permissions`, which it doesn't report yet (RYA-99).
+ * ponytail: mirrors wispd's `Backend::permissions`, which it doesn't report yet (RYA-154).
  */
 export const backends: Record<string, { provider: Provider; permissions: AgentPermission[] }> = {
   claude: { provider: "Claude", permissions: ["edit", "plan"] },
