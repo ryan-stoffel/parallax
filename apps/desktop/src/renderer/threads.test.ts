@@ -25,10 +25,20 @@ const quickChat = messages.find((m) => m.id === 5 && m.result)!.result as Thread
 const apply = (state: ThreadsState, ...list: WispEvent[]) =>
   list.reduce((s, event) => threadsReducer(s, { type: "event", event }), state);
 
-test("repo.added and thread.started add entries, and repeating one changes nothing", () => {
-  const state = apply(emptyThreads, wispAdded, threadStarted, wispAdded, threadStarted);
+test("repo.added, thread.started, and project.created add entries, and repeating one changes nothing", () => {
+  const project = {
+    id: "p-1",
+    name: "wisp",
+    repoPath: "/src/wisp",
+    createdAt: "2026-09-26T12:00:00Z",
+    updatedAt: "2026-09-26T12:00:00Z",
+  };
+  const created: WispEvent = { kind: "project.created", project };
+  const state = apply(emptyThreads, wispAdded, threadStarted, created);
+  expect(apply(state, wispAdded, threadStarted, created)).toEqual(state);
   expect(state.repos.map((r) => r.name)).toEqual(["wisp"]);
   expect(state.threads.map((t) => t.id)).toEqual([started.thread.id]);
+  expect(state.projects).toEqual([project]);
 });
 
 test("thread.updated replaces the thread, and thread.deleted removes it", () => {
@@ -41,6 +51,7 @@ test("a thread's title is the first line of its run's prompt", () => {
   const run = { ...started.run, prompt: "  Fix the flaky attach test.\nIt fails on CI.  " };
   const state = threadsReducer(emptyThreads, {
     type: "snapshot",
+    projects: [],
     repos: [],
     threads: [started.thread],
     runs: [run],
@@ -52,6 +63,7 @@ test("runs are kept by id: a later list replaces the runs it has, and keeps the 
   const other = { ...started.run, id: "other" };
   let state = threadsReducer(emptyThreads, {
     type: "snapshot",
+    projects: [],
     repos: [],
     threads: [started.thread],
     runs: [started.run, other],
