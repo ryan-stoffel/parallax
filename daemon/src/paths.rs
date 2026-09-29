@@ -307,8 +307,10 @@ fn fits(path: &Path) -> bool {
 /// a path is too long for the Win32 limit.
 ///
 /// `None` if only a verbatim path can name it, since removing the prefix would name another file:
-/// a volume with no drive letter (`\\?\Volume{...}`), a device (`\\.\`), or a component that ends
-/// in a dot or a space, is `.` or `..`, or is a reserved device name such as `CON` or `NUL.txt`.
+/// a volume with no drive letter (`\\?\Volume{...}`), a device (`\\.\`), a drive's volume itself
+/// (`\\?\C:`, not its root folder `\\?\C:\`), a UNC path with no share, or a component that ends
+/// in a dot or a space, is `.` or `..`, holds a `/` or `:`, or is a reserved device name such as
+/// `CON` or `NUL.txt`.
 #[must_use]
 pub fn without_verbatim_prefix(path: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
@@ -333,7 +335,14 @@ fn windows_plain(path: &Path) -> Option<PathBuf> {
     let mut plain = match prefix.kind() {
         Prefix::Disk(_) | Prefix::UNC(..) => return Some(path.to_owned()),
         Prefix::Verbatim(_) | Prefix::DeviceNS(_) => return None,
+        // `\\?\C:` is the volume, and `C:\` its root folder.
+        Prefix::VerbatimDisk(_) if path.as_os_str().len() == prefix.as_os_str().len() => {
+            return None;
+        }
         Prefix::VerbatimDisk(letter) => PathBuf::from(format!("{}:\\", char::from(letter))),
+        Prefix::VerbatimUNC(server, share) if server.is_empty() || share.is_empty() => {
+            return None;
+        }
         Prefix::VerbatimUNC(server, share) => {
             let mut root = OsString::from(r"\\");
             root.push(server);
@@ -362,16 +371,18 @@ const RESERVED_NAMES: &[&str] = &[
 ];
 
 /// Whether a path without the verbatim prefix still names the file called `name`: Win32 drops a
-/// trailing dot or space, and turns a reserved name into a device. A name that isn't Unicode is
-/// left to the caller's own check.
+/// trailing dot or space, reads `/` as a separator and `D:` as a drive, and turns a reserved name
+/// into a device. A name that isn't Unicode is checked with its unpaired surrogates replaced,
+/// which keeps every character these rules look at.
 #[cfg(windows)]
 fn plain_name(name: &OsStr) -> bool {
-    let Some(name) = name.to_str() else {
-        return true;
-    };
-    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    let name = name.to_string_lossy();
+    let stem = name
+        .split_once('.')
+        .map_or(name.as_ref(), |(stem, _)| stem)
+        .trim_end_matches(' ');
     !name.ends_with(['.', ' '])
-        && !name.contains('/')
+        && !name.contains(['/', ':'])
         && !RESERVED_NAMES
             .iter()
             .any(|reserved| stem.eq_ignore_ascii_case(reserved))
@@ -539,6 +550,15 @@ mod tests {
             r"\\?\C:\Lpt1\x",
             r"\\?\C:\com¹",
             r"\\?\UNC\server\share\aux",
+            // `PathBuf::push` reads `a:` as a drive and drops what came before it
+            r"\\?\C:\x\a:b",
+            r"\\?\C:\x\D:",
+            // Win32 reads `CON:` as the console
+            r"\\?\C:\x\CON:s",
+            // The volume, not its root folder
+            r"\\?\C:",
+            r"\\?\UNC\server",
+            r"\\?\UNC\server\",
         ] {
             assert_eq!(
                 without_verbatim_prefix(Path::new(verbatim)),
@@ -554,6 +574,32 @@ mod tests {
         ] {
             assert!(without_verbatim_prefix(Path::new(fine)).is_some(), "{fine}");
         }
+    }
+
+    /// A name that isn't Unicode, here with an unpaired surrogate, gets the same checks.
+    #[cfg(windows)]
+    #[test]
+    fn a_name_that_isnt_unicode_is_checked_too() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        use std::path::PathBuf;
+
+        use super::without_verbatim_prefix;
+
+        let with_surrogate = |prefix: &str, suffix: &str| {
+            let mut wide: Vec<u16> = prefix.encode_utf16().collect();
+            wide.push(0xD800);
+            wide.extend(suffix.encode_utf16());
+            PathBuf::from(OsString::from_wide(&wide))
+        };
+        for suffix in [".", " ", ":s", "/x"] {
+            let path = with_surrogate(r"\\?\C:\x\a", suffix);
+            assert_eq!(without_verbatim_prefix(&path), None, "{}", path.display());
+        }
+        assert_eq!(
+            without_verbatim_prefix(&with_surrogate(r"\\?\C:\x\a", "b")),
+            Some(with_surrogate(r"C:\x\a", "b"))
+        );
     }
 
     #[cfg(windows)]
