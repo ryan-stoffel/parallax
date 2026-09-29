@@ -7,6 +7,7 @@ import {
   CircleDashed,
   CircleX,
   Copy,
+  FolderGit2,
   GitBranch,
   Info,
   LoaderCircle,
@@ -28,7 +29,7 @@ import remarkGfm from "remark-gfm";
 import type { AgentRun, JsonValue } from "../protocol/generated/protocol";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
-import { accountLabel, failureText, isRunning, statusLabel, type Item } from "./transcript";
+import { failureText, isRunning, type Item } from "./transcript";
 import { useAgentRun } from "./useAgentRun";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
@@ -521,21 +522,13 @@ function CodeBlock({ children }: { children: ReactNode }) {
   );
 }
 
-/** An open run in the composer's tab: its status and account, then its worktree branch. */
+/** An open run in the composer's tab: that it runs in a worktree, and the worktree's branch. */
 export function RunTab({ run }: { run: AgentRun }) {
-  const dot = isRunning(run.status)
-    ? "bg-emerald-500 animate-pulse"
-    : run.status === "failed"
-      ? "bg-danger"
-      : "bg-faint-foreground/50";
   return (
     <>
-      <span className="flex min-w-0 items-center gap-4 px-2 py-1 text-[13.5px] text-muted-foreground">
-        <span className="flex shrink-0 items-center gap-2">
-          <span aria-hidden className={`size-1.5 rounded-full ${dot}`} />
-          {statusLabel(run.status)}
-        </span>
-        <span className="truncate">{accountLabel(run.accountId)}</span>
+      <span className={tabItem}>
+        <FolderGit2 aria-hidden />
+        Worktree
       </span>
       {run.branch && (
         <span className={tabItem} title="Worktree branch">

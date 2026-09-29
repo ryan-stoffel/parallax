@@ -2019,6 +2019,13 @@ export type ThreadStartParams = {
 	 * How the agent may act inside its sandbox, as `agent/start` takes it.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * Names the worktree's branch `wisp/<branchSlug>`: lowercase letters, digits, and hyphens,
+	 * no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
+	 * the run's short id after it. Absent names it `wisp/<short run id>`. Not part of what makes
+	 * a retry with the same run id conflict.
+	 */
+	branchSlug?: string,
 };
 
 /**

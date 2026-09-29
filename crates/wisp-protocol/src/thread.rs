@@ -130,6 +130,13 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// Names the worktree's branch `wisp/<branchSlug>`: lowercase letters, digits, and hyphens,
+    /// no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
+    /// the run's short id after it. Absent names it `wisp/<short run id>`. Not part of what makes
+    /// a retry with the same run id conflict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch_slug: Option<String>,
 }
 
 /// Result of `thread/start`.

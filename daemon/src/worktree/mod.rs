@@ -19,7 +19,8 @@
 //!
 //! A worktree lives at `<data dir>/worktrees/<repo slug>/<run id>`, where `<repo slug>` is the
 //! repo's directory name plus a short hash of its canonical path (so two repos named the same
-//! thing never collide, and the folder stays readable). Its branch is `wisp/<short run id>`,
+//! thing never collide, and the folder stays readable). Its branch is `wisp/<short run id>`
+//! (or `wisp/<slug>` for a named one, see [`WorktreeManager::create_named`]),
 //! `<short run id>` being the first 8 hex digits of the SHA-256 of the run id — the same
 //! short-hash idea [`crate::paths::DataDir`] uses for its socket fallback, and collision-free in
 //! the way a prefix of the run id's own (time-ordered) `UUIDv7` bytes would not be.
@@ -476,6 +477,23 @@ impl WorktreeManager {
         run_id: RunId,
         base: Option<&str>,
     ) -> Result<CreatedWorktree, WorktreeError> {
+        self.create_named(repo_path, run_id, base, None).await
+    }
+
+    /// [`WorktreeManager::create`] with the branch `wisp/<slug>` instead of `wisp/<short run id>`
+    /// when `slug` is given ([`valid_branch_slug`]). A branch that already has the name gets the
+    /// short run id after it.
+    ///
+    /// # Errors
+    ///
+    /// As [`WorktreeManager::create`], plus [`WorktreeError::GitFailed`] for an invalid `slug`.
+    pub async fn create_named(
+        &self,
+        repo_path: &Path,
+        run_id: RunId,
+        base: Option<&str>,
+        slug: Option<&str>,
+    ) -> Result<CreatedWorktree, WorktreeError> {
         let repo_root = self.repo_root(repo_path).await?;
         let _guard = self.lock_repo(&repo_root).await;
 
@@ -486,7 +504,30 @@ impl WorktreeManager {
             (self.resolve_commit(&repo_root, "HEAD").await?, dirty)
         };
 
-        let branch = format!("wisp/{}", short_hash(&run_id.to_string()));
+        let short = short_hash(&run_id.to_string());
+        let branch = match slug {
+            Some(slug) if valid_branch_slug(slug) => {
+                let named = format!("wisp/{slug}");
+                let taken = self
+                    .run_git(
+                        &repo_root,
+                        &[
+                            "rev-parse",
+                            "--verify",
+                            "--quiet",
+                            &format!("refs/heads/{named}"),
+                        ],
+                    )
+                    .await?
+                    .success();
+                if taken {
+                    format!("{named}-{short}")
+                } else {
+                    named
+                }
+            }
+            _ => format!("wisp/{short}"),
+        };
         let path = self
             .root
             .join(project_dir_name(&repo_root))
@@ -1158,6 +1199,18 @@ async fn collect(
 /// The first 8 hex digits of the SHA-256 of `text`. Used for both the short run id in a branch
 /// name and the repository hash in a worktree folder's name; a prefix of a `UUIDv7` would cluster
 /// collisions in time, since most of a `UUIDv7`'s own bits are a timestamp.
+/// Whether `slug` can follow `wisp/` in a branch name: 1 to 40 lowercase letters, digits, and
+/// hyphens, none leading or trailing.
+#[must_use]
+pub fn valid_branch_slug(slug: &str) -> bool {
+    (1..=40).contains(&slug.len())
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 fn short_hash(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     digest[..4].iter().fold(String::new(), |mut hex, byte| {

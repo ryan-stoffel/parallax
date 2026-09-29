@@ -148,6 +148,7 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
         model: None,
         effort: None,
         permission: None,
+        branch_slug: None,
     }
 }
 
@@ -721,6 +722,32 @@ async fn repo_entries_and_threads_refuse_what_they_cant_run() {
 /// RYA-97: a thread's model, effort, and permission reach its backend when it starts and when it
 /// resumes, come back on its run, and count for `thread/start`'s idempotency. What the backend
 /// can't honor is refused before anything is made.
+#[tokio::test]
+async fn a_thread_can_name_its_branch() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+
+    let started = client
+        .call::<ThreadStart>(ThreadStartParams {
+            branch_slug: Some("write-some-notes".to_owned()),
+            ..start_params(Some(repo.id), "Write some notes")
+        })
+        .await
+        .unwrap();
+    assert_eq!(started.run.branch.as_deref(), Some("wisp/write-some-notes"));
+
+    let refused = client
+        .call::<ThreadStart>(ThreadStartParams {
+            branch_slug: Some("../escape".to_owned()),
+            ..start_params(Some(repo.id), "Write more notes")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
+}
+
 #[tokio::test]
 async fn a_thread_keeps_its_model_effort_and_permission() {
     let seen = Arc::new(Mutex::new(Vec::new()));
