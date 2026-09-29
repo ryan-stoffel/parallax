@@ -1,0 +1,8 @@
+# Synthetic: a ChatGPT Plus account over its limit. The message is UsageLimitReachedError's
+# Display for Plus in codex-rs/protocol/src/error.rs at rust-v0.157.1, which exec reports as
+# turn.failed (event_processor_with_jsonl_output.rs). No real account was run into its limit.
+{"type":"thread.started","thread_id":"01a0eb10-5c3d-7e21-9f40-6a1b2c3d4e5f"}
+{"type":"turn.started"}
+{"type":"error","message":"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:00 PM."}
+{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:00 PM."}}
+@exit 1

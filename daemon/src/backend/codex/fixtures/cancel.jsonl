@@ -1,0 +1,8 @@
+# The start of a real run whose `sleep 60` was interrupted with SIGINT (codex-cli 0.157.1,
+# 2026-09-28): exec printed nothing more and exited 1. @trap-int stands in for its handler.
+{"type":"thread.started","thread_id":"01a0eafa-681c-7803-a6dd-3a0eedef2933"}
+{"type":"turn.started"}
+@trap-int
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll run `sleep 60` in the shell.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'sleep 60'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+@hang

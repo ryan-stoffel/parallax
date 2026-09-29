@@ -3,8 +3,13 @@
 # captured from the real CLI; see #124 for recorded transcripts.
 #
 # `codex app-server` reads one NDJSON request from stdin, replies with $FAKE_CLI_APP_SERVER_RESPONSE
-# (if set), then hangs like a real long-lived server until its group is killed. Anything else
-# behaves like `codex login status`: sleep, then stderr/stdout/exit from the FAKE_CLI_* variables.
+# (if set), then hangs like a real long-lived server until its group is killed. `codex --version`
+# prints the real CLI's banner. Anything else behaves like `codex login status`: sleep, then
+# stderr/stdout/exit from the FAKE_CLI_* variables.
+if [ "$1" = "--version" ]; then
+  echo "codex-cli 0.157.1"
+  exit 0
+fi
 if [ "$1" = "app-server" ]; then
   IFS= read -r _request
   if [ -n "${FAKE_CLI_APP_SERVER_SLEEP:-}" ]; then sleep "$FAKE_CLI_APP_SERVER_SLEEP"; fi

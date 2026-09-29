@@ -10,6 +10,7 @@ use wisp_protocol::{AccountId, CliKind, DetectedCli, ErrorKind, Provider};
 
 use crate::backend::Backend;
 use crate::backend::claude::{self, WORKER_MIN_VERSION, parse_version};
+use crate::backend::codex;
 use crate::backend::process::Environment;
 use crate::paths::without_verbatim_prefix;
 use crate::routing::KeyAccounts;
@@ -147,7 +148,8 @@ pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
     ErrorObject::wisp(ErrorKind::WorkerUnavailable, message)
 }
 
-/// What to do about a backend that can't sandbox a worker here.
+/// What to do about a backend that can't sandbox a worker here: only Claude Code's is checked
+/// on Linux (0013).
 #[cfg(not(windows))]
 const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 
@@ -169,32 +171,38 @@ pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     }
 }
 
-/// Refuses a Claude worker unless the detected Claude Code is at least [`WORKER_MIN_VERSION`],
-/// which has every flag the worker sandbox needs (0013).
-pub(super) fn check_claude(detected: Option<&DetectedCli>) -> Result<(), ErrorObject> {
+/// Refuses a worker unless the detected `cli` is at least its backend's oldest version with
+/// everything the worker sandbox needs (0013): Claude Code's [`WORKER_MIN_VERSION`], or Codex's
+/// [`codex::WORKER_MIN_VERSION`], below which Codex would ignore the sandbox's settings.
+pub(super) fn check_version(
+    cli: CliKind,
+    detected: Option<&DetectedCli>,
+) -> Result<(), ErrorObject> {
+    let (name, min) = match cli {
+        CliKind::Codex => ("Codex", codex::WORKER_MIN_VERSION),
+        _ => ("Claude Code", WORKER_MIN_VERSION),
+    };
     let Some(detected) = detected.filter(|detected| detected.installed) else {
         return Err(worker_unavailable(format!(
-            "Claude Code isn't installed on this host; install Claude Code {WORKER_MIN_VERSION} \
-             or later"
+            "{name} isn't installed on this host; install {name} {min} or later"
         )));
     };
     let Some(version) = detected.version.as_deref() else {
         return Err(worker_unavailable(format!(
-            "wispd could not read Claude Code's version, and a sandboxed worker needs \
-             {WORKER_MIN_VERSION} or later; update Claude Code"
+            "wispd could not read {name}'s version, and a sandboxed worker needs {min} or later; \
+             update {name}"
         )));
     };
     match parse_version(version) {
-        Some(found) if Some(found) >= parse_version(WORKER_MIN_VERSION) => Ok(()),
+        Some(found) if Some(found) >= parse_version(min) => Ok(()),
         _ => Err(worker_unavailable(format!(
-            "Claude Code {version} can't run a sandboxed worker; update Claude Code to \
-             {WORKER_MIN_VERSION} or later"
+            "{name} {version} can't run a sandboxed worker; update {name} to {min} or later"
         ))),
     }
 }
 
 /// Refuses a Claude worker unless Claude Code's sandbox works on this Linux host, seccomp filter
-/// included (0013), for the `claude` that `check_claude` accepted.
+/// included (0013), for the `claude` that `check_version` accepted.
 #[cfg(target_os = "linux")]
 pub(super) async fn check_linux_sandbox(
     detector: &crate::detect::CliDetector,
@@ -212,7 +220,11 @@ pub(super) async fn check_linux_sandbox(
 
 /// The detected CLI a backend runs, if wispd checks its version before starting a worker.
 pub(super) fn cli_of(backend: &dyn Backend) -> Option<CliKind> {
-    (backend.name() == claude::PROGRAM).then_some(CliKind::Claude)
+    match backend.name() {
+        claude::PROGRAM => Some(CliKind::Claude),
+        codex::PROGRAM => Some(CliKind::Codex),
+        _ => None,
+    }
 }
 
 /// Characters the vendors read as wildcards in a sandbox path (0013).
@@ -328,7 +340,7 @@ mod tests {
 
     #[cfg(unix)]
     use super::{allowlisted, with_extra_path};
-    use super::{check_claude, sandbox_path};
+    use super::{check_version, sandbox_path};
     use crate::backend::process::ALWAYS_SCRUBBED;
     #[cfg(unix)]
     use crate::backend::process::Environment;
@@ -358,25 +370,34 @@ mod tests {
     }
 
     #[test]
-    fn an_old_or_unknown_claude_is_refused_naming_both_versions() {
-        assert!(check_claude(Some(&claude(Some("2.1.248")))).is_ok());
-        assert!(check_claude(Some(&claude(Some("2.2.0")))).is_ok());
-        let old = check_claude(Some(&claude(Some("2.1.247")))).unwrap_err();
+    fn an_old_or_unknown_cli_is_refused_naming_both_versions() {
+        let check = |version| check_version(CliKind::Claude, Some(&claude(version)));
+        assert!(check(Some("2.1.248")).is_ok());
+        assert!(check(Some("2.2.0")).is_ok());
+        let old = check(Some("2.1.247")).unwrap_err();
         assert_eq!(old.wisp_data().unwrap().kind, ErrorKind::WorkerUnavailable);
         assert!(old.message.contains("2.1.247"), "{}", old.message);
         assert!(old.message.contains("2.1.248"), "{}", old.message);
         for missing in [None, Some(&claude(None)), Some(&claude(Some("latest")))] {
-            let error = check_claude(missing).unwrap_err();
+            let error = check_version(CliKind::Claude, missing).unwrap_err();
             assert!(error.message.contains("2.1.248"), "{}", error.message);
         }
         let mut absent = claude(None);
         absent.installed = false;
         assert!(
-            check_claude(Some(&absent))
+            check_version(CliKind::Claude, Some(&absent))
                 .unwrap_err()
                 .message
                 .contains("isn't installed")
         );
+
+        let mut codex = claude(Some("0.157.1"));
+        codex.cli = CliKind::Codex;
+        assert!(check_version(CliKind::Codex, Some(&codex)).is_ok());
+        codex.version = Some("0.156.1".into());
+        let old = check_version(CliKind::Codex, Some(&codex)).unwrap_err();
+        assert!(old.message.contains("Codex 0.156.1"), "{}", old.message);
+        assert!(old.message.contains("0.157.1"), "{}", old.message);
     }
 
     #[cfg(unix)]

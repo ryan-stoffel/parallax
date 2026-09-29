@@ -18,6 +18,7 @@
 //! call per start, send, or cancel, never per event.
 
 pub mod claude;
+pub mod codex;
 pub mod event;
 pub mod fake;
 pub mod key_account;
@@ -340,9 +341,9 @@ pub struct Capabilities {
     pub reports_cost: bool,
     /// Its runs report limit windows.
     pub rate_limits: bool,
-    /// It enforces the worker sandbox (0013) for a [`ToolPolicy::WorkspaceWrite`] run, so M3's
-    /// runner may start workers on it. Codex and Cursor join once #122 and #123 implement their
-    /// parts of 0013.
+    /// It enforces the worker sandbox (0013) for a [`ToolPolicy::WorkspaceWrite`] run on this
+    /// OS, so M3's runner may start workers on it. Cursor joins once RYA-40 implements its part
+    /// of 0013.
     pub worker_sandbox: bool,
 }
 

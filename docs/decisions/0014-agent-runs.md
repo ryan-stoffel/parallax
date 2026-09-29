@@ -75,5 +75,5 @@ Appending is a dedicated writer thread's job (#190), separate from `events/subsc
 
 - The editor can drive a worker end to end: start, stream, message, cancel, list, and rebuild a transcript after a reconnect or a restart (#105, #157).
 - A restart no longer changes `logId`. Tests that told wispd instances apart by `logId` use the serve pid.
-- Codex and Cursor workers are refused until #122 and #123 set `worker_sandbox`.
+- Cursor workers are refused until #123 sets `worker_sandbox`. Codex workers run on macOS (RYA-38), and are refused elsewhere until RYA-133 (Linux) and RYA-24 (Windows).
 - A worker's CLI that ignores `SIGINT` keeps a stopping wispd waiting for its cancel grace period, up to 15 s in total.

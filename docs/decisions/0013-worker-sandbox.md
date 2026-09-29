@@ -1,6 +1,6 @@
 # 0013: The worker sandbox
 
-- Status: accepted; the Linux sandbox is under [Claude Code on Linux](#claude-code-on-linux) (RYA-20), and the refusal of Claude workers on native Windows is in [0023](0023-cross-platform.md)
+- Status: accepted; the Linux sandbox is under [Claude Code on Linux](#claude-code-on-linux) (RYA-20), Codex workers are under [Codex](#codex) (RYA-38), and the refusal of Claude workers on native Windows is in [0023](0023-cross-platform.md)
 - Date: 2026-09-25
 - Issue: #137
 
@@ -42,7 +42,7 @@ With network on, anything a worker's commands can read, they can send anywhere. 
 - **What can leave.** The worktree's own source, which the vendor's model sees anyway, and any secret the list doesn't name. That includes `.env` files in other projects and credentials a tool keeps somewhere we didn't list. It also includes another account's configuration folder, if one lives outside the data folder: only the run's own account's is denied. The vendors have no built-in list [1], so new entries go in `UNREADABLE_IN_HOME`.
 - **What comes in.** Fetched pages, search results, and downloaded packages can carry prompt injection or malicious code. They run inside the same sandbox as everything else, so their reach is the same as the agent's own.
 - **This Mac's own services** (databases, Docker's published ports, dev servers) are a larger target than any one remote host, so its loopback and unspecified addresses are denied to commands and to WebFetch alike. The sandbox's proxy canonicalizes other spellings of loopback (`127.1`, `[::ffff:127.0.0.1]`) and refuses names that resolve to this Mac, but it doesn't check IP literals [13]. So `0.0.0.0` and `[::]` are listed explicitly.
-- **Gap: this Mac's interface addresses.** A service bound to `0.0.0.0` also listens on the Mac's LAN address, such as its Wi-Fi IP, and a worker that uses that literal address reaches it. wisp doesn't list those addresses, because they change with the network during a run. Other machines on the LAN are reachable too, since network access is on. #168 decides whether to enumerate the Mac's addresses at run start or to accept the gap.
+- **Gap: this Mac's interface addresses (Claude workers).** A service bound to `0.0.0.0` also listens on the Mac's LAN address, such as its Wi-Fi IP, and a worker that uses that literal address reaches it. wisp doesn't list those addresses, because they change with the network during a run. Other machines on the LAN are reachable too, since network access is on. #168 decides whether to enumerate the Mac's addresses at run start or to accept the gap. Codex workers don't have it: Codex's proxy refuses private addresses, this Mac's and the LAN's alike (see [Codex](#codex)).
 
 ### Claude Code
 
@@ -138,31 +138,36 @@ On Linux and WSL2, Claude Code sandboxes Bash with bubblewrap and relays its pro
   Each failure is `workerUnavailable` and names what is wrong: bubblewrap, socat, the scrub flag, the AppArmor profile, or the filter. The check runs the same binary and helper the worker will use, so it can't pass on a file Claude Code doesn't load. It can't catch a later Claude Code that stops running its helper. `WORKER_MIN_VERSION` and `daemon/tests/sandbox.rs` cover that. CI runs the test against a pinned Claude Code on Linux.
 - **Setup.** Install Claude Code 2.1.275 or later, `bubblewrap`, and `socat`. On Ubuntu 24.04 and later, also add the AppArmor profile for `/usr/bin/bwrap` from Claude's docs [1]. WSL1 isn't supported. Nor is wispd running as root: Claude's sandbox adds `CAP_SETFCAP` for uid 0 and the check doesn't, so the check refuses.
 
-### Codex (for #122)
+### Codex
 
-Codex sandboxes commands with Seatbelt. Its `:workspace` permission profile writes the workspace roots and the temp folders, and it protects `.git` (including the folder a `.git` file points to) and `.codex` [6][7]. Permission profiles, which are in beta, can also deny reads and turn the network on [7]. A worker runs:
+Codex sandboxes commands with Seatbelt on macOS. Its `:workspace` permission profile writes the workspace roots and the temp folders (`$TMPDIR` and `/tmp`), and it protects `.git` (including the folder a `.git` file points to) and `.codex` [6][7]. Permission profiles, which are in beta, can also deny reads and turn the network on [7]. A worker runs (RYA-38, `daemon/src/backend/codex.rs`), in its worktree, with the prompt on stdin:
 
 ```sh
-codex exec --json -C <worktree> \
-  --ignore-user-config --ignore-rules \
+codex exec [resume] --json --ignore-user-config --ignore-rules \
   -c 'default_permissions="wisp_worker"' \
-  -c 'permissions.wisp_worker.extends=":workspace"' \
-  -c 'permissions.wisp_worker.workspace_roots={"<shared context folder>"=true}' \
-  -c 'permissions.wisp_worker.filesystem={"<unreadable path>"="deny", ...}' \
-  -c 'permissions.wisp_worker.network.enabled=true' \
-  -c 'permissions.wisp_worker.network.domains={"*"="allow"}' \
-  -c 'features.network_proxy=true' \
-  -c 'approval_policy="never"' \
-  -c 'web_search="live"' \
-  -c 'projects."<worktree>".trust_level="untrusted"' \
-  -c 'shell_environment_policy.ignore_default_excludes=false'
+  -c 'permissions={wisp_worker={extends=":workspace", workspace_roots={"<context>"=true},
+        filesystem={"<unreadable path>"="deny", ..., "<worktree>/.git"="read", "<git folder>"="read"},
+        network={enabled=true, domains={"*"="allow"}}}}' \
+  -c 'features={network_proxy=true, hooks=false, apps=false, plugins=false, remote_plugin=false,
+        multi_agent=false, skill_mcp_dependency_install=false, shell_snapshot=false}' \
+  -c 'projects={"<worktree>"={trust_level="untrusted"}}' \
+  -c 'approval_policy="never"' -c 'web_search="live"' \
+  -c 'shell_environment_policy={ignore_default_excludes=false}' \
+  [-m <model>] [<thread id>] -
 ```
 
-- Profiles and `sandbox_mode` don't compose: passing `-s` or loading a `sandbox_mode` from any config disables the profile [7]. So #122 passes no `-s`, and `--ignore-user-config` keeps the user's `sandbox_mode` out. Auth still comes from `CODEX_HOME` [8].
-- **Network.** `network.enabled` gives commands network access. `network_proxy` with a global `*` allow reaches every public host, and its default `allow_local_binding = false` keeps loopback and private addresses out. That matches Claude's localhost denial [6]. Without the proxy, access would be direct and unrestricted, localhost included. `web_search="live"` is Codex's search-and-browse [6].
-- An untrusted project skips the repository's `.codex/` config, hooks, and rules [9]. `approval_policy="never"` is explicit, because an untrusted project otherwise asks for approval, and exec denies approval requests (0004). #122 must confirm that a `-c projects."<worktree>".trust_level` override still applies under `--ignore-user-config`.
+- **Each `-c` sets one top-level key** to an inline TOML table, so no path is part of a dotted key, where a `.` or `=` in it would split wrong. A value that doesn't parse as TOML is taken as a string, and Codex then refuses to start, so a mistake fails closed.
+- **The profile wins over `sandbox_mode`.** `default_permissions` on the command line selects permission profiles even if a system or managed config sets `sandbox_mode` (`resolve_permission_config_syntax` at `rust-v0.157.1`). wispd passes no `-s`. More specific entries win over broader ones, so the worktree (a workspace root, write) and the git paths (`read`) reopen inside the denied data folder.
+- **Network.** `network.enabled` with `network_proxy` sends commands through Codex's proxy, and Seatbelt allows nothing else. The `*` rule reaches every public host. The proxy's local-network guard (`allow_local_binding = false`) refuses loopback and private addresses, and names that resolve to them. That includes this Mac's own LAN address, so the interface-address gap in the threat model doesn't apply to Codex workers. `web_search="live"` is Codex's hosted search, which runs outside the proxy on OpenAI's side [6].
+- **No hooks, MCP servers, or repository settings.** `--ignore-user-config` skips the user's `config.toml`. User hooks then count as untrusted, because their trust hashes live there. The untrusted worktree skips the repository's `.codex/` config, hooks, and rules. `--ignore-rules` skips execpolicy rules. `hooks=false` turns the hooks engine off anyway, and `apps=false` and `plugins=false` keep ChatGPT's connectors and plugins, which are MCP servers, out. `multi_agent=false` removes subagents, as Claude's `Agent` tool is left out. Managed configuration (`/etc/codex`, MDM, cloud requirements) still applies: it is the administrator's. `approval_policy="never"` makes exec deny every escalation, so nothing runs outside the sandbox.
+- **Second check.** Exec reports no tool list, so a worker whose output shows an `mcp_tool_call` or `collab_tool_call` item is killed at once and fails with `policyViolation`.
+- **The environment.** `shell_environment_policy.ignore_default_excludes=false` keeps variables named `*KEY*`, `*SECRET*`, or `*TOKEN*` out of commands, including an API key account's `CODEX_API_KEY`. Shell snapshots are off, because a snapshot restored a `*KEY*` variable that the policy had removed (Evidence). Inherited `OPENAI_*` and `CODEX_*` variables never reach the CLI. A second account's `CODEX_HOME` is denied, as `~/.codex` is.
+- **Version.** Codex older than `codex::WORKER_MIN_VERSION` (0.157.1, the version checked here) is refused before a worker starts, since one that doesn't know permission profiles would ignore them rather than fail. Detection reads it from `codex --version`.
+- **Gap: threads with no repo.** A scratch repository's git folder is inside the data folder. Reading its files works, but git `lstat`s every parent folder, and a profile can't grant metadata alone, so `git status` fails in those threads. The worker still edits files, and wispd commits (RYA-134).
+- **Gap: the Keychain.** With network on, Codex's Seatbelt profile allows `mach-lookup` of `com.apple.SecurityServer` for TLS, as Claude's runtime does. The login keychain file is unreadable, which is the same open item as Claude's.
+- **Gap: the credential source.** Exec doesn't say which credentials it used, unlike Claude's `apiKeySource`. A subscription run bills whatever `codex login` stored; if that is an API key, wisp can't tell yet (RYA-136).
+- **Other OSes.** Only macOS was checked, so the backend reports `worker_sandbox: false` on Linux (RYA-133) and Windows (RYA-24), and those workers fail with `workerUnavailable`.
 - `.git` is read-only, so wispd commits (0004).
-- If #122 finds that permission profiles misbehave on the version it pins, the fallback is `-s workspace-write --add-dir <context>` with `sandbox_workspace_write.network_access=true`. That fallback loses the read denials and the localhost denial, and #122 records the gap.
 
 ### Cursor (for #123, still gated on #35)
 
@@ -200,8 +205,8 @@ wisp's own profile does have one use: commands wispd runs itself, such as a setu
 
 #156's comment spells out the exact values:
 
-1. Starts a worker only on a backend that implements this record: Claude now, Codex and Cursor once #122 and #123 do.
-2. Before starting a Claude worker, checks the detected version (#114) against `WORKER_MIN_VERSION`, and refuses with an error that names both versions. The `system/init` check backs this up.
+1. Starts a worker only on a backend that implements this record: Claude, Codex on macOS (RYA-38), and Cursor once #123 does.
+2. Before starting a Claude or Codex worker, checks the detected version (#114) against its backend's `WORKER_MIN_VERSION`, and refuses with an error that names both versions. For Claude, the `system/init` check backs this up.
 3. Passes `sandbox: Some(WorkerSandbox::for_worktree(home, data_dir, worktree, git_common_dir, context_dir))`, with every path canonical. Seatbelt matches real paths, and `/var` and `/tmp` are symlinks on macOS.
 4. Commits the worktree's changes itself, with the git folder pinned and hooks off (#166), for every backend including Claude. `--no-verify` skips only `pre-commit` and `commit-msg` [12]. A worker can write files that git hooks run, such as `.husky/*` under `core.hooksPath`: Claude through Bash, and Codex and Cursor through any command. Cursor's sandbox also leaves the worktree's `.git` file writable, and that file says which repository git uses.
 
@@ -238,6 +243,20 @@ Local experiments on macOS 27.0 with Codex CLI 0.154.0 (`codex sandbox -P <profi
 | Start a nested `sandbox-exec` | denied | denied | denied | denied |
 
 Nesting: `sandbox-exec` inside `sandbox-exec` works only when the outer profile is `(allow default)` with nothing denied. With a single `deny` of writes, reads, or network, the inner `sandbox_apply` fails with `Operation not permitted` (exit 71). `codex sandbox` inside wisp's profile failed the same way.
+
+**Codex (RYA-38).** On 2026-09-28, with codex-cli 0.157.1 on macOS 27.0, `codex sandbox -P wisp_worker` ran a probe with a worker's exact profile from a linked worktree. The worktree and context folder were inside a denied "data folder", and the tree was outside `/tmp` and `$TMPDIR`:
+
+- **Allowed:** writing the worktree, the context folder, `$TMPDIR`, and `/tmp`; reading the worktree and context folder; `git status` and `git log` in a worktree of a repository outside the data folder; HTTPS to a public host.
+- **Refused:** writing anywhere else, through a symlink in the worktree, to the `.git` file or the git folder, and `git commit`; reading a denied `.ssh`, `.codex`, and another project's context, and listing the data folder; hard-linking a denied file into the worktree; HTTP to `127.0.0.1`, `localhost`, `127.1`, `[::1]`, `0.0.0.0`, `[::ffff:127.0.0.1]`, and the Mac's LAN address, through the proxy or around it; connecting to a Unix socket; opening the login keychain.
+
+Real `codex exec --json` runs on a ChatGPT login with the backend's flags then confirmed the rest:
+
+- A repository `.codex/config.toml` naming an MCP server and a `notify` program, and a `.codex/hooks.json`, each writing a marker file outside the sandbox: no marker appeared.
+- A `curl` to `127.0.0.1` got the proxy's 403. Asked to read a denied file, write outside the worktree, and `apply_patch` outside it, the model declined all three, citing the permission profile Codex describes to it, and nothing was written.
+- A `WISP_PROBE_API_KEY` variable reached commands through the shell snapshot, and not once snapshots were off.
+- A worker ran through `wispd` end to end: wispd committed its file, and `agent/send` resumed the thread.
+
+The backend's fixtures are those runs.
 
 **Claude Code, against a fake API (RYA-20).** `daemon/tests/sandbox.rs` runs Claude Code with a worker's exact arguments against a fake Messages API on 127.0.0.1. So it needs no login and sends nothing to Anthropic. The fake asks for one Bash call that runs a script in the worktree, and Claude's permission checks can't see into a script.
 
