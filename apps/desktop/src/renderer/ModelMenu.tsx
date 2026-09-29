@@ -117,6 +117,7 @@ export function ModelMenu({
                   aria-label={p}
                   aria-pressed={!q && tab === p}
                   disabled={unavailable}
+                  aria-describedby={unavailable ? `${id}-${p}` : undefined}
                   onClick={() => setTab(p)}
                   className={railButton}
                 >
@@ -124,6 +125,7 @@ export function ModelMenu({
                 </button>
                 {unavailable && (
                   <span
+                    id={`${id}-${p}`}
                     role="tooltip"
                     className="pointer-events-none invisible absolute top-1/2 left-full z-10 ml-2 w-56 -translate-y-1/2 rounded-md border border-border bg-surface px-2.5 py-1.5 text-[12px] text-foreground shadow-composer group-hover:visible"
                   >

@@ -547,8 +547,9 @@ pub struct AgentSendParams {
     /// The message.
     pub text: String,
     /// A new model for the run and every later resume (RYA-163), sent only to a wispd that
-    /// advertises `sendModel`. It must be one the run's backend runs: a session can't move to
-    /// another CLI. Absent, or the run's own, changes nothing. A different one fails with
+    /// advertises `sendModel`. It should be one the run's backend runs, since a session can't move
+    /// to another CLI; wispd can't check that, so another's fails the run with the CLI's own error.
+    /// Absent, or the run's own, changes nothing. A different one fails with
     /// `unsupportedOption` while the run's CLI is running, since it can't change mid-process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
