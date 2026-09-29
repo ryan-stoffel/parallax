@@ -36,7 +36,6 @@ import {
   useState,
   type ComponentType,
   type ReactNode,
-  type SVGAttributes,
   type SVGProps,
   type ToggleEvent,
 } from "react";
@@ -110,7 +109,7 @@ interface ThreadListProps {
 }
 
 /** Every Project's icon, in the sidebar, the breadcrumb, and its chat. -500 reads on both themes. */
-export function ProjectIcon({ className = "" }: SVGAttributes<SVGSVGElement>) {
+export function ProjectIcon({ className = "" }: { className?: string }) {
   return <FolderKanban aria-hidden className={`text-violet-500 ${className}`} />;
 }
 

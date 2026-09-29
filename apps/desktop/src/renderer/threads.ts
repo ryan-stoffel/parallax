@@ -313,10 +313,12 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     async (id: string, name: string, repoPath: string) => {
       const answer = await window.wisp.request(hostId, "project/create", { id, name, repoPath });
       if ("error" in answer) return describeError(answer.error);
-      dispatch({
-        type: "event",
-        event: { kind: "project.created", project: answer.result.project },
-      });
+      // Not into another host's list, if the user has left this one.
+      if (shown.current === hostId)
+        dispatch({
+          type: "event",
+          event: { kind: "project.created", project: answer.result.project },
+        });
       return answer.result.project;
     },
     [hostId],

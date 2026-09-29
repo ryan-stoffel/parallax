@@ -65,6 +65,8 @@ export function NewProjectDialog({
     setError(undefined);
     const project = await create(params.id, params.name, params.repoPath);
     setCreating(false);
+    // Closed while it was creating, as with Escape: drop the late answer.
+    if (!dialog.open) return;
     if (typeof project === "string") return setError(project);
     dialog.close();
     onCreated(project);
