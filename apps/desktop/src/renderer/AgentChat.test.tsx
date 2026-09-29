@@ -48,6 +48,18 @@ test("a user message shows its text, or a neutral label when the log has none", 
   expect(document.body.textContent).toBe("Follow-up message");
 });
 
+test("a wake-up reads as from wisp, with its message folded away", () => {
+  row({
+    kind: "user",
+    key: "w",
+    text: "wisp, not the user: runs you started finished.",
+    wake: true,
+  });
+  expect(document.querySelector("summary")!.textContent).toBe("From wisp: subagents finished");
+  expect(document.querySelector("details")!.open).toBe(false);
+  expect(document.querySelector(".bg-selected")).toBeNull();
+});
+
 test("an assistant message renders Markdown, but never raw HTML or images", () => {
   row({
     kind: "assistant",
