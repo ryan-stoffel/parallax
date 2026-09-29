@@ -125,6 +125,12 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// like everything else, come through paged or capped methods (decision record 0007).
 pub const DEFAULT_MAX_DIFF_BYTES: usize = 1024 * 1024;
 
+/// The longest line a git call whose whole output is read may write (RYA-143). A `-z` output has
+/// no newline, so it is one line: 64 MiB holds about 800k paths. A longer line fails the call.
+// ponytail: past this, Accept and `agent/diff` fail loudly; read `-z` output split on NUL, with a
+// total cap, if a real repository gets there.
+const DEFAULT_MAX_GIT_LINE_BYTES: usize = 64 * 1024 * 1024;
+
 const WORKTREES_DIR: &str = "worktrees";
 
 /// Environment variables scrubbed from every git invocation, on top of
@@ -264,7 +270,7 @@ pub enum WorktreeError {
         /// The repository (or worktree) that lacks an identity.
         repo: PathBuf,
     },
-    /// A git command exited with a non-zero status.
+    /// A git command exited with a non-zero status, or wrote a line too long to read (RYA-143).
     #[error("`git {}` in {} failed: {detail}", .args.join(" "), .cwd.display())]
     GitFailed {
         /// Where it ran.
@@ -398,6 +404,7 @@ pub struct WorktreeManager {
     git_safe_home: PathBuf,
     timeout: Duration,
     max_diff_bytes: usize,
+    max_git_line_bytes: usize,
     merge_timeout: Duration,
     repo_locks: Arc<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>>,
 }
@@ -413,6 +420,7 @@ impl WorktreeManager {
             git_safe_home: data_dir_root.join(GIT_SAFE_HOME_DIR),
             timeout: DEFAULT_TIMEOUT,
             max_diff_bytes: DEFAULT_MAX_DIFF_BYTES,
+            max_git_line_bytes: DEFAULT_MAX_GIT_LINE_BYTES,
             merge_timeout: review::MERGE_TIMEOUT,
             repo_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
@@ -436,6 +444,13 @@ impl WorktreeManager {
     #[must_use]
     pub fn with_max_diff_bytes(mut self, max_diff_bytes: usize) -> Self {
         self.max_diff_bytes = max_diff_bytes;
+        self
+    }
+
+    /// Overrides the longest line a git call read whole may write, 64 MiB by default.
+    #[must_use]
+    pub fn with_max_git_line_bytes(mut self, max_git_line_bytes: usize) -> Self {
+        self.max_git_line_bytes = max_git_line_bytes;
         self
     }
 
@@ -923,8 +938,9 @@ impl WorktreeManager {
     }
 
     /// Runs `git args` in `cwd` and returns its output, whatever its exit status. Only
-    /// [`WorktreeError::Spawn`] and [`WorktreeError::Timeout`] are possible failures here; callers
-    /// that want a non-zero exit turned into an error use [`WorktreeManager::run_git_ok`].
+    /// [`WorktreeError::Spawn`], [`WorktreeError::Timeout`], and [`WorktreeError::GitFailed`] for
+    /// a line too long to read (see [`collect`]) are possible failures here; callers that want a
+    /// non-zero exit turned into an error use [`WorktreeManager::run_git_ok`].
     ///
     /// Every call runs with `core.hooksPath=/dev/null` (#157, #191): no git command wispd runs
     /// in the user's checkout ever runs a repository hook. Once a run is accepted, the
@@ -954,19 +970,21 @@ impl WorktreeManager {
             .collect();
         spec.inject.set("GIT_TERMINAL_PROMPT", "0");
         spec.stdin = StdinMode::Null;
+        spec.limits.max_line_bytes = self.max_git_line_bytes;
 
         let process = self.launcher.spawn(&spec)?;
-        match timeout(limit, collect(process)).await {
-            Ok((stdout, exit)) => Ok(GitOutput {
-                stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                exit,
-            }),
-            Err(_) => Err(WorktreeError::Timeout {
+        let Ok(collected) = timeout(limit, collect(process, cwd, args)).await else {
+            return Err(WorktreeError::Timeout {
                 cwd: cwd.to_owned(),
                 args: owned_args(args),
                 timeout: limit,
-            }),
-        }
+            });
+        };
+        let (stdout, exit) = collected?;
+        Ok(GitOutput {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            exit,
+        })
     }
 
     /// Like [`WorktreeManager::run_git`], but a non-zero exit becomes [`WorktreeError::GitFailed`]
@@ -985,29 +1003,30 @@ impl WorktreeManager {
 
     /// Runs `git args` against `work_tree`, with the git directory pinned to `git_dir` and every
     /// execution vector `work_tree`'s tracked files or repo-local config could reach neutralized
-    /// (#166): see the module documentation and [`WORKTREE_GIT_CONFIG`]. Like [`Self::run_git`],
-    /// only [`WorktreeError::Spawn`], [`WorktreeError::Timeout`], and now [`WorktreeError::Io`]
-    /// (preparing the dedicated `HOME`) are possible failures; [`Self::run_worktree_git_ok`] also
-    /// turns a non-zero exit into an error.
+    /// (#166): see the module documentation and [`WORKTREE_GIT_CONFIG`]. It fails like
+    /// [`Self::run_git`], and with [`WorktreeError::Io`] when preparing the dedicated `HOME`
+    /// fails; [`Self::run_worktree_git_ok`] also turns a non-zero exit into an error.
     async fn run_worktree_git(
         &self,
         work_tree: &Path,
         git_dir: &Path,
         args: &[&str],
     ) -> Result<GitOutput, WorktreeError> {
-        let spec = self.worktree_spec(work_tree, git_dir, args).await?;
+        let mut spec = self.worktree_spec(work_tree, git_dir, args).await?;
+        spec.limits.max_line_bytes = self.max_git_line_bytes;
         let process = self.launcher.spawn(&spec)?;
-        match timeout(self.timeout, collect(process)).await {
-            Ok((stdout, exit)) => Ok(GitOutput {
-                stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                exit,
-            }),
-            Err(_) => Err(WorktreeError::Timeout {
+        let Ok(collected) = timeout(self.timeout, collect(process, work_tree, args)).await else {
+            return Err(WorktreeError::Timeout {
                 cwd: work_tree.to_owned(),
                 args: owned_args(args),
                 timeout: self.timeout,
-            }),
-        }
+            });
+        };
+        let (stdout, exit) = collected?;
+        Ok(GitOutput {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            exit,
+        })
     }
 
     /// The process spec for `git args` scoped to a worker's worktree: see
@@ -1107,7 +1126,15 @@ fn owned_args(args: &[&str]) -> Vec<String> {
 /// Reads every line of `process`'s stdout until it exits, joining lines back with `\n`. The exact
 /// framing of the original bytes doesn't matter here: every caller either parses the result line
 /// by line or trims it as one block of text.
-async fn collect(mut process: Process) -> (Vec<u8>, Exit) {
+///
+/// A line over the process's limit fails `git args` in `cwd` with [`WorktreeError::GitFailed`]
+/// rather than being skipped (RYA-143): a `-z` output is one line, so skipping it would read as
+/// no output at all, such as a commit with no changed files.
+async fn collect(
+    mut process: Process,
+    cwd: &Path,
+    args: &[&str],
+) -> Result<(Vec<u8>, Exit), WorktreeError> {
     let mut stdout = Vec::new();
     loop {
         match process.next().await {
@@ -1115,8 +1142,14 @@ async fn collect(mut process: Process) -> (Vec<u8>, Exit) {
                 stdout.extend_from_slice(&line);
                 stdout.push(b'\n');
             }
-            Some(Output::Oversized { .. }) => {}
-            Some(Output::Exited(exit)) => return (stdout, exit),
+            Some(Output::Oversized { bytes }) => {
+                return Err(WorktreeError::GitFailed {
+                    cwd: cwd.to_owned(),
+                    args: owned_args(args),
+                    detail: format!("it wrote a {bytes}-byte line, too long for wispd to read"),
+                });
+            }
+            Some(Output::Exited(exit)) => return Ok((stdout, exit)),
             None => unreachable!("Output::Exited always comes last"),
         }
     }

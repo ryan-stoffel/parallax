@@ -440,13 +440,15 @@ impl WorktreeManager {
         let args = ["cat-file", "blob", object.as_str()];
         let spec = self.worktree_spec(worktree_path, git_dir, &args).await?;
         let process = self.launcher.spawn(&spec)?;
-        let Ok((mut bytes, exit)) = timeout(self.timeout, collect(process)).await else {
+        let Ok(collected) = timeout(self.timeout, collect(process, worktree_path, &args)).await
+        else {
             return Err(WorktreeError::Timeout {
                 cwd: worktree_path.to_owned(),
                 args: owned_args(&args),
                 timeout: self.timeout,
             });
         };
+        let (mut bytes, exit) = collected?;
         if !exit.info.success() {
             return Err(WorktreeError::GitFailed {
                 cwd: worktree_path.to_owned(),
