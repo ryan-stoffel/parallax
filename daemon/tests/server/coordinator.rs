@@ -106,12 +106,6 @@ async fn a_coordinator_runs_no_write_in_the_repository_and_resumes_after_a_resta
     assert_eq!(run.worktree_path, None);
     let retried = client.call::<ProjectStart>(params.clone()).await.unwrap();
     assert_eq!(retried.run.id, run.id, "a retry returns the same run");
-    let another = ProjectStartParams {
-        run_id: RunId::generate(),
-        ..params.clone()
-    };
-    let refused = client.call::<ProjectStart>(another).await.unwrap_err();
-    assert_eq!(kind(&refused), ErrorKind::IdConflict, "one per project");
     let projects = client
         .call::<ProjectList>(ProjectListParams {})
         .await
@@ -218,23 +212,48 @@ async fn a_turn_that_changes_the_working_tree_stops_and_names_the_change_without
 }
 
 #[tokio::test]
-async fn a_coordinator_that_never_reported_a_session_can_be_replaced() {
-    let host = Host::start(temp_dir(), fake(vec![Step::Exit(1)]));
+async fn a_new_start_replaces_the_coordinator_only_once_it_stops_running() {
+    let script = vec![
+        init("coordinator-1"),
+        Step::AwaitFollowUp,
+        end_turn("Done."),
+    ];
+    let host = Host::start(temp_dir(), fake(script));
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
     subscribe(&mut client, project.id, 0).await;
 
-    client
+    let first = client
         .call::<ProjectStart>(start_params(project.id, "Plan."))
         .await
-        .unwrap();
-    until(&mut client, updated_to(AgentStatus::Failed)).await;
-    let again = client
-        .call::<ProjectStart>(start_params(project.id, "Plan again."))
-        .await;
-    assert!(
-        again.is_ok(),
-        "a failed start leaves no session to resume: {again:?}"
+        .unwrap()
+        .run;
+    let refused = client
+        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        kind(&refused),
+        ErrorKind::IdConflict,
+        "one live coordinator"
     );
+
+    client
+        .call::<AgentSend>(send_params(first.id, TurnId::generate(), "Wrap up."))
+        .await
+        .unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    // Once it stops, even with a session that might never resume, a new start replaces it.
+    let second = client
+        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .await
+        .unwrap()
+        .run;
+    let projects = client
+        .call::<ProjectList>(ProjectListParams {})
+        .await
+        .unwrap()
+        .projects;
+    assert_eq!(projects[0].coordinator, Some(second.id));
     host.server.stop().await;
 }

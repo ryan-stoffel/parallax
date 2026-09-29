@@ -46,7 +46,7 @@
     "id": 2,
     "error": {
       "code": -32000,
-      "message": "project 01a0d349-6e00-7c9e-80e2-0426486a8cae already has a coordinator: run 01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "message": "project 01a0d349-6e00-7c9e-80e2-0426486a8cae's coordinator, run 01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b, is running; message it with agent/send, or stop it before starting over",
       "data": { "kind": "idConflict" }
     }
   },

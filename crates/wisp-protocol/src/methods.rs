@@ -211,8 +211,9 @@ method_table! {
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;
         /// `project/start`: starts a project's coordinator chat, a no-write run in its repository
-        /// with wispd's coordinator tools (0024), idempotent on its client-generated run id. One
-        /// per project. Gated on the `coordinator` capability.
+        /// with wispd's coordinator tools (0024), idempotent on its client-generated run id. It
+        /// replaces the project's last coordinator unless that one is running. Gated on the
+        /// `coordinator` capability.
         ProjectStart = "project/start": ProjectStartParams => AgentRunResult;
     }
     notifications {

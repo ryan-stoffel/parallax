@@ -22,8 +22,9 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 | --- | --- | --- |
 | `project/start` | `{project, runId, prompt, account?, model?, effort?}` | `{run}` |
 
-- `project/start` is idempotent on `runId`, like `agent/start`. The same params return the run, and different ones fail with `idConflict`. A project has one coordinator, so a new `runId` for a project that already has one also fails with `idConflict`, naming the existing run. The check and the insert run in one store job, which the store's thread runs alone, so two racing starts can't both succeed.
-- The coordinator is the project's newest `noWrite` run that is starting, running, or has a session. One that ended before its CLI reported a session, such as a CLI that wasn't signed in, can never take a message, so it doesn't count, and a new `runId` replaces it.
+- `project/start` is idempotent on `runId`, like `agent/start`. The same params return the run, and different ones fail with `idConflict`.
+- A project's coordinator is its newest `noWrite` run, and there is only ever one live. A new `runId` starts over: it replaces the coordinator unless that one is starting or running, in which case it fails with `idConflict`, naming the running coordinator. The check and the insert run in one store job, which the store's thread runs alone, so two racing starts can't both succeed.
+- A coordinator whose session can't be resumed never locks its project. That happens when Claude Code prunes its transcript after `cleanupPeriodDays` (30 idle days by default), when its account is removed, or when the account now runs on another backend. `agent/send` then fails, and `project/start` with a new `runId` starts over. The same goes for one that ended before its CLI reported a session, such as a CLI that wasn't signed in.
 - `account` absent means the coordinator role's default (0012). `model` and `effort` are `agent/start`'s (RYA-97). A no-write run's permission is fixed (0004), so `project/start` takes none, and `agent/send` refuses one with `unsupportedOption`.
 - `Project.coordinator` (optional) is the coordinator's run id, from `project/list` and `project/create`. `AgentPolicy` gains `noWrite`.
 - The run has no worktree. `agent/diff` and `agent/file` refuse it with `invalidParams`, and `agent/accept` refuses it because it has no commit.
@@ -31,6 +32,7 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 ### It runs in the project's repository
 
 - The coordinator's CLI runs in the project's repository itself, the user's checkout, with 0004's no-write arguments, no worker sandbox, and 0019's tools and allowlist.
+- It loads the user's settings (`--setting-sources user`, not a worker's `--restricted`), so user-level `additionalDirectories` or `Read(...)` allow rules widen what it can read.
 - It reads the code as the user has it, uncommitted work included. It needs no worktree, commit, or cleanup. And 0004's rule, "stops the turn and shows the diff without reverting it", is about the user's own tree.
 - A never-committed worktree in wispd's data folder was rejected. Nothing but the coordinator would write there, so the check would be exact. But it would miss the user's uncommitted work, and it would need refreshing to see merged work. wispd would also have to create it, refresh it, and remove it.
 

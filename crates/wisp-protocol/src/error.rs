@@ -28,7 +28,7 @@ pub enum ErrorKind {
     /// error so the client can tell "locked" from "broken" (#117).
     KeychainUnavailable,
     /// A create reused an existing id with different params, or `project/start` named a new run
-    /// for a project that already has a coordinator.
+    /// while the project's coordinator is starting or running.
     IdConflict,
     /// No shared context file has the given path (#155).
     ContextNotFound,

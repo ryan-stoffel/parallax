@@ -4,7 +4,8 @@
 //!
 //! `project/start` records it like any run, without a worktree, and hands it to the same actor as
 //! a worker's, so `agent/send`, `agent/cancel`, `agent/events`, the `agent.*` events, and resuming
-//! after a restart work unchanged.
+//! after a restart work unchanged. A project has one live coordinator: a new run replaces the
+//! last one unless that one is still starting or running.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +26,8 @@ use crate::server::Daemon;
 /// The coordinator's instructions, sent ahead of the user's first message (RYA-43 refines them).
 const INSTRUCTIONS: &str = include_str!("coordinator.md");
 
-/// `project/start`: see the module documentation. Idempotent on the run id, and one per project.
+/// `project/start`: see the module documentation. Idempotent on the run id, and refused while the
+/// project's coordinator is starting or running.
 pub(crate) async fn start(
     daemon: Arc<Daemon>,
     params: ProjectStartParams,
@@ -67,7 +69,7 @@ pub(crate) async fn start(
         account_id: prepared.resolved.account_id(),
         ..RunState::default()
     };
-    // One store job, so two starts with different run ids can't both find no coordinator.
+    // One store job, so two starts with different run ids can't both find no live coordinator.
     let row = store(&daemon, move |db| {
         if db
             .get_project(project.into())
@@ -79,10 +81,16 @@ pub(crate) async fn start(
                 format!("no project has id {project}"),
             ));
         }
-        if let Some(other) = coordinator_of(db, project.into())? {
+        if let Some(current) = newest(db, project.into())?
+            && (current.state.status == STARTING || current.state.status == RUNNING)
+        {
             return Err(ErrorObject::wisp(
                 ErrorKind::IdConflict,
-                format!("project {project} already has a coordinator: run {other}"),
+                format!(
+                    "project {project}'s coordinator, run {}, is running; message it with \
+                     agent/send, or stop it before starting over",
+                    current.id
+                ),
             ));
         }
         db.create_run(run_id.into(), &fields, &state)
@@ -124,30 +132,30 @@ pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     )))
 }
 
-/// `project`'s coordinator: its newest no-write run that is starting, running, or has a session to
-/// resume. One that ended before its CLI reported a session, such as a CLI that wasn't signed in,
-/// can never take a message, so it doesn't count, and `project/start` can start another.
-// ponytail: scans the project's runs; a coordinator column on projects if that gets slow.
+/// `project`'s coordinator: its newest no-write run. `project/start` with a new run id replaces it
+/// unless it is starting or running, so one whose session can't be resumed never locks the
+/// project.
 pub(crate) fn coordinator_of(
     db: &wisp_store::Store,
     project: Uuid,
 ) -> Result<Option<RunId>, ErrorObject> {
-    let runs = db.list_runs(Some(project)).map_err(|e| store_error(&e))?;
-    runs.into_iter()
-        .rev()
-        .find(|run| {
-            let state = &run.state;
-            run.fields.policy == NO_WRITE
-                && (state.session_id.is_some()
-                    || state.status == STARTING
-                    || state.status == RUNNING)
-        })
+    newest(db, project)?
         .map(|run| {
             RunId::try_from(run.id).map_err(|_| {
                 ErrorObject::internal_error(format!("the stored run {} has an invalid id", run.id))
             })
         })
         .transpose()
+}
+
+/// `project`'s newest no-write run.
+// ponytail: scans the project's runs; a coordinator column on projects if that gets slow.
+fn newest(db: &wisp_store::Store, project: Uuid) -> Result<Option<wisp_store::Run>, ErrorObject> {
+    let runs = db.list_runs(Some(project)).map_err(|e| store_error(&e))?;
+    Ok(runs
+        .into_iter()
+        .rev()
+        .find(|run| run.fields.policy == NO_WRITE))
 }
 
 /// The coordinator's first message: its instructions, where it is, then the user's message.

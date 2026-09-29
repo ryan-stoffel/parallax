@@ -187,8 +187,9 @@ export type WispRequests = {
 	"thread/delete": { params: ThreadDeleteParams, result: ThreadDeleteResult },
 	/**
 	 * `project/start`: starts a project's coordinator chat, a no-write run in its repository
-	 * with wispd's coordinator tools (0024), idempotent on its client-generated run id. One
-	 * per project. Gated on the `coordinator` capability.
+	 * with wispd's coordinator tools (0024), idempotent on its client-generated run id. It
+	 * replaces the project's last coordinator unless that one is running. Gated on the
+	 * `coordinator` capability.
 	 */
 	"project/start": { params: ProjectStartParams, result: AgentRunResult },
 };
@@ -400,9 +401,8 @@ export type Project = {
 	 */
 	branch?: string,
 	/**
-	 * The run of the project's coordinator chat, once `project/start` started it (0024). Its
-	 * transcript, messages, and Stop go through `agent/*` like any run's. Absent again if it
-	 * ended before its CLI reported a session.
+	 * The run of the project's coordinator chat, the newest one `project/start` started (0024).
+	 * Its transcript, messages, and Stop go through `agent/*` like any run's.
 	 */
 	coordinator?: RunId,
 	/**
@@ -2219,10 +2219,10 @@ export type ThreadDeleteResult = Record<symbol, never>;
  * `coordinatorThread` is its own id. Later messages, Stop, and its transcript go through
  * `agent/send`, `agent/cancel`, and `agent/events`, and its events are the project's `agent.*`
  * events. Idempotent on `runId` like `agent/start`: the same params return the run, and
- * different ones fail with `idConflict`. A project has one coordinator, so a new `runId` for a
- * project that already has one fails with `idConflict` too; `Project.coordinator` names it. A
- * coordinator that ended before its CLI reported a session can't take a message, so it doesn't
- * count, and a new `runId` replaces it.
+ * different ones fail with `idConflict`. A project's coordinator is its newest one, which
+ * `Project.coordinator` names. A new `runId` starts over: it replaces the coordinator unless that
+ * one is starting or running, when it fails with `idConflict`. So a coordinator whose session
+ * can't be resumed never locks its project.
  */
 export type ProjectStartParams = {
 	/**
