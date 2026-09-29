@@ -24,6 +24,8 @@ const bridge: WispBridge = {
   setThemeSource: (preference) => ipcRenderer.send("wisp:theme", preference),
   pickFolder: () => ipcRenderer.invoke("wisp:pickFolder") as Promise<string | null>,
 
+  nameThread: (prompt) => ipcRenderer.invoke("wisp:nameThread", prompt),
+
   request: (hostId, method, params) => ipcRenderer.invoke("wisp:request", hostId, method, params),
   subscribe(hostId, params, listener) {
     const key = crypto.randomUUID();

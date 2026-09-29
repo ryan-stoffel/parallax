@@ -1,7 +1,7 @@
 import { Folder, GitBranch, House, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
-import type { RpcError } from "../preload/bridge";
+import type { RpcError, ThreadName } from "../preload/bridge";
 import type { AccountChoice, Repo } from "../protocol/generated/protocol";
 import { TranscriptView } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
@@ -32,6 +32,7 @@ interface NewThreadProps {
     groupId: string,
     prompt: string,
     options: RunOptions,
+    name?: ThreadName,
   ) => Promise<RpcError | undefined>;
   /** Whether the host's wispd takes a thread's model, effort, and permission (`runOptions`). */
   runOptions: boolean;
@@ -46,6 +47,7 @@ interface Attempt {
   groupId: string;
   prompt: string;
   options: RunOptions;
+  name: ThreadName;
 }
 
 /** An account a worker can run on, as the account chooser lists it. */
@@ -162,7 +164,13 @@ export function NewThread({
     askForAccount = true,
     notice?: string,
   ): Promise<string | undefined> => {
-    const error = await start(attempt.runId, attempt.groupId, attempt.prompt, attempt.options);
+    const error = await start(
+      attempt.runId,
+      attempt.groupId,
+      attempt.prompt,
+      attempt.options,
+      attempt.name,
+    );
     failed.current = error ? attempt : undefined;
     if (!error) {
       onStarted(attempt.runId, notice);
@@ -210,13 +218,18 @@ export function NewThread({
       last &&
       last.groupId === group.id &&
       last.prompt === prompt &&
-      JSON.stringify(last.options) === JSON.stringify(options);
+      JSON.stringify(last.options) === JSON.stringify(options)
+        ? last
+        : undefined;
     setStarting(prompt);
+    // A retry keeps its name, so the same start is the same request.
+    const name = same?.name ?? (await window.wisp.nameThread(prompt));
     const error = await attemptStart({
-      runId: same ? last.runId : uuidv7(),
+      runId: same?.runId ?? uuidv7(),
       groupId: group.id,
       prompt,
       options,
+      name,
     });
     // On success the app opens the thread instead.
     if (error !== undefined) setStarting(undefined);

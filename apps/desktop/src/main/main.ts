@@ -5,6 +5,8 @@ import { THEME_PREFERENCES } from "../preload/bridge";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { startHosts } from "./hosts";
 import { isOpenableExternally, isReload } from "./links";
+import { createNamer } from "./namer";
+import { fallbackName } from "./naming";
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
 const devServerUrl = app.isPackaged ? undefined : process.env["WISP_DEV_SERVER_URL"];
@@ -50,6 +52,12 @@ app.on("web-contents-created", (_event, contents) => {
 
 ipcMain.handle("wisp:version", () => app.getVersion());
 
+// Names a new thread and its branch from its first prompt (see namer.ts).
+const namer = createNamer(path.join(app.getPath("userData"), "models"));
+ipcMain.handle("wisp:nameThread", (_event, prompt: unknown) =>
+  typeof prompt === "string" ? namer.name(prompt) : fallbackName(""),
+);
+
 // New Thread's "Add repository…": a folder on this Mac, sheet-attached to the asking window.
 ipcMain.handle("wisp:pickFolder", async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -77,6 +85,8 @@ nativeTheme.on("updated", () => {
 
 void app.whenReady().then(() => {
   startHosts();
+  // The end-to-end tests launch the app on CI machines, where a 490 MB download isn't wanted.
+  if (!process.env["WISP_NO_NAMER"]) namer.warm();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

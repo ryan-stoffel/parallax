@@ -34,10 +34,13 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
 let capabilities: Capabilities;
+const nameThread = vi.fn<WispBridge["nameThread"]>(async () => ({}));
 
 beforeEach(() => {
   request.mockClear();
   capabilities = {};
+  nameThread.mockReset().mockResolvedValue({});
+  localStorage.clear();
   answers = {
     "thread/list": () => ({ result: { repos: [wisp], threads: [thread], seq: 7 } }),
     "agent/list": () => ({
@@ -56,6 +59,7 @@ beforeEach(() => {
     onConnectionState: () => () => {},
     subscribe: () => () => {},
     request,
+    nameThread,
     pickFolder,
     hosts: async () => [],
     onHosts: () => () => {},
@@ -292,6 +296,27 @@ test("without run options, New Thread offers no model, effort, or access", async
     document.querySelector('main :is([aria-label^="Model"], [aria-label^="Reasoning"])'),
   ).toBeNull();
   expect(calls("accounts/defaults/get")).toEqual([]);
+});
+
+test("a thread starts on the branch its prompt was named for, and takes the name as its title", async () => {
+  nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "the flaky test is flaky, please fix it"),
+    },
+  });
+  await renderApp();
+  await send("the flaky test is flaky, please fix it");
+  expect(calls("thread/start")).toEqual([
+    {
+      runId: expect.any(String),
+      prompt: "the flaky test is flaky, please fix it",
+      repo: wisp.id,
+      branchSlug: "fix-flaky-test",
+    },
+  ]);
+  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix flaky test"]);
 });
 
 test("a folder that isn't a repository says so under the composer", async () => {

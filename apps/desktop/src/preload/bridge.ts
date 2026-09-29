@@ -25,6 +25,12 @@ export interface WispBridge {
   pickFolder(): Promise<string | null>;
 
   /**
+   * Names a new thread from its first prompt, with a model that runs on this computer. Resolves
+   * at once, from the prompt's words, while the model isn't ready. Never rejects.
+   */
+  nameThread(prompt: string): Promise<ThreadName>;
+
+  /**
    * Calls a wispd method on a host. Resolves to its result or its error, also for an unknown
    * host or method; never rejects.
    */
@@ -85,6 +91,9 @@ export interface WispBridge {
 }
 
 export type TerminalMessage = { type: "data"; data: string } | { type: "exit"; exitCode: number };
+
+/** A thread's name: a `title` for lists, and a `slug` to name its worktree branch `wisp/<slug>`. */
+export type ThreadName = { title?: string; slug?: string };
 
 /** A host the user added, reached with `ssh <destination> wispd attach` (0022). */
 export type SshHost = { id: string; name: string; destination: string };

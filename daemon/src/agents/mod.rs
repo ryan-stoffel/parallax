@@ -432,10 +432,12 @@ async fn create_worktree(
     agents: &Agents,
     repo_path: &Path,
     run_id: RunId,
+    thread: Option<&NewThread>,
 ) -> Result<(CreatedWorktree, PathBuf, PathBuf), ErrorObject> {
+    let branch_slug = thread.and_then(|thread| thread.branch_slug.as_deref());
     let created = agents
         .worktrees
-        .create(repo_path, run_id, None)
+        .create_named(repo_path, run_id, None, branch_slug)
         .await
         .map_err(|error| worktree_failed(&error))?;
     let paths = async {
@@ -564,6 +566,8 @@ pub(crate) struct NewThread {
     /// A thread with no repo's own scratch repository, which the caller made. Its worktree is
     /// cut from this instead of from the scope's path.
     pub scratch: Option<PathBuf>,
+    /// The name after `wisp/` for the worktree's branch, already checked.
+    pub branch_slug: Option<String>,
 }
 
 /// A created run, and its thread row for a normal thread.
@@ -613,7 +617,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         None => scope_path,
     };
     let (created, worktree_path, git_common_dir) =
-        create_worktree(agents, Path::new(&repo_path), run_id).await?;
+        create_worktree(agents, Path::new(&repo_path), run_id, thread.as_ref()).await?;
 
     fields.backend = prepared.resolved.backend().name().into();
     let state = RunState {
