@@ -11,7 +11,7 @@ import {
 import { useRef, useState, type ReactNode } from "react";
 
 import type { AgentEffort, AgentPermission, AgentRun } from "../protocol/generated/protocol";
-import { EffortMenu, effortName } from "./EffortMenu";
+import { EffortMenu } from "./EffortMenu";
 import { ModelMenu } from "./ModelMenu";
 import { backends, models, type Model, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
@@ -60,15 +60,19 @@ export interface ComposerProps {
   /** What goes under the tab, such as a new thread's account chooser. */
   footer?: ReactNode;
   /**
-   * The backend a new thread runs on, when wispd takes run options: shows the model, effort, and
-   * access choices it can honor. Absent (or unknown): no choices, and none are sent.
+   * The backend the thread runs on: shows the model, effort, and access choices it can honor. A
+   * new thread passes it only when wispd takes run options. Absent (or unknown): no choices, and
+   * none are sent.
    */
   backend?: string;
   /**
-   * An open run's model, effort, and access, shown as they were when it started. A run can't change
-   * them, so they're text, not choices. An unset field is the CLI's default. Ignored with `backend`.
+   * An open run's model, effort, and access (an unset one is the CLI's default). Its model can't
+   * change, so that button is off. Effort and access start from the run's, and only one that
+   * differs from it is sent.
    */
   started?: Pick<AgentRun, "model" | "effort" | "permission">;
+  /** Why effort and access can't change right now, which turns them off. */
+  optionsDisabled?: string;
 }
 
 /** The prompt box, the same on every screen. Enter sends and Shift+Enter starts a new line. */
@@ -81,6 +85,7 @@ export function Composer({
   footer,
   backend,
   started,
+  optionsDisabled,
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
@@ -89,14 +94,33 @@ export function Composer({
   const [files, setFiles] = useState<File[]>([]);
   const filePicker = useRef<HTMLInputElement>(null);
   const [pickedModel, setModel] = useState<Model>();
-  const [effort, setEffort] = useState<AgentEffort>("high");
-  const [pickedPermission, setPermission] = useState<AgentPermission>("edit");
+  const [pickedEffort, setEffort] = useState<AgentEffort>();
+  const [pickedPermission, setPermission] = useState<AgentPermission>();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const run = backend === undefined ? undefined : backends[backend];
   const runModels = models.filter((m) => m.provider === run?.provider);
-  const model = runModels.find((m) => m === pickedModel) ?? runModels[0];
-  const permission = run?.permissions.includes(pickedPermission) ? pickedPermission : "edit";
-  const options: RunOptions = run ? { ...(model && { model: model.id }), effort, permission } : {};
+  // An open run keeps its model, which may be one this list doesn't know, or the CLI's default.
+  const startedModel =
+    started &&
+    run &&
+    (runModels.find((m) => m.id === started.model) ?? {
+      id: started.model ?? "",
+      name: started.model ?? "Default model",
+      provider: run.provider,
+    });
+  const model = startedModel ?? runModels.find((m) => m === pickedModel) ?? runModels[0];
+  const startedEffort = started?.effort ?? "high";
+  const startedPermission = started?.permission ?? "edit";
+  const effort = pickedEffort ?? startedEffort;
+  const wanted = pickedPermission ?? startedPermission;
+  const permission = run?.permissions.includes(wanted) ? wanted : "edit";
+  let options: RunOptions = {};
+  if (run && started)
+    options = {
+      ...(effort !== startedEffort && { effort }),
+      ...(permission !== startedPermission && { permission }),
+    };
+  else if (run) options = { ...(model && { model: model.id }), effort, permission };
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
   const canSend = !!onSend && !disabledReason && text.trim() !== "";
@@ -182,40 +206,38 @@ export function Composer({
             <>
               {model && (
                 <>
-                  <ModelMenu key={backend} models={runModels} value={model} onChange={setModel} />
+                  {/* A disabled fieldset turns off every control in it, and its title says why. */}
+                  <fieldset
+                    disabled={!!started}
+                    title={started && "A thread keeps the model it started with"}
+                    className="flex min-w-0"
+                  >
+                    <ModelMenu key={backend} models={runModels} value={model} onChange={setModel} />
+                  </fieldset>
                   {divider}
                 </>
               )}
-              <EffortMenu value={effort} onChange={setEffort} />
-              {/* One permission is no choice, so there's nothing to show. */}
-              {run.permissions.length > 1 && (
-                <>
-                  {divider}
-                  <Picker
-                    label="Access"
-                    value={permission}
-                    onChange={(value) => setPermission(value as AgentPermission)}
-                    options={run.permissions.map((p) => accessOptions[p])}
-                    panelClassName="w-[25rem]"
-                  />
-                </>
-              )}
+              <fieldset
+                disabled={!!optionsDisabled}
+                title={optionsDisabled}
+                className="flex items-center gap-0.5"
+              >
+                <EffortMenu value={effort} onChange={setEffort} />
+                {/* One permission is no choice, so there's nothing to show. */}
+                {run.permissions.length > 1 && (
+                  <>
+                    {divider}
+                    <Picker
+                      label="Access"
+                      value={permission}
+                      onChange={(value) => setPermission(value as AgentPermission)}
+                      options={run.permissions.map((p) => accessOptions[p])}
+                      panelClassName="w-[25rem]"
+                    />
+                  </>
+                )}
+              </fieldset>
             </>
-          )}
-          {!run && started && (
-            <span className="flex min-w-0 items-center gap-1 pl-2 text-[13.5px] text-muted-foreground">
-              <span className="truncate">
-                {(started.model && models.find((m) => m.id === started.model)?.name) ??
-                  started.model ??
-                  "Default model"}
-              </span>
-              {divider}
-              <span className="shrink-0">
-                {(started.effort && effortName(started.effort)) ?? "Default effort"}
-              </span>
-              {divider}
-              <span className="shrink-0">{accessOptions[started.permission ?? "edit"].label}</span>
-            </span>
           )}
           <input
             ref={filePicker}

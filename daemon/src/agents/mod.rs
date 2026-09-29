@@ -765,10 +765,18 @@ pub(crate) async fn send(
         run_id,
         turn_id,
         text,
+        effort,
+        permission,
     } = params;
+    let options = RunOptions {
+        model: None,
+        effort,
+        permission,
+    };
     ask(&daemon, run_id, |reply| Command::Send {
         turn_id,
         text,
+        options,
         reply,
     })
     .await
@@ -849,6 +857,8 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                                 session_id: run.session_id,
                                 error: run.error,
                                 diff: run.diff,
+                                effort: run.effort,
+                                permission: run.permission,
                                 updated_at: run.updated_at,
                             },
                         },

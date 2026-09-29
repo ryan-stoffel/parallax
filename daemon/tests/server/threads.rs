@@ -76,8 +76,8 @@ fn fake(steps: Vec<Step>) -> BackendRegistry {
 /// A run's model, effort, and permission, as its backend got them.
 type Options = (Option<String>, Option<AgentEffort>, Option<AgentPermission>);
 
-/// The fake CLI as a backend that maps only `high` effort and the `plan` permission (RYA-97),
-/// and records each run's options.
+/// The fake CLI as a backend that maps only `low` and `high` effort and the `plan` permission
+/// (RYA-97), and records each run's options.
 struct WithOptions {
     fake: FakeBackend,
     seen: Arc<Mutex<Vec<Options>>>,
@@ -99,12 +99,26 @@ impl Backend for WithOptions {
     }
 
     fn efforts(&self) -> &'static [AgentEffort] {
-        &[AgentEffort::High]
+        &[AgentEffort::Low, AgentEffort::High]
     }
 
     fn permissions(&self) -> &'static [AgentPermission] {
         &[AgentPermission::Plan]
     }
+}
+
+/// A host whose worker backend is [`WithOptions`] running `steps`, and what that backend saw.
+fn with_options(steps: Vec<Step>) -> (Host, Arc<Mutex<Vec<Options>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(WithOptions {
+            fake: fake_backend(steps),
+            seen: Arc::clone(&seen),
+        }),
+    );
+    (Host::start(backends), seen)
 }
 
 fn editing() -> Vec<Step> {
@@ -135,6 +149,17 @@ fn hang() -> Vec<Step> {
         },
         Step::Hang,
     ]
+}
+
+/// `agent/send` params for `text`, changing no run options.
+fn message(run_id: RunId, text: &str) -> AgentSendParams {
+    AgentSendParams {
+        run_id,
+        turn_id: TurnId::generate(),
+        text: text.to_owned(),
+        effort: None,
+        permission: None,
+    }
 }
 
 fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
@@ -538,11 +563,7 @@ async fn a_delete_racing_a_message_to_a_finished_thread_leaves_nothing_running()
     client.until(updated_to(AgentStatus::Completed)).await;
 
     let send = client
-        .send::<AgentSend>(AgentSendParams {
-            run_id: params.run_id,
-            turn_id: TurnId::generate(),
-            text: "And some more".to_owned(),
-        })
+        .send::<AgentSend>(message(params.run_id, "And some more"))
         .await;
     let delete = client
         .send::<ThreadDelete>(ThreadDeleteParams {
@@ -569,11 +590,7 @@ async fn a_delete_racing_a_message_to_a_finished_thread_leaves_nothing_running()
     let branches = git(&path, &["branch", "--list", &branch]);
     assert!(branches.is_empty(), "the branch is removed: {branches}");
     let after = client
-        .send::<AgentSend>(AgentSendParams {
-            run_id: params.run_id,
-            turn_id: TurnId::generate(),
-            text: "Still there?".to_owned(),
-        })
+        .send::<AgentSend>(message(params.run_id, "Still there?"))
         .await;
     let answer = client.responses(&[after]).await.remove(0).unwrap_err();
     assert_eq!(kind(&answer), ErrorKind::RunNotFound);
@@ -751,16 +768,7 @@ async fn a_thread_can_name_its_branch() {
 /// can't honor is refused before anything is made.
 #[tokio::test]
 async fn a_thread_keeps_its_model_effort_and_permission() {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let mut backends = BackendRegistry::new();
-    backends.register(
-        Provider::Anthropic,
-        Arc::new(WithOptions {
-            fake: fake_backend(editing()),
-            seen: Arc::clone(&seen),
-        }),
-    );
-    let host = Host::start(backends);
+    let (host, seen) = with_options(editing());
     let path = real_repo(host.work.path(), "app");
     let mut client = host.client().await;
     let repo = client.add(&path).await;
@@ -781,11 +789,7 @@ async fn a_thread_keeps_its_model_effort_and_permission() {
 
     // The CLI has exited, so a message resumes the run, with the same options.
     client
-        .call::<AgentSend>(AgentSendParams {
-            run_id: params.run_id,
-            turn_id: TurnId::generate(),
-            text: "And a summary".to_owned(),
-        })
+        .call::<AgentSend>(message(params.run_id, "And a summary"))
         .await
         .unwrap();
     runs.until(updated_to(AgentStatus::Completed)).await;
@@ -833,4 +837,113 @@ async fn a_thread_keeps_its_model_effort_and_permission() {
         "no other thread was made"
     );
     assert_eq!(seen.lock().unwrap().len(), 2, "no other run started");
+}
+
+/// RYA-161: a message to a finished thread can change its effort. The change is stored, reported
+/// on its run and on `agent.updated`, and used by the resumed CLI. An effort the backend can't
+/// honor is refused before anything changes.
+#[tokio::test]
+async fn a_message_changes_a_finished_threads_effort() {
+    let (host, seen) = with_options(editing());
+    let mut client = host.client().await;
+    let params = ThreadStartParams {
+        effort: Some(AgentEffort::High),
+        permission: Some(AgentPermission::Plan),
+        ..start_params(None, "Plan the notes")
+    };
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    let scope = scope(started.thread.repo);
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope)).await;
+    runs.until(updated_to(AgentStatus::Completed)).await;
+
+    let refused = client
+        .call::<AgentSend>(AgentSendParams {
+            effort: Some(AgentEffort::Max),
+            ..message(params.run_id, "Think harder")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::UnsupportedOption, "{refused:?}");
+
+    // The run's own permission changes nothing.
+    let sent = client
+        .call::<AgentSend>(AgentSendParams {
+            effort: Some(AgentEffort::Low),
+            permission: Some(AgentPermission::Plan),
+            ..message(params.run_id, "Just a summary")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(sent.effort, Some(AgentEffort::Low));
+    assert_eq!(sent.permission, Some(AgentPermission::Plan));
+    let efforts: Vec<_> = runs
+        .until(updated_to(AgentStatus::Completed))
+        .await
+        .into_iter()
+        .filter_map(|event| match event.event {
+            WispEvent::AgentUpdated { state, .. } => Some(state.effort),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !efforts.is_empty() && efforts.iter().all(|e| *e == Some(AgentEffort::Low)),
+        "agent.updated reports the new effort: {efforts:?}"
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            (None, Some(AgentEffort::High), Some(AgentPermission::Plan)),
+            (None, Some(AgentEffort::Low), Some(AgentPermission::Plan)),
+        ]
+    );
+    let listed = client
+        .call::<AgentList>(AgentListParams {
+            project: Some(scope),
+        })
+        .await
+        .unwrap()
+        .runs;
+    assert_eq!(listed[0].effort, Some(AgentEffort::Low), "it was stored");
+}
+
+/// RYA-161: a running CLI can't change its effort, so a message asking for another one is
+/// refused, and nothing changes.
+#[tokio::test]
+async fn a_running_thread_refuses_a_new_effort() {
+    let (host, seen) = with_options(hang());
+    let mut client = host.client().await;
+    let params = ThreadStartParams {
+        effort: Some(AgentEffort::High),
+        ..start_params(None, "Wait for me")
+    };
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    let scope = scope(started.thread.repo);
+    client.subscribe(0, Some(scope)).await;
+    client.until(updated_to(AgentStatus::Running)).await;
+
+    let refused = client
+        .call::<AgentSend>(AgentSendParams {
+            effort: Some(AgentEffort::Low),
+            ..message(params.run_id, "Hurry up")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::UnsupportedOption, "{refused:?}");
+    assert!(
+        refused.message.contains("while the run is working"),
+        "{refused:?}"
+    );
+
+    let listed = client
+        .call::<AgentList>(AgentListParams {
+            project: Some(scope),
+        })
+        .await
+        .unwrap()
+        .runs;
+    assert_eq!(listed[0].effort, Some(AgentEffort::High));
+    assert_eq!(seen.lock().unwrap().len(), 1, "no other CLI started");
+    host.server.stop().await;
 }

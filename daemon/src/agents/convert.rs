@@ -139,6 +139,8 @@ pub(super) fn run_state(row: &wisp_store::Run) -> AgentRunState {
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),
+        effort: row.fields.effort.as_deref().and_then(option_value),
+        permission: row.fields.permission.as_deref().and_then(option_value),
         updated_at: row.updated_at,
     }
 }
