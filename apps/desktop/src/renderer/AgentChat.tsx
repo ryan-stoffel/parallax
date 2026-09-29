@@ -168,20 +168,19 @@ export function TranscriptView({
     [],
   );
 
-  // While the run goes, the last turn's work row stands for what it's doing, even before it does anything.
+  // While the run goes, a work row follows a message that has no reply yet, standing for what
+  // the agent is doing before it does anything.
   const view = useMemo(() => {
     const grouped = groupWork(rows);
-    const last = grouped.findLast((r) => r.kind !== "assistant");
+    const last = grouped.at(-1);
     if (live && (last?.kind === "user" || last?.kind === "pending"))
-      grouped.splice(grouped.indexOf(last) + 1, 0, {
-        kind: "work",
-        key: "work:pending",
-        items: [],
-      });
+      grouped.push({ kind: "work", key: "work:pending", items: [] });
     return grouped;
   }, [rows, live]);
-  // The agent's text streams in its own row, so a work row is only live while it is the last.
-  const activeIndex = live && view.at(-1)?.kind === "work" ? view.length - 1 : -1;
+  // The agent's text streams in its own row, so a work row is only live while it is the last
+  // (a notice after it doesn't count).
+  const tail = view.findLastIndex((r) => r.kind !== "notice");
+  const activeIndex = live && view[tail]?.kind === "work" ? tail : -1;
 
   const virtualizer = useVirtualizer({
     count: view.length,

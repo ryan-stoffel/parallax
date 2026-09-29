@@ -6,7 +6,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
 import type { SubscriptionMessage, WispBridge } from "../preload/bridge";
 import type { AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
-import { AgentChat, RowView, RunTab } from "./AgentChat";
+import { AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
 import type { Item } from "./transcript";
 
@@ -336,4 +336,36 @@ test("an open thread's composer shows what its run started with, without choices
   // Nothing recorded means the CLI's defaults.
   render(<Composer started={{}} />);
   expect(document.body.textContent).toContain("Default modelDefault effortEdit");
+});
+
+test("while a run goes, only the last work row shows what the agent is doing", () => {
+  const transcript = (rows: Item[]) => render(<TranscriptView rows={rows} sent={new Map()} live />);
+  const user: Item = { kind: "user", key: "u", text: "go" };
+  const tool: Item = {
+    kind: "tool",
+    key: "t",
+    callId: "1",
+    name: "Bash",
+    input: { command: "ls" },
+  };
+  const reply: Item = { kind: "assistant", key: "a", text: "Hi", partial: true };
+  const header = () => document.querySelector("button[aria-expanded]")?.textContent;
+
+  // Before the agent does anything, a placeholder says it is working.
+  transcript([user]);
+  expect(header()).toBe("Working");
+  act(() => unmount());
+
+  // A reply with no tools needs no placeholder above it.
+  transcript([user, reply]);
+  expect(header()).toBeUndefined();
+  act(() => unmount());
+
+  transcript([user, tool]);
+  expect(header()).toBe("Runningls");
+  act(() => unmount());
+
+  // Once its text streams, the work before it is done.
+  transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, reply]);
+  expect(header()).toBe("Worked briefly");
 });
