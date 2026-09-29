@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use jiff::Timestamp;
 use serde_json::{Map, Value};
 
-use super::{NO_WRITE_TOOLS, WORKER_MIN_VERSION, WORKER_TOOLS};
+use super::{NO_WRITE_TOOLS, WORKER_MIN_VERSION, WORKER_PERMISSION_MODE, WORKER_TOOLS};
 use crate::backend::ToolPolicy;
 use crate::backend::event::{
     Event, Failure, FailureKind, LimitStatus, LimitWindow, ModelUsage, TodoItem, TodoStatus,
@@ -259,6 +259,25 @@ impl Translator {
                 let message = format!(
                     "Claude Code {} can't sandbox a worker; {WORKER_MIN_VERSION} or later can",
                     reported.unwrap_or("of an unknown version")
+                );
+                steps.push(violation(FailureKind::PolicyViolation, message));
+                return steps;
+            }
+            // Claude Code writes init before its first request, so this stops the worker before
+            // any tool runs.
+            let mode = text(message, "permissionMode");
+            if mode != Some(WORKER_PERMISSION_MODE) {
+                let reported = match mode {
+                    Some(mode) => format!("permission mode {mode:?}"),
+                    None => "no permission mode".to_owned(),
+                };
+                let message = format!(
+                    "Claude Code reported {reported} for a worker instead of \
+                     {WORKER_PERMISSION_MODE:?}. It forces \"default\" when \
+                     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, which on Linux lets a worker's \
+                     commands write all of /home, /tmp, /var, /opt, /run, /mnt, and /root. wispd \
+                     doesn't set it for a worker, so check the env block of Claude Code's managed \
+                     settings"
                 );
                 steps.push(violation(FailureKind::PolicyViolation, message));
                 return steps;

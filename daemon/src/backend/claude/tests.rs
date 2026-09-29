@@ -45,6 +45,7 @@ fn fixture(name: &str) -> &'static str {
         "follow-up-no-echo" => include_str!("fixtures/follow-up-no-echo.jsonl"),
         "provider" => include_str!("fixtures/provider.jsonl"),
         "subprocess-env" => include_str!("fixtures/subprocess-env.jsonl"),
+        "scrub-mode" => include_str!("fixtures/scrub-mode.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -616,6 +617,28 @@ async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
         &Outcome::Completed {
             result: Some("Fixed the off-by-one in the parser. I couldn't run the tests.".into())
         }
+    );
+}
+
+/// A worker's own init shows scrub mode, which the Linux host check runs in another process and
+/// can miss (RYA-118): wispd stops it at init, before its Bash call.
+#[tokio::test]
+async fn a_worker_whose_init_shows_another_permission_mode_is_stopped_before_any_tool() {
+    let fake = Fake::new("scrub-mode");
+    let mut request = request(&fake.root());
+    request.policy = ToolPolicy::WorkspaceWrite;
+    request.sandbox = Some(worker_sandbox(&fake.root()));
+    let all = run(&fake, request).await;
+    let (kind, message) = failure(&all);
+    assert_eq!(kind, FailureKind::PolicyViolation);
+    assert!(
+        message.contains(r#"permission mode "default" for a worker instead of "acceptEdits""#),
+        "{message}"
+    );
+    assert!(
+        !all.iter()
+            .any(|event| matches!(event, Event::ToolCall { .. })),
+        "{all:?}"
     );
 }
 
@@ -1285,9 +1308,10 @@ fn init_line(tools: &str) -> Vec<u8> {
     init_with_version(tools, "2.1.281")
 }
 
+/// An init line in a worker's permission mode. No-write runs don't check theirs.
 fn init_with_version(tools: &str, version: &str) -> Vec<u8> {
     format!(
-        r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"{version}","tools":{tools}}}"#
+        r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"{version}","permissionMode":"acceptEdits","tools":{tools}}}"#
     )
     .into_bytes()
 }
@@ -1323,6 +1347,30 @@ fn a_worker_on_a_claude_code_too_old_to_sandbox_it_is_stopped() {
         None,
         "no-write runs have no floor"
     );
+}
+
+#[test]
+fn a_worker_must_report_the_permission_mode_it_asked_for() {
+    let init = |mode: &str| {
+        format!(
+            r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"2.1.283","tools":["Read"]{mode}}}"#
+        )
+    };
+    for (mode, refused) in [
+        (r#","permissionMode":"acceptEdits""#, false),
+        (r#","permissionMode":"default""#, true),
+        (r#","permissionMode":"bypassPermissions""#, true),
+        ("", true),
+    ] {
+        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+        let steps = translator.line(init(mode).as_bytes());
+        let expected = refused.then_some(FailureKind::PolicyViolation);
+        assert_eq!(violation_kind(&steps), expected, "{mode}");
+    }
+    // wispd sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB for a no-write run, which forces "default".
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    let steps = translator.line(init(r#","permissionMode":"default""#).as_bytes());
+    assert_eq!(violation_kind(&steps), None);
 }
 
 fn violation_kind(steps: &[Step]) -> Option<FailureKind> {

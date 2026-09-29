@@ -25,16 +25,17 @@
 //!     the unreadable paths are what keep secrets in.
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
 //!
-//!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`], or
-//!   a Claude Code older than [`WORKER_MIN_VERSION`], fails with
-//!   [`FailureKind::PolicyViolation`].
+//!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`],
+//!   reports a Claude Code older than [`WORKER_MIN_VERSION`], or reports a permission mode
+//!   other than [`WORKER_PERMISSION_MODE`], fails with [`FailureKind::PolicyViolation`].
 //!
 //!   Only macOS and Linux run workers, with the same settings. On Linux,
 //!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
 //!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). It also
 //!   refuses a worker when Claude Code runs with [`SCRUB_ENV`] on, which managed settings can
-//!   set (RYA-112). Elsewhere the backend reports no `worker_sandbox` and refuses a
-//!   workspace-write run.
+//!   set (RYA-112). That check runs in a separate process, so the permission mode check, which
+//!   the flag fails, backs it up from inside the worker's own (RYA-118). Elsewhere the backend
+//!   reports no `worker_sandbox` and refuses a workspace-write run.
 //!
 //! # Messages go on stdin
 //!
@@ -166,6 +167,11 @@ pub const WORKER_TOOL_LIST: &str =
 /// interface addresses aren't: 0013 records that gap.
 pub const WORKER_DENIED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "[::]"];
 
+/// The permission mode a worker asks for, and must then report in `system/init`. Claude Code
+/// forces `default` instead when [`SCRUB_ENV`] is on, so another mode there means the worker's
+/// own process runs in scrub mode, whatever `linux_sandbox::check_host` saw (RYA-118).
+pub const WORKER_PERMISSION_MODE: &str = "acceptEdits";
+
 /// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013). [`arguments`] adds the run's
 /// [`worker_settings`] and `--add-dir` folders after them.
 pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
@@ -174,7 +180,7 @@ pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
     WORKER_TOOL_LIST,
     "--strict-mcp-config",
     "--permission-mode",
-    "acceptEdits",
+    WORKER_PERMISSION_MODE,
 ];
 
 /// The oldest Claude Code that has every flag and setting a worker relies on: `--restricted`
@@ -217,7 +223,9 @@ const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1
 /// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
 /// from a worker's commands instead, and [`SCRUBBED_VARS`] keeps an inherited one out. Managed
 /// settings can still set it, and their `env` beats wispd's, so on Linux
-/// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (RYA-112).
+/// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (RYA-112), and
+/// on every OS a worker whose `system/init` shows the permission mode it forces fails
+/// (RYA-118). It forces a no-write run's mode to `default` as well, so those aren't checked.
 const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 
 /// Variables a worker's commands never see (0013): an API key account's key, and the token for
