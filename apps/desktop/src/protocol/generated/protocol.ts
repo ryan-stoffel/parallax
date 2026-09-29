@@ -1098,7 +1098,8 @@ export type AgentStartParams = {
 	 */
 	prompt: string,
 	/**
-	 * What the run's tools may do. Only `workspaceWrite` exists.
+	 * What the run's tools may do: only `workspaceWrite`. A project's coordinator, the one
+	 * `noWrite` run, is started with `project/start`.
 	 */
 	policy: AgentPolicy,
 	/**

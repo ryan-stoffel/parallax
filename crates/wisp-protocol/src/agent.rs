@@ -501,7 +501,8 @@ pub struct AgentStartParams {
     pub project: ProjectId,
     /// The task.
     pub prompt: String,
-    /// What the run's tools may do. Only `workspaceWrite` exists.
+    /// What the run's tools may do: only `workspaceWrite`. A project's coordinator, the one
+    /// `noWrite` run, is started with `project/start`.
     pub policy: AgentPolicy,
     /// The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
