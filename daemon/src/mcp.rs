@@ -543,14 +543,17 @@ fn summary(binding: &Binding, run: &AgentRun) -> Value {
     })
 }
 
-/// The bound project's runs.
+/// The bound project's runs, without its coordinator (0024): the model never sees or steers its
+/// own run, which would message itself.
 async fn project_runs(binding: &Binding, wispd: &mut Wispd) -> Result<Vec<AgentRun>, String> {
-    Ok(wispd
+    let mut runs = wispd
         .call::<AgentList>(AgentListParams {
             project: Some(binding.project),
         })
         .await?
-        .runs)
+        .runs;
+    runs.retain(|run| run.policy != AgentPolicy::NoWrite);
+    Ok(runs)
 }
 
 /// Run `run_id`, if it belongs to the bound project: the binding check every tool that takes a

@@ -37,10 +37,10 @@ use crate::{
     EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
     EventsUnsubscribeResult, HostHealthParams, HostHealthResult, HostVersionParams,
     HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
-    ProjectCreateResult, ProjectListParams, ProjectListResult, RepoAddParams, RepoAddResult,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    ProjectCreateResult, ProjectListParams, ProjectListResult, ProjectStartParams, RepoAddParams,
+    RepoAddResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -210,6 +210,11 @@ method_table! {
         /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;
+        /// `project/start`: starts a project's coordinator chat, a no-write run in its repository
+        /// with wispd's coordinator tools (0024), idempotent on its client-generated run id. It
+        /// replaces the project's last coordinator unless that one is running. Gated on the
+        /// `coordinator` capability.
+        ProjectStart = "project/start": ProjectStartParams => AgentRunResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -281,6 +286,7 @@ mod tests {
                 "thread/start",
                 "thread/archive",
                 "thread/delete",
+                "project/start",
                 "$/cancelRequest",
                 "events/event",
             ]
