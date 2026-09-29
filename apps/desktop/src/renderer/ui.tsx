@@ -34,6 +34,10 @@ export function IconButton({
   );
 }
 
+/** A segmented control's option: a label around a visually hidden radio. */
+export const segment =
+  "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
+
 // Every dropdown shares these: a quiet trigger, and a panel 8px under it with the same radius.
 /** A menu's trigger: sized to its content, highlighted on hover. */
 export const menuButton =

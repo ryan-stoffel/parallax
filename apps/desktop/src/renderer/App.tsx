@@ -14,15 +14,17 @@ import { projectIcons, SettingsNav, settingsNames, Sidebar, ThreadList } from ".
 import { useThemePreference } from "./theme";
 import { groupOf, groupThreads, noRepo, useThreads } from "./threads";
 import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
+import { UsagePage } from "./Usage";
 
 /**
- * The open chat: a Project's coordinator chat, a thread (its id is its run's), or a new
- * thread in a sidebar group (`threads.ts`). With no group, it's the first repository's.
+ * The main pane: a Project's coordinator chat, a thread (its id is its run's), a new thread in
+ * a sidebar group (`threads.ts`; with no group, it's the first repository's), or Usage.
  */
 export type Selection =
   | { kind: "project"; projectId: string }
   | { kind: "thread"; threadId: string }
-  | { kind: "new"; groupId?: string };
+  | { kind: "new"; groupId?: string }
+  | { kind: "usage" };
 
 export type SettingsSection = "general" | "hosts" | "providers";
 
@@ -70,7 +72,8 @@ export function App() {
   const project =
     selection.kind === "project" ? projects.find((p) => p.id === selection.projectId)! : undefined;
   let crumbs: Crumb[];
-  if (project) {
+  if (selection.kind === "usage") crumbs = [{ label: "Usage" }, { label: "All hosts" }];
+  else if (project) {
     const { Icon, color } = projectIcons[project.icon];
     crumbs = [{ label: host.name }, { label: project.name, icon: <Icon className={color} /> }];
   } else {
@@ -124,7 +127,9 @@ export function App() {
       <PanelLeft />
     </IconButton>
   );
-  const sidePanelOpen = panelOpen && !settings;
+  // The side panel is a chat's, so Settings and Usage have none.
+  const chat = !settings && selection.kind !== "usage";
+  const sidePanelOpen = panelOpen && chat;
   const expanded = sidePanelOpen && panelExpanded;
   // The main pane's top row meets the traffic lights without the sidebar, and
   // Windows' window buttons without the side panel.
@@ -181,7 +186,7 @@ export function App() {
               {showSidebar}
               <Breadcrumb items={crumbs} />
               {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
-              {!panelOpen && (
+              {chat && !panelOpen && (
                 <div className="ml-auto">
                   <IconButton
                     label="Show side panel"
@@ -195,7 +200,9 @@ export function App() {
                 </div>
               )}
             </TopBar>
-            {selection.kind === "thread" ? (
+            {selection.kind === "usage" ? (
+              <UsagePage hosts={hosts} />
+            ) : selection.kind === "thread" ? (
               // Keyed, so another run starts from an empty transcript.
               <AgentChat
                 key={`${host.id}/${selection.threadId}`}

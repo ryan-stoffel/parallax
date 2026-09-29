@@ -68,7 +68,7 @@ test("a Project is one row that opens its chat, with no thread level", () => {
   expect(project.getAttribute("aria-current")).toBe("page");
 });
 
-test("the footer's Usage opens Providers, and Update shows its answer", async () => {
+test("the footer's Usage opens the Usage page, and Update shows its answer", async () => {
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   renderApp();
@@ -76,7 +76,12 @@ test("the footer's Usage opens Providers, and Update shows its answer", async ()
   expect(button("Update from develop")).toBeNull();
 
   act(() => button("Usage")!.click());
-  expect(document.querySelector('[aria-current="page"]')?.textContent).toBe("Providers");
+  const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
+  expect(document.querySelector("main h1")?.textContent).toBe("Usage");
+  // The sidebar stays on the thread list, and the side panel is a chat's.
+  expect(button("Usage")).not.toBeNull();
+  expect(document.querySelector('main [aria-controls="side-panel"]')).toBeNull();
   act(() => unmount());
 
   let answer: (text: string) => void = () => {};

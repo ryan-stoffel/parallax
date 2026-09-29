@@ -13,6 +13,7 @@ import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
+import { segment } from "./ui";
 import { UsageLines, useUsage, type Period } from "./Usage";
 import { uuidv7 } from "./uuidv7";
 
@@ -20,10 +21,6 @@ import { uuidv7 } from "./uuidv7";
 const SignInTerminal = lazy(() =>
   import("./SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
 );
-
-/** A segmented control's option: a label around a visually hidden radio. */
-const segment =
-  "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
 
 const themeOptions: { value: ThemePreference; name: string; icon: ReactNode }[] = [
   { value: "system", name: "System", icon: <Monitor /> },
