@@ -2,10 +2,20 @@ import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "ele
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { ErrorCodes } from "../protocol/generated/protocol";
+import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
 import type { RendererMethod, RpcResponse, SshHost, SubscribeParams } from "../preload/bridge";
 import { Connection, sshCommand } from "./connection";
 import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
+import {
+  closeAllTerminals,
+  closeTerminal,
+  isCliKind,
+  loginCommand,
+  openTerminal,
+  resizeTerminal,
+  writeTerminal,
+  type Command,
+} from "./terminal";
 import { findWispd } from "./wispd";
 
 // The methods the renderer may call, checked at runtime because the renderer is untrusted
@@ -128,12 +138,50 @@ export function startHosts(): void {
   ipcMain.handle("wisp:connectionState", (_event, hostId: unknown) => connection(hostId).state);
   ipcMain.handle("wisp:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
+  // A window's sign-in terminal (terminal.ts). The renderer names the host and the CLI; only
+  // main decides what runs.
+  ipcMain.handle(
+    "wisp:openTerminal",
+    (event, hostId: unknown, cli: unknown, cols: unknown, rows: unknown) => {
+      if (typeof hostId !== "string" || !isCliKind(cli) || !isSize(cols) || !isSize(rows)) {
+        return "invalid terminal";
+      }
+      return openTerminal(event.sender, () => signInCommand(hostId, cli), cols, rows);
+    },
+  );
+  ipcMain.on("wisp:terminalInput", (event, data: unknown) => {
+    if (typeof data === "string") writeTerminal(event.sender, data);
+  });
+  ipcMain.on("wisp:resizeTerminal", (event, cols: unknown, rows: unknown) => {
+    if (isSize(cols) && isSize(rows)) resizeTerminal(event.sender, cols, rows);
+  });
+  ipcMain.on("wisp:closeTerminal", (event) => closeTerminal(event.sender));
+
   powerMonitor.on("resume", () => {
     for (const each of connections.values()) each.heartbeat();
   });
   app.on("will-quit", () => {
     for (const each of connections.values()) each.dispose();
+    closeAllTerminals();
   });
+}
+
+/**
+ * What signs in to `cli` on a host: the binary that host's wispd found, which is the one it runs
+ * later, reached as the host's connection is. Resolves to an error for people.
+ */
+async function signInCommand(hostId: string, cli: CliKind): Promise<Command | string> {
+  const host = connections.get(hostId);
+  if (!host) return "That host isn't in wisp anymore.";
+  // Decided before asking, so a remote host's path can never run on this computer.
+  const saved = settings.hosts.find((h) => h.id === hostId);
+  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  const answer = await host.request("accounts/list", {});
+  if ("error" in answer)
+    return `wisp couldn't ask the host where the CLI is: ${answer.error.message}`;
+  const path = answer.result.clis.find((each) => each.cli === cli)?.path;
+  if (!path) return "That CLI isn't installed on this host anymore.";
+  return loginCommand(cli, path, ssh);
 }
 
 /** Starts a host's connection, replacing any it had. */
@@ -201,6 +249,10 @@ function connection(hostId: unknown): Connection {
   if (!found) throw new Error(`unknown host: ${String(hostId)}`);
   return found;
 }
+
+/** A terminal's width or height, in character cells. */
+const isSize = (value: unknown): value is number =>
+  Number.isInteger(value) && (value as number) > 0 && (value as number) <= 1000;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

@@ -1,9 +1,10 @@
 import { ArrowUpRight, Monitor, Moon, Plus, Sun } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 
 import type { RpcError, ThemePreference } from "../preload/bridge";
 import {
   ErrorCodes,
+  type CliKind,
   type DetectedCli,
   type KeyAccount,
   type Provider,
@@ -13,6 +14,11 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
 import { uuidv7 } from "./uuidv7";
+
+// xterm.js is large, so it loads when a sign-in first opens.
+const SignInTerminal = lazy(() =>
+  import("./SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
+);
 
 const themeOptions: { value: ThemePreference; name: string; icon: ReactNode }[] = [
   { value: "system", name: "System", icon: <Monitor /> },
@@ -244,6 +250,8 @@ function accountsError(error: RpcError): string {
 /** Settings > Providers: each host's vendor CLIs and API keys. */
 function ProvidersSettings() {
   const hosts = useHosts();
+  // The one sign-in terminal, across every host: the app runs one per window.
+  const [signIn, setSignIn] = useState<{ hostId: string; cli: CliKind }>();
   return (
     <>
       <h1 className="mb-1.5 text-xl font-semibold">Providers</h1>
@@ -252,7 +260,12 @@ function ProvidersSettings() {
         API key as a fallback.
       </p>
       {hosts.map((h) => (
-        <HostAccounts key={h.id} host={h} />
+        <HostAccounts
+          key={h.id}
+          host={h}
+          signingIn={signIn?.hostId === h.id ? signIn.cli : undefined}
+          onSignIn={(cli) => setSignIn(cli && { hostId: h.id, cli })}
+        />
       ))}
     </>
   );
@@ -260,9 +273,20 @@ function ProvidersSettings() {
 
 /**
  * One host's accounts: each CLI wispd detects there, then its API keys, which can be added and
- * removed. Loads once the host is connected; Refresh probes the CLIs again.
+ * removed. Loads once the host is connected; Refresh probes the CLIs again. A CLI that isn't
+ * signed in signs in in a terminal under its row (`signingIn`), and the CLIs are probed again
+ * when it ends.
  */
-function HostAccounts({ host }: { host: Host }) {
+function HostAccounts({
+  host,
+  signingIn,
+  onSignIn,
+}: {
+  host: Host;
+  signingIn?: CliKind;
+  /** Opens a CLI's sign-in terminal, or closes it with undefined. */
+  onSignIn: (cli?: CliKind) => void;
+}) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
   const [detected, setDetected] = useState<DetectedCli[]>();
@@ -324,7 +348,23 @@ function HostAccounts({ host }: { host: Host }) {
             <p className={`${settingRow} text-muted-foreground`}>Checking…</p>
           )}
           {detected?.map((cli) => (
-            <CliRow key={cli.cli} cli={cli} />
+            <Fragment key={cli.cli}>
+              <CliRow
+                cli={cli}
+                onSignIn={signingIn === cli.cli ? undefined : () => onSignIn(cli.cli)}
+              />
+              {signingIn === cli.cli && (
+                <Suspense>
+                  <SignInTerminal
+                    hostId={host.id}
+                    cli={cli.cli}
+                    name={cliInfo[cli.cli]?.name ?? cli.cli}
+                    onExit={() => void load("accounts/refresh")}
+                    onClose={() => onSignIn(undefined)}
+                  />
+                </Suspense>
+              )}
+            </Fragment>
           ))}
           {keys?.map((account) => (
             <KeyRow
@@ -359,8 +399,11 @@ function HostAccounts({ host }: { host: Host }) {
   );
 }
 
-/** A detected CLI: its version and plan, and whether it's signed in, or where to install it. */
-function CliRow({ cli }: { cli: DetectedCli }) {
+/**
+ * A detected CLI: its version and plan, and whether it's signed in, or where to install it. A
+ * known CLI that isn't signed in offers Sign in, while `onSignIn` is given.
+ */
+function CliRow({ cli, onSignIn }: { cli: DetectedCli; onSignIn?: () => void }) {
   const info = cliInfo[cli.cli];
   // Plans come as the vendor writes them, such as Claude's "max".
   const plan = cli.plan && cli.plan[0]!.toUpperCase() + cli.plan.slice(1);
@@ -381,9 +424,28 @@ function CliRow({ cli }: { cli: DetectedCli }) {
       </a>
     );
   else if (cli.signedIn === true) status = <span className="text-foreground">Signed in</span>;
-  else if (cli.signedIn === false) status = "Not signed in";
-  // wispd couldn't tell; its note says why.
-  else status = <span title={cli.note}>Sign-in unknown</span>;
+  else {
+    status = (
+      <span className="flex items-center gap-2">
+        {cli.signedIn === false ? (
+          "Not signed in"
+        ) : (
+          // wispd couldn't tell; its note says why.
+          <span title={cli.note}>Sign-in unknown</span>
+        )}
+        {info && onSignIn && (
+          <button
+            type="button"
+            aria-label={`Sign in to ${info.name}`}
+            onClick={onSignIn}
+            className={`${quietButton} -my-1`}
+          >
+            Sign in
+          </button>
+        )}
+      </span>
+    );
+  }
 
   return (
     <div className={settingRow}>

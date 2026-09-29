@@ -102,7 +102,7 @@ test("lists each connected host's CLIs and keys, and links a missing CLI to its 
   await renderProviders();
   expect(rows("This Mac")).toEqual([
     "Claude Code2.1.281 · MaxSigned in",
-    "Codex0.156.1Not signed in",
+    "Codex0.156.1Not signed inSign in",
     "CursorNot installedInstall",
     "WorkAnthropic API key · sk-ant-...abcdRemove",
   ]);
@@ -205,5 +205,5 @@ test("Refresh probes the CLIs again, without undoing a remove made meanwhile", a
   await act(async () => probed());
   await settle();
   expect(calls("accounts/refresh")).toHaveLength(1);
-  expect(rows("This Mac")).toEqual(["Claude CodeInstalledNot signed in"]);
+  expect(rows("This Mac")).toEqual(["Claude CodeInstalledNot signed inSign in"]);
 });

@@ -1,6 +1,7 @@
 // The `window.wisp` contract. The preload implements it and the renderer types
 // against it, so it must not import anything from Node or Electron.
 import type {
+  CliKind,
   ErrorData,
   EventsEventParams,
   EventsSubscribeParams,
@@ -60,7 +61,29 @@ export interface WispBridge {
    * people, or undefined.
    */
   removeHost(id: string): Promise<string | undefined>;
+
+  /**
+   * Opens this window's terminal, running `cli`'s own sign-in on a host (0004), in place of any
+   * terminal it had. Resolves to an error for people, or undefined once it runs. The app only
+   * passes on what's typed and printed; it never reads or keeps it.
+   */
+  openTerminal(
+    hostId: string,
+    cli: CliKind,
+    cols: number,
+    rows: number,
+  ): Promise<string | undefined>;
+  /** Types into the terminal. */
+  terminalInput(data: string): void;
+  /** Resizes the terminal, in character cells. */
+  resizeTerminal(cols: number, rows: number): void;
+  /** Ends the terminal, killing what runs in it. */
+  closeTerminal(): void;
+  /** What the terminal prints, then its exit. Returns the unsubscribe function. */
+  onTerminal(listener: (message: TerminalMessage) => void): () => void;
 }
+
+export type TerminalMessage = { type: "data"; data: string } | { type: "exit"; exitCode: number };
 
 /** A host the user added, reached with `ssh <destination> wispd attach` (0022). */
 export type SshHost = { id: string; name: string; destination: string };
