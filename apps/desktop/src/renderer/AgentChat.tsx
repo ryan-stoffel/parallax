@@ -97,6 +97,11 @@ export function AgentChat({
   if (connection?.status === "failed") disabledReason = "Disconnected from wispd";
   else if (!connected) disabledReason = "Connecting to wispd…";
   else if (!run) disabledReason = error ? "This chat couldn't load" : "Loading…";
+  let optionsDisabled: string | undefined;
+  if (connected && !("sendOptions" in connection.capabilities))
+    optionsDisabled = "This host's wispd can't change a thread's effort or access";
+  else if (isRunning(run?.status))
+    optionsDisabled = "Effort and access can change once it finishes";
 
   return (
     <>
@@ -131,7 +136,9 @@ export function AgentChat({
           onStop={isRunning(run?.status) ? cancel : undefined}
           disabledReason={disabledReason}
           tab={run && <RunTab run={run} />}
+          backend={run?.backend}
           started={run}
+          optionsDisabled={optionsDisabled}
         />
       </div>
     </>

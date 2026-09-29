@@ -6,8 +6,8 @@ use crate::error::StoreError;
 use crate::worktree::insert_worktree;
 use crate::{Store, Worktree, WorktreeFields, timestamp};
 
-/// What an `agent/start` asked for, plus the backend routing resolved it to (#156). None of it
-/// changes after the run is created.
+/// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only effort
+/// and permission change after the run is created, through `agent/send` (RYA-161).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFields {
     pub project_id: Uuid,
@@ -265,6 +265,27 @@ impl Store {
     /// [`StoreError::NotFound`] if no run has `id`, or a database error.
     pub fn update_run(&self, id: Uuid, state: &RunState) -> Result<Run, StoreError> {
         update(&self.conn, id, state)
+    }
+
+    /// Replaces run `id`'s effort and permission (RYA-161), and returns the updated row.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no run has `id`, or a database error.
+    pub fn set_run_options(
+        &self,
+        id: Uuid,
+        effort: Option<&str>,
+        permission: Option<&str>,
+    ) -> Result<Run, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE runs SET effort = ?2, permission = ?3, updated_at = ?4 WHERE id = ?1",
+            params![id.to_string(), effort, permission, timestamp::now()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound { id });
+        }
+        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
     }
 
     /// Replaces accepted run `id`'s state and deletes its worktree's row, in one transaction:

@@ -23,9 +23,9 @@ use wisp_protocol::{
 };
 use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, Worktree};
 
-use super::convert::{self, agent_run, item_bytes, option_value, output_item};
+use super::convert::{self, agent_run, item_bytes, option_name, option_value, output_item};
 use super::worker::{sandbox_path, worker_unavailable};
-use super::{Prepared, prepare, store, store_error};
+use super::{Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
     AccountRef, Credential, Event, EventStream, FollowUp, ModelUsage, Outcome, Resume, Run,
     RunRequest, SendError, ToolPolicy, Usage, WorkerSandbox,
@@ -46,6 +46,8 @@ pub(super) enum Command {
     Send {
         turn_id: TurnId,
         text: String,
+        /// A new effort or permission for the run (RYA-161); its model is always `None`.
+        options: RunOptions,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
     /// `agent/cancel`.
@@ -205,9 +207,10 @@ impl Actor {
             Command::Send {
                 turn_id,
                 text,
+                options,
                 reply,
             } => {
-                let answer = self.send(turn_id, text).await;
+                let answer = self.send(turn_id, text, options).await;
                 let _ = reply.send(answer);
             }
             Command::Cancel { reply } => {
@@ -352,7 +355,12 @@ impl Actor {
         Ok((self.snapshot()?, merge))
     }
 
-    async fn send(&mut self, turn_id: TurnId, text: String) -> Result<AgentRun, ErrorObject> {
+    async fn send(
+        &mut self,
+        turn_id: TurnId,
+        text: String,
+        options: RunOptions,
+    ) -> Result<AgentRun, ErrorObject> {
         if text.trim().is_empty() {
             return Err(ErrorObject::invalid_params("text must not be empty"));
         }
@@ -368,6 +376,23 @@ impl Actor {
                     format!("turn {turn_id} was already sent with a different text"),
                 ))
             };
+        }
+        // Only an effort or permission that differs from the run's changes anything (RYA-161).
+        let fields = &self.row.fields;
+        let changes = RunOptions {
+            model: None,
+            effort: options.effort.filter(|&e| option_name(e) != fields.effort),
+            permission: options
+                .permission
+                .filter(|&p| option_name(p) != fields.permission),
+        };
+        let changing = changes != RunOptions::default();
+        if changing && self.live.is_some() {
+            return Err(ErrorObject::wisp(
+                ErrorKind::UnsupportedOption,
+                "effort and access can't change while the run is working; send the message \
+                 again once it has finished",
+            ));
         }
         if let Some(live) = &self.live {
             let follow_up = FollowUp {
@@ -402,11 +427,17 @@ impl Actor {
                 }
             }
         }
-        self.resume(turn_id, text).await
+        self.resume(turn_id, text, changes).await
     }
 
-    /// Starts a new CLI process for the run, resuming its vendor session with `text`.
-    async fn resume(&mut self, turn_id: TurnId, text: String) -> Result<AgentRun, ErrorObject> {
+    /// Starts a new CLI process for the run, resuming its vendor session with `text`, after
+    /// storing `changes` to its effort and permission, which the new process runs with.
+    async fn resume(
+        &mut self,
+        turn_id: TurnId,
+        text: String,
+        changes: RunOptions,
+    ) -> Result<AgentRun, ErrorObject> {
         let Some(session_id) = self.row.state.session_id.clone() else {
             return Err(ErrorObject::wisp(
                 ErrorKind::RunNotResumable,
@@ -446,6 +477,24 @@ impl Actor {
                 "its session ran on {}, but its account now runs on {backend}",
                 self.row.fields.backend
             )));
+        }
+        if changes != RunOptions::default() {
+            changes.check(prepared.resolved.backend())?;
+            let (id, fields) = (self.row.id, &self.row.fields);
+            let effort = changes
+                .effort
+                .and_then(option_name)
+                .or(fields.effort.clone());
+            let permission = changes
+                .permission
+                .and_then(option_name)
+                .or(fields.permission.clone());
+            let row = store(&self.daemon, move |db| {
+                db.set_run_options(id, effort.as_deref(), permission.as_deref())
+                    .map_err(|error| store_error(&error))
+            })
+            .await?;
+            self.row.fields = row.fields;
         }
         let session = session_id.clone();
         let totals = store(&self.daemon, move |db| {

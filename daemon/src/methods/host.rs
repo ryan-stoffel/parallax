@@ -77,8 +77,9 @@ pub(crate) fn initialize(
 /// `agentReview` (#157): `agent/diff`, `agent/file`, `agent/accept`, `agent/requestChanges`, and
 /// `agent.accepted`, so an editor can tell a host that reviews runs from one that only runs them,
 /// `threads` (#110): normal threads, with the `thread/*` and `repo/*` methods and the `repo.*`
-/// and `thread.*` events, and `runOptions` (RYA-97): `agent/start` and `thread/start` take
-/// `model`, `effort`, and `permission`, which an older wispd would silently ignore (0007).
+/// and `thread.*` events, `runOptions` (RYA-97): `agent/start` and `thread/start` take
+/// `model`, `effort`, and `permission`, which an older wispd would silently ignore (0007), and
+/// `sendOptions` (RYA-161): `agent/send` takes `effort` and `permission`, likewise.
 fn capabilities_advertised() -> Capabilities {
     Capabilities(BTreeMap::from([
         ("accounts".to_owned(), serde_json::Map::new()),
@@ -86,6 +87,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agentReview".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
+        ("sendOptions".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
     ]))
 }
