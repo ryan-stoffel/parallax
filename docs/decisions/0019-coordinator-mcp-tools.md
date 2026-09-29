@@ -36,7 +36,7 @@ The coordinator is a no-write Claude Code or Codex run (0004, 0012). To plan and
 
 ### The coordinator's allowlist (Claude Code)
 
-A coordinator run is 0004's no-write command unchanged, plus two flags:
+A coordinator run is 0004's no-write command plus two flags. Its `--settings` now also deny reads under Claude Code's shared temp folder ([0024](0024-coordinator-chat.md)):
 
 ```sh
 claude -p ... --tools Read,Glob,Grep --setting-sources user \

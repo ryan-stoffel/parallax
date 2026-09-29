@@ -423,8 +423,10 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
     let sent = &backend.calls()[0];
     assert_eq!(sent.policy, ToolPolicy::NoWrite);
     assert_eq!(sent.sandbox, None, "a coordinator gets no worker sandbox");
+    let settings = claude::no_write_settings().to_string();
     let mut expected: Vec<&str> = claude::BASE_ARGS.to_vec();
     expected.extend(claude::NO_WRITE_ARGS);
+    expected.extend(["--settings", &settings]);
     assert_eq!(
         claude::arguments(sent).unwrap(),
         expected,
@@ -482,6 +484,8 @@ async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
         ],
     }}});
     expected.extend([
+        "--settings".to_owned(),
+        claude::no_write_settings().to_string(),
         "--mcp-config".to_owned(),
         config.to_string(),
         "--allowedTools".to_owned(),

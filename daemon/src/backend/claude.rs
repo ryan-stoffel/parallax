@@ -6,8 +6,9 @@
 //! the run's cwd, plus the policy's flags, `--model`, `--effort`, and `--resume <session id>`
 //! (0004 [10]):
 //!
-//! - **No-write** is exactly 0004's: [`NO_WRITE_ARGS`]. As a second check, a no-write run whose
-//!   `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
+//! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
+//!   also keeps the file tools out of Claude Code's shared temp folder (RYA-176). As a second
+//!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
 //!   [`FailureKind::PolicyViolation`]. A coordinator's run also gets wispd's own MCP tools
 //!   (0019): `--mcp-config` with only the `wispd mcp` server, and `--allowedTools` with exactly
 //!   [`crate::mcp::ALLOWED_TOOLS`], which `dontAsk` would otherwise deny. `--strict-mcp-config`
@@ -150,20 +151,34 @@ pub const BASE_ARGS: &[&str] = &[
     "stream-json",
 ];
 
-/// [`ToolPolicy::NoWrite`]'s arguments, exactly as 0004 has them: read-only built-in tools, only
-/// the user's settings (so no project `env` block or hooks), hooks off, no MCP servers but
-/// wispd's, and every call that would prompt denied.
+/// [`ToolPolicy::NoWrite`]'s fixed arguments, as 0004 has them: read-only built-in tools, only
+/// the user's settings (so no project `env` block or hooks), no MCP servers but wispd's, and
+/// every call that would prompt denied. [`arguments`] adds [`no_write_settings`] after them.
 pub const NO_WRITE_ARGS: &[&str] = &[
     "--tools",
     "Read,Glob,Grep",
     "--setting-sources",
     "user",
-    "--settings",
-    r#"{"disableAllHooks":true}"#,
     "--strict-mcp-config",
     "--permission-mode",
     "dontAsk",
 ];
+
+/// The `--settings` a no-write run gets: hooks off (0004), and no `Read` under Claude Code's
+/// shared temp folder, `/tmp/claude-<uid>` in both spellings ([`commands_temp`]), which holds
+/// every session's files and which Claude Code otherwise lets it read outside its cwd (RYA-176).
+/// 0013 hides the same folder from workers. A `Read` rule covers `Glob` and `Grep` too. The
+/// folder is always in `/tmp`, because no no-write run gets [`TEMP_ENV`]: every agent CLI starts
+/// from wispd's allowlisted environment (`agents::worker::agent_environment`, 0014), which drops
+/// an inherited one, and only a worker has one injected.
+#[must_use]
+pub fn no_write_settings() -> Value {
+    let deny: Vec<String> = ["/tmp", "/private/tmp"]
+        .into_iter()
+        .map(|temp| format!("Read(/{}/**)", commands_temp(Path::new(temp)).display()))
+        .collect();
+    serde_json::json!({"disableAllHooks": true, "permissions": {"deny": deny}})
+}
 
 /// The only built-in tools a no-write run's `system/init` may list. `EndConversation` stays
 /// whatever `--tools` says (the CLI reference), and only ends the session. A coordinator run
@@ -419,7 +434,9 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
                 "a no-write run takes no permission; its mode is fixed (0004)".into(),
             ));
         }
-        ToolPolicy::NoWrite => {}
+        ToolPolicy::NoWrite => {
+            args.extend(["--settings".into(), no_write_settings().to_string().into()]);
+        }
     }
     if let Some(tools) = &request.coordinator_tools {
         if request.policy != ToolPolicy::NoWrite {
