@@ -8,9 +8,14 @@
 //! Service, and `docker.sock`. Since 2.1.92 the filter ships inside Claude Code: its native build
 //! runs every sandboxed command through its own binary as `ARGV0=apply-seccomp`. So
 //! [`check_host`] probes that same helper, inside the namespaces Claude's sandbox uses.
+//!
+//! [`check_host`] also refuses a Claude Code whose managed settings turn on
+//! `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, which widens every command's writes on Linux (RYA-112).
 
 use std::os::unix::net::UnixListener;
 use std::path::Path;
+
+use serde_json::Value;
 
 use super::WORKER_MIN_VERSION;
 use crate::backend::process::Launcher;
@@ -43,13 +48,21 @@ const REFUSED: i32 = 97;
 /// on from 24.04.
 const APPARMOR_USERNS: &str = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
 
+/// The `claude sandbox status` field that is `"unsupported"` on Linux exactly when
+/// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is on: the flag turns off Bash auto-allow.
+const SCRUB_FIELD: &str = "autoAllowBashIfSandboxedSource";
+
+/// The first Claude Code whose `sandbox status` has [`SCRUB_FIELD`].
+const STATUS_MIN_VERSION: &str = "2.1.275";
+
 /// Checks that Claude Code's sandbox works here with its seccomp filter, for workers that run
 /// `claude` through `launcher`:
 ///
 /// 1. `bwrap` and `socat` resolve on the launcher's `PATH`, where Claude Code looks for them.
-/// 2. Inside bwrap alone, `socat` connects to a Unix socket wispd listens on. If it can't, bwrap
+/// 2. `claude`'s settings don't turn on `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` ([`check_scrub_flag`]).
+/// 3. Inside bwrap alone, `socat` connects to a Unix socket wispd listens on. If it can't, bwrap
 ///    can't sandbox here, as on Ubuntu 24.04 and later without a profile for it.
-/// 3. Inside bwrap and `claude`'s own filter, the same connect is refused.
+/// 4. Inside bwrap and `claude`'s own filter, the same connect is refused.
 ///
 /// # Errors
 ///
@@ -63,6 +76,7 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
         "socat isn't installed, and Claude Code's worker sandbox needs it on Linux; install the \
          socat package",
     )?;
+    check_scrub_flag(launcher, text(claude)?).await?;
     let dir = tempfile::tempdir()
         .map_err(|error| format!("could not make a folder to check the worker sandbox: {error}"))?;
     let socket = dir.path().join("probe.sock");
@@ -104,6 +118,34 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
             "Claude Code's seccomp filter (its apply-seccomp helper) could not run: {}; Claude \
              Code {WORKER_MIN_VERSION} or later has it built in on x86_64 and arm64",
             first_line(&filtered)
+        )),
+    }
+}
+
+/// Refuses a `claude` whose settings turn on `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`. On Linux the flag
+/// merges Claude Code's CI profile into every command's sandbox, which lets commands write all of
+/// `/home`, `/tmp`, `/var`, `/opt`, `/run`, `/mnt`, and `/root` (0013). wispd never sets it for a
+/// worker, but managed settings can, and their `env` beats both the worker's environment and its
+/// `--settings`. So wispd asks Claude Code itself, which covers every managed source it loads.
+/// `--restricted` makes it read the same settings a worker does.
+async fn check_scrub_flag(launcher: &Launcher, claude: &str) -> Result<(), String> {
+    let args = ["--restricted", "sandbox", "status"];
+    let ran = run(launcher, claude, &args, PROBE_TIMEOUT)
+        .await
+        .map_err(|error| format!("checking Claude Code's sandbox settings failed: {error}"))?;
+    let status: Value = serde_json::from_str(ran.stdout.trim()).unwrap_or_default();
+    match status[SCRUB_FIELD].as_str() {
+        Some("unsupported") => Err(
+            "Claude Code's managed settings turn on CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which on \
+             Linux lets a worker's commands write all of /home, /tmp, /var, /opt, /run, /mnt, and \
+             /root; remove it from the managed settings' env"
+                .into(),
+        ),
+        Some(_) => Ok(()),
+        None => Err(format!(
+            "`claude sandbox status` doesn't say whether Claude Code's settings turn on \
+             CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which would widen a worker's sandbox; update Claude \
+             Code to {STATUS_MIN_VERSION} or later"
         )),
     }
 }
@@ -166,10 +208,13 @@ mod tests {
     use crate::backend::process::{Environment, Launcher};
     use crate::paths::DataDir;
 
-    /// A launcher whose `PATH` is only `path`.
-    fn launcher(root: &Path, path: &str) -> Launcher {
+    /// A launcher whose environment is only `vars`, with `HOME` in `root`.
+    fn launcher(root: &Path, vars: &[(&str, &str)]) -> Launcher {
         let mut env = Environment::empty();
-        env.set("PATH", path);
+        env.set("HOME", root);
+        for (name, value) in vars {
+            env.set(name, value);
+        }
         Launcher::new(DataDir::new(root.join("data")).unwrap(), env)
     }
 
@@ -186,7 +231,7 @@ mod tests {
         let bin = dir.path().join("bin");
         fs::create_dir(&bin).unwrap();
         let claude = script(&bin, "claude", "exit 0");
-        let only = launcher(dir.path(), bin.to_str().unwrap());
+        let only = launcher(dir.path(), &[("PATH", bin.to_str().unwrap())]);
 
         let error = check_host(&only, &claude).await.unwrap_err();
         assert!(
@@ -199,14 +244,52 @@ mod tests {
         assert!(error.contains("socat isn't installed"), "{error}");
     }
 
+    #[tokio::test]
+    async fn a_claude_in_scrub_mode_or_without_its_status_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        script(&bin, "bwrap", "exit 0");
+        script(&bin, "socat", "exit 0");
+        let only = launcher(dir.path(), &[("PATH", bin.to_str().unwrap())]);
+
+        // Part of what Claude Code 2.1.283 prints when managed settings turn the flag on.
+        let scrubbed = script(
+            &bin,
+            "claude",
+            r#"echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"unsupported"}'"#,
+        );
+        let error = check_host(&only, &scrubbed).await.unwrap_err();
+        assert!(
+            error.contains("managed settings turn on CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
+            "{error}"
+        );
+
+        // Claude Code 2.1.274 and older don't report the field.
+        let old = script(
+            &bin,
+            "old-claude",
+            r#"echo '{"statusVersion":2,"enabledSource":"off"}'"#,
+        );
+        let error = check_host(&only, &old).await.unwrap_err();
+        assert!(error.contains("update Claude Code to 2.1.275"), "{error}");
+    }
+
     /// The real bwrap and socat, which CI installs along with the Claude Code it names in
     /// `WISP_SANDBOX_CLAUDE` (0013).
     fn installed() -> Option<(tempfile::TempDir, Launcher, PathBuf)> {
         let claude = PathBuf::from(std::env::var_os("WISP_SANDBOX_CLAUDE")?);
         let dir = tempfile::tempdir().unwrap();
-        let launcher = launcher(dir.path(), "/usr/local/bin:/usr/bin:/bin");
+        let launcher = launcher(dir.path(), &[("PATH", INSTALLED_PATH)]);
         Some((dir, launcher, claude))
     }
+
+    const INSTALLED_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
+
+    /// A fake `claude`'s answer to `--restricted sandbox status` with the scrub flag off.
+    const STATUS_OK: &str = r#"if [ "$1" = --restricted ]; then
+    echo '{"autoAllowBashIfSandboxedSource":"default"}'; exit 0
+fi"#;
 
     #[tokio::test]
     async fn claude_code_s_own_filter_passes_the_check() {
@@ -222,16 +305,36 @@ mod tests {
             return;
         };
         // Runs the command it is given with no filter, as a build without the helper would.
-        let unfiltered = script(dir.path(), "claude", r#"exec "$@""#);
+        let unfiltered = script(dir.path(), "claude", &format!("{STATUS_OK}\nexec \"$@\""));
         let error = check_host(&launcher, &unfiltered).await.unwrap_err();
         assert!(error.contains("let a sandboxed command connect"), "{error}");
 
         let broken = script(
             dir.path(),
             "broken-claude",
-            "echo 'no helper here' >&2; exit 1",
+            &format!("{STATUS_OK}\necho 'no helper here' >&2; exit 1"),
         );
         let error = check_host(&launcher, &broken).await.unwrap_err();
         assert!(error.contains("could not run: no helper here"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_claude_with_the_scrub_flag_on_is_refused() {
+        let Some((dir, _, claude)) = installed() else {
+            return;
+        };
+        // Where a managed settings `env` block puts the flag: Claude Code's own environment.
+        let scrubbed = launcher(
+            dir.path(),
+            &[
+                ("PATH", INSTALLED_PATH),
+                ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
+            ],
+        );
+        let error = check_host(&scrubbed, &claude).await.unwrap_err();
+        assert!(
+            error.contains("managed settings turn on CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
+            "{error}"
+        );
     }
 }

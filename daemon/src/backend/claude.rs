@@ -31,7 +31,8 @@
 //!
 //!   Only macOS and Linux run workers, with the same settings. On Linux,
 //!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
-//!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). Elsewhere the
+//!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). It also
+//!   refuses a worker whose managed settings turn on [`SCRUB_ENV`] (RYA-112). Elsewhere the
 //!   backend reports no `worker_sandbox` and refuses a workspace-write run.
 //!
 //! # Messages go on stdin
@@ -210,7 +211,8 @@ const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1
 /// wispd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
 /// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
 /// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
-/// from a worker's commands instead.
+/// from a worker's commands instead. Managed settings can still set it, and their `env` beats
+/// wispd's, so on Linux `linux_sandbox::check_host` refuses a worker when they do (RYA-112).
 const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 
 /// Variables a worker's commands never see (0013): an API key account's key, and the token for
@@ -315,10 +317,10 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
 /// matches every host. The denied hosts are `WebFetch` deny rules as well as `deniedDomains`,
 /// because the sandbox's list binds only commands, and a deny rule beats the `*` allow for the
 /// tool. Bash is an allow rule as well, not only `autoAllowBashIfSandboxed`, so it stays allowed
-/// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders, and the read-only git paths stay
-/// readable inside an unreadable path, such as wispd's data folder, which holds the worktree, the
-/// context folder, and a normal thread's scratch repository (#110). A second account's
-/// `config_home` is unreadable too.
+/// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders,
+/// and the read-only git paths stay readable inside an unreadable path, such as wispd's data
+/// folder, which holds the worktree, the context folder, and a normal thread's scratch repository
+/// (#110). A second account's `config_home` is unreadable too.
 #[must_use]
 pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<&Path>) -> Value {
     let unreadable = strings(

@@ -102,7 +102,7 @@ impl CliDetector {
 
 /// The result of running a status command to completion within the timeout.
 pub(crate) struct Ran {
-    stdout: String,
+    pub(crate) stdout: String,
     pub(crate) stderr_tail: String,
     pub(crate) exit_code: Option<i32>,
 }
