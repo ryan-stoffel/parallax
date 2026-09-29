@@ -347,7 +347,9 @@ function History({
     <div>
       {hosts.map((h) => (
         <HostHistoryLoader
-          key={h.id}
+          // Keyed by `now` too, so Refresh and a new range ask again from empty rather than
+          // showing the last answer under the new range.
+          key={`${h.id}/${now}`}
           host={h}
           named={hosts.length > 1}
           since={since}
@@ -377,7 +379,7 @@ function History({
       <div className="grid gap-10 @3xl:grid-cols-[minmax(0,5fr)_minmax(0,8fr)]">
         <div>
           <span className="block text-[44px] leading-tight font-semibold tabular-nums">
-            {format(whole)}
+            {shown(summary.total)}
           </span>
           <p className="mt-1 text-[13px] text-muted-foreground">{subtitle}</p>
           <ul className="mt-7 flex flex-col gap-5">
@@ -406,22 +408,34 @@ function History({
                     </span>
                   </div>
                   <p className="mt-1 pl-[18px] text-[12.5px] text-muted-foreground">
-                    {percent(measure(total), whole)} of {cost ? "cost" : "tokens"} · {other}
+                    {cost && total.cost === 0 && total.unpriced > 0
+                      ? "No reported cost"
+                      : `${percent(measure(total), whole)} of ${cost ? "cost" : "tokens"}`}{" "}
+                    · {other}
                   </p>
                 </li>
               );
             })}
           </ul>
         </div>
-        <Chart
-          title={`${hourly ? "Hourly" : "Daily"} ${cost ? "cost" : "processed tokens"}`}
-          series={summary.backends.map((b) => ({
-            color: backends[b.backend].color,
-            values: b.byBucket.map(measure),
-          }))}
-          labels={starts.map((s) => label(s))}
-          format={format}
-        />
+        {whole > 0 ? (
+          <Chart
+            title={`${hourly ? "Hourly" : "Daily"} ${cost ? "cost" : "processed tokens"}`}
+            // A backend that reports no cost has no line on the cost chart, rather than a flat $0.
+            series={summary.backends
+              .filter((b) => measure(b.total) > 0)
+              .map((b) => ({
+                color: backends[b.backend].color,
+                values: b.byBucket.map(measure),
+              }))}
+            labels={starts.map((s) => label(s))}
+            format={format}
+          />
+        ) : (
+          <p className="text-[13px] text-muted-foreground">
+            No vendor reported a cost in this range.
+          </p>
+        )}
       </div>
 
       <h2 className="mt-12 mb-4 text-[15px] font-medium">Totals</h2>
