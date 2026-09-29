@@ -27,6 +27,7 @@ pub mod run_temp;
 pub mod sandbox;
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -221,6 +222,24 @@ pub fn check_argument(what: &str, value: &str) -> Result<(), StartError> {
         )));
     }
     Ok(())
+}
+
+/// `export PATH='<path>'${PATH:+:$PATH}`: a shell line that puts `path`, the `PATH` a worker's CLI
+/// started with, back in front of whatever `PATH` the shell's startup files left, keeping their
+/// entries after it (RYA-126, RYA-141). `${PATH:+...}` avoids a trailing `:`, which would put the
+/// current folder on `PATH`.
+#[must_use]
+pub fn prepend_path_line(path: &OsStr) -> Vec<u8> {
+    let mut line = b"export PATH='".to_vec();
+    for &byte in path.as_encoded_bytes() {
+        if byte == b'\'' {
+            line.extend_from_slice(b"'\\''");
+        } else {
+            line.push(byte);
+        }
+    }
+    line.extend_from_slice(b"'${PATH:+:$PATH}\n");
+    line
 }
 
 /// A vendor session for a run to continue.

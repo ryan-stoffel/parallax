@@ -26,6 +26,17 @@
 //!   which would hand commands the variables `shell_environment_policy` keeps out, such as
 //!   `CODEX_API_KEY`.
 //!
+//! # A worker's `PATH`
+//!
+//! Codex runs each command with the user's shell, and zsh reads `/etc/zshenv` and `~/.zshenv`
+//! for every command, so startup files that set `PATH` outright replace the `PATH` wispd gave the
+//! CLI. The shell snapshot that would put it back is off (above). So a worker's commands get
+//! `ZDOTDIR`, which zsh reads right after `/etc/zshenv`: [`write_zdotdir`] writes a folder into the
+//! data folder's `tmp/` whose `.zshenv` runs the user's own `~/.zshenv` and then puts the CLI's
+//! `PATH` back in front (RYA-141). The profile makes the folder readable, since the sandboxed zsh
+//! reads it, but not writable. `allow_login_shell=false` keeps `.zprofile` and `.zlogin`, which
+//! would run after it, from running. The run's driver deletes the folder once Codex has exited.
+//!
 //! As a second check, a worker whose output shows an MCP or subagent call is stopped with
 //! [`FailureKind::PolicyViolation`]. Codex older than [`WORKER_MIN_VERSION`] would ignore the
 //! profile, so the runner refuses it before starting a worker. Only macOS runs Codex workers;
@@ -56,21 +67,24 @@ mod tests;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 
 use self::stream::{Step, Translator};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
-    CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, Signal, StdinMode,
+    CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, Signal, SpawnError,
+    StdinMode,
 };
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
     EventSink, RunHandle, RunRequest, StartError, Started, ToolPolicy, TurnId, WorkerSandbox,
-    check_argument,
+    check_argument, prepend_path_line,
 };
 
 /// The CLI's program name, looked up on the launcher's `PATH`.
@@ -127,14 +141,18 @@ impl CodexBackend {
     }
 }
 
-/// The CLI's arguments for `request`.
+/// The CLI's arguments for `request`, whose commands get `zdotdir` as `ZDOTDIR` (see
+/// [`worker_overrides`]).
 ///
 /// # Errors
 ///
 /// [`StartError::Invalid`] if the model or the resume id could be read as an option, or if the
 /// worker has no usable [`WorkerSandbox`]. [`StartError::Unsupported`] for a no-write run, a
 /// permission other than `edit`, or an effort this version doesn't know.
-pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
+pub fn arguments(
+    request: &RunRequest,
+    zdotdir: Option<&Path>,
+) -> Result<Vec<OsString>, StartError> {
     let Some(sandbox) = worker_sandbox(request)? else {
         return Err(StartError::Unsupported(
             "wispd runs only workers on Codex so far; its coordinator is RYA-39".into(),
@@ -149,7 +167,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         Credential::Subscription { config_home } => config_home.as_deref(),
         Credential::ApiKey(_) => None,
     };
-    for value in worker_overrides(sandbox, &request.cwd, config_home) {
+    for value in worker_overrides(sandbox, &request.cwd, config_home, zdotdir) {
         args.extend(["-c".into(), value.into()]);
     }
     if !matches!(request.permission, None | Some(AgentPermission::Edit)) {
@@ -190,11 +208,13 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
 /// The `-c` overrides that hold a worker in `cwd` to 0013 (see the module docs). Each sets one
 /// top-level key to an inline table, so no path is ever part of a dotted key. A path both
 /// unreadable and read-only is denied. A second account's `config_home` is unreadable too.
+/// `zdotdir`, the worker's [`write_zdotdir`] folder, is readable and is its commands' `ZDOTDIR`.
 #[must_use]
 pub fn worker_overrides(
     sandbox: &WorkerSandbox,
     cwd: &Path,
     config_home: Option<&Path>,
+    zdotdir: Option<&Path>,
 ) -> Vec<String> {
     let mut access: BTreeMap<&Path, &str> = sandbox
         .read_only
@@ -208,6 +228,9 @@ pub fn worker_overrides(
         .chain(config_home)
     {
         access.insert(path, "deny");
+    }
+    if let Some(zdotdir) = zdotdir {
+        access.insert(zdotdir, "read");
     }
     let filesystem = inline(
         access
@@ -229,8 +252,45 @@ pub fn worker_overrides(
         format!(r#"projects={{{}={{trust_level="untrusted"}}}}"#, toml(cwd)),
         r#"approval_policy="never""#.to_owned(),
         r#"web_search="live""#.to_owned(),
-        "shell_environment_policy={ignore_default_excludes=false}".to_owned(),
+        "allow_login_shell=false".to_owned(),
+        format!(
+            "shell_environment_policy={{ignore_default_excludes=false{}}}",
+            zdotdir
+                .map(|zdotdir| format!(", set={{ZDOTDIR={}}}", toml(zdotdir)))
+                .unwrap_or_default()
+        ),
     ]
+}
+
+/// The start of a worker's `.zshenv`. zsh reads it in place of the user's `~/.zshenv`, so it runs
+/// that file itself, after unsetting `ZDOTDIR` so neither that file nor the command sees wispd's
+/// folder.
+const ZSHENV_START: &[u8] = b"unset ZDOTDIR\n[ -f \"$HOME/.zshenv\" ] && . \"$HOME/.zshenv\"\n";
+
+/// Writes a worker's `ZDOTDIR` into `dir` (wispd's data folder's `tmp/`) and returns it, which
+/// deletes it when dropped (RYA-141). Its `.zshenv` runs the user's `~/.zshenv` and then puts
+/// `path`, the `PATH` the CLI started with, in front of whatever `PATH` the startup files left.
+/// The folder is new, has a random name and a canonical path, as the sandbox needs, and only its
+/// owner may open it (0700, and 0600 for the file).
+///
+/// # Errors
+///
+/// If `dir` can't be created or the folder can't be written.
+pub fn write_zdotdir(dir: &Path, path: &OsStr) -> io::Result<TempDir> {
+    std::fs::create_dir_all(dir)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("codex-zdotdir-");
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let zdotdir = builder.tempdir_in(dir.canonicalize()?)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(zdotdir.path().join(".zshenv"))?;
+    file.write_all(ZSHENV_START)?;
+    file.write_all(&prepend_path_line(path))?;
+    Ok(zdotdir)
 }
 
 /// `{a, b, ...}`, an inline table of `entries`.
@@ -301,8 +361,15 @@ impl Backend for CodexBackend {
                 "wispd hasn't checked Codex's worker sandbox on this OS yet (decision 0013)".into(),
             ));
         }
+        let zdotdir = match self.launcher.base().get("PATH") {
+            Some(path) => Some(
+                write_zdotdir(&self.launcher.data_dir().temp_dir(), path)
+                    .map_err(SpawnError::Io)?,
+            ),
+            None => None,
+        };
         let mut spec = ProcessSpec::new(PROGRAM, &request.cwd);
-        spec.args = arguments(&request)?;
+        spec.args = arguments(&request, zdotdir.as_ref().map(TempDir::path))?;
         spec.scrub = scrubbed(self.launcher.base());
         match &request.account.credential {
             Credential::Subscription { config_home } => {
@@ -340,6 +407,7 @@ impl Backend for CodexBackend {
             switch,
             turn_id,
             Translator::new(prefix),
+            zdotdir,
         ));
         Ok(Started {
             run: Arc::new(handle),
@@ -349,13 +417,15 @@ impl Backend for CodexBackend {
 }
 
 /// Runs one process: forwards its events and decides the outcome when it exits. Cancelling
-/// doesn't go through here: the run's handle signals the process through `switch`.
+/// doesn't go through here: the run's handle signals the process through `switch`. `zdotdir`,
+/// the worker's [`write_zdotdir`] folder, is deleted once the process has exited.
 async fn drive(
     mut process: Process,
     mut sink: EventSink,
     switch: CancelSwitch,
     turn_id: Option<TurnId>,
     mut translator: Translator,
+    zdotdir: Option<TempDir>,
 ) {
     let mut violation = None;
     if sink.emit(Event::TurnStarted { turn_id }).await.is_err() {
@@ -400,6 +470,7 @@ async fn drive(
             () = sink.closed(), if !switch.is_cancelled() => switch.cancel(),
         }
     };
+    drop(zdotdir);
     let outcome = outcome(violation, &switch, &mut translator, exit);
     let _ = sink.finish(outcome).await;
 }
