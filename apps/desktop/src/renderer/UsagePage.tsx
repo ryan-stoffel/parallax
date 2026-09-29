@@ -74,15 +74,18 @@ function backendOf(accountId: string, keys: KeyAccount[]): Backend | undefined {
   return key && providerBackend[key.provider];
 }
 
-/** A host's API keys, to name their accounts and tell their backend. Empty until they answer. */
-function useKeys(hostId: string, connected: boolean): KeyAccount[] {
+/**
+ * A host's API keys, to name their accounts and tell their backend, asked again whenever
+ * `refresh` changes. Empty until they answer.
+ */
+function useKeys(hostId: string, connected: boolean, refresh?: number): KeyAccount[] {
   const [keys, setKeys] = useState<KeyAccount[]>([]);
   useEffect(() => {
     if (!connected) return;
     void window.wisp.request(hostId, "accounts/keys/list", {}).then((answer) => {
       if ("result" in answer) setKeys(answer.result.accounts);
     });
-  }, [hostId, connected]);
+  }, [hostId, connected, refresh]);
   return keys;
 }
 
@@ -317,6 +320,8 @@ function History({
   const { starts, hourly } = useMemo(() => buckets(range, now), [range, now]);
   const since = new Date(starts[0]!).toISOString();
   const [loaded, setLoaded] = useState<Record<string, HostHistory | undefined>>({});
+  // Here rather than in Breakdown, which unmounts while a new range loads.
+  const [by, setBy] = useState<BreakdownBy>("model");
   const onLoad = useCallback(
     (hostId: string, history?: HostHistory) => setLoaded((all) => ({ ...all, [hostId]: history })),
     [],
@@ -328,9 +333,10 @@ function History({
   const measure = (m: Measures) => (cost ? m.cost : tokensOf(m));
   const format = (n: number) => (cost ? dollars(n) : tokenCount.format(n));
   // A backend or model that used tokens but reported no cost has none to show, not $0.
-  const shown = (m: Measures) =>
-    cost && m.cost === 0 && m.unpriced > 0 ? "—" : format(measure(m));
+  const unreported = (m: Measures) => cost && m.cost === 0 && m.unpriced > 0;
+  const shown = (m: Measures) => (unreported(m) ? "—" : format(measure(m)));
   const whole = measure(summary.total);
+  const share = (m: Measures) => (unreported(m) ? "—" : percent(measure(m), whole));
   const label = (start: number, long = false) =>
     new Date(start).toLocaleString(
       "en",
@@ -342,17 +348,17 @@ function History({
     );
 
   // One element in the same place in every return below, so the loaders are never remounted
-  // (which would drop their answers and ask again) as the rest appears.
+  // (which would drop their answers and ask again) as the rest appears. Refresh reaches them
+  // through `now`.
   const notes = (
     <div>
       {hosts.map((h) => (
         <HostHistoryLoader
-          // Keyed by `now` too, so Refresh and a new range ask again from empty rather than
-          // showing the last answer under the new range.
-          key={`${h.id}/${now}`}
+          key={h.id}
           host={h}
           named={hosts.length > 1}
           since={since}
+          refresh={now}
           onLoad={onLoad}
         />
       ))}
@@ -459,10 +465,12 @@ function History({
       </dl>
 
       <Breakdown
+        by={by}
+        onBy={setBy}
         hourly={hourly}
-        whole={whole}
         measure={measure}
         shown={shown}
+        share={share}
         models={summary.models}
         times={starts
           .map((start, i) => ({ start, total: summary.byBucket[i]! }))
@@ -476,35 +484,43 @@ function History({
 }
 
 /**
- * Asks one host for its history since `since` once it's connected, and hands it to `onLoad`
- * (undefined while it has none). Shows why the host has nothing, if it doesn't.
+ * Asks one host for its history since `since` once it's connected, and again whenever `since` or
+ * `refresh` changes, and hands it to `onLoad` (undefined while it has none for `since`). A
+ * refresh keeps the last answer until the next arrives; a new `since` drops it, since its hours
+ * and run counts are for another range. Shows why the host has nothing, if it doesn't.
  */
 function HostHistoryLoader({
   host,
   named,
   since,
+  refresh,
   onLoad,
 }: {
   host: Host;
   named: boolean;
   since: string;
+  refresh: number;
   onLoad: (hostId: string, history?: HostHistory) => void;
 }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
-  const keys = useKeys(host.id, connected);
-  const [answer, setAnswer] = useState<Omit<HostHistory, "keys"> | RpcError>();
+  const keys = useKeys(host.id, connected, refresh);
+  const [answer, setAnswer] = useState<{
+    since: string;
+    value: Omit<HostHistory, "keys"> | RpcError;
+  }>();
   useEffect(() => {
     if (!connected) return;
     let stopped = false;
     void window.wisp.request(host.id, "usage/history", { since }).then((a) => {
-      if (!stopped) setAnswer("result" in a ? a.result : a.error);
+      if (!stopped) setAnswer({ since, value: "result" in a ? a.result : a.error });
     });
     return () => {
       stopped = true;
     };
-  }, [host.id, connected, since]);
-  const history = connected && answer && "hours" in answer ? answer : undefined;
+  }, [host.id, connected, since, refresh]);
+  const current = answer?.since === since ? answer.value : undefined;
+  const history = connected && current && "hours" in current ? current : undefined;
   useEffect(
     () => onLoad(host.id, history && { ...history, keys }),
     [host.id, history, keys, onLoad],
@@ -512,7 +528,7 @@ function HostHistoryLoader({
 
   const note =
     hostStatus(connection) ??
-    (!answer ? "Loading…" : "hours" in answer ? undefined : usageError(answer));
+    (!current ? "Loading…" : "hours" in current ? undefined : usageError(current));
   if (!note) return null;
   return (
     <p className="mb-6 text-[13px] text-muted-foreground">
@@ -596,28 +612,31 @@ function Chart({
   );
 }
 
-type Breakdown = "model" | "time";
+type BreakdownBy = "model" | "time";
 
 /** The range's usage by model (largest first) or by day or hour (latest first), as a table. */
 function Breakdown({
+  by,
+  onBy,
   hourly,
-  whole,
   measure,
   shown,
+  share,
   models,
   times,
   cost,
 }: {
+  by: BreakdownBy;
+  onBy: (by: BreakdownBy) => void;
   hourly: boolean;
-  whole: number;
   measure: (m: Measures) => number;
   shown: (m: Measures) => string;
+  share: (m: Measures) => string;
   models: Summary["models"];
   times: { name: string; total: Measures }[];
   /** Whether the view measures cost; the last column is then tokens, and cost otherwise. */
   cost: boolean;
 }) {
-  const [by, setBy] = useState<Breakdown>("model");
   const unit = hourly ? "Hour" : "Day";
   const rows =
     by === "model"
@@ -651,7 +670,7 @@ function Breakdown({
             { value: "time", name: unit },
           ]}
           value={by}
-          onChange={setBy}
+          onChange={onBy}
         />
       </div>
       <table className="w-full text-[13.5px]">
@@ -670,9 +689,7 @@ function Breakdown({
                 <span className="flex items-center gap-2.5">{r.name}</span>
               </td>
               <td className={cell}>{shown(r.total)}</td>
-              <td className={`${cell} text-muted-foreground`}>
-                {percent(measure(r.total), whole)}
-              </td>
+              <td className={`${cell} text-muted-foreground`}>{share(r.total)}</td>
               <td className={cell}>
                 {cost
                   ? tokenCount.format(tokensOf(r.total))
