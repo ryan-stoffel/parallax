@@ -1,10 +1,12 @@
-import { Folder, House } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Folder, GitBranch, House, Plus } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AccountChoice, Repo } from "../protocol/generated/protocol";
 import { Composer } from "./Composer";
 import { describeError } from "./errors";
+import type { Host } from "./hosts";
+import { RunTargetMenu } from "./RunTargetMenu";
 import { noRepo, type ThreadGroup } from "./threads";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
@@ -14,6 +16,8 @@ const addRepository = "add-repository";
 
 interface NewThreadProps {
   hostId: string;
+  /** The computers a thread can run on. */
+  hosts: Host[];
   /** Repositories and No Repo, as the sidebar groups them. */
   groups: ThreadGroup[];
   groupId: string;
@@ -80,6 +84,7 @@ const noAccounts =
  */
 export function NewThread({
   hostId,
+  hosts,
   groups,
   groupId,
   onGroupChange,
@@ -100,6 +105,8 @@ export function NewThread({
 
   // Focus the chosen account when the chooser opens, so a screen reader announces it.
   const chooser = useRef<HTMLFieldSetElement>(null);
+  // The heading's repository name opens the same menu as the picker under the box.
+  const repoMenu = useId();
   useEffect(() => {
     if (choices) chooser.current?.querySelector<HTMLInputElement>("input:checked")?.focus();
   }, [choices]);
@@ -178,37 +185,72 @@ export function NewThread({
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 pb-[12vh]">
-      <div className="w-full max-w-2xl">
-        <h1 className="mb-6 text-center text-[22px] font-medium tracking-tight">
-          {group.id === noRepo
-            ? "What should we work on?"
-            : `What should we build in ${group.name}?`}
+      <div className="w-full max-w-3xl">
+        <h1 className="mb-7 text-center text-[24px] font-medium tracking-tight">
+          {group.id === noRepo ? "What should we work on " : "What should we build in "}
+          <button
+            type="button"
+            popoverTarget={repoMenu}
+            aria-haspopup="menu"
+            className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground"
+          >
+            {group.id === noRepo ? "without a repo" : group.name}
+          </button>
+          ?
         </h1>
+        {/* Menu only: the repository name in the heading opens it. */}
+        <Picker
+          id={repoMenu}
+          button={false}
+          label="Repository"
+          value={group.id}
+          onChange={(value) => {
+            if (value === addRepository) return void pickRepository();
+            setRepoError(undefined);
+            setChoices(undefined);
+            onGroupChange(value);
+          }}
+          options={[
+            ...groups.map((g) => ({
+              value: g.id,
+              label: g.name,
+              icon: g.id === noRepo ? <House /> : <Folder />,
+            })),
+            ...(local
+              ? [
+                  {
+                    value: addRepository,
+                    label: "Add repository…",
+                    icon: <Plus />,
+                    divider: true,
+                  },
+                ]
+              : []),
+          ]}
+        />
         <Composer
-          hero
           newThread
           onSend={send}
           disabledReason={disabledReason}
-          footer={
-            <div className="flex flex-col items-start px-2 pt-2">
+          tab={
+            <>
+              <RunTargetMenu hosts={hosts} hostId={hostId} />
+              {/* Placeholder until wispd offers branches. */}
               <Picker
-                label="Repository"
-                icon={group.id === noRepo ? <House /> : <Folder />}
-                value={group.id}
-                onChange={(e) => {
-                  if (e.target.value === addRepository) return void pickRepository();
-                  setRepoError(undefined);
-                  setChoices(undefined);
-                  onGroupChange(e.target.value);
-                }}
-              >
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-                {local && <option value={addRepository}>Add repository…</option>}
-              </Picker>
+                label="Branch"
+                icon={<GitBranch />}
+                align="end"
+                search="Search branches…"
+                panelClassName="w-72"
+                options={[
+                  { value: "develop", label: "develop", hint: "current" },
+                  { value: "main", label: "main" },
+                ]}
+              />
+            </>
+          }
+          footer={
+            <div>
               {repoError && (
                 <p role="alert" className="px-2 pt-1.5 text-[12.5px] text-danger">
                   {repoError}

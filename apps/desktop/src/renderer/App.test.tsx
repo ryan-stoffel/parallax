@@ -29,13 +29,17 @@ function renderApp() {
 
 test("the side panel toggle reports and flips the panel's state", () => {
   renderApp();
-  const toggle = document.querySelector<HTMLButtonElement>('[aria-controls="side-panel"]')!;
+  // One toggle shows at a time: the main pane's while closed, the panel's while open.
+  const toggle = () =>
+    [...document.querySelectorAll<HTMLButtonElement>('[aria-controls="side-panel"]')].find(
+      (b) => !b.closest("[hidden]"),
+    )!;
   const panel = document.getElementById("side-panel")!;
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
   expect(panel.hidden).toBe(true);
 
-  act(() => toggle.click());
-  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  act(() => toggle().click());
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
   expect(panel.hidden).toBe(false);
 
   // Mod+Alt+B closes it again.
@@ -44,7 +48,7 @@ test("the side panel toggle reports and flips the panel's state", () => {
       new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true }),
     );
   });
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
   expect(panel.hidden).toBe(true);
 });
 
