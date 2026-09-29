@@ -22,11 +22,11 @@ A project's coordinator is a run (0024), and the runs it starts through `wispd m
 - It never sends while its own CLI runs. Claude Code's CLI exits once no turn is outstanding (0014), so a running CLI is a turn in progress, and everything that arrives during it goes out together as the next turn.
 - A user message doesn't carry waiting wake-ups; they follow as their own turn.
 
-### The cap
+### The cap, and other pauses
 
 - A coordinator takes at most 10 wake-up turns in a row. The next one pauses wake-ups and emits `agent.wakeupsPaused {runId}` on the project's events. Summaries keep collecting while paused.
-- The user's next `agent/send` to the coordinator resets the count and ends the pause; what waited goes out after that turn.
-- `agent/cancel` on the coordinator pauses wake-ups too, without the event, so a run finishing a moment after Stop doesn't start it again.
+- `agent/cancel` on the coordinator pauses wake-ups too, so a run finishing a moment after Stop doesn't start it again. So does a wake-up that can't start the coordinator, such as one whose session can't resume, or a store error while checking it. Each emits the same event, once per pause. The event carries no reason: whatever paused them, the user's next message is what lets them through.
+- The user's next `agent/send` to the coordinator resets the count and ends the pause; what waited goes out after that turn. Summaries are dropped only once a wake-up turn reaches the coordinator's CLI.
 - Only the project's current coordinator wakes. A coordinator that `project/start` replaced drops its wake-ups, so a project never has two live (0024).
 
 ### How a client recognizes a wake-up
@@ -38,4 +38,5 @@ A project's coordinator is a run (0024), and the runs it starts through `wispd m
 - Wake-ups are in memory only. A restart loses what is waiting, the count, and a pause. Runs that were running are interrupted on shutdown and wake nothing; the user's next message resumes the coordinator. RYA-178 picks a project back up after a restart.
 - A user message the coordinator gets while wake-ups wait costs one more turn than folding them in would.
 - The coordinator's instructions still say it isn't told when a subagent finishes; RYA-43 rewrites them.
+- A wake-up checks that its coordinator is still the project's before resuming it, but the run is recorded `running` only once its CLI starts. A `project/start` that lands in between finds no running coordinator and starts a second. `agent/send` has the same window (0024); a wake-up just opens it with nobody at the keyboard. It is narrow, so it stays.
 - A `coordinatorThread` that names no run, which any client can send to `agent/start`, wakes nothing; wispd logs a warning.

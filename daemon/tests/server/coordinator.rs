@@ -425,6 +425,8 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
             .cloned()
             .collect::<Vec<_>>()
     };
+    // Past wake-ups' 2 s batch: a turn in progress still holds them.
+    tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(coordinator_launches().len(), 1, "no wake-up during a turn");
 
     // The user's message ends the coordinator's turn; then nobody is watching.

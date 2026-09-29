@@ -4,10 +4,10 @@
 //! to the coordinator's actor, which keeps it in [`Wakes`]. The actor sends what is waiting as one
 //! turn, through the same resume as `agent/send`, once [`BATCH`] has passed since the first
 //! summary arrived and its own CLI isn't running: a turn in progress gets them next. After
-//! [`CAP`] wake-ups in a row with no message from the user, it pauses them and reports
+//! [`CAP`] wake-ups in a row with no message from the user, after the user stops the coordinator,
+//! or when a wake-up can't start it, it pauses them until the user writes and reports
 //! `agent.wakeupsPaused`.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,8 +40,9 @@ pub(super) struct Wakes {
     since: Option<Instant>,
     in_a_row: u32,
     paused: bool,
-    /// Turns sent as wake-ups whose `turnStarted` isn't logged yet.
-    sent: HashSet<TurnId>,
+    /// The wake-up turn last sent, until its `turnStarted` is logged. Only one can be in flight,
+    /// since none is sent while the coordinator's CLI runs.
+    sent: Option<TurnId>,
 }
 
 impl Wakes {
@@ -58,18 +59,23 @@ impl Wakes {
             .map(|since| since + BATCH)
     }
 
-    /// The next wake-up turn's id and message, counted against the cap. `None` once the cap is
-    /// reached, which pauses wake-ups and keeps what is waiting.
-    pub fn take(&mut self) -> Option<(TurnId, String)> {
+    /// The next wake-up turn's id and message, or `None` once the cap is reached. What is
+    /// waiting stays until [`Wakes::delivered`].
+    pub fn next(&mut self) -> Option<(TurnId, String)> {
         if self.in_a_row >= CAP {
-            self.paused = true;
             return None;
         }
-        self.in_a_row += 1;
-        self.since = None;
         let turn = TurnId::generate();
-        self.sent.insert(turn);
-        Some((turn, message(&std::mem::take(&mut self.waiting))))
+        self.sent = Some(turn);
+        Some((turn, message(&self.waiting)))
+    }
+
+    /// The wake-up from [`Wakes::next`] reached the coordinator's CLI: it counts against the cap,
+    /// and what waited is gone.
+    pub fn delivered(&mut self) {
+        self.in_a_row += 1;
+        self.waiting.clear();
+        self.since = None;
     }
 
     /// The user wrote to the coordinator: the count starts over, and a pause ends.
@@ -78,9 +84,10 @@ impl Wakes {
         self.paused = false;
     }
 
-    /// The user stopped the coordinator: nothing wakes it until they write again.
-    pub fn pause(&mut self) {
-        self.paused = true;
+    /// Nothing wakes the coordinator until the user writes again. Whether it wasn't paused
+    /// already.
+    pub fn pause(&mut self) -> bool {
+        !std::mem::replace(&mut self.paused, true)
     }
 
     /// Drops what is waiting, for a coordinator a newer one replaced (0024).
@@ -91,7 +98,7 @@ impl Wakes {
 
     /// Whether `turn` was sent as a wake-up, forgetting it.
     pub fn was_sent(&mut self, turn: TurnId) -> bool {
-        self.sent.remove(&turn)
+        self.sent.take_if(|sent| *sent == turn).is_some()
     }
 }
 
@@ -121,17 +128,16 @@ pub(super) fn summary(run: &AgentRun, outcome: &AgentOutcome) -> String {
         .prompt
         .lines()
         .find(|line| !line.trim().is_empty())
-        .unwrap_or_default()
-        .trim();
+        .unwrap_or_default();
     let ended = match outcome {
         AgentOutcome::Completed {
             result: Some(result),
-        } => format!("completed, saying: {}", truncate(result, EXCERPT_BYTES)),
+        } => format!("completed, saying: {}", one_line(result, EXCERPT_BYTES)),
         AgentOutcome::Completed { result: None } => "completed".to_owned(),
         AgentOutcome::Failed { failure, message } => format!(
             "failed ({}): {}",
             option_name(failure).unwrap_or_default(),
-            truncate(message, EXCERPT_BYTES)
+            one_line(message, EXCERPT_BYTES)
         ),
         AgentOutcome::Cancelled => "cancelled".to_owned(),
         AgentOutcome::Interrupted | AgentOutcome::Unknown => "stopped".to_owned(),
@@ -146,8 +152,16 @@ pub(super) fn summary(run: &AgentRun, outcome: &AgentOutcome) -> String {
     format!(
         "- Run {} ({}): {ended}. {changes}",
         run.id,
-        truncate(task, TASK_BYTES)
+        one_line(task, TASK_BYTES)
     )
+}
+
+/// `text` cut to about `max` bytes, on one line, so each run's summary stays one line.
+fn one_line(text: &str, max: usize) -> String {
+    truncate(text, max)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A wake-up turn's message: the summaries, and what to do with them.
@@ -179,8 +193,10 @@ mod tests {
             "the first one sets the time"
         );
 
-        let (turn, message) = wakes.take().unwrap();
+        let (turn, message) = wakes.next().unwrap();
         assert!(message.contains("- Run a\n- Run b"), "{message}");
+        assert_eq!(wakes.due(), Some(first + BATCH), "kept until delivered");
+        wakes.delivered();
         assert_eq!(wakes.due(), None, "both went out in one turn");
         assert!(wakes.was_sent(turn));
         assert!(!wakes.was_sent(turn), "each turn is marked once");
@@ -192,16 +208,19 @@ mod tests {
         let now = Instant::now();
         for _ in 0..CAP {
             wakes.push("- Run".to_owned(), now);
-            assert!(wakes.take().is_some());
+            assert!(wakes.next().is_some());
+            wakes.delivered();
         }
         wakes.push("- Run late".to_owned(), now);
-        assert!(wakes.take().is_none(), "one past the cap pauses");
+        assert!(wakes.next().is_none(), "one past the cap");
+        assert!(wakes.pause(), "which the actor pauses on, once");
+        assert!(!wakes.pause());
         wakes.push("- Run later".to_owned(), now);
         assert_eq!(wakes.due(), None, "paused: nothing is due");
 
         wakes.attended();
         assert_eq!(wakes.due(), Some(now + BATCH), "what waited is due again");
-        let (_, message) = wakes.take().unwrap();
+        let (_, message) = wakes.next().unwrap();
         assert!(message.contains("late\n- Run later"), "{message}");
     }
 }

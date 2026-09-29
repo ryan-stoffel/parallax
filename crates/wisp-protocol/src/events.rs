@@ -164,8 +164,9 @@ pub enum WispEvent {
         merge: AgentMerge,
     },
     /// wispd stopped waking a project's coordinator on its own (RYA-42, decision 0025): it took
-    /// 10 wake-up turns in a row without a message from the user. Runs that finish meanwhile are
-    /// kept, and the user's next `agent/send` to the coordinator lets them through.
+    /// 10 wake-up turns in a row without a message from the user, the user stopped it with
+    /// `agent/cancel`, or a wake-up couldn't start it. Runs that finish meanwhile are kept, and
+    /// the user's next `agent/send` to the coordinator lets them through.
     #[serde(rename = "agent.wakeupsPaused")]
     AgentWakeupsPaused {
         /// The coordinator's run id.

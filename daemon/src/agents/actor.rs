@@ -269,7 +269,9 @@ impl Actor {
                 }
                 // Stop means stop: a run finishing a moment later doesn't start the coordinator
                 // again before the user writes.
-                self.wakes.pause();
+                if self.is_coordinator() {
+                    self.pause_wakes().await;
+                }
                 let _ = reply.send(self.snapshot());
             }
             Command::Accept {
@@ -301,28 +303,48 @@ impl Actor {
     }
 
     /// Sends what is waiting as the coordinator's next turn, through the same resume as
-    /// `agent/send`, or pauses wake-ups at the cap (RYA-42). Only the project's current
-    /// coordinator wakes: a replaced one drops them, so a project never has two live (0024).
+    /// `agent/send` (RYA-42). Pauses wake-ups at the cap, or when this fails, keeping what is
+    /// waiting. Only the project's current coordinator wakes: a replaced one drops them, so a
+    /// project never has two live (0024).
     async fn wake(&mut self) {
         let project = self.project.into();
         let current = store(&self.daemon, move |db| {
             super::coordinator::coordinator_of(db, project)
         })
         .await;
-        if current.ok().flatten() != Some(self.id) {
-            self.wakes.clear();
-            return;
+        match current {
+            Ok(Some(current)) if current == self.id => {}
+            Ok(_) => {
+                self.wakes.clear();
+                return;
+            }
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not check a coordinator before waking it");
+                self.pause_wakes().await;
+                return;
+            }
         }
-        let Some((turn_id, text)) = self.wakes.take() else {
-            info!(run = %self.id, "pausing a coordinator's wake-ups until the user writes");
-            self.append(WispEvent::AgentWakeupsPaused { run_id: self.id })
-                .await;
+        let Some((turn_id, text)) = self.wakes.next() else {
+            self.pause_wakes().await;
             return;
         };
         info!(run = %self.id, "waking a coordinator: runs it started finished");
-        if let Err(error) = self.resume(turn_id, text, RunOptions::default()).await {
-            warn!(run = %self.id, error = %error.message, "could not wake a coordinator");
-            self.wakes.was_sent(turn_id);
+        match self.resume(turn_id, text, RunOptions::default()).await {
+            Ok(_) if self.live.is_some() => self.wakes.delivered(),
+            Ok(_) => self.pause_wakes().await,
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not wake a coordinator");
+                self.pause_wakes().await;
+            }
+        }
+    }
+
+    /// Stops waking the coordinator until the user writes, and says so once (RYA-42).
+    async fn pause_wakes(&mut self) {
+        if self.wakes.pause() {
+            info!(run = %self.id, "pausing a coordinator's wake-ups until the user writes");
+            self.append(WispEvent::AgentWakeupsPaused { run_id: self.id })
+                .await;
         }
     }
 
