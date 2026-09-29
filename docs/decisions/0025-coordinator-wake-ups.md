@@ -37,6 +37,5 @@ A project's coordinator is a run (0024), and the runs it starts through `wispd m
 
 - Wake-ups are in memory only. A restart loses what is waiting, the count, and a pause. Runs that were running are interrupted on shutdown and wake nothing; the user's next message resumes the coordinator. RYA-178 picks a project back up after a restart.
 - A user message the coordinator gets while wake-ups wait costs one more turn than folding them in would.
-- The coordinator's instructions still say it isn't told when a subagent finishes; RYA-43 rewrites them.
 - A wake-up checks that its coordinator is still the project's before resuming it, but the run is recorded `running` only once its CLI starts. A `project/start` that lands in between finds no running coordinator and starts a second. `agent/send` has the same window (0024); a wake-up just opens it with nobody at the keyboard. It is narrow, so it stays.
 - A `coordinatorThread` that names no run, which any client can send to `agent/start`, wakes nothing; wispd logs a warning.

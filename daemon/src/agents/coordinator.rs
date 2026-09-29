@@ -24,7 +24,7 @@ use super::{RunOptions, existing, prepare, requested_account, store, store_error
 use crate::backend::Backend;
 use crate::server::Daemon;
 
-/// The coordinator's instructions, sent ahead of the user's first message (RYA-43 refines them).
+/// The coordinator's instructions, sent ahead of the user's first message.
 const INSTRUCTIONS: &str = include_str!("coordinator.md");
 
 /// `project/start`: see the module documentation. Idempotent on the run id, and refused while the
