@@ -377,9 +377,10 @@ echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"default"}'"#,
                 ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
             ],
         );
-        // The status passes, so the check moves on to the bwrap probe, which the fake fails.
+        // The status passes, so the check moves on to the bwrap probe, which the fake fails. How
+        // it words that depends on the host's AppArmor setting, but it always names bubblewrap.
         let error = check_host(&inherited, &claude).await.unwrap_err();
-        assert!(error.contains("bubblewrap can't create"), "{error}");
+        assert!(error.contains("bubblewrap"), "{error}");
     }
 
     /// The real bwrap and socat, which CI installs along with the Claude Code it names in
