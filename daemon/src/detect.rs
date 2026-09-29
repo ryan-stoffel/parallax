@@ -303,6 +303,17 @@ async fn probe_codex(launcher: &Launcher, timeout: Duration) -> DetectedCli {
         return not_installed(CliKind::Codex);
     };
     let mut detected = installed(CliKind::Codex, &path);
+    // A worker needs a Codex that knows its sandbox's settings (0013): `codex-cli 0.157.1`.
+    if let Ok(ran) = run(launcher, "codex", &["--version"], timeout).await
+        && ran.exit_code == Some(0)
+    {
+        detected.version = ran
+            .stdout
+            .split_whitespace()
+            .last()
+            .filter(|word| crate::backend::claude::parse_version(word).is_some())
+            .map(str::to_owned);
+    }
     match run(launcher, "codex", &["login", "status"], timeout).await {
         Ok(ran) => {
             detected.signed_in = exit_code_signed_in(ran.exit_code);

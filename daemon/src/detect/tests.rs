@@ -230,6 +230,8 @@ async fn codexs_plan_comes_from_the_app_server_only_when_signed_in() {
     assert_eq!(codex.signed_in, Some(true));
     assert_eq!(codex.auth_kind, Some(AuthKind::Subscription));
     assert_eq!(codex.plan.as_deref(), Some("plus"));
+    // A worker's version check reads it (0013).
+    assert_eq!(codex.version.as_deref(), Some("0.157.1"));
 }
 
 #[tokio::test]

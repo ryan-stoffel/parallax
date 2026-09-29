@@ -293,13 +293,15 @@ pub(super) async fn prepare(
             clis.iter().find(|detected| detected.cli == cli).cloned()
         };
         let mut detected = find(&daemon.cli_detector.list().await.clis);
-        if worker::check_claude(detected.as_ref()).is_err() {
+        if worker::check_version(cli, detected.as_ref()).is_err() {
             // The user may have just updated the CLI: look again before refusing.
             detected = find(&daemon.cli_detector.refresh().await.clis);
-            worker::check_claude(detected.as_ref())?;
+            worker::check_version(cli, detected.as_ref())?;
         }
         #[cfg(target_os = "linux")]
-        worker::check_linux_sandbox(&daemon.cli_detector, detected.as_ref()).await?;
+        if cli == wisp_protocol::CliKind::Claude {
+            worker::check_linux_sandbox(&daemon.cli_detector, detected.as_ref()).await?;
+        }
     }
     let home = worker::home()?;
     let data_dir = sandbox_path(daemon.data_dir.root(), "wispd's data folder")?;
