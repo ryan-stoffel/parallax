@@ -1306,7 +1306,8 @@ async fn cancel_interrupts_the_cli_with_sigint() {
     // The fake CLI prints `@trap-armed` right after installing its SIGINT trap (fake-claude.sh),
     // which the translator reports as a malformed line. Waiting for it here is a deterministic
     // handshake: cancel() below can never race the trap's own installation (#149), unlike waiting
-    // for a wall-clock margin.
+    // for a wall-clock margin. The fake then blocks reading stdin, which cancel closes after the
+    // SIGINT, so a trap that bash left pending still runs at EOF (RYA-120, cancel.jsonl).
     assert!(matches!(
         next(&mut events).await,
         Event::Warning {
