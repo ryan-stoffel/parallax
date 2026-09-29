@@ -66,7 +66,10 @@ beforeEach(() => {
 });
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  act(() => unmount());
+  vi.useRealTimers();
+});
 
 async function renderProviders() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -206,4 +209,58 @@ test("Refresh probes the CLIs again, without undoing a remove made meanwhile", a
   await settle();
   expect(calls("accounts/refresh")).toHaveLength(1);
   expect(rows("This Mac")).toEqual(["Claude CodeInstalledNot signed inSign in"]);
+});
+
+test("shows each account's usage and limits for the chosen period, and keeps them live", async () => {
+  vi.useFakeTimers({ now: Date.parse("2026-09-28T12:00:00Z"), toFake: ["setTimeout", "Date"] });
+  const tokens = (input: number, output = 0) => ({
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  });
+  let used = 12;
+  answers["usage/get"] = () => ({
+    result: {
+      accounts: [
+        {
+          accountId: "claude",
+          today: { ...tokens(1000, 200), costUsdMicros: 500_000 },
+          week: { ...tokens(40_000, 2000), costUsdMicros: 900_000 },
+          limits: [
+            {
+              window: "five_hour",
+              usedPercent: used,
+              resetsAt: "2026-09-28T14:00:00Z",
+              capturedAt: "2026-09-28T11:59:00Z",
+            },
+          ],
+        },
+        { accountId: "k-work", today: tokens(0), week: tokens(3_000_000), limits: [] },
+        { accountId: "k-gone", today: tokens(5), week: tokens(5), limits: [] },
+      ],
+    },
+  });
+  await renderProviders();
+  expect(rows("This Mac")).toEqual([
+    "Claude Code2.1.281 · Max1.2K tokens today, about $0.505-hour limit · 12% used · resets in 2 hSigned in",
+    "Codex0.156.1No usage todayNot signed inSign in",
+    "CursorNot installedInstall",
+    "WorkAnthropic API key · sk-ant-...abcdNo usage todayRemove",
+  ]);
+
+  await click(section("Usage period").querySelector<HTMLInputElement>('[value="week"]')!);
+  expect(rows("This Mac")).toEqual([
+    "Claude Code2.1.281 · Max42K tokens this week, about $0.905-hour limit · 12% used · resets in 2 hSigned in",
+    "Codex0.156.1No usage this weekNot signed inSign in",
+    "CursorNot installedInstall",
+    "WorkAnthropic API key · sk-ant-...abcd3M tokens this weekRemove",
+  ]);
+
+  // A run hits the limit: the next poll shows it.
+  used = 100;
+  await act(() => vi.advanceTimersByTimeAsync(5000));
+  await settle();
+  expect(calls("usage/get")).toHaveLength(2);
+  expect(rows("This Mac")[0]).toContain("5-hour limit reached · resets in 2 h");
 });

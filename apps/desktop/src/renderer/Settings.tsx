@@ -13,12 +13,17 @@ import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
+import { UsageLines, useUsage, type Period } from "./Usage";
 import { uuidv7 } from "./uuidv7";
 
 // xterm.js is large, so it loads when a sign-in first opens.
 const SignInTerminal = lazy(() =>
   import("./SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
 );
+
+/** A segmented control's option: a label around a visually hidden radio. */
+const segment =
+  "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
 
 const themeOptions: { value: ThemePreference; name: string; icon: ReactNode }[] = [
   { value: "system", name: "System", icon: <Monitor /> },
@@ -52,10 +57,7 @@ export function Settings({ section, addingHost, theme, onThemeChange }: Settings
                 </legend>
                 <div className="flex gap-0.5 rounded-lg border border-border p-0.5">
                   {themeOptions.map((opt) => (
-                    <label
-                      key={opt.value}
-                      className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5"
-                    >
+                    <label key={opt.value} className={segment}>
                       <input
                         type="radio"
                         name="theme"
@@ -247,14 +249,40 @@ function accountsError(error: RpcError): string {
   return describeError(error);
 }
 
-/** Settings > Providers: each host's vendor CLIs and API keys. */
+const periods: { value: Period; name: string }[] = [
+  { value: "today", name: "Today" },
+  { value: "week", name: "This week" },
+];
+
+/** Settings > Providers: each host's vendor CLIs and API keys, with each one's usage. */
 function ProvidersSettings() {
   const hosts = useHosts();
   // The one sign-in terminal, across every host: the app runs one per window.
   const [signIn, setSignIn] = useState<{ hostId: string; cli: CliKind }>();
+  const [period, setPeriod] = useState<Period>("today");
   return (
     <>
-      <h1 className="mb-1.5 text-xl font-semibold">Providers</h1>
+      <div className="mb-1.5 flex items-center justify-between gap-4">
+        <h1 className="text-xl font-semibold">Providers</h1>
+        <fieldset
+          aria-label="Usage period"
+          className="flex gap-0.5 rounded-lg border border-border p-0.5"
+        >
+          {periods.map((p) => (
+            <label key={p.value} className={segment}>
+              <input
+                type="radio"
+                name="usage-period"
+                value={p.value}
+                checked={period === p.value}
+                onChange={() => setPeriod(p.value)}
+                className="sr-only"
+              />
+              {p.name}
+            </label>
+          ))}
+        </fieldset>
+      </div>
       <p className="mb-6 text-[13px] text-muted-foreground">
         The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
         API key as a fallback.
@@ -263,6 +291,7 @@ function ProvidersSettings() {
         <HostAccounts
           key={h.id}
           host={h}
+          period={period}
           signingIn={signIn?.hostId === h.id ? signIn.cli : undefined}
           onSignIn={(cli) => setSignIn(cli && { hostId: h.id, cli })}
         />
@@ -273,16 +302,18 @@ function ProvidersSettings() {
 
 /**
  * One host's accounts: each CLI wispd detects there, then its API keys, which can be added and
- * removed. Loads once the host is connected; Refresh probes the CLIs again. A CLI that isn't
- * signed in signs in in a terminal under its row (`signingIn`), and the CLIs are probed again
- * when it ends.
+ * removed, each with its usage over `period` and its limits, kept live. Loads once the host is
+ * connected; Refresh probes the CLIs again. A CLI that isn't signed in signs in in a terminal
+ * under its row (`signingIn`), and the CLIs are probed again when it ends.
  */
 function HostAccounts({
   host,
+  period,
   signingIn,
   onSignIn,
 }: {
   host: Host;
+  period: Period;
   signingIn?: CliKind;
   /** Opens a CLI's sign-in terminal, or closes it with undefined. */
   onSignIn: (cli?: CliKind) => void;
@@ -294,6 +325,9 @@ function HostAccounts({
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
   const [adding, setAdding] = useState(false);
+  // By account id: a subscription's is its CLI's kind, the backend that runs it (0012).
+  const usage = useUsage(host.id, connected);
+  const usageOf = (id: string) => usage && <UsageLines usage={usage.get(id)} period={period} />;
 
   // `accounts/list` may answer from wispd's cache; `accounts/refresh` always probes again. Keys
   // are listed again too, since another client may have changed them, and shown as soon as they
@@ -351,6 +385,7 @@ function HostAccounts({
             <Fragment key={cli.cli}>
               <CliRow
                 cli={cli}
+                usage={cli.installed && usageOf(cli.cli)}
                 onSignIn={signingIn === cli.cli ? undefined : () => onSignIn(cli.cli)}
               />
               {signingIn === cli.cli && (
@@ -371,6 +406,7 @@ function HostAccounts({
               key={account.id}
               hostId={host.id}
               account={account}
+              usage={usageOf(account.id)}
               onRemoved={() => setKeys((all) => all?.filter((k) => k.id !== account.id))}
             />
           ))}
@@ -400,10 +436,18 @@ function HostAccounts({
 }
 
 /**
- * A detected CLI: its version and plan, and whether it's signed in, or where to install it. A
- * known CLI that isn't signed in offers Sign in, while `onSignIn` is given.
+ * A detected CLI: its version and plan, its `usage` lines, and whether it's signed in, or where
+ * to install it. A known CLI that isn't signed in offers Sign in, while `onSignIn` is given.
  */
-function CliRow({ cli, onSignIn }: { cli: DetectedCli; onSignIn?: () => void }) {
+function CliRow({
+  cli,
+  usage,
+  onSignIn,
+}: {
+  cli: DetectedCli;
+  usage?: ReactNode;
+  onSignIn?: () => void;
+}) {
   const info = cliInfo[cli.cli];
   // Plans come as the vendor writes them, such as Claude's "max".
   const plan = cli.plan && cli.plan[0]!.toUpperCase() + cli.plan.slice(1);
@@ -452,20 +496,23 @@ function CliRow({ cli, onSignIn }: { cli: DetectedCli; onSignIn?: () => void }) 
       <div className="min-w-0">
         <span className="block truncate text-[13px] font-medium">{info?.name ?? cli.cli}</span>
         <span className="block truncate text-[12.5px] text-muted-foreground">{details}</span>
+        {usage}
       </div>
       <span className="shrink-0 text-[12.5px] text-muted-foreground">{status}</span>
     </div>
   );
 }
 
-/** A stored API key, shown only masked. Remove asks first, in place. */
+/** A stored API key, shown only masked, with its `usage` lines. Remove asks first, in place. */
 function KeyRow({
   hostId,
   account,
+  usage,
   onRemoved,
 }: {
   hostId: string;
   account: KeyAccount;
+  usage?: ReactNode;
   onRemoved: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -490,6 +537,7 @@ function KeyRow({
             ? "Remove this key? wisp deletes it from the host's keychain."
             : `${providerNames[account.provider] ?? account.provider} API key · ${account.maskedKey}`}
         </span>
+        {usage}
         {error && (
           <span role="alert" className="block text-[12.5px] text-danger">
             {error}
