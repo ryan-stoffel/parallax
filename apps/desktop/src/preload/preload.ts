@@ -23,6 +23,8 @@ const bridge: WispBridge = {
   version: () => ipcRenderer.invoke("wisp:version") as Promise<string>,
   setThemeSource: (preference) => ipcRenderer.send("wisp:theme", preference),
   pickFolder: () => ipcRenderer.invoke("wisp:pickFolder") as Promise<string | null>,
+  updatable: process.argv.includes("--wisp-updatable"),
+  update: () => ipcRenderer.invoke("wisp:update") as Promise<string>,
 
   nameThread: (prompt) => ipcRenderer.invoke("wisp:nameThread", prompt),
 
