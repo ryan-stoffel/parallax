@@ -29,11 +29,13 @@ import remarkGfm from "remark-gfm";
 import type { AgentRun, JsonValue } from "../protocol/generated/protocol";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
-import { failureText, isRunning, type Item } from "./transcript";
+import { failureText, groupWork, isRunning, workedFor, type Item, type Work } from "./transcript";
 import { useAgentRun } from "./useAgentRun";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
 type Row = Item | { kind: "pending"; key: string; text: string };
+/** What the list shows: a turn's activity is folded into one `Work` row. */
+type ViewRow = Row | Work;
 
 /**
  * An agent run as a chat: its transcript, the composer, and the run's footer.
@@ -165,20 +167,34 @@ export function TranscriptView({
     [],
   );
 
+  // While the run goes, the last turn's work row stands for what it's doing, even before it does anything.
+  const view = useMemo(() => {
+    const grouped = groupWork(rows);
+    const last = grouped.findLast((r) => r.kind !== "assistant");
+    if (live && (last?.kind === "user" || last?.kind === "pending"))
+      grouped.splice(grouped.indexOf(last) + 1, 0, {
+        kind: "work",
+        key: "work:pending",
+        items: [],
+      });
+    return grouped;
+  }, [rows, live]);
+  const activeIndex = live ? view.findLastIndex((r) => r.kind !== "assistant") : -1;
+
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: view.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 64,
     overscan: 8,
     paddingStart: 16,
     paddingEnd: 24,
-    getItemKey: (i) => rows[i]!.key,
+    getItemKey: (i) => view[i]!.key,
   });
   const total = virtualizer.getTotalSize();
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [total, rows.length]);
+  }, [total, view.length]);
 
   return (
     <div
@@ -193,7 +209,7 @@ export function TranscriptView({
     >
       <div className="relative w-full" style={{ height: total }}>
         {virtualizer.getVirtualItems().map((v) => {
-          const row = rows[v.index]!;
+          const row = view[v.index]!;
           return (
             <div
               key={v.key}
@@ -208,6 +224,9 @@ export function TranscriptView({
                   sentText={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
                   live={live}
                   open={open.has(row.key)}
+                  openKeys={row.kind === "work" ? open : undefined}
+                  active={v.index === activeIndex}
+                  answering={v.index === activeIndex && activeIndex < view.length - 1}
                   onToggle={toggle}
                   onResend={onResend}
                 />
@@ -221,12 +240,18 @@ export function TranscriptView({
 }
 
 interface RowProps {
-  row: Row;
+  row: ViewRow;
   /** The text of a follow-up this window sent, which the log doesn't hold. */
   sentText?: string;
   /** Whether the run is going, so a tool call with no result is still in progress. */
   live: boolean;
   open: boolean;
+  /** For a work row: which of its items are expanded. */
+  openKeys?: ReadonlySet<string>;
+  /** For a work row: whether it is the one the agent is working in now. */
+  active?: boolean;
+  /** For the active work row: whether the agent has moved on to its closing message. */
+  answering?: boolean;
   onToggle: (key: string, open: boolean) => void;
   /** Sends a dropped follow-up again. */
   onResend?: (turnId: string, text: string) => void;
@@ -238,10 +263,25 @@ export const RowView = memo(function RowView({
   sentText,
   live,
   open,
+  openKeys,
+  active,
+  answering,
   onToggle,
   onResend,
 }: RowProps) {
   switch (row.kind) {
+    case "work":
+      return (
+        <WorkGroup
+          work={row}
+          active={active ?? false}
+          answering={answering ?? false}
+          live={live}
+          open={open}
+          openKeys={openKeys ?? new Set()}
+          onToggle={onToggle}
+        />
+      );
     case "user":
     case "pending": {
       const text = row.text ?? sentText;
@@ -356,6 +396,101 @@ export const RowView = memo(function RowView({
     }
   }
 });
+
+/**
+ * A turn's thinking, tool calls, and narration under one dropdown. While the agent works its
+ * header says what it's doing now; afterward it says how long it worked, and hides the rest.
+ */
+function WorkGroup({
+  work,
+  active,
+  answering,
+  live,
+  open,
+  openKeys,
+  onToggle,
+}: {
+  work: Work;
+  active: boolean;
+  answering: boolean;
+  live: boolean;
+  open: boolean;
+  openKeys: ReadonlySet<string>;
+  onToggle: (key: string, open: boolean) => void;
+}) {
+  const now = active ? (answering ? { label: "Writing" } : activity(work.items.at(-1))) : undefined;
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        disabled={work.items.length === 0}
+        onClick={() => onToggle(work.key, !open)}
+        className="group/work flex max-w-full cursor-default items-center gap-1.5 rounded-md py-0.5 text-[13px] hover:text-foreground"
+      >
+        {now ? (
+          <>
+            <span className="shrink-0 animate-pulse">{now.label}</span>
+            {now.detail && <span className="truncate text-muted-foreground">{now.detail}</span>}
+          </>
+        ) : (
+          <span className="text-muted-foreground">{workedFor(work.startedAt, work.endedAt)}</span>
+        )}
+        {work.items.length > 0 && (
+          <ChevronRight
+            aria-hidden
+            className={`size-3.5 shrink-0 text-faint-foreground transition-transform ${open ? "rotate-90" : ""}`}
+          />
+        )}
+      </button>
+      {open && (
+        <div className="mt-2 ml-1 space-y-2.5 border-l border-border pl-4">
+          {work.items.map((item) => (
+            <RowView
+              key={item.key}
+              row={item}
+              live={live}
+              open={openKeys.has(item.key)}
+              onToggle={onToggle}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// What a tool is doing, in a word, by the names common tools use.
+const verbs: Partial<Record<string, string>> = {
+  Bash: "Running",
+  Read: "Reading",
+  Grep: "Searching",
+  Glob: "Searching",
+  WebSearch: "Searching",
+  WebFetch: "Fetching",
+  Edit: "Editing",
+  MultiEdit: "Editing",
+  Write: "Writing",
+  Task: "Running agent",
+  Agent: "Running agent",
+};
+
+/** The header of the work in progress: what its latest item is doing. */
+function activity(item?: Item): { label: string; detail?: string } {
+  switch (item?.kind) {
+    case "reasoning":
+      return { label: "Thinking" };
+    case "tool":
+      return {
+        label: verbs[item.name ?? ""] ?? item.name ?? "Working",
+        detail: toolHint(item.input),
+      };
+    case "todo":
+      return { label: "Planning" };
+    default:
+      return { label: "Working" };
+  }
+}
 
 function ToolCall({
   item,
