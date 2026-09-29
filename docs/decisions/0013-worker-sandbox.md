@@ -153,7 +153,7 @@ codex exec [resume] --json --ignore-user-config --ignore-rules \
   -c 'projects={"<worktree>"={trust_level="untrusted"}}' \
   -c 'approval_policy="never"' -c 'web_search="live"' \
   -c 'shell_environment_policy={ignore_default_excludes=false}' \
-  [-m <model>] [<thread id>] -
+  [-c 'model_reasoning_effort="<effort>"'] [-m <model>] [<thread id>] -
 ```
 
 - **Each `-c` sets one top-level key** to an inline TOML table, so no path is part of a dotted key, where a `.` or `=` in it would split wrong. A value that doesn't parse as TOML is taken as a string, and Codex then refuses to start, so a mistake fails closed.

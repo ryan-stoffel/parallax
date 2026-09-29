@@ -534,6 +534,9 @@ async fn requests_codex_can_t_run_are_refused_before_spawning() {
     let mut option = request(&cwd);
     option.model = Some("--dangerously-bypass-approvals-and-sandbox".into());
     assert!(matches!(refuse(option), StartError::Invalid(_)));
+    let mut plan = request(&cwd);
+    plan.permission = Some(AgentPermission::Plan);
+    assert!(matches!(refuse(plan), StartError::Unsupported(_)));
     assert!(fake.argv().is_empty(), "nothing was spawned");
 }
 
