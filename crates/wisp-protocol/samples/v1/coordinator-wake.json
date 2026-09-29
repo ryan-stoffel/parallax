@@ -14,7 +14,7 @@
           {
             "kind": "turnStarted",
             "turnId": "01a0d3a0-3d4e-7f5a-8b6c-7d8e9f0a1b2c",
-            "text": "wisp, not the user: runs you started finished.\n\n- Run 01a0d395-1a2b-7c3d-8e4f-5a6b7c8d9e0f (Add the dark mode toggle.): completed, saying: Added the toggle and its tests. Branch wisp/01a0d395 changes 3 files (+84 -2).\n\nReview them with agent_status and agent_diff, message or start runs if more is needed, and tell the user where things stand.",
+            "text": "wisp, not the user: runs you started ended.\n\n- Run 01a0d395-1a2b-7c3d-8e4f-5a6b7c8d9e0f (Add the dark mode toggle.): completed, saying: Added the toggle and its tests. Branch wisp/01a0d395 changes 3 files (+84 -2).\n\nReview them with agent_status and agent_diff, message or start runs if more is needed, and tell the user where things stand.",
             "wake": true
           }
         ]

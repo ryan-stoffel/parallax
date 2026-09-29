@@ -1,3 +1,4 @@
+use jiff::Timestamp;
 use rusqlite::{Row, params};
 use uuid::Uuid;
 
@@ -45,6 +46,21 @@ impl Store {
         }
         Ok(turns)
     }
+
+    /// When `run_id`'s newest recorded turn was sent, or `None` if it has none: a coordinator's
+    /// last turn, which wake-ups rebuilt after a restart count from (RYA-178).
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored timestamp is corrupt.
+    pub fn last_turn_at(&self, run_id: Uuid) -> Result<Option<Timestamp>, StoreError> {
+        let at: Option<String> = self.conn.query_row(
+            "SELECT MAX(created_at) FROM turns WHERE run_id = ?1",
+            params![run_id.to_string()],
+            |row| row.get(0),
+        )?;
+        at.as_deref().map(timestamp::parse).transpose()
+    }
 }
 
 fn row_to_turn(row: &Row<'_>) -> rusqlite::Result<(String, String)> {
@@ -71,5 +87,7 @@ mod tests {
             [(turn, "do the thing".to_owned())]
         );
         assert_eq!(store.run_turns(other_run).unwrap(), []);
+        assert!(store.last_turn_at(run).unwrap().is_some());
+        assert_eq!(store.last_turn_at(other_run).unwrap(), None);
     }
 }
