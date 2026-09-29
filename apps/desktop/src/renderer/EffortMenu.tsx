@@ -25,6 +25,8 @@ const levels: {
   },
   { value: "max", name: "Max", Icon: Zap, blurb: "Everything it's got", speed: 0.4 },
 ];
+/** A level's name, for showing what a run started with. */
+export const effortName = (value: AgentEffort) => levels.find((l) => l.value === value)?.name;
 const last = levels.length - 1;
 // The thumb's center travels from one radius in to one radius short of the far end, as the
 // range's own (invisible) thumb does, so pointer positions map to the same stops.
