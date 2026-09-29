@@ -21,13 +21,15 @@ export const periods: { value: Period; name: string }[] = [
 const USAGE_POLL_MS = 5000;
 
 /**
- * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`.
+ * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`, and
+ * at once whenever `refresh` changes.
  * `usage` is undefined until it first answers, so a wispd without `usage/get` shows no usage at
  * all; a later failure keeps the last answer. `error` is the latest answer's, until one succeeds.
  */
 export function useUsage(
   hostId: string,
   connected: boolean,
+  refresh?: number,
 ): { usage?: ReadonlyMap<string, AccountUsage>; error?: RpcError } {
   const [usage, setUsage] = useState<ReadonlyMap<string, AccountUsage>>();
   const [error, setError] = useState<RpcError>();
@@ -50,7 +52,7 @@ export function useUsage(
       stopped = true;
       clearTimeout(timer);
     };
-  }, [hostId, connected]);
+  }, [hostId, connected, refresh]);
   return { usage, error };
 }
 

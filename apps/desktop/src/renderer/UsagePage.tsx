@@ -82,9 +82,13 @@ function useKeys(hostId: string, connected: boolean, refresh?: number): KeyAccou
   const [keys, setKeys] = useState<KeyAccount[]>([]);
   useEffect(() => {
     if (!connected) return;
+    let stopped = false;
     void window.wisp.request(hostId, "accounts/keys/list", {}).then((answer) => {
-      if ("result" in answer) setKeys(answer.result.accounts);
+      if (!stopped && "result" in answer) setKeys(answer.result.accounts);
     });
+    return () => {
+      stopped = true;
+    };
   }, [hostId, connected, refresh]);
   return keys;
 }
@@ -293,8 +297,7 @@ export function UsagePage({
         <div className="@container mx-auto max-w-5xl px-8 pt-6 pb-16">
           {view === "limits" ? (
             hosts.map((h) => (
-              // Keyed by `now`, so Refresh asks again.
-              <HostLimits key={`${h.id}/${now}`} host={h} named={hosts.length > 1} />
+              <HostLimits key={h.id} host={h} named={hosts.length > 1} refresh={now} />
             ))
           ) : (
             <History hosts={hosts} view={view} range={range} now={now} />
@@ -414,7 +417,7 @@ function History({
                     </span>
                   </div>
                   <p className="mt-1 pl-[18px] text-[12.5px] text-muted-foreground">
-                    {cost && total.cost === 0 && total.unpriced > 0
+                    {unreported(total)
                       ? "No reported cost"
                       : `${percent(measure(total), whole)} of ${cost ? "cost" : "tokens"}`}{" "}
                     · {other}
@@ -705,12 +708,15 @@ function Breakdown({
   );
 }
 
-/** One host's accounts' limit windows, under the host's name when there are several. */
-function HostLimits({ host, named }: { host: Host; named: boolean }) {
+/**
+ * One host's accounts' limit windows, under the host's name when there are several, asked again
+ * in place when `refresh` changes.
+ */
+function HostLimits({ host, named, refresh }: { host: Host; named: boolean; refresh: number }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
-  const { usage, error } = useUsage(host.id, connected);
-  const keys = useKeys(host.id, connected);
+  const { usage, error } = useUsage(host.id, connected, refresh);
+  const keys = useKeys(host.id, connected, refresh);
 
   // A host that isn't connected shows its status, not its last answer, whose resets are stale.
   let note = hostStatus(connection);
