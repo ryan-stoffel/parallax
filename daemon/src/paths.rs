@@ -298,6 +298,85 @@ fn fits(path: &Path) -> bool {
     path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES
 }
 
+/// `path` as Windows programs and the vendors' sandbox settings spell it, without the verbatim
+/// `\\?\` prefix that [`Path::canonicalize`] puts on every path on Windows (RYA-109): `\\?\C:\x`
+/// becomes `C:\x`, and `\\?\UNC\server\share\x` becomes `\\server\share\x`. A path without the
+/// prefix is returned as it is, and so is every path on macOS and Linux.
+///
+/// A long path keeps its plain spelling: Rust's standard library puts the prefix back itself when
+/// a path is too long for the Win32 limit.
+///
+/// `None` if only a verbatim path can name it, since removing the prefix would name another file:
+/// a volume with no drive letter (`\\?\Volume{...}`), a device (`\\.\`), or a component that ends
+/// in a dot or a space, is `.` or `..`, or is a reserved device name such as `CON` or `NUL.txt`.
+#[must_use]
+pub fn without_verbatim_prefix(path: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        windows_plain(path)
+    }
+    #[cfg(not(windows))]
+    {
+        Some(path.to_owned())
+    }
+}
+
+#[cfg(windows)]
+fn windows_plain(path: &Path) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return Some(path.to_owned());
+    };
+    let mut plain = match prefix.kind() {
+        Prefix::Disk(_) | Prefix::UNC(..) => return Some(path.to_owned()),
+        Prefix::Verbatim(_) | Prefix::DeviceNS(_) => return None,
+        Prefix::VerbatimDisk(letter) => PathBuf::from(format!("{}:\\", char::from(letter))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut root = OsString::from(r"\\");
+            root.push(server);
+            root.push(r"\");
+            root.push(share);
+            root.push(r"\");
+            PathBuf::from(root)
+        }
+    };
+    for component in components {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) if plain_name(name) => plain.push(name),
+            _ => return None,
+        }
+    }
+    Some(plain)
+}
+
+/// Device names Win32 reserves in every folder, alone or before an extension (`NUL.txt`).
+#[cfg(windows)]
+const RESERVED_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM0", "COM1", "COM2", "COM3", "COM4",
+    "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT0", "LPT1", "LPT2", "LPT3",
+    "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
+];
+
+/// Whether a path without the verbatim prefix still names the file called `name`: Win32 drops a
+/// trailing dot or space, and turns a reserved name into a device. A name that isn't Unicode is
+/// left to the caller's own check.
+#[cfg(windows)]
+fn plain_name(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return true;
+    };
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    !name.ends_with(['.', ' '])
+        && !name.contains('/')
+        && !RESERVED_NAMES
+            .iter()
+            .any(|reserved| stem.eq_ignore_ascii_case(reserved))
+}
+
 #[cfg(test)]
 mod tests {
     use super::DataDir;
@@ -408,6 +487,73 @@ mod tests {
         let socket = dir.socket_path().unwrap();
         assert_eq!(socket.path.as_os_str(), r"\\.\pipe\wispd-bb46ad6a4ea41022");
         assert!(!socket.fallback);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_paths_lose_their_prefix() {
+        use std::path::Path;
+
+        use super::without_verbatim_prefix;
+
+        let plain = |path: &str| without_verbatim_prefix(Path::new(path));
+        for (verbatim, expected) in [
+            (r"\\?\C:\Users\runneradmin", r"C:\Users\runneradmin"),
+            (r"\\?\d:\", r"D:\"),
+            (r"\\?\C:\a b\.git\x.y", r"C:\a b\.git\x.y"),
+            (r"\\?\UNC\server\share\repo", r"\\server\share\repo"),
+            (r"\\?\UNC\server\share", r"\\server\share\"),
+            // Already plain
+            (r"C:\Users\me", r"C:\Users\me"),
+            (r"\\server\share\repo", r"\\server\share\repo"),
+        ] {
+            assert_eq!(
+                plain(verbatim).as_deref(),
+                Some(Path::new(expected)),
+                "{verbatim}"
+            );
+        }
+        let long = format!(r"\\?\C:\{}", "a".repeat(300));
+        assert_eq!(plain(&long).unwrap().as_os_str(), &long[4..]);
+    }
+
+    /// Paths a plain spelling would send to another file, or to a device.
+    #[cfg(windows)]
+    #[test]
+    fn a_path_only_a_verbatim_prefix_can_name_is_refused() {
+        use std::path::Path;
+
+        use super::without_verbatim_prefix;
+
+        for verbatim in [
+            r"\\?\Volume{0b8e7c8d-0000-0000-0000-100000000000}\repo",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\repo",
+            r"\\.\COM1",
+            r"\\?\C:\repo.",
+            r"\\?\C:\repo \x",
+            r"\\?\C:\a\..\b",
+            r"\\?\C:\a\.\b",
+            r"\\?\C:\a/b",
+            r"\\?\C:\CON",
+            r"\\?\C:\x\nul.txt",
+            r"\\?\C:\Lpt1\x",
+            r"\\?\C:\com¹",
+            r"\\?\UNC\server\share\aux",
+        ] {
+            assert_eq!(
+                without_verbatim_prefix(Path::new(verbatim)),
+                None,
+                "{verbatim}"
+            );
+        }
+        for fine in [
+            r"\\?\C:\console",
+            r"\\?\C:\CONFIG",
+            r"\\?\C:\com10",
+            r"\\?\C:\.con",
+        ] {
+            assert!(without_verbatim_prefix(Path::new(fine)).is_some(), "{fine}");
+        }
     }
 
     #[cfg(windows)]

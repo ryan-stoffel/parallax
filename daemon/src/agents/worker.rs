@@ -11,6 +11,7 @@ use wisp_protocol::{AccountId, CliKind, DetectedCli, ErrorKind, Provider};
 use crate::backend::Backend;
 use crate::backend::claude::{self, WORKER_MIN_VERSION, parse_version};
 use crate::backend::process::Environment;
+use crate::paths::without_verbatim_prefix;
 use crate::routing::KeyAccounts;
 
 /// Folders appended to an agent's `PATH` when it lacks them (#96): the vendors' own install
@@ -217,7 +218,9 @@ pub(super) fn cli_of(backend: &dyn Backend) -> Option<CliKind> {
 const GLOB_CHARACTERS: &[char] = &['*', '?', '[', ']'];
 
 /// `path`, canonical, and refused with a plain message if it isn't UTF-8 or holds a wildcard.
-/// Seatbelt matches real paths, and `/tmp` and `/var` are symlinks on macOS (0013).
+/// Seatbelt matches real paths, and `/tmp` and `/var` are symlinks on macOS (0013). On Windows it
+/// is spelled without the verbatim `\\?\` prefix canonicalizing adds, whose `?` isn't part of the
+/// path (RYA-109), and refused if only a verbatim path can name it.
 pub(super) fn sandbox_path(path: &Path, what: &str) -> Result<PathBuf, ErrorObject> {
     let canonical = path.canonicalize().map_err(|error| {
         worker_unavailable(format!(
@@ -225,6 +228,14 @@ pub(super) fn sandbox_path(path: &Path, what: &str) -> Result<PathBuf, ErrorObje
             path.display()
         ))
     })?;
+    let Some(canonical) = without_verbatim_prefix(&canonical) else {
+        return Err(worker_unavailable(format!(
+            "{what} {} can only be named with a \\\\?\\ path, which the worker sandbox can't \
+             hold; move it to a folder on a drive letter or network share whose folder names \
+             don't end in a dot or a space and aren't reserved names such as CON or NUL",
+            canonical.display()
+        )));
+    };
     match canonical.to_str() {
         Some(text) if !text.contains(GLOB_CHARACTERS) => Ok(canonical),
         _ => Err(worker_unavailable(format!(
@@ -314,9 +325,9 @@ mod tests {
 
     use wisp_protocol::{CliKind, DetectedCli, ErrorKind};
 
-    use super::check_claude;
     #[cfg(unix)]
-    use super::{allowlisted, sandbox_path, with_extra_path};
+    use super::{allowlisted, with_extra_path};
+    use super::{check_claude, sandbox_path};
     use crate::backend::process::ALWAYS_SCRUBBED;
     #[cfg(unix)]
     use crate::backend::process::Environment;
@@ -490,5 +501,63 @@ mod tests {
         let fine = sandbox_path(dir.path(), "the repository").unwrap();
         assert!(fine.is_absolute());
         assert!(sandbox_path(&dir.path().join("missing"), "x").is_err());
+    }
+
+    /// Canonicalizing on Windows adds `\\?\`, whose `?` refused every path (RYA-109). The path
+    /// comes back plain, and a wildcard in the path itself is still refused.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_path_comes_back_without_its_verbatim_prefix() {
+        use std::path::{Component, Prefix};
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("app");
+        std::fs::create_dir(&repo).unwrap();
+        for path in [repo.clone(), repo.join("..").join("app")] {
+            let plain = sandbox_path(&path, "the repository").unwrap();
+            assert!(
+                matches!(
+                    plain.components().next(),
+                    Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+                ),
+                "{}",
+                plain.display()
+            );
+            assert!(
+                !plain.to_str().unwrap().contains('?'),
+                "{}",
+                plain.display()
+            );
+            assert!(plain.ends_with("app"));
+            assert_eq!(plain.canonicalize().unwrap(), repo.canonicalize().unwrap());
+        }
+        let home = super::home().unwrap();
+        assert!(
+            !home.to_str().unwrap().starts_with(r"\\?\"),
+            "{}",
+            home.display()
+        );
+
+        let odd = dir.path().join("app[old]");
+        std::fs::create_dir(&odd).unwrap();
+        let error = sandbox_path(&odd, "the repository").unwrap_err();
+        assert!(error.message.contains("app[old]"), "{}", error.message);
+        assert!(!error.message.contains(r"\\?\"), "{}", error.message);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_only_a_verbatim_path_can_name_is_refused_plainly() {
+        let dir = tempfile::tempdir().unwrap();
+        // Only the verbatim spelling keeps the trailing dot.
+        let verbatim = dir.path().canonicalize().unwrap().join("trailing.");
+        std::fs::create_dir(&verbatim).unwrap();
+        let error = sandbox_path(&verbatim, "the repository").unwrap_err();
+        assert_eq!(
+            error.wisp_data().unwrap().kind,
+            ErrorKind::WorkerUnavailable
+        );
+        assert!(error.message.contains("trailing."), "{}", error.message);
+        assert!(error.message.contains("CON"), "{}", error.message);
     }
 }
