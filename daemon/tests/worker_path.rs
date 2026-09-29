@@ -33,14 +33,7 @@ async fn a_worker_keeps_wispds_path_when_zsh_startup_resets_it() {
     let context = data.join("context/p");
     let git_dir = root.join("repo/.git");
     let tools = root.join("tools");
-    for folder in [
-        &home,
-        &worktree,
-        &context,
-        &git_dir,
-        &tools,
-        &root.join("tmp"),
-    ] {
+    for folder in [&home, &worktree, &context, &git_dir, &tools] {
         fs::create_dir_all(folder).unwrap();
     }
     // As nix-darwin's /etc/zshenv does: every zsh reads it, even `zsh -c`.
@@ -54,7 +47,7 @@ async fn a_worker_keeps_wispds_path_when_zsh_startup_resets_it() {
     )
     .unwrap();
 
-    let request = worker_request(&home, &data, &worktree, &git_dir, &context);
+    let (request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
     let path = format!(
         "{}:{}",
         tools.display(),

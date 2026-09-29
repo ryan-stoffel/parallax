@@ -36,6 +36,7 @@ use crate::backend::claude::ClaudeBackend;
 use crate::backend::codex::CodexBackend;
 use crate::backend::fake::FakeBackend;
 use crate::backend::process::{Environment, Launcher};
+use crate::backend::run_temp;
 use crate::context::ContextIndex;
 use crate::detect::CliDetector;
 use crate::event_log::EventLog;
@@ -262,9 +263,10 @@ impl std::fmt::Debug for Daemon {
 }
 
 impl Server {
-    /// Prepares the data folder, takes the instance lock, removes an old socket, binds the new
-    /// one, and opens the store. On Windows it creates the named pipe instead of the socket, so
-    /// it must be called inside a tokio runtime there.
+    /// Prepares the data folder, takes the instance lock, removes what earlier runs left in their
+    /// temp folders, removes an old socket, binds the new one, and opens the store. On Windows it
+    /// creates the named pipe instead of the socket, so it must be called inside a tokio runtime
+    /// there.
     ///
     /// A store that can't be opened doesn't stop the server; `host/health` reports it.
     ///
@@ -276,6 +278,7 @@ impl Server {
         let data_dir = &config.data_dir;
         prepare_data_dir(data_dir.root())?;
         let lock = InstanceLock::acquire(&data_dir.lock_file(), data_dir.root())?;
+        run_temp::sweep(data_dir);
         let socket_path = data_dir
             .socket_path()
             .map_err(|error| StartError::io("finding the socket path", error))?;

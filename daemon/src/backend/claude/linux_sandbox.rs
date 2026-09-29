@@ -269,7 +269,7 @@ mod tests {
     use crate::backend::process::{Environment, Launcher};
     use crate::backend::{
         AccountRef, ApiKey, Backend, Credential, Event, FailureKind, Outcome, RunId, RunRequest,
-        ToolPolicy, WorkerSandbox,
+        ToolPolicy, WorkerSandbox, run_temp,
     };
     use crate::paths::DataDir;
 
@@ -472,6 +472,7 @@ fi"#;
             fs::create_dir_all(folder).unwrap();
         }
         let base = launcher(root, &[("PATH", INSTALLED_PATH)]);
+        let temp = run_temp::create(base.data_dir()).unwrap();
         let backend = ClaudeBackend::new(base).with_program(wrapper);
         let request = RunRequest {
             run_id: RunId::generate(),
@@ -480,7 +481,12 @@ fi"#;
             prompt: "Say hi.".into(),
             policy: ToolPolicy::WorkspaceWrite,
             sandbox: Some(WorkerSandbox::for_worktree(
-                root, &data, &worktree, &git_dir, &context,
+                root,
+                &data,
+                &worktree,
+                &git_dir,
+                &context,
+                temp.path(),
             )),
             account: AccountRef {
                 id: "test".into(),
