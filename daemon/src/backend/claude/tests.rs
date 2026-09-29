@@ -12,7 +12,7 @@ use tempfile::TempDir;
 use super::stream::{Step, Translator};
 use super::{
     ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS,
-    write_env_file,
+    no_write_settings, write_env_file,
 };
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
@@ -320,11 +320,14 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
         "--input-format",
         "stream-json",
     ];
+    let settings = no_write_settings().to_string();
     expected.extend(NO_WRITE_ARGS);
+    expected.extend(["--settings", &settings]);
     assert_eq!(fake.argv(), expected);
     assert_eq!(
         NO_WRITE_ARGS.join(" "),
-        r#"--tools Read,Glob,Grep --setting-sources user --settings {"disableAllHooks":true} --strict-mcp-config --permission-mode dontAsk"#,
+        "--tools Read,Glob,Grep --setting-sources user --strict-mcp-config --permission-mode \
+         dontAsk",
         "0004's no-write policy, exactly"
     );
     let env = fake.env();
@@ -350,6 +353,26 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
             "uuid": TURN_1,
         })],
         "the prompt goes on stdin, not in argv"
+    );
+}
+
+/// RYA-176: a no-write run, the coordinator, has hooks off (0004) and can't read Claude Code's
+/// shared temp folder, which holds every session's files, in either spelling.
+#[test]
+fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
+    let args = super::arguments(&request(Path::new("/repo"))).unwrap();
+    let at = args.iter().position(|arg| arg == "--settings").unwrap();
+    let settings: Value = serde_json::from_str(args[at + 1].to_str().unwrap()).unwrap();
+    let uid = rustix::process::getuid().as_raw();
+    assert_eq!(
+        settings,
+        serde_json::json!({
+            "disableAllHooks": true,
+            "permissions": {"deny": [
+                format!("Read(//tmp/claude-{uid}/**)"),
+                format!("Read(//private/tmp/claude-{uid}/**)"),
+            ]},
+        })
     );
 }
 
