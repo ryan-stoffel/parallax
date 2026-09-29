@@ -161,6 +161,7 @@ pub(crate) async fn request_changes(
             run_id,
             turn_id,
             text,
+            model: None,
             effort: None,
             permission: None,
         },

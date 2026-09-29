@@ -765,11 +765,12 @@ pub(crate) async fn send(
         run_id,
         turn_id,
         text,
+        model,
         effort,
         permission,
     } = params;
     let options = RunOptions {
-        model: None,
+        model,
         effort,
         permission,
     };
@@ -857,6 +858,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                                 session_id: run.session_id,
                                 error: run.error,
                                 diff: run.diff,
+                                model: run.model,
                                 effort: run.effort,
                                 permission: run.permission,
                                 updated_at: run.updated_at,

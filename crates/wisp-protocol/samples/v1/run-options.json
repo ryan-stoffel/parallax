@@ -75,6 +75,7 @@
       "runId": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
       "turnId": "01a0e2a2-3a4b-7c5d-8e6f-7a8b9c0d1e03",
       "text": "Now just write the summary.",
+      "model": "sonnet",
       "effort": "low",
       "permission": "plan"
     }
@@ -93,7 +94,7 @@
         "accountId": "claude",
         "branch": "wisp/1a2b3c4d",
         "worktreePath": "/Users/me/Library/Application Support/wisp/worktrees/wisp-5e6f7a8b/01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
-        "model": "opus",
+        "model": "sonnet",
         "effort": "low",
         "permission": "plan",
         "createdAt": "2026-09-28T12:00:00Z",
@@ -117,7 +118,7 @@
     "id": 4,
     "error": {
       "code": -32000,
-      "message": "effort and access can't change while the run is working; send the message again once it has finished",
+      "message": "the model, effort, and access can't change while the run is working; send the message again once it has finished",
       "data": {
         "kind": "unsupportedOption"
       }
