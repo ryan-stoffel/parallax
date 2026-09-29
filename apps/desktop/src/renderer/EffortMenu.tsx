@@ -1,15 +1,29 @@
-import { Brain, ChevronDown, Feather, Flame, Sprout, Zap, type LucideIcon } from "lucide-react";
-import { useId, useState, type CSSProperties } from "react";
+import { Brain, ChevronDown, Flame, Rocket, Sprout, Zap, type LucideIcon } from "lucide-react";
+import { useId, type CSSProperties } from "react";
 
+import type { AgentEffort } from "../protocol/generated/protocol";
 import { menuButton, menuPanel } from "./ui";
 
-// Each level's icon, a line about it, and how long (in seconds) a stripe takes to cross the fill.
-const levels: { name: string; Icon: LucideIcon; blurb: string; speed: number }[] = [
-  { name: "Light", Icon: Feather, blurb: "Quick answers, barely a pause", speed: 3 },
-  { name: "Low", Icon: Sprout, blurb: "A little thought first", speed: 2 },
-  { name: "Medium", Icon: Brain, blurb: "Thinks it over", speed: 1.3 },
-  { name: "High", Icon: Flame, blurb: "Digs in on the hard parts", speed: 0.8 },
-  { name: "Max", Icon: Zap, blurb: "Everything it's got", speed: 0.4 },
+// Each level wispd takes, its icon, a line about it, and how long (in seconds) a stripe takes to
+// cross the fill.
+const levels: {
+  value: AgentEffort;
+  name: string;
+  Icon: LucideIcon;
+  blurb: string;
+  speed: number;
+}[] = [
+  { value: "low", name: "Low", Icon: Sprout, blurb: "A little thought first", speed: 3 },
+  { value: "medium", name: "Medium", Icon: Brain, blurb: "Thinks it over", speed: 2 },
+  { value: "high", name: "High", Icon: Flame, blurb: "Digs in on the hard parts", speed: 1.3 },
+  {
+    value: "xhigh",
+    name: "Extra high",
+    Icon: Rocket,
+    blurb: "Takes its time on the hardest parts",
+    speed: 0.8,
+  },
+  { value: "max", name: "Max", Icon: Zap, blurb: "Everything it's got", speed: 0.4 },
 ];
 const last = levels.length - 1;
 // The thumb's center travels from one radius in to one radius short of the far end, as the
@@ -20,13 +34,18 @@ const at = (i: number) => `calc(${thumb} / 2 + (100% - ${thumb}) * ${i / last})`
 const spring = "duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]";
 
 /**
- * The reasoning picker: a button showing the level that opens a slider with a stop for each
+ * The reasoning picker: a button showing the effort that opens a slider with a stop for each
  * level. Stripes in the fill speed up with the level, and Max shimmers and glows (index.css).
- * A placeholder until wispd takes an effort per thread; nothing here is sent.
  */
-export function EffortMenu() {
+export function EffortMenu({
+  value,
+  onChange,
+}: {
+  value: AgentEffort;
+  onChange: (value: AgentEffort) => void;
+}) {
   const id = useId();
-  const [level, setLevel] = useState(3);
+  const level = levels.findIndex((l) => l.value === value);
   const { name, Icon, blurb, speed } = levels[level]!;
   const full = level === last;
   return (
@@ -89,7 +108,7 @@ export function EffortMenu() {
             value={level}
             aria-label="Reasoning effort"
             aria-valuetext={name}
-            onChange={(e) => setLevel(Number(e.target.value))}
+            onChange={(e) => onChange(levels[Number(e.target.value)]!.value)}
             className="effort-slider peer absolute inset-x-0 top-1/2 m-0 h-(--thumb) w-full -translate-y-1/2"
           />
           <span

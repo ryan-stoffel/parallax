@@ -1,74 +1,44 @@
-// The models each agent CLI offered on 2026-09-28, one entry per model (effort and "fast"
-// variants folded in). A placeholder until wispd reports them per host. Sources:
-// - Claude Code has no list command; these are what its aliases (opus, fable, sonnet, haiku) resolve to.
-// - Codex: ~/.codex/models_cache.json, the entries it lists (visibility "list").
-// - Cursor: `cursor-agent models`, in its order.
+import type { AgentPermission, ThreadStartParams } from "../protocol/generated/protocol";
 
-export type Provider = "Claude" | "Codex" | "Cursor";
+// The models each worker backend's CLI took on 2026-09-29, and what to send for each. A
+// placeholder until wispd reports them per host. Sources:
+// - Claude Code 2.1.283: the full names its aliases (opus, fable, sonnet, haiku) resolve to in
+//   its baked-in model catalog. `--model` takes these as they are.
+// - codex-cli 0.157.1: the slugs ~/.codex/models_cache.json lists (visibility "list"), which
+//   `-m` takes.
+// Cursor has no wispd backend, so it has no models here.
+
+export type Provider = "Claude" | "Codex";
 
 export interface Model {
+  /** What the backend's CLI takes, sent as `thread/start`'s `model`. */
+  id: string;
   name: string;
   provider: Provider;
   isNew?: boolean;
 }
 
-const claude: Model[] = [
-  { name: "Claude Opus 5.5", provider: "Claude", isNew: true },
-  { name: "Claude Fable 5.1", provider: "Claude" },
-  { name: "Claude Sonnet 5.5", provider: "Claude", isNew: true },
-  { name: "Claude Haiku 4.5", provider: "Claude" },
+export const models: Model[] = [
+  { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "Claude", isNew: true },
+  { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "Claude" },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "Claude" },
+  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "Claude" },
+  { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "Codex", isNew: true },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "Codex" },
+  { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "Codex" },
+  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "Codex" },
+  { id: "gpt-5.5", name: "GPT-5.5", provider: "Codex" },
 ];
 
-const codex: Model[] = [
-  { name: "GPT-6 Astra", provider: "Codex", isNew: true },
-  { name: "GPT-6 Sol", provider: "Codex", isNew: true },
-  { name: "GPT-6 Luna", provider: "Codex", isNew: true },
-  { name: "GPT-5.6 Sol", provider: "Codex" },
-  { name: "GPT-5.6 Terra", provider: "Codex" },
-  { name: "GPT-5.6 Luna", provider: "Codex" },
-  { name: "GPT-5.5", provider: "Codex" },
-];
+/**
+ * The wispd backends a thread can run on, by name (`AccountChoice`'s `backend`): whose models
+ * they take, and the permissions they map. Every backend maps every effort (RYA-97, RYA-38).
+ * ponytail: mirrors wispd's `Backend::permissions`, which it doesn't report yet (RYA-154).
+ */
+export const backends: Record<string, { provider: Provider; permissions: AgentPermission[] }> = {
+  claude: { provider: "Claude", permissions: ["edit", "plan"] },
+  codex: { provider: "Codex", permissions: ["edit"] },
+};
 
-const cursor: Model[] = [
-  "Auto",
-  "Composer 2.5",
-  "Codex 5.3",
-  "GPT-5.2",
-  "Claude Opus 5",
-  "GPT-5.6 Sol",
-  "Claude Fable 5",
-  "Grok 4.5",
-  "Gemini 3.7 Flash",
-  "Claude Sonnet 5",
-  "GPT-5.6 Luna",
-  "Grok 4.7",
-  "Grok 4.6",
-  "Claude Opus 5.5",
-  "Claude Opus 4.8",
-  "GPT-5.5",
-  "Claude Fable 5.1",
-  "Gemini 3.8 Flash",
-  "Muse Spark 1.3",
-  "GPT-5.6 Terra",
-  "Claude Sonnet 5.5",
-  "Claude Sonnet 4.6",
-  "Claude Opus 4.7",
-  "GPT-5.4",
-  "Claude Opus 4.6",
-  "Claude Opus 4.5",
-  "Gemini 3.6 Flash",
-  "Gemini 3.1 Pro",
-  "GPT-5.4 Mini",
-  "GPT-5.4 Nano",
-  "Claude Sonnet 4.5",
-  "GPT-5.1",
-  "Gemini 3 Flash",
-  "Gemini 3.5 Flash",
-  "Claude Sonnet 4",
-  "GPT-5 Mini",
-  "Kimi K3",
-  "Kimi K2.7 Code",
-  "GLM 5.2",
-].map((name) => ({ name, provider: "Cursor" }));
-
-export const models: Model[] = [...claude, ...codex, ...cursor];
+/** What a new thread's run asks of its CLI, sent only to a wispd that advertises `runOptions`. */
+export type RunOptions = Pick<ThreadStartParams, "model" | "effort" | "permission">;

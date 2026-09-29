@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
 import type { RpcResponse, SubscriptionMessage, WispBridge } from "../preload/bridge";
-import type { ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
+import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -33,9 +33,11 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
   return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
+let capabilities: Capabilities;
 
 beforeEach(() => {
   request.mockClear();
+  capabilities = {};
   answers = {
     "thread/list": () => ({ result: { repos: [wisp], threads: [thread], seq: 7 } }),
     "agent/list": () => ({
@@ -45,7 +47,12 @@ beforeEach(() => {
   window.wisp = {
     platform: "darwin",
     setThemeSource: vi.fn(),
-    connectionState: async () => ({ status: "connected", wispd: "0.1.0", protocol: 1 }),
+    connectionState: async () => ({
+      status: "connected",
+      wispd: "0.1.0",
+      protocol: 1,
+      capabilities,
+    }),
     onConnectionState: () => () => {},
     subscribe: () => () => {},
     request,
@@ -94,6 +101,16 @@ async function choose(label: string, option: string) {
   ].find((b) => b.textContent === option)!;
   await act(async () => item.click());
   await settle();
+}
+
+// A composer control by its label. The sidebar's New Project dialog has a model menu too.
+const control = (label: string) => document.querySelector(`main [aria-label="${label}"]`);
+// Clicks the main pane's first menu item whose text starts with `text`.
+async function pick(text: string) {
+  const item = [...document.querySelectorAll<HTMLElement>('main [role="menuitemradio"]')].find(
+    (b) => b.textContent?.startsWith(text),
+  )!;
+  await act(async () => item.click());
 }
 
 async function send(text: string) {
@@ -182,6 +199,99 @@ test("No Repo starts a thread with no repo", async () => {
   await send("Hi");
   expect(calls("thread/start")).toEqual([{ runId: expect.any(String), prompt: "Hi" }]);
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
+});
+
+describe("with wispd's run options", () => {
+  const started = (p: Record<string, unknown>) => ({
+    result: {
+      thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, p["prompt"] as string),
+    },
+  });
+  beforeEach(() => {
+    capabilities = { runOptions: {} };
+    answers["accounts/defaults/get"] = () => ({ result: {} });
+    answers["thread/start"] = started;
+  });
+
+  test("New Thread sends the model, effort, and access it shows, and a changed one is a new start", async () => {
+    // Refused at Max, then started at Extra high.
+    answers["thread/start"] = (p) =>
+      p["effort"] === "max"
+        ? {
+            error: {
+              code: -32000,
+              message: "the claude backend can't run with effort max",
+              data: { kind: "unsupportedOption" },
+            },
+          }
+        : started(p);
+    await renderApp();
+    // No worker default yet, so Claude's choices, as the account chooser only offers Claude.
+    expect(control("Model: Claude Opus 5.5")).not.toBeNull();
+    expect(control("Access: Edit")).not.toBeNull();
+
+    await pick("Claude Fable 5.1");
+    await pick("Plan");
+    const effort = (level: string) =>
+      act(() => {
+        const slider = document.querySelector<HTMLInputElement>('main input[type="range"]')!;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          slider,
+          level,
+        );
+        slider.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    effort("4");
+    await send("Plan the settings split");
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      "the claude backend can't run with effort max",
+    );
+    effort("3");
+    await send("Plan the settings split");
+
+    const [refused, retry] = calls("thread/start");
+    expect(refused).toEqual({
+      runId: expect.any(String),
+      repo: wisp.id,
+      prompt: "Plan the settings split",
+      model: "claude-fable-5-1",
+      effort: "max",
+      permission: "plan",
+    });
+    expect(retry).toEqual({ ...refused, runId: expect.any(String), effort: "xhigh" });
+    expect(retry!["runId"]).not.toBe(refused!["runId"]);
+  });
+
+  test("an OpenAI key default offers Codex's models and no plan", async () => {
+    answers["accounts/defaults/get"] = () => ({ result: { worker: { kind: "key", id: "k-1" } } });
+    answers["accounts/keys/list"] = () => ({
+      result: { accounts: [{ id: "k-1", provider: "openai", label: "Work" }] },
+    });
+    await renderApp();
+    expect(control("Model: GPT-6 Astra")).not.toBeNull();
+    expect(document.querySelector('main [aria-label^="Access"]')).toBeNull();
+
+    await send("Tidy the README");
+    expect(calls("thread/start")).toEqual([
+      {
+        runId: expect.any(String),
+        repo: wisp.id,
+        prompt: "Tidy the README",
+        model: "gpt-6-astra",
+        effort: "high",
+        permission: "edit",
+      },
+    ]);
+  });
+});
+
+test("without run options, New Thread offers no model, effort, or access", async () => {
+  await renderApp();
+  expect(
+    document.querySelector('main :is([aria-label^="Model"], [aria-label^="Reasoning"])'),
+  ).toBeNull();
+  expect(calls("accounts/defaults/get")).toEqual([]);
 });
 
 test("a folder that isn't a repository says so under the composer", async () => {

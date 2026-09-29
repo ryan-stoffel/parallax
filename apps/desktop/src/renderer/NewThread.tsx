@@ -7,6 +7,7 @@ import { TranscriptView } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
+import type { RunOptions } from "./models";
 import { RunTargetMenu } from "./RunTargetMenu";
 import { noRepo, type ThreadGroup } from "./threads";
 import { Picker } from "./ui";
@@ -26,7 +27,14 @@ interface NewThreadProps {
   /** Whether the host is this computer, so its folders can be picked. */
   local: boolean;
   addRepo: (path: string) => Promise<Repo | string>;
-  start: (runId: string, groupId: string, prompt: string) => Promise<RpcError | undefined>;
+  start: (
+    runId: string,
+    groupId: string,
+    prompt: string,
+    options: RunOptions,
+  ) => Promise<RpcError | undefined>;
+  /** Whether the host's wispd takes a thread's model, effort, and permission (`runOptions`). */
+  runOptions: boolean;
   /** Called once wispd has the thread, with a note for it, such as which account it picked. */
   onStarted: (runId: string, notice?: string) => void;
   disabledReason?: string;
@@ -37,6 +45,7 @@ interface Attempt {
   runId: string;
   groupId: string;
   prompt: string;
+  options: RunOptions;
 }
 
 /** An account a worker can run on, as the account chooser lists it. */
@@ -74,6 +83,24 @@ async function accountOptions(hostId: string): Promise<AccountOption[] | string>
   ];
 }
 
+/**
+ * The backend the host's new threads run on: its worker default's, or Claude's with no default,
+ * since the account chooser only offers Claude accounts (`accountOptions`). Undefined when that
+ * can't be told.
+ */
+async function workerBackend(hostId: string): Promise<string | undefined> {
+  const defaults = await window.wisp.request(hostId, "accounts/defaults/get", {});
+  if ("error" in defaults) return undefined;
+  const worker = defaults.result.worker;
+  if (!worker) return "claude";
+  if (worker.kind === "subscription") return worker.backend;
+  if (worker.kind !== "key") return undefined;
+  const keys = await window.wisp.request(hostId, "accounts/keys/list", {});
+  if ("error" in keys) return undefined;
+  const provider = keys.result.accounts.find((k) => k.id === worker.id)?.provider;
+  return provider === "anthropic" ? "claude" : provider === "openai" ? "codex" : undefined;
+}
+
 const noAccounts =
   "No account can run this thread yet. Sign in to Claude Code, or add an API key, then try again.";
 
@@ -92,9 +119,22 @@ export function NewThread({
   local,
   addRepo,
   start,
+  runOptions,
   onStarted,
   disabledReason,
 }: NewThreadProps) {
+  // ponytail: read as the screen opens, since wispd has no event for a changed default. One
+  // changed elsewhere shows once New Thread opens again. Until then wispd refuses an effort or
+  // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
+  const [backend, setBackend] = useState<string>();
+  useEffect(() => {
+    if (!runOptions) return;
+    let live = true;
+    void workerBackend(hostId).then((b) => live && setBackend(b));
+    return () => {
+      live = false;
+    };
+  }, [hostId, runOptions]);
   const [repoError, setRepoError] = useState<string>();
   // Open while the host needs an account for the failed start.
   const [choices, setChoices] = useState<AccountOption[]>();
@@ -122,7 +162,7 @@ export function NewThread({
     askForAccount = true,
     notice?: string,
   ): Promise<string | undefined> => {
-    const error = await start(attempt.runId, attempt.groupId, attempt.prompt);
+    const error = await start(attempt.runId, attempt.groupId, attempt.prompt, attempt.options);
     failed.current = error ? attempt : undefined;
     if (!error) {
       onStarted(attempt.runId, notice);
@@ -162,13 +202,22 @@ export function NewThread({
     return attemptStart(attempt, false, notice);
   };
 
-  const send = async (prompt: string) => {
+  const send = async (prompt: string, options: RunOptions) => {
     setChoices(undefined);
     const last = failed.current;
-    const runId =
-      last && last.groupId === group.id && last.prompt === prompt ? last.runId : uuidv7();
+    // wispd refuses a run id reused with other options, so changing one starts afresh.
+    const same =
+      last &&
+      last.groupId === group.id &&
+      last.prompt === prompt &&
+      JSON.stringify(last.options) === JSON.stringify(options);
     setStarting(prompt);
-    const error = await attemptStart({ runId, groupId: group.id, prompt });
+    const error = await attemptStart({
+      runId: same ? last.runId : uuidv7(),
+      groupId: group.id,
+      prompt,
+      options,
+    });
     // On success the app opens the thread instead.
     if (error !== undefined) setStarting(undefined);
     return error;
@@ -262,6 +311,8 @@ export function NewThread({
         <Composer
           newThread
           onSend={send}
+          // Hidden while starting, as the opened thread's composer has none.
+          backend={runOptions && starting === undefined ? backend : undefined}
           disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
           tab={
             starting !== undefined ? (

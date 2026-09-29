@@ -165,7 +165,12 @@ function fakeBridge(seq: number, { listSeq = seq, resyncs = 0, cancelError = "" 
   });
   window.wisp = {
     platform: "darwin",
-    connectionState: async () => ({ status: "connected", wispd: "0.1.0", protocol: 1 }),
+    connectionState: async () => ({
+      status: "connected",
+      wispd: "0.1.0",
+      protocol: 1,
+      capabilities: {},
+    }),
     onConnectionState: () => () => {},
     request,
     subscribe,
