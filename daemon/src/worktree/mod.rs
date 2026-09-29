@@ -83,6 +83,10 @@
 //! the same trust [`WorktreeManager::create`] and [`WorktreeManager::remove`] already place in
 //! `repo_root`.
 //!
+//! [`WorktreeManager::refresh_detached`] trusts the `.git` file in a coordinator's folder: nothing
+//! untrusted can write it, since the coordinator runs with only `Read`, `Glob`, and `Grep` (0004)
+//! and workers can't read wispd's data folder (0013).
+//!
 //! **Known gap (#175):** a `-c` override wins over a config value no matter how that value was
 //! set, including through an `include`/`includeIf`, so hooks and hooksPath stay closed either
 //! way. Filter drivers (`filter.<name>.clean`/`.smudge`) don't have that `-c` escape hatch, and if
@@ -769,7 +773,8 @@ impl WorktreeManager {
     /// file is removed. Only the coordinator writes there, and 0004's check has already stopped
     /// the turn that did, so this discards nothing of the user's. When that can't be done in
     /// place, because the folder has no `.git` file (so git would look above it for a repository)
-    /// or git fails there, the folder is removed and added again.
+    /// or git fails there, the folder is removed and added again. A symlink at `path` is refused,
+    /// never followed.
     ///
     /// # Errors
     ///
@@ -784,9 +789,12 @@ impl WorktreeManager {
         let repo_root = self.repo_root(repo_path).await?;
         let _guard = self.lock_repo(&repo_root).await;
         let head = self.resolve_commit(&repo_root, "HEAD").await?;
-        if tokio::fs::symlink_metadata(path.join(".git"))
-            .await
-            .is_ok_and(|meta| meta.is_file())
+        // A symlinked folder would send `checkout --force` and `clean` somewhere else: it falls
+        // through to `remove_orphan`, which refuses it.
+        if is_real_dir(path).await
+            && tokio::fs::symlink_metadata(path.join(".git"))
+                .await
+                .is_ok_and(|meta| meta.is_file())
         {
             let refreshed = async {
                 self.run_git_ok(path, &["checkout", "--quiet", "--force", "--detach", &head])

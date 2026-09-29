@@ -58,7 +58,7 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 
 - The coordinator doesn't see the user's uncommitted work (RYA-171). To show it something, commit it, or describe it in the message.
 - A repository with no commits has nothing to check out, so its coordinator fails to start until the first commit, as its subagents do.
-- The check misses writes to ignored files and outside the repository, as 0004 and 0012 accept.
+- The check misses writes to ignored files and outside its worktree, including the user's checkout, as 0004 and 0012 accept.
 - Nothing wakes the coordinator when a subagent finishes (RYA-42), and the app has no coordinator chat yet (RYA-46).
 - `Project.coordinator` is filled by scanning the project's runs. If that gets slow, move it to a column on `projects`.
 - No event announces a new coordinator on the host-level subscription. The project's subscription gets `agent.started` with `policy: noWrite`, and `project/list` names it.
