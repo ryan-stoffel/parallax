@@ -19,6 +19,7 @@ test("a model's reply is a title and a branch", () => {
     title: "Fix the GitHub sign in flow",
     slug: "github-sign-in",
   });
+  expect(parseName("Title: Fix the build. \nBranch: fix-build")?.title).toBe("Fix the build");
   expect(parseName("Hello! How can I assist you today?")).toBeUndefined();
   expect(parseName("Title: Only a title")).toBeUndefined();
 });

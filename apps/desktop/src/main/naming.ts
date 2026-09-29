@@ -21,7 +21,11 @@ export function slugify(text: string): string | undefined {
 export function parseName(reply: string): ThreadName | undefined {
   const match = /^Title: (.+)\nBranch: (.+)$/.exec(reply.trim());
   if (!match) return undefined;
-  const title = match[1]!.split(/\s+/).slice(0, maxTitleWords).join(" ");
+  const title = match[1]!
+    .split(/\s+/)
+    .slice(0, maxTitleWords)
+    .join(" ")
+    .replace(/[\s.'-]+$/, "");
   const slug = slugify(match[2]!);
   return slug ? { title, slug } : undefined;
 }

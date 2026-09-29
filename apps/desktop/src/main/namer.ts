@@ -3,7 +3,7 @@ import type { ChatHistoryItem, LlamaChatSession as Session } from "node-llama-cp
 import type { ThreadName } from "../preload/bridge";
 import { fallbackName, parseName } from "./naming";
 
-// 0.5B parameters, 4-bit: about 490 MB, and a name in roughly 200 ms once loaded.
+// 0.5B parameters, 4-bit: about 490 MB, and a name in roughly 100 to 150 ms once loaded.
 const model = "hf:Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M";
 // A reply this slow isn't worth holding up a thread for.
 const timeoutMs = 2000;
@@ -69,7 +69,7 @@ type Complete = (prompt: string, signal: AbortSignal) => Promise<string>;
  */
 export function createNamer(modelDir: string) {
   let complete: Complete | undefined;
-  let busy = false;
+  let queue: Promise<unknown> = Promise.resolve();
   let started = false;
 
   // ponytail: a failed download or load stays failed until the app restarts.
@@ -102,17 +102,19 @@ export function createNamer(modelDir: string) {
 
     async name(prompt: string): Promise<ThreadName> {
       const fallback = fallbackName(prompt);
-      // One name at a time: the context has one sequence.
-      if (!complete || busy) return fallback;
-      busy = true;
-      try {
-        const abort = AbortSignal.timeout(timeoutMs);
-        return parseName(await complete(prompt.trim().slice(0, 500), abort)) ?? fallback;
-      } catch {
-        return fallback;
-      } finally {
-        busy = false;
-      }
+      const generate = complete;
+      if (!generate) return fallback;
+      // One name at a time: the session is shared. Each waits its turn, then gets its own timeout.
+      const turn = queue.then(async () => {
+        try {
+          const reply = await generate(prompt.trim().slice(0, 500), AbortSignal.timeout(timeoutMs));
+          return parseName(reply) ?? fallback;
+        } catch {
+          return fallback;
+        }
+      });
+      queue = turn;
+      return turn;
     },
   };
 }
