@@ -1,5 +1,5 @@
 import { ArrowUp, GitBranch, LoaderCircle, Workflow } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentRun, WispEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
@@ -49,6 +49,11 @@ export function useProjectAgents(
     setRuns([]);
     setError(undefined);
   }
+  // The scope shown now, so `start` drops a late answer from a Project the user has left.
+  const current = useRef(scope);
+  useEffect(() => {
+    current.current = scope;
+  }, [scope]);
 
   useEffect(() => {
     if (!connected || !project) return;
@@ -89,7 +94,8 @@ export function useProjectAgents(
       if ("error" in answer) return describeError(answer.error);
       // Unless its agent.started got here first, with whatever followed it.
       const { run } = answer.result;
-      setRuns((prev) => (prev.some((r) => r.id === run.id) ? prev : [...prev, run]));
+      if (current.current === `${hostId}/${project}`)
+        setRuns((prev) => (prev.some((r) => r.id === run.id) ? prev : [...prev, run]));
       return undefined;
     },
     [hostId, project],

@@ -77,8 +77,12 @@ export function App() {
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
   const agent = agents.runs.find((r) => r.id === agentId);
-  const openAgent = (id?: string) =>
-    project && setSelection({ kind: "project", projectId: project.id, agentId: id });
+  // Shrinks an expanded side panel, which hides the main pane the chat opens in.
+  const openAgent = (id?: string) => {
+    if (!project) return;
+    setSelection({ kind: "project", projectId: project.id, agentId: id });
+    setPanelExpanded(false);
+  };
 
   // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
   // back to the coordinator.
@@ -283,6 +287,8 @@ export function App() {
         agents={
           project && (
             <AgentsPanel
+              // Another Project's start box starts empty, with its own retry id.
+              key={`${host.id}/${project.id}`}
               agents={agents}
               openId={agentId}
               onOpen={openAgent}

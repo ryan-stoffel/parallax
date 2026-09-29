@@ -470,16 +470,24 @@ const docs = subagent("01a0d391-0000-7000-8000-000000000002", "Write the docs", 
   accountId: "01a0d34b-3c4d-7e5f-a061-7b8c9d0e1f22",
   branch: "wisp/docs",
 });
-/** Ember with a coordinator and `runs` after it, served by `agent/list` and `agent/events`. */
+/**
+ * Ember with a coordinator and `runs` after it, served by `agent/list` and `agent/events`, open
+ * with its Agents view. Photon has no runs.
+ */
 async function openEmberAgents(...runs: AgentRun[]) {
   capabilities = { coordinator: {}, openPr: {} };
   const all = [coordinatorRun(coordinatorId, "Plan the release"), ...runs];
   answers["project/list"] = () => ({
     result: {
-      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: coordinatorId }],
+      projects: [
+        { ...project("ember", "2026-09-26T12:00:00Z"), coordinator: coordinatorId },
+        project("photon", "2026-09-29T09:00:00Z"),
+      ],
     },
   });
-  answers["agent/list"] = (p) => ({ result: { runs: p["project"] ? all : [], seq: 7 } });
+  answers["agent/list"] = (p) => ({
+    result: { runs: p["project"] === "p-ember" ? all : [], seq: 7 },
+  });
   answers["agent/events"] = serveEvents(() => all);
   await renderApp();
   await openEmber();
@@ -555,6 +563,15 @@ test("opening a subagent shows its chat, with Open PR, and the Project crumb goe
   expect(transcript()).toContain("Plan the release");
 });
 
+test("opening a subagent from an expanded side panel shrinks it, so the chat shows", async () => {
+  await openEmberAgents(login);
+  await click(document.querySelector('#side-panel button[aria-label="Expand panel"]'));
+  expect(document.querySelector("main")!.hidden).toBe(true);
+  await click(agentRow("Fix the login bug"));
+  expect(document.querySelector("main")!.hidden).toBe(false);
+  expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);
+});
+
 test("a running subagent's chat stops it", async () => {
   answers["agent/cancel"] = () => ({ result: { run: docs } });
   await openEmberAgents(docs);
@@ -604,4 +621,34 @@ test("the Agents view starts a subagent by hand, reusing its id to retry", async
   expect(retry).toEqual(first);
   expect(box.value).toBe("");
   expect(agentRows()[0]).toMatch(/^Bump the version/);
+});
+
+test("another Project's Agents view starts with an empty box and never gets a late start", async () => {
+  let release = () => {};
+  answers["agent/start"] = async (p) => {
+    await new Promise<void>((resolve) => (release = resolve));
+    return { result: { run: subagent(p["runId"] as string, p["prompt"] as string) } };
+  };
+  await openEmberAgents();
+  const box = () =>
+    document.querySelector<HTMLTextAreaElement>(
+      '#side-panel textarea[aria-label="New subagent\'s task"]',
+    )!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      box(),
+      "Bump the version",
+    );
+    box().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(document.querySelector('#side-panel button[aria-label="Start subagent"]'));
+
+  await click(
+    [...document.querySelectorAll("#sidebar li button")].find((b) => b.textContent === "photon3h"),
+  );
+  expect(crumbs()).toEqual(["This Mac", "photon"]);
+  expect(box().value).toBe("");
+  await act(async () => release());
+  await settle();
+  expect(agentRows()).toEqual([]);
 });
