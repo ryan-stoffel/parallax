@@ -133,7 +133,7 @@ use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
     EventSink, FollowUp, Run, RunHandle, RunId, RunRequest, SendError, StartError, Started,
-    ToolPolicy, TurnId, WorkerSandbox, check_argument,
+    ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::mcp;
 
@@ -345,20 +345,11 @@ pub const ENV_FILE_ENV: &str = "CLAUDE_ENV_FILE";
 /// If `dir` can't be created or the file can't be written.
 pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
     std::fs::create_dir_all(dir)?;
-    let mut script = b"export PATH='".to_vec();
-    for &byte in path.as_encoded_bytes() {
-        if byte == b'\'' {
-            script.extend_from_slice(b"'\\''");
-        } else {
-            script.push(byte);
-        }
-    }
-    script.extend_from_slice(b"'${PATH:+:$PATH}\n");
     let mut file = tempfile::Builder::new()
         .prefix("claude-env-")
         .suffix(".sh")
         .tempfile_in(dir)?;
-    file.write_all(&script)?;
+    file.write_all(&prepend_path_line(path))?;
     Ok(file.into_temp_path())
 }
 

@@ -12,7 +12,8 @@
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
 //! - `tmp/`: files wispd writes for a run and deletes when it ends, such as a Claude worker's
-//!   `CLAUDE_ENV_FILE` (RYA-126). See [`DataDir::temp_dir`].
+//!   `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141). See
+//!   [`DataDir::temp_dir`].
 //! - `logs/wispd.log`: the log.
 //!
 //! One folder is outside it: `/tmp/wisp-<hash>/`, which holds each worker run's own temp folder
@@ -157,8 +158,10 @@ impl DataDir {
     }
 
     /// `tmp/`: files wispd writes for a run and deletes when the run ends, such as a Claude
-    /// worker's `CLAUDE_ENV_FILE` (RYA-126), and `serve` sweeps at startup. No worker's commands
-    /// can read or write them, since the data folder is unreadable to every worker (0013).
+    /// worker's `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141), and `serve`
+    /// sweeps at startup. No worker's commands can write them or read another run's, since the
+    /// data folder is unreadable to every worker (0013). A Codex worker's own `ZDOTDIR` is
+    /// readable to it.
     #[must_use]
     pub fn temp_dir(&self) -> PathBuf {
         self.root.join("tmp")

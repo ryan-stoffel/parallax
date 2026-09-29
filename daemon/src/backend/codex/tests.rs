@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
 
-use super::{CodexBackend, WORKER_FEATURES, worker_overrides};
+use super::{CodexBackend, WORKER_FEATURES, worker_overrides, write_zdotdir};
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::sandbox::unreadable_in_home;
 use crate::backend::{
@@ -295,7 +295,8 @@ async fn a_worker_run_maps_the_real_stream_and_holds_codex_to_0013() {
     assert_worker_invocation(&fake);
 }
 
-/// A worker's prompt, sandbox, model, and second account reached the CLI, and nothing else did.
+/// A worker's prompt, sandbox, `ZDOTDIR`, model, and second account reached the CLI, and nothing
+/// else did.
 fn assert_worker_invocation(fake: &Fake) {
     let cwd = fake.root();
     // The prompt went on stdin, never in argv, and stdin closed after it.
@@ -311,7 +312,17 @@ fn assert_worker_invocation(fake: &Fake) {
     assert_eq!(argv[argv.len() - 3..], ["-m", "gpt-5.5-codex", "-"]);
     let cwd_text = cwd.display().to_string();
     let values = overrides(&argv);
-    assert_eq!(values.len(), 8, "{values:?}");
+    assert_eq!(values.len(), 9, "{values:?}");
+    // The worker's ZDOTDIR, in the data folder's tmp/, is gone once the run has finished.
+    let zdotdir = values[7]
+        .strip_prefix(r#"shell_environment_policy={ignore_default_excludes=false, set={ZDOTDIR=""#)
+        .and_then(|rest| rest.strip_suffix(r#""}}"#))
+        .unwrap_or_else(|| panic!("{}", values[7]));
+    assert!(
+        zdotdir.starts_with(&format!("{cwd_text}/data/tmp/codex-zdotdir-")),
+        "{zdotdir}"
+    );
+    assert!(!Path::new(zdotdir).exists(), "{zdotdir} outlived the run");
     assert_eq!(values[0], r#"default_permissions="wisp_worker""#);
     let permissions = values[1]
         .strip_prefix(&format!(
@@ -333,6 +344,7 @@ fn assert_worker_invocation(fake: &Fake) {
         r#""/tmp/codex-second-account"="deny""#.to_owned(),
         format!(r#""{cwd_text}/.git"="read""#),
         r#""/Users/u/src/app/.git"="read""#.to_owned(),
+        format!(r#""{zdotdir}"="read""#),
     ]);
     assert_eq!(rules, expected.iter().map(String::as_str).collect());
     assert_eq!(
@@ -344,7 +356,10 @@ fn assert_worker_invocation(fake: &Fake) {
             &format!(r#"projects={{"{cwd_text}"={{trust_level="untrusted"}}}}"#),
             r#"approval_policy="never""#,
             r#"web_search="live""#,
-            "shell_environment_policy={ignore_default_excludes=false}",
+            "allow_login_shell=false",
+            &format!(
+                r#"shell_environment_policy={{ignore_default_excludes=false, set={{ZDOTDIR="{zdotdir}"}}}}"#
+            ),
             r#"model_reasoning_effort="xhigh""#,
         ]
     );
@@ -550,9 +565,49 @@ async fn requests_codex_can_t_run_are_refused_before_spawning() {
 #[test]
 fn paths_are_quoted_as_toml_strings() {
     let cwd = Path::new("/Users/u/we\"ird\\dir\u{7f}");
-    let values = worker_overrides(&sandbox(cwd), cwd, None);
+    let values = worker_overrides(&sandbox(cwd), cwd, None, None);
     assert_eq!(
         values[3],
         r#"projects={"/Users/u/we\"ird\\dir\u007F"={trust_level="untrusted"}}"#
     );
+}
+
+/// A worker's `.zshenv`, read by a real zsh whose `~/.zshenv` sets `PATH` outright as
+/// nix-darwin's `/etc/zshenv` does, puts wispd's `PATH` back in front of it and leaves `ZDOTDIR`
+/// unset. The folder goes when dropped (RYA-141).
+#[test]
+fn a_worker_s_zdotdir_puts_its_path_back_after_zsh_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let tools = root.join("it's tools");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&tools).unwrap();
+    fs::write(home.join(".zshenv"), "export PATH=/usr/bin:/bin\n").unwrap();
+    let tool = tools.join("wisp-path-probe");
+    fs::write(&tool, "#!/bin/sh\necho found-the-tool\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", tools.display());
+
+    let zdotdir = write_zdotdir(&root.join("data/tmp"), path.as_ref()).unwrap();
+    let output = std::process::Command::new("/bin/zsh")
+        .args([
+            "-c",
+            r#"wisp-path-probe; printf '%s\n' "$PATH" "${ZDOTDIR-unset}""#,
+        ])
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", &path)
+        .env("ZDOTDIR", zdotdir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("found-the-tool\n{path}:/usr/bin:/bin\nunset\n"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let folder = zdotdir.path().to_owned();
+    drop(zdotdir);
+    assert!(!folder.exists());
 }
