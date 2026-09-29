@@ -1,9 +1,10 @@
-import { Folder, GitBranch, House, Plus } from "lucide-react";
+import { Folder, GitBranch, House, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AccountChoice, Repo } from "../protocol/generated/protocol";
-import { Composer } from "./Composer";
+import { TranscriptView } from "./AgentChat";
+import { Composer, tabItem } from "./Composer";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { RunTargetMenu } from "./RunTargetMenu";
@@ -100,6 +101,9 @@ export function NewThread({
   const [picked, setPicked] = useState(0);
   const [choosing, setChoosing] = useState(false);
   const [chooseError, setChooseError] = useState<string>();
+  // The prompt of a start in flight. Starting takes wispd a moment (a worktree, a worker), so the
+  // screen shows it as the thread it opens meanwhile.
+  const [starting, setStarting] = useState<string>();
   const failed = useRef<Attempt>(undefined);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
 
@@ -163,7 +167,11 @@ export function NewThread({
     const last = failed.current;
     const runId =
       last && last.groupId === group.id && last.prompt === prompt ? last.runId : uuidv7();
-    return attemptStart({ runId, groupId: group.id, prompt });
+    setStarting(prompt);
+    const error = await attemptStart({ runId, groupId: group.id, prompt });
+    // On success the app opens the thread instead.
+    if (error !== undefined) setStarting(undefined);
+    return error;
   };
 
   const continueWith = async (option: AccountOption) => {
@@ -183,71 +191,101 @@ export function NewThread({
     else onGroupChange(repo.id);
   };
 
+  // While starting, laid out as AgentChat is, so opening the thread doesn't move anything. The
+  // Composer keeps its place in the tree either way, so a failed start still puts the text back.
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-6 pb-[12vh]">
-      <div className="w-full max-w-3xl">
-        <h1 className="mb-7 text-center text-[24px] font-medium tracking-tight">
-          {group.id === noRepo ? "What should we work on " : "What should we build in "}
-          <button
-            type="button"
-            popoverTarget={repoMenu}
-            aria-haspopup="menu"
-            className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground"
-          >
-            {group.id === noRepo ? "without a repo" : group.name}
-          </button>
-          ?
-        </h1>
-        {/* Menu only: the repository name in the heading opens it. */}
-        <Picker
-          id={repoMenu}
-          button={false}
-          label="Repository"
-          value={group.id}
-          onChange={(value) => {
-            if (value === addRepository) return void pickRepository();
-            setRepoError(undefined);
-            setChoices(undefined);
-            onGroupChange(value);
-          }}
-          options={[
-            ...groups.map((g) => ({
-              value: g.id,
-              label: g.name,
-              icon: g.id === noRepo ? <House /> : <Folder />,
-            })),
-            ...(local
-              ? [
-                  {
-                    value: addRepository,
-                    label: "Add repository…",
-                    icon: <Plus />,
-                    divider: true,
-                  },
-                ]
-              : []),
-          ]}
+    <div
+      className={
+        starting === undefined
+          ? "flex flex-1 flex-col items-center justify-center px-6 pb-[12vh]"
+          : "flex min-h-0 flex-1 flex-col"
+      }
+    >
+      {starting !== undefined && (
+        <TranscriptView
+          rows={[{ kind: "pending", key: "pending:prompt", text: starting }]}
+          sent={new Map()}
+          live={false}
         />
+      )}
+      <div
+        className={
+          starting === undefined ? "w-full max-w-3xl" : "mx-auto w-full max-w-3xl px-6 pb-5"
+        }
+      >
+        {starting === undefined && (
+          <>
+            <h1 className="mb-7 text-center text-[24px] font-medium tracking-tight">
+              {group.id === noRepo ? "What should we work on " : "What should we build in "}
+              <button
+                type="button"
+                popoverTarget={repoMenu}
+                aria-haspopup="menu"
+                className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground"
+              >
+                {group.id === noRepo ? "without a repo" : group.name}
+              </button>
+              ?
+            </h1>
+            {/* Menu only: the repository name in the heading opens it. */}
+            <Picker
+              id={repoMenu}
+              button={false}
+              label="Repository"
+              value={group.id}
+              onChange={(value) => {
+                if (value === addRepository) return void pickRepository();
+                setRepoError(undefined);
+                setChoices(undefined);
+                onGroupChange(value);
+              }}
+              options={[
+                ...groups.map((g) => ({
+                  value: g.id,
+                  label: g.name,
+                  icon: g.id === noRepo ? <House /> : <Folder />,
+                })),
+                ...(local
+                  ? [
+                      {
+                        value: addRepository,
+                        label: "Add repository…",
+                        icon: <Plus />,
+                        divider: true,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          </>
+        )}
         <Composer
           newThread
           onSend={send}
-          disabledReason={disabledReason}
+          disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
           tab={
-            <>
-              <RunTargetMenu hosts={hosts} hostId={hostId} />
-              {/* Placeholder until wispd offers branches. */}
-              <Picker
-                label="Branch"
-                icon={<GitBranch />}
-                align="end"
-                search="Search branches…"
-                panelClassName="w-72"
-                options={[
-                  { value: "develop", label: "develop", hint: "current" },
-                  { value: "main", label: "main" },
-                ]}
-              />
-            </>
+            starting !== undefined ? (
+              <span className={tabItem}>
+                <LoaderCircle aria-hidden className="animate-spin" />
+                Starting…
+              </span>
+            ) : (
+              <>
+                <RunTargetMenu hosts={hosts} hostId={hostId} />
+                {/* Placeholder until wispd offers branches. */}
+                <Picker
+                  label="Branch"
+                  icon={<GitBranch />}
+                  align="end"
+                  search="Search branches…"
+                  panelClassName="w-72"
+                  options={[
+                    { value: "develop", label: "develop", hint: "current" },
+                    { value: "main", label: "main" },
+                  ]}
+                />
+              </>
+            )
           }
           footer={
             <div>
