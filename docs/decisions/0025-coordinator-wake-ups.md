@@ -1,8 +1,8 @@
 # 0025: Runs a coordinator started wake it when they finish
 
-- Status: accepted
+- Status: accepted; restarts added by RYA-178
 - Date: 2026-09-29
-- Issue: RYA-42
+- Issue: RYA-42, RYA-178
 
 ## Context
 
@@ -12,7 +12,7 @@ A project's coordinator is a run (0024), and the runs it starts through `wispd m
 
 ### What wakes it
 
-- When a worker whose run has a `coordinatorThread` ends a CLI process, completed, failed, or cancelled, wispd hands a summary to the coordinator's actor, after committing the run. A run wispd interrupts on shutdown sends none, and neither does a CLI that fails to start, since its caller gets that answer directly.
+- When a worker whose run has a `coordinatorThread` ends a CLI process, completed, failed, or cancelled, wispd hands a summary to the coordinator's actor, after committing the run. A run wispd interrupts on shutdown sends none then (the next start names it, below), and neither does a CLI that fails to start, since its caller gets that answer directly.
 - The summary is one line per run: its id, its task's first line, how it ended with its last result or failure message (each cut short), and its branch's diff stats. The turn's message opens with "wisp, not the user", lists the summaries, and asks the coordinator to review, act, and report. The wording lives in `daemon/src/agents/wake.rs`, not in the coordinator's instructions.
 - Everything happens in wispd's actors, so no client needs to be connected.
 
@@ -28,6 +28,14 @@ A project's coordinator is a run (0024), and the runs it starts through `wispd m
 - `agent/cancel` on the coordinator pauses wake-ups too, so a run finishing a moment after Stop doesn't start it again. So does a wake-up that can't start the coordinator, such as one whose session can't resume, or a store error while checking it. Each emits the same event, once per pause. The event carries no reason: whatever paused them, the user's next message is what lets them through.
 - The user's next `agent/send` to the coordinator resets the count and ends the pause; what waited goes out after that turn. Summaries are dropped only once a wake-up turn reaches the coordinator's CLI.
 - Only the project's current coordinator wakes. A coordinator that `project/start` replaced drops its wake-ups, so a project never has two live (0024).
+- The count and a pause are stored per coordinator (the `wakes` table) whenever they change, and its actor takes them up when it starts. So a coordinator at the cap, or one the user stopped, stays paused across a restart, and a looping one can't reset its count by outliving wispd (RYA-178).
+
+### After a restart (RYA-178)
+
+- When wispd starts, after marking runs it finds still running `interrupted` (0014), it wakes each project's current coordinator for what it missed: the runs it started that ended after its last turn began (its newest stored turn, or its creation). That covers the runs the stop interrupted and summaries that were waiting. They go to its actor together, so they make one turn, on the same path as above, cap and pause included. A run a wake-up already named ended before that wake-up's turn, so a later restart doesn't name it again.
+- If the coordinator's own turn was interrupted, the wake-up says so too, since nothing else would pick it back up.
+- The coordinator decides what to do with an interrupted run: `message_agent` resumes it. wispd doesn't resume runs itself, which would spend on every one with nobody deciding.
+- A rebuilt summary comes from the run's row: its status, error, and branch, but not its last result or its failure's kind.
 
 ### How a client recognizes a wake-up
 
@@ -35,7 +43,9 @@ A project's coordinator is a run (0024), and the runs it starts through `wispd m
 
 ## Consequences
 
-- Wake-ups are in memory only. A restart loses what is waiting, the count, and a pause. Runs that were running are interrupted on shutdown and wake nothing; the user's next message resumes the coordinator. RYA-178 picks a project back up after a restart.
+- What is waiting stays in memory; a restart rebuilds it from the store, only from runs that ended after the coordinator's newest recorded turn of any kind. So a run that ended before the coordinator's last recorded turn, while its wake-up still waited, isn't rebuilt: the coordinator can find it with `list_agents`. That covers one that ended before the user's last message, and, since a wake-up's turn is recorded only once its CLI starts, one that ended in the moment before, if wispd stops before the next wake-up. In that case the coordinator was usually interrupted too, and its own line wakes it.
+- A run whose CLI failed to start during the coordinator's last turn is named again after a restart, since recording the failure updates the run after that turn began, though the coordinator's tool already returned the error. It can cost one unattended turn.
+- The first start of a wispd with RYA-178 wakes a coordinator once for runs that ended after its last turn and were never named, which an older wispd dropped on restart.
 - A user message the coordinator gets while wake-ups wait costs one more turn than folding them in would.
 - A wake-up checks that its coordinator is still the project's before resuming it, but the run is recorded `running` only once its CLI starts. A `project/start` that lands in between finds no running coordinator and starts a second. `agent/send` has the same window (0024); a wake-up just opens it with nobody at the keyboard. It is narrow, so it stays.
 - A `coordinatorThread` that names no run, which any client can send to `agent/start`, wakes nothing; wispd logs a warning.

@@ -202,6 +202,9 @@ impl Actor {
     }
 
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, shutdown: CancellationToken) {
+        if self.is_coordinator() {
+            self.load_wakes().await;
+        }
         loop {
             let deadline = self.batch.since.map(|since| since + COALESCE);
             // A coordinator's turn in progress gets its wake-ups next, once its CLI has exited.
@@ -257,8 +260,8 @@ impl Actor {
                 reply,
             } => {
                 let answer = self.send(turn_id, text, options).await;
-                if answer.is_ok() {
-                    self.wakes.attended();
+                if answer.is_ok() && self.wakes.attended() {
+                    self.save_wakes().await;
                 }
                 let _ = reply.send(answer);
             }
@@ -330,7 +333,10 @@ impl Actor {
         };
         info!(run = %self.id, "waking a coordinator: runs it started finished");
         match self.resume(turn_id, text, RunOptions::default()).await {
-            Ok(_) if self.live.is_some() => self.wakes.delivered(),
+            Ok(_) if self.live.is_some() => {
+                self.wakes.delivered();
+                self.save_wakes().await;
+            }
             Ok(_) => self.pause_wakes().await,
             Err(error) => {
                 warn!(run = %self.id, error = %error.message, "could not wake a coordinator");
@@ -343,8 +349,39 @@ impl Actor {
     async fn pause_wakes(&mut self) {
         if self.wakes.pause() {
             info!(run = %self.id, "pausing a coordinator's wake-ups until the user writes");
+            self.save_wakes().await;
             self.append(WispEvent::AgentWakeupsPaused { run_id: self.id })
                 .await;
+        }
+    }
+
+    /// Takes up the coordinator's wake-up count and pause where the last wispd left them
+    /// (RYA-178). If they can't be read, pauses wake-ups, as a failed check does.
+    async fn load_wakes(&mut self) {
+        let id = self.row.id;
+        let stored = store(&self.daemon, move |db| {
+            db.wake_state(id).map_err(|error| store_error(&error))
+        })
+        .await;
+        match stored {
+            Ok(state) => self.wakes.restore(state),
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not read a coordinator's wake-ups");
+                self.pause_wakes().await;
+            }
+        }
+    }
+
+    /// Stores the coordinator's wake-up count and pause, so a restart keeps them (RYA-178).
+    async fn save_wakes(&self) {
+        let (id, state) = (self.row.id, self.wakes.state());
+        let saved = store(&self.daemon, move |db| {
+            db.set_wake_state(id, state)
+                .map_err(|error| store_error(&error))
+        })
+        .await;
+        if let Err(error) = saved {
+            warn!(run = %self.id, error = %error.message, "could not store a coordinator's wake-ups");
         }
     }
 

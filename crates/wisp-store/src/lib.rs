@@ -19,6 +19,7 @@ mod threads;
 mod timestamp;
 mod turns;
 mod usage;
+mod wakes;
 mod worktree;
 
 use std::fs;
@@ -36,6 +37,7 @@ pub use project::{Project, ProjectFields};
 pub use runs::{Run, RunAccept, RunFields, RunState};
 pub use threads::{Repo, RepoFields, Thread};
 pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageHour, UsageSummary};
+pub use wakes::WakeState;
 pub use worktree::{Worktree, WorktreeFields};
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);

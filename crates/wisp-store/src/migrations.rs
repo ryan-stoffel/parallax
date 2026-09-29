@@ -238,6 +238,17 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE runs ADD COLUMN effort TEXT;
         ALTER TABLE runs ADD COLUMN permission TEXT;",
     },
+    // A coordinator's wake-up count and pause (RYA-178, decision 0025), so a restart neither
+    // resets the cap nor lifts a pause. No row means none in a row and not paused. No foreign
+    // key, like `turns`.
+    Migration {
+        version: 14,
+        sql: "CREATE TABLE wakes (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            in_a_row INTEGER NOT NULL,
+            paused INTEGER NOT NULL
+        );",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

@@ -12,7 +12,8 @@
 //! A run outlives its CLI processes: `agent/send` to a run whose CLI has ended resumes the
 //! vendor session in the same worktree. When wispd stops, running CLIs are cancelled and their
 //! runs recorded `interrupted`; a run still `starting` or `running` in the store when wispd
-//! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`.
+//! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`, and
+//! either wakes the coordinator that started it once wispd starts again ([`wake::catch_up`]).
 //!
 //! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
 //! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
@@ -872,8 +873,9 @@ pub(crate) async fn open_pr(
 }
 
 /// Marks every run the store still has as `starting` or `running` as `interrupted`: wispd
-/// stopped without recording how they ended, as after a crash. Called once at startup, before
-/// any connection is accepted.
+/// stopped without recording how they ended, as after a crash. Then wakes each project's
+/// coordinator for what it missed while wispd was stopped ([`wake::catch_up`], RYA-178). Called
+/// once at startup, before any connection is accepted.
 pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     let recovered = store(daemon, |db| {
         let mut recovered = Vec::new();
@@ -932,6 +934,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
         }
         Err(error) => warn!(error = %error.message, "could not recover interrupted agent runs"),
     }
+    wake::catch_up(daemon).await;
 }
 
 #[cfg(test)]

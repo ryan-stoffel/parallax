@@ -7,17 +7,23 @@
 //! [`CAP`] wake-ups in a row with no message from the user, after the user stops the coordinator,
 //! or when a wake-up can't start it, it pauses them until the user writes and reports
 //! `agent.wakeupsPaused`.
+//!
+//! A restart keeps the count and a pause in the store (RYA-178). What was waiting, and the runs
+//! the stop interrupted, [`catch_up`] rebuilds from the store when wispd starts.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
-use wisp_protocol::{AgentOutcome, AgentRun, RunId, TurnId};
+use wisp_protocol::{AgentFailureKind, AgentOutcome, AgentRun, AgentStatus, RunId, TurnId};
+use wisp_store::WakeState;
 
 use super::actor::Command;
-use super::convert::{option_name, truncate};
+use super::convert::{INTERRUPTED, NO_WRITE, agent_run, option_name, truncate};
+use super::{store, store_error};
 use crate::server::Daemon;
 
 /// How long wake-ups wait after the first arrives, so runs that finish together make one turn.
@@ -31,15 +37,13 @@ pub(super) const CAP: u32 = 10;
 const TASK_BYTES: usize = 200;
 const EXCERPT_BYTES: usize = 500;
 
-/// A coordinator's waiting wake-ups, and how many it has taken since the user last wrote.
-// ponytail: in memory, so a restart loses what is waiting, the count, and a pause; store them if
-// restarts in the middle of a project start to matter (RYA-178).
+/// A coordinator's waiting wake-ups, how many it has taken since the user last wrote, and whether
+/// they are paused. The actor stores `state` whenever it changes, so a restart keeps it.
 #[derive(Debug, Default)]
 pub(super) struct Wakes {
     waiting: Vec<String>,
     since: Option<Instant>,
-    in_a_row: u32,
-    paused: bool,
+    state: WakeState,
     /// The wake-up turn last sent, until its `turnStarted` is logged. Only one can be in flight,
     /// since none is sent while the coordinator's CLI runs.
     sent: Option<TurnId>,
@@ -55,14 +59,14 @@ impl Wakes {
     /// When what is waiting is due, unless nothing is or wake-ups are paused.
     pub fn due(&self) -> Option<Instant> {
         self.since
-            .filter(|_| !self.paused)
+            .filter(|_| !self.state.paused)
             .map(|since| since + BATCH)
     }
 
     /// The next wake-up turn's id and message, or `None` once the cap is reached. What is
     /// waiting stays until [`Wakes::delivered`].
     pub fn next(&mut self) -> Option<(TurnId, String)> {
-        if self.in_a_row >= CAP {
+        if self.state.in_a_row >= CAP {
             return None;
         }
         let turn = TurnId::generate();
@@ -73,21 +77,31 @@ impl Wakes {
     /// The wake-up from [`Wakes::next`] reached the coordinator's CLI: it counts against the cap,
     /// and what waited is gone.
     pub fn delivered(&mut self) {
-        self.in_a_row += 1;
+        self.state.in_a_row += 1;
         self.waiting.clear();
         self.since = None;
     }
 
-    /// The user wrote to the coordinator: the count starts over, and a pause ends.
-    pub fn attended(&mut self) {
-        self.in_a_row = 0;
-        self.paused = false;
+    /// The user wrote to the coordinator: the count starts over, and a pause ends. Whether that
+    /// changed anything.
+    pub fn attended(&mut self) -> bool {
+        std::mem::take(&mut self.state) != WakeState::default()
     }
 
     /// Nothing wakes the coordinator until the user writes again. Whether it wasn't paused
     /// already.
     pub fn pause(&mut self) -> bool {
-        !std::mem::replace(&mut self.paused, true)
+        !std::mem::replace(&mut self.state.paused, true)
+    }
+
+    /// The count and pause, as the store keeps them across a restart (RYA-178).
+    pub fn state(&self) -> WakeState {
+        self.state
+    }
+
+    /// Takes up the count and pause a previous wispd stored.
+    pub fn restore(&mut self, state: WakeState) {
+        self.state = state;
     }
 
     /// Drops what is waiting, for a coordinator a newer one replaced (0024).
@@ -122,6 +136,88 @@ pub(super) fn notify(daemon: &Arc<Daemon>, thread: Uuid, summary: String) {
     });
 }
 
+/// After a restart, hands each project's current coordinator one summary of the runs it started
+/// that ended after its last turn began (RYA-178): the runs the stop interrupted, and any whose
+/// wake-up was still waiting. A run a wake-up already named ended before that wake-up's turn, so
+/// it isn't named again. If the coordinator's own turn was interrupted, the summary says so, since
+/// nothing else would pick it back up. Called once at startup, after runs the store still has
+/// running are marked interrupted.
+// ponytail: rebuilt from run rows, so a summary lacks the run's last result, and a run that ended
+// before the user's last message to the coordinator isn't named; store the summaries if that
+// matters.
+pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
+    let missed = store(daemon, |db| {
+        let runs = db.list_runs(None).map_err(|e| store_error(&e))?;
+        // Oldest first, so each project keeps its newest no-write run: its coordinator (0024).
+        let coordinators: HashMap<Uuid, &wisp_store::Run> = runs
+            .iter()
+            .filter(|run| run.fields.policy == NO_WRITE)
+            .map(|run| (run.fields.project_id, run))
+            .collect();
+        let mut missed = Vec::new();
+        for coordinator in coordinators.into_values() {
+            let since = db
+                .last_turn_at(coordinator.id)
+                .map_err(|e| store_error(&e))?
+                .unwrap_or(coordinator.created_at);
+            let mut lines = Vec::new();
+            for run in runs.iter().filter(|run| {
+                run.fields.coordinator_thread == Some(coordinator.id) && run.updated_at > since
+            }) {
+                if run.id == coordinator.id {
+                    if run.state.status == INTERRUPTED {
+                        lines.push(OWN_TURN.to_owned());
+                    }
+                    continue;
+                }
+                let worktree = db.get_worktree(run.id).map_err(|e| store_error(&e))?;
+                if let Some(line) = agent_run(run, worktree.as_ref())
+                    .ok()
+                    .and_then(|run| stored_summary(&run))
+                {
+                    lines.push(line);
+                }
+            }
+            if !lines.is_empty() {
+                missed.push((coordinator.id, lines.join("\n")));
+            }
+        }
+        Ok(missed)
+    })
+    .await;
+    match missed {
+        Ok(missed) => {
+            for (thread, summary) in missed {
+                info!(coordinator = %thread, "waking a coordinator for what it missed while wispd was stopped");
+                notify(daemon, thread, summary);
+            }
+        }
+        Err(error) => {
+            warn!(error = %error.message, "could not find what coordinators missed while wispd was stopped");
+        }
+    }
+}
+
+/// The summary line for a coordinator whose own turn a stop interrupted.
+const OWN_TURN: &str = "- Your own last turn was interrupted when wispd stopped; pick it back up.";
+
+/// [`summary`] from `run`'s row alone, for a run whose wake-up a restart lost: the row keeps its
+/// status and error, but not its last result or its failure's kind. `None` for a run that hasn't
+/// ended.
+fn stored_summary(run: &AgentRun) -> Option<String> {
+    let outcome = match run.status {
+        AgentStatus::Completed => AgentOutcome::Completed { result: None },
+        AgentStatus::Failed => AgentOutcome::Failed {
+            failure: AgentFailureKind::Unknown,
+            message: run.error.clone().unwrap_or_default(),
+        },
+        AgentStatus::Cancelled => AgentOutcome::Cancelled,
+        AgentStatus::Interrupted => AgentOutcome::Interrupted,
+        _ => return None,
+    };
+    Some(summary(run, &outcome))
+}
+
 /// One line on how `run`'s CLI process ended: its id, task, outcome, and branch.
 pub(super) fn summary(run: &AgentRun, outcome: &AgentOutcome) -> String {
     let task = run
@@ -134,13 +230,20 @@ pub(super) fn summary(run: &AgentRun, outcome: &AgentOutcome) -> String {
             result: Some(result),
         } => format!("completed, saying: {}", one_line(result, EXCERPT_BYTES)),
         AgentOutcome::Completed { result: None } => "completed".to_owned(),
+        AgentOutcome::Failed {
+            failure: AgentFailureKind::Unknown,
+            message,
+        } => format!("failed: {}", one_line(message, EXCERPT_BYTES)),
         AgentOutcome::Failed { failure, message } => format!(
             "failed ({}): {}",
             option_name(failure).unwrap_or_default(),
             one_line(message, EXCERPT_BYTES)
         ),
         AgentOutcome::Cancelled => "cancelled".to_owned(),
-        AgentOutcome::Interrupted | AgentOutcome::Unknown => "stopped".to_owned(),
+        AgentOutcome::Interrupted => {
+            "interrupted when wispd stopped; message_agent resumes it".to_owned()
+        }
+        AgentOutcome::Unknown => "stopped".to_owned(),
     };
     let changes = match (&run.diff, &run.branch) {
         (Some(diff), Some(branch)) => format!(
@@ -167,7 +270,7 @@ fn one_line(text: &str, max: usize) -> String {
 /// A wake-up turn's message: the summaries, and what to do with them.
 fn message(summaries: &[String]) -> String {
     format!(
-        "wisp, not the user: runs you started finished.\n\n{}\n\nReview them with agent_status \
+        "wisp, not the user: runs you started ended.\n\n{}\n\nReview them with agent_status \
          and agent_diff, message or start runs if more is needed, and tell the user where things \
          stand.",
         summaries.join("\n")
