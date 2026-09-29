@@ -7,11 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
-use wisp_protocol::methods::{AgentEvents, AgentSend, AgentStart, ProjectList, ProjectStart};
+use wisp_protocol::methods::{
+    AgentCancel, AgentEvents, AgentSend, AgentStart, ProjectList, ProjectStart,
+};
 use wisp_protocol::{
-    AccountChoice, AgentEventsParams, AgentFailureKind, AgentOutcome, AgentOutputItem, AgentPolicy,
-    AgentStartParams, AgentStatus, CoordinatorThreadId, ErrorKind, EventsEventParams, ProjectId,
-    ProjectListParams, ProjectStartParams, Provider, RunId, TurnId, WispEvent,
+    AccountChoice, AgentCancelParams, AgentEventsParams, AgentFailureKind, AgentOutcome,
+    AgentOutputItem, AgentPolicy, AgentRun, AgentStartParams, AgentStatus, CoordinatorThreadId,
+    ErrorKind, EventsEventParams, ProjectId, ProjectListParams, ProjectStartParams, Provider,
+    RunId, TurnId, WispEvent,
 };
 use wispd::backend::fake::{FakeBackend, Step};
 use wispd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
@@ -19,7 +22,7 @@ use wispd::paths::DataDir;
 use wispd::routing::BackendRegistry;
 
 use crate::agents::{
-    Host, create, end_turn, fake, fake_backend, git, init, items, outcomes, project_params,
+    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, outcomes, project_params,
     send_params, subscribe, text, until, updated_to,
 };
 use crate::support::{PATIENCE, kind, temp_dir};
@@ -367,26 +370,85 @@ impl Backend for Roles {
     }
 }
 
+/// Workers on `worker`, and each coordinator launch on the next of `coordinator`.
+fn roles(
+    worker: Vec<Step>,
+    coordinator: Vec<Vec<Step>>,
+    seen: &Arc<Mutex<Vec<RunRequest>>>,
+) -> BackendRegistry {
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(Roles {
+            worker: fake_backend(worker),
+            coordinator: Mutex::new(coordinator.into_iter().map(fake_backend).collect()),
+            seen: Arc::clone(seen),
+        }),
+    );
+    backends
+}
+
+/// Every coordinator launch `seen` so far.
+fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request.policy == ToolPolicy::NoWrite)
+        .cloned()
+        .collect()
+}
+
+/// The `n`th coordinator launch, once it happens.
+async fn nth_launch(seen: &Mutex<Vec<RunRequest>>, n: usize) -> RunRequest {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Some(launch) = coordinator_launches(seen).get(n) {
+            return launch.clone();
+        }
+        assert!(Instant::now() < deadline, "the coordinator was never woken");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// A worker `project`'s coordinator starts through its tools, as `spawn_agent` would.
+async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
+    let params = AgentStartParams {
+        coordinator_thread: coordinator.coordinator_thread,
+        ..crate::agents::start_params(coordinator.project, task)
+    };
+    client.call::<AgentStart>(params).await.unwrap().run.id
+}
+
+/// Waits until each of `runs` has reported its session, so it can be resumed.
+async fn sessions(client: &mut Conn, runs: &[RunId]) {
+    let mut left = runs.to_vec();
+    until(client, |event| {
+        if let WispEvent::AgentUpdated { run_id, state } = &event.event
+            && state.session_id.is_some()
+        {
+            left.retain(|run| run != run_id);
+        }
+        left.is_empty()
+    })
+    .await;
+}
+
 /// RYA-42: two runs the coordinator started finish during its turn; once that turn ends, and with
 /// no client connected, wispd wakes it with one turn that names both.
 #[tokio::test]
 async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_connected() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let mut backends = BackendRegistry::new();
-    backends.register(
-        Provider::Anthropic,
-        Arc::new(Roles {
-            worker: fake_backend(vec![init("worker-1"), end_turn("Added it.")]),
-            coordinator: Mutex::new(vec![
-                fake_backend(vec![
-                    init("coordinator-1"),
-                    Step::AwaitFollowUp,
-                    end_turn("Planned."),
-                ]),
-                fake_backend(vec![init("coordinator-1"), end_turn("Reviewed.")]),
-            ]),
-            seen: Arc::clone(&seen),
-        }),
+    let backends = roles(
+        vec![init("worker-1"), end_turn("Added it.")],
+        vec![
+            vec![
+                init("coordinator-1"),
+                Step::AwaitFollowUp,
+                end_turn("Planned."),
+            ],
+            vec![init("coordinator-1"), end_turn("Reviewed.")],
+        ],
+        &seen,
     );
     let host = Host::start(temp_dir(), backends);
     let mut client = host.client().await;
@@ -398,15 +460,9 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         .unwrap()
         .run;
 
-    // As its spawn_agent would start them.
-    let thread = coordinator.coordinator_thread;
     let mut workers = Vec::new();
     for task in ["Add a README.", "Add a license."] {
-        let params = AgentStartParams {
-            coordinator_thread: thread,
-            ..crate::agents::start_params(project.id, task)
-        };
-        workers.push(client.call::<AgentStart>(params).await.unwrap().run.id);
+        workers.push(spawn(&mut client, &coordinator, task).await);
     }
     let mut left = workers.len();
     until(&mut client, |event| {
@@ -418,16 +474,13 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         left == 0
     })
     .await;
-    let coordinator_launches = || {
-        let seen = seen.lock().unwrap();
-        seen.iter()
-            .filter(|request| request.policy == ToolPolicy::NoWrite)
-            .cloned()
-            .collect::<Vec<_>>()
-    };
     // Past wake-ups' 2 s batch: a turn in progress still holds them.
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(coordinator_launches().len(), 1, "no wake-up during a turn");
+    assert_eq!(
+        coordinator_launches(&seen).len(),
+        1,
+        "no wake-up during a turn"
+    );
 
     // The user's message ends the coordinator's turn; then nobody is watching.
     client
@@ -435,12 +488,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         .await
         .unwrap();
     drop(client);
-    let deadline = Instant::now() + PATIENCE;
-    while coordinator_launches().len() < 2 {
-        assert!(Instant::now() < deadline, "the coordinator was never woken");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let wake = coordinator_launches()[1].clone();
+    let wake = nth_launch(&seen, 1).await;
     assert!(wake.resume.is_some(), "a wake-up resumes the session");
     for worker in &workers {
         assert!(wake.prompt.contains(&worker.to_string()), "{}", wake.prompt);
@@ -467,5 +515,111 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         text: Some(wake.prompt.clone()),
         wake: true,
     }));
+    host.server.stop().await;
+}
+
+/// RYA-178: a run the coordinator started is running, and so is the coordinator's own turn, when
+/// wispd restarts. Once it is back, one wake-up names both, and another restart wakes nothing.
+#[tokio::test]
+async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let hang = || vec![init("worker-1"), Step::Hang];
+    let backends = roles(hang(), vec![vec![init("coordinator-1"), Step::Hang]], &seen);
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    let worker = spawn(&mut client, &coordinator, "Add a README.").await;
+    sessions(&mut client, &[coordinator.id, worker]).await;
+
+    let later = || vec![vec![init("coordinator-1"), end_turn("Picked up.")]];
+    let host = host.restart(roles(hang(), later(), &seen)).await;
+    let wake = nth_launch(&seen, 1).await;
+    assert_eq!(
+        wake.resume.map(|resume| resume.session_id).as_deref(),
+        Some("coordinator-1"),
+        "a wake-up resumes the session"
+    );
+    assert!(
+        wake.prompt.starts_with("wisp, not the user"),
+        "{}",
+        wake.prompt
+    );
+    assert!(
+        wake.prompt.contains(&format!(
+            "- Run {worker} (Add a README.): interrupted when wispd stopped"
+        )),
+        "{}",
+        wake.prompt
+    );
+    assert!(
+        wake.prompt.contains("Your own last turn was interrupted"),
+        "{}",
+        wake.prompt
+    );
+    assert_eq!(wake.prompt.matches("- Run ").count(), 1, "{}", wake.prompt);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(coordinator_launches(&seen).len(), 2, "one wake-up");
+
+    // The coordinator heard about the run and let it be: nothing new to wake it for.
+    let host = host.restart(roles(hang(), later(), &seen)).await;
+    host.client().await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(coordinator_launches(&seen).len(), 2, "nothing new");
+    host.server.stop().await;
+}
+
+/// RYA-178: the user stops the coordinator while a run it started is running, then wispd
+/// restarts. Wake-ups stay paused, and what the restart interrupted waits for the user's message.
+#[tokio::test]
+async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let hang = || vec![init("worker-1"), Step::Hang];
+    let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
+    let host = Host::start(temp_dir(), roles(hang(), vec![turn("Planned.")], &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let worker = spawn(&mut client, &coordinator, "Add a README.").await;
+    sessions(&mut client, &[worker]).await;
+    client
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: coordinator.id,
+        })
+        .await
+        .unwrap();
+    until(&mut client, |event| {
+        matches!(event.event, WispEvent::AgentWakeupsPaused { .. })
+    })
+    .await;
+
+    let backends = roles(hang(), vec![turn("Heard you."), turn("Reviewed.")], &seen);
+    let host = host.restart(backends).await;
+    let mut client = host.client().await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(coordinator_launches(&seen).len(), 1, "still paused");
+
+    client
+        .call::<AgentSend>(send_params(coordinator.id, TurnId::generate(), "Go on."))
+        .await
+        .unwrap();
+    let wake = nth_launch(&seen, 2).await;
+    assert!(
+        wake.prompt
+            .contains(&format!("- Run {worker} (Add a README.): interrupted")),
+        "{}",
+        wake.prompt
+    );
     host.server.stop().await;
 }
