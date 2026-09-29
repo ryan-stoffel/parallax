@@ -6,35 +6,39 @@
 :root {
   color-scheme: light;
   --background: #ffffff;
-  --sidebar: #f6f6f7;
+  --sidebar: #ffffff;
   --surface: #ffffff;
-  --foreground: #18181b;
-  --muted-foreground: #4f4f58;
-  --faint-foreground: #63636c;
+  --foreground: #181818;
+  --muted-foreground: #4f4f4f;
+  --faint-foreground: #636363;
   --border: rgb(0 0 0 / 9%);
   --hover: rgb(0 0 0 / 4.5%);
   --selected: rgb(0 0 0 / 7%);
-  --primary: #18181b;
+  --send: #2563eb;
+  --send-foreground: #ffffff;
+  --primary: #181818;
   --primary-foreground: #ffffff;
-  --ring: #3a6ff0;
+  --ring: #2563eb;
   --danger: #c42b2b;
   --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
 }
 
 :root.dark {
   color-scheme: dark;
-  --background: #0d0d0f;
-  --sidebar: #111113;
-  --surface: #17171a;
-  --foreground: #ececef;
-  --muted-foreground: #a8a8b1;
-  --faint-foreground: #86868f;
+  --background: #0d0d0d;
+  --sidebar: #000000;
+  --surface: #171717;
+  --foreground: #ececec;
+  --muted-foreground: #a8a8a8;
+  --faint-foreground: #868686;
   --border: rgb(255 255 255 / 8%);
   --hover: rgb(255 255 255 / 4.5%);
   --selected: rgb(255 255 255 / 8%);
-  --primary: #ececef;
-  --primary-foreground: #0d0d0f;
-  --ring: #7c9dff;
+  --send: #1e40af;
+  --send-foreground: #ececec;
+  --primary: #ececec;
+  --primary-foreground: #0d0d0d;
+  --ring: #3b82f6;
   --danger: #ff8f8a;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
 }
@@ -50,6 +54,8 @@
   --color-border: var(--border);
   --color-hover: var(--hover);
   --color-selected: var(--selected);
+  --color-send: var(--send);
+  --color-send-foreground: var(--send-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-ring: var(--ring);
@@ -171,4 +177,117 @@ body {
 }
 .markdown hr {
   border-color: var(--border);
+}
+
+/* The reasoning slider (EffortMenu.tsx). An invisible range takes input; the track, fill, and
+   thumb are drawn so they can spring together. --thumb is the thumb's diameter. */
+.effort-slider {
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.effort-slider::-webkit-slider-runnable-track {
+  height: var(--thumb);
+  background: transparent;
+}
+.effort-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: var(--thumb);
+  height: var(--thumb);
+  background: transparent;
+}
+.effort-slider:focus-visible {
+  outline: none;
+}
+
+/* Stripes drift through the fill, faster the harder it thinks (--effort-speed). */
+.effort-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: repeating-linear-gradient(-45deg, rgb(255 255 255 / 13%) 0 8px, transparent 8px 16px);
+  background-size: 22.627px 100%;
+  animation: effort-stripes var(--effort-speed) linear infinite;
+}
+@keyframes effort-stripes {
+  to {
+    background-position: 22.627px 0;
+  }
+}
+
+/* The level's icon pops in whenever the level changes. */
+.effort-icon {
+  animation: effort-icon-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes effort-icon-in {
+  from {
+    transform: scale(0.4) rotate(-20deg);
+    opacity: 0;
+  }
+}
+
+/* At Max: the thumb pops once, the fill shimmers, the track glows, and the bolt buzzes. */
+@keyframes effort-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes effort-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 6px 0 color-mix(in srgb, var(--ring) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 22px 5px color-mix(in srgb, var(--ring) 70%, transparent);
+  }
+}
+@keyframes effort-pop {
+  40% {
+    transform: scale(1.2);
+  }
+}
+@keyframes effort-buzz {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  25% {
+    transform: rotate(-14deg) scale(1.15);
+  }
+  75% {
+    transform: rotate(10deg) scale(1.1);
+  }
+}
+.effort-full .effort-fill {
+  background-image: linear-gradient(
+    90deg,
+    var(--ring),
+    color-mix(in srgb, var(--ring) 45%, white),
+    var(--ring)
+  );
+  background-size: 200% 100%;
+  animation: effort-shimmer 1.8s linear infinite;
+}
+.effort-full .effort-track {
+  animation: effort-glow 1.8s ease-in-out infinite;
+}
+.effort-full .effort-thumb {
+  animation: effort-pop 0.45s ease-out;
+}
+.effort-full .effort-icon svg {
+  animation: effort-buzz 0.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .effort-fill::after,
+  .effort-icon,
+  .effort-full .effort-fill,
+  .effort-full .effort-track,
+  .effort-full .effort-thumb,
+  .effort-full .effort-icon svg {
+    animation: none;
+  }
 }

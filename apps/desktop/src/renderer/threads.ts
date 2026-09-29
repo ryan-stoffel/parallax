@@ -1,19 +1,24 @@
-import { useCallback, useEffect, useReducer, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { uuidv7 } from "./uuidv7";
 
-/** A host's repo entries and normal threads (0017), and each thread's title. */
+/** A host's repo entries and normal threads (0017), and each thread's title and run. */
 export interface ThreadsState {
   repos: Repo[];
   threads: Thread[];
   /** By run id: the first line of the run's prompt, since a thread has no title of its own. */
   titles: Readonly<Record<string, string>>;
+  /**
+   * By run id: each thread's run as last listed. Host-level events don't carry run changes, so
+   * its status can lag until `refresh` lists the thread's repository again.
+   */
+  runs: Readonly<Record<string, AgentRun>>;
 }
 
-export const emptyThreads: ThreadsState = { repos: [], threads: [], titles: {} };
+export const emptyThreads: ThreadsState = { repos: [], threads: [], titles: {}, runs: {} };
 
 export type ThreadsAction =
   | { type: "snapshot"; repos: Repo[]; threads: Thread[]; runs: AgentRun[] }
@@ -24,9 +29,18 @@ export type ThreadsAction =
 export function threadsReducer(state: ThreadsState, action: ThreadsAction): ThreadsState {
   switch (action.type) {
     case "snapshot":
-      return { repos: action.repos, threads: action.threads, titles: titlesOf(action.runs) };
+      return {
+        repos: action.repos,
+        threads: action.threads,
+        titles: titlesOf(action.runs),
+        runs: byId(action.runs),
+      };
     case "runs":
-      return { ...state, titles: { ...state.titles, ...titlesOf(action.runs) } };
+      return {
+        ...state,
+        titles: { ...state.titles, ...titlesOf(action.runs) },
+        runs: { ...state.runs, ...byId(action.runs) },
+      };
     case "event": {
       const e = action.event;
       switch (e.kind) {
@@ -48,6 +62,10 @@ function upsert<T extends { id: string }>(list: T[], item: T): T[] {
   return list.some((x) => x.id === item.id)
     ? list.map((x) => (x.id === item.id ? item : x))
     : [...list, item];
+}
+
+function byId(runs: AgentRun[]): Record<string, AgentRun> {
+  return Object.fromEntries(runs.map((r) => [r.id, r]));
 }
 
 function titlesOf(runs: AgentRun[]): Record<string, string> {
@@ -98,10 +116,12 @@ export interface ThreadsView {
   start: (runId: string, groupId: string, prompt: string) => Promise<RpcError | undefined>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
+  /** Lists a repo entry's runs again, so their status is current. Failures are ignored. */
+  refresh: (repo: string) => void;
 }
 
 /**
- * A host's threads, kept live: `thread/list` and `agent/list` (for titles), then host-level
+ * A host's threads, kept live: `thread/list` and `agent/list` (for titles and runs), then host-level
  * events after the list's `seq`, starting over on `resync`. Loads only while `connected`.
  */
 export function useThreads(hostId: string, connected: boolean): ThreadsView {
@@ -114,6 +134,11 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     dispatch({ type: "snapshot", repos: [], threads: [], runs: [] });
     setError(undefined);
   }
+  // The host shown now, so `refresh` drops a late answer from one the user has left.
+  const shown = useRef(hostId);
+  useEffect(() => {
+    shown.current = hostId;
+  }, [hostId]);
 
   useEffect(() => {
     if (!connected) return;
@@ -205,5 +230,15 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     [hostId],
   );
 
-  return { state, error, addRepo, start, archive, remove };
+  const refresh = useCallback(
+    (repo: string) => {
+      void window.wisp.request(hostId, "agent/list", { project: repo }).then((answer) => {
+        if (shown.current === hostId && "result" in answer)
+          dispatch({ type: "runs", runs: answer.result.runs });
+      });
+    },
+    [hostId],
+  );
+
+  return { state, error, addRepo, start, archive, remove, refresh };
 }

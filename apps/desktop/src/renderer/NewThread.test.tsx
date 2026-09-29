@@ -80,15 +80,13 @@ const heading = () => document.querySelector("h1")?.textContent;
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 
-async function choose(label: string, value: string) {
-  // A Picker is a <label> whose first child names it.
-  const picker = [...document.querySelectorAll("label")]
-    .find((l) => l.firstElementChild?.textContent === label)!
-    .querySelector("select")!;
-  await act(async () => {
-    picker.value = value;
-    picker.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+async function choose(label: string, option: string) {
+  const item = [
+    ...document.querySelectorAll<HTMLElement>(
+      `[role="menu"][aria-label="${label}"] [role="menuitemradio"]`,
+    ),
+  ].find((b) => b.textContent === option)!;
+  await act(async () => item.click());
   await settle();
 }
 
@@ -118,7 +116,7 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
   answers["repo/add"] = (p) => ({ result: { repo: { ...other, id: p["id"] } } });
   await renderApp();
 
-  await choose("Repository", "add-repository");
+  await choose("Repository", "Add repository…");
   expect(calls("repo/add")).toEqual([
     { id: expect.stringMatching(/^[0-9a-f-]{14}7/), path: "/src/other" },
   ]);
@@ -156,8 +154,8 @@ test("No Repo starts a thread with no repo", async () => {
     },
   });
   await renderApp();
-  await choose("Repository", "no-repo");
-  expect(heading()).toBe("What should we work on?");
+  await choose("Repository", "No Repo");
+  expect(heading()).toBe("What should we work on without a repo?");
   await send("Hi");
   expect(calls("thread/start")).toEqual([{ runId: expect.any(String), prompt: "Hi" }]);
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
@@ -173,7 +171,7 @@ test("a folder that isn't a repository says so under the composer", async () => 
     },
   });
   await renderApp();
-  await choose("Repository", "add-repository");
+  await choose("Repository", "Add repository…");
   expect(document.querySelector('[role="alert"]')?.textContent).toBe(
     "/tmp/notes is not the top folder of a git repository: it has no .git.",
   );

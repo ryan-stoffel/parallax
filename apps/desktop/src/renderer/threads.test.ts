@@ -48,6 +48,19 @@ test("a thread's title is the first line of its run's prompt", () => {
   expect(state.titles).toEqual({ [run.id]: "Fix the flaky attach test." });
 });
 
+test("runs are kept by id: a later list replaces the runs it has, and keeps the rest", () => {
+  const other = { ...started.run, id: "other" };
+  let state = threadsReducer(emptyThreads, {
+    type: "snapshot",
+    repos: [],
+    threads: [started.thread],
+    runs: [started.run, other],
+  });
+  state = threadsReducer(state, { type: "runs", runs: [{ ...started.run, status: "failed" }] });
+  expect(state.runs[started.run.id]?.status).toBe("failed");
+  expect(state.runs["other"]).toEqual(other);
+});
+
 test("groups: repositories, then No Repo, newest first, archived apart", () => {
   // The quick chat's result arrives before the scratch entry's repo.added (seq 50).
   let state = apply(emptyThreads, wispAdded, threadStarted);
