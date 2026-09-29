@@ -13,7 +13,8 @@
 //! and stores its row, including [`CreatedWorktree::git_dir`], in `wisp-store`'s `worktrees`
 //! table, and a finished run is committed with [`WorktreeManager::commit_all`] and measured with
 //! [`WorktreeManager::diff_stat`]. A client reviews the commit through
-//! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157).
+//! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
+//! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (RYA-168).
 //!
 //! # Layout and naming
 //!
@@ -89,6 +90,7 @@
 //! repository's git folder — so this needs an unusual repository configuration to matter; #175
 //! tracks closing it.
 
+mod pull_request;
 mod review;
 mod scratch;
 #[cfg(all(test, unix))]
@@ -96,6 +98,7 @@ mod tests;
 #[cfg(all(test, windows))]
 mod windows_tests;
 
+pub use pull_request::PrError;
 pub use review::{
     AcceptError, Accepted, Blob, CommitDiff, FileDiff, MAX_BLOB_BYTES, MergeHow, validate_repo_path,
 };

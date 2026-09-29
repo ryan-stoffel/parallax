@@ -205,6 +205,7 @@ export function App() {
                 runId={selection.threadId}
                 notice={notice?.threadId === selection.threadId ? notice.text : undefined}
                 prompt={threads.state.runs[selection.threadId]?.prompt}
+                noRepo={group.id === noRepo}
               />
             ) : selection.kind === "new" ? (
               <NewThread

@@ -36,8 +36,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentEffort, AgentOutcome,
-    AgentPermission, AgentRun, AgentRunState, AgentSendParams, AgentStartParams,
+    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentEffort, AgentOpenPrResult,
+    AgentOutcome, AgentPermission, AgentRun, AgentRunState, AgentSendParams, AgentStartParams,
     CoordinatorThreadId, ErrorKind, ProjectId, Role, RunId, TurnId, WispEvent,
 };
 use wisp_store::{RunFields, RunState, StoreError, WorktreeFields};
@@ -850,6 +850,22 @@ pub(crate) async fn accept(
     })
     .await?;
     Ok(AgentAcceptResult { run, merge })
+}
+
+/// `agent/openPr`: through the run's actor, as `agent/accept` is (RYA-168).
+pub(crate) async fn open_pr(
+    daemon: Arc<Daemon>,
+    run_id: RunId,
+    title: String,
+    body: String,
+) -> Result<AgentOpenPrResult, ErrorObject> {
+    let url = ask(&daemon, run_id, |reply| Command::OpenPr {
+        title,
+        body,
+        reply,
+    })
+    .await?;
+    Ok(AgentOpenPrResult { url })
 }
 
 /// Marks every run the store still has as `starting` or `running` as `interrupted`: wispd

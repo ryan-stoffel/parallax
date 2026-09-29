@@ -80,9 +80,12 @@ function byId(runs: AgentRun[]): Record<string, AgentRun> {
 }
 
 function titlesOf(runs: AgentRun[]): Record<string, string> {
-  return Object.fromEntries(
-    runs.map((r) => [r.id, readTitle(r.id) ?? r.prompt.trim().split("\n")[0]!]),
-  );
+  return Object.fromEntries(runs.map((r) => [r.id, titleOf(r)]));
+}
+
+/** A run's title: its thread's generated title, or else its prompt's first line. */
+export function titleOf(run: AgentRun): string {
+  return readTitle(run.id) ?? run.prompt.trim().split("\n")[0]!;
 }
 
 // A thread's generated title, kept in this app: wispd has no title of its own. Run ids are unique

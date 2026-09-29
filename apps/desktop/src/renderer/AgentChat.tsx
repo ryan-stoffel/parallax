@@ -9,6 +9,8 @@ import {
   Copy,
   FolderGit2,
   GitBranch,
+  GitPullRequest,
+  GitPullRequestArrow,
   Info,
   LoaderCircle,
   Ban,
@@ -29,6 +31,8 @@ import remarkGfm from "remark-gfm";
 import type { AgentRun, JsonValue } from "../protocol/generated/protocol";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
+import { describeError } from "./errors";
+import { titleOf } from "./threads";
 import { failureText, groupWork, isRunning, workedFor, type Item, type Work } from "./transcript";
 import { useAgentRun } from "./useAgentRun";
 
@@ -46,6 +50,7 @@ export function AgentChat({
   runId,
   notice,
   prompt,
+  noRepo,
 }: {
   hostId: string;
   runId: string;
@@ -53,11 +58,14 @@ export function AgentChat({
   notice?: string;
   /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
   prompt?: string;
+  /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
+  noRepo?: boolean;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
   const [resendError, setResendError] = useState<string>();
+  const [prError, setPrError] = useState<string>();
   // Dropped follow-ups already sent again, so their Send again goes away (back on failure).
   const [resent, setResent] = useState<ReadonlySet<string>>(new Set());
   const resend = useCallback(
@@ -103,6 +111,14 @@ export function AgentChat({
     optionsDisabled = "This host's wispd can't change a thread's model, effort, or access";
   else if (isRunning(run?.status))
     optionsDisabled = "The model, effort, and access can change once it finishes";
+  // A finished run with a commit can go to GitHub (RYA-168), until Accept removes its branch.
+  const canOpenPr =
+    connected &&
+    "openPr" in connection.capabilities &&
+    !noRepo &&
+    !!run?.diff &&
+    !isRunning(run.status) &&
+    run.status !== "accepted";
 
   return (
     <>
@@ -121,10 +137,10 @@ export function AgentChat({
         </div>
       )}
       <div className="mx-auto w-full max-w-3xl px-6 pb-5">
-        {/* A loaded transcript that stopped updating, or a failed Send again. */}
-        {(error ?? resendError) && rows.length > 0 && (
+        {/* A loaded transcript that stopped updating, a failed Send again, or Open PR. */}
+        {(error ?? resendError ?? prError) && rows.length > 0 && (
           <p role="alert" className="px-2 pb-2 text-[12.5px] text-danger">
-            {error ?? resendError}
+            {error ?? resendError ?? prError}
           </p>
         )}
         {notice && (
@@ -136,7 +152,13 @@ export function AgentChat({
           onSend={send}
           onStop={isRunning(run?.status) ? cancel : undefined}
           disabledReason={disabledReason}
-          tab={run && <RunTab run={run} />}
+          tab={
+            run && (
+              <RunTab run={run}>
+                {canOpenPr && <OpenPr hostId={hostId} run={run} onError={setPrError} />}
+              </RunTab>
+            )
+          }
           backend={run?.backend}
           started={run}
           optionsDisabled={optionsDisabled}
@@ -659,20 +681,81 @@ function CodeBlock({ children }: { children: ReactNode }) {
   );
 }
 
-/** An open run in the composer's tab: that it runs in a worktree, and the worktree's branch. */
-export function RunTab({ run }: { run: AgentRun }) {
+/**
+ * An open run in the composer's tab: that it runs in a worktree, and the worktree's branch,
+ * followed by `children`, such as Open PR.
+ */
+export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode }) {
   return (
     <>
       <span className={tabItem}>
         <FolderGit2 aria-hidden />
         Worktree
       </span>
-      {run.branch && (
-        <span className={tabItem} title="Worktree branch">
-          <GitBranch aria-hidden />
-          <span className="truncate">{run.branch}</span>
-        </span>
-      )}
+      <span className="flex min-w-0 items-center">
+        {run.branch && (
+          <span className={tabItem} title="Worktree branch">
+            <GitBranch aria-hidden />
+            <span className="truncate">{run.branch}</span>
+          </span>
+        )}
+        {children}
+      </span>
     </>
+  );
+}
+
+/**
+ * Open PR: wispd pushes the run's branch and opens a pull request titled like the thread, then
+ * this links to it, in the browser. It unmounts while the run works, so after another turn the
+ * button is back, to push the new commit to the same pull request.
+ */
+function OpenPr({
+  hostId,
+  run,
+  onError,
+}: {
+  hostId: string;
+  run: AgentRun;
+  onError: (error?: string) => void;
+}) {
+  const [url, setUrl] = useState<string>();
+  const [opening, setOpening] = useState(false);
+  if (url) {
+    const number = /\/pull\/(\d+)$/.exec(url)?.[1];
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        title={url}
+        className={`${tabItem} rounded-md hover:bg-hover hover:text-foreground`}
+      >
+        <GitPullRequest aria-hidden />
+        {number ? `PR #${number}` : "Pull request"}
+      </a>
+    );
+  }
+  const open = async () => {
+    setOpening(true);
+    onError(undefined);
+    const answer = await window.wisp.request(hostId, "agent/openPr", {
+      runId: run.id,
+      title: titleOf(run),
+    });
+    setOpening(false);
+    if ("error" in answer) onError(describeError(answer.error));
+    else setUrl(answer.result.url);
+  };
+  return (
+    <button
+      type="button"
+      disabled={opening}
+      onClick={() => void open()}
+      className={`${tabItem} rounded-md enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-60`}
+    >
+      <GitPullRequestArrow aria-hidden />
+      {opening ? "Opening PR…" : "Open PR"}
+    </button>
   );
 }
