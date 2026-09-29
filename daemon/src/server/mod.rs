@@ -33,6 +33,7 @@ use crate::VERSION;
 use crate::agents::{self, Agents};
 use crate::backend::Backend;
 use crate::backend::claude::ClaudeBackend;
+use crate::backend::codex::CodexBackend;
 use crate::backend::fake::FakeBackend;
 use crate::backend::process::{Environment, Launcher};
 use crate::context::ContextIndex;
@@ -93,7 +94,7 @@ pub struct Config {
     pub outbound_queue: usize,
     /// The backends workers run on (#156). `None`, the default, registers Claude Code for
     /// Anthropic accounts, or the fake backend when `WISPD_FAKE_BACKEND` names a script
-    /// ([`FakeBackend::from_env`]); tests register a fake.
+    /// ([`FakeBackend::from_env`]), and Codex for `OpenAI` accounts; tests register a fake.
     pub backends: Option<BackendRegistry>,
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
     /// default, is wispd's own with the usual install folders on `PATH` (#96, decision 0014).
@@ -302,6 +303,10 @@ impl Server {
             };
             let mut backends = BackendRegistry::new();
             backends.register(wisp_protocol::Provider::Anthropic, backend);
+            backends.register(
+                wisp_protocol::Provider::Openai,
+                Arc::new(CodexBackend::new(launcher.clone())),
+            );
             backends
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
