@@ -31,6 +31,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "accounts/list": true,
   "accounts/refresh": true,
   "usage/get": true,
+  "usage/history": true,
   "accounts/defaults/get": true,
   "accounts/defaults/set": true,
   "context/list": true,

@@ -1,8 +1,11 @@
-//! `usage/get`.
+//! `usage/get` and `usage/history`.
 
 use jiff::{ToSpan, Zoned};
 use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{AccountUsage, UsageGetParams, UsageGetResult, UsageLimitWindow, UsagePeriod};
+use wisp_protocol::{
+    AccountRuns, AccountUsage, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod,
+};
 use wisp_store::{LimitSnapshot, Store, StoreError};
 
 use super::Context;
@@ -54,6 +57,50 @@ fn usage_report(
     Ok(UsageGetResult { accounts })
 }
 
+/// Every account's usage since `params.since`, per UTC hour and model, and its run count.
+pub(crate) async fn history(
+    context: &Context,
+    params: UsageHistoryParams,
+) -> Result<UsageHistoryResult, ErrorObject> {
+    let until = jiff::Timestamp::now();
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |store| {
+            usage_history(store, params.since, until).map_err(|error| store_error(&error))
+        })
+        .await
+}
+
+/// Reads `usage/history`'s result from the store for `[since, until)`. Synchronous for the same
+/// reason as [`usage_report`].
+fn usage_history(
+    store: &Store,
+    since: jiff::Timestamp,
+    until: jiff::Timestamp,
+) -> Result<UsageHistoryResult, StoreError> {
+    let hours = store
+        .usage_hours(since, until)?
+        .into_iter()
+        .map(|hour| UsageHour {
+            hour: hour.hour,
+            account_id: hour.account_id,
+            model: hour.model,
+            input_tokens: hour.input_tokens,
+            output_tokens: hour.output_tokens,
+            cache_read_tokens: hour.cache_read_tokens,
+            cache_write_tokens: hour.cache_write_tokens,
+            cost_usd_micros: hour.cost_usd_micros,
+        })
+        .collect();
+    let runs = store
+        .usage_run_counts(since, until)?
+        .into_iter()
+        .map(|(account_id, runs)| AccountRuns { account_id, runs })
+        .collect();
+    Ok(UsageHistoryResult { hours, runs })
+}
+
 fn usage_period(summary: wisp_store::UsageSummary) -> UsagePeriod {
     UsagePeriod {
         input_tokens: summary.input_tokens,
@@ -91,7 +138,7 @@ mod tests {
     use uuid::Uuid;
     use wisp_store::{LimitSnapshot, Store, UsageDelta};
 
-    use super::{local_bounds, usage_report};
+    use super::{local_bounds, usage_history, usage_report};
 
     fn open() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
@@ -232,5 +279,50 @@ mod tests {
         let far_future = "2030-01-01T00:00:00Z".parse().unwrap();
         let report = usage_report(&store, far_past, far_past, far_future).unwrap();
         assert!(report.accounts.is_empty());
+    }
+
+    #[test]
+    fn a_history_reports_each_hours_usage_and_each_accounts_runs() {
+        let (_dir, store) = open();
+        store
+            .record_usage_delta(&UsageDelta {
+                run_id: Uuid::now_v7(),
+                account_id: "codex-work".to_owned(),
+                model: None,
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_tokens: 3,
+                cache_write_tokens: 4,
+                cost_usd_micros: None,
+                at: "2026-09-29T19:42:10.5Z".parse().unwrap(),
+            })
+            .unwrap();
+
+        let history = usage_history(
+            &store,
+            "2026-09-29T00:00:00Z".parse().unwrap(),
+            "2026-09-30T00:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            history.hours,
+            [wisp_protocol::UsageHour {
+                hour: "2026-09-29T19:00:00Z".parse().unwrap(),
+                account_id: "codex-work".to_owned(),
+                model: None,
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_tokens: 3,
+                cache_write_tokens: 4,
+                cost_usd_micros: None,
+            }]
+        );
+        assert_eq!(
+            history.runs,
+            [wisp_protocol::AccountRuns {
+                account_id: "codex-work".to_owned(),
+                runs: 1,
+            }]
+        );
     }
 }

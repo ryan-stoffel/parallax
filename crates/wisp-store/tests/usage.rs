@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use uuid::Uuid;
-use wisp_store::{LimitSnapshot, SessionModelUsage, Store, UsageDelta};
+use wisp_store::{LimitSnapshot, SessionModelUsage, Store, UsageDelta, UsageHour};
 
 fn temp_db_path() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -112,6 +112,184 @@ fn cost_is_not_reported_when_no_delta_in_range_reported_one() {
     assert_eq!(
         summary.cost_usd_micros, None,
         "no reported cost is 'not reported', not zero"
+    );
+}
+
+fn hours(store: &Store, since: &str, until: &str) -> Vec<UsageHour> {
+    store
+        .usage_hours(since.parse().unwrap(), until.parse().unwrap())
+        .expect("hours")
+}
+
+/// `(hour, account, model, input tokens, cost)` of a row, to compare in one assert.
+type Row<'a> = (String, &'a str, Option<&'a str>, u64, Option<u64>);
+
+fn summarize(hours: &[UsageHour]) -> Vec<Row<'_>> {
+    hours
+        .iter()
+        .map(|h| {
+            (
+                h.hour.to_string(),
+                h.account_id.as_str(),
+                h.model.as_deref(),
+                h.input_tokens,
+                h.cost_usd_micros,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn usage_hours_sum_per_utc_hour_account_and_model() {
+    let (_dir, path) = temp_db_path();
+    let store = Store::open(&path).expect("open");
+    let run = Uuid::now_v7();
+    let with_model = |account, at, input, model: Option<&str>| UsageDelta {
+        model: model.map(str::to_owned),
+        ..delta(run, account, at, input)
+    };
+    for delta in [
+        with_model("a", "2026-09-24T10:05:00Z", 1, Some("opus")),
+        with_model("a", "2026-09-24T10:55:00Z", 2, Some("opus")),
+        with_model("a", "2026-09-24T10:30:00Z", 4, Some("sonnet")),
+        with_model("b", "2026-09-24T10:10:00Z", 8, Some("opus")),
+        with_model("a", "2026-09-24T11:00:00Z", 16, Some("opus")),
+        with_model("a", "2026-09-24T11:20:00Z", 32, None),
+    ] {
+        store.record_usage_delta(&delta).expect("record");
+    }
+
+    assert_eq!(
+        summarize(&hours(
+            &store,
+            "2026-09-24T00:00:00Z",
+            "2026-09-25T00:00:00Z"
+        )),
+        [
+            (
+                "2026-09-24T10:00:00Z".to_owned(),
+                "a",
+                Some("opus"),
+                1 + 2,
+                Some(30)
+            ),
+            (
+                "2026-09-24T10:00:00Z".to_owned(),
+                "a",
+                Some("sonnet"),
+                4,
+                Some(40)
+            ),
+            (
+                "2026-09-24T10:00:00Z".to_owned(),
+                "b",
+                Some("opus"),
+                8,
+                Some(80)
+            ),
+            ("2026-09-24T11:00:00Z".to_owned(), "a", None, 32, Some(320)),
+            (
+                "2026-09-24T11:00:00Z".to_owned(),
+                "a",
+                Some("opus"),
+                16,
+                Some(160)
+            ),
+        ],
+        "one row per hour, account, and model, ordered that way; no row for empty hours"
+    );
+}
+
+/// The range is `[since, until)`, even when `since` falls mid-hour: that hour's row sums only
+/// the deltas from `since` on.
+#[test]
+fn usage_hours_cover_since_up_to_until() {
+    let (_dir, path) = temp_db_path();
+    let store = Store::open(&path).expect("open");
+    let run = Uuid::now_v7();
+    for (at, input) in [
+        ("2026-09-24T10:29:59.999999999Z", 1),
+        ("2026-09-24T10:30:00Z", 2),
+        ("2026-09-24T10:45:00Z", 4),
+        ("2026-09-24T12:00:00Z", 8),
+    ] {
+        store
+            .record_usage_delta(&delta(run, "a", at, input))
+            .expect("record");
+    }
+
+    assert_eq!(
+        summarize(&hours(
+            &store,
+            "2026-09-24T10:30:00Z",
+            "2026-09-24T12:00:00Z"
+        )),
+        [(
+            "2026-09-24T10:00:00Z".to_owned(),
+            "a",
+            Some("claude-opus"),
+            2 + 4,
+            Some(60)
+        )],
+    );
+}
+
+#[test]
+fn an_hours_cost_is_absent_only_when_no_delta_in_it_reported_one() {
+    let (_dir, path) = temp_db_path();
+    let store = Store::open(&path).expect("open");
+    let run = Uuid::now_v7();
+    let no_cost = |account, at| UsageDelta {
+        cost_usd_micros: None,
+        ..delta(run, account, at, 1)
+    };
+    for delta in [
+        no_cost("codex", "2026-09-24T10:00:00Z"),
+        no_cost("mixed", "2026-09-24T10:00:00Z"),
+        delta(run, "mixed", "2026-09-24T10:10:00Z", 5),
+    ] {
+        store.record_usage_delta(&delta).expect("record");
+    }
+
+    let rows = hours(&store, "2026-09-24T00:00:00Z", "2026-09-25T00:00:00Z");
+    assert_eq!(
+        rows.iter()
+            .map(|h| (h.account_id.as_str(), h.cost_usd_micros))
+            .collect::<Vec<_>>(),
+        [("codex", None), ("mixed", Some(50))],
+        "absent, not zero, when nothing reported a cost"
+    );
+}
+
+#[test]
+fn run_counts_are_distinct_runs_per_account_in_range() {
+    let (_dir, path) = temp_db_path();
+    let store = Store::open(&path).expect("open");
+    let (first, second, other, earlier) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    for delta in [
+        delta(first, "a", "2026-09-24T10:00:00Z", 1),
+        delta(first, "a", "2026-09-24T11:00:00Z", 1),
+        delta(second, "a", "2026-09-24T12:00:00Z", 1),
+        delta(other, "b", "2026-09-24T10:00:00Z", 1),
+        delta(earlier, "a", "2026-09-23T23:59:59Z", 1),
+    ] {
+        store.record_usage_delta(&delta).expect("record");
+    }
+
+    assert_eq!(
+        store
+            .usage_run_counts(
+                "2026-09-24T00:00:00Z".parse().unwrap(),
+                "2026-09-25T00:00:00Z".parse().unwrap(),
+            )
+            .expect("runs"),
+        [("a".to_owned(), 2), ("b".to_owned(), 1)],
+        "a run with several deltas counts once; one before `since` not at all"
     );
 }
 
