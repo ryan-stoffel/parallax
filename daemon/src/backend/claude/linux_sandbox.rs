@@ -144,7 +144,9 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
 /// itself, with the environment a worker gets. That was tested with the flag in
 /// `managed-settings.json` and in a `managed-settings.d` drop-in. Server-managed settings, a
 /// `policyHelper`, and WSL's inherited settings join the same managed tier inside Claude Code,
-/// but weren't tried.
+/// but weren't tried. This runs in its own process, which can still see other settings than the
+/// worker does, so a worker whose `system/init` shows the permission mode the flag forces fails
+/// too (RYA-118).
 ///
 /// Fails closed: anything but a successful run that prints [`STATUS_VERSION`] with one of
 /// [`SCRUB_OFF`] is refused.
@@ -263,7 +265,12 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{check_host, read_status, status_spec};
+    use crate::backend::claude::ClaudeBackend;
     use crate::backend::process::{Environment, Launcher};
+    use crate::backend::{
+        AccountRef, ApiKey, Backend, Credential, Event, FailureKind, Outcome, RunId, RunRequest,
+        ToolPolicy, WorkerSandbox,
+    };
     use crate::paths::DataDir;
 
     /// A launcher whose environment is only `vars`, with `HOME` in `root`.
@@ -452,5 +459,85 @@ fi"#;
             error.contains("runs with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB on"),
             "{error}"
         );
+    }
+
+    /// How a worker run through the real `claude`, via `wrapper`, ends: cancelled once its init
+    /// passed wispd's checks, or failed. The wrapper points it at a closed port, so nothing
+    /// reaches Anthropic.
+    async fn worker_outcome(root: &Path, wrapper: &Path) -> Outcome {
+        let data = root.join("data");
+        let (worktree, context) = (data.join("worktrees/run"), data.join("context/p"));
+        let git_dir = root.join("repo/.git");
+        for folder in [&worktree, &context, &git_dir] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        let base = launcher(root, &[("PATH", INSTALLED_PATH)]);
+        let backend = ClaudeBackend::new(base).with_program(wrapper);
+        let request = RunRequest {
+            run_id: RunId::generate(),
+            turn_id: None,
+            cwd: worktree.clone(),
+            prompt: "Say hi.".into(),
+            policy: ToolPolicy::WorkspaceWrite,
+            sandbox: Some(WorkerSandbox::for_worktree(
+                root, &data, &worktree, &git_dir, &context,
+            )),
+            account: AccountRef {
+                id: "test".into(),
+                credential: Credential::ApiKey(ApiKey::new("sk-ant-wisp-test-not-a-key".into())),
+            },
+            resume: None,
+            model: None,
+            coordinator_tools: None,
+        };
+        let mut started = backend.start(request).unwrap();
+        loop {
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(60), started.events.next())
+                    .await
+                    .expect("no event within 60 s")
+                    .expect("the stream ended before Finished");
+            match event {
+                // The init passed every check, and the CLI is now retrying the closed port.
+                Event::Notice { .. } => started.run.cancel(),
+                Event::Finished { outcome, .. } => return outcome,
+                _ => {}
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_worker_in_scrub_mode_fails_its_permission_mode_check() {
+        let Some((dir, _, claude)) = installed() else {
+            return;
+        };
+        let root = dir.path();
+        let run = format!(
+            "export ANTHROPIC_BASE_URL=http://127.0.0.1:9 DISABLE_AUTOUPDATER=1 \
+             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\nexec '{}' \"$@\"",
+            claude.display()
+        );
+        let off = script(root, "claude-off", &run);
+        assert_eq!(
+            worker_outcome(&root.join("off"), &off).await,
+            Outcome::Cancelled
+        );
+
+        // Where a managed settings `env` block puts the flag: in Claude Code's own environment.
+        let on = script(
+            root,
+            "claude-on",
+            &format!("export CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1\n{run}"),
+        );
+        match worker_outcome(&root.join("on"), &on).await {
+            Outcome::Failed(failure) => {
+                assert_eq!(failure.failure, FailureKind::PolicyViolation, "{failure:?}");
+                assert!(
+                    failure.message.contains(r#"permission mode "default""#),
+                    "{failure:?}"
+                );
+            }
+            other => panic!("expected a policy violation, got {other:?}"),
+        }
     }
 }
