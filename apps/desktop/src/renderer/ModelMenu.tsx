@@ -21,22 +21,27 @@ const providers: Record<Provider, ComponentType<SVGProps<SVGSVGElement>>> = {
 const keyOf = (m: Model) => `${m.provider}/${m.name}`;
 
 const railButton =
-  "grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-hover aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4";
+  "grid size-8 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover aria-pressed:bg-selected aria-pressed:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-4";
 
 /**
  * The model picker: a button showing the chosen model that opens a searchable list of `models`,
  * with a rail to filter by favorites or provider. A native popover, so Escape and clicking away
- * close it, and it flips above the button when there's no room below.
+ * close it, and it flips above the button when there's no room below. With `provider`, only its
+ * models are listed, and the rail shows the other providers disabled, saying why on hover.
  */
 export function ModelMenu({
-  models,
+  models: all,
+  provider,
   value: chosen,
   onChange,
 }: {
   models: Model[];
+  /** The only provider whose models can be picked: an open thread's, whose CLI can't change. */
+  provider?: Provider;
   value: Model;
   onChange: (model: Model) => void;
 }) {
+  const models = provider ? all.filter((m) => m.provider === provider) : all;
   const [favorites, setFavorites] = useState(() => new Set([keyOf(models[0]!)]));
   const [tab, setTab] = useState<"favorites" | Provider>(chosen.provider);
   const [query, setQuery] = useState("");
@@ -101,19 +106,31 @@ export function ModelMenu({
             <Star />
           </button>
           <span aria-hidden className="my-1 h-px w-6 bg-border" />
-          {[...new Set(models.map((m) => m.provider))].map((p) => {
+          {[...new Set(all.map((m) => m.provider))].map((p) => {
             const ProviderLogo = providers[p];
+            const unavailable = provider !== undefined && p !== provider;
             return (
-              <button
-                key={p}
-                type="button"
-                aria-label={p}
-                aria-pressed={!q && tab === p}
-                onClick={() => setTab(p)}
-                className={railButton}
-              >
-                <ProviderLogo />
-              </button>
+              // A disabled button gets no pointer events, so its wrapper shows the tooltip.
+              <span key={p} className="group relative flex">
+                <button
+                  type="button"
+                  aria-label={p}
+                  aria-pressed={!q && tab === p}
+                  disabled={unavailable}
+                  onClick={() => setTab(p)}
+                  className={railButton}
+                >
+                  <ProviderLogo />
+                </button>
+                {unavailable && (
+                  <span
+                    role="tooltip"
+                    className="pointer-events-none invisible absolute top-1/2 left-full z-10 ml-2 w-56 -translate-y-1/2 rounded-md border border-border bg-surface px-2.5 py-1.5 text-[12px] text-foreground shadow-composer group-hover:visible"
+                  >
+                    {p} is unavailable in this thread. Start a new thread to switch providers.
+                  </span>
+                )}
+              </span>
             );
           })}
         </div>

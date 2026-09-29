@@ -326,7 +326,7 @@ test("while disconnected, nothing loads and the composer says why", async () => 
   expect(send.disabled).toBe(true);
 });
 
-test("an open thread's composer is New Thread's, with its model fixed and only changes sent", async () => {
+test("an open thread's composer picks within its provider and sends only what changed", async () => {
   const onSend = vi.fn(async () => undefined);
   const open = (optionsDisabled?: string) =>
     render(
@@ -337,20 +337,36 @@ test("an open thread's composer is New Thread's, with its model fixed and only c
         optionsDisabled={optionsDisabled}
       />,
     );
+  const control = (label: string) => document.querySelector(`[aria-label="${label}"]`)!;
   // happy-dom doesn't disable a disabled fieldset's controls, which browsers do.
-  const off = (label: string) =>
-    document.querySelector(`[aria-label="${label}"]`)!.closest("fieldset")!.disabled;
+  const off = (label: string) => control(label).closest("fieldset")!.disabled;
 
-  open("Effort and access can change once it finishes");
+  open("The model, effort, and access can change once it finishes");
   expect(off("Model: Claude Opus 5.5")).toBe(true);
   expect(off("Reasoning effort: Extra high")).toBe(true);
   expect(off("Access: Plan")).toBe(true);
   act(() => unmount());
 
   open();
-  expect(off("Model: Claude Opus 5.5")).toBe(true);
+  expect(off("Model: Claude Opus 5.5")).toBe(false);
   expect(off("Reasoning effort: Extra high")).toBe(false);
   expect(off("Access: Plan")).toBe(false);
+  // The model menu lists only Claude's models; Codex is in the rail, disabled, saying why.
+  const menu = document.getElementById(
+    control("Model: Claude Opus 5.5").getAttribute("popovertarget")!,
+  )!;
+  const listed = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
+  expect(listed.every((m) => m.textContent?.includes("Claude"))).toBe(true);
+  expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Claude"]')!.disabled).toBe(
+    false,
+  );
+  const codex = menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!;
+  expect(codex.disabled).toBe(true);
+  expect(codex.parentElement!.querySelector('[role="tooltip"]')!.textContent).toBe(
+    "Codex is unavailable in this thread. Start a new thread to switch providers.",
+  );
+
+  await act(async () => listed.find((m) => m.textContent?.startsWith("Claude Sonnet 5"))!.click());
   const set = (el: HTMLInputElement | HTMLTextAreaElement, value: string) =>
     act(() => {
       Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, value);
@@ -361,8 +377,11 @@ test("an open thread's composer is New Thread's, with its model fixed and only c
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
   );
-  // Access is still the run's, so only the effort goes.
-  expect(onSend).toHaveBeenCalledWith("Just the summary", { effort: "low" });
+  // Access is still the run's, so it isn't sent.
+  expect(onSend).toHaveBeenCalledWith("Just the summary", {
+    model: "claude-sonnet-5",
+    effort: "low",
+  });
 });
 
 test("while a run goes, only the last work row shows what the agent is doing", () => {
