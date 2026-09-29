@@ -328,7 +328,7 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
         NO_WRITE_ARGS.join(" "),
         "--tools Read,Glob,Grep --setting-sources user --strict-mcp-config --permission-mode \
          dontAsk",
-        "0004's no-write policy, exactly"
+        "0004's no-write flags, before its settings"
     );
     let env = fake.env();
     let working_dir = format!("PWD={}", cwd.display());

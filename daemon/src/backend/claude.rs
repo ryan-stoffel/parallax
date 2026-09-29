@@ -167,7 +167,10 @@ pub const NO_WRITE_ARGS: &[&str] = &[
 /// The `--settings` a no-write run gets: hooks off (0004), and no `Read` under Claude Code's
 /// shared temp folder, `/tmp/claude-<uid>` in both spellings ([`commands_temp`]), which holds
 /// every session's files and which Claude Code otherwise lets it read outside its cwd (RYA-176).
-/// 0013 hides the same folder from workers. A `Read` rule covers `Glob` and `Grep` too.
+/// 0013 hides the same folder from workers. A `Read` rule covers `Glob` and `Grep` too. The
+/// folder is always in `/tmp`, because no no-write run gets [`TEMP_ENV`]: every agent CLI starts
+/// from wispd's allowlisted environment (`agents::worker::agent_environment`, 0014), which drops
+/// an inherited one, and only a worker has one injected.
 #[must_use]
 pub fn no_write_settings() -> Value {
     let deny: Vec<String> = ["/tmp", "/private/tmp"]

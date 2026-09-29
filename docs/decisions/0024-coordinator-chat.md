@@ -38,7 +38,7 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 - It reads committed `HEAD` as of when its CLI process started, not the user's uncommitted work. A commit made while a process runs is seen from the next one. Its first message says so.
 - One worktree per project. A new `project/start` takes it over, so nothing is left to remove, and a replaced coordinator can't be resumed.
 - It loads the user's settings (`--setting-sources user`, not a worker's `--restricted`), so user-level `additionalDirectories` or `Read(...)` allow rules widen what it can read.
-- Its `--settings` deny `Read` under Claude Code's shared temp folder, `/tmp/claude-<uid>` in both spellings, which Claude Code otherwise lets it read outside its worktree and which holds other sessions' files, as 0013 hides it from workers (RYA-176). Claude Code 2.1.283 applies the rule to `Glob` and `Grep` too, checked by hand.
+- On macOS and Linux, its `--settings` deny `Read` under Claude Code's shared temp folder, `/tmp/claude-<uid>` in both spellings, which Claude Code otherwise lets it read outside its worktree and which holds other sessions' files, as 0013 hides it from workers (RYA-176). Claude Code 2.1.283 applies the rule to `Glob` and `Grep` too, checked by hand.
 - Subagents still branch from the repository's `HEAD`, not from the coordinator's worktree.
 
 ### 0004's check around every turn
