@@ -289,18 +289,16 @@ pub(super) async fn prepare(
     .map_err(|error| routing_error(&error))?;
     worker::check_backend(resolved.backend())?;
     if let Some(cli) = worker::cli_of(resolved.backend()) {
-        let find = |clis: &[wisp_protocol::DetectedCli]| {
-            clis.iter().find(|detected| detected.cli == cli).cloned()
-        };
-        let mut detected = find(&daemon.cli_detector.list().await.clis);
-        if worker::check_version(cli, detected.as_ref()).is_err() {
+        // Only this CLI's status: a full probe also waits on the slowest of the others.
+        let mut detected = daemon.cli_detector.get(cli).await;
+        if worker::check_version(cli, Some(&detected)).is_err() {
             // The user may have just updated the CLI: look again before refusing.
-            detected = find(&daemon.cli_detector.refresh().await.clis);
-            worker::check_version(cli, detected.as_ref())?;
+            detected = daemon.cli_detector.refresh_one(cli).await;
+            worker::check_version(cli, Some(&detected))?;
         }
         #[cfg(target_os = "linux")]
         if cli == wisp_protocol::CliKind::Claude {
-            worker::check_linux_sandbox(&daemon.cli_detector, detected.as_ref()).await?;
+            worker::check_linux_sandbox(&daemon.cli_detector, Some(&detected)).await?;
         }
     }
     let home = worker::home()?;
