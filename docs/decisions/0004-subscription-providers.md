@@ -1,6 +1,6 @@
 # 0004: Subscriptions run through each vendor's official CLI
 
-- Status: accepted; where API keys are kept on Linux and Windows is in [0023](0023-cross-platform.md)
+- Status: accepted; where API keys are kept on Linux and Windows is in [0023](0023-cross-platform.md), and the no-write run's `--settings` deny of reads under Claude Code's shared temp folder is in [0024](0024-coordinator-chat.md)
 - Date: 2026-09-23
 - Issue: #15
 
