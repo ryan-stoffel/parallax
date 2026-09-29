@@ -137,7 +137,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await page.getByRole("button", { name: "Providers" }).click();
   const host = page.getByRole("region", { name: /^This (Mac|computer)$/ });
   const codex = (row: RegExp) => host.locator("div").filter({ hasText: row });
-  await expect(codex(/^CodexInstalledNot signed inSign in$/)).toBeVisible();
+  await expect(codex(/^CodexInstalledNo usage todayNot signed inSign in$/)).toBeVisible();
   await page.getByRole("button", { name: "Sign in to Codex" }).click();
 
   const terminal = page.getByRole("group", { name: "Codex sign-in terminal" });
@@ -146,5 +146,5 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await page.keyboard.press("Enter");
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
   // The sign-in's end ran accounts/refresh, which found the fake signed in.
-  await expect(codex(/^CodexInstalledSigned in$/)).toBeVisible();
+  await expect(codex(/^CodexInstalledNo usage todaySigned in$/)).toBeVisible();
 });
