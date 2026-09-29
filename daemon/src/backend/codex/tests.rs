@@ -37,6 +37,7 @@ fn fixture(name: &str) -> &'static str {
         "resume" => include_str!("fixtures/resume.jsonl"),
         "not-signed-in" => include_str!("fixtures/not-signed-in.jsonl"),
         "usage-limit" => include_str!("fixtures/usage-limit.jsonl"),
+        "throttled" => include_str!("fixtures/throttled.jsonl"),
         "mcp-call" => include_str!("fixtures/mcp-call.jsonl"),
         "cancel" => include_str!("fixtures/cancel.jsonl"),
         other => panic!("no fixture {other}"),
@@ -439,6 +440,7 @@ async fn a_signed_out_or_limited_login_falls_back_to_an_openai_key() {
     for (first, reason) in [
         ("not-signed-in", FailureKind::NotSignedIn),
         ("usage-limit", FailureKind::RateLimited),
+        ("throttled", FailureKind::RateLimited),
     ] {
         let fake = Fake::with_key_fixture(first, Some("worker"));
         let mut backends = BackendRegistry::new();
@@ -503,6 +505,7 @@ async fn cancel_interrupts_codex_with_sigint() {
         Event::SessionStarted { .. }
     ));
     // `@trap-armed`, printed once the fake's SIGINT trap is installed: a deterministic handshake.
+    // The fake then hangs in foreground sleeps, so a trap bash left pending still runs (RYA-120).
     assert!(matches!(
         next(&mut events).await,
         Event::Warning {

@@ -9,7 +9,9 @@
 #   @exit <code>    exit
 #   @trap-int       on SIGINT, record it and exit 1 as exec does; prints @trap-armed once
 #                   installed, a deterministic handshake so a test never cancels before the trap
-#   @hang           wait forever
+#   @hang           wait forever, in foreground one-second sleeps: bash 3.2 leaves a trap pending
+#                   through `wait` if the signal lands just before it, but runs it as soon as a
+#                   foreground command ends (RYA-120)
 # Every other line goes to stdout as it is.
 
 dir=$FAKE_CODEX_DIR
@@ -27,7 +29,7 @@ while IFS= read -r line <&3; do
     '@stderr '*) printf '%s\n' "${line#@stderr }" >&2 ;;
     '@exit '*) exit "${line#@exit }" ;;
     '@trap-int') trap 'echo SIGINT >> "$dir/signals"; exit 1' INT; printf '%s\n' @trap-armed ;;
-    '@hang') while :; do sleep 60 & wait $!; done ;;
+    '@hang') while :; do sleep 1; done ;;
     *) printf '%s\n' "$line" ;;
   esac
 done

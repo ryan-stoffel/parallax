@@ -280,8 +280,10 @@ fn usage_total(usage: &Value) -> Usage {
 
 /// The failure a `turn.failed` message points to. Exec reports only the message, so routing's
 /// fallback (0012) depends on these phrases: an HTTP 401, or a login that has to be made again,
-/// is [`FailureKind::NotSignedIn`]; a usage limit, quota, or rate limit is
-/// [`FailureKind::RateLimited`].
+/// is [`FailureKind::NotSignedIn`]; a usage limit, quota, or rate limit, or a plain HTTP 429
+/// that outlasted Codex's retries ("exceeded retry limit, last status: 429 Too Many Requests"),
+/// is [`FailureKind::RateLimited`]. A plan that doesn't include Codex ("upgrade to Plus") stays a
+/// [`FailureKind::VendorError`], so it isn't quietly billed to a paid key instead (0013).
 pub(super) fn classify(message: &str) -> FailureKind {
     let lower = message.to_lowercase();
     let any = |phrases: &[&str]| phrases.iter().any(|phrase| lower.contains(phrase));
@@ -295,6 +297,7 @@ pub(super) fn classify(message: &str) -> FailureKind {
     } else if any(&[
         "usage limit",
         "rate limit",
+        "too many requests",
         "quota exceeded",
         "out of credits",
         "spend cap",
@@ -349,6 +352,19 @@ mod tests {
                 FailureKind::RateLimited,
             ),
             ("rate limit exceeded: slow down", FailureKind::RateLimited),
+            (
+                "exceeded retry limit, last status: 429 Too Many Requests, request id: req_1",
+                FailureKind::RateLimited,
+            ),
+            (
+                "exceeded retry limit, last status: 500 Internal Server Error",
+                FailureKind::VendorError,
+            ),
+            (
+                "To use Codex with your ChatGPT plan, upgrade to Plus: \
+             https://chatgpt.com/explore/plus.",
+                FailureKind::VendorError,
+            ),
             (
                 "stream disconnected before completion: reset",
                 FailureKind::VendorError,
