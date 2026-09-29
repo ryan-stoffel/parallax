@@ -104,7 +104,7 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 
 - **Linux: Claude Code.** It sandboxes Bash with bubblewrap, and routes network traffic through its proxy with `socat`. It supports Linux and WSL2, but not WSL1.
   - The same `worker_settings` apply, and wispd never sets `enableWeakerNestedSandbox`.
-  - wispd also requires Claude Code's optional seccomp filter, from `@anthropic-ai/sandbox-runtime`. Without it, sandboxed commands can connect to any Unix socket. On Linux that includes the D-Bus session bus that serves the Secret Service, and `docker.sock`. On macOS, Seatbelt blocks these by default (0013).
+  - wispd also requires Claude Code's optional seccomp filter, which Claude Code ships itself as its `apply-seccomp` helper (0013). Without it, sandboxed commands can connect to any Unix socket. On Linux that includes the D-Bus session bus that serves the Secret Service, and `docker.sock`. On macOS, Seatbelt blocks these by default (0013).
   - A missing `bwrap`, `socat`, or filter fails `agent/start` with `workerUnavailable` naming it. So does an AppArmor policy that keeps `bwrap` from creating user namespaces (Ubuntu 24.04 and later).
   - `failIfUnavailable` doesn't cover the filter, because Claude Code treats it as optional, so wispd has to detect it itself. RYA-20 chose a sandboxed probe through Claude Code's own built-in helper, recorded in [0013's Linux section](0013-worker-sandbox.md#claude-code-on-linux).
   - `UNREADABLE_IN_HOME` becomes a list per OS. RYA-20 adds Linux's.

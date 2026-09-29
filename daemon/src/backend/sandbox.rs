@@ -26,6 +26,8 @@ pub const UNREADABLE_IN_HOME: &[&str] = &[
     ".config/gcloud",
     ".kube",
     ".docker",
+    // Podman, Buildah, and Skopeo keep registry logins in `auth.json` here
+    ".config/containers",
     ".terraform.d",
     ".vault-token",
     // Git hosts and git's own credential store
@@ -113,6 +115,8 @@ pub const UNREADABLE_IN_HOME_ON_THIS_OS: &[&str] = &[
     ".config/BraveSoftware",
     ".config/microsoft-edge",
     ".mozilla",
+    // Firefox 147 and later, and Thunderbird, put new profiles here
+    ".config/mozilla",
     "snap/firefox",
     "snap/chromium",
     ".var/app/org.mozilla.firefox",
@@ -312,6 +316,7 @@ mod tests {
         ".config/BraveSoftware",
         ".config/microsoft-edge",
         ".mozilla",
+        ".config/mozilla",
         "snap/firefox",
         ".var/app/org.mozilla.firefox",
         // Agent apps
@@ -330,6 +335,7 @@ mod tests {
             ".aws",
             ".kube",
             ".docker",
+            ".config/containers",
             ".terraform.d",
             ".vault-token",
             // Git credentials and hosts

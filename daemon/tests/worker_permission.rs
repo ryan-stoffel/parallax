@@ -17,6 +17,8 @@ use wispd::backend::claude::arguments;
 use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
 
 const KEY: &str = "sk-ant-wisp-test-key-never-send";
+/// A stand-in for the messaging token, in case Claude Code doesn't set its own.
+const TOKEN: &str = "wisp-test-messaging-token";
 
 #[tokio::test]
 async fn a_worker_can_run_bash_without_exposing_its_key() {
@@ -49,7 +51,8 @@ async fn a_worker_can_run_bash_without_exposing_its_key() {
     fs::write(
         worktree.join("probe.sh"),
         format!(
-            "if [ -n \"${{ANTHROPIC_API_KEY-}}\" ]; then echo key-exposed; else echo key-hidden; fi\n             cat '{}' 2>/dev/null || echo denied-read\n             echo x > inside && echo wrote-inside\n             echo x > '{}' 2>/dev/null || echo denied-write\n",
+            "if [ -n \"${{ANTHROPIC_API_KEY-}}\" ]; then echo key-exposed; else echo key-hidden; fi\n\
+             if [ -n \"${{CLAUDE_CODE_MESSAGING_TOKEN-}}\" ]; then echo token-exposed; else echo token-hidden; fi\n             cat '{}' 2>/dev/null || echo denied-read\n             echo x > inside && echo wrote-inside\n             echo x > '{}' 2>/dev/null || echo denied-write\n",
             home.join(".ssh/id_ed25519").display(), home.join("outside").display(),
         ),
     ).unwrap();
@@ -75,6 +78,8 @@ async fn a_worker_can_run_bash_without_exposing_its_key() {
     let result = tool_result(&stdout).unwrap_or_else(|| panic!("no Bash result:\n{transcript}"));
     assert!(result.contains("key-hidden"), "{transcript}");
     assert!(!result.contains(KEY), "{transcript}");
+    assert!(result.contains("token-hidden"), "{transcript}");
+    assert!(!result.contains(TOKEN), "{transcript}");
     assert!(result.contains("wrote-inside"), "{transcript}");
     assert!(result.contains("denied-read"), "{transcript}");
     assert!(result.contains("denied-write"), "{transcript}");
@@ -104,6 +109,7 @@ async fn run_worker(
         .env("TMPDIR", root.join("tmp"))
         .env("CLAUDE_CONFIG_DIR", root.join("config"))
         .env("ANTHROPIC_API_KEY", KEY)
+        .env("CLAUDE_CODE_MESSAGING_TOKEN", TOKEN)
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         .env("DISABLE_AUTOUPDATER", "1")

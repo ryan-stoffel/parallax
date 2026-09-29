@@ -57,8 +57,9 @@
 //! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it wispd
 //! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
 //! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
-//! it. The CLI's own subprocesses don't get the key either: a no-write run sets [`SCRUB_ENV`],
-//! and a worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its commands.
+//! it. A no-write run sets [`SCRUB_ENV`], so the CLI's own subprocesses don't get the key. A
+//! worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed commands only: the
+//! helpers Claude Code runs outside the sandbox, such as `git` and `rg`, still inherit it.
 //!
 //! A project's `env` block can still set variables for a worker (0004, #134), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
@@ -313,8 +314,8 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
 /// the network: the sandbox takes its allowlist from `WebFetch` allow rules, and a bare `*`
 /// matches every host. The denied hosts are `WebFetch` deny rules as well as `deniedDomains`,
 /// because the sandbox's list binds only commands, and a deny rule beats the `*` allow for the
-/// tool. Bash is an allow rule as well, since Claude Code ignores `autoAllowBashIfSandboxed` when
-/// [`SCRUB_ENV`] is set (RYA-110). `cwd`, the writable folders, and the read-only git paths stay
+/// tool. Bash is an allow rule as well, not only `autoAllowBashIfSandboxed`, so it stays allowed
+/// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders, and the read-only git paths stay
 /// readable inside an unreadable path, such as wispd's data folder, which holds the worktree, the
 /// context folder, and a normal thread's scratch repository (#110). A second account's
 /// `config_home` is unreadable too.
