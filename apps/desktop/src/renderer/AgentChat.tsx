@@ -42,11 +42,14 @@ export function AgentChat({
   hostId,
   runId,
   notice,
+  prompt,
 }: {
   hostId: string;
   runId: string;
   /** A quiet note shown over the composer, such as which account a new thread got. */
   notice?: string;
+  /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
+  prompt?: string;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -81,8 +84,11 @@ export function AgentChat({
     const pending = [...sent]
       .filter(([turnId]) => !seen.has(turnId))
       .map(([turnId, text]) => ({ kind: "pending" as const, key: `pending:${turnId}`, text }));
-    return [...items, ...pending];
-  }, [items, sent]);
+    const all = [...items, ...pending];
+    return all.length === 0 && prompt
+      ? [{ kind: "pending", key: "pending:prompt", text: prompt }]
+      : all;
+  }, [items, sent, prompt]);
 
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from wispd";
@@ -141,7 +147,7 @@ export function TranscriptView({
   rows: Row[];
   sent: ReadonlyMap<string, string>;
   live: boolean;
-  onResend: (turnId: string, text: string) => void;
+  onResend?: (turnId: string, text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
