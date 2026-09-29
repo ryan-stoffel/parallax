@@ -19,7 +19,11 @@ const bridge: Partial<WispBridge> = {
 window.wisp = bridge as WispBridge;
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  act(() => unmount());
+  delete bridge.updatable;
+  delete bridge.update;
+});
 
 function renderApp() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));

@@ -73,36 +73,53 @@ function restartApp() {
 
 // The update in flight, shared by clicks that land while it runs.
 let updating;
+// The commit before a pull whose install or build hasn't succeeded yet, so the next click
+// retries them rather than finding nothing new.
+let base;
 
 /**
  * Fast-forwards this checkout to origin/develop, then installs and rebuilds what changed. The
  * watchers reload the renderer and restart Electron; a new wispd starts on the app's reconnect.
- * Resolves to one line for the sidebar. A change to this script or the Vite config needs a
- * manual restart of `pnpm dev`.
+ * Resolves to one line for the sidebar. New packages, and a change to this script or the Vite
+ * config, need a manual restart of `pnpm dev`.
  */
 async function update() {
   const branch = (await run("git", ["branch", "--show-current"])).out;
   if (branch !== "develop")
     return `Update follows develop, and this checkout is on ${branch || "a detached HEAD"}.`;
-  const before = (await run("git", ["rev-parse", "HEAD"])).out;
+  base ??= (await run("git", ["rev-parse", "HEAD"])).out;
   const pull = await run("git", ["pull", "--ff-only", "origin", "develop"]);
-  if (pull.code !== 0) return `git pull failed: ${lastLine(pull.out)}`;
+  if (pull.code !== 0) return `git pull failed: ${errorLine(pull.out)}`;
   const after = (await run("git", ["rev-parse", "HEAD"])).out;
-  if (after === before) return "Up to date";
+  const changed = (await run("git", ["diff", "--name-only", base, after])).out
+    .split("\n")
+    .filter(Boolean);
+  const updated = `Updated to ${after.slice(0, 7)}`;
 
-  const changed = (await run("git", ["diff", "--name-only", before, after])).out.split("\n");
-  if (changed.includes("apps/desktop/pnpm-lock.yaml")) {
-    // pnpm sets npm_execpath to itself for the scripts it runs.
+  const packages = changed.includes("apps/desktop/pnpm-lock.yaml");
+  if (packages) {
+    // pnpm sets npm_execpath to itself for the scripts it runs: a JS file, or a native binary.
     const pnpm = process.env["npm_execpath"] ?? "pnpm";
-    const install = await run(process.execPath, [pnpm, "install", "--frozen-lockfile"], ".");
-    if (install.code !== 0) return `pnpm install failed: ${lastLine(install.out)}`;
+    const args = ["install", "--frozen-lockfile"];
+    const install = /\.[cm]?js$/.test(pnpm)
+      ? await run(process.execPath, [pnpm, ...args], ".")
+      : await run(pnpm, args, ".");
+    if (install.code !== 0) return `pnpm install failed: ${errorLine(install.out)}`;
   }
-  if (changed.some((file) => /^(daemon|crates)\/|^Cargo\.(toml|lock)$/.test(file))) {
+  const rust = changed.some((file) => /^(daemon|crates)\/|^Cargo\.(toml|lock)$/.test(file));
+  // Windows won't replace the wispd.exe that the app's wispd is running from.
+  if (rust && windows) {
+    base = undefined;
+    return `${updated}. Quit wisp and stop wispd, then run cargo build -p wispd.`;
+  }
+  if (rust) {
     const build = await run("cargo", ["build", "-p", "wispd"]);
-    if (build.code !== 0) return `cargo build failed: ${lastLine(build.out)}`;
+    if (build.code !== 0) return `cargo build failed: ${errorLine(build.out)}`;
     stopWispd();
   }
-  return `Updated to ${after.slice(0, 7)}`;
+  base = undefined;
+  if (packages) return `${updated}. Restart pnpm dev to load the new packages.`;
+  return changed.length ? updated : "Up to date";
 }
 
 /** Runs a command in the repo root (or `cwd`), echoing its output. Never rejects. */
@@ -120,13 +137,15 @@ function run(command, args, cwd = "../..") {
   });
 }
 
-const lastLine = (text) => text.split("\n").at(-1) ?? "";
+/** The first `fatal:` or `error:` line of git's or cargo's output, else its last line. */
+const errorLine = (text) => {
+  const lines = text.split("\n");
+  return lines.find((line) => /^(fatal|error)\b/.test(line)) ?? lines.at(-1) ?? "";
+};
 
 // Asks the running `wispd serve` to shut down, by the pid in its lock file (daemon/src/paths.rs).
-// ponytail: stops runs in flight, so it's only called when Rust changed; POSIX only, so on
-// Windows the new build waits for wispd's next start.
+// ponytail: stops runs in flight, so it's only called when Rust changed.
 function stopWispd() {
-  if (windows) return;
   const dataDir =
     process.env["WISPD_DATA_DIR"] ??
     (process.platform === "darwin"
@@ -135,8 +154,8 @@ function stopWispd() {
   try {
     const pid = Number.parseInt(readFileSync(path.join(dataDir, "wispd.lock"), "utf8"));
     // A crashed serve leaves its pid behind, which another process may have by now.
-    const name = spawnSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf8" }).stdout;
-    if (name.trim().endsWith("wispd")) process.kill(pid);
+    const args = spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" }).stdout;
+    if (/wispd serve\b/.test(args)) process.kill(pid);
   } catch {
     // Not running.
   }

@@ -30,7 +30,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // Read by the preload, which is sandboxed and can't ask the main process synchronously.
+      // The preload reads it, so `window.wisp.updatable` is a plain value.
       additionalArguments: updatable ? ["--wisp-updatable"] : [],
     },
   });
