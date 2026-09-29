@@ -39,8 +39,9 @@
 //!
 //! As a second check, a worker whose output shows an MCP or subagent call is stopped with
 //! [`FailureKind::PolicyViolation`]. Codex older than [`WORKER_MIN_VERSION`] would ignore the
-//! profile, so the runner refuses it before starting a worker. Only macOS runs Codex workers;
-//! elsewhere the backend reports no `worker_sandbox` (0013).
+//! profile, so the runner refuses it before starting a worker. The backend runs workers only on
+//! macOS, but it reports no `worker_sandbox` on any OS until RYA-145 keeps their commands out of
+//! the shared temp folders, so wispd refuses Codex workers (0013, RYA-153).
 //!
 //! # Credentials
 //!
@@ -340,7 +341,9 @@ impl Backend for CodexBackend {
             coordinator: false,
             reports_cost: false,
             rate_limits: false,
-            worker_sandbox: cfg!(target_os = "macos"),
+            // Off everywhere until RYA-145: a worker's commands still write the shared temp
+            // folders on macOS (RYA-153).
+            worker_sandbox: false,
         }
     }
 
@@ -356,7 +359,7 @@ impl Backend for CodexBackend {
         if request.prompt.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
-        if request.policy == ToolPolicy::WorkspaceWrite && !self.capabilities().worker_sandbox {
+        if request.policy == ToolPolicy::WorkspaceWrite && !cfg!(target_os = "macos") {
             return Err(StartError::Unsupported(
                 "wispd hasn't checked Codex's worker sandbox on this OS yet (decision 0013)".into(),
             ));
