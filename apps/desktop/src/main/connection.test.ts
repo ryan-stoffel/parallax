@@ -97,7 +97,7 @@ test("handshakes, then heartbeats, and reconnects when wispd goes silent", () =>
   });
   expect(state()).toEqual({ status: "connecting" });
   child().handshake();
-  expect(state()).toEqual({ status: "connected", wispd: "0.1.0", protocol: 1 });
+  expect(state()).toEqual({ status: "connected", wispd: "0.1.0", protocol: 1, capabilities: {} });
 
   vi.advanceTimersByTime(30_000);
   const health = child().request("host/health");

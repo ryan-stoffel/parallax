@@ -215,6 +215,9 @@ export function App() {
                 local={host.id === localId}
                 addRepo={threads.addRepo}
                 start={threads.start}
+                runOptions={
+                  connection?.status === "connected" && "runOptions" in connection.capabilities
+                }
                 onStarted={(threadId, text) => {
                   setNotice(text ? { threadId, text } : undefined);
                   setSelection({ kind: "thread", threadId });

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
+import type { RunOptions } from "./models";
 import { uuidv7 } from "./uuidv7";
 
 /** A host's repo entries and normal threads (0017), and each thread's title and run. */
@@ -112,8 +113,16 @@ export interface ThreadsView {
   error?: string;
   /** Registers a repository (idempotent on its path). Resolves to its entry or an error message. */
   addRepo: (path: string) => Promise<Repo | string>;
-  /** Starts a thread in a group. Reuse `runId` to retry. Resolves to wispd's error, or undefined. */
-  start: (runId: string, groupId: string, prompt: string) => Promise<RpcError | undefined>;
+  /**
+   * Starts a thread in a group, with `options` sent as they are. Reuse `runId`, with the same
+   * options, to retry. Resolves to wispd's error, or undefined.
+   */
+  start: (
+    runId: string,
+    groupId: string,
+    prompt: string,
+    options: RunOptions,
+  ) => Promise<RpcError | undefined>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
   /** Lists a repo entry's runs again, so their status is current. Failures are ignored. */
@@ -193,11 +202,12 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
   );
 
   const start = useCallback(
-    async (runId: string, groupId: string, prompt: string) => {
+    async (runId: string, groupId: string, prompt: string, options: RunOptions) => {
       const answer = await window.wisp.request(hostId, "thread/start", {
         runId,
         prompt,
         ...(groupId !== noRepo && { repo: groupId }),
+        ...options,
       });
       if ("error" in answer) return answer.error;
       dispatch({ type: "runs", runs: [answer.result.run] });

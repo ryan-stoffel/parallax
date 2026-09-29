@@ -1,8 +1,9 @@
 import { Folder, X } from "lucide-react";
-import type { Ref } from "react";
+import { useState, type Ref } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
 import { ModelMenu } from "./ModelMenu";
+import { models } from "./models";
 import { IconButton, Picker } from "./ui";
 
 /**
@@ -19,6 +20,7 @@ export function NewProjectDialog({
 }) {
   const row = "flex items-center justify-between gap-4 px-5 py-3";
   const workspaces = repositories.filter((r) => !r.scratch);
+  const [model, setModel] = useState(models[0]!);
   return (
     <dialog
       ref={ref}
@@ -53,7 +55,7 @@ export function NewProjectDialog({
           <span aria-hidden className="text-[13px]">
             Model
           </span>
-          <ModelMenu />
+          <ModelMenu models={models} value={model} onChange={setModel} />
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3">
           <p className="text-[12px] text-muted-foreground">

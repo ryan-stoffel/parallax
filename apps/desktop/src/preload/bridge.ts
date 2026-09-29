@@ -1,6 +1,7 @@
 // The `window.wisp` contract. The preload implements it and the renderer types
 // against it, so it must not import anything from Node or Electron.
 import type {
+  Capabilities,
   CliKind,
   ErrorData,
   EventsEventParams,
@@ -120,7 +121,8 @@ export type SubscriptionMessage =
 
 export type ConnectionState =
   | { status: "connecting" }
-  | { status: "connected"; wispd: string; protocol: number }
+  /** `capabilities` are what wispd's `initialize` advertised, such as `runOptions`. */
+  | { status: "connected"; wispd: string; protocol: number; capabilities: Capabilities }
   /** `retrying` is false once only `retry` can bring it back. */
   | { status: "failed"; error: ConnectionError; retrying: boolean };
 

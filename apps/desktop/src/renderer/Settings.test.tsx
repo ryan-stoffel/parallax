@@ -10,7 +10,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
 const states: Record<string, ConnectionState> = {
-  local: { status: "connected", wispd: "0.1.0", protocol: 1 },
+  local: { status: "connected", wispd: "0.1.0", protocol: 1, capabilities: {} },
   [mini.id]: {
     status: "failed",
     retrying: false,
