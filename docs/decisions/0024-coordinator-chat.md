@@ -1,6 +1,6 @@
 # 0024: A project's coordinator chat is a no-write run in the project's repository
 
-- Status: accepted
+- Status: accepted; where it runs amended by RYA-171
 - Date: 2026-09-29
 - Issue: RYA-41
 
@@ -24,28 +24,31 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 
 - `project/start` is idempotent on `runId`, like `agent/start`. The same params return the run, and different ones fail with `idConflict`.
 - A project's coordinator is its newest `noWrite` run, and there is only ever one live. A new `runId` starts over: it replaces the coordinator unless that one is starting or running, in which case it fails with `idConflict`, naming the running coordinator. The check and the insert run in one store job, which the store's thread runs alone, so two racing starts can't both succeed.
+- A replaced coordinator can't be resumed: `agent/send` fails with `runNotResumable`, naming its successor, so a project never has two live coordinators sharing its worktree (RYA-171).
 - A coordinator whose session can't be resumed never locks its project. That happens when Claude Code prunes its transcript after `cleanupPeriodDays` (30 idle days by default), when its account is removed, or when the account now runs on another backend. `agent/send` then fails, and `project/start` with a new `runId` starts over. The same goes for one that ended before its CLI reported a session, such as a CLI that wasn't signed in.
 - `account` absent means the coordinator role's default (0012). `model` and `effort` are `agent/start`'s (RYA-97). A no-write run's permission is fixed (0004), so `project/start` takes none, and `agent/send` refuses one with `unsupportedOption`.
 - `Project.coordinator` (optional) is the coordinator's run id, from `project/list` and `project/create`. `AgentPolicy` gains `noWrite`.
-- The run has no worktree. `agent/diff` and `agent/file` refuse it with `invalidParams`, and `agent/accept` refuses it because it has no commit.
+- The run records no worktree, and `AgentRun.worktreePath` is absent. `agent/diff` and `agent/file` refuse it with `invalidParams`, and `agent/accept` refuses it because it has no commit.
 
-### It runs in the project's repository
+### It runs in a worktree of its own (RYA-171)
 
-- The coordinator's CLI runs in the project's repository itself, the user's checkout, with 0004's no-write arguments, no worker sandbox, and 0019's tools and allowlist.
+- The coordinator's CLI runs in a detached worktree of the project's repository, `coordinators/<project id>` in wispd's data folder, with 0004's no-write arguments, no worker sandbox, and 0019's tools and allowlist. It is never committed and never on a branch.
+- Before each CLI process starts, the first and every resume, including after a restart, wispd moves it to the repository's current `HEAD`. It adds the worktree if it is missing. Otherwise it checks the commit out with `--force` and removes every untracked and ignored file. If that fails, or the folder has no `.git` file, wispd removes the folder and adds it again. Hooks stay off, as for every git call wispd makes (0014).
+- Only the coordinator writes there, so the check is exact. The user's edits, commits, stray files such as `.DS_Store`, `agent/accept`, and the sidebar's Update button change the checkout, not this worktree, and never stop a turn. The first version ran in the user's checkout, where all of those tripped the check.
+- It reads committed `HEAD` as of when its CLI process started, not the user's uncommitted work. A commit made while a process runs is seen from the next one. Its first message says so.
+- One worktree per project. A new `project/start` takes it over, so nothing is left to remove, and a replaced coordinator can't be resumed.
 - It loads the user's settings (`--setting-sources user`, not a worker's `--restricted`), so user-level `additionalDirectories` or `Read(...)` allow rules widen what it can read.
-- It reads the code as the user has it, uncommitted work included. It needs no worktree, commit, or cleanup. And 0004's rule, "stops the turn and shows the diff without reverting it", is about the user's own tree.
-- A never-committed worktree in wispd's data folder was rejected. Nothing but the coordinator would write there, so the check would be exact. But it would miss the user's uncommitted work, and it would need refreshing to see merged work. wispd would also have to create it, refresh it, and remove it.
+- Subagents still branch from the repository's `HEAD`, not from the coordinator's worktree.
 
 ### 0004's check around every turn
 
-- Before each CLI process starts, wispd takes `routing::snapshot` of the repository. After every `TurnFinished`, and again when the CLI exits, it runs `routing::check` against that snapshot.
-- On a change, wispd cancels the CLI, and the run fails with `policyViolation`. The message lists the changed paths from `git status`, and wispd reverts nothing. A check that can't run at all also stops the run, as `internal`. The next message resumes the session, and the next process takes a new snapshot, which includes the change.
-- A tree that was already dirty when the turn started, and stays exactly as dirty, is not a change (0012).
+- Before each CLI process starts, right after the refresh, wispd takes `routing::snapshot` of the coordinator's worktree. After every `TurnFinished`, and again when the CLI exits, it runs `routing::check` against that snapshot.
+- On a change, wispd cancels the CLI, and the run fails with `policyViolation`. The message lists the changed paths from `git status`, and wispd reverts nothing then. A check that can't run at all also stops the run, as `internal`. The next message resumes the session, and the next process's refresh discards the change: it was the coordinator's own, never the user's.
 - The coordinator is never committed.
 
 ### Its first message
 
-`daemon/src/agents/coordinator.md` is the coordinator's instructions: plan, delegate with `spawn_agent`, check on subagents, and keep shared notes. They go ahead of the user's first message and the repository's path, as a worker's limits do (0013). RYA-43 refines them.
+`daemon/src/agents/coordinator.md` is the coordinator's instructions: plan, delegate with `spawn_agent`, check on subagents, and keep shared notes. They go ahead of the user's first message, the repository's path, and a note that its working directory is a copy of the latest commit, as a worker's limits do (0013). RYA-43 refines them.
 
 ### It never sees itself
 
@@ -53,8 +56,9 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 
 ## Consequences
 
-- An edit the user makes in the checkout during a coordinator turn also trips the check: an editor save, a `git pull`, or `agent/accept` merging a subagent. The turn stops, says which files changed, and the next message resumes it. If this happens often, move the coordinator to a worktree of its own.
-- The check misses writes to ignored files and outside the repository, as 0004 and 0012 accept.
+- The coordinator doesn't see the user's uncommitted work (RYA-171). To show it something, commit it, or describe it in the message.
+- A repository with no commits has nothing to check out, so its coordinator fails to start until the first commit, as its subagents do.
+- The check misses writes to ignored files and outside its worktree, including the user's checkout, as 0004 and 0012 accept.
 - Nothing wakes the coordinator when a subagent finishes (RYA-42), and the app has no coordinator chat yet (RYA-46).
 - `Project.coordinator` is filled by scanning the project's runs. If that gets slow, move it to a column on `projects`.
 - No event announces a new coordinator on the host-level subscription. The project's subscription gets `agent.started` with `policy: noWrite`, and `project/list` names it.

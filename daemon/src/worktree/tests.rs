@@ -550,6 +550,77 @@ async fn remove_deletes_the_worktree_and_its_branch() {
 }
 
 #[tokio::test]
+async fn refresh_detached_follows_head_and_discards_what_was_written_there() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    std::fs::write(repo.join(".gitignore"), "*.log\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "ignore logs"]);
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let path = data_dir.path().join("coordinators").join("project");
+
+    let head = mgr.refresh_detached(&repo, &path).await.unwrap();
+    assert_eq!(head, rev_parse(&repo, "HEAD"));
+    assert_eq!(rev_parse(&path, "HEAD"), head);
+    assert_eq!(
+        git_output(&path, &["branch", "--show-current"]),
+        "",
+        "detached, on no branch"
+    );
+
+    // The user commits; something writes a tracked, an untracked, and an ignored file there.
+    std::fs::write(repo.join("README.md"), "moved on\n").unwrap();
+    git(&repo, &["commit", "-qam", "move on"]);
+    std::fs::write(path.join("README.md"), "written\n").unwrap();
+    std::fs::write(path.join("new.txt"), "written\n").unwrap();
+    std::fs::write(path.join("run.log"), "written\n").unwrap();
+    let head = mgr.refresh_detached(&repo, &path).await.unwrap();
+    assert_eq!(head, rev_parse(&repo, "HEAD"));
+    assert_eq!(rev_parse(&path, "HEAD"), head);
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "moved on\n"
+    );
+    assert!(!path.join("new.txt").exists());
+    assert!(!path.join("run.log").exists());
+
+    // A folder that is no longer a worktree is added again, never searched above.
+    std::fs::remove_file(path.join(".git")).unwrap();
+    mgr.refresh_detached(&repo, &path).await.unwrap();
+    assert_eq!(rev_parse(&path, "HEAD"), head);
+    assert_eq!(worktree_count(&repo), 2);
+}
+
+#[tokio::test]
+async fn refresh_detached_refuses_a_symlink_and_leaves_its_target_alone() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let theirs = data_dir.path().join("theirs");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "mine",
+            theirs.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(theirs.join("draft.txt"), "unsaved\n").unwrap();
+    let path = data_dir.path().join("coordinators").join("project");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    symlink(&theirs, &path).unwrap();
+
+    mgr.refresh_detached(&repo, &path).await.unwrap_err();
+    assert_eq!(git_output(&theirs, &["branch", "--show-current"]), "mine");
+    assert!(theirs.join("draft.txt").exists());
+}
+
+#[tokio::test]
 async fn gc_orphans_removes_an_unknown_worktree_and_keeps_a_known_one() {
     let repo_dir = tempfile::tempdir().unwrap();
     let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
