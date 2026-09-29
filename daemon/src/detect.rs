@@ -109,7 +109,7 @@ pub(crate) struct Ran {
 
 /// Resolves `program` on `launcher`'s effective `PATH` (#96), without running it.
 pub(crate) fn resolve(launcher: &Launcher, program: &str) -> Option<PathBuf> {
-    let spec = ProcessSpec::new(program, "/");
+    let spec = probe_spec(program);
     let env = launcher.environment(&spec);
     find_program(program.as_ref(), env.get("PATH")).ok()
 }
@@ -140,16 +140,24 @@ fn installed(cli: CliKind, path: &Path) -> DetectedCli {
     }
 }
 
-/// Runs `program args` in `/`, with `launcher`'s scrubbing, stdin closed, and no output beyond
-/// wispd's usual limits. Waits at most `timeout`; on a timeout, the process's group is killed
-/// (dropping it does that) and `Err` explains why.
+/// A spec for probing `program` in the user's home, which is absolute on every OS, unlike `/` on
+/// Windows (RYA-144), and which only they can write to. `/` if the home folder is unknown or
+/// missing.
+fn probe_spec(program: &str) -> ProcessSpec {
+    let home = std::env::home_dir().filter(|home| home.is_absolute() && home.is_dir());
+    ProcessSpec::new(program, home.unwrap_or_else(|| PathBuf::from("/")))
+}
+
+/// Runs `program args` in [`probe_spec`]'s folder, with `launcher`'s scrubbing, stdin closed, and
+/// no output beyond wispd's usual limits. Waits at most `timeout`; on a timeout, the process's
+/// group is killed (dropping it does that) and `Err` explains why.
 pub(crate) async fn run(
     launcher: &Launcher,
     program: &str,
     args: &[&str],
     timeout: Duration,
 ) -> Result<Ran, String> {
-    let mut spec = ProcessSpec::new(program, "/");
+    let mut spec = probe_spec(program);
     spec.args = args.iter().map(|arg| (*arg).into()).collect();
     run_spec(launcher, &spec, timeout).await
 }
@@ -344,7 +352,7 @@ async fn probe_codex(launcher: &Launcher, timeout: Duration) -> DetectedCli {
 /// rather than an error, since a subscription's plan is metadata, not a fact wispd depends on.
 /// The process is killed once this returns, whether or not it answered in time.
 async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<String> {
-    let mut spec = ProcessSpec::new("codex", "/");
+    let mut spec = probe_spec("codex");
     spec.args = vec!["app-server".into()];
     spec.stdin = StdinMode::Piped;
     let mut process = launcher.spawn(&spec).ok()?;
@@ -406,3 +414,35 @@ fn extract_subscription_tier(text: &str) -> Option<String> {
 
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::time::Duration;
+
+    use wisp_protocol::CliKind;
+
+    use super::CliDetector;
+    use crate::backend::process::{Environment, Launcher};
+    use crate::paths::DataDir;
+
+    /// A probe starts on Windows, where `/` isn't absolute (RYA-144): a fake `codex.cmd` that
+    /// exits 0 to `codex login status` reads as signed in.
+    #[tokio::test]
+    async fn a_cmd_cli_is_probed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("codex.cmd"), "@exit 0\r\n").unwrap();
+        let mut env = Environment::inherited();
+        env.set("PATH", dir.path());
+        let launcher = Launcher::new(DataDir::new(dir.path().join("data")).unwrap(), env);
+        let probe = CliDetector::new(launcher, Duration::from_secs(10))
+            .refresh()
+            .await;
+        let codex = probe
+            .clis
+            .iter()
+            .find(|cli| cli.cli == CliKind::Codex)
+            .unwrap();
+        assert_eq!(codex.signed_in, Some(true), "{codex:?}");
+        assert_eq!(codex.note, None, "{codex:?}");
+    }
+}
