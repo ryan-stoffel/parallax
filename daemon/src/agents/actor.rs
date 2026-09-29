@@ -1,8 +1,8 @@
 //! One run's actor: the task that owns a run for as long as wispd runs.
 //!
-//! It takes commands (`agent/send`, `agent/cancel`, `agent/accept`, `thread/delete`) and the run's
-//! backend events in one loop, so nothing about a run needs a lock, and events are logged in the
-//! order they happened.
+//! It takes commands (`agent/send`, `agent/cancel`, `agent/accept`, `agent/openPr`,
+//! `thread/delete`) and the run's backend events in one loop, so nothing about a run needs a lock,
+//! and events are logged in the order they happened.
 //!
 //! A project's coordinator (0024) differs in three places: it starts in the project's repository
 //! with wispd's tools and no sandbox, its working tree is checked after every turn (0004), and it
@@ -37,6 +37,7 @@ use crate::backend::{
 };
 use crate::routing::{self, TreeSnapshot};
 use crate::server::Daemon;
+use crate::worktree::PrError;
 
 /// How long transcript items wait to be sent together as one `agent.output` (0007).
 const COALESCE: Duration = Duration::from_millis(50);
@@ -64,6 +65,12 @@ pub(super) enum Command {
         reviewed: Option<String>,
         reply: oneshot::Sender<Result<(AgentRun, AgentMerge), ErrorObject>>,
     },
+    /// `agent/openPr` (RYA-168).
+    OpenPr {
+        title: String,
+        body: String,
+        reply: oneshot::Sender<Result<String, ErrorObject>>,
+    },
     /// `thread/delete` (#110): stops the run's CLI, waits for it to exit, and deletes the thread.
     Delete {
         reply: oneshot::Sender<Result<(), ErrorObject>>,
@@ -78,6 +85,9 @@ impl Command {
                 let _ = reply.send(Err(error));
             }
             Self::Accept { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::OpenPr { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Delete { reply } => {
@@ -251,6 +261,10 @@ impl Actor {
                 let answer = self.accept(id, reviewed).await;
                 let _ = reply.send(answer);
             }
+            Command::OpenPr { title, body, reply } => {
+                let answer = self.open_pr(&title, &body).await;
+                let _ = reply.send(answer);
+            }
             Command::Delete { reply } => {
                 let answer = self.delete().await;
                 if answer.is_ok() {
@@ -376,6 +390,55 @@ impl Actor {
         })
         .await;
         Ok((self.snapshot()?, merge))
+    }
+
+    /// `agent/openPr`: pushes the run's branch to its repository's `origin` and returns the URL
+    /// of its pull request, opening one if none is open (RYA-168). Running here, between commands,
+    /// it never races a turn or its commit.
+    async fn open_pr(&self, title: &str, body: &str) -> Result<String, ErrorObject> {
+        if self.accepted() {
+            return Err(super::run_accepted(self.id));
+        }
+        let refused = |why: String| ErrorObject::wisp(ErrorKind::PrRefused, why);
+        if self.live.is_some() {
+            return Err(refused(format!(
+                "run {} is still running; open a pull request once it has finished",
+                self.id
+            )));
+        }
+        if self.row.state.commit_sha.is_none() {
+            return Err(refused(format!(
+                "run {} has no committed changes to open a pull request for",
+                self.id
+            )));
+        }
+        let Some(worktree) = &self.worktree else {
+            return Err(ErrorObject::internal_error(format!(
+                "run {} has no recorded worktree",
+                self.id
+            )));
+        };
+        let url = self
+            .daemon
+            .agents
+            .worktrees
+            .open_pr(
+                Path::new(&worktree.repo_path),
+                &worktree.branch,
+                title,
+                body,
+            )
+            .await
+            .map_err(|error| {
+                let kind = match &error {
+                    PrError::Push(_) => ErrorKind::PushFailed,
+                    PrError::GhUnavailable(_) => ErrorKind::GhUnavailable,
+                    PrError::Gh(_) => ErrorKind::PrFailed,
+                };
+                ErrorObject::wisp(kind, error.to_string())
+            })?;
+        info!(run = %self.id, %url, "opened a pull request for an agent run");
+        Ok(url)
     }
 
     async fn send(

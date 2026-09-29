@@ -25,9 +25,10 @@ use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, R
 use wisp_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
-    AgentEvents, AgentFile, AgentList, AgentRequestChanges, AgentSend, AgentStart, ContextList,
-    ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
-    Initialize, ProjectCreate, ProjectList, ProjectStart, RequestMethod, UsageGet, UsageHistory,
+    AgentEvents, AgentFile, AgentList, AgentOpenPr, AgentRequestChanges, AgentSend, AgentStart,
+    ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth,
+    HostVersion, Initialize, ProjectCreate, ProjectList, ProjectStart, RequestMethod, UsageGet,
+    UsageHistory,
 };
 use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
@@ -180,6 +181,9 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentRequestChanges::NAME => {
             handle::<AgentRequestChanges, _, _>(request, |p| agent::request_changes(context, p))
                 .await
+        }
+        AgentOpenPr::NAME => {
+            handle::<AgentOpenPr, _, _>(request, |p| agent::open_pr(context, p)).await
         }
         _ => return None,
     })

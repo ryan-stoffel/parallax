@@ -31,16 +31,16 @@ use crate::{
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
     AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult,
-    AgentFileParams, AgentFileResult, AgentListParams, AgentListResult, AgentRequestChangesParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams, ContextListResult,
-    ContextReadParams, ContextReadResult, ContextWriteParams, ContextWriteResult,
-    EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
-    EventsUnsubscribeResult, HostHealthParams, HostHealthResult, HostVersionParams,
-    HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
-    ProjectCreateResult, ProjectListParams, ProjectListResult, ProjectStartParams, RepoAddParams,
-    RepoAddResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    AgentFileParams, AgentFileResult, AgentListParams, AgentListResult, AgentOpenPrParams,
+    AgentOpenPrResult, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
+    AgentStartParams, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
+    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, HostHealthParams,
+    HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams, InitializeResult,
+    ProjectCreateParams, ProjectCreateResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, RepoAddParams, RepoAddResult, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ThreadStartResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -195,6 +195,10 @@ method_table! {
         /// `agent/requestChanges`: the reviewer's follow-up to a run, sent as `agent/send` sends
         /// a message. Idempotent on its client-generated turn id.
         AgentRequestChanges = "agent/requestChanges": AgentRequestChangesParams => AgentRunResult;
+        /// `agent/openPr`: pushes a finished run's branch to the repository's `origin` and opens
+        /// a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
+        /// `openPr` capability.
+        AgentOpenPr = "agent/openPr": AgentOpenPrParams => AgentOpenPrResult;
         /// `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
         /// (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
         ThreadList = "thread/list": ThreadListParams => ThreadListResult;
@@ -281,6 +285,7 @@ mod tests {
                 "agent/file",
                 "agent/accept",
                 "agent/requestChanges",
+                "agent/openPr",
                 "thread/list",
                 "repo/add",
                 "thread/start",

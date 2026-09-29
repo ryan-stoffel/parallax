@@ -94,7 +94,8 @@ pub use project::{
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,
     AgentDiffResult, AgentDiffStats, AgentFileParams, AgentFileResult, AgentFileSide,
-    AgentFileStatus, AgentMerge, AgentMergeKind, AgentRequestChangesParams,
+    AgentFileStatus, AgentMerge, AgentMergeKind, AgentOpenPrParams, AgentOpenPrResult,
+    AgentRequestChangesParams,
 };
 pub use thread::{
     Repo, RepoAddParams, RepoAddResult, RepoId, Thread, ThreadArchiveParams, ThreadArchiveResult,

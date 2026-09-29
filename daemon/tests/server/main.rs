@@ -15,6 +15,7 @@ mod handshake;
 mod keys;
 mod lifecycle;
 mod mcp;
+mod open_pr;
 mod projects;
 mod requests;
 mod support;

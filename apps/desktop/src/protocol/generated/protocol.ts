@@ -161,6 +161,12 @@ export type WispRequests = {
 	 */
 	"agent/requestChanges": { params: AgentRequestChangesParams, result: AgentRunResult },
 	/**
+	 * `agent/openPr`: pushes a finished run's branch to the repository's `origin` and opens
+	 * a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
+	 * `openPr` capability.
+	 */
+	"agent/openPr": { params: AgentOpenPrParams, result: AgentOpenPrResult },
+	/**
 	 * `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
 	 * (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
 	 */
@@ -2056,6 +2062,40 @@ export type AgentRequestChangesParams = {
 };
 
 /**
+ * Params of `agent/openPr` (RYA-168): wispd pushes the run's branch to the repository's `origin`
+ * on the host, as the user, and opens a pull request for it against the GitHub repository's
+ * default branch with `gh`.
+ *
+ * Idempotent: when the branch already has an open pull request, it pushes any new commits and
+ * returns that one.
+ */
+export type AgentOpenPrParams = {
+	/**
+	 * The run. It must have finished and have a commit.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's title, such as the thread's. wispd takes its first line, cut to 256
+	 * characters.
+	 */
+	title: string,
+	/**
+	 * Its description, at most 64 KiB. Absent means empty.
+	 */
+	body?: string,
+};
+
+/**
+ * Result of `agent/openPr`.
+ */
+export type AgentOpenPrResult = {
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+};
+
+/**
  * Params of `thread/list`.
  */
 export type ThreadListParams = Record<symbol, never>;
@@ -2314,7 +2354,7 @@ export type ErrorData = {
  * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

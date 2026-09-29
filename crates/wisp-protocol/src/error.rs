@@ -73,6 +73,18 @@ pub enum ErrorKind {
     /// `thread/start` asked for, or the model's name can't be passed to its CLI (RYA-97). Nothing
     /// was created. The message names the option, the value, and the backend.
     UnsupportedOption,
+    /// `agent/openPr` refused before pushing anything: the run is still running, or it has no
+    /// commit beyond its base (RYA-168).
+    PrRefused,
+    /// `agent/openPr` could not push the run's branch: the repository has no `origin`, or git
+    /// failed. The message carries git's stderr.
+    PushFailed,
+    /// `gh` isn't installed on the host, or isn't signed in. The message says which, with gh's
+    /// stderr. The branch was pushed first.
+    GhUnavailable,
+    /// `gh` could not find or open the pull request, for example because `origin` isn't a GitHub
+    /// repository. The message carries gh's stderr. The branch was pushed first.
+    PrFailed,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -179,6 +191,10 @@ mod tests {
             (ErrorKind::ThreadNotFound, "threadNotFound"),
             (ErrorKind::NoDefaultAccount, "noDefaultAccount"),
             (ErrorKind::UnsupportedOption, "unsupportedOption"),
+            (ErrorKind::PrRefused, "prRefused"),
+            (ErrorKind::PushFailed, "pushFailed"),
+            (ErrorKind::GhUnavailable, "ghUnavailable"),
+            (ErrorKind::PrFailed, "prFailed"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

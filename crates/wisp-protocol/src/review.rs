@@ -7,7 +7,8 @@
 //! side, so a client can show it in a diff editor, for a local or a remote host alike (#67).
 //! `agent/accept` merges the run's commit into the project repository's current branch on the
 //! host and removes the run's worktree and branch. `agent/requestChanges` sends the run a
-//! follow-up, as `agent/send` does.
+//! follow-up, as `agent/send` does. `agent/openPr`, behind the `openPr` capability (RYA-168),
+//! pushes the run's branch to the repository's `origin` and opens a pull request for it instead.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -243,6 +244,34 @@ pub struct AgentRequestChangesParams {
     pub turn_id: TurnId,
     /// What to change.
     pub text: String,
+}
+
+/// Params of `agent/openPr` (RYA-168): wispd pushes the run's branch to the repository's `origin`
+/// on the host, as the user, and opens a pull request for it against the GitHub repository's
+/// default branch with `gh`.
+///
+/// Idempotent: when the branch already has an open pull request, it pushes any new commits and
+/// returns that one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentOpenPrParams {
+    /// The run. It must have finished and have a commit.
+    pub run_id: RunId,
+    /// The pull request's title, such as the thread's. wispd takes its first line, cut to 256
+    /// characters.
+    pub title: String,
+    /// Its description, at most 64 KiB. Absent means empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub body: Option<String>,
+}
+
+/// Result of `agent/openPr`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentOpenPrResult {
+    /// The pull request's web URL.
+    pub url: String,
 }
 
 #[cfg(test)]
