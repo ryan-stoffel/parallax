@@ -23,6 +23,13 @@ export interface WispBridge {
   setThemeSource(preference: ThemePreference): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
+  /** Whether `update` can run: the app runs under `pnpm dev`, from a checkout. */
+  updatable: boolean;
+  /**
+   * Fast-forwards the checkout to origin/develop and rebuilds what changed; the app then reloads
+   * itself. Resolves to one line for people, such as "Up to date" or why it failed.
+   */
+  update(): Promise<string>;
 
   /**
    * Names a new thread from its first prompt, with a model that runs on this computer. Resolves

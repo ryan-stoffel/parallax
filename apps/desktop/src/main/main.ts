@@ -10,6 +10,8 @@ import { fallbackName } from "./naming";
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
 const devServerUrl = app.isPackaged ? undefined : process.env["WISP_DEV_SERVER_URL"];
+// scripts/dev.mjs gives Electron an IPC channel, over which it runs the sidebar's Update.
+const updatable = process.send !== undefined;
 
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors;
@@ -28,6 +30,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // The preload reads it, so `window.wisp.updatable` is a plain value.
+      additionalArguments: updatable ? ["--wisp-updatable"] : [],
     },
   });
   win.once("ready-to-show", () => win.show());
@@ -51,6 +55,23 @@ app.on("web-contents-created", (_event, contents) => {
 });
 
 ipcMain.handle("wisp:version", () => app.getVersion());
+
+// Asks scripts/dev.mjs to pull develop and rebuild, and resolves to its one-line answer.
+ipcMain.handle(
+  "wisp:update",
+  () =>
+    new Promise<string>((resolve) => {
+      if (!process.send) return resolve("Update runs only under pnpm dev.");
+      const onMessage = (message: unknown) => {
+        const text = (message as { update?: unknown } | null)?.update;
+        if (typeof text !== "string") return;
+        process.off("message", onMessage);
+        resolve(text);
+      };
+      process.on("message", onMessage);
+      process.send("update");
+    }),
+);
 
 // Names a new thread and its branch from its first prompt (see namer.ts).
 const namer = createNamer(path.join(app.getPath("userData"), "models"));

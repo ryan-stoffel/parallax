@@ -2,6 +2,7 @@ import {
   ArchiveRestore,
   ArrowLeft,
   Bot,
+  ChartNoAxesColumn,
   Bug,
   Check,
   ChevronDown,
@@ -24,6 +25,7 @@ import {
   LoaderCircle,
   PanelLeft,
   Plus,
+  RefreshCw,
   Search,
   Server,
   Settings,
@@ -454,14 +456,46 @@ export function ThreadList({
       </dialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <button
-          type="button"
-          onClick={() => onOpenSettings("general")}
-          className={`${row} text-muted-foreground`}
-        >
-          <Settings className="size-4" />
-          Settings
-        </button>
+        <Footer onOpenSettings={onOpenSettings} />
+      </div>
+    </>
+  );
+}
+
+/** The footer's buttons: Settings, Usage (on the Providers page), and Update under `pnpm dev`. */
+function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
+  // "Updating…" while Update runs, then its answer until the next click.
+  const [update, setUpdate] = useState<string>();
+  const updating = update === "Updating…";
+  const runUpdate = async () => {
+    setUpdate("Updating…");
+    setUpdate(await window.wisp.update());
+  };
+  return (
+    <>
+      {update && (
+        <p role="status" className="px-2 py-1 text-[12px] text-muted-foreground">
+          {update}
+        </p>
+      )}
+      <div className="flex items-center gap-1">
+        <IconButton label="Settings" keys="," onClick={() => onOpenSettings("general")}>
+          <Settings />
+        </IconButton>
+        <IconButton label="Usage" onClick={() => onOpenSettings("providers")}>
+          <ChartNoAxesColumn />
+        </IconButton>
+        {window.wisp.updatable && (
+          <span className="ml-auto">
+            <IconButton
+              label="Update from develop"
+              disabled={updating}
+              onClick={() => void runUpdate()}
+            >
+              <RefreshCw className={updating ? "animate-spin" : undefined} />
+            </IconButton>
+          </span>
+        )}
       </div>
     </>
   );
