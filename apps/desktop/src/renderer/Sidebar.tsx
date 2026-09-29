@@ -177,11 +177,15 @@ export function ThreadList({
       }
     };
     if (card) open();
-    else cardTimer.current = window.setTimeout(open, cardDelay);
+    // A card that shows after the delay starts afresh; moving between rows keeps the set.
+    else
+      cardTimer.current = window.setTimeout(() => {
+        refreshed.current.clear();
+        open();
+      }, cardDelay);
   };
   const hideCard = () => {
     window.clearTimeout(cardTimer.current);
-    refreshed.current.clear();
     setCard(undefined);
   };
 
