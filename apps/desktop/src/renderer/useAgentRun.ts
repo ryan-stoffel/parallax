@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import type { RpcError } from "../preload/bridge";
 import type { AgentSendParams } from "../protocol/generated/protocol";
 import { applyEvents, emptyTranscript, type Transcript } from "./transcript";
 import { uuidv7 } from "./uuidv7";
@@ -12,9 +13,9 @@ export interface AgentRunView {
   sent: ReadonlyMap<string, string>;
   /**
    * Sends a message as the run's next turn, with a new model, effort, or access for the run if given.
-   * Resolves to an error message, or undefined.
+   * Resolves to wispd's error, or undefined.
    */
-  send: (text: string, options?: SendOptions) => Promise<string | undefined>;
+  send: (text: string, options?: SendOptions) => Promise<RpcError | undefined>;
   /** Stops the run. Resolves to an error message, or undefined. */
   cancel: () => Promise<string | undefined>;
 }
@@ -107,7 +108,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         next.delete(turnId);
         return next;
       });
-      return answer.error.message;
+      return answer.error;
     },
     [hostId, runId],
   );

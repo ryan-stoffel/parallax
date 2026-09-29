@@ -105,6 +105,43 @@ test("a tool call with an oversized input says so", () => {
   expect(document.querySelector("details")!.textContent).toContain("Too large to show (89 KB)");
 });
 
+test("a coordinator's wispd tool calls read as what they did, and to what", () => {
+  const summary = (name: string, input: Record<string, string>, subagent?: string) => {
+    row({ kind: "tool", key: "t", callId: "1", name, input, ...(subagent && { subagent }) });
+    const text = document.querySelector("summary")!.textContent;
+    act(() => unmount());
+    return text;
+  };
+  expect(summary("mcp__wispd__spawn_agent", { prompt: "Fix the login bug\nwith a test" })).toBe(
+    "Started a subagentFix the login bug",
+  );
+  expect(summary("mcp__wispd__agent_status", { runId: "r-1" }, "Fix the login bug")).toBe(
+    "Checked on a subagentFix the login bug",
+  );
+  expect(summary("mcp__wispd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
+    "Wrote shared contextplan.md",
+  );
+  // A wispd tool this app doesn't know keeps its name.
+  expect(summary("mcp__wispd__plan_approve", {})).toBe("mcp__wispd__plan_approve");
+});
+
+test("a coordinator's no-write stop lists the files it changed", () => {
+  row({
+    kind: "end",
+    key: "e",
+    outcome: {
+      status: "failed",
+      failure: "policyViolation",
+      message:
+        "the coordinator's no-write turn changed the working tree:\n M src/settings.tsx\n?? notes.md",
+    },
+  });
+  const alert = document.querySelector('[role="alert"]')!;
+  expect(alert.querySelector("p")!.textContent).toBe("Failed: stopped by wisp's safety check");
+  expect(alert.textContent).toContain("the coordinator's no-write turn changed the working tree:");
+  expect(alert.querySelector("pre")!.textContent).toBe(" M src/settings.tsx\n?? notes.md");
+});
+
 test("reasoning, checklists, and notices render quietly", () => {
   row({ kind: "reasoning", key: "r", text: "The build uses cargo." });
   expect(document.querySelector("summary")!.textContent).toBe("Thinking");

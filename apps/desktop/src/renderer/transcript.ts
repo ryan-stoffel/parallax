@@ -22,7 +22,10 @@ type ItemBody =
   /** `partial` while it is still arriving as `textDelta`s. */
   | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
   | { kind: "reasoning"; key: string; text: string }
-  /** `status` is absent until its result arrives; `name` is null for a result with no call. */
+  /**
+   * `status` is absent until its result arrives; `name` is null for a result with no call.
+   * `subagent` is the first line of the prompt of the subagent a coordinator's wispd tool names.
+   */
   | {
       kind: "tool";
       key: string;
@@ -31,6 +34,7 @@ type ItemBody =
       input?: JsonValue;
       status?: AgentToolStatus;
       output?: string;
+      subagent?: string;
     }
   | { kind: "todo"; key: string; items: AgentTodoItem[] }
   /** `turnId` marks a follow-up that never reached the agent. */
@@ -137,9 +141,15 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     case "reasoning":
       items.push({ kind: "reasoning", key, text: item.text });
       break;
-    case "toolCall":
-      items.push({ kind: "tool", key, callId: item.callId, name: item.name, input: item.input });
+    case "toolCall": {
+      const { callId, name, input } = item;
+      const runId = name?.startsWith(wispdTools)
+        ? (input as { runId?: unknown } | null | undefined)?.runId
+        : undefined;
+      const subagent = typeof runId === "string" ? subagentTitle(items, runId) : undefined;
+      items.push({ kind: "tool", key, callId, name, input, ...(subagent && { subagent }) });
       break;
+    }
     case "toolResult": {
       const i = items.findLastIndex((x) => x.kind === "tool" && x.callId === item.callId);
       const result = { status: item.status, output: item.output };
@@ -174,6 +184,30 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     }
     // sessionStarted and usage aren't shown.
   }
+}
+
+/** The prefix of a coordinator's wispd tools as Claude Code names them (0019), `mcp__wispd__spawn_agent`. */
+export const wispdTools = "mcp__wispd__";
+
+/**
+ * The first line of subagent `runId`'s prompt, from the newest earlier wispd tool answer that
+ * lists it: spawn_agent's, message_agent's, or cancel_agent's run, agent_status's `run`, or
+ * list_agents' `runs`.
+ */
+function subagentTitle(items: Item[], runId: string): string | undefined {
+  type Summary = { runId?: unknown; prompt?: unknown };
+  for (const x of items.toReversed()) {
+    if (x.kind !== "tool" || !x.name?.startsWith(wispdTools) || !x.output?.includes(runId))
+      continue;
+    try {
+      const answer = JSON.parse(x.output) as Summary & { run?: Summary; runs?: Summary[] };
+      const run = [answer, answer.run, ...(answer.runs ?? [])].find((r) => r?.runId === runId);
+      if (typeof run?.prompt === "string") return run.prompt.trim().split("\n")[0];
+    } catch {
+      // Not JSON, or cut short: an older answer may still have it.
+    }
+  }
+  return undefined;
 }
 
 /** A run of agent activity between its messages, collapsed to one row: thinking, tool calls, and checklists. */
@@ -248,7 +282,7 @@ export function accountLabel(accountId: string): string {
 const failures: Record<AgentFailureKind, string> = {
   notSignedIn: "not signed in",
   rateLimited: "rate limited",
-  policyViolation: "blocked by its sandbox",
+  policyViolation: "stopped by wisp's safety check",
   unexpectedApiKey: "found an unexpected API key",
   vendorError: "the provider returned an error",
   crashed: "the CLI crashed",
