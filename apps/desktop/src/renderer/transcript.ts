@@ -176,7 +176,7 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
   }
 }
 
-/** A turn's agent activity, collapsed to one row: thinking, tool calls, checklists, and narration. */
+/** A run of agent activity between its messages, collapsed to one row: thinking, tool calls, and checklists. */
 export interface Work {
   kind: "work";
   key: string;
@@ -187,10 +187,10 @@ export interface Work {
 }
 
 /**
- * Folds each run of agent activity into one `Work` row. The agent's closing messages, after its
- * last tool call or thought, stay out as the turn's answer, and so do notices after it. A notice
- * for a dropped follow-up, and other rows (user, end, and whatever the caller adds), split runs
- * and pass through.
+ * Folds each run of thinking, tool calls, and checklists into one `Work` row. The agent's messages
+ * are never folded: they split runs and pass through, so they stay in order and stream in place.
+ * So do a dropped follow-up's notice and other rows (user, end, and whatever the caller adds).
+ * Other notices fold, except those after a run's last activity.
  */
 export function groupWork<R extends { kind: string; at?: string }>(
   rows: readonly (Item | R)[],
@@ -198,7 +198,7 @@ export function groupWork<R extends { kind: string; at?: string }>(
   const out: (Item | R | Work)[] = [];
   let run: Item[] = [];
   const flush = (next?: { kind: string; at?: string }) => {
-    const last = run.findLastIndex((i) => i.kind !== "assistant" && i.kind !== "notice");
+    const last = run.findLastIndex((i) => i.kind !== "notice");
     if (last >= 0) {
       const items = run.slice(0, last + 1);
       out.push({
@@ -208,7 +208,8 @@ export function groupWork<R extends { kind: string; at?: string }>(
         startedAt: items[0]!.at,
         // A later follow-up's time would count the wait between turns as work.
         endedAt:
-          (run[last + 1] ?? (next?.kind === "end" ? next : undefined))?.at ?? items[last]!.at,
+          (run[last + 1] ?? (next?.kind === "assistant" || next?.kind === "end" ? next : undefined))
+            ?.at ?? items[last]!.at,
       });
     }
     out.push(...run.slice(last + 1));
@@ -216,7 +217,7 @@ export function groupWork<R extends { kind: string; at?: string }>(
   };
   for (const row of rows) {
     if (
-      ["assistant", "reasoning", "tool", "todo"].includes(row.kind) ||
+      ["reasoning", "tool", "todo"].includes(row.kind) ||
       (row.kind === "notice" && !(row as Item & { turnId?: string }).turnId)
     )
       run.push(row as Item);
