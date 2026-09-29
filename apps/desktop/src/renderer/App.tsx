@@ -6,11 +6,10 @@ import { AgentChat } from "./AgentChat";
 import { useConnection } from "./ConnectionStatus";
 import { NewThread } from "./NewThread";
 import { localId, useHosts } from "./hosts";
-import { projects } from "./placeholder";
 import { ProjectChat } from "./ProjectChat";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
-import { projectIcons, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
+import { ProjectIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
 import { groupOf, groupThreads, noRepo, useThreads } from "./threads";
 import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
@@ -66,13 +65,17 @@ export function App() {
   } else if (selection.kind === "new")
     group = groups.find((g) => g.id === selection.groupId) ?? group;
 
-  // The Project or repository crumb wears its sidebar icon.
+  // The open Project. Once its host is removed, the next host's list doesn't have it.
   const project =
-    selection.kind === "project" ? projects.find((p) => p.id === selection.projectId)! : undefined;
+    selection.kind === "project"
+      ? threads.state.projects.find((p) => p.id === selection.projectId)
+      : undefined;
+  if (selection.kind === "project" && !project) setSelection({ kind: "new" });
+
+  // The Project or repository crumb wears its sidebar icon.
   let crumbs: Crumb[];
   if (project) {
-    const { Icon, color } = projectIcons[project.icon];
-    crumbs = [{ label: host.name }, { label: project.name, icon: <Icon className={color} /> }];
+    crumbs = [{ label: host.name }, { label: project.name, icon: <ProjectIcon /> }];
   } else {
     const repo = { label: group.name, icon: group.id === noRepo ? <House /> : <Folder /> };
     const page =
@@ -150,7 +153,6 @@ export function App() {
               setHostId(id);
               setSelection({ kind: "new" });
             }}
-            projects={host.id === localId ? projects : []}
             selection={selection}
             onSelect={setSelection}
             onOpenSettings={openSettings}
@@ -231,7 +233,7 @@ export function App() {
                 }
               />
             ) : (
-              <ProjectChat project={project!} host={host} hosts={hosts} />
+              project && <ProjectChat project={project} />
             )}
           </>
         )}

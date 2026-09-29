@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type { RpcError, ThreadName } from "../preload/bridge";
-import type { AgentRun, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
+import type { AgentRun, Project, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import type { RunOptions } from "./models";
 import { uuidv7 } from "./uuidv7";
 
-/** A host's repo entries and normal threads (0017), and each thread's title and run. */
+/** A host's projects, repo entries, and normal threads (0017), and each thread's title and run. */
 export interface ThreadsState {
+  projects: Project[];
   repos: Repo[];
   threads: Thread[];
   /** By run id: the first line of the run's prompt, since a thread has no title of its own. */
@@ -19,10 +20,16 @@ export interface ThreadsState {
   runs: Readonly<Record<string, AgentRun>>;
 }
 
-export const emptyThreads: ThreadsState = { repos: [], threads: [], titles: {}, runs: {} };
+export const emptyThreads: ThreadsState = {
+  projects: [],
+  repos: [],
+  threads: [],
+  titles: {},
+  runs: {},
+};
 
 export type ThreadsAction =
-  | { type: "snapshot"; repos: Repo[]; threads: Thread[]; runs: AgentRun[] }
+  | { type: "snapshot"; projects: Project[]; repos: Repo[]; threads: Thread[]; runs: AgentRun[] }
   | { type: "runs"; runs: AgentRun[] }
   | { type: "event"; event: WispEvent };
 
@@ -31,6 +38,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
   switch (action.type) {
     case "snapshot":
       return {
+        projects: action.projects,
         repos: action.repos,
         threads: action.threads,
         titles: titlesOf(action.runs),
@@ -45,6 +53,8 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
     case "event": {
       const e = action.event;
       switch (e.kind) {
+        case "project.created":
+          return { ...state, projects: upsert(state.projects, e.project) };
         case "repo.added":
           return { ...state, repos: upsert(state.repos, e.repo) };
         case "thread.started":
@@ -152,11 +162,17 @@ export interface ThreadsView {
   remove: (thread: Thread) => Promise<string | undefined>;
   /** Lists a repo entry's runs again, so their status is current. Failures are ignored. */
   refresh: (repo: string) => void;
+  /**
+   * Creates a project on a repository's path. Reuse `id`, with the same name and path, to retry.
+   * Resolves to the project or an error message.
+   */
+  createProject: (id: string, name: string, repoPath: string) => Promise<Project | string>;
 }
 
 /**
- * A host's threads, kept live: `thread/list` and `agent/list` (for titles and runs), then host-level
- * events after the list's `seq`, starting over on `resync`. Loads only while `connected`.
+ * A host's threads and projects, kept live: `thread/list`, `agent/list` (for titles and runs), and
+ * `project/list`, then host-level events after the thread list's `seq`, starting over on `resync`.
+ * Loads only while `connected`.
  */
 export function useThreads(hostId: string, connected: boolean): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
@@ -165,7 +181,7 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
   const [shownHost, setShownHost] = useState(hostId);
   if (shownHost !== hostId) {
     setShownHost(hostId);
-    dispatch({ type: "snapshot", repos: [], threads: [], runs: [] });
+    dispatch({ type: "snapshot", projects: [], repos: [], threads: [], runs: [] });
     setError(undefined);
   }
   // The host shown now, so `refresh` drops a late answer from one the user has left.
@@ -187,7 +203,17 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
       const runs = await window.wisp.request(hostId, "agent/list", {});
       if (stopped) return;
       if ("error" in runs) return setError(runs.error.message);
-      dispatch({ type: "snapshot", ...list.result, runs: runs.result.runs });
+      // Also after the list, whose older `seq` the subscription starts from: a project it
+      // replays is already here, and applying it again changes nothing.
+      const projects = await window.wisp.request(hostId, "project/list", {});
+      if (stopped) return;
+      if ("error" in projects) return setError(projects.error.message);
+      dispatch({
+        type: "snapshot",
+        ...list.result,
+        projects: projects.result.projects,
+        runs: runs.result.runs,
+      });
       setError(undefined);
       const since = { after: list.result.seq, logId: list.logId };
       unsubscribe = window.wisp.subscribe(hostId, since, (message) => {
@@ -283,5 +309,18 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     [hostId],
   );
 
-  return { state, error, addRepo, start, archive, remove, refresh };
+  const createProject = useCallback(
+    async (id: string, name: string, repoPath: string) => {
+      const answer = await window.wisp.request(hostId, "project/create", { id, name, repoPath });
+      if ("error" in answer) return describeError(answer.error);
+      dispatch({
+        type: "event",
+        event: { kind: "project.created", project: answer.result.project },
+      });
+      return answer.result.project;
+    },
+    [hostId],
+  );
+
+  return { state, error, addRepo, start, archive, remove, refresh, createProject };
 }

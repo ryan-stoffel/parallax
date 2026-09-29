@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Bot,
   ChartNoAxesColumn,
-  Bug,
   Check,
   ChevronDown,
   ChevronRight,
@@ -11,11 +10,10 @@ import {
   CircleCheck,
   CirclePause,
   CircleSlash,
-  Code,
   Ellipsis,
   FileDiff,
-  Flame,
   Folder,
+  FolderKanban,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -30,7 +28,6 @@ import {
   Server,
   Settings,
   SquarePen,
-  User,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -39,6 +36,7 @@ import {
   useState,
   type ComponentType,
   type ReactNode,
+  type SVGAttributes,
   type SVGProps,
   type ToggleEvent,
 } from "react";
@@ -50,7 +48,6 @@ import { localId, type Host } from "./hosts";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
-import type { Project, ProjectIcon } from "./placeholder";
 import { groupOf, groupThreads, noRepo, type ThreadsView } from "./threads";
 import { accountLabel, statusLabel as runStatusLabel } from "./transcript";
 import { IconButton, menuItem, menuPanel, moveFocus, TopBar } from "./ui";
@@ -104,8 +101,6 @@ interface ThreadListProps {
   /** The open host, whose Projects and threads show under its row. */
   host: Host;
   onHostChange: (hostId: string) => void;
-  /** The open host's Projects. */
-  projects: Project[];
   selection: Selection;
   onSelect: (selection: Selection) => void;
   onOpenSettings: (section: SettingsSection, addHost?: boolean) => void;
@@ -114,14 +109,10 @@ interface ThreadListProps {
   onDelete: (thread: Thread) => Promise<string | undefined>;
 }
 
-// Glyph and color per ProjectIcon. -500 shades read on both themes.
-export const projectIcons: Record<ProjectIcon, { Icon: LucideIcon; color: string }> = {
-  code: { Icon: Code, color: "text-violet-500" },
-  flame: { Icon: Flame, color: "text-orange-500" },
-  search: { Icon: Search, color: "text-sky-500" },
-  bug: { Icon: Bug, color: "text-amber-600" },
-  user: { Icon: User, color: "text-rose-500" },
-};
+/** Every Project's icon, in the sidebar, the breadcrumb, and its chat. -500 reads on both themes. */
+export function ProjectIcon({ className = "" }: SVGAttributes<SVGSVGElement>) {
+  return <FolderKanban aria-hidden className={`text-violet-500 ${className}`} />;
+}
 
 // How long a pointer rests on a thread before its card shows. Moving to another thread while
 // one shows switches at once.
@@ -136,7 +127,6 @@ export function ThreadList({
   hosts,
   host,
   onHostChange,
-  projects,
   selection,
   onSelect,
   onOpenSettings,
@@ -161,7 +151,10 @@ export function ThreadList({
 
   const q = query.trim().toLowerCase();
   const matches = (text: string) => !q || text.toLowerCase().includes(q);
-  const shownProjects = projects.filter((p) => matches(p.name));
+  // Most recently active first, as threads are newest first.
+  const shownProjects = threads.state.projects
+    .filter((p) => matches(p.name))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const shownGroups = groups
     .map((g) => ({ ...g, threads: g.threads.filter((t) => matches(title(t))) }))
     .filter((g) => !q || g.threads.length > 0);
@@ -247,7 +240,6 @@ export function ThreadList({
           </header>
           <ul>
             {shownProjects.map((p) => {
-              const { Icon, color } = projectIcons[p.icon];
               const selected = selection.kind === "project" && selection.projectId === p.id;
               return (
                 <li key={p.id}>
@@ -257,9 +249,11 @@ export function ThreadList({
                     onClick={() => onSelect({ kind: "project", projectId: p.id })}
                     className={`${row} ${selected ? current : "text-foreground/80"}`}
                   >
-                    <Icon aria-hidden className={`size-4 shrink-0 ${color}`} />
+                    <ProjectIcon className="size-4 shrink-0" />
                     <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                    <span className="shrink-0 text-[11.5px] text-faint-foreground">{p.age}</span>
+                    <span className="shrink-0 text-[11.5px] text-faint-foreground">
+                      {age(p.updatedAt)}
+                    </span>
                   </button>
                 </li>
               );
@@ -412,7 +406,14 @@ export function ThreadList({
           left={card.left}
         />
       )}
-      <NewProjectDialog ref={newProject} repositories={threads.state.repos} />
+      <NewProjectDialog
+        ref={newProject}
+        repos={threads.state.repos}
+        local={host.id === localId}
+        addRepo={threads.addRepo}
+        create={threads.createProject}
+        onCreated={(project) => onSelect({ kind: "project", projectId: project.id })}
+      />
       <AddRepositoryDialog
         ref={addRepositoryDialog}
         local={host.id === localId}
