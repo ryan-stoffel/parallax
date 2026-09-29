@@ -71,6 +71,8 @@ export interface ComposerProps {
    * provider, since a session can't move to another CLI.
    */
   started?: Pick<AgentRun, "model" | "effort" | "permission">;
+  /** A no-write run, such as a Project's coordinator (0024): its access is fixed, so none is offered or sent. */
+  noWrite?: boolean;
   /** Why the model, effort, and access can't change right now, which turns them off. */
   optionsDisabled?: string;
 }
@@ -85,6 +87,7 @@ export function Composer({
   footer,
   backend,
   started,
+  noWrite,
   optionsDisabled,
 }: ComposerProps) {
   const [text, setText] = useState("");
@@ -98,6 +101,7 @@ export function Composer({
   const [pickedPermission, setPermission] = useState<AgentPermission>();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const run = backend === undefined ? undefined : backends[backend];
+  const permissions = noWrite ? [] : (run?.permissions ?? []);
   const runModels = models.filter((m) => m.provider === run?.provider);
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
@@ -113,7 +117,7 @@ export function Composer({
   const startedPermission = started?.permission ?? "edit";
   const effort = pickedEffort ?? startedEffort;
   const wanted = pickedPermission ?? startedPermission;
-  const permission = run?.permissions.includes(wanted) ? wanted : "edit";
+  const permission = permissions.includes(wanted) ? wanted : "edit";
   let options: RunOptions = {};
   if (run && started)
     options = {
@@ -121,7 +125,8 @@ export function Composer({
       ...(effort !== startedEffort && { effort }),
       ...(permission !== startedPermission && { permission }),
     };
-  else if (run) options = { ...(model && { model: model.id }), effort, permission };
+  else if (run)
+    options = { ...(model && { model: model.id }), effort, ...(!noWrite && { permission }) };
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
   const canSend = !!onSend && !disabledReason && text.trim() !== "";
@@ -226,14 +231,14 @@ export function Composer({
                 )}
                 <EffortMenu value={effort} onChange={setEffort} />
                 {/* One permission is no choice, so there's nothing to show. */}
-                {run.permissions.length > 1 && (
+                {permissions.length > 1 && (
                   <>
                     {divider}
                     <Picker
                       label="Access"
                       value={permission}
                       onChange={(value) => setPermission(value as AgentPermission)}
-                      options={run.permissions.map((p) => accessOptions[p])}
+                      options={permissions.map((p) => accessOptions[p])}
                       panelClassName="w-[25rem]"
                     />
                   </>

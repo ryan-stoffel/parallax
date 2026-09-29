@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type { RpcError, ThreadName } from "../preload/bridge";
-import type { AgentRun, Project, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  Project,
+  ProjectStartParams,
+  Repo,
+  Thread,
+  WispEvent,
+} from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import type { RunOptions } from "./models";
 import { uuidv7 } from "./uuidv7";
@@ -31,6 +38,8 @@ export const emptyThreads: ThreadsState = {
 export type ThreadsAction =
   | { type: "snapshot"; projects: Project[]; repos: Repo[]; threads: Thread[]; runs: AgentRun[] }
   | { type: "runs"; runs: AgentRun[] }
+  /** A Project's new coordinator, which no host-level event announces (0024). */
+  | { type: "coordinator"; run: AgentRun }
   | { type: "event"; event: WispEvent };
 
 /** Applies a snapshot, runs' titles, or a host-level event. Events are upserts, so a repeat is harmless. */
@@ -49,6 +58,13 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         ...state,
         titles: { ...state.titles, ...titlesOf(action.runs) },
         runs: { ...state.runs, ...byId(action.runs) },
+      };
+    case "coordinator":
+      return {
+        ...threadsReducer(state, { type: "runs", runs: [action.run] }),
+        projects: state.projects.map((p) =>
+          p.id === action.run.project ? { ...p, coordinator: action.run.id } : p,
+        ),
       };
     case "event": {
       const e = action.event;
@@ -170,7 +186,22 @@ export interface ThreadsView {
    * Resolves to the project or an error message.
    */
   createProject: (id: string, name: string, repoPath: string) => Promise<Project | string>;
+  /**
+   * Starts a Project's coordinator with `prompt`, or starts it over with a new `runId` (0024), then
+   * keeps it as the Project's. Reusing `runId` to retry is safe with any prompt or options: a
+   * failed `project/start` creates nothing, and one whose answer was lost shows up in
+   * `project/list` after a reconnect. Resolves to wispd's error, or undefined.
+   */
+  startCoordinator: (
+    project: string,
+    runId: string,
+    prompt: string,
+    options: CoordinatorOptions,
+  ) => Promise<RpcError | undefined>;
 }
+
+/** What a new coordinator runs on: its model, effort, and account (`project/start`'s). */
+export type CoordinatorOptions = Pick<ProjectStartParams, "model" | "effort" | "account">;
 
 /**
  * A host's threads and projects, kept live: `thread/list`, `agent/list` (for titles and runs), and
@@ -327,5 +358,30 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     [hostId],
   );
 
-  return { state, error, addRepo, start, archive, remove, refresh, createProject };
+  const startCoordinator = useCallback(
+    async (project: string, runId: string, prompt: string, options: CoordinatorOptions) => {
+      const answer = await window.wisp.request(hostId, "project/start", {
+        project,
+        runId,
+        prompt,
+        ...options,
+      });
+      if ("error" in answer) return answer.error;
+      if (shown.current === hostId) dispatch({ type: "coordinator", run: answer.result.run });
+      return undefined;
+    },
+    [hostId],
+  );
+
+  return {
+    state,
+    error,
+    addRepo,
+    start,
+    archive,
+    remove,
+    refresh,
+    createProject,
+    startCoordinator,
+  };
 }

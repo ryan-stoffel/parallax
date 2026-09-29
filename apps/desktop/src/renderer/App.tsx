@@ -234,7 +234,15 @@ export function App() {
                 }
               />
             ) : (
-              project && <ProjectChat project={project} />
+              project && (
+                <ProjectChat
+                  key={`${host.id}/${project.id}`}
+                  hostId={host.id}
+                  project={project}
+                  prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
+                  startCoordinator={threads.startCoordinator}
+                />
+              )
             )}
           </>
         )}
