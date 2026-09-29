@@ -1,4 +1,5 @@
-//! `project/list` and `project/create`.
+//! `project/list`, `project/create`, and `project/start`, which starts a project's coordinator
+//! behind the `coordinator` capability (0024).
 
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -6,11 +7,12 @@ use std::sync::Arc;
 use tracing::{info, warn};
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    ErrorKind, ProjectCreateParams, ProjectCreateResult, ProjectListParams, ProjectListResult,
-    WispEvent,
+    AgentRunResult, ErrorKind, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
+    ProjectListResult, ProjectStartParams, WispEvent,
 };
 
 use super::Context;
+use crate::agents::coordinator;
 use crate::repo;
 use crate::store::{self, store_error};
 
@@ -28,7 +30,10 @@ pub(crate) async fn list(
             let seq = log.head();
             let projects = rows
                 .into_iter()
-                .map(store::project)
+                .map(|row| {
+                    let coordinator = coordinator::coordinator_of(store, row.id)?;
+                    store::project(row, coordinator)
+                })
                 .collect::<Result<_, _>>()?;
             Ok(ProjectListResult { projects, seq })
         })
@@ -67,7 +72,8 @@ pub(crate) async fn create(
             let row = store
                 .create_project(id, &fields)
                 .map_err(|error| store_error(&error))?;
-            let project = store::project(row)?;
+            let coordinator = coordinator::coordinator_of(store, id)?;
+            let project = store::project(row, coordinator)?;
             if !existed {
                 let seq = log.append_blocking(
                     project.created_at,
@@ -86,6 +92,22 @@ pub(crate) async fn create(
             Ok(ProjectCreateResult { project })
         })
         .await
+}
+
+/// Starts the project's coordinator, detached from the request as `agent/start` is, so a dropped
+/// connection never leaves it half started.
+pub(crate) async fn start(
+    context: &Context,
+    params: ProjectStartParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    super::agent::check_text("prompt", &params.prompt)?;
+    let daemon = Arc::clone(&context.daemon);
+    let run = context
+        .daemon
+        .agents
+        .detached(coordinator::start(daemon, params))
+        .await?;
+    Ok(AgentRunResult { run })
 }
 
 /// The longest `name` wispd accepts, in bytes.

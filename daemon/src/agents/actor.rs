@@ -3,6 +3,10 @@
 //! It takes commands (`agent/send`, `agent/cancel`, `agent/accept`, `thread/delete`) and the run's
 //! backend events in one loop, so nothing about a run needs a lock, and events are logged in the
 //! order they happened.
+//!
+//! A project's coordinator (0024) differs in three places: it starts in the project's repository
+//! with wispd's tools and no sandbox, its working tree is checked after every turn (0004), and it
+//! is never committed.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,19 +23,19 @@ use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{AcceptId, AgentMerge};
 use wisp_protocol::{
     AccountChoice, AccountId, AgentFailureKind, AgentOutcome, AgentOutputItem, AgentRun,
-    DiffSummary, ErrorKind, ProjectId, RunId, TurnId, WispEvent,
+    CoordinatorThreadId, DiffSummary, ErrorKind, ProjectId, Role, RunId, TurnId, WispEvent,
 };
 use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, Worktree};
 
 use super::convert::{self, agent_run, item_bytes, option_name, option_value, output_item};
 use super::worker::{sandbox_path, worker_unavailable};
-use super::{Prepared, RunOptions, prepare, store, store_error};
+use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, Credential, Event, EventStream, FollowUp, ModelUsage, Outcome, Resume, Run,
-    RunRequest, SendError, ToolPolicy, Usage, WorkerSandbox,
+    AccountRef, CoordinatorTools, Credential, Event, EventStream, Failure, FailureKind, FollowUp,
+    ModelUsage, Outcome, Resume, Run, RunRequest, SendError, Usage, WorkerSandbox,
     run_temp::{self, RunTemp},
 };
-use crate::routing;
+use crate::routing::{self, TreeSnapshot};
 use crate::server::Daemon;
 
 /// How long transcript items wait to be sent together as one `agent.output` (0007).
@@ -86,9 +90,17 @@ impl Command {
 struct Live {
     run: Arc<dyn Run>,
     events: EventStream,
-    /// The run's temp folder (RYA-130), removed once the CLI has exited: `events` ends only
+    /// A worker's temp folder (RYA-130), removed once the CLI has exited: `events` ends only
     /// then.
-    temp: RunTemp,
+    temp: Option<RunTemp>,
+}
+
+/// What a run's CLI starts with besides its account and prompt, from [`Actor::launch`].
+struct Setup {
+    cwd: PathBuf,
+    sandbox: Option<WorkerSandbox>,
+    temp: Option<RunTemp>,
+    tools: Option<CoordinatorTools>,
 }
 
 #[derive(Default)]
@@ -112,6 +124,10 @@ pub(super) struct Actor {
     turns: HashMap<TurnId, String>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
+    /// A coordinator's repository, and its working tree as it was when the CLI started (0004).
+    tree: Option<(PathBuf, TreeSnapshot)>,
+    /// How a coordinator's turn broke its no-write policy, which ends its CLI's run.
+    violation: Option<Failure>,
     stopping: bool,
     /// Set once `thread/delete` removed the run: the actor stops, refusing what is still queued.
     deleted: bool,
@@ -143,6 +159,8 @@ impl Actor {
             batch: Batch::default(),
             turns,
             last_message,
+            tree: None,
+            violation: None,
             stopping: false,
             deleted: false,
         }
@@ -158,6 +176,11 @@ impl Actor {
 
     fn accepted(&self) -> bool {
         self.row.state.status == convert::ACCEPTED
+    }
+
+    /// Whether this is a project's coordinator (0024) rather than a worker or a thread.
+    fn is_coordinator(&self) -> bool {
+        self.row.fields.policy == convert::NO_WRITE
     }
 
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, shutdown: CancellationToken) {
@@ -386,6 +409,12 @@ impl Actor {
                 .permission
                 .filter(|&p| option_name(p) != fields.permission),
         };
+        if self.is_coordinator() && changes.permission.is_some() {
+            return Err(ErrorObject::wisp(
+                ErrorKind::UnsupportedOption,
+                "a project's coordinator never edits, so it takes no permission",
+            ));
+        }
         let changing = changes != RunOptions::default();
         if changing && self.live.is_some() {
             return Err(ErrorObject::wisp(
@@ -456,21 +485,26 @@ impl Actor {
                 format!("run {} can't be resumed: {why}", self.id),
             )
         };
-        let (prepared, _) = match prepare(&self.daemon, self.project, self.id, Some(account)).await
-        {
-            Ok(prepared) => prepared,
-            Err(error)
-                if error
-                    .wisp_data()
-                    .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
-            {
-                return Err(not_resumable(format!(
-                    "its session's account {} no longer exists",
-                    self.row.state.account_id
-                )));
-            }
-            Err(error) => return Err(error),
+        let role = if self.is_coordinator() {
+            Role::Coordinator
+        } else {
+            Role::Worker
         };
+        let (prepared, _) =
+            match prepare(&self.daemon, self.project, self.id, Some(account), role).await {
+                Ok(prepared) => prepared,
+                Err(error)
+                    if error
+                        .wisp_data()
+                        .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
+                {
+                    return Err(not_resumable(format!(
+                        "its session's account {} no longer exists",
+                        self.row.state.account_id
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
         let backend = prepared.resolved.backend().name();
         if backend != self.row.fields.backend {
             return Err(not_resumable(format!(
@@ -549,8 +583,8 @@ impl Actor {
     }
 
     /// Starts the run's CLI with `prompt` and records the result: `running`, or `failed` with
-    /// why. `paths` are the worktree's and the repository git folder's canonical paths, when the
-    /// caller already has them. Returns whether the CLI started.
+    /// why. `paths` are a worker's worktree's and repository git folder's canonical paths, when
+    /// the caller already has them. Returns whether the CLI started.
     pub async fn launch(
         &mut self,
         prepared: Prepared,
@@ -559,47 +593,39 @@ impl Actor {
         resume: Option<Resume>,
         paths: Option<(PathBuf, PathBuf)>,
     ) -> bool {
-        let paths = match paths {
-            Some(paths) => Ok(paths),
-            None => self.worker_paths().await,
-        };
-        let (cwd, git_common_dir) = match paths {
-            Ok(paths) => paths,
-            Err(error) => {
-                self.failed_to_start(error.message).await;
-                return false;
-            }
-        };
         let Prepared {
             resolved,
             accounts,
-            home,
-            data_dir,
-            context,
+            place,
         } = prepared;
-        let (temp, temp_path) = match self.run_temp() {
-            Ok(temp) => temp,
-            Err(error) => {
-                self.failed_to_start(error.message).await;
+        let setup = match place {
+            Place::Worker {
+                home,
+                data_dir,
+                context,
+            } => self.worker_setup(&home, &data_dir, &context, paths).await,
+            Place::Coordinator { repo } => self.coordinator_setup(repo).await,
+        };
+        let Setup {
+            cwd,
+            sandbox,
+            temp,
+            tools,
+        } = match setup {
+            Ok(setup) => setup,
+            Err(message) => {
+                self.failed_to_start(message).await;
                 return false;
             }
         };
-        let sandbox = WorkerSandbox::for_worktree(
-            &home,
-            &data_dir,
-            &cwd,
-            &git_common_dir,
-            &context,
-            &temp_path,
-        );
         let account_id = resolved.account_id();
         let request = RunRequest {
             run_id: self.id,
             turn_id,
             cwd,
             prompt,
-            policy: ToolPolicy::WorkspaceWrite,
-            sandbox: Some(sandbox),
+            policy: resolved.policy(),
+            sandbox,
             account: AccountRef {
                 id: account_id.clone(),
                 credential: Credential::Subscription { config_home: None },
@@ -608,7 +634,7 @@ impl Actor {
             model: self.row.fields.model.clone(),
             effort: self.row.fields.effort.as_deref().and_then(option_value),
             permission: self.row.fields.permission.as_deref().and_then(option_value),
-            coordinator_tools: None,
+            coordinator_tools: tools,
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
             Ok(started) => {
@@ -629,6 +655,86 @@ impl Actor {
                 false
             }
         }
+    }
+
+    /// A worker's worktree and sandbox, with a new temp folder for its CLI.
+    async fn worker_setup(
+        &self,
+        home: &Path,
+        data_dir: &Path,
+        context: &Path,
+        paths: Option<(PathBuf, PathBuf)>,
+    ) -> Result<Setup, String> {
+        let (cwd, git_common_dir) = match paths {
+            Some(paths) => paths,
+            None => self.worker_paths().await.map_err(|error| error.message)?,
+        };
+        let (temp, temp_path) = self.run_temp().map_err(|error| error.message)?;
+        let sandbox =
+            WorkerSandbox::for_worktree(home, data_dir, &cwd, &git_common_dir, context, &temp_path);
+        Ok(Setup {
+            cwd,
+            sandbox: Some(sandbox),
+            temp: Some(temp),
+            tools: None,
+        })
+    }
+
+    /// A coordinator's repository and its wisp tools, bound to its project and to its own thread
+    /// (0019), after a snapshot of the repository's working tree for [`Actor::check_tree`].
+    async fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
+        let before = routing::snapshot(&repo)
+            .await
+            .map_err(|error| format!("could not read the project's working tree: {error}"))?;
+        let program = std::env::current_exe()
+            .map_err(|error| format!("could not find wispd's own executable: {error}"))?;
+        let thread = self
+            .row
+            .fields
+            .coordinator_thread
+            .and_then(|id| CoordinatorThreadId::try_from(id).ok())
+            .ok_or_else(|| format!("coordinator run {} has no thread id", self.id))?;
+        let tools = CoordinatorTools {
+            program,
+            data_dir: self.daemon.data_dir.root().to_owned(),
+            project: self.project,
+            thread,
+        };
+        self.tree = Some((repo.clone(), before));
+        Ok(Setup {
+            cwd: repo,
+            sandbox: None,
+            temp: None,
+            tools: Some(tools),
+        })
+    }
+
+    /// 0004's second check on a coordinator's no-write policy, after each turn and when its CLI
+    /// exits: compares the repository's working tree with the snapshot taken before the CLI
+    /// started. A change stops the CLI and fails the run with the files that changed, and wispd
+    /// reverts nothing. Does nothing for any other run.
+    async fn check_tree(&mut self) {
+        let Some((repo, before)) = &self.tree else {
+            return;
+        };
+        if self.violation.is_some() {
+            return;
+        }
+        let failure = match routing::check(repo, before).await {
+            Ok(None) => return,
+            Ok(Some(failure)) => failure,
+            Err(error) => Failure {
+                failure: FailureKind::Internal,
+                message: format!("could not check the project's working tree: {error}"),
+                exit: None,
+                stderr_tail: None,
+            },
+        };
+        warn!(run = %self.id, message = %failure.message, "stopping a coordinator whose turn changed its working tree");
+        if let Some(live) = &self.live {
+            live.run.cancel();
+        }
+        self.violation = Some(failure);
     }
 
     /// A new temp folder for the run's CLI (RYA-130), a resumed run's too, and its canonical
@@ -712,6 +818,7 @@ impl Actor {
                 let outcome = outcome.clone();
                 self.record_usage(event).await;
                 self.clear_live();
+                self.check_tree().await;
                 self.finish(&outcome).await;
             }
             _ => {
@@ -730,6 +837,9 @@ impl Actor {
                             .map(|sent| convert::truncate(sent, convert::MAX_TEXT_ITEM_BYTES));
                     }
                     self.push(item).await;
+                }
+                if matches!(event, Event::TurnFinished { .. }) {
+                    self.check_tree().await;
                 }
             }
         }
@@ -759,10 +869,13 @@ impl Actor {
         }
     }
 
-    /// Records how a CLI process ended. Unless wispd stopped it, commits the worktree's changes
-    /// first, through #166's hardened commit, and reports the commit.
+    /// Records how a CLI process ended: as a coordinator's policy violation, if its turn broke
+    /// it. Unless wispd stopped it, commits a worker's changes first, through #166's hardened
+    /// commit, and reports the commit.
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
+        let violation = self.violation.take().map(Outcome::Failed);
+        let outcome = violation.as_ref().unwrap_or(outcome);
         if self.stopping && matches!(outcome, Outcome::Cancelled) {
             info!(run = %self.id, "an agent run was interrupted because wispd is stopping");
             self.append(WispEvent::AgentFinished {
@@ -775,7 +888,11 @@ impl Actor {
             return;
         }
         let (mut outcome, mut status, mut error) = convert::outcome(outcome);
-        let committed = self.commit().await;
+        let committed = if self.is_coordinator() {
+            Ok(None)
+        } else {
+            self.commit().await
+        };
         let diff = match committed {
             Ok(diff) => diff,
             Err(message) => {
@@ -1096,7 +1213,7 @@ mod tests {
         actor.live = Some(Live {
             run: Arc::new(NoopRun),
             events,
-            temp: crate::backend::run_temp::create(&daemon.data_dir).unwrap(),
+            temp: Some(crate::backend::run_temp::create(&daemon.data_dir).unwrap()),
         });
 
         let (commands, receiver) = mpsc::channel(4);

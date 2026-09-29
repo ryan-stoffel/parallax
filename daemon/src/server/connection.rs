@@ -536,6 +536,7 @@ mod tests {
                 name: "wisp".to_owned(),
                 repo_path: "/src/wisp".to_owned(),
                 branch: None,
+                coordinator: None,
                 created_at: Timestamp::now(),
                 updated_at: Timestamp::now(),
             };
@@ -681,6 +682,7 @@ mod tests {
                     name: name.to_owned(),
                     repo_path: "/src".to_owned(),
                     branch: None,
+                    coordinator: None,
                     created_at: Timestamp::now(),
                     updated_at: Timestamp::now(),
                 },

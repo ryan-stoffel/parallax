@@ -1,0 +1,96 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project/start",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "prompt": "Add a dark mode to the settings page.",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "run": {
+        "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "prompt": "Add a dark mode to the settings page.",
+        "policy": "noWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "coordinatorThread": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "model": "opus",
+        "effort": "high",
+        "createdAt": "2026-09-29T12:00:00Z",
+        "updatedAt": "2026-09-29T12:00:01Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "project/start",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "runId": "01a0d391-5a6b-7c8d-9e0f-1a2b3c4d5e6f",
+      "prompt": "Start over."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "error": {
+      "code": -32000,
+      "message": "project 01a0d349-6e00-7c9e-80e2-0426486a8cae already has a coordinator: run 01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "data": { "kind": "idConflict" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "project/list",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "projects": [
+        {
+          "id": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+          "name": "app",
+          "repoPath": "/Users/me/src/app",
+          "branch": "main",
+          "coordinator": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+          "createdAt": "2026-09-29T11:00:00Z",
+          "updatedAt": "2026-09-29T11:00:00Z"
+        }
+      ],
+      "seq": 12
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 13,
+      "time": "2026-09-29T12:02:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.finished",
+        "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "outcome": {
+          "status": "failed",
+          "failure": "policyViolation",
+          "message": "the coordinator's no-write turn changed the working tree:\n M src/settings.tsx"
+        }
+      }
+    }
+  }
+]

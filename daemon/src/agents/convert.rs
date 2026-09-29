@@ -56,6 +56,9 @@ pub(super) const ACCEPTED: &str = "accepted";
 /// The store's text for the only policy `agent/start` takes.
 pub(super) const WORKSPACE_WRITE: &str = "workspaceWrite";
 
+/// The store's text for a project coordinator's policy (0024).
+pub(crate) const NO_WRITE: &str = "noWrite";
+
 fn status(text: &str) -> AgentStatus {
     match text {
         STARTING => AgentStatus::Starting,
@@ -88,10 +91,10 @@ pub(crate) fn agent_run(
         id,
         project,
         prompt: row.fields.prompt.clone(),
-        policy: if row.fields.policy == WORKSPACE_WRITE {
-            AgentPolicy::WorkspaceWrite
-        } else {
-            AgentPolicy::Unknown
+        policy: match row.fields.policy.as_str() {
+            WORKSPACE_WRITE => AgentPolicy::WorkspaceWrite,
+            NO_WRITE => AgentPolicy::NoWrite,
+            _ => AgentPolicy::Unknown,
         },
         status: status(&state.status),
         backend: row.fields.backend.clone(),
