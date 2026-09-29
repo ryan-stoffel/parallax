@@ -158,22 +158,47 @@ fn unreadable_outside_home() -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// The runtime folders to deny: wispd's `$XDG_RUNTIME_DIR` when it is set and not empty, and
-/// `/run/user/<uid>`, where logind makes it and where tools look when the variable is unset, as it
-/// is for a worker (0014). A value that isn't absolute UTF-8 is kept as it is, so
-/// [`worker_sandbox`] refuses the run instead of leaving the folder readable.
+/// The runtime folders to deny:
+/// - wispd's `$XDG_RUNTIME_DIR`. A value that isn't absolute is ignored, as the XDG Base
+///   Directory spec says. An absolute one that isn't UTF-8 is kept, so [`worker_sandbox`] refuses
+///   the run instead of leaving the folder readable.
+/// - `/run/user/<uid>`, where logind makes it. Tools fall back to it when the variable is unset,
+///   as it is for a worker (0014).
+/// - `/run/containers/<uid>`, where Podman, Buildah, and Skopeo keep registry logins when the
+///   variable is unset (`containers/image`'s `defaultPerUIDPathFormat`).
 #[cfg(target_os = "linux")]
 fn runtime_dirs(xdg_runtime_dir: Option<std::ffi::OsString>, uid: u32) -> Vec<PathBuf> {
-    let standard = PathBuf::from(format!("/run/user/{uid}"));
     let mut dirs: Vec<PathBuf> = xdg_runtime_dir
-        .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
         .into_iter()
         .collect();
-    if !dirs.contains(&standard) {
-        dirs.push(standard);
+    for dir in [format!("/run/user/{uid}"), format!("/run/containers/{uid}")] {
+        let dir = PathBuf::from(dir);
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
     }
     dirs
+}
+
+/// The temp folder a worker's CLI uses: the `TMPDIR` it inherits from wispd (0014), or `/tmp`
+/// when that is unset or empty, as Node and Bun's `os.tmpdir()` pick it.
+fn worker_temp_dir(tmpdir: Option<std::ffi::OsString>) -> PathBuf {
+    tmpdir
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
+}
+
+/// The unreadable path of `sandbox` that `temp` is inside, if any. Claude Code puts its network
+/// proxy's sockets in the temp folder, so a deny over it cuts a worker's commands off the network
+/// (RYA-107). Allowing the folder instead would reopen what the deny hides.
+fn hiding_temp_dir<'a>(sandbox: &'a WorkerSandbox, temp: &Path) -> Option<&'a Path> {
+    sandbox
+        .unreadable
+        .iter()
+        .map(PathBuf::as_path)
+        .find(|denied| temp.starts_with(denied))
 }
 
 /// Characters the vendors' sandbox settings read as wildcards in a path. A path holding one would
@@ -241,7 +266,8 @@ impl WorkerSandbox {
 /// [`StartError::Invalid`] if a worker has no sandbox, which is how a caller that predates 0013
 /// is refused; if its sandbox has nothing unreadable; or if any of its paths, its cwd, or its
 /// account's configuration folder is relative, isn't valid UTF-8, or holds a character the
-/// vendors' settings read as a wildcard (`*`, `?`, `[`, `]`).
+/// vendors' settings read as a wildcard (`*`, `?`, `[`, `]`); or if the temp folder a worker
+/// inherits is inside one of its unreadable paths.
 pub fn worker_sandbox(request: &RunRequest) -> Result<Option<&WorkerSandbox>, StartError> {
     if request.policy == ToolPolicy::NoWrite {
         return Ok(None);
@@ -270,6 +296,16 @@ pub fn worker_sandbox(request: &RunRequest) -> Result<Option<&WorkerSandbox>, St
             path.display()
         )));
     }
+    let temp = worker_temp_dir(std::env::var_os("TMPDIR"));
+    if let Some(denied) = hiding_temp_dir(sandbox, &temp) {
+        return Err(StartError::Invalid(format!(
+            "the worker's temp folder {} is inside {}, which its commands may not read, so they \
+             would lose the sandbox's network proxy; set TMPDIR to a folder outside it (decision \
+             0013)",
+            temp.display(),
+            denied.display()
+        )));
+    }
     Ok(Some(sandbox))
 }
 
@@ -284,7 +320,10 @@ fn usable(path: &Path) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{WorkerSandbox, unreadable_in_home, unreadable_outside_home};
+    use super::{
+        WorkerSandbox, hiding_temp_dir, unreadable_in_home, unreadable_outside_home,
+        worker_temp_dir,
+    };
 
     #[test]
     fn a_worktree_sandbox_writes_the_context_and_hides_secrets_and_the_data_folder() {
@@ -322,30 +361,56 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn the_runtime_folder_is_denied_wherever_it_is_and_an_unusable_one_refused() {
+    fn the_runtime_folders_are_denied_wherever_the_variable_points() {
         use std::os::unix::ffi::OsStringExt;
 
         use super::{runtime_dirs, usable};
 
-        let standard = Path::new("/run/user/1000");
-        assert_eq!(runtime_dirs(None, 1000), [standard]);
-        assert_eq!(runtime_dirs(Some("".into()), 1000), [standard]);
+        let fallbacks = [
+            Path::new("/run/user/1000"),
+            Path::new("/run/containers/1000"),
+        ];
+        // Unset, empty, and relative values are ignored, as the XDG spec says.
+        for ignored in [None, Some("".into()), Some("run".into())] {
+            assert_eq!(runtime_dirs(ignored, 1000), fallbacks);
+        }
         assert_eq!(
             runtime_dirs(Some("/run/user/1000/".into()), 1000),
-            [standard]
+            fallbacks
         );
         assert_eq!(
             runtime_dirs(Some("/tmp/run".into()), 1000),
-            [Path::new("/tmp/run"), standard]
+            [Path::new("/tmp/run"), fallbacks[0], fallbacks[1]]
         );
         // Kept, so that `worker_sandbox` refuses the run.
-        for unusable in [
-            "run".into(),
-            std::ffi::OsString::from_vec(b"/run/\xff".to_vec()),
+        let not_utf8 = std::ffi::OsString::from_vec(b"/run/\xff".to_vec());
+        let dirs = runtime_dirs(Some(not_utf8), 1000);
+        assert!(!usable(&dirs[0]), "{dirs:?}");
+        assert_eq!(dirs[1..], fallbacks);
+    }
+
+    #[test]
+    fn a_temp_folder_inside_an_unreadable_path_is_found() {
+        let mut sandbox = WorkerSandbox::for_worktree(
+            Path::new("/home/u"),
+            Path::new("/home/u/.local/share/wisp"),
+            Path::new("/home/u/.local/share/wisp/worktrees/app-1a2b/run"),
+            Path::new("/home/u/src/app/.git"),
+            Path::new("/home/u/.local/share/wisp/context/p"),
+        );
+        sandbox.unreadable.push("/run/user/1000".into());
+        assert_eq!(worker_temp_dir(None), Path::new("/tmp"));
+        assert_eq!(worker_temp_dir(Some("".into())), Path::new("/tmp"));
+        for outside in [None, Some("/tmp/".into()), Some("/run/user/10000".into())] {
+            assert_eq!(hiding_temp_dir(&sandbox, &worker_temp_dir(outside)), None);
+        }
+        for (inside, denied) in [
+            ("/run/user/1000", "/run/user/1000"),
+            ("/run/user/1000/tmp", "/run/user/1000"),
+            ("/home/u/.local/share/wisp/tmp", "/home/u/.local/share/wisp"),
         ] {
-            let dirs = runtime_dirs(Some(unusable), 1000);
-            assert!(!usable(&dirs[0]), "{dirs:?}");
-            assert_eq!(dirs[1], standard);
+            let temp = worker_temp_dir(Some(inside.into()));
+            assert_eq!(hiding_temp_dir(&sandbox, &temp), Some(Path::new(denied)));
         }
     }
 
