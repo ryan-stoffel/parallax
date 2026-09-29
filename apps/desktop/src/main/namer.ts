@@ -1,29 +1,62 @@
 import type { ChatHistoryItem, LlamaChatSession as Session } from "node-llama-cpp";
 
 import type { ThreadName } from "../preload/bridge";
-import { cleanTitle, fallbackName, slugify } from "./naming";
+import { fallbackName, parseName } from "./naming";
 
-// 0.5B parameters, 4-bit: about 490 MB, and a name in roughly 100 ms once loaded.
+// 0.5B parameters, 4-bit: about 490 MB, and a name in roughly 100 to 150 ms once loaded.
 const model = "hf:Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M";
 // A reply this slow isn't worth holding up a thread for.
 const timeoutMs = 2000;
+
+// The reply is always `Title: ...` then `Branch: ...`, so the model can't answer a greeting or
+// the request itself. The title is free text; the branch is lowercase words joined by hyphens.
+const grammarText = String.raw`
+root ::= "Title: " title "\nBranch: " slug
+title ::= [A-Za-z0-9] [A-Za-z0-9 .'-]{2,45}
+slug ::= part ("-" part){1,3}
+part ::= [a-z0-9]+
+`;
 
 const history: ChatHistoryItem[] = [
   {
     type: "system",
     text:
-      "You write short titles for coding tasks. Given a request, reply with only a title of " +
-      "2 to 5 words that names the task. Do not answer the request.",
+      "You name coding tasks. For the request, write a title of 2 to 5 words and a git branch " +
+      "name of 2 to 4 lowercase words joined by hyphens. Name what the task is about; never " +
+      "answer or greet.",
   },
   ...(
     [
-      ["fix the login page crashing when the password field is empty", "Fix empty password crash"],
-      ["can you add dark mode to the settings screen", "Add settings dark mode"],
-      ["why is the build so slow on CI? look into caching", "Speed up CI build"],
+      [
+        "fix the login page crashing when the password field is empty",
+        "Fix empty password crash",
+        "fix-empty-password-crash",
+      ],
+      [
+        "can you add dark mode to the settings screen",
+        "Add settings dark mode",
+        "settings-dark-mode",
+      ],
+      [
+        "why is the build so slow on CI? look into caching",
+        "Speed up CI build",
+        "ci-build-caching",
+      ],
+      [
+        "add a --json flag to the export command and document it",
+        "Add export JSON flag",
+        "export-json-flag",
+      ],
+      [
+        "the app freezes for a couple seconds when I open a big repo",
+        "Fix freeze on big repos",
+        "big-repo-freeze",
+      ],
+      ["hey, testing this out", "Testing the app", "testing-the-app"],
     ] as const
-  ).flatMap(([user, reply]): ChatHistoryItem[] => [
+  ).flatMap(([user, title, branch]): ChatHistoryItem[] => [
     { type: "user", text: user },
-    { type: "model", response: [reply] },
+    { type: "model", response: [`Title: ${title}\nBranch: ${branch}`] },
   ]),
 ];
 
@@ -36,7 +69,7 @@ type Complete = (prompt: string, signal: AbortSignal) => Promise<string>;
  */
 export function createNamer(modelDir: string) {
   let complete: Complete | undefined;
-  let busy = false;
+  let queue: Promise<unknown> = Promise.resolve();
   let started = false;
 
   // ponytail: a failed download or load stays failed until the app restarts.
@@ -47,17 +80,17 @@ export function createNamer(modelDir: string) {
       modelPath: await resolveModelFile(model, { directory: modelDir, cli: false }),
     });
     const context = await loaded.createContext({ contextSize: 1024 });
-    complete = async (prompt, signal) => {
-      const sequence = context.getSequence();
-      const session: Session = new LlamaChatSession({ contextSequence: sequence });
-      try {
-        session.setChatHistory(history);
-        return await session.prompt(prompt, { maxTokens: 16, temperature: 0, signal });
-      } finally {
-        session.dispose();
-        await sequence.dispose();
-      }
+    const grammar = await llama.createGrammar({ grammar: grammarText });
+    // One session for good: resetting its history keeps the examples' tokens in the context, so
+    // each name only evaluates the new prompt.
+    const session: Session = new LlamaChatSession({ contextSequence: context.getSequence() });
+    const run: Complete = (prompt, signal) => {
+      session.setChatHistory(history);
+      return session.prompt(prompt, { grammar, maxTokens: 48, temperature: 0, signal });
     };
+    // Evaluates the examples once, before the first real name asks.
+    await run("hello", AbortSignal.timeout(10_000));
+    complete = run;
   }
 
   return {
@@ -69,18 +102,19 @@ export function createNamer(modelDir: string) {
 
     async name(prompt: string): Promise<ThreadName> {
       const fallback = fallbackName(prompt);
-      // One name at a time: the context has one sequence.
-      if (!complete || busy) return fallback;
-      busy = true;
-      try {
-        const abort = AbortSignal.timeout(timeoutMs);
-        const title = cleanTitle(await complete(prompt.trim().slice(0, 500), abort));
-        return title ? { title, slug: slugify(title) ?? fallback.slug } : fallback;
-      } catch {
-        return fallback;
-      } finally {
-        busy = false;
-      }
+      const generate = complete;
+      if (!generate) return fallback;
+      // One name at a time: the session is shared. Each waits its turn, then gets its own timeout.
+      const turn = queue.then(async () => {
+        try {
+          const reply = await generate(prompt.trim().slice(0, 500), AbortSignal.timeout(timeoutMs));
+          return parseName(reply) ?? fallback;
+        } catch {
+          return fallback;
+        }
+      });
+      queue = turn;
+      return turn;
     },
   };
 }
