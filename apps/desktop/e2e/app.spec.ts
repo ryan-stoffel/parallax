@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -151,4 +152,28 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
   // The sign-in's end ran accounts/refresh, which found the fake signed in.
   await expect(codex(/^CodexInstalledNo usage todaySigned in$/)).toBeVisible();
+});
+
+test("creates a project on a repository it adds, and opens it (RYA-166)", async () => {
+  const repo = path.join(mkdtempSync(path.join(tmpdir(), "wisp-e2e-repo-")), "ember");
+  mkdirSync(repo);
+  execFileSync("git", ["init", "-q", repo]);
+  // The native folder picker can't be driven, so it answers with the repository.
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+  }, repo);
+
+  // The sign-in test left Settings open.
+  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "New project" }).click();
+  const dialog = page.getByRole("dialog", { name: "Create Project" });
+  await dialog.getByRole("button", { name: /^Repository/ }).click();
+  await page.getByRole("menuitemradio", { name: "Add repository…" }).click();
+  await expect(dialog.getByRole("textbox", { name: "Name" })).toHaveValue("ember");
+  await dialog.getByRole("button", { name: "Create Project" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
+  const projects = page.getByRole("region", { name: "Projects" });
+  await expect(projects.getByRole("listitem")).toHaveText([/^ember/]);
 });

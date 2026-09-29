@@ -46,6 +46,7 @@ beforeEach(() => {
     "agent/list": () => ({
       result: { runs: [run(thread.id, "Fix the flaky test\nPlease.")], seq: 7 },
     }),
+    "project/list": () => ({ result: { projects: [], seq: 7 } }),
   };
   window.wisp = {
     platform: "darwin",
@@ -97,17 +98,18 @@ const heading = () => document.querySelector("h1")?.textContent;
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 
+// A main pane menu's option. The sidebar's Create Project dialog has a Repository menu too.
 async function choose(label: string, option: string) {
   const item = [
     ...document.querySelectorAll<HTMLElement>(
-      `[role="menu"][aria-label="${label}"] [role="menuitemradio"]`,
+      `main [role="menu"][aria-label="${label}"] [role="menuitemradio"]`,
     ),
   ].find((b) => b.textContent === option)!;
   await act(async () => item.click());
   await settle();
 }
 
-// A composer control by its label. The sidebar's New Project dialog has a model menu too.
+// A composer control by its label, in the main pane.
 const control = (label: string) => document.querySelector(`main [aria-label="${label}"]`);
 // Clicks the main pane's first menu item whose text starts with `text`.
 async function pick(text: string) {
