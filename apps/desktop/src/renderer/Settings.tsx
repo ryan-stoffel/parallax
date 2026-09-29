@@ -358,8 +358,10 @@ function HostAccounts({ host }: { host: Host }) {
 /** A detected CLI: its version and plan, and whether it's signed in, or where to install it. */
 function CliRow({ cli }: { cli: DetectedCli }) {
   const info = cliInfo[cli.cli];
+  // Plans come as the vendor writes them, such as Claude's "max".
+  const plan = cli.plan && cli.plan[0]!.toUpperCase() + cli.plan.slice(1);
   const details = cli.installed
-    ? [cli.version, cli.plan].filter(Boolean).join(" · ") || "Installed"
+    ? [cli.version, plan].filter(Boolean).join(" · ") || "Installed"
     : "Not installed";
   let status: ReactNode;
   if (!cli.installed)

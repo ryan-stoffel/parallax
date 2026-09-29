@@ -35,7 +35,7 @@ beforeEach(() => {
       result: {
         checkedAt: "2026-09-28T12:00:00Z",
         clis: [
-          { cli: "claude", installed: true, version: "2.1.281", plan: "Max", signedIn: true },
+          { cli: "claude", installed: true, version: "2.1.281", plan: "max", signedIn: true },
           { cli: "codex", installed: true, version: "0.156.1", signedIn: false },
           { cli: "cursor", installed: false },
         ],
