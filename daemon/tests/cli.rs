@@ -1,5 +1,9 @@
 use std::process::{Command, Output};
 
+#[cfg(unix)]
+#[path = "common/temp.rs"]
+mod temp;
+
 fn wispd(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_wispd"))
         .args(args)
@@ -66,10 +70,7 @@ fn an_unknown_log_level_is_a_usage_error() {
 #[cfg(target_os = "macos")]
 #[test]
 fn service_status_reports_a_fresh_label_as_absent() {
-    let temp = tempfile::Builder::new()
-        .prefix("wispd-cli-")
-        .tempdir_in("/tmp")
-        .expect("create a temp dir under /tmp");
+    let temp = temp::temp_dir();
     let data_dir = temp.path().to_str().expect("a UTF-8 temp path");
     let output = wispd(&[
         "service",
@@ -93,10 +94,7 @@ fn service_status_reports_a_fresh_label_as_absent() {
 #[cfg(target_os = "macos")]
 #[test]
 fn service_install_refuses_the_default_label_for_another_data_folder() {
-    let temp = tempfile::Builder::new()
-        .prefix("wispd-cli-")
-        .tempdir_in("/tmp")
-        .expect("create a temp dir under /tmp");
+    let temp = temp::temp_dir();
     let data_dir = temp.path().join("data");
     let output = Command::new(env!("CARGO_BIN_EXE_wispd"))
         .args(["service", "install", "--data-dir"])
@@ -129,10 +127,7 @@ fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
     use std::os::unix::fs::PermissionsExt;
 
     const LABEL: &str = "io.github.ryan-stoffel.wisp.wispd.cli-test";
-    let temp = tempfile::Builder::new()
-        .prefix("wispd-cli-")
-        .tempdir_in("/tmp")
-        .expect("create a temp dir under /tmp");
+    let temp = temp::temp_dir();
     let bin = temp.path().join("bin");
     let home = temp.path().join("home");
     let data = temp.path().join("data");
