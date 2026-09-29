@@ -67,6 +67,8 @@ fn request(cwd: &Path) -> RunRequest {
         turn_id: None,
         resume: None,
         model: None,
+        effort: None,
+        permission: None,
         coordinator_tools: None,
     }
 }

@@ -40,6 +40,8 @@ fn request(cwd: &Path) -> RunRequest {
         },
         resume: None,
         model: None,
+        effort: None,
+        permission: None,
         coordinator_tools: None,
     }
 }

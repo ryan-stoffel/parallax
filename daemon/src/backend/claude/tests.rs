@@ -13,10 +13,10 @@ use super::stream::{Step, Translator};
 use super::{ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
-    AccountRef, ApiKey, Backend, Credential, Event, EventStream, FailureKind, FollowUp,
-    LimitStatus, LimitWindow, ModelUsage, Outcome, Resume, RunId, RunRequest, SendError,
-    StartError, Started, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind,
-    WorkerSandbox,
+    AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, Credential, Event, EventStream,
+    FailureKind, FollowUp, LimitStatus, LimitWindow, ModelUsage, Outcome, Resume, RunId,
+    RunRequest, SendError, StartError, Started, TodoItem, TodoStatus, ToolPolicy, ToolStatus,
+    TurnId, Usage, WarningKind, WorkerSandbox,
 };
 use crate::paths::DataDir;
 
@@ -172,6 +172,8 @@ fn request(cwd: &Path) -> RunRequest {
         },
         resume: None,
         model: None,
+        effort: None,
+        permission: None,
         coordinator_tools: None,
     }
 }
@@ -358,17 +360,17 @@ fn worker_sandbox(cwd: &Path) -> WorkerSandbox {
     )
 }
 
-/// A worker's policy, sandbox, model, and second account reached the CLI.
+/// A worker's policy, sandbox, model, effort, and second account reached the CLI.
 fn assert_worker_invocation(fake: &Fake) {
     let argv = fake.argv();
     let cwd = fake.root().display().to_string();
     let mut expected: Vec<&str> = WORKSPACE_WRITE_ARGS.to_vec();
-    expected.push("--settings");
+    expected.extend(["--permission-mode", "acceptEdits", "--settings"]);
     assert_eq!(argv[6..6 + expected.len()], expected);
     assert_eq!(
         WORKSPACE_WRITE_ARGS.join(" "),
         "--restricted --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
-         TodoWrite --strict-mcp-config --permission-mode acceptEdits",
+         TodoWrite --strict-mcp-config",
         "0013's worker policy, exactly"
     );
     assert_eq!(WORKER_TOOL_LIST, WORKER_TOOLS.join(","));
@@ -428,7 +430,9 @@ fn assert_worker_invocation(fake: &Fake) {
             "--add-dir",
             "/Users/u/Library/Application Support/wisp/context/p",
             "--model",
-            "claude-sonnet-4-6"
+            "claude-sonnet-4-6",
+            "--effort",
+            "high",
         ]
     );
     for flag in [
@@ -476,6 +480,53 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
         list("/permissions/allow"),
         ["Bash", "WebFetch(domain:*)", "WebSearch"]
     );
+}
+
+/// RYA-97: a worker's permission picks only its mode, and its sandbox settings stay the same. A
+/// no-write run's mode is fixed (0004), so it takes no permission.
+#[test]
+fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox() {
+    let cwd = Path::new("/Users/u/wt");
+    let mut worker = request(cwd);
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(cwd));
+    let args = |permission| -> Vec<String> {
+        let request = RunRequest {
+            permission,
+            ..worker.clone()
+        };
+        super::arguments(&request)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect()
+    };
+    let after = |args: &[String], flag: &str| {
+        let at = args.iter().position(|arg| arg == flag).unwrap();
+        args[at + 1].clone()
+    };
+    let default = args(None);
+    let edit = args(Some(AgentPermission::Edit));
+    let plan = args(Some(AgentPermission::Plan));
+    assert_eq!(default, edit);
+    assert_eq!(after(&edit, "--permission-mode"), "acceptEdits");
+    assert_eq!(after(&plan, "--permission-mode"), "plan");
+    assert_eq!(after(&plan, "--settings"), after(&edit, "--settings"));
+    assert_eq!(
+        plan.iter()
+            .filter(|arg| *arg == "--permission-mode")
+            .count(),
+        1
+    );
+
+    let no_write = RunRequest {
+        permission: Some(AgentPermission::Edit),
+        ..request(cwd)
+    };
+    assert!(matches!(
+        super::arguments(&no_write),
+        Err(StartError::Invalid(_))
+    ));
 }
 
 #[test]
@@ -535,6 +586,7 @@ async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
     request.policy = ToolPolicy::WorkspaceWrite;
     request.sandbox = Some(worker_sandbox(&fake.root()));
     request.model = Some("claude-sonnet-4-6".into());
+    request.effort = Some(AgentEffort::High);
     request.account.credential = Credential::Subscription {
         config_home: Some("/tmp/claude-second-account".into()),
     };
@@ -1364,6 +1416,18 @@ fn a_worker_must_report_the_permission_mode_it_asked_for() {
         ("", true),
     ] {
         let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+        let steps = translator.line(init(mode).as_bytes());
+        let expected = refused.then_some(FailureKind::PolicyViolation);
+        assert_eq!(violation_kind(&steps), expected, "{mode}");
+    }
+    // A plan worker (RYA-97) must report plan mode, and scrub mode's "default" still fails it.
+    for (mode, refused) in [
+        (r#","permissionMode":"plan""#, false),
+        (r#","permissionMode":"acceptEdits""#, true),
+        (r#","permissionMode":"default""#, true),
+    ] {
+        let mut translator =
+            Translator::new(ToolPolicy::WorkspaceWrite, "none").with_permission_mode("plan");
         let steps = translator.line(init(mode).as_bytes());
         let expected = refused.then_some(FailureKind::PolicyViolation);
         assert_eq!(violation_kind(&steps), expected, "{mode}");

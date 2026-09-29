@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rustix::process::Signal;
@@ -17,14 +17,15 @@ use wisp_protocol::methods::{
     ThreadStart,
 };
 use wisp_protocol::{
-    AcceptId, AccountChoice, AgentAcceptParams, AgentEventsParams, AgentListParams,
-    AgentSendParams, AgentStatus, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    HostHealthParams, ProjectId, Provider, Repo, RepoAddParams, RepoId, RunId, ThreadArchiveParams,
-    ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams, TurnId, WispEvent,
+    AcceptId, AccountChoice, AgentAcceptParams, AgentEffort, AgentEventsParams, AgentListParams,
+    AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
+    EventsSubscribeParams, HostHealthParams, ProjectId, Provider, Repo, RepoAddParams, RepoId,
+    RunId, ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult,
+    ThreadStartParams, TurnId, WispEvent,
 };
-use wispd::backend::Event;
 use wispd::backend::fake::{FakeBackend, Script, Step};
 use wispd::backend::process::{CancelPolicy, Environment, Launcher};
+use wispd::backend::{Backend, Capabilities, Event, RunRequest, StartError, Started};
 use wispd::paths::DataDir;
 use wispd::routing::BackendRegistry;
 
@@ -53,24 +54,57 @@ fn real_repo(dir: &Path, name: &str) -> PathBuf {
     repo.canonicalize().unwrap()
 }
 
-fn fake(steps: Vec<Step>) -> BackendRegistry {
+fn fake_backend(steps: Vec<Step>) -> FakeBackend {
     let scratch = tempfile::tempdir().unwrap();
     let launcher = Launcher::new(
         DataDir::new(scratch.path()).unwrap(),
         Environment::inherited(),
     );
+    FakeBackend::new(launcher, Script { steps }).with_cancel_policy(CancelPolicy {
+        signal: Signal::INT,
+        group: false,
+        grace: Duration::from_millis(500),
+    })
+}
+
+fn fake(steps: Vec<Step>) -> BackendRegistry {
     let mut backends = BackendRegistry::new();
-    backends.register(
-        Provider::Anthropic,
-        Arc::new(
-            FakeBackend::new(launcher, Script { steps }).with_cancel_policy(CancelPolicy {
-                signal: Signal::INT,
-                group: false,
-                grace: Duration::from_millis(500),
-            }),
-        ),
-    );
+    backends.register(Provider::Anthropic, Arc::new(fake_backend(steps)));
     backends
+}
+
+/// A run's model, effort, and permission, as its backend got them.
+type Options = (Option<String>, Option<AgentEffort>, Option<AgentPermission>);
+
+/// The fake CLI as a backend that maps only `high` effort and the `plan` permission (RYA-97),
+/// and records each run's options.
+struct WithOptions {
+    fake: FakeBackend,
+    seen: Arc<Mutex<Vec<Options>>>,
+}
+
+impl Backend for WithOptions {
+    fn name(&self) -> &'static str {
+        self.fake.name()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.fake.capabilities()
+    }
+
+    fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        let options = (request.model.clone(), request.effort, request.permission);
+        self.seen.lock().unwrap().push(options);
+        self.fake.start(request)
+    }
+
+    fn efforts(&self) -> &'static [AgentEffort] {
+        &[AgentEffort::High]
+    }
+
+    fn permissions(&self) -> &'static [AgentPermission] {
+        &[AgentPermission::Plan]
+    }
 }
 
 fn editing() -> Vec<Step> {
@@ -111,6 +145,9 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
         }),
+        model: None,
+        effort: None,
+        permission: None,
     }
 }
 
@@ -679,4 +716,93 @@ async fn repo_entries_and_threads_refuse_what_they_cant_run() {
         .await
         .unwrap_err();
     assert_eq!(kind(&archive), ErrorKind::ThreadNotFound);
+}
+
+/// RYA-97: a thread's model, effort, and permission reach its backend when it starts and when it
+/// resumes, come back on its run, and count for `thread/start`'s idempotency. What the backend
+/// can't honor is refused before anything is made.
+#[tokio::test]
+async fn a_thread_keeps_its_model_effort_and_permission() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(WithOptions {
+            fake: fake_backend(editing()),
+            seen: Arc::clone(&seen),
+        }),
+    );
+    let host = Host::start(backends);
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+
+    let params = ThreadStartParams {
+        model: Some("opus".to_owned()),
+        effort: Some(AgentEffort::High),
+        permission: Some(AgentPermission::Plan),
+        ..start_params(Some(repo.id), "Plan the notes")
+    };
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    assert_eq!(started.run.model.as_deref(), Some("opus"));
+    assert_eq!(started.run.effort, Some(AgentEffort::High));
+    assert_eq!(started.run.permission, Some(AgentPermission::Plan));
+    runs.until(updated_to(AgentStatus::Completed)).await;
+
+    // The CLI has exited, so a message resumes the run, with the same options.
+    client
+        .call::<AgentSend>(AgentSendParams {
+            run_id: params.run_id,
+            turn_id: TurnId::generate(),
+            text: "And a summary".to_owned(),
+        })
+        .await
+        .unwrap();
+    runs.until(updated_to(AgentStatus::Completed)).await;
+    let options: Options = (
+        Some("opus".to_owned()),
+        Some(AgentEffort::High),
+        Some(AgentPermission::Plan),
+    );
+    assert_eq!(*seen.lock().unwrap(), [options.clone(), options]);
+
+    let retry = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    assert_eq!(retry.run.id, started.run.id);
+    let conflict = client
+        .call::<ThreadStart>(ThreadStartParams {
+            effort: None,
+            ..params
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
+
+    for refused in [
+        ThreadStartParams {
+            effort: Some(AgentEffort::Max),
+            ..start_params(None, "Anything")
+        },
+        ThreadStartParams {
+            permission: Some(AgentPermission::Edit),
+            ..start_params(None, "Anything")
+        },
+        ThreadStartParams {
+            model: Some("--dangerously-skip-permissions".to_owned()),
+            ..start_params(None, "Anything")
+        },
+    ] {
+        let run_id = refused.run_id;
+        let error = client.call::<ThreadStart>(refused).await.unwrap_err();
+        assert_eq!(kind(&error), ErrorKind::UnsupportedOption, "{error:?}");
+        let scratch = host.data().join("scratch").join(run_id.to_string());
+        assert!(!scratch.exists(), "no scratch repository is left behind");
+    }
+    assert_eq!(
+        client.list().await.threads.len(),
+        1,
+        "no other thread was made"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 2, "no other run started");
 }

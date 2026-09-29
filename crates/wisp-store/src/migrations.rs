@@ -230,6 +230,14 @@ const MIGRATIONS: &[Migration] = &[
         version: 12,
         sql: "ALTER TABLE worktrees ADD COLUMN base_dirty INTEGER NOT NULL DEFAULT 0;",
     },
+    // The model, effort, and permission a run asked for (RYA-97), each NULL for the CLI's
+    // default. Part of `agent/start`'s idempotent params, and passed again when a run resumes.
+    Migration {
+        version: 13,
+        sql: "ALTER TABLE runs ADD COLUMN model TEXT;
+        ALTER TABLE runs ADD COLUMN effort TEXT;
+        ALTER TABLE runs ADD COLUMN permission TEXT;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

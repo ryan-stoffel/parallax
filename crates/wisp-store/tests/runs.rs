@@ -16,6 +16,9 @@ fn fields(project_id: Uuid) -> RunFields {
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
         coordinator_thread: None,
+        model: Some("opus".to_owned()),
+        effort: Some("high".to_owned()),
+        permission: None,
     }
 }
 

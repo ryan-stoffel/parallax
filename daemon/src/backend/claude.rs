@@ -3,7 +3,8 @@
 //! # The command
 //!
 //! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json` in
-//! the run's cwd, plus the policy's flags, `--model`, and `--resume <session id>` (0004 [10]):
+//! the run's cwd, plus the policy's flags, `--model`, `--effort`, and `--resume <session id>`
+//! (0004 [10]):
 //!
 //! - **No-write** is exactly 0004's: [`NO_WRITE_ARGS`]. As a second check, a no-write run whose
 //!   `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
@@ -11,8 +12,9 @@
 //!   (0019): `--mcp-config` with only the `wispd mcp` server, and `--allowedTools` with exactly
 //!   [`crate::mcp::ALLOWED_TOOLS`], which `dontAsk` would otherwise deny. `--strict-mcp-config`
 //!   still keeps every other MCP server out, and those tools are all `system/init` may add.
-//! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then
-//!   [`worker_settings`] as `--settings`, then `--add-dir` for each writable folder:
+//! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
+//!   [`worker_permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
+//!   each writable folder:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
@@ -27,7 +29,8 @@
 //!
 //!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`],
 //!   reports a Claude Code older than [`WORKER_MIN_VERSION`], or reports a permission mode
-//!   other than [`WORKER_PERMISSION_MODE`], fails with [`FailureKind::PolicyViolation`].
+//!   other than the one it asked for ([`worker_permission_mode`]), fails with
+//!   [`FailureKind::PolicyViolation`].
 //!
 //!   Only macOS and Linux run workers, with the same settings. On Linux,
 //!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
@@ -101,9 +104,9 @@ use super::process::{
 };
 use super::sandbox::worker_sandbox;
 use super::{
-    Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, EventSink, FollowUp, Run,
-    RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
-    WorkerSandbox,
+    AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
+    EventSink, FollowUp, Run, RunHandle, RunId, RunRequest, SendError, StartError, Started,
+    ToolPolicy, TurnId, WorkerSandbox, check_argument,
 };
 use crate::mcp;
 
@@ -167,21 +170,35 @@ pub const WORKER_TOOL_LIST: &str =
 /// interface addresses aren't: 0013 records that gap.
 pub const WORKER_DENIED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "[::]"];
 
-/// The permission mode a worker asks for, and must then report in `system/init`. Claude Code
-/// forces `default` instead when [`SCRUB_ENV`] is on, so another mode there means the worker's
-/// own process runs in scrub mode, whatever `linux_sandbox::check_host` saw (RYA-118).
+/// The permission mode a worker asks for by default ([`worker_permission_mode`]). A worker must
+/// then report the mode it asked for in `system/init`. Claude Code forces `default` instead when
+/// [`SCRUB_ENV`] is on, so another mode there means the worker's own process runs in scrub mode,
+/// whatever `linux_sandbox::check_host` saw (RYA-118).
 pub const WORKER_PERMISSION_MODE: &str = "acceptEdits";
 
 /// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013). [`arguments`] adds the run's
-/// [`worker_settings`] and `--add-dir` folders after them.
+/// `--permission-mode` ([`worker_permission_mode`]), [`worker_settings`], and `--add-dir`
+/// folders after them.
 pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
     "--restricted",
     "--tools",
     WORKER_TOOL_LIST,
     "--strict-mcp-config",
-    "--permission-mode",
-    WORKER_PERMISSION_MODE,
 ];
+
+/// Every [`AgentEffort`] but the fallback: `--effort` takes them all. Claude Code downgrades
+/// `xhigh` on models that lack it, and only warns about a level it doesn't know, so wispd sends
+/// only these.
+const EFFORTS: &[AgentEffort] = &[
+    AgentEffort::Low,
+    AgentEffort::Medium,
+    AgentEffort::High,
+    AgentEffort::Xhigh,
+    AgentEffort::Max,
+];
+
+/// The worker permissions Claude Code maps, both inside the worker sandbox (0013).
+const PERMISSIONS: &[AgentPermission] = &[AgentPermission::Edit, AgentPermission::Plan];
 
 /// The oldest Claude Code that has every flag and setting a worker relies on: `--restricted`
 /// arrived in 2.1.248, the last of them (0013). An older CLI rejects the unknown flag, and a
@@ -280,14 +297,27 @@ impl ClaudeBackend {
 ///
 /// # Errors
 ///
-/// [`StartError::Invalid`] if the model or the resume id could be read as an option, or if a
-/// worker has no usable [`WorkerSandbox`].
+/// [`StartError::Invalid`] if the model or the resume id could be read as an option, if a
+/// worker has no usable [`WorkerSandbox`], or if a no-write run asks for a permission.
+/// [`StartError::Unsupported`] for an effort or permission this version doesn't know.
 pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     let policy = match request.policy {
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
+    match request.policy {
+        ToolPolicy::WorkspaceWrite => {
+            let mode = worker_permission_mode(request.permission)?;
+            args.extend(["--permission-mode".into(), mode.into()]);
+        }
+        ToolPolicy::NoWrite if request.permission.is_some() => {
+            return Err(StartError::Invalid(
+                "a no-write run takes no permission; its mode is fixed (0004)".into(),
+            ));
+        }
+        ToolPolicy::NoWrite => {}
+    }
     if let Some(tools) = &request.coordinator_tools {
         if request.policy != ToolPolicy::NoWrite {
             return Err(StartError::Invalid(
@@ -313,11 +343,14 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         }
     }
     if let Some(model) = &request.model {
-        check_value("model", model)?;
+        check_argument("model", model)?;
         args.extend(["--model".into(), model.into()]);
     }
+    if let Some(effort) = request.effort {
+        args.extend(["--effort".into(), effort_level(effort)?.into()]);
+    }
     if let Some(resume) = &request.resume {
-        check_value("resume id", &resume.session_id)?;
+        check_argument("resume id", &resume.session_id)?;
         args.extend(["--resume".into(), resume.session_id.clone().into()]);
     }
     Ok(args)
@@ -391,16 +424,39 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
         .collect()
 }
 
-fn check_value(what: &str, value: &str) -> Result<(), StartError> {
-    if value.is_empty()
-        || value.starts_with('-')
-        || value.chars().any(|c| c.is_control() || c.is_whitespace())
-    {
-        return Err(StartError::Invalid(format!(
-            "the {what} {value:?} is not a usable argument"
-        )));
+/// A worker's `--permission-mode` for `permission` (RYA-97): `acceptEdits` by default, or `plan`,
+/// whose file tools refuse to write. Neither loosens the worker sandbox (0013): its commands run
+/// in the same sandbox either way.
+///
+/// # Errors
+///
+/// [`StartError::Unsupported`] for a permission this version doesn't know.
+pub fn worker_permission_mode(
+    permission: Option<AgentPermission>,
+) -> Result<&'static str, StartError> {
+    match permission {
+        None | Some(AgentPermission::Edit) => Ok(WORKER_PERMISSION_MODE),
+        Some(AgentPermission::Plan) => Ok("plan"),
+        Some(AgentPermission::Unknown) => Err(StartError::Unsupported(
+            "Claude Code has no mode for this permission".into(),
+        )),
     }
-    Ok(())
+}
+
+/// `--effort`'s value for `effort`.
+fn effort_level(effort: AgentEffort) -> Result<&'static str, StartError> {
+    Ok(match effort {
+        AgentEffort::Low => "low",
+        AgentEffort::Medium => "medium",
+        AgentEffort::High => "high",
+        AgentEffort::Xhigh => "xhigh",
+        AgentEffort::Max => "max",
+        AgentEffort::Unknown => {
+            return Err(StartError::Unsupported(
+                "Claude Code has no such effort level".into(),
+            ));
+        }
+    })
 }
 
 /// The variables of `base` that no run gets: [`SCRUBBED_PREFIXES`] and [`SCRUBBED_VARS`].
@@ -459,6 +515,14 @@ impl Backend for ClaudeBackend {
         }
     }
 
+    fn efforts(&self) -> &'static [AgentEffort] {
+        EFFORTS
+    }
+
+    fn permissions(&self) -> &'static [AgentPermission] {
+        PERMISSIONS
+    }
+
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         if request.prompt.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
@@ -499,7 +563,8 @@ impl Backend for ClaudeBackend {
             switch,
             stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
-                .with_coordinator_tools(request.coordinator_tools.is_some()),
+                .with_coordinator_tools(request.coordinator_tools.is_some())
+                .with_permission_mode(worker_permission_mode(request.permission)?),
             turns: VecDeque::new(),
             violation: None,
         };

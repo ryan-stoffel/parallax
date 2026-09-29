@@ -7,8 +7,7 @@ mod common;
 
 use std::fs;
 
-use common::{run_worker, tool_result};
-use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
+use common::{run_worker, tool_result, worker_request};
 
 const KEY: &str = "sk-ant-wisp-test-key-never-send";
 /// A stand-in for the messaging token, in case Claude Code doesn't set its own.
@@ -51,23 +50,7 @@ async fn a_worker_can_run_bash_without_exposing_its_key() {
         ),
     ).unwrap();
 
-    let request = RunRequest {
-        run_id: RunId::generate(),
-        turn_id: None,
-        cwd: worktree.clone(),
-        prompt: "Run the probe.".into(),
-        policy: ToolPolicy::WorkspaceWrite,
-        sandbox: Some(WorkerSandbox::for_worktree(
-            &home, &data, &worktree, &git_dir, &context,
-        )),
-        account: AccountRef {
-            id: "test".into(),
-            credential: Credential::Subscription { config_home: None },
-        },
-        resume: None,
-        model: Some("claude-sonnet-4-6".into()),
-        coordinator_tools: None,
-    };
+    let request = worker_request(&home, &data, &worktree, &git_dir, &context);
     let (stdout, transcript) = run_worker(
         &claude,
         &request,

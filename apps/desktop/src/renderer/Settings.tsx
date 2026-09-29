@@ -1,17 +1,24 @@
-import { Monitor, Moon, Plus, Sun } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { ArrowUpRight, Monitor, Moon, Plus, Sun } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
-import type { ThemePreference } from "../preload/bridge";
+import type { RpcError, ThemePreference } from "../preload/bridge";
+import {
+  ErrorCodes,
+  type DetectedCli,
+  type KeyAccount,
+  type Provider,
+} from "../protocol/generated/protocol";
 import type { SettingsSection } from "./App";
+import { statusLabel, useConnection } from "./ConnectionStatus";
+import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
+import { uuidv7 } from "./uuidv7";
 
 const themeOptions: { value: ThemePreference; name: string; icon: ReactNode }[] = [
   { value: "system", name: "System", icon: <Monitor /> },
   { value: "light", name: "Wisp Light", icon: <Sun /> },
   { value: "dark", name: "Wisp Dark", icon: <Moon /> },
 ];
-
-const providers = ["Claude", "Codex"];
 
 interface SettingsProps {
   section: SettingsSection;
@@ -62,23 +69,7 @@ export function Settings({ section, addingHost, theme, onThemeChange }: Settings
         ) : section === "hosts" ? (
           <HostsSettings addingHost={addingHost} />
         ) : (
-          <>
-            <h1 className="mb-1.5 text-xl font-semibold">Providers</h1>
-            <p className="mb-6 text-[13px] text-muted-foreground">
-              The AI subscriptions your agents run on.
-            </p>
-            <Section title="Subscriptions">
-              {providers.map((name) => (
-                <div
-                  key={name}
-                  className="flex items-center justify-between border-border px-4 py-3.5 not-last:border-b"
-                >
-                  <span className="text-[13px] font-medium">{name}</span>
-                  <span className="text-[12.5px] text-muted-foreground">Not connected</span>
-                </div>
-              ))}
-            </Section>
-          </>
+          <ProvidersSettings />
         )}
       </div>
     </div>
@@ -223,10 +214,369 @@ function HostForm({ host, onDone }: { host?: Host; onDone: () => void }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** The vendor CLIs wispd detects (0004), by `CliKind`, and where each says how to install it. */
+const cliInfo: Record<string, { name: string; install: string }> = {
+  claude: { name: "Claude Code", install: "https://code.claude.com/docs/en/setup" },
+  codex: { name: "Codex", install: "https://learn.chatgpt.com/docs/codex/cli" },
+  cursor: { name: "Cursor", install: "https://cursor.com/docs/cli/installation" },
+};
+
+const providerNames: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  cursor: "Cursor",
+};
+/** The providers a key can be added for. Not Cursor: 0004 rules out `CURSOR_API_KEY` as a fallback. */
+const keyProviders: Provider[] = ["anthropic", "openai"];
+
+/**
+ * A failed accounts request, for people. A wispd without these methods is too old. A keychain
+ * failure shows wispd's message, which names the fix on that host's OS.
+ */
+function accountsError(error: RpcError): string {
+  if (error.code === ErrorCodes.MethodNotFound)
+    return "Update wispd on this host to manage its accounts here.";
+  if (error.data?.kind === "keychainUnavailable")
+    return `This host's keychain isn't available: ${error.message}.`;
+  return describeError(error);
+}
+
+/** Settings > Providers: each host's vendor CLIs and API keys. */
+function ProvidersSettings() {
+  const hosts = useHosts();
+  return (
+    <>
+      <h1 className="mb-1.5 text-xl font-semibold">Providers</h1>
+      <p className="mb-6 text-[13px] text-muted-foreground">
+        The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
+        API key as a fallback.
+      </p>
+      {hosts.map((h) => (
+        <HostAccounts key={h.id} host={h} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * One host's accounts: each CLI wispd detects there, then its API keys, which can be added and
+ * removed. Loads once the host is connected; Refresh probes the CLIs again.
+ */
+function HostAccounts({ host }: { host: Host }) {
+  const connection = useConnection(host.id);
+  const connected = connection?.status === "connected";
+  const [detected, setDetected] = useState<DetectedCli[]>();
+  const [keys, setKeys] = useState<KeyAccount[]>();
+  const [error, setError] = useState<string>();
+  const [checking, setChecking] = useState(false);
+  const [adding, setAdding] = useState(false);
+
+  // `accounts/list` may answer from wispd's cache; `accounts/refresh` always probes again. Keys
+  // are listed again too, since another client may have changed them, and shown as soon as they
+  // answer: the probe can take seconds, and a list held until then would undo an add or remove
+  // made meanwhile.
+  const load = useCallback(
+    async (method: "accounts/list" | "accounts/refresh") => {
+      setChecking(true);
+      const [clis, keyList] = await Promise.all([
+        window.wisp.request(host.id, method, {}),
+        window.wisp.request(host.id, "accounts/keys/list", {}).then((answer) => {
+          if ("result" in answer) setKeys(answer.result.accounts);
+          return answer;
+        }),
+      ]);
+      setChecking(false);
+      if ("result" in clis) setDetected(clis.result.clis);
+      const failed = "error" in clis ? clis.error : "error" in keyList ? keyList.error : undefined;
+      setError(failed && accountsError(failed));
+    },
+    [host.id],
+  );
+  useEffect(() => {
+    if (connected) void load("accounts/list");
+  }, [connected, load]);
+
+  const refresh = (
+    <button
+      type="button"
+      disabled={!connected || checking}
+      onClick={() => void load("accounts/refresh")}
+      className={`${quietButton} -my-1 disabled:opacity-50`}
+    >
+      Refresh
+    </button>
+  );
+
+  return (
+    <Section title={host.name} action={refresh}>
+      {!connected ? (
+        <p className={`${settingRow} text-muted-foreground`}>
+          {connection ? statusLabel(connection) : "Connecting…"}
+        </p>
+      ) : (
+        <>
+          {error && (
+            <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
+              {error}
+            </p>
+          )}
+          {!detected && !error && (
+            <p className={`${settingRow} text-muted-foreground`}>Checking…</p>
+          )}
+          {detected?.map((cli) => (
+            <CliRow key={cli.cli} cli={cli} />
+          ))}
+          {keys?.map((account) => (
+            <KeyRow
+              key={account.id}
+              hostId={host.id}
+              account={account}
+              onRemoved={() => setKeys((all) => all?.filter((k) => k.id !== account.id))}
+            />
+          ))}
+          {keys &&
+            (adding ? (
+              <KeyForm
+                hostId={host.id}
+                onDone={(account) => {
+                  setAdding(false);
+                  if (account) setKeys((all) => [...(all ?? []), account]);
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAdding(true)}
+                className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+              >
+                <Plus aria-hidden />
+                Add API key
+              </button>
+            ))}
+        </>
+      )}
+    </Section>
+  );
+}
+
+/** A detected CLI: its version and plan, and whether it's signed in, or where to install it. */
+function CliRow({ cli }: { cli: DetectedCli }) {
+  const info = cliInfo[cli.cli];
+  // Plans come as the vendor writes them, such as Claude's "max".
+  const plan = cli.plan && cli.plan[0]!.toUpperCase() + cli.plan.slice(1);
+  const details = cli.installed
+    ? [cli.version, plan].filter(Boolean).join(" · ") || "Installed"
+    : "Not installed";
+  let status: ReactNode;
+  if (!cli.installed)
+    status = info && (
+      <a
+        href={info.install}
+        target="_blank"
+        rel="noreferrer"
+        className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
+      >
+        Install
+        <ArrowUpRight aria-hidden />
+      </a>
+    );
+  else if (cli.signedIn === true) status = <span className="text-foreground">Signed in</span>;
+  else if (cli.signedIn === false) status = "Not signed in";
+  // wispd couldn't tell; its note says why.
+  else status = <span title={cli.note}>Sign-in unknown</span>;
+
+  return (
+    <div className={settingRow}>
+      <div className="min-w-0">
+        <span className="block truncate text-[13px] font-medium">{info?.name ?? cli.cli}</span>
+        <span className="block truncate text-[12.5px] text-muted-foreground">{details}</span>
+      </div>
+      <span className="shrink-0 text-[12.5px] text-muted-foreground">{status}</span>
+    </div>
+  );
+}
+
+/** A stored API key, shown only masked. Remove asks first, in place. */
+function KeyRow({
+  hostId,
+  account,
+  onRemoved,
+}: {
+  hostId: string;
+  account: KeyAccount;
+  onRemoved: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<string>();
+  const remove = async () => {
+    setRemoving(true);
+    const answer = await window.wisp.request(hostId, "accounts/keys/remove", { id: account.id });
+    setRemoving(false);
+    // Already gone, such as removed by another client: that's what Remove wanted.
+    if ("error" in answer && answer.error.data?.kind !== "accountNotFound")
+      setError(accountsError(answer.error));
+    else onRemoved();
+  };
+
+  return (
+    <div className={settingRow}>
+      <div className="min-w-0">
+        <span className="block truncate text-[13px] font-medium">{account.label}</span>
+        <span className="block truncate text-[12.5px] text-muted-foreground">
+          {confirming
+            ? "Remove this key? wisp deletes it from the host's keychain."
+            : `${providerNames[account.provider] ?? account.provider} API key · ${account.maskedKey}`}
+        </span>
+        {error && (
+          <span role="alert" className="block text-[12.5px] text-danger">
+            {error}
+          </span>
+        )}
+      </div>
+      {/* Cancel takes Remove's place and focus, so a double click or a second Enter can't remove. */}
+      <div className="flex shrink-0 gap-1">
+        {confirming ? (
+          <>
+            <button
+              type="button"
+              disabled={removing}
+              onClick={() => void remove()}
+              className="rounded-md bg-red-600 px-2.5 py-1 text-[12.5px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
+            >
+              Remove
+            </button>
+            <button
+              type="button"
+              autoFocus
+              className={quietButton}
+              onClick={() => setConfirming(false)}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button type="button" className={quietButton} onClick={() => setConfirming(true)}>
+            Remove
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Adds an API key on a host. The key is read from its field once, then the field is cleared:
+ * wispd keeps it in the host's keychain and only ever answers with its masked form. `onDone`
+ * gets the new account, or nothing when cancelled.
+ */
+function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAccount) => void }) {
+  // One id while the form is open, so sending it again can't store the key twice (0007).
+  const [id] = useState(uuidv7);
+  const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const save = async (form: HTMLFormElement) => {
+    const data = new FormData(form);
+    const keyField = form.elements.namedItem("key") as HTMLInputElement;
+    const params = {
+      id,
+      provider: data.get("provider") as Provider,
+      label: data.get("label") as string,
+      key: keyField.value,
+    };
+    keyField.value = "";
+    setSaving(true);
+    const answer = await window.wisp.request(hostId, "accounts/keys/add", params);
+    setSaving(false);
+    if ("error" in answer) setError(accountsError(answer.error));
+    else onDone(answer.result.account);
+  };
+
+  return (
+    <form
+      aria-label="Add API key"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save(e.currentTarget);
+      }}
+      className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
+    >
+      <label className="text-[12.5px] text-muted-foreground">
+        Provider
+        <select name="provider" className={field}>
+          {keyProviders.map((p) => (
+            <option key={p} value={p}>
+              {providerNames[p]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="text-[12.5px] text-muted-foreground">
+        Label
+        {/* Within wispd's limits (a label with a non-space, of at most 256 bytes, and a key of at
+            least 20), so it never answers invalidParams. */}
+        <input
+          name="label"
+          required
+          pattern=".*\S.*"
+          title="A label can't be only spaces."
+          maxLength={64}
+          placeholder="Work"
+          className={field}
+        />
+      </label>
+      <label className="text-[12.5px] text-muted-foreground">
+        API key
+        <input
+          name="key"
+          type="password"
+          required
+          minLength={20}
+          autoComplete="off"
+          spellCheck={false}
+          className={field}
+        />
+        <span className="mt-1 block text-faint-foreground">
+          Kept in the host's keychain. wisp never shows it again.
+        </span>
+      </label>
+      {error && (
+        <p role="alert" className="text-[12.5px] text-danger">
+          {error}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => onDone()} className={quietButton}>
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+        >
+          Add key
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** A titled card of settings rows. `action` sits at the end of the title's line. */
+function Section({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section aria-label={title} className="mb-8">
-      <h2 className="mb-2 text-[12.5px] font-medium text-muted-foreground">{title}</h2>
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <h2 className="text-[12.5px] font-medium text-muted-foreground">{title}</h2>
+        {action}
+      </div>
       <div className="rounded-xl border border-border bg-surface">{children}</div>
     </section>
   );
