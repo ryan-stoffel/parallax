@@ -9,6 +9,7 @@
 
 mod agents;
 mod context;
+mod coordinator;
 mod events;
 mod handshake;
 mod keys;

@@ -1,6 +1,6 @@
 # 0019: The coordinator's wisp tools are `wispd mcp`, bound to one project and thread
 
-- Status: accepted
+- Status: accepted; the coordinator that runs with these tools, and the tools' skipping its own run, are in [0024](0024-coordinator-chat.md)
 - Date: 2026-09-26
 - Issue: #195
 

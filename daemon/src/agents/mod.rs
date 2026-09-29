@@ -13,9 +13,13 @@
 //! vendor session in the same worktree. When wispd stops, running CLIs are cancelled and their
 //! runs recorded `interrupted`; a run still `starting` or `running` in the store when wispd
 //! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`.
+//!
+//! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
+//! no worktree; the same actor runs it.
 
 mod actor;
 mod convert;
+pub(crate) mod coordinator;
 pub(crate) mod review;
 pub(crate) mod worker;
 
@@ -134,13 +138,23 @@ impl std::fmt::Debug for Agents {
     }
 }
 
-/// What starting a worker's CLI needs, from [`prepare`].
+/// What starting a run's CLI needs, from [`prepare`].
 pub(super) struct Prepared {
     resolved: Resolved,
     accounts: StoredKeyAccounts,
-    home: PathBuf,
-    data_dir: PathBuf,
-    context: PathBuf,
+    place: Place,
+}
+
+/// Where a run's CLI starts, and what that needs.
+pub(super) enum Place {
+    /// A worker, in its worktree, inside the worker sandbox (0013), which needs these folders.
+    Worker {
+        home: PathBuf,
+        data_dir: PathBuf,
+        context: PathBuf,
+    },
+    /// A project's coordinator, in the project's repository itself, with no sandbox (0024).
+    Coordinator { repo: PathBuf },
 }
 
 impl Agents {
@@ -250,12 +264,14 @@ fn requested_account(account: Option<&AccountChoice>) -> Option<String> {
 }
 
 /// The project's repository, the routing inputs, and the paths run `run` of `project` needs,
-/// checked: everything that can refuse a worker before anything is created.
+/// checked: everything that can refuse a worker, or a coordinator when `role` is one, before
+/// anything is created.
 pub(super) async fn prepare(
     daemon: &Arc<Daemon>,
     project: ProjectId,
     run: RunId,
     requested: Option<AccountChoice>,
+    role: Role,
 ) -> Result<(Prepared, String), ErrorObject> {
     let (repo_path, context_scope, defaults, accounts) = store(daemon, move |db| {
         let repo_path = crate::threads::scope_path(db, project)?;
@@ -278,15 +294,31 @@ pub(super) async fn prepare(
         coordinator: defaults.coordinator,
         worker: defaults.worker,
     };
+    let policy = match role {
+        Role::Coordinator => ToolPolicy::NoWrite,
+        Role::Worker => ToolPolicy::WorkspaceWrite,
+    };
     let resolved = routing::resolve(
         &daemon.agents.backends,
         &accounts,
         &defaults,
-        Role::Worker,
+        role,
         requested,
-        ToolPolicy::WorkspaceWrite,
+        policy,
     )
     .map_err(|error| routing_error(&error))?;
+    if role == Role::Coordinator {
+        coordinator::check_backend(resolved.backend())?;
+        let place = Place::Coordinator {
+            repo: PathBuf::from(&repo_path),
+        };
+        let prepared = Prepared {
+            resolved,
+            accounts,
+            place,
+        };
+        return Ok((prepared, repo_path));
+    }
     worker::check_backend(resolved.backend())?;
     if let Some(cli) = worker::cli_of(resolved.backend()) {
         // Only this CLI's status: a full probe also waits on the slowest of the others.
@@ -313,9 +345,11 @@ pub(super) async fn prepare(
     let prepared = Prepared {
         resolved,
         accounts,
-        home,
-        data_dir,
-        context,
+        place: Place::Worker {
+            home,
+            data_dir,
+            context,
+        },
     };
     Ok((prepared, repo_path))
 }
@@ -364,10 +398,13 @@ impl RunOptions {
 
 fn routing_error(error: &RoutingError) -> ErrorObject {
     match error {
-        RoutingError::NoAccount { .. } => ErrorObject::wisp(
+        &RoutingError::NoAccount { role } => ErrorObject::wisp(
             ErrorKind::NoDefaultAccount,
-            "no account was named, and the worker role has no default; set one with \
-             accounts/defaults/set",
+            format!(
+                "no account was named, and the {} role has no default; set one with \
+                 accounts/defaults/set",
+                crate::store::role_text(role)
+            ),
         ),
         &RoutingError::UnknownKeyAccount { id } => ErrorObject::wisp(
             ErrorKind::AccountNotFound,
@@ -608,7 +645,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         };
         return Ok(CreatedRun { run, thread: row });
     }
-    let (prepared, scope_path) = prepare(&daemon, project, run_id, account).await?;
+    let (prepared, scope_path) = prepare(&daemon, project, run_id, account, Role::Worker).await?;
     options.check(prepared.resolved.backend())?;
     let repo_path = match thread.as_ref().and_then(|thread| thread.scratch.clone()) {
         Some(scratch) => scratch.to_string_lossy().into_owned(),
@@ -652,14 +689,16 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
 
     // A run just created here has no sent turns yet.
     let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+    let Place::Worker { context, .. } = &prepared.place else {
+        return Err(ErrorObject::internal_error(
+            "a worker was prepared as a coordinator",
+        ));
+    };
     let task = match &thread {
-        Some(thread) => worker::thread_prompt(
-            &prompt,
-            &worktree_path,
-            &prepared.context,
-            thread.scratch.is_some(),
-        ),
-        None => worker::worker_prompt(&prompt, &worktree_path, &prepared.context),
+        Some(thread) => {
+            worker::thread_prompt(&prompt, &worktree_path, context, thread.scratch.is_some())
+        }
+        None => worker::worker_prompt(&prompt, &worktree_path, context),
     };
     actor
         .launch(
@@ -711,7 +750,11 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| run_not_found(id))?;
         let worktree = db.get_worktree(id.into()).map_err(|e| store_error(&e))?;
-        if worktree.is_none() && row.state.status != convert::ACCEPTED {
+        // Only an accepted run has lost its worktree, and a coordinator never had one (0024).
+        if worktree.is_none()
+            && row.state.status != convert::ACCEPTED
+            && row.fields.policy != convert::NO_WRITE
+        {
             return Err(ErrorObject::internal_error(format!(
                 "run {id} has no recorded worktree"
             )));

@@ -2,8 +2,8 @@
 //! table so every params and result type is the protocol's own.
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
-//! `coordinator`; #110 `threads`: `thread.rs`), and `host.rs` advertises the capability in
-//! `initialize`.
+//! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`), and `host.rs`
+//! advertises the capability in `initialize`.
 
 mod accounts;
 mod agent;
@@ -27,7 +27,7 @@ use wisp_protocol::methods::{
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
     AgentEvents, AgentFile, AgentList, AgentRequestChanges, AgentSend, AgentStart, ContextList,
     ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
-    Initialize, ProjectCreate, ProjectList, RequestMethod, UsageGet, UsageHistory,
+    Initialize, ProjectCreate, ProjectList, ProjectStart, RequestMethod, UsageGet, UsageHistory,
 };
 use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
@@ -78,6 +78,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         }
         ProjectCreate::NAME => {
             handle::<ProjectCreate, _, _>(&request, |p| project::create(&context, p)).await
+        }
+        ProjectStart::NAME => {
+            handle::<ProjectStart, _, _>(&request, |p| project::start(&context, p)).await
         }
         AccountsList::NAME => {
             handle::<AccountsList, _, _>(&request, |p| accounts::list(&context, p)).await

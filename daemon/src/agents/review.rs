@@ -34,6 +34,11 @@ async fn reviewable(daemon: &Arc<Daemon>, id: RunId) -> Result<(RunRow, Worktree
         return Err(run_accepted(id));
     }
     let Some(worktree) = worktree else {
+        if row.fields.policy == convert::NO_WRITE {
+            return Err(ErrorObject::invalid_params(format!(
+                "run {id} is a project's coordinator, which changes no files to review"
+            )));
+        }
         return Err(ErrorObject::internal_error(format!(
             "run {id} has no recorded worktree"
         )));

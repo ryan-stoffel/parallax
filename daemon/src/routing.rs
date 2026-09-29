@@ -12,16 +12,16 @@
 //!
 //! # What owns calling this, and how
 //!
-//! #156's runner (`crate::agents`) calls `resolve` and `start` for workers; nothing calls
-//! `snapshot` or `check` yet. Who owns what (see #119's decision record, 0012):
+//! #156's runner (`crate::agents`) calls `resolve` and `start` for workers, and for a project's
+//! coordinator (RYA-41, 0024), whose turns it also checks with `snapshot` and `check`. Who owns
+//! what (see #119's decision record, 0012):
 //!
 //! - #156 (the M3 runner, workers only) calls `resolve` and `start` for a worker's
 //!   `workspace-write` run, maps [`Event::AccountFallback`] to an `agent/*` notification, and
 //!   charges usage after it to `to_account`, not the account the run started on.
-//! - Whichever M4 issue runs a coordinator's turn (0012, since M4's task issues don't exist yet)
-//!   calls `resolve` and `start` the same way, and additionally calls [`snapshot`] before the
-//!   turn and [`check`] after it, stopping the run and reporting a `policyViolation` event on a
-//!   violation.
+//! - The same runner runs a project's coordinator (0024): `resolve` and `start` the same way,
+//!   plus [`snapshot`] before each CLI process and [`check`] after each turn, stopping the run
+//!   and reporting a `policyViolation` on a violation.
 //! - [`start`]'s returned [`Started::run`] already forwards to whichever attempt is actually
 //!   running, including after a fallback (see [`FallbackRun`]), so a caller never needs to track
 //!   that itself.

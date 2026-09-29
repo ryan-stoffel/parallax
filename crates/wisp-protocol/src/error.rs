@@ -27,7 +27,8 @@ pub enum ErrorKind {
     /// The Keychain is locked, or access to an item was denied. Distinct from a bare internal
     /// error so the client can tell "locked" from "broken" (#117).
     KeychainUnavailable,
-    /// A create reused an existing id with different params.
+    /// A create reused an existing id with different params, or `project/start` named a new run
+    /// while the project's coordinator is starting or running.
     IdConflict,
     /// No shared context file has the given path (#155).
     ContextNotFound,
@@ -44,7 +45,7 @@ pub enum ErrorKind {
     /// wispd won't start a worker as asked: its backend doesn't implement the worker sandbox
     /// (0013), the CLI is missing or older than the version the sandbox needs, or a path it would
     /// sandbox holds `*`, `?`, `[`, or `]`. The message says which, and for an old CLI names both
-    /// versions.
+    /// versions. `project/start` fails with it too when the account's backend can't coordinate.
     WorkerUnavailable,
     /// wispd could not create the run's worktree, for example because the project's repository
     /// has uncommitted changes. The message says what to do.
