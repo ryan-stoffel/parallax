@@ -10,8 +10,8 @@ import {
 } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 
-import type { AgentEffort, AgentPermission } from "../protocol/generated/protocol";
-import { EffortMenu } from "./EffortMenu";
+import type { AgentEffort, AgentPermission, AgentRun } from "../protocol/generated/protocol";
+import { EffortMenu, effortName } from "./EffortMenu";
 import { ModelMenu } from "./ModelMenu";
 import { backends, models, type Model, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
@@ -64,6 +64,11 @@ export interface ComposerProps {
    * access choices it can honor. Absent (or unknown): no choices, and none are sent.
    */
   backend?: string;
+  /**
+   * An open run's model, effort, and access, shown as they were when it started. A run can't change
+   * them, so they're text, not choices. An unset field is the CLI's default. Ignored with `backend`.
+   */
+  started?: Pick<AgentRun, "model" | "effort" | "permission">;
 }
 
 /** The prompt box, the same on every screen. Enter sends and Shift+Enter starts a new line. */
@@ -75,6 +80,7 @@ export function Composer({
   tab,
   footer,
   backend,
+  started,
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
@@ -195,6 +201,21 @@ export function Composer({
                 </>
               )}
             </>
+          )}
+          {!run && started && (
+            <span className="flex min-w-0 items-center gap-1 pl-2 text-[13.5px] text-muted-foreground">
+              <span className="truncate">
+                {(started.model && models.find((m) => m.id === started.model)?.name) ??
+                  started.model ??
+                  "Default model"}
+              </span>
+              {divider}
+              <span className="shrink-0">
+                {(started.effort && effortName(started.effort)) ?? "Default effort"}
+              </span>
+              {divider}
+              <span className="shrink-0">{accessOptions[started.permission ?? "edit"].label}</span>
+            </span>
           )}
           <input
             ref={filePicker}

@@ -131,6 +131,7 @@ export function AgentChat({
           onStop={isRunning(run?.status) ? cancel : undefined}
           disabledReason={disabledReason}
           tab={run && <RunTab run={run} />}
+          started={run}
         />
       </div>
     </>
