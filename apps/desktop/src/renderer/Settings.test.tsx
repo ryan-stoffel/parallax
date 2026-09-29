@@ -20,9 +20,9 @@ const states: Record<string, ConnectionState> = {
 const secret = "sk-proj-THE-SECRET-0123456789abcdef";
 
 type Answer = { result: unknown } | { error: { code: number; message: string; data?: object } };
-let answers: Record<string, (params: Record<string, unknown>) => Answer>;
+let answers: Record<string, (params: Record<string, unknown>) => Answer | Promise<Answer>>;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
-  const answer = answers[method]?.(params) ?? { error: { code: -32601, message: "no" } };
+  const answer = (await answers[method]?.(params)) ?? { error: { code: -32601, message: "no" } };
   return "result" in answer ? { ...answer, logId: "log" } : answer;
 });
 const calls = (method: string) =>
@@ -90,6 +90,9 @@ const rows = (name: string) =>
   [...section(name).querySelectorAll(":scope > div:last-child > div")].map((r) => r.textContent);
 const button = (within: Element, name: string) =>
   [...within.querySelectorAll("button")].find((b) => b.textContent === name)!;
+// The Work key's row.
+const work = () =>
+  [...section("This Mac").querySelectorAll("div")].find((d) => d.textContent?.startsWith("Work"))!;
 const click = async (element: HTMLElement) => {
   await act(async () => element.click());
   await settle();
@@ -160,11 +163,6 @@ test("adds a key, clearing it from its field after each try, and never gets it b
 test("removes a key only once it's confirmed", async () => {
   answers["accounts/keys/remove"] = () => ({ result: {} });
   await renderProviders();
-  const work = () =>
-    [...section("This Mac").querySelectorAll("div")].find((d) =>
-      d.textContent?.startsWith("Work"),
-    )!;
-
   await click(button(work(), "Remove"));
   expect(work().textContent).toContain("Remove this key?");
   await click(button(work(), "Cancel"));
@@ -176,15 +174,36 @@ test("removes a key only once it's confirmed", async () => {
   expect(section("This Mac").textContent).not.toContain("Work");
 });
 
-test("Refresh probes the CLIs again", async () => {
-  answers["accounts/refresh"] = () => ({
-    result: {
-      checkedAt: "2026-09-28T12:10:00Z",
-      clis: [{ cli: "claude", installed: true, signedIn: false }],
-    },
+test("a key another client already removed goes when removed", async () => {
+  answers["accounts/keys/remove"] = () => ({
+    error: { code: -32000, message: "account not found", data: { kind: "accountNotFound" } },
   });
   await renderProviders();
+  await click(button(work(), "Remove"));
+  await click(button(work(), "Remove"));
+  expect(section("This Mac").textContent).not.toContain("Work");
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+});
+
+test("Refresh probes the CLIs again, without undoing a remove made meanwhile", async () => {
+  let probed = () => {};
+  answers["accounts/refresh"] = () =>
+    new Promise((resolve) => {
+      probed = () =>
+        resolve({
+          result: {
+            checkedAt: "2026-09-28T12:10:00Z",
+            clis: [{ cli: "claude", installed: true, signedIn: false }],
+          },
+        });
+    });
+  answers["accounts/keys/remove"] = () => ({ result: {} });
+  await renderProviders();
   await click(button(section("This Mac"), "Refresh"));
+  await click(button(work(), "Remove"));
+  await click(button(work(), "Remove"));
+  await act(async () => probed());
+  await settle();
   expect(calls("accounts/refresh")).toHaveLength(1);
-  expect(rows("This Mac")[0]).toBe("Claude CodeInstalledNot signed in");
+  expect(rows("This Mac")).toEqual(["Claude CodeInstalledNot signed in"]);
 });

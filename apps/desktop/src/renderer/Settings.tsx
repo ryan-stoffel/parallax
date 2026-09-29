@@ -272,17 +272,21 @@ function HostAccounts({ host }: { host: Host }) {
   const [adding, setAdding] = useState(false);
 
   // `accounts/list` may answer from wispd's cache; `accounts/refresh` always probes again. Keys
-  // are listed again too, since another client may have changed them.
+  // are listed again too, since another client may have changed them, and shown as soon as they
+  // answer: the probe can take seconds, and a list held until then would undo an add or remove
+  // made meanwhile.
   const load = useCallback(
     async (method: "accounts/list" | "accounts/refresh") => {
       setChecking(true);
       const [clis, keyList] = await Promise.all([
         window.wisp.request(host.id, method, {}),
-        window.wisp.request(host.id, "accounts/keys/list", {}),
+        window.wisp.request(host.id, "accounts/keys/list", {}).then((answer) => {
+          if ("result" in answer) setKeys(answer.result.accounts);
+          return answer;
+        }),
       ]);
       setChecking(false);
       if ("result" in clis) setDetected(clis.result.clis);
-      if ("result" in keyList) setKeys(keyList.result.accounts);
       const failed = "error" in clis ? clis.error : "error" in keyList ? keyList.error : undefined;
       setError(failed && accountsError(failed));
     },
@@ -409,7 +413,9 @@ function KeyRow({
     setRemoving(true);
     const answer = await window.wisp.request(hostId, "accounts/keys/remove", { id: account.id });
     setRemoving(false);
-    if ("error" in answer) setError(accountsError(answer.error));
+    // Already gone, such as removed by another client: that's what Remove wanted.
+    if ("error" in answer && answer.error.data?.kind !== "accountNotFound")
+      setError(accountsError(answer.error));
     else onRemoved();
   };
 
@@ -507,8 +513,17 @@ function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAcc
       </label>
       <label className="text-[12.5px] text-muted-foreground">
         Label
-        {/* Within wispd's limits (a 256-byte label, a 20-byte key), so it never answers invalidParams. */}
-        <input name="label" required maxLength={64} placeholder="Work" className={field} />
+        {/* Within wispd's limits (a label with a non-space, of at most 256 bytes, and a key of at
+            least 20), so it never answers invalidParams. */}
+        <input
+          name="label"
+          required
+          pattern=".*\S.*"
+          title="A label can't be only spaces."
+          maxLength={64}
+          placeholder="Work"
+          className={field}
+        />
       </label>
       <label className="text-[12.5px] text-muted-foreground">
         API key
