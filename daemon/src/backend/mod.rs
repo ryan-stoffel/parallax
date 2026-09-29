@@ -34,7 +34,7 @@ use std::task::{Context, Poll};
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-pub use wisp_protocol::{RunId, TurnId};
+pub use wisp_protocol::{AgentEffort, AgentPermission, RunId, TurnId};
 use zeroize::Zeroize;
 
 pub use self::event::{
@@ -65,6 +65,19 @@ pub trait Backend: Send + Sync {
     /// If the request is invalid or asks for something the backend can't do, or the CLI can't be
     /// started. Routing (#119) can fall back to another backend on any of these.
     fn start(&self, request: RunRequest) -> Result<Started, StartError>;
+
+    /// The [`RunRequest::effort`] levels this backend maps to its CLI (RYA-97). None by default,
+    /// so a backend that doesn't map them refuses them instead of ignoring them.
+    fn efforts(&self) -> &'static [AgentEffort] {
+        &[]
+    }
+
+    /// The [`RunRequest::permission`] values this backend maps to its CLI, all inside the worker
+    /// sandbox (0013). None by default, like [`Backend::efforts`]; an absent permission always
+    /// means [`AgentPermission::Edit`].
+    fn permissions(&self) -> &'static [AgentPermission] {
+        &[]
+    }
 }
 
 /// A started run: its control handle and its events.
@@ -131,8 +144,13 @@ pub struct RunRequest {
     pub account: AccountRef,
     /// The vendor's session to resume, or a new session.
     pub resume: Option<Resume>,
-    /// The model, or the CLI's default.
+    /// The model, or the CLI's default. [`check_argument`] must accept it.
     pub model: Option<String>,
+    /// How hard the model thinks, or the CLI's default. Only a level in [`Backend::efforts`].
+    pub effort: Option<AgentEffort>,
+    /// How a worker may act inside its sandbox, or [`AgentPermission::Edit`]. Only a value in
+    /// [`Backend::permissions`], and only for a [`ToolPolicy::WorkspaceWrite`] run.
+    pub permission: Option<AgentPermission>,
     /// wispd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
     /// Routing drops them for every other role, and a backend refuses them on a worker.
     pub coordinator_tools: Option<CoordinatorTools>,
@@ -182,6 +200,25 @@ impl CoordinatorTools {
             },
         }))
     }
+}
+
+/// Checks that `value`, such as a model or a session id, can be a CLI's argument: not empty,
+/// not starting with `-`, where the CLI would read it as an option, and with no whitespace or
+/// control characters.
+///
+/// # Errors
+///
+/// [`StartError::Invalid`], naming `what` and the value.
+pub fn check_argument(what: &str, value: &str) -> Result<(), StartError> {
+    if value.is_empty()
+        || value.starts_with('-')
+        || value.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(StartError::Invalid(format!(
+            "the {what} {value:?} is not a usable argument"
+        )));
+    }
+    Ok(())
 }
 
 /// A vendor session for a run to continue.

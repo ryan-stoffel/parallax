@@ -413,6 +413,9 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     policy: AgentPolicy::WorkspaceWrite,
                     account: args.account,
                     coordinator_thread: Some(binding.thread),
+                    model: None,
+                    effort: None,
+                    permission: None,
                 })
                 .await?
                 .run;

@@ -1,7 +1,8 @@
 //! The M3 runner (#156, decision 0014): runs a worker end to end.
 //!
 //! `agent/start` resolves the worker's account through routing (#119), refuses a worker wispd
-//! can't sandbox (0013), creates the run's worktree (#154), records the run, and starts the
+//! can't sandbox (0013) or a model, effort, or permission its backend can't honor (RYA-97),
+//! creates the run's worktree (#154), records the run, and starts the
 //! backend in the worktree with the project's shared context folder (#155) writable. From then
 //! on one [`actor`] task per run owns it: it streams the backend's events into the event log as
 //! `agent.*` events, records usage (#120) against whichever account the run is on, takes
@@ -31,17 +32,17 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentOutcome, AgentRun, AgentRunState,
-    AgentSendParams, AgentStartParams, CoordinatorThreadId, ErrorKind, ProjectId, Role, RunId,
-    TurnId, WispEvent,
+    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentEffort, AgentOutcome,
+    AgentPermission, AgentRun, AgentRunState, AgentSendParams, AgentStartParams,
+    CoordinatorThreadId, ErrorKind, ProjectId, Role, RunId, TurnId, WispEvent,
 };
 use wisp_store::{RunFields, RunState, StoreError, WorktreeFields};
 
 use self::actor::{Actor, Command};
 pub(crate) use self::convert::agent_run as snapshot;
-use self::convert::{STARTING, WORKSPACE_WRITE, agent_run};
+use self::convert::{STARTING, WORKSPACE_WRITE, agent_run, option_name};
 use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
-use crate::backend::ToolPolicy;
+use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
 use crate::worktree::{CreatedWorktree, WorktreeError, WorktreeManager};
@@ -319,6 +320,48 @@ pub(super) async fn prepare(
     Ok((prepared, repo_path))
 }
 
+/// What a run asks of its CLI beyond the prompt (RYA-97), each `None` for the CLI's default. The
+/// run keeps them for every launch, including a resume.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RunOptions {
+    pub model: Option<String>,
+    pub effort: Option<AgentEffort>,
+    pub permission: Option<AgentPermission>,
+}
+
+impl RunOptions {
+    /// Refuses, with `unsupportedOption`, a model name that can't be a CLI argument, or an
+    /// effort or permission that `backend` doesn't map.
+    fn check(&self, backend: &dyn Backend) -> Result<(), ErrorObject> {
+        let refuse = |detail: String| ErrorObject::wisp(ErrorKind::UnsupportedOption, detail);
+        let name = backend.name();
+        if let Some(model) = &self.model
+            && check_argument("model", model).is_err()
+        {
+            return Err(refuse(format!(
+                "the model {model:?} can't be passed to the {name} backend's CLI"
+            )));
+        }
+        if let Some(effort) = self.effort
+            && !backend.efforts().contains(&effort)
+        {
+            let effort = option_name(effort).unwrap_or_default();
+            return Err(refuse(format!(
+                "the {name} backend can't run with effort {effort}"
+            )));
+        }
+        if let Some(permission) = self.permission
+            && !backend.permissions().contains(&permission)
+        {
+            let permission = option_name(permission).unwrap_or_default();
+            return Err(refuse(format!(
+                "the {name} backend can't run with permission {permission}"
+            )));
+        }
+        Ok(())
+    }
+}
+
 fn routing_error(error: &RoutingError) -> ErrorObject {
     match error {
         RoutingError::NoAccount { .. } => ErrorObject::wisp(
@@ -343,14 +386,13 @@ fn worktree_failed(error: &WorktreeError) -> ErrorObject {
     ErrorObject::wisp(ErrorKind::WorktreeFailed, error.to_string())
 }
 
-/// The run `run_id` already is, for a retry of `agent/start` with the same params, or
-/// `idConflict` if they differ. `None` for a new run.
+/// The run `run_id` already is, for a retry of `agent/start` that asks for the same `fields`, or
+/// `idConflict` if they differ. The backend isn't compared: routing resolves it, not the
+/// request. `None` for a new run.
 async fn existing(
     daemon: &Arc<Daemon>,
     run_id: RunId,
-    project: ProjectId,
-    prompt: &str,
-    (requested, coordinator_thread): (Option<&str>, Option<CoordinatorThreadId>),
+    fields: &RunFields,
 ) -> Result<Option<AgentRun>, ErrorObject> {
     let found = store(daemon, move |db| {
         let Some(row) = db.get_run(run_id.into()).map_err(|e| store_error(&e))? else {
@@ -365,17 +407,16 @@ async fn existing(
     let Some((row, worktree)) = found else {
         return Ok(None);
     };
-    let same = row.fields.project_id == Uuid::from(project)
-        && row.fields.prompt == prompt
-        && row.fields.policy == WORKSPACE_WRITE
-        && row.fields.requested_account.as_deref() == requested
-        && row.fields.coordinator_thread == coordinator_thread.map(Uuid::from);
-    if !same {
+    let stored = RunFields {
+        backend: fields.backend.clone(),
+        ..row.fields.clone()
+    };
+    if stored != *fields {
         return Err(ErrorObject::wisp(
             ErrorKind::IdConflict,
             format!(
-                "run {run_id} exists with a different project, prompt, account, policy, or \
-                 coordinator thread"
+                "run {run_id} exists with a different project, prompt, account, policy, \
+                 coordinator thread, model, effort, or permission"
             ),
         ));
     }
@@ -481,6 +522,9 @@ pub(crate) async fn start(
         prompt,
         account,
         coordinator_thread,
+        model,
+        effort,
+        permission,
         ..
     } = params;
     let new = NewRun {
@@ -489,6 +533,11 @@ pub(crate) async fn start(
         prompt,
         account,
         coordinator_thread,
+        options: RunOptions {
+            model,
+            effort,
+            permission,
+        },
         thread: None,
     };
     Ok(create(daemon, new).await?.run)
@@ -504,6 +553,7 @@ pub(crate) struct NewRun {
     pub account: Option<AccountChoice>,
     /// The coordinator thread starting the run through `wispd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    pub options: RunOptions,
     pub thread: Option<NewThread>,
 }
 
@@ -529,20 +579,24 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         prompt,
         account,
         coordinator_thread,
+        options,
         thread,
     } = new;
     let _starting = agents.start_guard(run_id).await;
-    let requested = requested_account(account.as_ref());
+    // What the request asks for, as the runs table stores it. Routing fills in the backend below.
+    let mut fields = RunFields {
+        project_id: project.into(),
+        prompt: prompt.clone(),
+        requested_account: requested_account(account.as_ref()),
+        policy: WORKSPACE_WRITE.to_owned(),
+        backend: String::new(),
+        coordinator_thread: coordinator_thread.map(Uuid::from),
+        model: options.model.clone(),
+        effort: options.effort.and_then(option_name),
+        permission: options.permission.and_then(option_name),
+    };
 
-    if let Some(run) = existing(
-        &daemon,
-        run_id,
-        project,
-        &prompt,
-        (requested.as_deref(), coordinator_thread),
-    )
-    .await?
-    {
+    if let Some(run) = existing(&daemon, run_id, &fields).await? {
         let row = if thread.is_some() {
             Some(crate::threads::existing_thread(&daemon, run_id).await?)
         } else {
@@ -551,6 +605,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         return Ok(CreatedRun { run, thread: row });
     }
     let (prepared, scope_path) = prepare(&daemon, project, run_id, account).await?;
+    options.check(prepared.resolved.backend())?;
     let repo_path = match thread.as_ref().and_then(|thread| thread.scratch.clone()) {
         Some(scratch) => scratch.to_string_lossy().into_owned(),
         None => scope_path,
@@ -558,14 +613,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
     let (created, worktree_path, git_common_dir) =
         create_worktree(agents, Path::new(&repo_path), run_id).await?;
 
-    let fields = RunFields {
-        project_id: project.into(),
-        prompt: prompt.clone(),
-        requested_account: requested,
-        policy: WORKSPACE_WRITE.to_owned(),
-        backend: prepared.resolved.backend().name().to_owned(),
-        coordinator_thread: coordinator_thread.map(Uuid::from),
-    };
+    fields.backend = prepared.resolved.backend().name().into();
     let state = RunState {
         status: STARTING.to_owned(),
         account_id: prepared.resolved.account_id(),

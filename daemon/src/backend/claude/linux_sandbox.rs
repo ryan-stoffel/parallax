@@ -488,6 +488,8 @@ fi"#;
             },
             resume: None,
             model: None,
+            effort: None,
+            permission: None,
             coordinator_tools: None,
         };
         let mut started = backend.start(request).unwrap();

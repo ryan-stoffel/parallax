@@ -1,6 +1,6 @@
 # 0014: Agent runs in wispd
 
-- Status: accepted; review and accept added by #157; `PATH` fill-in and cancelling on Linux and Windows are in [0023](0023-cross-platform.md)
+- Status: accepted; review and accept added by #157; `PATH` fill-in and cancelling on Linux and Windows are in [0023](0023-cross-platform.md); model, effort, and permission added by RYA-97
 - Date: 2026-09-25
 - Issue: #156, #157 (review and accept), #68 (what Accept does), #191 (no hooks in the user's checkout)
 
@@ -14,22 +14,23 @@ M3's done-when is one subagent that completes a task in a worktree and writes to
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `agent/start` | `{runId, project, prompt, policy: "workspaceWrite", account?}` | `{run}` |
+| `agent/start` | `{runId, project, prompt, policy: "workspaceWrite", account?, model?, effort?, permission?}` | `{run}` |
 | `agent/send` | `{runId, turnId, text}` | `{run}` |
 | `agent/cancel` | `{runId}` | `{run}` |
 | `agent/list` | `{project?}` | `{runs, seq}` |
 | `agent/events` | `{runId, after, limit?}` | `{events, more}` |
 
 - `agent/cancel` is 0007's `agent/stop`, named as #156 asks. `agent/events` replaces 0007's `agent/output`: it pages through all of one run's logged events, not only output, which is what an editor needs to rebuild a transcript after `resyncRequired` or a restart.
-- `agent/start` is idempotent on `runId` (0007). A retry with the same project, prompt, policy, and account returns the run; different params fail with `idConflict`. `account` absent means the worker role's default (0012).
+- `agent/start` is idempotent on `runId` (0007). A retry with the same project, prompt, policy, account, model, effort, and permission returns the run; different params fail with `idConflict`. `account` absent means the worker role's default (0012).
+- `model`, `effort`, and `permission` (RYA-97) are sent only to a wispd that advertises the `runOptions` capability, since an older one would ignore them (0007). Each is optional, and absent means the CLI's default. `model` is the backend's own name, such as `opus`. `effort` is `low`, `medium`, `high`, `xhigh`, or `max`. `permission` is `edit` (the default: edits and commands without asking) or `plan` (Claude Code's plan mode, whose file tools refuse to write). Both permissions run inside the worker sandbox (0013); nothing loosens it. The run stores all three, reports them on `AgentRun`, and passes them again when it resumes. A backend lists the efforts and permissions it maps (`Backend::efforts`, `Backend::permissions`, none by default), and anything else, or a model name that can't be a CLI argument, fails with `unsupportedOption` before anything is created. Claude Code maps them to `--model`, `--effort`, and `--permission-mode acceptEdits` or `plan`. wispd can't check a model name against the vendor's list, so an unknown model fails the run with the CLI's own error.
 - `agent/send` is idempotent on `turnId` while wispd runs. It goes to a running CLI as its next turn. Once the run's CLI has ended, it resumes the vendor session in the same worktree with the message as the prompt (0011: Ryan messages a subagent directly).
 - Events, all project-scoped and all carrying `runId`: `agent.started {run?}` (wispd always sends `run`; it is optional only because a v1 sample predicted `agent.started {runId}`), `agent.updated {state}` with only the fields that change during a run (status, account, session, error, diff, `updatedAt`; never the prompt), `agent.output {items}` coalesced per run every 50 ms, `agent.accountFallback`, `agent.finished {outcome}` once per CLI process, and `agent.diffReady {diff}` after each commit.
-- Errors: `runNotFound`, `runNotResumable`, `workerUnavailable` (a backend without 0013, a missing or too old CLI with both versions named, a sandbox path holding `*?[]`), and `worktreeFailed` (for example a path that isn't a repository, or a git failure; #257 stopped counting the repository's own uncommitted changes as one).
+- Errors: `runNotFound`, `runNotResumable`, `workerUnavailable` (a backend without 0013, a missing or too old CLI with both versions named, a sandbox path holding `*?[]`), `worktreeFailed` (for example a path that isn't a repository, or a git failure; #257 stopped counting the repository's own uncommitted changes as one), and `unsupportedOption` (RYA-97).
 
 ### A run's life
 
 - **Statuses:** `starting`, `running`, `completed`, `failed`, `cancelled`, `interrupted`. A run outlives its CLI processes: `completed`, `failed`, `cancelled`, and `interrupted` runs with a session id take `agent/send`.
-- **Before anything is created,** wispd resolves the account (`routing::resolve`, `Role::Worker`), refuses a backend whose `Capabilities::worker_sandbox` is false, checks Claude Code's detected version against `WORKER_MIN_VERSION`, and canonicalizes and checks every sandbox path. Detection reads the version from `claude --version` when `claude auth status` doesn't report one.
+- **Before anything is created,** wispd resolves the account (`routing::resolve`, `Role::Worker`), refuses a backend whose `Capabilities::worker_sandbox` is false, checks Claude Code's detected version against `WORKER_MIN_VERSION`, canonicalizes and checks every sandbox path, and checks the run's model, effort, and permission against the backend. Detection reads the version from `claude --version` when `claude auth status` doesn't report one.
 - **Then** it creates the worktree, records the run and worktree rows in one transaction (with #166's pinned `git_dir`), and starts the CLI with `WorkerSandbox::for_worktree`, whose git folder comes from the user's own checkout. The first prompt tells the agent its limits (0013).
 - **One actor task per run** takes commands and backend events in one loop. It charges usage to the run's current account, which changes on `AccountFallback` (0012).
 - **When a CLI process ends,** wispd commits the worktree on the run's branch with `commit_all` (#166: pinned git folder, no hooks), whatever the outcome, and reports the commit's stats against the worktree's base. A failed commit fails the run with `commitFailed`.

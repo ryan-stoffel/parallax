@@ -26,7 +26,7 @@ use wisp_protocol::{
 };
 use wisp_store::RepoFields;
 
-use crate::agents::{self, NewRun, NewThread};
+use crate::agents::{self, NewRun, NewThread, RunOptions};
 use crate::repo;
 use crate::server::Daemon;
 
@@ -310,6 +310,9 @@ pub(crate) async fn start(
         repo,
         prompt,
         account,
+        model,
+        effort,
+        permission,
     } = params;
     let entry = match repo {
         Some(id) => {
@@ -361,6 +364,11 @@ pub(crate) async fn start(
         prompt,
         account,
         coordinator_thread: None,
+        options: RunOptions {
+            model,
+            effort,
+            permission,
+        },
         thread: Some(NewThread {
             scratch: scratch.clone(),
         }),

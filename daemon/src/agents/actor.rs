@@ -23,7 +23,7 @@ use wisp_protocol::{
 };
 use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, Worktree};
 
-use super::convert::{self, agent_run, item_bytes, output_item};
+use super::convert::{self, agent_run, item_bytes, option_value, output_item};
 use super::worker::sandbox_path;
 use super::{Prepared, prepare, store, store_error};
 use crate::backend::{
@@ -533,7 +533,9 @@ impl Actor {
                 credential: Credential::Subscription { config_home: None },
             },
             resume,
-            model: None,
+            model: self.row.fields.model.clone(),
+            effort: self.row.fields.effort.as_deref().and_then(option_value),
+            permission: self.row.fields.permission.as_deref().and_then(option_value),
             coordinator_tools: None,
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
@@ -953,6 +955,9 @@ mod tests {
                 policy: "workspaceWrite".to_owned(),
                 backend: "fake".to_owned(),
                 coordinator_thread: None,
+                model: None,
+                effort: None,
+                permission: None,
             },
             state: RunState {
                 status: "running".to_owned(),

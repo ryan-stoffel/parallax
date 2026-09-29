@@ -10,8 +10,39 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use wispd::backend::RunRequest;
 use wispd::backend::claude::arguments;
+use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
+
+/// A worker's request as wispd builds it (0013): a worktree at `worktree` in wispd's data folder
+/// `data`, whose repository's git folder is `git_dir`, with `context` writable. It runs the probe
+/// that [`run_worker`]'s fake API asks for.
+pub fn worker_request(
+    home: &Path,
+    data: &Path,
+    worktree: &Path,
+    git_dir: &Path,
+    context: &Path,
+) -> RunRequest {
+    RunRequest {
+        run_id: RunId::generate(),
+        turn_id: None,
+        cwd: worktree.to_owned(),
+        prompt: "Run the probe.".into(),
+        policy: ToolPolicy::WorkspaceWrite,
+        sandbox: Some(WorkerSandbox::for_worktree(
+            home, data, worktree, git_dir, context,
+        )),
+        account: AccountRef {
+            id: "test".into(),
+            credential: Credential::Subscription { config_home: None },
+        },
+        resume: None,
+        model: Some("claude-sonnet-4-6".into()),
+        effort: None,
+        permission: None,
+        coordinator_tools: None,
+    }
+}
 
 /// Runs `claude` with the arguments wispd gives `request`, against a fake Messages API whose one
 /// Bash call runs `sh probe.sh` in the worktree. Returns stdout, and stdout with stderr for
