@@ -186,6 +186,7 @@ codex exec [resume] --json --ignore-user-config --ignore-rules \
 - **Gap: the Keychain.** With network on, Codex's Seatbelt profile allows `mach-lookup` of `com.apple.SecurityServer` for TLS, as Claude's runtime does. The login keychain file is unreadable, which is the same open item as Claude's.
 - **Gap: the credential source.** Exec doesn't say which credentials it used, unlike Claude's `apiKeySource`. A subscription run bills whatever `codex login` stored; if that is an API key, wisp can't tell yet (RYA-136).
 - **Other OSes.** Only macOS was checked, so the backend reports `worker_sandbox: false` on Linux (RYA-133) and Windows (RYA-24), and those workers fail with `workerUnavailable`.
+- **Refused until RYA-145 (RYA-153).** Because of the temp gap, the backend reports `worker_sandbox: false` on macOS too, so wispd refuses every Codex worker with `workerUnavailable`, naming RYA-145, before creating anything. Detection, sign-in, and usage are unchanged, and RYA-145 turns workers back on.
 - `.git` is read-only, so wispd commits (0004).
 
 ### Cursor (for #123, still gated on #35)
@@ -224,7 +225,7 @@ wisp's own profile does have one use: commands wispd runs itself, such as a setu
 
 #156's comment spells out the exact values:
 
-1. Starts a worker only on a backend that implements this record: Claude, Codex on macOS (RYA-38), and Cursor once #123 does.
+1. Starts a worker only on a backend that implements this record: Claude, Codex on macOS once RYA-145 lands (RYA-38, RYA-153), and Cursor once #123 does.
 2. Before starting a Claude or Codex worker, checks the detected version (#114) against its backend's `WORKER_MIN_VERSION`, and refuses with an error that names both versions. For Claude, the `system/init` check backs this up.
 3. Passes `sandbox: Some(WorkerSandbox::for_worktree(home, data_dir, worktree, git_common_dir, context_dir))`, with every path canonical. Seatbelt matches real paths, and `/var` and `/tmp` are symlinks on macOS.
 4. Commits the worktree's changes itself, with the git folder pinned and hooks off (#166), for every backend including Claude. `--no-verify` skips only `pre-commit` and `commit-msg` [12]. A worker can write files that git hooks run, such as `.husky/*` under `core.hooksPath`: Claude through Bash, and Codex and Cursor through any command. Cursor's sandbox also leaves the worktree's `.git` file writable, and that file says which repository git uses.
