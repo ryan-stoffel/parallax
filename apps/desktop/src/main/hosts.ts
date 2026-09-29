@@ -173,13 +173,14 @@ export function startHosts(): void {
 async function signInCommand(hostId: string, cli: CliKind): Promise<Command | string> {
   const host = connections.get(hostId);
   if (!host) return "That host isn't in wisp anymore.";
+  // Decided before asking, so a remote host's path can never run on this computer.
+  const saved = settings.hosts.find((h) => h.id === hostId);
+  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
   const answer = await host.request("accounts/list", {});
   if ("error" in answer)
     return `wisp couldn't ask the host where the CLI is: ${answer.error.message}`;
   const path = answer.result.clis.find((each) => each.cli === cli)?.path;
   if (!path) return "That CLI isn't installed on this host anymore.";
-  const saved = settings.hosts.find((h) => h.id === hostId);
-  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
   return loginCommand(cli, path, ssh);
 }
 

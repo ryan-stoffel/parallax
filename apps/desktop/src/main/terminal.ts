@@ -24,11 +24,12 @@ export type SshTarget = { destination: string; ssh: string };
 /**
  * The command that signs in to `cli` at `path`, where the host's wispd found it: run here, or
  * with `ssh -t` on an SSH host.
- * - Windows can't run an npm `.cmd` shim by itself, so one goes through `cmd.exe`.
+ * - Windows can't run an npm `.cmd` shim by itself, so one goes through `cmd.exe`. node-pty looks
+ *   a bare name up on PATH without PATHEXT there, so `ssh` becomes `ssh.exe`.
  * - Over ssh, Codex's browser callback to localhost:1455 is forwarded back here, where the
- *   browser is, and Cursor is told not to open a browser on the host. Claude Code needs neither:
- *   with no browser, it asks for a code to paste. `-e none` turns off ssh's escape character,
- *   so what's typed only ever reaches the CLI.
+ *   browser is, and fails at once if that port is taken. Cursor is told not to open a browser on
+ *   the host. Claude Code needs neither: with no browser, it asks for a code to paste. `-e none`
+ *   turns off ssh's escape character, so what's typed only ever reaches the CLI.
  */
 export function loginCommand(
   cli: CliKind,
@@ -44,11 +45,13 @@ export function loginCommand(
     }
     return { file: path, args };
   }
-  const forward = cli === "codex" ? ["-L", "1455:localhost:1455"] : [];
+  const forward =
+    cli === "codex" ? ["-o", "ExitOnForwardFailure=yes", "-L", "1455:localhost:1455"] : [];
   const env = cli === "cursor" && path.startsWith("/") ? "NO_OPEN_BROWSER=1 " : "";
+  const bare = platform === "win32" && !/\.\w+$/.test(ssh.ssh);
   // prettier-ignore
   return {
-    file: ssh.ssh,
+    file: bare ? `${ssh.ssh}.exe` : ssh.ssh,
     args: [
       "-t", "-e", "none", "-o", "ControlPath=none", ...forward,
       "--", ssh.destination, `${env}${quote(path)} ${args.join(" ")}`,
