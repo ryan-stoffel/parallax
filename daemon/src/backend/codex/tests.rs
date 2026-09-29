@@ -574,7 +574,7 @@ fn paths_are_quoted_as_toml_strings() {
 
 /// A worker's `.zshenv`, read by a real zsh whose `~/.zshenv` sets `PATH` outright as
 /// nix-darwin's `/etc/zshenv` does, puts wispd's `PATH` back in front of it and leaves `ZDOTDIR`
-/// unset. The folder goes when dropped (RYA-141).
+/// unset. Only its owner may open the folder, which goes when dropped (RYA-141).
 #[test]
 fn a_worker_s_zdotdir_puts_its_path_back_after_zsh_startup() {
     let dir = tempfile::tempdir().unwrap();
@@ -590,6 +590,13 @@ fn a_worker_s_zdotdir_puts_its_path_back_after_zsh_startup() {
     let path = format!("{}:/usr/bin:/bin", tools.display());
 
     let zdotdir = write_zdotdir(&root.join("data/tmp"), path.as_ref()).unwrap();
+    for (entry, expected) in [
+        (zdotdir.path().to_owned(), 0o700),
+        (zdotdir.path().join(".zshenv"), 0o600),
+    ] {
+        let mode = fs::metadata(&entry).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, expected, "{}", entry.display());
+    }
     let output = std::process::Command::new("/bin/zsh")
         .args([
             "-c",

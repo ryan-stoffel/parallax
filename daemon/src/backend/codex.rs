@@ -67,7 +67,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -271,19 +271,25 @@ const ZSHENV_START: &[u8] = b"unset ZDOTDIR\n[ -f \"$HOME/.zshenv\" ] && . \"$HO
 /// deletes it when dropped (RYA-141). Its `.zshenv` runs the user's `~/.zshenv` and then puts
 /// `path`, the `PATH` the CLI started with, in front of whatever `PATH` the startup files left.
 /// The folder is new, has a random name and a canonical path, as the sandbox needs, and only its
-/// owner may open it.
+/// owner may open it (0700, and 0600 for the file).
 ///
 /// # Errors
 ///
 /// If `dir` can't be created or the folder can't be written.
 pub fn write_zdotdir(dir: &Path, path: &OsStr) -> io::Result<TempDir> {
     std::fs::create_dir_all(dir)?;
-    let zdotdir = tempfile::Builder::new()
-        .prefix("codex-zdotdir-")
-        .tempdir_in(dir.canonicalize()?)?;
-    let mut script = ZSHENV_START.to_vec();
-    script.extend(prepend_path_line(path));
-    std::fs::write(zdotdir.path().join(".zshenv"), script)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("codex-zdotdir-");
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let zdotdir = builder.tempdir_in(dir.canonicalize()?)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(zdotdir.path().join(".zshenv"))?;
+    file.write_all(ZSHENV_START)?;
+    file.write_all(&prepend_path_line(path))?;
     Ok(zdotdir)
 }
 
