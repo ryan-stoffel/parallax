@@ -1009,7 +1009,38 @@ export type AgentStartParams = {
 	 * spawns (0019). The run keeps it, and a retry must repeat it.
 	 */
 	coordinatorThread?: CoordinatorThreadId,
+	/**
+	 * The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
+	 * it, `effort`, and `permission` only to a wispd that advertises `runOptions`. The run keeps
+	 * all three when it resumes, and a retry must repeat them.
+	 */
+	model?: string,
+	/**
+	 * How hard the model thinks. Absent means the CLI's default.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * How the agent may act inside its sandbox. Absent means `edit`.
+	 */
+	permission?: AgentPermission,
 };
+
+/**
+ * How hard a run's model thinks, behind the `runOptions` capability (RYA-97). Claude Code takes
+ * every level as `--effort`, and downgrades `xhigh` on models that lack it. A backend that can't
+ * honor a level refuses the run with `unsupportedOption`.
+ *
+ * A newer peer may send a level this version does not know; treat it as unknown.
+ */
+export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/**
+ * How a run's agent may act inside its sandbox, behind the `runOptions` capability (RYA-97).
+ * Every value stays inside the worker sandbox (0013); none loosens it.
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentPermission = "edit" | "plan";
 
 /**
  * What a run's tools may do. Only workers run through `agent/start`.
@@ -1104,6 +1135,18 @@ export type AgentRun = {
 	 * started itself.
 	 */
 	coordinatorThread?: CoordinatorThreadId,
+	/**
+	 * The model it was started with. Absent means the CLI's default.
+	 */
+	model?: string,
+	/**
+	 * The effort it was started with. Absent means the CLI's default.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * The permission it was started with. Absent means `edit`.
+	 */
+	permission?: AgentPermission,
 	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
@@ -1964,6 +2007,18 @@ export type ThreadStartParams = {
 	 * The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
 	 */
 	account?: AccountChoice,
+	/**
+	 * The model, as `agent/start` takes it. Absent means the CLI's default.
+	 */
+	model?: string,
+	/**
+	 * How hard the model thinks, as `agent/start` takes it.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * How the agent may act inside its sandbox, as `agent/start` takes it.
+	 */
+	permission?: AgentPermission,
 };
 
 /**
@@ -2085,7 +2140,7 @@ export type ErrorData = {
  * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

@@ -1,6 +1,8 @@
 //! Mapping between the runner's inputs and outputs: backend events to the protocol's transcript
 //! items, and store rows to the protocol's runs.
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::error;
 use wisp_protocol::jsonrpc::ErrorObject;
@@ -106,9 +108,26 @@ pub(crate) fn agent_run(
             .map(CoordinatorThreadId::try_from)
             .transpose()
             .map_err(|_| corrupt("coordinator thread id"))?,
+        model: row.fields.model.clone(),
+        effort: row.fields.effort.as_deref().and_then(option_value),
+        permission: row.fields.permission.as_deref().and_then(option_value),
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
+}
+
+/// An effort's or a permission's protocol name, such as `high`, as the runs table stores it.
+pub(super) fn option_name(value: impl Serialize) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// A stored effort or permission, back from its protocol name: `Unknown` for a name this version
+/// doesn't know.
+pub(super) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
+    serde_json::from_value(Value::String(name.to_owned())).ok()
 }
 
 /// The part of a stored run that `agent.updated` reports.

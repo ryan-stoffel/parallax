@@ -68,6 +68,10 @@ pub enum ErrorKind {
     /// A run named no account, and its role has no default (0012). Set one with
     /// `accounts/defaults/set`, then retry with the same run id.
     NoDefaultAccount,
+    /// The run's backend can't honor a `model`, `effort`, or `permission` that `agent/start` or
+    /// `thread/start` asked for, or the model's name can't be passed to its CLI (RYA-97). Nothing
+    /// was created. The message names the option, the value, and the backend.
+    UnsupportedOption,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -173,6 +177,7 @@ mod tests {
             (ErrorKind::RepoNotFound, "repoNotFound"),
             (ErrorKind::ThreadNotFound, "threadNotFound"),
             (ErrorKind::NoDefaultAccount, "noDefaultAccount"),
+            (ErrorKind::UnsupportedOption, "unsupportedOption"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

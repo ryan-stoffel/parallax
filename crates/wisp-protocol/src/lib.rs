@@ -57,10 +57,11 @@ pub use account::{
     Provider, RawKey,
 };
 pub use agent::{
-    AgentCancelParams, AgentEventsParams, AgentEventsResult, AgentFailureKind, AgentListParams,
-    AgentListResult, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRun, AgentRunResult,
-    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus,
-    AgentToolStatus, CoordinatorThreadId, DiffSummary, LoggedEvent, RunId, TurnId,
+    AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult, AgentFailureKind,
+    AgentListParams, AgentListResult, AgentOutcome, AgentOutputItem, AgentPermission, AgentPolicy,
+    AgentRun, AgentRunResult, AgentRunState, AgentSendParams, AgentStartParams, AgentStatus,
+    AgentTodoItem, AgentTodoStatus, AgentToolStatus, CoordinatorThreadId, DiffSummary, LoggedEvent,
+    RunId, TurnId,
 };
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,
