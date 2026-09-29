@@ -146,13 +146,8 @@ pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
 }
 
 /// What to do about a backend that can't sandbox a worker here.
-#[cfg(target_os = "macos")]
+#[cfg(not(windows))]
 const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
-/// What to do about a backend that can't sandbox a worker here. Linux's sandbox checks are
-/// RYA-20's (0023).
-#[cfg(target_os = "linux")]
-const NO_SANDBOX_HINT: &str = "wispd can't check a worker sandbox on this OS yet (decision \
-                               0023), so run workers on a macOS host";
 
 /// What to do about a backend that can't sandbox a worker here: Claude Code has no sandbox on
 /// native Windows (0023, RYA-24).
@@ -194,6 +189,23 @@ pub(super) fn check_claude(detected: Option<&DetectedCli>) -> Result<(), ErrorOb
              {WORKER_MIN_VERSION} or later"
         ))),
     }
+}
+
+/// Refuses a Claude worker unless Claude Code's sandbox works on this Linux host, seccomp filter
+/// included (0013), for the `claude` that `check_claude` accepted.
+#[cfg(target_os = "linux")]
+pub(super) async fn check_linux_sandbox(
+    detector: &crate::detect::CliDetector,
+    claude: Option<&DetectedCli>,
+) -> Result<(), ErrorObject> {
+    let Some(path) = claude.and_then(|claude| claude.path.as_deref()) else {
+        return Err(worker_unavailable(
+            "wispd could not tell where Claude Code is installed",
+        ));
+    };
+    claude::linux_sandbox::check_host(detector.launcher(), Path::new(path))
+        .await
+        .map_err(worker_unavailable)
 }
 
 /// The detected CLI a backend runs, if wispd checks its version before starting a worker.

@@ -1,11 +1,16 @@
-//! Real Claude Code regression for RYA-110 and RYA-20: a worker can run Bash, and its commands
-//! don't see the key. A local fake Messages API asks for Bash, so no account or Anthropic
-//! connection is needed. Set `WISP_SANDBOX_CLAUDE` to the CLI under test.
+//! Claude Code's worker sandbox, for real (0013). Runs the Claude Code named in
+//! `WISP_SANDBOX_CLAUDE` with the arguments wispd gives a worker, against a fake Messages API on
+//! 127.0.0.1 that asks for one Bash command, then checks what that command could do. Nothing
+//! reaches Anthropic, and no login is used.
+//!
+//! Skipped when `WISP_SANDBOX_CLAUDE` is unset. CI's Linux legs install bubblewrap, socat, and a
+//! pinned Claude Code, and set it.
 #![cfg(unix)]
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs;
+use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -16,17 +21,16 @@ use tokio::net::{TcpListener, TcpStream};
 use wispd::backend::claude::arguments;
 use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
 
-const KEY: &str = "sk-ant-wisp-test-key-never-send";
-/// A stand-in for the messaging token, in case Claude Code doesn't set its own.
-const TOKEN: &str = "wisp-test-messaging-token";
+const SECRET: &str = "wisp-sandbox-test-secret";
 
 #[tokio::test]
-async fn a_worker_can_run_bash_without_exposing_its_key() {
+async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_sockets() {
     let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        eprintln!("skipped: WISP_SANDBOX_CLAUDE doesn't name a Claude Code to test");
         return;
     };
     let dir = tempfile::tempdir().unwrap();
+    // Canonical, since Seatbelt matches real paths and macOS's temp folder is behind a symlink.
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
     let data = root.join("data");
@@ -37,25 +41,54 @@ async fn a_worker_can_run_bash_without_exposing_its_key() {
         &home.join(".ssh"),
         &worktree,
         &context,
+        &data.join("context/other"),
         &git_dir,
         &root.join("tmp"),
     ] {
         fs::create_dir_all(folder).unwrap();
     }
-    fs::write(home.join(".ssh/id_ed25519"), "private-test-key").unwrap();
+    // A key in the home folder, and another project's context in wispd's data folder.
+    fs::write(home.join(".ssh/id_ed25519"), format!("{SECRET}-key")).unwrap();
     fs::write(
-        worktree.join(".git"),
-        format!("gitdir: {}/worktrees/run\n", git_dir.display()),
+        data.join("context/other/notes.md"),
+        format!("{SECRET}-notes"),
     )
     .unwrap();
-    fs::write(
-        worktree.join("probe.sh"),
-        format!(
-            "if [ -n \"${{ANTHROPIC_API_KEY-}}\" ]; then echo key-exposed; else echo key-hidden; fi\n\
-             if [ -n \"${{CLAUDE_CODE_MESSAGING_TOKEN-}}\" ]; then echo token-exposed; else echo token-hidden; fi\n             cat '{}' 2>/dev/null || echo denied-read\n             echo x > inside && echo wrote-inside\n             echo x > '{}' 2>/dev/null || echo denied-write\n",
-            home.join(".ssh/id_ed25519").display(), home.join("outside").display(),
-        ),
-    ).unwrap();
+    let git_file = format!("gitdir: {}/worktrees/run\n", git_dir.display());
+    fs::write(worktree.join(".git"), &git_file).unwrap();
+    let socket = root.join("probe.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    // The probe is a script in the worktree, so Claude Code's permission checks can't see what it
+    // touches, as with any build script a worker runs. Only the OS sandbox stands in its way.
+    let path = |path: &Path| path.display().to_string();
+    let mut probe = format!(
+        "cat '{key}'\n\
+         cat '{notes}'\n\
+         echo x > '{home_file}'\n\
+         echo x > '{root_file}'\n\
+         echo x > '{git_file}'\n\
+         echo x > '{inside}' && echo wrote-inside\n\
+         echo x > '{note}' && echo wrote-context\n",
+        key = path(&home.join(".ssh/id_ed25519")),
+        notes = path(&data.join("context/other/notes.md")),
+        home_file = path(&home.join("outside")),
+        root_file = path(&root.join("outside")),
+        git_file = path(&worktree.join(".git")),
+        inside = path(&worktree.join("inside")),
+        note = path(&context.join("note")),
+    );
+    if cfg!(target_os = "linux") {
+        // The seccomp filter's job: no Unix sockets, such as the D-Bus session bus.
+        writeln!(
+            probe,
+            "socat -u OPEN:/dev/null 'UNIX-CONNECT:{}' && echo socket-connected",
+            path(&socket)
+        )
+        .unwrap();
+    }
+    fs::write(worktree.join("probe.sh"), probe).unwrap();
 
     let request = RunRequest {
         run_id: RunId::generate(),
@@ -75,15 +108,23 @@ async fn a_worker_can_run_bash_without_exposing_its_key() {
         coordinator_tools: None,
     };
     let (stdout, transcript) = run_worker(&claude, &request, &root, &home).await;
+
     let result = tool_result(&stdout).unwrap_or_else(|| panic!("no Bash result:\n{transcript}"));
-    assert!(result.contains("key-hidden"), "{transcript}");
-    assert!(!result.contains(KEY), "{transcript}");
-    assert!(result.contains("token-hidden"), "{transcript}");
-    assert!(!result.contains(TOKEN), "{transcript}");
     assert!(result.contains("wrote-inside"), "{transcript}");
-    assert!(result.contains("denied-read"), "{transcript}");
-    assert!(result.contains("denied-write"), "{transcript}");
-    assert!(!home.join("outside").exists());
+    assert!(result.contains("wrote-context"), "{result}");
+    assert!(worktree.join("inside").exists());
+    assert!(context.join("note").exists());
+    assert!(!stdout.contains(SECRET), "a secret was read:\n{result}");
+    assert!(!home.join("outside").exists(), "{result}");
+    assert!(!root.join("outside").exists(), "{result}");
+    assert_eq!(fs::read_to_string(worktree.join(".git")).unwrap(), git_file);
+    if cfg!(target_os = "linux") {
+        assert!(!result.contains("socket-connected"), "{result}");
+        assert!(
+            listener.accept().is_err(),
+            "a Unix socket connect got through"
+        );
+    }
 }
 
 /// Runs `claude` with the arguments wispd gives `request`, against a fake Messages API whose one
@@ -108,8 +149,7 @@ async fn run_worker(
         .env("HOME", home)
         .env("TMPDIR", root.join("tmp"))
         .env("CLAUDE_CONFIG_DIR", root.join("config"))
-        .env("ANTHROPIC_API_KEY", KEY)
-        .env("CLAUDE_CODE_MESSAGING_TOKEN", TOKEN)
+        .env("ANTHROPIC_API_KEY", "sk-ant-wisp-sandbox-test")
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         .env("DISABLE_AUTOUPDATER", "1")
