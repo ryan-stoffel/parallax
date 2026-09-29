@@ -728,6 +728,20 @@ mod tests {
     }
 
     #[test]
+    fn the_coordinators_instructions_name_only_real_tools() {
+        let instructions = include_str!("agents/coordinator.md");
+        // Every `snake_case` span between backticks.
+        for name in instructions.split('`').skip(1).step_by(2) {
+            if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                assert!(
+                    TOOLS.contains(&name),
+                    "coordinator.md names `{name}`, not a tool"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn no_tool_takes_a_project_or_a_thread() {
         for tool in definitions().as_array().unwrap() {
             let schema = &tool["inputSchema"];
