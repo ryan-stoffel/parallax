@@ -327,6 +327,12 @@ impl Launcher {
         &self.base
     }
 
+    /// wispd's data folder.
+    #[must_use]
+    pub fn data_dir(&self) -> &DataDir {
+        &self.data_dir
+    }
+
     /// The environment `spec`'s process gets.
     #[must_use]
     pub fn environment(&self, spec: &ProcessSpec) -> Environment {

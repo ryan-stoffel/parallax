@@ -64,7 +64,8 @@ jobs:
 
       # What Claude Code's worker sandbox needs on Linux (0013): bubblewrap, socat, and the AppArmor
       # profile from Claude Code's docs that lets bwrap make user namespaces. Plus a pinned Claude
-      # Code, which the sandbox tests run against a fake API (RYA-20).
+      # Code, which the sandbox tests run against a fake API (RYA-20), and zsh, whose startup the
+      # PATH test makes reset PATH (RYA-126).
       - name: Install the Linux worker sandbox
         if: runner.os == 'Linux'
         env:
@@ -73,7 +74,7 @@ jobs:
           CLAUDE_SHA256_ARM64: 346d294f0103d6fc0de11ac953579b5c62dfa90698a4cfc486b6f927c615e697
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          sudo apt-get install -y --no-install-recommends bubblewrap socat zsh
           sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
           abi <abi/4.0>,
           include <tunables/global>
