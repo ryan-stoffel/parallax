@@ -49,7 +49,7 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 
 ### Its first message
 
-`daemon/src/agents/coordinator.md` is the coordinator's instructions: plan, delegate with `spawn_agent`, check on subagents, and keep shared notes. They go ahead of the user's first message, the repository's path, and a note that its working directory is a copy of the latest commit, as a worker's limits do (0013). RYA-43 refines them.
+`daemon/src/agents/coordinator.md` is the coordinator's instructions: plan, delegate with `spawn_agent`, check on subagents, and keep shared notes. They go ahead of the user's first message, the repository's path, and a note that its working directory is a copy of the latest commit, as a worker's limits do (0013).
 
 ### It never sees itself
 
