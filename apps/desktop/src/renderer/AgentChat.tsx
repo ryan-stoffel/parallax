@@ -168,19 +168,19 @@ export function TranscriptView({
     [],
   );
 
-  // While the run goes, the last turn's work row stands for what it's doing, even before it does anything.
+  // While the run goes, a work row follows a message that has no reply yet, standing for what
+  // the agent is doing before it does anything.
   const view = useMemo(() => {
     const grouped = groupWork(rows);
-    const last = grouped.findLast((r) => r.kind !== "assistant");
+    const last = grouped.at(-1);
     if (live && (last?.kind === "user" || last?.kind === "pending"))
-      grouped.splice(grouped.indexOf(last) + 1, 0, {
-        kind: "work",
-        key: "work:pending",
-        items: [],
-      });
+      grouped.push({ kind: "work", key: "work:pending", items: [] });
     return grouped;
   }, [rows, live]);
-  const activeIndex = live ? view.findLastIndex((r) => r.kind !== "assistant") : -1;
+  // The agent's text streams in its own row, so a work row is only live while it is the last
+  // (a notice after it doesn't count).
+  const tail = view.findLastIndex((r) => r.kind !== "notice");
+  const activeIndex = live && view[tail]?.kind === "work" ? tail : -1;
 
   const virtualizer = useVirtualizer({
     count: view.length,
@@ -227,7 +227,6 @@ export function TranscriptView({
                   open={open.has(row.key)}
                   openKeys={row.kind === "work" ? open : undefined}
                   active={v.index === activeIndex}
-                  answering={v.index === activeIndex && activeIndex < view.length - 1}
                   onToggle={toggle}
                   onResend={onResend}
                 />
@@ -251,8 +250,6 @@ interface RowProps {
   openKeys?: ReadonlySet<string>;
   /** For a work row: whether it is the one the agent is working in now. */
   active?: boolean;
-  /** For the active work row: whether the agent has moved on to its closing message. */
-  answering?: boolean;
   onToggle: (key: string, open: boolean) => void;
   /** Sends a dropped follow-up again. */
   onResend?: (turnId: string, text: string) => void;
@@ -266,7 +263,6 @@ export const RowView = memo(function RowView({
   open,
   openKeys,
   active,
-  answering,
   onToggle,
   onResend,
 }: RowProps) {
@@ -276,7 +272,6 @@ export const RowView = memo(function RowView({
         <WorkGroup
           work={row}
           active={active ?? false}
-          answering={answering ?? false}
           live={live}
           open={open}
           openKeys={openKeys ?? new Set()}
@@ -399,13 +394,12 @@ export const RowView = memo(function RowView({
 });
 
 /**
- * A turn's thinking, tool calls, and narration under one dropdown. While the agent works its
+ * A run of thinking, tool calls, and checklists under one dropdown. While the agent works its
  * header says what it's doing now; afterward it says how long it worked, and hides the rest.
  */
 function WorkGroup({
   work,
   active,
-  answering,
   live,
   open,
   openKeys,
@@ -413,13 +407,12 @@ function WorkGroup({
 }: {
   work: Work;
   active: boolean;
-  answering: boolean;
   live: boolean;
   open: boolean;
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
 }) {
-  const now = active ? (answering ? { label: "Writing" } : activity(work.items.at(-1))) : undefined;
+  const now = active ? activity(work.items.at(-1)) : undefined;
   return (
     <div>
       <button
