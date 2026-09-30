@@ -309,6 +309,7 @@ export function App() {
               key={`${host.id}/${project.id}`}
               hostId={host.id}
               project={project.id}
+              name={project.name}
               connected={connected}
             />
           )

@@ -310,3 +310,21 @@ body {
     animation: none;
   }
 }
+
+/* The Context view (ContextPanel.tsx). Its files draw a task's checkbox as a circle, so a task
+   has no bullet, and a top-level task list sits flush; plain items and nested lists keep theirs.
+   A Recents card previews the top of a file in small type. */
+:is(.context-doc, .context-preview) .task-list-item {
+  list-style: none;
+}
+:is(.context-doc, .context-preview) .markdown > .contains-task-list {
+  padding-left: 0;
+}
+.context-preview .markdown {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+.context-preview .markdown > * {
+  margin-top: 0.3em;
+}
