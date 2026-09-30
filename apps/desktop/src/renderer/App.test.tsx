@@ -23,6 +23,7 @@ afterEach(() => {
   act(() => unmount());
   delete bridge.updatable;
   delete bridge.update;
+  delete bridge.onUpdateReady;
 });
 
 function renderApp() {
@@ -56,7 +57,7 @@ test("the side panel toggle reports and flips the panel's state", () => {
   expect(panel.hidden).toBe(true);
 });
 
-test("the footer's Usage opens the Usage page, and Update shows its answer", async () => {
+test("the footer's Usage opens the Usage page, and Update shows when it's ready and its answer", async () => {
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   renderApp();
@@ -77,18 +78,25 @@ test("the footer's Usage opens the Usage page, and Update shows its answer", asy
   act(() => unmount());
 
   let answer: (text: string) => void = () => {};
+  let ready: (commits: number) => void = () => {};
   Object.assign(bridge, {
     updatable: true,
     update: () => new Promise<string>((resolve) => (answer = resolve)),
+    onUpdateReady: (listener: (commits: number) => void) => {
+      ready = listener;
+      return () => {};
+    },
   });
   renderApp();
-  act(() => button("Update from develop")!.click());
+  act(() => ready(3));
+  act(() => button("Update ready: 3 new commits on develop")!.click());
   // The connection's status line shares the footer.
   const status = () =>
     [...document.querySelectorAll('#sidebar [role="status"]')].map((s) => s.textContent);
   expect(status()).toContain("Updating…");
   expect(button("Update from develop")!.disabled).toBe(true);
-  await act(async () => answer("Up to date"));
-  expect(status()).toContain("Up to date");
+  await act(async () => answer("Updated to abc1234"));
+  act(() => ready(0));
+  expect(status()).toContain("Updated to abc1234");
   expect(button("Update from develop")!.disabled).toBe(false);
 });
