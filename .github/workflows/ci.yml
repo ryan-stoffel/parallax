@@ -1,18 +1,17 @@
 name: CI
 
+# Pull requests only: develop and main take changes only through PRs that passed these checks, so a
+# push there runs just release.yml's build.
 on:
   pull_request:
-  push:
-    branches: [develop, main]
 
 permissions:
   contents: read
 
-# A new push to a PR cancels its running check. Each push to develop or main gets its own group,
-# because a shared group cancels a pending run whenever a newer one queues.
+# A new push to a PR cancels its running check.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 defaults:
   run:
