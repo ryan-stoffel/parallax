@@ -2,16 +2,17 @@
 # Builds the app's installer and its update metadata for this OS and arch into
 # apps/desktop/release/ (0029, 0030): a release `wispd` for the target, the app's dist/, then
 # electron-builder. WISP_VERSION is the version to stamp into the build (default 0.0.0-local); it
-# is never committed. Unsigned unless CSC_LINK is set, which on macOS signs with that certificate
-# (and notarizes if APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER are set too).
+# is never committed. Unsigned unless CSC_KEYCHAIN (or CSC_LINK) names a certificate, which on
+# macOS signs with it (and notarizes if APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER are
+# set too).
 set -eu
 
 cd "$(dirname "$0")/../.."
 
-# Without CSC_LINK, don't pick up a Developer ID from the local keychain. With it, electron-builder
-# signs with that certificate, which auto-discovery must stay on for. Checked before `set -x`, so
-# the certificate never reaches the log.
-if [ -z "${CSC_LINK:-}" ]; then
+# Without a certificate, don't pick up a Developer ID from the login keychain. With one,
+# electron-builder finds its identity by auto-discovery, which must stay on. Checked before
+# `set -x`, so the certificate never reaches the log.
+if [ -z "${CSC_KEYCHAIN:-}" ] && [ -z "${CSC_LINK:-}" ]; then
   export CSC_IDENTITY_AUTO_DISCOVERY=${CSC_IDENTITY_AUTO_DISCOVERY:-false}
 fi
 set -x

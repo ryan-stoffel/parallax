@@ -148,7 +148,9 @@ jobs:
 
       # The signing secrets reach only this step and the next. electron-builder signs everything in
       # the bundle with the Developer ID certificate and the hardened runtime, then notarizes and
-      # staples the app, before it builds the dmg and zip (0030).
+      # staples the app, before it builds the dmg and zip (0030). The certificate goes into a
+      # keychain made here and named by CSC_KEYCHAIN: electron-builder 26.15.3's own CSC_LINK
+      # import unlocks its keychain with the certificate's password, which fails.
       - name: Package, sign, and notarize the app
         if: runner.os == 'macOS'
         env:
@@ -158,9 +160,22 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
+          CSC_KEYCHAIN=$RUNNER_TEMP/signing.keychain-db
+          password=$(openssl rand -base64 32)
+          security create-keychain -p "$password" "$CSC_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$CSC_KEYCHAIN"
+          security unlock-keychain -p "$password" "$CSC_KEYCHAIN"
+          (umask 077 && printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/certificate.p12")
+          security import "$RUNNER_TEMP/certificate.p12" -k "$CSC_KEYCHAIN" -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$CSC_KEYCHAIN" > /dev/null
+          # shellcheck disable=SC2046 # one keychain path per word
+          security list-keychains -d user -s "$CSC_KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           APPLE_API_KEY=$RUNNER_TEMP/apple-api-key.p8
           (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY")
-          export APPLE_API_KEY
+          export CSC_KEYCHAIN APPLE_API_KEY
+          unset CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_P8
           scripts/ci/package-app
 
       # The dmg was signed in the build but can only be notarized as a file, after it. Stapling

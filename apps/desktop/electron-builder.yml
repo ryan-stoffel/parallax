@@ -42,7 +42,7 @@ extraResources:
     to: .
 artifactName: wisp-${version}-${os}-${arch}.${ext}
 # The updater installs from the zip; the dmg is for first installs. Signing and notarizing happen
-# only when CSC_LINK and the APPLE_API_* variables are set (release.yml's macOS build): everything
+# only when CSC_KEYCHAIN (or CSC_LINK) and the APPLE_API_* variables are set (release.yml's macOS build): everything
 # in the bundle, wispd included, gets the hardened runtime and a secure timestamp.
 mac:
   target: [dmg, zip]

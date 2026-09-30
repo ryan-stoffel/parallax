@@ -65,7 +65,8 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
 - **Only the macOS build signs, on every run of `release.yml`:** pushes to `develop` and `main`, and `workflow_dispatch`, which proves it on a branch but never publishes.
   - The secrets from RYA-65 go only to the two macOS steps: `CSC_LINK` (a base64 `.p12`), `CSC_KEY_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`.
   - The `.p8` key is written to a file in `$RUNNER_TEMP` with mode 600 and passed as `APPLE_API_KEY`.
-- electron-builder signs with the Developer ID Application certificate, using a temporary keychain. It signs every binary in the bundle with the hardened runtime and a secure timestamp. That covers `Contents/Resources/wispd`, node-pty's `pty.node` and `spawn-helper`, and node-llama-cpp's addon and dylibs, since `@electron/osx-sign` walks all of `Contents/`. It then notarizes the app with the API key and staples it, before it builds the dmg and zip. It also signs the dmg.
+- The workflow imports the certificate into a keychain of its own, in `$RUNNER_TEMP`, and names it in `CSC_KEYCHAIN`. electron-builder 26.15.3 can import `CSC_LINK` itself, but it then unlocks that keychain with the certificate's password instead of the keychain's, so the build fails.
+- electron-builder signs with the Developer ID Application certificate from that keychain. It signs every binary in the bundle with the hardened runtime and a secure timestamp. That covers `Contents/Resources/wispd`, node-pty's `pty.node` and `spawn-helper`, and node-llama-cpp's addon and dylibs, since `@electron/osx-sign` walks all of `Contents/`. It then notarizes the app with the API key and staples it, before it builds the dmg and zip. It also signs the dmg.
 - **Entitlements** (`apps/desktop/entitlements.mac.plist`, for the app and everything in it) are `com.apple.security.cs.allow-jit` only, for V8. Everything the app loads is signed with its own Team ID, so library validation passes without `disable-library-validation`. Spawning processes (node-pty's shell, `wispd`, and the agents `wispd` starts) needs no entitlement.
 - After the build, the job:
   1. notarizes the dmg with `notarytool` and prints Apple's log if it isn't accepted
@@ -73,7 +74,7 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
   3. runs `codesign --verify --deep --strict`, `spctl --assess --type execute`, and `stapler validate` on the app
 
   Any failure fails the job, so no release is published.
-- **`package-app` signs only when `CSC_LINK` is set.** Otherwise it still sets `CSC_IDENTITY_AUTO_DISCOVERY=false`, so a local build never signs with an identity in the keychain. It can't set it with `CSC_LINK`, because electron-builder then finds no identity and silently skips signing. Notarization runs only when the `APPLE_API_*` variables are set.
+- **`package-app` signs only when `CSC_KEYCHAIN` or `CSC_LINK` is set.** Otherwise it still sets `CSC_IDENTITY_AUTO_DISCOVERY=false`, so a local build never signs with an identity in the login keychain. It leaves auto-discovery on when a certificate is given, because without it electron-builder finds no identity and silently skips signing. Notarization runs only when the `APPLE_API_*` variables are set.
 - Windows and Linux stay unsigned (RYA-65; 0029's Smart App Control limitation stands).
 
 ## Consequences
