@@ -14,16 +14,18 @@ import { ProjectIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./
 import { useThemePreference } from "./theme";
 import { groupOf, groupThreads, noRepo, titleOf, useThreads } from "./threads";
 import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
+import { UsagePage } from "./UsagePage";
 
 /**
- * The open chat: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
- * thread (its id is its run's), or a new thread in a sidebar group (`threads.ts`). With no group,
- * it's the first repository's.
+ * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
+ * thread (its id is its run's), a new thread in a sidebar group (`threads.ts`; with no group,
+ * it's the first repository's), or Usage.
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
   | { kind: "thread"; threadId: string }
-  | { kind: "new"; groupId?: string };
+  | { kind: "new"; groupId?: string }
+  | { kind: "usage" };
 
 export type SettingsSection = "general" | "hosts" | "providers";
 
@@ -155,7 +157,9 @@ export function App() {
       <PanelLeft />
     </IconButton>
   );
-  const sidePanelOpen = panelOpen && !settings;
+  // The side panel is a chat's, so Settings and Usage have none.
+  const chat = !settings && selection.kind !== "usage";
+  const sidePanelOpen = panelOpen && chat;
   const expanded = sidePanelOpen && panelExpanded;
   // The main pane's top row meets the traffic lights without the sidebar, and
   // Windows' window buttons without the side panel.
@@ -205,6 +209,8 @@ export function App() {
               onThemeChange={setTheme}
             />
           </>
+        ) : selection.kind === "usage" ? (
+          <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
         ) : (
           <>
             <TopBar className={topBarInset}>
