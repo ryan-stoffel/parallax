@@ -1,0 +1,73 @@
+name: Release
+
+# The two release channels (0028): a nightly prerelease per push to develop and a standard release
+# per push to main. Only this workflow can write to the repository's releases.
+on:
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+# One publish at a time per branch, so each release's notes start at the one before it. If pushes
+# queue up, the newest waits and the ones between are skipped; their PRs still land in its notes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  # The pushed commit's date, not the run's, so a re-run of an old commit finds its own tag.
+  COMMIT_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
+
+jobs:
+  nightly:
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the nightly prerelease
+        run: |
+          date=${COMMIT_TIMESTAMP:0:10}
+          tag="nightly-${date//-/}-${GITHUB_SHA::7}"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "$tag is already published."
+            exit 0
+          fi
+          previous=$(gh release list --limit 1000 --json tagName |
+            jq -r --arg tag "$tag" '[.[].tagName | select(startswith("nightly-") and . != $tag)][0] // empty')
+          # Once packaging exists (RYA-64), a `gh release upload "$tag"` after this attaches the
+          # installers and wispd binaries.
+          args=(--target "$GITHUB_SHA" --prerelease --generate-notes)
+          if [ -n "$previous" ]; then args+=(--notes-start-tag "$previous"); fi
+          gh release create "$tag" "${args[@]}"
+
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the standard release
+        run: |
+          date=${COMMIT_TIMESTAMP:0:10}
+          tag="release-${date//-/}-${GITHUB_SHA::7}"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "$tag is already published."
+            exit 0
+          fi
+          previous=$(gh release list --limit 1000 --json tagName |
+            jq -r --arg tag "$tag" '[.[].tagName | select(startswith("release-") and . != $tag)][0] // empty')
+          # Once packaging exists (RYA-64), a `gh release upload "$tag"` after this attaches the
+          # installers and wispd binaries.
+          args=(--target "$GITHUB_SHA" --latest --generate-notes)
+          if [ -n "$previous" ]; then args+=(--notes-start-tag "$previous"); fi
+          gh release create "$tag" "${args[@]}"
