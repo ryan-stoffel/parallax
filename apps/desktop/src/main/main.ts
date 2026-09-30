@@ -63,7 +63,8 @@ app.on("web-contents-created", (_event, contents) => {
 
 ipcMain.handle("wisp:version", () => app.getVersion());
 
-// Asks scripts/dev.mjs to pull develop and rebuild, and resolves to its one-line answer.
+// Asks scripts/dev.mjs to move the checkout to the update channel's branch and rebuild, and
+// resolves to its one-line answer.
 ipcMain.handle(
   "wisp:update",
   () =>
@@ -80,8 +81,8 @@ ipcMain.handle(
     }),
 );
 
-// The commits develop has that the checkout lacks, which scripts/dev.mjs sends each new app and
-// whenever a check changes it. Windows get each change; a (re)loaded renderer asks.
+// The commits the channel's branch has that the checkout lacks, which scripts/dev.mjs sends each
+// new app and whenever a check changes it. Windows get each change; a (re)loaded renderer asks.
 let behind = 0;
 process.on("message", (message) => {
   const count = (message as { behind?: unknown } | null)?.behind;
@@ -125,7 +126,8 @@ nativeTheme.on("updated", () => {
 });
 
 void app.whenReady().then(() => {
-  startHosts();
+  // Tells scripts/dev.mjs which channel's branch to check, and follow, now and on each change.
+  startHosts((channel) => process.send?.({ channel }));
   // The end-to-end tests launch the app on CI machines, where a 490 MB download isn't wanted.
   if (!process.env["WISP_NO_NAMER"]) namer.warm();
   createWindow();

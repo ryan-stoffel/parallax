@@ -32,6 +32,9 @@ const bridge: WispBridge = {
     return () => ipcRenderer.removeListener("wisp:behind", forward);
   },
 
+  updateChannel: () => ipcRenderer.invoke("wisp:updateChannel"),
+  setUpdateChannel: (channel) => ipcRenderer.invoke("wisp:setUpdateChannel", channel),
+
   nameThread: (prompt) => ipcRenderer.invoke("wisp:nameThread", prompt),
 
   request: (hostId, method, params) => ipcRenderer.invoke("wisp:request", hostId, method, params),

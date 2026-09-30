@@ -3,7 +3,14 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
-import type { RendererMethod, RpcResponse, SshHost, SubscribeParams } from "../preload/bridge";
+import {
+  UPDATE_CHANNELS,
+  type RendererMethod,
+  type RpcResponse,
+  type SshHost,
+  type SubscribeParams,
+  type UpdateChannel,
+} from "../preload/bridge";
 import { Connection, sshCommand } from "./connection";
 import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
 import {
@@ -68,9 +75,10 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 
 /**
  * Connects to the local wispd, as host id `local`, and to every saved SSH host at once, and
- * serves the `window.wisp` calls that reach wispd or edit the hosts.
+ * serves the `window.wisp` calls that reach wispd or edit the hosts and the update channel.
+ * `onUpdateChannel` gets the channel at start and whenever it's saved.
  */
-export function startHosts(): void {
+export function startHosts(onUpdateChannel: (channel: UpdateChannel) => void): void {
   addConnection("local", () => {
     const wispd = findWispd({
       env: process.env,
@@ -92,6 +100,18 @@ export function startHosts(): void {
   ipcMain.handle("wisp:hosts", () => settings.hosts);
   ipcMain.handle("wisp:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
   ipcMain.handle("wisp:removeHost", (_event, id: unknown) => removeHost(id));
+
+  const channel = () => settings.updateChannel ?? "nightly";
+  onUpdateChannel(channel());
+  ipcMain.handle("wisp:updateChannel", channel);
+  ipcMain.handle("wisp:setUpdateChannel", (_event, next: unknown) => {
+    // Unlike `ssh`, the renderer may set this, to one of the two channels.
+    const chosen = UPDATE_CHANNELS.find((c) => c === next);
+    if (!chosen) return "invalid update channel";
+    const error = saveSettings({ ...settings, updateChannel: chosen });
+    if (!error) onUpdateChannel(chosen);
+    return error;
+  });
 
   // Answers `{error}` rather than throwing, so a bad call reads like any failed request.
   ipcMain.handle("wisp:request", (_event, hostId: unknown, method: unknown, params: unknown) => {

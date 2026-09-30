@@ -467,7 +467,7 @@ export function ThreadList({
 
 /**
  * The footer's buttons: Settings, Usage, and Update under `pnpm dev`, which shows a download
- * icon with a dot while develop has commits to pull.
+ * icon with a dot while the update channel's branch has commits to take.
  */
 function Footer({
   onOpenSettings,
@@ -502,8 +502,8 @@ function Footer({
             <IconButton
               label={
                 ready
-                  ? `Update ready: ${behind} new commit${behind === 1 ? "" : "s"} on develop`
-                  : "Update from develop"
+                  ? `Update ready: ${behind} commit${behind === 1 ? "" : "s"} to apply`
+                  : "Update wisp"
               }
               disabled={updating}
               onClick={() => void runUpdate()}

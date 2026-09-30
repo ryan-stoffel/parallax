@@ -29,8 +29,18 @@ test("settings round-trip with keys this doesn't know, and a missing file is no 
   const settings = file();
   expect(readSettings(settings)).toEqual({ hosts: [] });
   const hosts = [{ id: "h1", name: "Mac mini", destination: "mini" }];
-  writeSettings(settings, { hosts, ssh: "C:\\ssh.exe", later: 1 } as never);
-  expect(readSettings(settings)).toEqual({ hosts, ssh: "C:\\ssh.exe", later: 1 });
+  writeSettings(settings, {
+    hosts,
+    ssh: "C:\\ssh.exe",
+    updateChannel: "release",
+    later: 1,
+  } as never);
+  expect(readSettings(settings)).toEqual({
+    hosts,
+    ssh: "C:\\ssh.exe",
+    updateChannel: "release",
+    later: 1,
+  });
 });
 
 // Throwing is what stops a save from overwriting them (hosts.ts).
@@ -41,6 +51,8 @@ test("a file this can't use as is throws, so a save can't overwrite what the use
     "[]",
     JSON.stringify({ hosts: {} }),
     JSON.stringify({ hosts: [good], ssh: 3 }),
+    JSON.stringify({ hosts: [good], updateChannel: "beta" }),
+    JSON.stringify({ hosts: [good], updateChannel: 1 }),
     JSON.stringify({ hosts: [good, null] }),
     JSON.stringify({ hosts: [good, { id: "h2" }] }),
     JSON.stringify({ hosts: [good, { ...good, name: "again" }] }),

@@ -14,6 +14,13 @@ import type {
 export const THEME_PREFERENCES = ["system", "dark", "light"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
+/**
+ * The Updates setting: nightly follows every push to develop, release only released code (main).
+ * scripts/channels.mjs holds the branch each follows.
+ */
+export const UPDATE_CHANNELS = ["nightly", "release"] as const;
+export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
+
 export interface WispBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
@@ -26,16 +33,23 @@ export interface WispBridge {
   /** Whether `update` can run: the app runs under `pnpm dev`, from a checkout. */
   updatable: boolean;
   /**
-   * Fast-forwards the checkout to origin/develop and rebuilds what changed; the app then reloads
-   * itself. Resolves to one line for people, such as "Up to date" or why it failed.
+   * Moves the checkout to the update channel's branch and rebuilds what changed; the app then
+   * reloads itself. Resolves to one line for people, such as "Up to date" or why it failed.
    */
   update(): Promise<string>;
   /**
-   * Calls `listener` with how many commits develop has that `update` would pull, now and on every
-   * change; 0 when there's no update. Only changes while `updatable`. Returns the unsubscribe
-   * function.
+   * Calls `listener` with how many commits the channel's branch has that `update` would take, now
+   * and on every change; 0 when there's no update. Only changes while `updatable`. Returns the
+   * unsubscribe function.
    */
   onUpdateReady(listener: (commits: number) => void): () => void;
+  /** The saved update channel; nightly until one is chosen. */
+  updateChannel(): Promise<UpdateChannel>;
+  /**
+   * Saves the update channel, which takes effect at once. Resolves to an error for people, or
+   * undefined.
+   */
+  setUpdateChannel(channel: UpdateChannel): Promise<string | undefined>;
 
   /**
    * Names a new thread from its first prompt, with a model that runs on this computer. Resolves
