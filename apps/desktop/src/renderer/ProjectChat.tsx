@@ -47,7 +47,7 @@ export function ProjectChat({
     };
   }, [hostId, connected]);
 
-  // The Project's repository and branch, which the coordinator runs in (0026).
+  // The Project's repository and branch, which the coordinator runs in (0027).
   const tab = (
     <>
       <span className={tabItem} title={project.repoPath}>

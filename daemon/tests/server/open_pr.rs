@@ -139,6 +139,7 @@ fn thread(repo: Option<RepoId>) -> ThreadStartParams {
         effort: None,
         permission: None,
         branch_slug: None,
+        images: Vec::new(),
     }
 }
 

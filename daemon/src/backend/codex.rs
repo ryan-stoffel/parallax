@@ -10,6 +10,16 @@
 //! which then closes: `codex exec` runs one turn and exits, so the backend takes no follow-ups,
 //! and 0014's `agent/send` resumes the thread instead.
 //!
+//! # Images
+//!
+//! The prompt's images (RYA-191) are files in a folder of their own in the data folder's `tmp/`,
+//! which [`write_images`] makes and the run's driver deletes once Codex has exited, each passed as
+//! `--image=<file>`: with a space instead of `=`, `--image` would take the `-` after it as a
+//! second image, and Codex splits a value at commas, so a path with one is refused. The CLI reads
+//! them itself, outside its sandbox, and wraps each in `<image name=[Image #1] path="...">` for
+//! the model, so the model sees wispd's temp path, never the user's file name, which wispd never
+//! gets.
+//!
 //! Only workers run on Codex so far: the coordinator's no-write mode is RYA-39. A worker is held
 //! to 0013 by Codex's own sandbox (Seatbelt on macOS), configured entirely by
 //! [`worker_overrides`]:
@@ -84,9 +94,10 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
-    EventSink, RunHandle, RunRequest, StartError, Started, ToolPolicy, TurnId, WorkerSandbox,
-    check_argument, prepend_path_line,
+    EventSink, ImageMediaType, PromptImage, RunHandle, RunRequest, StartError, Started, ToolPolicy,
+    TurnId, WorkerSandbox, check_argument, prepend_path_line,
 };
+use crate::images;
 
 /// The CLI's program name, looked up on the launcher's `PATH`.
 pub const PROGRAM: &str = "codex";
@@ -143,16 +154,18 @@ impl CodexBackend {
 }
 
 /// The CLI's arguments for `request`, whose commands get `zdotdir` as `ZDOTDIR` (see
-/// [`worker_overrides`]).
+/// [`worker_overrides`]), with `images`, the files of its prompt's images (see [`write_images`]).
 ///
 /// # Errors
 ///
-/// [`StartError::Invalid`] if the model or the resume id could be read as an option, or if the
-/// worker has no usable [`WorkerSandbox`]. [`StartError::Unsupported`] for a no-write run, a
-/// permission other than `edit`, or an effort this version doesn't know.
+/// [`StartError::Invalid`] if the model or the resume id could be read as an option, if an
+/// image's path has a comma, or if the worker has no usable [`WorkerSandbox`].
+/// [`StartError::Unsupported`] for a no-write run, a permission other than `edit`, or an effort
+/// this version doesn't know.
 pub fn arguments(
     request: &RunRequest,
     zdotdir: Option<&Path>,
+    images: &[PathBuf],
 ) -> Result<Vec<OsString>, StartError> {
     let Some(sandbox) = worker_sandbox(request)? else {
         return Err(StartError::Unsupported(
@@ -197,6 +210,17 @@ pub fn arguments(
     if let Some(model) = &request.model {
         check_argument("model", model)?;
         args.extend(["-m".into(), model.into()]);
+    }
+    for image in images {
+        if image.as_os_str().as_encoded_bytes().contains(&b',') {
+            return Err(StartError::Invalid(format!(
+                "the image file {} has a comma in its path, where Codex would split it",
+                image.display()
+            )));
+        }
+        let mut arg = OsString::from("--image=");
+        arg.push(image);
+        args.push(arg);
     }
     if let Some(resume) = &request.resume {
         check_argument("resume id", &resume.session_id)?;
@@ -294,6 +318,48 @@ pub fn write_zdotdir(dir: &Path, path: &OsStr) -> io::Result<TempDir> {
     Ok(zdotdir)
 }
 
+/// Writes `images` as files into a new folder in `dir` (wispd's data folder's `tmp/`), named by
+/// their order and file type, and returns the folder, which deletes them when dropped, with their
+/// paths. `None` for no images. Only the folder's owner may open it (0700).
+///
+/// # Errors
+///
+/// If an image isn't base64, or `dir` or a file can't be written.
+pub fn write_images(
+    dir: &Path,
+    images: &[PromptImage],
+) -> io::Result<Option<(TempDir, Vec<PathBuf>)>> {
+    if images.is_empty() {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(dir)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("codex-images-");
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let folder = builder.tempdir_in(dir)?;
+    let mut paths = Vec::with_capacity(images.len());
+    for (n, image) in (1..).zip(images) {
+        let bytes = images::decode(&image.data).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("image {n} isn't base64"),
+            )
+        })?;
+        let extension = match image.media_type {
+            ImageMediaType::Png => "png",
+            ImageMediaType::Jpeg => "jpg",
+            ImageMediaType::Gif => "gif",
+            ImageMediaType::Webp => "webp",
+            ImageMediaType::Unknown => "bin",
+        };
+        let path = folder.path().join(format!("{n}.{extension}"));
+        std::fs::write(&path, bytes)?;
+        paths.push(path);
+    }
+    Ok(Some((folder, paths)))
+}
+
 /// `{a, b, ...}`, an inline table of `entries`.
 fn inline(entries: impl Iterator<Item = String>) -> String {
     format!("{{{}}}", entries.collect::<Vec<_>>().join(", "))
@@ -371,8 +437,16 @@ impl Backend for CodexBackend {
             ),
             None => None,
         };
+        let (images, image_paths) =
+            write_images(&self.launcher.data_dir().temp_dir(), &request.images)
+                .map_err(SpawnError::Io)?
+                .unzip();
         let mut spec = ProcessSpec::new(PROGRAM, &request.cwd);
-        spec.args = arguments(&request, zdotdir.as_ref().map(TempDir::path))?;
+        spec.args = arguments(
+            &request,
+            zdotdir.as_ref().map(TempDir::path),
+            image_paths.as_deref().unwrap_or_default(),
+        )?;
         spec.scrub = scrubbed(self.launcher.base());
         match &request.account.credential {
             Credential::Subscription { config_home } => {
@@ -410,7 +484,7 @@ impl Backend for CodexBackend {
             switch,
             turn_id,
             Translator::new(prefix),
-            zdotdir,
+            [zdotdir, images],
         ));
         Ok(Started {
             run: Arc::new(handle),
@@ -420,15 +494,16 @@ impl Backend for CodexBackend {
 }
 
 /// Runs one process: forwards its events and decides the outcome when it exits. Cancelling
-/// doesn't go through here: the run's handle signals the process through `switch`. `zdotdir`,
-/// the worker's [`write_zdotdir`] folder, is deleted once the process has exited.
+/// doesn't go through here: the run's handle signals the process through `switch`. `temp`, the
+/// worker's [`write_zdotdir`] and [`write_images`] folders, is deleted once the process has
+/// exited.
 async fn drive(
     mut process: Process,
     mut sink: EventSink,
     switch: CancelSwitch,
     turn_id: Option<TurnId>,
     mut translator: Translator,
-    zdotdir: Option<TempDir>,
+    temp: [Option<TempDir>; 2],
 ) {
     let mut violation = None;
     if sink.emit(Event::TurnStarted { turn_id }).await.is_err() {
@@ -473,7 +548,7 @@ async fn drive(
             () = sink.closed(), if !switch.is_cancelled() => switch.cancel(),
         }
     };
-    drop(zdotdir);
+    drop(temp);
     let outcome = outcome(violation, &switch, &mut translator, exit);
     let _ = sink.finish(outcome).await;
 }

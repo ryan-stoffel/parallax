@@ -179,6 +179,25 @@ body {
   border-color: var(--border);
 }
 
+/* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
+   paragraphs) with no gap, and code blocks drawn as the transcript's CodeBlock draws them. */
+.composer-input.markdown {
+  font-size: 15px;
+  line-height: 1.625;
+}
+.composer-input > :first-child,
+.composer-input p + p {
+  margin-top: 0;
+}
+.composer-input pre {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar);
+  padding: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
 /* The reasoning slider (EffortMenu.tsx). An invisible range takes input; the track, fill, and
    thumb are drawn so they can spring together. --thumb is the thumb's diameter. */
 .effort-slider {

@@ -11,6 +11,12 @@ import {
   Square,
   X,
 } from "lucide-react";
+import Bold from "@tiptap/extension-bold";
+import Italic from "@tiptap/extension-italic";
+import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { EditorContent, markInputRule, useEditor, type Editor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
 import { useRef, useState, type ReactNode } from "react";
 
 import type { AgentEffort, AgentPermission, AgentRun } from "../protocol/generated/protocol";
@@ -19,7 +25,7 @@ import { ModelMenu } from "./ModelMenu";
 import { backends, models, type Model, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
 
-// Claude Code's permission modes, under its own names (0026). Every mode but Bypass keeps a
+// Claude Code's permission modes, under its own names (0027). Every mode but Bypass keeps a
 // worker in its sandbox (0013). wisp can't show Manual's approval requests yet, so they're denied.
 const accessOptions: Record<AgentPermission, PickerOption> = {
   auto: {
@@ -56,6 +62,92 @@ const accessOptions: Record<AgentPermission, PickerOption> = {
 };
 
 const divider = <span aria-hidden className="mx-1 h-5 w-px bg-border" />;
+
+// The box's editor: typed Markdown (`- `, `1. `, ```` ``` ````, `> `, `#`, `**bold**`, `*italic*`,
+// `` `code` ``) formats as you type. Nothing else rewrites what's typed: bold and italic come from
+// `**` and `*` only, with no space just inside them (as in CommonMark), so `__init__`, `_private_`,
+// and `a * b * c` stay as they are, and there's no strikethrough or `---` rule. Links and
+// underline have no place in a prompt, and a trailing empty line after a list or code block would
+// only add height.
+const extensions = [
+  StarterKit.configure({
+    bold: false,
+    italic: false,
+    strike: false,
+    horizontalRule: false,
+    link: false,
+    underline: false,
+    trailingNode: false,
+  }),
+  Bold.extend({
+    addInputRules() {
+      return [
+        markInputRule({ find: /(?:^|\s)(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/, type: this.type }),
+      ];
+    },
+  }),
+  Italic.extend({
+    addInputRules() {
+      return [markInputRule({ find: /(?:^|\s)(\*([^*\s](?:[^*]*[^*\s])?)\*)$/, type: this.type })];
+    },
+  }),
+];
+
+// What's sent is the box as Markdown. Text goes out as typed, unescaped, since the agent reads it
+// raw: `foo_bar` and `<div>` stay as they are.
+const { nodes, marks } = defaultMarkdownSerializer;
+const markdown = new MarkdownSerializer(
+  {
+    // Paragraphs, headings, and quotes share the defaults' names.
+    ...nodes,
+    listItem: nodes["list_item"]!,
+    bulletList: (state, node) => state.renderList(node, "  ", () => "- "),
+    orderedList: (state, node) => {
+      // Nested lines indent as far as the widest number reaches.
+      const start = node.attrs["start"] as number;
+      const width = `${start + node.childCount - 1}. `.length;
+      state.renderList(node, " ".repeat(width), (i) => `${start + i}. `.padEnd(width));
+    },
+    codeBlock: (state, node) => {
+      // A fence longer than any run of backticks in the code.
+      const runs = node.textContent.match(/`{3,}/g) ?? [];
+      const fence = "`".repeat(Math.max(2, ...runs.map((r) => r.length)) + 1);
+      state.write(`${fence}${(node.attrs["language"] as string | null) ?? ""}\n`);
+      state.text(node.textContent, false);
+      state.ensureNewLine();
+      state.write(fence);
+      state.closeBlock(node);
+    },
+    hardBreak: (state) => state.write("\n"),
+    text: (state, node) => state.text(node.text!, false),
+  },
+  {
+    // So does inline code.
+    ...marks,
+    bold: marks["strong"]!,
+    italic: marks["em"]!,
+  },
+);
+
+// Lines typed with Shift+Enter are paragraphs, which Markdown would send a blank line apart. They
+// go out a line apart, as typed: each run of them is joined into one, with line breaks.
+function asLines(node: ProseMirrorNode): ProseMirrorNode {
+  if (node.isTextblock) return node;
+  const children: ProseMirrorNode[] = [];
+  node.forEach((child) => {
+    const last = children.at(-1);
+    if (last?.type.name === "paragraph" && child.type.name === "paragraph") {
+      const lineBreak = child.type.schema.nodes["hardBreak"]!.create();
+      children[children.length - 1] = last.copy(
+        last.content.addToEnd(lineBreak).append(child.content),
+      );
+    } else children.push(asLines(child));
+  });
+  return node.copy(Fragment.from(children));
+}
+
+const toMarkdown = (node: ProseMirrorNode) =>
+  markdown.serialize(asLines(node), { tightLists: true });
 
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
 export const tabItem =
@@ -96,7 +188,11 @@ export interface ComposerProps {
   optionsDisabled?: string;
 }
 
-/** The prompt box, the same on every screen. Enter sends and Shift+Enter starts a new line. */
+/**
+ * The prompt box, the same on every screen. It formats Markdown as you type and sends it as
+ * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
+ * block Enter adds a line and Cmd/Ctrl+Enter sends. It grows with its text up to 40% of the window.
+ */
 export function Composer({
   newThread,
   onSend,
@@ -108,6 +204,7 @@ export function Composer({
   started,
   optionsDisabled,
 }: ComposerProps) {
+  // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
   const [stopping, setStopping] = useState(false);
@@ -151,16 +248,108 @@ export function Composer({
 
   const submit = async () => {
     if (!canSend) return;
-    setText("");
+    const sent = editor.getJSON();
+    editor.commands.clearContent();
     setError(undefined);
     const failed = await onSend(text, options);
     if (failed === undefined) setFiles([]);
-    else {
+    else if (!editor.isDestroyed) {
       // Put it back ahead of anything typed while it was in flight.
-      setText((typed) => (typed ? `${text}\n\n${typed}` : text));
+      const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);
+      editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });
       setError(failed);
     }
   };
+
+  const placeholder =
+    disabledReason ??
+    (newThread
+      ? "Describe a change, paste an error, or drop in a plan"
+      : "Reply, add detail, or steer what it does next");
+  // Its props are read again on every render, so its handlers see this render's state.
+  const editor: Editor = useEditor({
+    extensions,
+    // Pasted text arrives as typed, never reformatted.
+    enablePasteRules: false,
+    onUpdate: ({ editor }) => setText(toMarkdown(editor.state.doc)),
+    editorProps: {
+      // All of them, since these replace Tiptap's own (its role too) once props change.
+      attributes: {
+        id: "composer-input",
+        role: "textbox",
+        "aria-label": "Message",
+        "aria-multiline": "true",
+        "aria-placeholder": placeholder,
+        // It grows from three rows up to the cap, then scrolls. Its parent is anchored below it,
+        // so it grows upward.
+        class:
+          "composer-input markdown block max-h-[40vh] min-h-[calc(4.875em+1.125rem)] overflow-y-auto px-5 pt-4.5 focus-visible:outline-none",
+      },
+      handleKeyDown: (_view, event): boolean => {
+        if (event.key !== "Enter" || event.isComposing) return false;
+        const inCode = editor.isActive("codeBlock");
+        if (inCode ? event.metaKey || event.ctrlKey : !event.shiftKey) {
+          void submit();
+          return true;
+        }
+        // Shift+Enter does what Enter does in other editors: a new line, list item, or line of
+        // code, or out of an empty list item. A line of just ``` or ```lang starts a code block,
+        // as ``` and a space does.
+        return (
+          event.shiftKey &&
+          editor.commands.first(({ commands }) => [
+            () => commands.newlineInCode(),
+            ({ state }) => {
+              const { $from } = state.selection;
+              const fence = /^```([a-z]*)$/.exec($from.parent.textContent);
+              return (
+                !!fence &&
+                commands.deleteRange({ from: $from.start(), to: $from.end() }) &&
+                commands.setCodeBlock(fence[1] ? { language: fence[1] } : undefined)
+              );
+            },
+            () => commands.splitListItem("listItem"),
+            () => commands.liftEmptyBlock(),
+            () => commands.splitBlock(),
+          ])
+        );
+      },
+      // Paste takes plain text only, so nothing brings in its source's styling. Anything else (an
+      // image, say) falls through to the editor, which drops it.
+      handleDOMEvents: {
+        paste: (view, event) => {
+          const text = event.clipboardData?.getData("text/plain");
+          if (!text) return false;
+          event.preventDefault();
+          view.pasteText(text);
+          return true;
+        },
+      },
+      // Copy and cut give the selection's Markdown as its text, so pasting it back sends the same.
+      // Within one line or code block, that's just its text (with any inline Markdown), not the
+      // block's markers or fences.
+      clipboardTextSerializer: (slice, view) => {
+        const { selection, schema } = view.state;
+        const { $from, $to } = selection;
+        const content =
+          $from.sameParent($to) && $from.parent.isTextblock
+            ? schema.nodes["paragraph"]!.create(
+                null,
+                $from.parent.slice($from.parentOffset, $to.parentOffset).content,
+              )
+            : slice.content;
+        return toMarkdown(schema.topNodeType.create(null, content));
+      },
+      // Pasted lines are lines, as typed ones are: a paragraph each, blank ones kept.
+      clipboardTextParser: (text, _context, _plain, view) => {
+        const { schema } = view.state;
+        const lines = text
+          .split(/\r\n?|\n/)
+          .map((line) => schema.nodes["paragraph"]!.create(null, line ? schema.text(line) : null));
+        return new Slice(Fragment.from(lines), 1, 1);
+      },
+    },
+  });
 
   const stop = async () => {
     setStopping(true);
@@ -181,27 +370,17 @@ export function Composer({
         }}
         className="relative z-10 rounded-3xl border border-border bg-surface shadow-composer focus-within:border-ring"
       >
-        <label htmlFor="composer-input" className="sr-only">
-          Message
-        </label>
-        <textarea
-          id="composer-input"
-          rows={3}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
-            e.preventDefault();
-            void submit();
-          }}
-          placeholder={
-            disabledReason ??
-            (newThread
-              ? "Describe a change, paste an error, or drop in a plan"
-              : "Reply, add detail, or steer what it does next")
-          }
-          className="block w-full resize-none bg-transparent px-5 pt-4.5 text-[15px] leading-relaxed placeholder:text-faint-foreground focus-visible:outline-none"
-        />
+        <div className="relative">
+          {!text && (
+            <p
+              aria-hidden
+              className="pointer-events-none absolute inset-x-5 top-4.5 truncate text-[15px] leading-relaxed text-faint-foreground"
+            >
+              {placeholder}
+            </p>
+          )}
+          <EditorContent editor={editor} />
+        </div>
         {files.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 px-4 pt-2">
             {files.map((f, i) => (

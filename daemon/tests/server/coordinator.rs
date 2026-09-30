@@ -1,6 +1,6 @@
 //! A project's coordinator chat end to end (RYA-41, decision 0024): `project/start` against an
 //! in-process wispd whose backend is the fake CLI, in a real git repository. The coordinator runs
-//! in the project's repository, in its permission mode (0026).
+//! in the project's repository, in its permission mode (0027).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -71,6 +71,7 @@ fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
         model: None,
         effort: None,
         permission: None,
+        images: Vec::new(),
     }
 }
 
@@ -332,7 +333,7 @@ async fn sessions(client: &mut Conn, runs: &[RunId]) {
     .await;
 }
 
-/// 0026: the coordinator runs in the mode it was started in, a subagent it spawns inherits it,
+/// 0027: the coordinator runs in the mode it was started in, a subagent it spawns inherits it,
 /// and a mode changed between turns applies to its next turn and to the subagents after that.
 #[tokio::test]
 async fn subagents_inherit_the_coordinators_permission_mode_as_it_changes() {
@@ -486,6 +487,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         turn_id: wake.turn_id,
         text: Some(wake.prompt.clone()),
         wake: true,
+        images: Vec::new(),
     }));
     host.server.stop().await;
 }

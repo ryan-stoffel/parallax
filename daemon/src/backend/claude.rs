@@ -11,7 +11,7 @@
 //!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
 //!   [`FailureKind::PolicyViolation`].
 //! - **A coordinator**, a no-write run with wispd's own MCP tools attached (0019), is full Claude
-//!   Code instead (0026): the run's [`permission_mode`], then `--mcp-config` with the `wispd mcp`
+//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `wispd mcp`
 //!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
 //!   with [`crate::mcp::ALLOWED_TOOLS`], so wispd's tools work in every mode. Its user and
 //!   project settings, hooks, skills, plugins, and subagents all load, as in a terminal. As a
@@ -20,7 +20,7 @@
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
 //!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
 //!   each writable folder. In [`AgentPermission::Bypass`] a worker is full Claude Code instead,
-//!   as on the user's own machine (0026): only its permission mode and `--add-dir`, with no
+//!   as on the user's own machine (0027): only its permission mode and `--add-dir`, with no
 //!   sandbox, and its `system/init` may list any tool. Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
@@ -75,7 +75,8 @@
 //! # Messages go on stdin
 //!
 //! With `--input-format stream-json`, the prompt and every follow-up are user messages on stdin,
-//! one JSON object per line, as the Agent SDK sends them. The prompt never goes in argv, where
+//! one JSON object per line, as the Agent SDK sends them, with a message's images as base64 image
+//! blocks before its text (RYA-191). The prompt never goes in argv, where
 //! `ps` would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id,
 //! which the CLI echoes in `result.user_message_uuids`: several messages sent close together can
 //! run as one turn, and those ids say which turns a result ended. Once no turn is outstanding,
@@ -101,7 +102,7 @@
 //! inherit it.
 //!
 //! A project's `env` block can still set variables for a worker, and a coordinator or a bypass
-//! worker loads the repository's settings (0004, #134, 0026), so the output is
+//! worker loads the repository's settings (0004, #134, 0027), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
 //! a `result` whose `modelUsage` names a provider other than `firstParty`, kill the CLI's process
 //! group at once and fail the run with [`FailureKind::UnexpectedApiKey`].
@@ -140,8 +141,8 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
-    EventSink, FollowUp, Run, RunHandle, RunId, RunRequest, SendError, StartError, Started,
-    ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
+    EventSink, FollowUp, PromptImage, Run, RunHandle, RunId, RunRequest, SendError, StartError,
+    Started, ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::mcp;
 
@@ -228,7 +229,7 @@ pub const WORKER_DENIED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "0
 pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
 
 /// [`AgentPermission::Bypass`]'s mode. Claude Code refuses it under `--restricted`, so a worker
-/// in it runs without the worker sandbox (0026).
+/// in it runs without the worker sandbox (0027).
 pub const BYPASS_PERMISSION_MODE: &str = "bypassPermissions";
 
 /// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013), in every mode but
@@ -252,7 +253,7 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
-/// Claude Code's permission modes, in the order its own picker lists them (0026).
+/// Claude Code's permission modes, in the order its own picker lists them (0027).
 const PERMISSIONS: &[AgentPermission] = &[
     AgentPermission::Auto,
     AgentPermission::Manual,
@@ -277,7 +278,7 @@ pub const SCRUBBED_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAU
 /// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key; the
 /// configuration folder, which [`apply_credential`] sets only to the account's own; and
 /// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or a coordinator must not
-/// get (RYA-112, 0026).
+/// get (RYA-112, 0027).
 pub const SCRUBBED_VARS: &[&str] = &["AWS_BEARER_TOKEN_BEDROCK", CONFIG_DIR_ENV, SCRUB_ENV];
 
 /// The variable that picks a second account's configuration folder.
@@ -306,7 +307,7 @@ const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1
 /// on every OS a worker whose `system/init` shows the permission mode it forces fails
 /// (RYA-118). A coordinator doesn't get it either: it would force `default`, where headless Claude
 /// Code denies every tool nobody approved, so a coordinator that reports another mode than it
-/// asked for fails the same way (0026). It forces a plain no-write run's mode to `default` as
+/// asked for fails the same way (0027). It forces a plain no-write run's mode to `default` as
 /// well, so those aren't checked.
 const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 
@@ -578,7 +579,7 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
 }
 
 /// A worker's or a coordinator's `--permission-mode` for `permission`: Claude Code's own mode of
-/// the same name (RYA-97, 0026), [`DEFAULT_PERMISSION_MODE`] by default.
+/// the same name (RYA-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
 ///
 /// # Errors
 ///
@@ -734,7 +735,8 @@ impl Backend for ClaudeBackend {
             violation: None,
             env_file,
         };
-        tokio::spawn(driver.run(Message::new(request.turn_id, &request.prompt, false)));
+        let prompt = Message::new(request.turn_id, &request.prompt, &request.images, false);
+        tokio::spawn(driver.run(prompt));
         Ok(Started {
             run: Arc::new(ClaudeRun { handle, stop }),
             events,
@@ -774,11 +776,25 @@ struct Message {
 }
 
 impl Message {
-    fn new(turn_id: Option<TurnId>, text: &str, follow_up: bool) -> Self {
+    /// The message's content is `text` alone, or with images, the Messages API's base64 image
+    /// blocks and then `text` as a text block (RYA-191).
+    fn new(turn_id: Option<TurnId>, text: &str, images: &[PromptImage], follow_up: bool) -> Self {
         let uuid = turn_id.unwrap_or_else(TurnId::generate).to_string();
+        let content = if images.is_empty() {
+            Value::from(text)
+        } else {
+            let images = images.iter().map(|image| {
+                serde_json::json!({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": image.media_type, "data": image.data},
+                })
+            });
+            let text = serde_json::json!({"type": "text", "text": text});
+            images.chain([text]).collect()
+        };
         let mut line = serde_json::json!({
             "type": "user",
-            "message": {"role": "user", "content": text},
+            "message": {"role": "user", "content": content},
             "parent_tool_use_id": null,
             "uuid": uuid,
         })
@@ -938,7 +954,12 @@ impl Driver {
                 },
                 follow_up = self.control.recv(), if control_open => match follow_up {
                     Some(follow_up) => {
-                        let message = Message::new(Some(follow_up.turn_id), &follow_up.text, true);
+                        let message = Message::new(
+                            Some(follow_up.turn_id),
+                            &follow_up.text,
+                            &follow_up.images,
+                            true,
+                        );
                         if let Err(message) = stdin.send(message) {
                             self.dropped(&message).await;
                         }
@@ -1048,7 +1069,12 @@ impl Driver {
             late.push(follow_up);
         }
         for follow_up in late {
-            let message = Message::new(Some(follow_up.turn_id), &follow_up.text, true);
+            let message = Message::new(
+                Some(follow_up.turn_id),
+                &follow_up.text,
+                &follow_up.images,
+                true,
+            );
             if let Err(message) = stdin.send(message) {
                 self.dropped(&message).await;
             }

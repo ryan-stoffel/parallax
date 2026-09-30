@@ -1,4 +1,4 @@
-# 0026: Every Claude thread uses Claude Code's permission modes
+# 0027: Every Claude thread uses Claude Code's permission modes
 
 - Status: accepted; supersedes in part [0004](0004-subscription-providers.md) (the coordinator's no-write flags), [0013](0013-worker-sandbox.md) (a worker in Bypass Permissions runs without the sandbox), [0019](0019-coordinator-mcp-tools.md) (the coordinator's flags), and [0024](0024-coordinator-chat.md) (where the coordinator runs, its per-turn check, and its fixed permission)
 - Date: 2026-09-29

@@ -33,6 +33,7 @@ pub fn worker_request(
         turn_id: None,
         cwd: worktree.to_owned(),
         prompt: "Run the probe.".into(),
+        images: Vec::new(),
         policy: ToolPolicy::WorkspaceWrite,
         sandbox: Some(WorkerSandbox::for_worktree(
             home, data, worktree, git_dir, context, &canonical,

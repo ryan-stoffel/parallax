@@ -255,11 +255,13 @@ export function NewThread({
 
   // While starting, laid out as AgentChat is, so opening the thread doesn't move anything. The
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.
+  // Before it starts, it's anchored by its bottom about where centering it a little above the
+  // middle would, so the Composer grows upward until the heading reaches the top.
   return (
     <div
       className={
         starting === undefined
-          ? "flex flex-1 flex-col items-center justify-center px-6 pb-[12vh]"
+          ? "flex flex-1 flex-col items-center justify-end-safe px-6 pb-[calc(56vh-9.375rem)]"
           : "flex min-h-0 flex-1 flex-col"
       }
     >

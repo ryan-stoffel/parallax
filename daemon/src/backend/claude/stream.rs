@@ -92,7 +92,7 @@ pub(super) struct Translator {
     policy: ToolPolicy,
     expected_key_source: &'static str,
     /// wispd's MCP tools were attached, so a no-write run is a coordinator: full Claude Code in
-    /// its permission mode (0026), whose `system/init` may list any tool.
+    /// its permission mode (0027), whose `system/init` may list any tool.
     coordinator_tools: bool,
     /// The permission mode a worker or a coordinator asked for, which its `system/init` must
     /// report.
@@ -130,14 +130,14 @@ impl Translator {
         }
     }
 
-    /// Checks `system/init` as a coordinator's when wispd's MCP tools were `attached` (0019, 0026).
+    /// Checks `system/init` as a coordinator's when wispd's MCP tools were `attached` (0019, 0027).
     pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
         self.coordinator_tools = attached;
         self
     }
 
     /// Expects a worker's or a coordinator's `system/init` to report `mode` instead of
-    /// [`DEFAULT_PERMISSION_MODE`], for a run that asked for another permission (RYA-97, 0026).
+    /// [`DEFAULT_PERMISSION_MODE`], for a run that asked for another permission (RYA-97, 0027).
     /// [`BYPASS_PERMISSION_MODE`] also lifts a worker's tool check: it runs as full Claude Code.
     pub fn with_permission_mode(mut self, mode: &'static str) -> Self {
         self.permission_mode = mode;
@@ -252,7 +252,7 @@ impl Translator {
             return steps;
         };
         // A coordinator and a bypass worker are full Claude Code, whose tools are whatever its
-        // configuration loads (0026).
+        // configuration loads (0027).
         let offered: Vec<&str> = tools
             .iter()
             .map(|tool| tool.as_str().unwrap_or("<not a string>"))

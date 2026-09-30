@@ -18,9 +18,9 @@ use super::{
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, CoordinatorTools, Credential, Event,
-    EventStream, FailureKind, FollowUp, LimitStatus, LimitWindow, ModelUsage, Outcome, Resume,
-    RunId, RunRequest, SendError, StartError, Started, TodoItem, TodoStatus, ToolPolicy,
-    ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
+    EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow, ModelUsage,
+    Outcome, PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started, TodoItem,
+    TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
 };
 use crate::paths::DataDir;
 
@@ -168,6 +168,7 @@ fn request(cwd: &Path) -> RunRequest {
         turn_id: Some(turn(TURN_1)),
         cwd: cwd.to_owned(),
         prompt: "Summarize the README.\nKeep it short.".into(),
+        images: Vec::new(),
         policy: ToolPolicy::NoWrite,
         sandbox: None,
         account: AccountRef {
@@ -377,7 +378,7 @@ fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
     );
 }
 
-/// 0026: a coordinator runs as Claude Code in its mode, and without
+/// 0027: a coordinator runs as Claude Code in its mode, and without
 /// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, which would force "default"; it doesn't inherit it either.
 #[tokio::test]
 async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
@@ -632,7 +633,7 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
     );
 }
 
-/// RYA-97, 0026: a worker's permission picks Claude Code's mode of the same name, and its sandbox
+/// RYA-97, 0027: a worker's permission picks Claude Code's mode of the same name, and its sandbox
 /// settings stay the same, except in bypass, where Claude Code refuses `--restricted` and the
 /// worker runs as full Claude Code. A no-write run's mode is fixed (0004), so it takes no
 /// permission.
@@ -978,6 +979,7 @@ async fn a_result_without_ids_or_a_queue_count_ends_every_turn() {
     run.send(FollowUp {
         turn_id: turn(TURN_2),
         text: "Fix the tests too.".into(),
+        images: Vec::new(),
     })
     .unwrap();
     let all = rest(&mut events).await;
@@ -1301,6 +1303,7 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
     let follow_up = FollowUp {
         turn_id: turn(TURN_2),
         text: "Fix the tests too.".into(),
+        images: Vec::new(),
     };
     run.send(follow_up.clone()).unwrap();
     run.send(follow_up).unwrap();
@@ -1343,7 +1346,8 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
     assert_eq!(
         run.send(FollowUp {
             turn_id: TurnId::generate(),
-            text: "too late".into()
+            text: "too late".into(),
+            images: Vec::new(),
         }),
         Err(SendError::Finished)
     );
@@ -1361,6 +1365,7 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
     run.send(FollowUp {
         turn_id: turn(TURN_2),
         text: "And now the docs.".into(),
+        images: Vec::new(),
     })
     .unwrap();
     let all = rest(&mut events).await;
@@ -1410,6 +1415,55 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
         &Outcome::Completed {
             result: Some("Second answer.".into())
         }
+    );
+}
+
+#[tokio::test]
+async fn images_go_before_the_text_as_base64_blocks_in_the_prompt_and_follow_ups() {
+    let png = PromptImage {
+        media_type: ImageMediaType::Png,
+        data: "iVBORw0KGgo=".into(),
+    };
+    let gif = PromptImage {
+        media_type: ImageMediaType::Gif,
+        data: "R0lGODlh".into(),
+    };
+    let fake = Fake::new("follow-up-turns");
+    let request = RunRequest {
+        images: vec![png, gif.clone()],
+        ..request(&fake.root())
+    };
+    let Started { run, mut events } = launch(&fake.backend, request).await;
+    assert!(matches!(
+        next(&mut events).await,
+        Event::SessionStarted { .. }
+    ));
+    run.send(FollowUp {
+        turn_id: turn(TURN_2),
+        text: "And this one.".into(),
+        images: vec![gif],
+    })
+    .unwrap();
+    rest(&mut events).await;
+    let block = |media_type: &str, data: &str| {
+        serde_json::json!({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        })
+    };
+    let text = |text: &str| serde_json::json!({"type": "text", "text": text});
+    let stdin = fake.stdin();
+    assert_eq!(
+        stdin[0]["message"]["content"],
+        serde_json::json!([
+            block("image/png", "iVBORw0KGgo="),
+            block("image/gif", "R0lGODlh"),
+            text("Summarize the README.\nKeep it short."),
+        ])
+    );
+    assert_eq!(
+        stdin[1]["message"]["content"],
+        serde_json::json!([block("image/gif", "R0lGODlh"), text("And this one.")])
     );
 }
 
@@ -1667,7 +1721,7 @@ fn a_no_write_run_allows_only_the_read_tools() {
     );
 }
 
-/// 0026: a coordinator and a bypass worker are full Claude Code, so their init may list any
+/// 0027: a coordinator and a bypass worker are full Claude Code, so their init may list any
 /// tool, another MCP server's included, in the mode they asked for. Without wispd's tools a
 /// no-write run keeps its read tools.
 #[test]

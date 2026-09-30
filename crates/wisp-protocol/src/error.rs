@@ -85,6 +85,12 @@ pub enum ErrorKind {
     /// `gh` could not find or open the pull request, for example because `origin` isn't a GitHub
     /// repository. The message carries gh's stderr. The branch was pushed first.
     PrFailed,
+    /// An image in `images` is over the per-image cap, or a message's images are over the
+    /// per-message cap or count, which `promptImages`' options give (RYA-191). The message says
+    /// which. Nothing was sent.
+    ImageTooLarge,
+    /// No image of the run has the given id (RYA-191).
+    ImageNotFound,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

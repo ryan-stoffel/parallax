@@ -43,6 +43,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "agent/cancel": true,
   "agent/list": true,
   "agent/events": true,
+  "agent/image": true,
   "agent/diff": true,
   "agent/file": true,
   "agent/accept": true,

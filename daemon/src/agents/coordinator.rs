@@ -1,11 +1,11 @@
 //! A project's coordinator chat (RYA-41, decision 0024): a no-write run with wispd's MCP tools
 //! bound to the project and to the run's own id as its coordinator thread (0019). The Claude
-//! backend runs it as full Claude Code in its permission mode (0026).
+//! backend runs it as full Claude Code in its permission mode (0027).
 //!
 //! `project/start` records it like any run, without a worktree row, and hands it to the same
 //! actor as a worker's, so `agent/send`, `agent/cancel`, `agent/events`, the `agent.*` events, and
 //! resuming after a restart work unchanged. The actor runs it in the project's repository, as
-//! Claude Code runs in the folder it was started in (0026). A project has one live coordinator: a
+//! Claude Code runs in the folder it was started in (0027). A project has one live coordinator: a
 //! new run replaces the last one unless that one is still starting or running.
 
 use std::collections::HashMap;
@@ -41,6 +41,7 @@ pub(crate) async fn start(
         model,
         effort,
         permission,
+        images,
     } = params;
     let _starting = daemon.agents.start_guard(run_id).await;
     let options = RunOptions {
@@ -104,7 +105,9 @@ pub(crate) async fn start(
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());
     let message = first_message(&prompt, &repo_path);
-    actor.launch(prepared, message, None, None, None).await;
+    actor
+        .launch(prepared, message, images, None, None, None)
+        .await;
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
     daemon.agents.spawn(actor);

@@ -53,7 +53,7 @@ pub const TOOLS: &[&str] = &[
 ];
 
 /// [`TOOLS`] as Claude Code names them, `mcp__<server>__<tool>`: a coordinator's
-/// `--allowedTools`, so they run without asking in every permission mode (0026).
+/// `--allowedTools`, so they run without asking in every permission mode (0027).
 pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__wispd__spawn_agent",
     "mcp__wispd__list_agents",
@@ -416,6 +416,7 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     model: None,
                     effort: None,
                     permission: None,
+                    images: Vec::new(),
                 })
                 .await?
                 .run;
@@ -451,6 +452,7 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     model: None,
                     effort: None,
                     permission: None,
+                    images: Vec::new(),
                 })
                 .await?
                 .run;

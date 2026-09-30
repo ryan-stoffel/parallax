@@ -1,5 +1,5 @@
-//! SQLite-backed storage for wisp projects, key accounts, agent runs, normal threads and their
-//! repo entries, and wispd's event log.
+//! SQLite-backed storage for wisp projects, key accounts, agent runs and the images sent to them,
+//! normal threads and their repo entries, and wispd's event log.
 //!
 //! [`Store`] owns one SQLite connection and applies its own versioned
 //! migrations on open. The caller chooses the database path; this crate
@@ -12,6 +12,7 @@ mod accounts;
 mod defaults;
 mod error;
 mod events;
+mod images;
 mod migrations;
 mod project;
 mod runs;
@@ -33,6 +34,7 @@ pub use accounts::{Account, AccountFields};
 pub use defaults::RoleDefault;
 pub use error::StoreError;
 pub use events::StoredEvent;
+pub use images::StoredImage;
 pub use project::{Project, ProjectFields};
 pub use runs::{Run, RunAccept, RunFields, RunState};
 pub use threads::{Repo, RepoFields, Thread};

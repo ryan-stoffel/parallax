@@ -31,16 +31,17 @@ use crate::{
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
     AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult,
-    AgentFileParams, AgentFileResult, AgentListParams, AgentListResult, AgentOpenPrParams,
-    AgentOpenPrResult, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
-    AgentStartParams, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
-    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, HostHealthParams,
-    HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams, InitializeResult,
-    ProjectCreateParams, ProjectCreateResult, ProjectListParams, ProjectListResult,
-    ProjectStartParams, RepoAddParams, RepoAddResult, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
-    ThreadStartResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    AgentFileParams, AgentFileResult, AgentImageParams, AgentListParams, AgentListResult,
+    AgentOpenPrParams, AgentOpenPrResult, AgentRequestChangesParams, AgentRunResult,
+    AgentSendParams, AgentStartParams, ContextListParams, ContextListResult, ContextReadParams,
+    ContextReadResult, ContextWriteParams, ContextWriteResult, EventsEventParams,
+    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
+    HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams,
+    InitializeResult, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
+    ProjectListResult, ProjectStartParams, PromptImage, RepoAddParams, RepoAddResult,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -181,6 +182,9 @@ method_table! {
         AgentList = "agent/list": AgentListParams => AgentListResult;
         /// `agent/events`: one run's events from wispd's log, a page at a time.
         AgentEvents = "agent/events": AgentEventsParams => AgentEventsResult;
+        /// `agent/image`: an image sent with one of a run's messages, by an id from its
+        /// `turnStarted`. Gated on the `promptImages` capability.
+        AgentImage = "agent/image": AgentImageParams => PromptImage;
         /// `agent/diff`: the files that differ between a run's base and its latest commit, each
         /// with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
         /// capability, like every review method.
@@ -281,6 +285,7 @@ mod tests {
                 "agent/cancel",
                 "agent/list",
                 "agent/events",
+                "agent/image",
                 "agent/diff",
                 "agent/file",
                 "agent/accept",

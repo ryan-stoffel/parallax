@@ -66,7 +66,7 @@
 //! commands run against `repo_root`, the user's own checkout, which a sandboxed worker never
 //! writes, so there is no `.git` file or repo-local config of the worker's to distrust there. A
 //! coordinator or a worker in Bypass Permissions can write it, but either can already run any
-//! command as the user (0026). They still run
+//! command as the user (0027). They still run
 //! with hooks off, like every git call wispd makes (#157, #191): once a run is accepted, the
 //! checkout's hooks can include files the worker wrote.
 //!

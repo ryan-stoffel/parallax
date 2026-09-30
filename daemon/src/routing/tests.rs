@@ -23,6 +23,7 @@ fn request(cwd: &Path) -> RunRequest {
         turn_id: None,
         cwd: cwd.to_owned(),
         prompt: "hi".into(),
+        images: Vec::new(),
         policy: ToolPolicy::WorkspaceWrite,
         sandbox: Some(WorkerSandbox::for_worktree(
             Path::new("/Users/u"),
@@ -440,7 +441,7 @@ fn coordinator_tools() -> CoordinatorTools {
     }
 }
 
-/// #195, 0026: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
+/// #195, 0027: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
 /// flags, `wispd mcp` joining its own MCP servers, and wispd's eight tools allowed in every mode.
 #[tokio::test]
 async fn a_coordinator_gets_wispds_mcp_tools_on_claude_codes_own_configuration() {

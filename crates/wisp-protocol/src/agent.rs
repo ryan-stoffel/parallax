@@ -32,6 +32,46 @@ uuid_v7_id! {
     TurnId
 }
 
+uuid_v7_id! {
+    /// A stored image's id (RYA-191, decision 0026): a version 7 UUID that wispd generates once a
+    /// message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
+    ImageId
+}
+
+/// An image's file type (RYA-191): the four that Claude and Codex both take.
+///
+/// A newer peer may send a type this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+pub enum ImageMediaType {
+    /// PNG.
+    #[serde(rename = "image/png")]
+    Png,
+    /// JPEG.
+    #[serde(rename = "image/jpeg")]
+    Jpeg,
+    /// GIF.
+    #[serde(rename = "image/gif")]
+    Gif,
+    /// WebP.
+    #[serde(rename = "image/webp")]
+    Webp,
+    /// A type this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
+/// decision 0026). The CLI gets it beside the text, never as a file name or path in it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptImage {
+    /// Its file type, which its bytes must match.
+    pub media_type: ImageMediaType,
+    /// The image file's bytes, in standard base64 with padding.
+    pub data: String,
+}
+
 /// What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
 /// which `project/start` starts, is `noWrite`.
 ///
@@ -43,7 +83,7 @@ pub enum AgentPolicy {
     /// sandbox (0004, 0013).
     WorkspaceWrite,
     /// A project's coordinator (0024): full Claude Code in its permission mode, in the project's
-    /// repository, plus wispd's coordinator tools (0019, 0026). Without those tools, read-only
+    /// repository, plus wispd's coordinator tools (0019, 0027). Without those tools, read-only
     /// tools (0004).
     NoWrite,
     /// A policy this version does not know yet.
@@ -77,7 +117,7 @@ pub enum AgentEffort {
 }
 
 /// A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
-/// which each backend reports the subset of that it maps (RYA-188, 0026). A worker keeps the
+/// which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
 /// worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
 ///
 /// A newer peer may send a value this version does not know; treat it as unknown.
@@ -396,6 +436,10 @@ pub enum AgentOutputItem {
         /// on its own, not the user, because runs it started finished. `text` lists them.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         wake: bool,
+        /// The images sent with the turn's message, the prompt's or a follow-up's, in order, for
+        /// `agent/image` (RYA-191). Absent when it had none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImageId>,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {
@@ -536,11 +580,17 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
-    /// The permission mode (RYA-97, 0026). Absent means `edit`, or for a run with a
+    /// The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
     /// `coordinatorThread`, the coordinator's mode when it spawns the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// Images for the prompt, sent only to a wispd that advertises `promptImages`. Its options
+    /// give the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of `data`, past which
+    /// the request fails with `imageTooLarge`. A retry must repeat them; wispd doesn't compare
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PromptImage>,
 }
 
 /// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
@@ -581,6 +631,9 @@ pub struct AgentSendParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// Images for the message, as `agent/start`'s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PromptImage>,
 }
 
 /// Params of `agent/cancel`: stops a running agent, which ends as `cancelled`. Cancelling a run
@@ -625,6 +678,17 @@ pub struct AgentEventsParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<u32>,
+}
+
+/// Params of `agent/image`: one image sent with a run's messages, by an id from its
+/// `turnStarted` (RYA-191). Its result is the [`PromptImage`] as it was sent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentImageParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The image.
+    pub image_id: ImageId,
 }
 
 /// Result of `agent/events`.

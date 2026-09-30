@@ -1,6 +1,8 @@
 use rusqlite::Connection;
 use uuid::Uuid;
-use wisp_store::{RepoFields, RunFields, RunState, Store, StoreError, StoredEvent, WorktreeFields};
+use wisp_store::{
+    RepoFields, RunFields, RunState, Store, StoreError, StoredEvent, StoredImage, WorktreeFields,
+};
 
 fn open() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
@@ -151,7 +153,7 @@ fn a_thread_is_recorded_with_its_run_and_worktree_and_archives() {
 }
 
 #[test]
-fn deleting_a_thread_removes_its_run_worktree_events_and_turns_only() {
+fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     let (_dir, mut store) = open();
     let repo = store
         .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/wisp"))
@@ -180,10 +182,16 @@ fn deleting_a_thread_removes_its_run_worktree_events_and_turns_only() {
             })
             .unwrap();
     }
-    // A run's sent turns (#190) have no foreign key to `runs`, so `delete_thread` has to remove
-    // them itself: nothing else would.
+    // A run's sent turns (#190) and images (RYA-191) have no foreign key to `runs`, so
+    // `delete_thread` has to remove them itself: nothing else would.
+    let image = Uuid::now_v7();
     for run in [kept, gone] {
         store.record_turn(run, Uuid::now_v7(), "carry on").unwrap();
+        let stored = StoredImage {
+            media_type: "image/png".to_owned(),
+            data: "iVBORw0KGgo=".to_owned(),
+        };
+        store.add_images(run, &[(image, stored)]).unwrap();
     }
 
     assert!(store.delete_thread(gone).unwrap());
@@ -196,11 +204,13 @@ fn deleting_a_thread_removes_its_run_worktree_events_and_turns_only() {
     assert_eq!(store.get_worktree(gone).unwrap(), None);
     assert!(store.run_events(gone, 0, 10, 1 << 20).unwrap().0.is_empty());
     assert_eq!(store.run_turns(gone).unwrap(), []);
+    assert_eq!(store.image(gone, image).unwrap(), None);
 
     assert!(store.get_thread(kept).unwrap().is_some());
     assert!(store.get_run(kept).unwrap().is_some());
     assert_eq!(store.run_events(kept, 0, 10, 1 << 20).unwrap().0.len(), 1);
     assert_eq!(store.run_turns(kept).unwrap().len(), 1);
+    assert!(store.image(kept, image).unwrap().is_some());
 }
 
 /// Two branches each added a migration: a database that has a newer version but is missing an

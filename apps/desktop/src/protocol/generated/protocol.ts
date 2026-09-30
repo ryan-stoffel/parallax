@@ -139,6 +139,11 @@ export type WispRequests = {
 	 */
 	"agent/events": { params: AgentEventsParams, result: AgentEventsResult },
 	/**
+	 * `agent/image`: an image sent with one of a run's messages, by an id from its
+	 * `turnStarted`. Gated on the `promptImages` capability.
+	 */
+	"agent/image": { params: AgentImageParams, result: PromptImage },
+	/**
 	 * `agent/diff`: the files that differ between a run's base and its latest commit, each
 	 * with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
 	 * capability, like every review method.
@@ -1128,10 +1133,17 @@ export type AgentStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * The permission mode (RYA-97, 0026). Absent means `edit`, or for a run with a
+	 * The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
 	 * `coordinatorThread`, the coordinator's mode when it spawns the run.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * Images for the prompt, sent only to a wispd that advertises `promptImages`. Its options
+	 * give the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of `data`, past which
+	 * the request fails with `imageTooLarge`. A retry must repeat them; wispd doesn't compare
+	 * them.
+	 */
+	images?: Array<PromptImage>,
 };
 
 /**
@@ -1145,7 +1157,7 @@ export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
- * which each backend reports the subset of that it maps (RYA-188, 0026). A worker keeps the
+ * which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
  * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
  *
  * A newer peer may send a value this version does not know; treat it as unknown.
@@ -1165,6 +1177,28 @@ export type AgentPolicy = "workspaceWrite" | "noWrite";
  * through its wisp tools carry it, so a client can tell them from runs it started itself.
  */
 export type CoordinatorThreadId = string;
+
+/**
+ * An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
+ * decision 0026). The CLI gets it beside the text, never as a file name or path in it.
+ */
+export type PromptImage = {
+	/**
+	 * Its file type, which its bytes must match.
+	 */
+	mediaType: ImageMediaType,
+	/**
+	 * The image file's bytes, in standard base64 with padding.
+	 */
+	data: string,
+};
+
+/**
+ * An image's file type (RYA-191): the four that Claude and Codex both take.
+ *
+ * A newer peer may send a type this version does not know; treat it as unknown.
+ */
+export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
 /**
  * Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
@@ -1329,6 +1363,10 @@ export type AgentSendParams = {
 	 * A new permission (RYA-161), as `effort`.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * Images for the message, as `agent/start`'s.
+	 */
+	images?: Array<PromptImage>,
 };
 
 /**
@@ -1613,7 +1651,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 * True for a wake-up (RYA-42, decision 0025): a turn wispd sent a project's coordinator
 	 * on its own, not the user, because runs it started finished. `text` lists them.
 	 */
-	wake?: boolean, } | { "kind": "textDelta",
+	wake?: boolean,
+	/**
+	 * The images sent with the turn's message, the prompt's or a follow-up's, in order, for
+	 * `agent/image` (RYA-191). Absent when it had none.
+	 */
+	images?: Array<ImageId>, } | { "kind": "textDelta",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
@@ -1742,6 +1785,12 @@ export type AgentTodoStatus = "pending" | "inProgress" | "completed";
 export type AgentToolStatus = "ok" | "error" | "denied";
 
 /**
+ * A stored image's id (RYA-191, decision 0026): a version 7 UUID that wispd generates once a
+ * message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
+ */
+export type ImageId = string;
+
+/**
  * The part of a run that changes while it runs, as `agent.updated` reports it. The rest of
  * [`AgentRun`], including its prompt, never changes after `agent.started`.
  */
@@ -1837,6 +1886,21 @@ export type Thread = {
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
+};
+
+/**
+ * Params of `agent/image`: one image sent with a run's messages, by an id from its
+ * `turnStarted` (RYA-191). Its result is the [`PromptImage`] as it was sent.
+ */
+export type AgentImageParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The image.
+	 */
+	imageId: ImageId,
 };
 
 /**
@@ -2204,6 +2268,10 @@ export type ThreadStartParams = {
 	 * a retry with the same run id conflict.
 	 */
 	branchSlug?: string,
+	/**
+	 * Images for the first message, as `agent/start`'s.
+	 */
+	images?: Array<PromptImage>,
 };
 
 /**
@@ -2306,6 +2374,10 @@ export type ProjectStartParams = {
 	 * The permission mode, as `agent/start`'s (RYA-188). Absent means the backend's default.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * Images for the first message, as `agent/start`'s.
+	 */
+	images?: Array<PromptImage>,
 };
 
 /**
@@ -2370,7 +2442,7 @@ export type ErrorData = {
  * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

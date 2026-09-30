@@ -39,9 +39,10 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentEffort, AgentOpenPrResult,
-    AgentOutcome, AgentPermission, AgentRun, AgentRunState, AgentSendParams, AgentStartParams,
-    CoordinatorThreadId, ErrorKind, ProjectId, Role, RunId, TurnId, WispEvent,
+    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentEffort, AgentImageParams,
+    AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun, AgentRunState, AgentSendParams,
+    AgentStartParams, CoordinatorThreadId, ErrorKind, ImageMediaType, ProjectId, PromptImage, Role,
+    RunId, TurnId, WispEvent,
 };
 use wisp_store::{RunFields, RunState, StoreError, WorktreeFields};
 
@@ -555,7 +556,7 @@ async fn record(
 }
 
 /// A coordinator's subagent runs in the coordinator's current permission mode unless it names its
-/// own (0026): sets `options`' permission to the mode of the coordinator whose thread is
+/// own (0027): sets `options`' permission to the mode of the coordinator whose thread is
 /// `coordinator_thread`, its own run (0024), and returns it. The coordinator's mode only changes
 /// between its turns, so a retried spawn from the same turn inherits the same one.
 // ponytail: `create` drops an inherited mode the subagent's backend lacks, so a retry of that
@@ -604,12 +605,14 @@ pub(crate) async fn start(
         model,
         effort,
         permission,
+        images,
         ..
     } = params;
     let new = NewRun {
         run_id,
         scope: project,
         prompt,
+        images,
         account,
         coordinator_thread,
         options: RunOptions {
@@ -629,6 +632,8 @@ pub(crate) struct NewRun {
     /// The project, or for a thread its repo entry, whose id the run's events go to.
     pub scope: ProjectId,
     pub prompt: String,
+    /// The prompt's images (RYA-191), already checked.
+    pub images: Vec<PromptImage>,
     pub account: Option<AccountChoice>,
     /// The coordinator thread starting the run through `wispd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
@@ -658,6 +663,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         run_id,
         scope: project,
         prompt,
+        images,
         account,
         coordinator_thread,
         mut options,
@@ -733,14 +739,9 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         }
         None => worker::worker_prompt(&prompt, &worktree_path, context),
     };
+    let paths = Some((worktree_path, git_common_dir));
     actor
-        .launch(
-            prepared,
-            task,
-            None,
-            None,
-            Some((worktree_path, git_common_dir)),
-        )
+        .launch(prepared, task, images, None, None, paths)
         .await;
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
@@ -844,6 +845,7 @@ pub(crate) async fn send(
         model,
         effort,
         permission,
+        images,
     } = params;
     let options = RunOptions {
         model,
@@ -853,10 +855,41 @@ pub(crate) async fn send(
     ask(&daemon, run_id, |reply| Command::Send {
         turn_id,
         text,
+        images,
         options,
         reply,
     })
     .await
+}
+
+/// `agent/image`: one of a run's stored images (RYA-191, decision 0026).
+pub(crate) async fn image(
+    daemon: &Arc<Daemon>,
+    params: AgentImageParams,
+) -> Result<PromptImage, ErrorObject> {
+    let AgentImageParams { run_id, image_id } = params;
+    let stored = store(daemon, move |db| {
+        if db
+            .get_run(run_id.into())
+            .map_err(|e| store_error(&e))?
+            .is_none()
+        {
+            return Err(run_not_found(run_id));
+        }
+        db.image(run_id.into(), image_id.into())
+            .map_err(|e| store_error(&e))
+    })
+    .await?
+    .ok_or_else(|| {
+        ErrorObject::wisp(
+            ErrorKind::ImageNotFound,
+            format!("run {run_id} has no image {image_id}"),
+        )
+    })?;
+    Ok(PromptImage {
+        media_type: option_value(&stored.media_type).unwrap_or(ImageMediaType::Unknown),
+        data: stored.data,
+    })
 }
 
 /// `agent/cancel`.

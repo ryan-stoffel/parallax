@@ -32,6 +32,15 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("agents".to_owned(), serde_json::Map::new()),
             ("coordinator".to_owned(), serde_json::Map::new()),
             ("openPr".to_owned(), serde_json::Map::new()),
+            (
+                "promptImages".to_owned(),
+                serde_json::from_value(json!({
+                    "maxImages": 10,
+                    "maxImageBytes": 5 * 1024 * 1024,
+                    "maxTotalBytes": 6 * 1024 * 1024,
+                }))
+                .unwrap()
+            ),
             ("runOptions".to_owned(), serde_json::Map::new()),
             ("sendModel".to_owned(), serde_json::Map::new()),
             ("sendOptions".to_owned(), serde_json::Map::new()),
