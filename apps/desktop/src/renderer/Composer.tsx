@@ -155,6 +155,11 @@ function asLines(node: ProseMirrorNode): ProseMirrorNode {
 const toMarkdown = (node: ProseMirrorNode) =>
   markdown.serialize(asLines(node), { tightLists: true });
 
+// Whether copied HTML has text of its own, not just an image. A parsed document is inert: nothing
+// in it runs or loads.
+const hasText = (html: string) =>
+  !!new DOMParser().parseFromString(html, "text/html").body.textContent?.trim();
+
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
 export const tabItem =
   "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
@@ -300,7 +305,7 @@ export function Composer({
       // Put it back ahead of anything typed or added while it was in flight.
       const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);
       editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });
-      setImages((added) => [...sentImages, ...added]);
+      setImages((added) => [...sentImages, ...added].slice(0, imageCaps?.maxImages));
       setError(failed);
     }
   };
@@ -359,14 +364,17 @@ export function Composer({
         );
       },
       // Paste takes files (a screenshot, a copied image) above the text, so a copied file's name
-      // never lands in it. Text copied from an app (Office, Notes, a web page) can carry a picture
-      // of itself too: with HTML beside it, it's text. Text is plain only, so nothing brings in its
-      // source's styling. Anything else falls through to the editor, which drops it.
+      // or an image's URL never lands in it. Text copied from an app (Office, Notes, a web page)
+      // can carry a picture of itself too: when its HTML has text of its own, it's text. Text is
+      // plain only, so nothing brings in its source's styling. Anything else falls through to the
+      // editor, which drops it.
       handleDOMEvents: {
         paste: (view, event) => {
           const data = event.clipboardData;
           const text = data?.getData("text/plain");
-          const files = text && data?.getData("text/html") ? [] : [...(data?.files ?? [])];
+          const html = data?.getData("text/html");
+          let files = [...(data?.files ?? [])];
+          if (files.length > 0 && text && html && hasText(html)) files = [];
           if (files.length === 0 && !text) return false;
           event.preventDefault();
           if (files.length > 0) void addFiles(files);

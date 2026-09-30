@@ -10,7 +10,7 @@ import type { ImageCaps } from "./images";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom decodes no images. Every image is small enough to send as it is.
-vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 48 }));
+vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 48, close() {} }));
 
 let unmount = () => {};
 afterEach(() => act(() => unmount()));
@@ -216,17 +216,23 @@ test("a failed send puts the same text and images back, ahead of anything added 
   const { box, type, press, paste } = render(onSend);
   type("- ");
   type("first");
-  await paste([pngFile()]);
+  await paste([new File([Uint8Array.of(0x47, 0x49, 0x46)], "a.gif", { type: "image/gif" })]);
   await press("Enter");
   expect(thumbnails()).toEqual([]);
   type("more");
+  await paste(Array.from({ length: 10 }, () => pngFile()));
   await act(async () => fail("wispd is busy"));
   expect(alert()).toBe("wispd is busy");
   expect(box.querySelector("ul")?.textContent).toBe("first");
-  expect(thumbnails()).toEqual(["Image 1"]);
+  // Still at most 10: the one sent, then the first nine added meanwhile.
+  expect(thumbnails()).toHaveLength(10);
 
   await press("Enter");
-  expect(onSend).toHaveBeenLastCalledWith("- first\n\nmore", {}, [sentPng]);
+  const gif = { mediaType: "image/gif", data: "R0lG" };
+  expect(onSend).toHaveBeenLastCalledWith("- first\n\nmore", {}, [
+    gif,
+    ...Array<PromptImage>(9).fill(sentPng),
+  ]);
 });
 
 test("a pasted image sits above the text, with its name nowhere in it, and is sent beside it", async () => {
@@ -251,6 +257,17 @@ test("a pasted image sits above the text, with its name nowhere in it, and is se
   await paste([pngFile()]);
   await press("Enter");
   expect(onSend).toHaveBeenLastCalledWith("", {}, [sentPng]);
+});
+
+test("an image copied from a browser, with its URL as text, pastes as the image", async () => {
+  const { box, paste } = render(vi.fn(async () => undefined));
+  const url = "https://example.com/cat-photo.png";
+  await paste([pngFile()], {
+    "text/plain": url,
+    "text/html": `<meta charset="utf-8"><img src="${url}">`,
+  });
+  expect(thumbnails()).toEqual(["Image 1"]);
+  expect(box.textContent).toBe("");
 });
 
 test("text copied from an app with a picture of itself pastes as text", async () => {
