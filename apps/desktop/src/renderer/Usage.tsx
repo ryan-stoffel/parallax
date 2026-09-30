@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import type { RpcError } from "../preload/bridge";
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
 
 /** The two periods `usage/get` reports: today, and this week from Monday, in the host's local time. */
@@ -7,22 +8,31 @@ export type Period = "today" | "week";
 
 const periodWords: Record<Period, string> = { today: "today", week: "this week" };
 
+/** The periods as a segmented control's options. */
+export const periods: { value: Period; name: string }[] = [
+  { value: "today", name: "Today" },
+  { value: "week", name: "This week" },
+];
+
 /**
- * How long after each answer the Providers page asks for usage again. wispd sends no host-level
- * usage or limit event, so this is what keeps them live while runs go.
+ * How long after each answer the Providers and Usage pages ask for usage again. wispd sends no
+ * host-level usage or limit event, so this is what keeps them live while runs go.
  */
 const USAGE_POLL_MS = 5000;
 
 /**
- * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`.
- * Undefined until it first answers, so a wispd without `usage/get` shows no usage at all; a
- * later failure keeps the last answer.
+ * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`, and
+ * at once whenever `refresh` changes.
+ * `usage` is undefined until it first answers, so a wispd without `usage/get` shows no usage at
+ * all; a later failure keeps the last answer. `error` is the latest answer's, until one succeeds.
  */
 export function useUsage(
   hostId: string,
   connected: boolean,
-): ReadonlyMap<string, AccountUsage> | undefined {
+  refresh?: number,
+): { usage?: ReadonlyMap<string, AccountUsage>; error?: RpcError } {
   const [usage, setUsage] = useState<ReadonlyMap<string, AccountUsage>>();
+  const [error, setError] = useState<RpcError>();
   useEffect(() => {
     if (!connected) return;
     let stopped = false;
@@ -31,8 +41,10 @@ export function useUsage(
     const load = async () => {
       const answer = await window.wisp.request(hostId, "usage/get", {});
       if (stopped) return;
-      if ("result" in answer)
+      if ("result" in answer) {
         setUsage(new Map(answer.result.accounts.map((a) => [a.accountId, a])));
+        setError(undefined);
+      } else setError(answer.error);
       timer = setTimeout(() => void load(), USAGE_POLL_MS);
     };
     void load();
@@ -40,8 +52,8 @@ export function useUsage(
       stopped = true;
       clearTimeout(timer);
     };
-  }, [hostId, connected]);
-  return usage;
+  }, [hostId, connected, refresh]);
+  return { usage, error };
 }
 
 /**
@@ -162,7 +174,40 @@ function duration(ms: number): string {
 const at = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-function limitDetails(limit: UsageLimitWindow): string {
+/** When a limit resets and when wispd heard about it, for a tooltip. */
+export function limitDetails(limit: UsageLimitWindow): string {
   const resets = limit.resetsAt ? `Resets ${at(limit.resetsAt)}. ` : "";
   return `${resets}Reported ${at(limit.capturedAt)}.`;
+}
+
+/**
+ * A limit window for its Usage card: a short name ("Session", "Weekly · Opus"), how much is left
+ * (0 to 100) when the vendor says, a line on what comes back when, and the bar's reset badge.
+ * Once the reset time has passed, the last percent is stale and the whole window is back.
+ */
+export function limitCard(
+  limit: UsageLimitWindow,
+  now: number,
+): { name: string; left?: number; line: string; badge?: string } {
+  const weekly = /^seven_day(?:_(.+))?$/.exec(limit.window);
+  const name =
+    limit.window === "five_hour"
+      ? "Session"
+      : weekly
+        ? weekly[1]
+          ? `Weekly · ${capitalize(weekly[1])}`
+          : "Weekly"
+        : capitalize(limit.window);
+  const resets = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt);
+  if (resets !== undefined && resets <= now)
+    return { name, left: 100, line: "Has reset", badge: "reset" };
+  const left =
+    limit.usedPercent === undefined
+      ? undefined
+      : 100 - Math.min(100, Math.max(0, Math.floor(limit.usedPercent)));
+  if (resets === undefined) return { name, left, line: "Reset time unknown" };
+  const resetsIn = duration(resets - now);
+  const line =
+    left !== undefined && left < 100 ? `+${100 - left}% in ${resetsIn}` : `Resets in ${resetsIn}`;
+  return { name, left, line, badge: resetsIn };
 }

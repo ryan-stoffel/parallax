@@ -457,14 +457,17 @@ export function ThreadList({
       </dialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <Footer onOpenSettings={onOpenSettings} />
+        <Footer onOpenSettings={onOpenSettings} onOpenUsage={() => onSelect({ kind: "usage" })} />
       </div>
     </>
   );
 }
 
-/** The footer's buttons: Settings, Usage (on the Providers page), and Update under `pnpm dev`. */
-function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
+/** The footer's buttons: Settings, Usage, and Update under `pnpm dev`. */
+function Footer({
+  onOpenSettings,
+  onOpenUsage,
+}: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {
   // "Updating…" while Update runs, then its answer until the next click.
   const [update, setUpdate] = useState<string>();
   const updating = update === "Updating…";
@@ -483,7 +486,7 @@ function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
         <IconButton label="Settings" keys="," onClick={() => onOpenSettings("general")}>
           <Settings />
         </IconButton>
-        <IconButton label="Usage" onClick={() => onOpenSettings("providers")}>
+        <IconButton label="Usage" onClick={onOpenUsage}>
           <ChartNoAxesColumn />
         </IconButton>
         {window.wisp.updatable && (

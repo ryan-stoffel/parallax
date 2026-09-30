@@ -56,7 +56,7 @@ test("the side panel toggle reports and flips the panel's state", () => {
   expect(panel.hidden).toBe(true);
 });
 
-test("the footer's Usage opens Providers, and Update shows its answer", async () => {
+test("the footer's Usage opens the Usage page, and Update shows its answer", async () => {
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   renderApp();
@@ -64,7 +64,16 @@ test("the footer's Usage opens Providers, and Update shows its answer", async ()
   expect(button("Update from develop")).toBeNull();
 
   act(() => button("Usage")!.click());
-  expect(document.querySelector('[aria-current="page"]')?.textContent).toBe("Providers");
+  const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
+  // The sidebar stays on the thread list, and the side panel is a chat's.
+  expect(button("Usage")).not.toBeNull();
+  expect(document.querySelector('main [aria-controls="side-panel"]')).toBeNull();
+  // The range stays in the top bar on Limits, but can't be changed there.
+  const range = document.querySelector<HTMLFieldSetElement>('main [aria-label="Usage range"]')!;
+  expect(range.disabled).toBe(false);
+  act(() => document.querySelector<HTMLInputElement>('main input[value="limits"]')!.click());
+  expect(range.disabled).toBe(true);
   act(() => unmount());
 
   let answer: (text: string) => void = () => {};
