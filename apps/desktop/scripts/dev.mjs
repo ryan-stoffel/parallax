@@ -14,6 +14,7 @@ import electron from "electron";
 import { createServer } from "vite-plus";
 
 import { commitsBehind } from "./behind.mjs";
+import { restartNote } from "./restart.mjs";
 
 const bundles = ["dist/main/main.cjs", "dist/preload/preload.cjs"];
 
@@ -95,8 +96,8 @@ let base;
 /**
  * Fast-forwards this checkout to origin/develop, then installs and rebuilds what changed. The
  * watchers reload the renderer and restart Electron; a new wispd starts on the app's reconnect.
- * Resolves to one line for the sidebar. New packages, and a change to this script, to
- * scripts/behind.mjs, or to the Vite config, need a manual restart of `pnpm dev`.
+ * Resolves to one line for the sidebar. New packages, and a change to scripts/ or the Vite config,
+ * load only when wisp restarts, so then the line says to quit and reopen it (scripts/restart.mjs).
  */
 async function update() {
   // Another branch is someone's work, which Update leaves alone. A detached HEAD fast-forwards.
@@ -134,7 +135,8 @@ async function update() {
     stopWispd();
   }
   base = undefined;
-  if (packages) return `${updated}. Restart pnpm dev to load the new packages.`;
+  const note = restartNote(changed);
+  if (note) return `${updated}. ${note}`;
   return changed.length ? updated : "Up to date";
 }
 
