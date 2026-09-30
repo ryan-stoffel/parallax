@@ -62,28 +62,72 @@ export async function wispdVersion(wispd: string): Promise<string | undefined> {
   }
 }
 
+/** What `replaceServe` needs from the system. Tests pass fakes. */
+export type ServeSystem = {
+  /** The pid in `dir`'s `wispd.lock`. Throws when there's none. */
+  lockPid: (dir: string) => number;
+  /** The process's command line, as `ps -o args=` prints it. Rejects when it isn't running. */
+  args: (pid: number) => Promise<string>;
+  /** `process.kill`: SIGTERM by default; signal 0 throws once the process is gone. */
+  kill: (pid: number, signal?: 0) => void;
+  sleep: (ms: number) => Promise<void>;
+};
+
+const processes: ServeSystem = {
+  lockPid: (dir) => Number.parseInt(readFileSync(path.join(dir, "wispd.lock"), "utf8")),
+  args: async (pid) =>
+    (await promisify(execFile)("ps", ["-o", "args=", "-p", String(pid)])).stdout.trim(),
+  kill: (pid, signal) => process.kill(pid, signal),
+  sleep: (ms) => sleep(ms),
+};
+
 /**
- * Stops the `wispd serve` that holds `wispd.lock` in `dir`, by the pid in it, as scripts/dev.mjs's
- * `stopWispd` does, and waits up to 10 s for it to exit. SIGTERM lets serve shut down cleanly,
- * but it ends agent runs in flight. macOS and Linux only (`ps`); does nothing when none runs.
+ * Whether a serve's command line is a packaged wisp app's bundled wispd, the path `findWispd`
+ * returns there: `….app/Contents/Resources/wispd serve` on macOS, `…/resources/wispd serve` in
+ * an AppImage's mount. A Cargo build or a wispd on PATH is someone else's.
  */
-export async function stopServe(dir: string): Promise<void> {
+export const isBundledServe = (args: string) =>
+  /(\.app\/Contents\/Resources|\/resources)\/wispd serve(\s|$)/.test(args);
+
+/**
+ * After an update, stops the `wispd serve` holding `dir`'s lock when its version (`running`)
+ * differs from the app's bundled wispd's (`bundled`, undefined when unknown) and a packaged wisp
+ * app started it (`isBundledServe`), then waits up to 10 s for it to exit. SIGTERM lets serve shut
+ * down cleanly, but it ends agent runs in flight. Every other serve is left alone; a real protocol
+ * mismatch with one still shows as the connection's error. macOS and Linux only (`ps`). `why` is
+ * for the log.
+ */
+export async function replaceServe(
+  dir: string,
+  running: string,
+  bundled: string | undefined,
+  system = processes,
+): Promise<{ stopped: boolean; why: string }> {
+  const keep = (why: string) => ({ stopped: false, why: `kept wispd serve ${running}: ${why}` });
+  if (bundled === undefined) return keep("the bundled wispd's version is unknown");
+  if (bundled === running) return keep("it is the bundled version");
   let pid: number;
+  let args: string;
   try {
-    pid = Number.parseInt(readFileSync(path.join(dir, "wispd.lock"), "utf8"));
+    pid = system.lockPid(dir);
     // A crashed serve leaves its pid behind, which another process may have by now.
-    const { stdout } = await promisify(execFile)("ps", ["-o", "args=", "-p", String(pid)]);
-    if (!/wispd serve\b/.test(stdout)) return;
-    process.kill(pid);
+    args = await system.args(pid);
   } catch {
-    return; // Not running.
+    return keep("it isn't running");
+  }
+  if (!isBundledServe(args)) return keep(`no packaged wisp started it (${args})`);
+  try {
+    system.kill(pid);
+  } catch {
+    return keep("it already exited");
   }
   for (let waited = 0; waited < 10_000; waited += 100) {
     try {
-      process.kill(pid, 0);
+      system.kill(pid, 0);
     } catch {
-      return; // Gone.
+      break; // Gone.
     }
-    await sleep(100);
+    await system.sleep(100);
   }
+  return { stopped: true, why: `stopped wispd serve ${running} for the bundled ${bundled}` };
 }

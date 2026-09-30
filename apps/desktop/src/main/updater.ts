@@ -40,7 +40,8 @@ export function updateError(error: Error & { code?: string; statusCode?: number 
  * `updaterSettings`) through the `app-update.yml` electron-builder packs, downloads what it finds
  * in the background, and installs it when Update is clicked or wisp quits. `publish` gets what the
  * Update button shows on every change. Nothing is checked until `follow` names a channel; then it
- * checks every minute, and on `checkSoon` at most every 10 s, while nothing is downloaded yet.
+ * checks every minute, and on `checkSoon` at most every 10 s, while nothing is downloaded yet. A
+ * channel change checks at once, and the button keeps offering a download already waiting.
  */
 export function startUpdater(publish: (state: UpdateState) => void) {
   // Updates replace the AppImage file; an unpacked Linux build has nothing to replace.
@@ -60,22 +61,31 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     autoUpdater.checkForUpdates().catch(() => {});
   };
 
+  // The button keeps offering a downloaded update, since it installs on quit, until another
+  // version replaces it or Squirrel.Mac rejects it. `note` is the latest check's line.
+  const show = (note?: string) =>
+    publish({
+      ...(downloaded !== undefined && { ready: `wisp ${downloaded} to install` }),
+      ...(note !== undefined && { note }),
+    });
+
   // autoDownload and autoInstallOnAppQuit are electron-updater's defaults.
   autoUpdater.on("update-available", ({ version }) => {
-    if (version !== downloaded) publish({ note: `Downloading wisp ${version}…` });
-  });
-  autoUpdater.on("update-not-available", () => {
+    if (version === downloaded) return;
+    // Its download replaces the one waiting.
     downloaded = undefined;
-    publish({});
+    show(`Downloading wisp ${version}…`);
   });
+  autoUpdater.on("update-not-available", () => show());
   autoUpdater.on("update-downloaded", ({ version }) => {
     downloaded = version;
-    publish({ ready: `wisp ${version} to install` });
+    show();
   });
-  // Also Squirrel.Mac's, such as a signature it rejects after the download.
   autoUpdater.on("error", (error: Error) => {
-    downloaded = undefined;
-    publish({ note: updateError(error) });
+    // Squirrel.Mac's own errors (they carry an NSError `domain`), such as a signature it rejects,
+    // mean the download won't install. A failed check leaves it waiting.
+    if ("domain" in error) downloaded = undefined;
+    show(updateError(error));
   });
   if (unsupported) publish({ note: unsupported });
   // A downloaded update waits for a click or quit; checking again would fetch it again.
@@ -90,7 +100,7 @@ export function startUpdater(publish: (state: UpdateState) => void) {
       autoUpdater.allowPrerelease = settings.allowPrerelease;
       autoUpdater.allowDowngrade = settings.allowDowngrade;
       following = true;
-      if (!unsupported) publish({});
+      if (!unsupported) show();
       check();
     },
     /** A window came to the front. */
