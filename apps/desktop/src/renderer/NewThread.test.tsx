@@ -323,6 +323,38 @@ test("a thread starts on the branch its prompt was named for, and takes the name
   expect(crumbs()).toEqual(["This Mac", "wisp", "Fix flaky test"]);
 });
 
+test("a thread can start with an image alone, titled Image, and nothing to name it by", async () => {
+  capabilities = {
+    promptImages: { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 },
+  };
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1 }));
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, ""),
+    },
+  });
+  await renderApp();
+  const data = new DataTransfer();
+  data.items.add(new File([Uint8Array.of(0xff, 0xd8, 0xff)], "a.jpg", { type: "image/jpeg" }));
+  act(() => {
+    composer().dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+  });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  await send("");
+  expect(calls("thread/start")).toEqual([
+    {
+      runId: expect.any(String),
+      prompt: "",
+      images: [{ mediaType: "image/jpeg", data: "/9j/" }],
+      repo: wisp.id,
+    },
+  ]);
+  expect(nameThread).not.toHaveBeenCalled();
+  expect(crumbs()).toEqual(["This Mac", "wisp", "Image"]);
+  vi.unstubAllGlobals();
+});
+
 test("a folder that isn't a repository says so under the composer", async () => {
   pickFolder.mockResolvedValue("/tmp/notes");
   answers["repo/add"] = () => ({

@@ -5,6 +5,7 @@ import type {
   AgentRun,
   Project,
   ProjectStartParams,
+  PromptImage,
   Repo,
   Thread,
   WispEvent,
@@ -99,9 +100,12 @@ function titlesOf(runs: AgentRun[]): Record<string, string> {
   return Object.fromEntries(runs.map((r) => [r.id, titleOf(r)]));
 }
 
-/** A run's title: its thread's generated title, or else its prompt's first line. */
+/**
+ * A run's title: its thread's generated title, or else its prompt's first line, or "Image" for a
+ * prompt of images alone.
+ */
 export function titleOf(run: AgentRun): string {
-  return readTitle(run.id) ?? run.prompt.trim().split("\n")[0]!;
+  return readTitle(run.id) ?? (run.prompt.trim().split("\n")[0] || "Image");
 }
 
 // A thread's generated title, kept in this app: wispd has no title of its own. Run ids are unique
@@ -166,14 +170,15 @@ export interface ThreadsView {
   /** Registers a repository (idempotent on its path). Resolves to its entry or an error message. */
   addRepo: (path: string) => Promise<Repo | string>;
   /**
-   * Starts a thread in a group, with `options` sent as they are, and its branch and title from
-   * `name`. Reuse `runId`, with the same
-   * options, to retry. Resolves to wispd's error, or undefined.
+   * Starts a thread in a group with `prompt` and its `images`, with `options` sent as they are, and
+   * its branch and title from `name`. Reuse `runId`, with the same options, to retry. Resolves to
+   * wispd's error, or undefined.
    */
   start: (
     runId: string,
     groupId: string,
     prompt: string,
+    images: PromptImage[],
     options: RunOptions,
     name?: ThreadName,
   ) => Promise<RpcError | undefined>;
@@ -187,15 +192,16 @@ export interface ThreadsView {
    */
   createProject: (id: string, name: string, repoPath: string) => Promise<Project | string>;
   /**
-   * Starts a Project's coordinator with `prompt`, or starts it over with a new `runId` (0024), then
-   * keeps it as the Project's. Reusing `runId` to retry is safe with any prompt or options: a
-   * failed `project/start` creates nothing, and one whose answer was lost shows up in
-   * `project/list` after a reconnect. Resolves to wispd's error, or undefined.
+   * Starts a Project's coordinator with `prompt` and its `images`, or starts it over with a new
+   * `runId` (0024), then keeps it as the Project's. Reusing `runId` to retry is safe with any
+   * prompt or options: a failed `project/start` creates nothing, and one whose answer was lost
+   * shows up in `project/list` after a reconnect. Resolves to wispd's error, or undefined.
    */
   startCoordinator: (
     project: string,
     runId: string,
     prompt: string,
+    images: PromptImage[],
     options: CoordinatorOptions,
   ) => Promise<RpcError | undefined>;
 }
@@ -294,12 +300,14 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
       runId: string,
       groupId: string,
       prompt: string,
+      images: PromptImage[],
       options: RunOptions,
       name?: ThreadName,
     ) => {
       const answer = await window.wisp.request(hostId, "thread/start", {
         runId,
         prompt,
+        ...(images.length > 0 && { images }),
         ...(groupId !== noRepo && { repo: groupId }),
         ...options,
         ...(name?.slug && { branchSlug: name.slug }),
@@ -362,11 +370,18 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
   );
 
   const startCoordinator = useCallback(
-    async (project: string, runId: string, prompt: string, options: CoordinatorOptions) => {
+    async (
+      project: string,
+      runId: string,
+      prompt: string,
+      images: PromptImage[],
+      options: CoordinatorOptions,
+    ) => {
       const answer = await window.wisp.request(hostId, "project/start", {
         project,
         runId,
         prompt,
+        ...(images.length > 0 && { images }),
         ...options,
       });
       if ("error" in answer) return answer.error;

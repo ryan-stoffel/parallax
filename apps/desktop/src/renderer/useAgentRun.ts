@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
-import type { AgentSendParams } from "../protocol/generated/protocol";
+import type { AgentSendParams, PromptImage } from "../protocol/generated/protocol";
 import { applyEvents, emptyTranscript, type Transcript } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
@@ -9,15 +9,25 @@ export interface AgentRunView {
   transcript: Transcript;
   /** Why the transcript couldn't load, for people. */
   error?: string;
-  /** Texts this window sent, by turn id, since the log holds only the id (RYA-92). */
-  sent: ReadonlyMap<string, string>;
+  /** Messages this window sent, by turn id, since older logs hold only the id (RYA-92). */
+  sent: ReadonlyMap<string, SentMessage>;
   /**
-   * Sends a message as the run's next turn, with a new model, effort, or access for the run if given.
-   * Resolves to wispd's error, or undefined.
+   * Sends a message and its images as the run's next turn, with a new model, effort, or access for
+   * the run if given. Resolves to wispd's error, or undefined.
    */
-  send: (text: string, options?: SendOptions) => Promise<RpcError | undefined>;
+  send: (
+    text: string,
+    options?: SendOptions,
+    images?: PromptImage[],
+  ) => Promise<RpcError | undefined>;
   /** Stops the run. Resolves to an error message, or undefined. */
   cancel: () => Promise<string | undefined>;
+}
+
+/** A message this window sent: its text and images, at hand until the run's log has them. */
+export interface SentMessage {
+  text: string;
+  images: PromptImage[];
 }
 
 /** A new model, effort, or access for a run, sent only to a wispd that advertises `sendModel`. */
@@ -32,7 +42,7 @@ export type SendOptions = Pick<AgentSendParams, "model" | "effort" | "permission
 export function useAgentRun(hostId: string, runId: string, connected: boolean): AgentRunView {
   const [transcript, setTranscript] = useState(emptyTranscript);
   const [error, setError] = useState<string>();
-  const [sent, setSent] = useState<ReadonlyMap<string, string>>(new Map());
+  const [sent, setSent] = useState<ReadonlyMap<string, SentMessage>>(new Map());
 
   useEffect(() => {
     if (!connected) return;
@@ -93,14 +103,15 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
   }, [hostId, runId, connected]);
 
   const send = useCallback(
-    async (text: string, options?: SendOptions) => {
+    async (text: string, options?: SendOptions, images: PromptImage[] = []) => {
       const turnId = uuidv7();
-      setSent((prev) => new Map(prev).set(turnId, text));
+      setSent((prev) => new Map(prev).set(turnId, { text, images }));
       const answer = await window.wisp.request(hostId, "agent/send", {
         runId,
         turnId,
         text,
         ...options,
+        ...(images.length > 0 && { images }),
       });
       if (!("error" in answer)) return undefined;
       setSent((prev) => {

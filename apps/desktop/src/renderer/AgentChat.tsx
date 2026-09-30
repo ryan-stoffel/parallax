@@ -11,6 +11,7 @@ import {
   GitBranch,
   GitPullRequest,
   GitPullRequestArrow,
+  ImageOff,
   Info,
   LoaderCircle,
   Ban,
@@ -30,10 +31,11 @@ import {
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import type { AgentRun, JsonValue } from "../protocol/generated/protocol";
+import type { AgentRun, ImageId, JsonValue, PromptImage } from "../protocol/generated/protocol";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
+import { imageCaps, imageUrl, loadImage } from "./images";
 import type { RunOptions } from "./models";
 import { titleOf } from "./threads";
 import {
@@ -45,10 +47,10 @@ import {
   type Item,
   type Work,
 } from "./transcript";
-import { useAgentRun } from "./useAgentRun";
+import { useAgentRun, type SentMessage } from "./useAgentRun";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
-type Row = Item | { kind: "pending"; key: string; text: string };
+type Row = Item | { kind: "pending"; key: string; text: string; images?: PromptImage[] };
 /** What the list shows: a turn's activity is folded into one `Work` row. */
 type ViewRow = Row | Work;
 
@@ -76,10 +78,14 @@ export function AgentChat({
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
   tab?: ReactNode;
   /**
-   * Starts a new run with `text` in place of this one once this one can't take messages, as a
-   * Project's coordinator can (0024). Resolves to an error message, or undefined.
+   * Starts a new run with `text` and `images` in place of this one once this one can't take
+   * messages, as a Project's coordinator can (0024). Resolves to an error message, or undefined.
    */
-  startOver?: (text: string, options: RunOptions) => Promise<string | undefined>;
+  startOver?: (
+    text: string,
+    options: RunOptions,
+    images: PromptImage[],
+  ) => Promise<string | undefined>;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -89,9 +95,9 @@ export function AgentChat({
   // Dropped follow-ups already sent again, so their Send again goes away (back on failure).
   const [resent, setResent] = useState<ReadonlySet<string>>(new Set());
   const resend = useCallback(
-    (turnId: string, text: string) => {
+    (turnId: string, message: SentMessage) => {
       setResent((prev) => new Set(prev).add(turnId));
-      void send(text).then((failed) => {
+      void send(message.text, undefined, message.images).then((failed) => {
         setResendError(failed?.message);
         if (failed)
           setResent((prev) => {
@@ -108,23 +114,34 @@ export function AgentChat({
     [sent, resent],
   );
   const { run, items } = transcript;
+  const showImage = useCallback((id: ImageId) => loadImage(hostId, runId, id), [hostId, runId]);
 
   // A message wispd wouldn't send because the run can't be resumed, which `startOver` can take.
-  const [refused, setRefused] = useState<{ text: string; options: RunOptions; why: string }>();
+  const [refused, setRefused] = useState<{
+    text: string;
+    options: RunOptions;
+    images: PromptImage[];
+    why: string;
+  }>();
   const [startingOver, setStartingOver] = useState(false);
-  const sendText = async (text: string, options: RunOptions) => {
-    const failed = await send(text, options);
+  const sendText = async (text: string, options: RunOptions, images: PromptImage[]) => {
+    const failed = await send(text, options, images);
     if (!startOver || failed?.data?.kind !== "runNotResumable") return failed?.message;
-    setRefused({ text, options, why: failed.message });
+    setRefused({ text, options, images, why: failed.message });
     return ""; // Back in the box; the line above it says why and offers Start over.
   };
   // A run that ended before its CLI reported a session never answered: it starts over with its
-  // own first message.
+  // own first message. ponytail: without that message's images, which would need fetching first.
   const stuck =
     startOver &&
     (refused ??
       (run && !isRunning(run.status) && !run.sessionId
-        ? { text: run.prompt, options: {}, why: "it stopped before its session started." }
+        ? {
+            text: run.prompt,
+            options: {},
+            images: [],
+            why: "it stopped before its session started.",
+          }
         : undefined));
   const restart = async () => {
     if (!stuck) return;
@@ -135,7 +152,7 @@ export function AgentChat({
       effort = run?.effort,
       permission = run?.permission,
     } = stuck.options;
-    const failed = await startOver(stuck.text, { model, effort, permission });
+    const failed = await startOver(stuck.text, { model, effort, permission }, stuck.images);
     setStartingOver(false);
     if (failed) setRefused({ ...stuck, why: failed });
   };
@@ -145,7 +162,12 @@ export function AgentChat({
     const seen = new Set(items.flatMap((i) => ("turnId" in i && i.turnId ? [i.turnId] : [])));
     const pending = [...sent]
       .filter(([turnId]) => !seen.has(turnId))
-      .map(([turnId, text]) => ({ kind: "pending" as const, key: `pending:${turnId}`, text }));
+      .map(([turnId, { text, images }]) => ({
+        kind: "pending" as const,
+        key: `pending:${turnId}`,
+        text,
+        images,
+      }));
     const all = [...items, ...pending];
     return all.length === 0 && prompt
       ? [{ kind: "pending", key: "pending:prompt", text: prompt }]
@@ -174,7 +196,13 @@ export function AgentChat({
   return (
     <>
       {rows.length > 0 ? (
-        <TranscriptView rows={rows} sent={unsent} live={isRunning(run?.status)} onResend={resend} />
+        <TranscriptView
+          rows={rows}
+          sent={unsent}
+          live={isRunning(run?.status)}
+          onResend={resend}
+          loadImage={showImage}
+        />
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-[13px] text-faint-foreground">
           {error ? (
@@ -227,6 +255,7 @@ export function AgentChat({
           backend={run?.backend}
           started={run}
           optionsDisabled={optionsDisabled}
+          imageCaps={imageCaps(connection)}
         />
       </div>
     </>
@@ -242,11 +271,14 @@ export function TranscriptView({
   sent,
   live,
   onResend,
+  loadImage,
 }: {
   rows: Row[];
-  sent: ReadonlyMap<string, string>;
+  sent: ReadonlyMap<string, SentMessage>;
   live: boolean;
-  onResend?: (turnId: string, text: string) => void;
+  onResend?: (turnId: string, message: SentMessage) => void;
+  /** Fetches a message's image by id, as a data URL. */
+  loadImage?: (imageId: ImageId) => Promise<string | undefined>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -326,13 +358,14 @@ export function TranscriptView({
               <div className="mx-auto max-w-3xl px-6 py-2">
                 <RowView
                   row={row}
-                  sentText={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
+                  sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
                   live={live}
                   open={open.has(row.key)}
                   openKeys={row.kind === "work" ? open : undefined}
                   active={v.index === activeIndex}
                   onToggle={toggle}
                   onResend={onResend}
+                  loadImage={loadImage}
                 />
               </div>
             </div>
@@ -345,8 +378,8 @@ export function TranscriptView({
 
 interface RowProps {
   row: ViewRow;
-  /** The text of a follow-up this window sent, which the log doesn't hold. */
-  sentText?: string;
+  /** A follow-up this window sent: its text, which an older log lacks, and its images, at hand. */
+  sent?: SentMessage;
   /** Whether the run is going, so a tool call with no result is still in progress. */
   live: boolean;
   open: boolean;
@@ -356,19 +389,22 @@ interface RowProps {
   active?: boolean;
   onToggle: (key: string, open: boolean) => void;
   /** Sends a dropped follow-up again. */
-  onResend?: (turnId: string, text: string) => void;
+  onResend?: (turnId: string, message: SentMessage) => void;
+  /** Fetches a message's image by id, as a data URL. */
+  loadImage?: (imageId: ImageId) => Promise<string | undefined>;
 }
 
 /** One transcript row. Memoized: an unchanged item keeps its object, so it skips re-rendering. */
 export const RowView = memo(function RowView({
   row,
-  sentText,
+  sent,
   live,
   open,
   openKeys,
   active,
   onToggle,
   onResend,
+  loadImage,
 }: RowProps) {
   switch (row.kind) {
     case "work":
@@ -403,15 +439,27 @@ export const RowView = memo(function RowView({
             </p>
           </Disclosure>
         );
-      const text = row.text ?? sentText;
+      const text = row.text ?? sent?.text;
+      // Images sent from here are at hand; the log's come from wispd by id.
+      const images = row.kind === "pending" ? row.images : (sent?.images ?? row.images);
       return (
-        <div className="flex justify-end">
-          <div
-            className={`max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap ${row.kind === "pending" ? "opacity-60" : ""}`}
-          >
-            {/* A follow-up from an older log, which has no text for it. */}
-            {text ?? <span className="text-muted-foreground italic">Follow-up message</span>}
-          </div>
+        <div
+          className={`flex flex-col items-end gap-1.5 ${row.kind === "pending" ? "opacity-60" : ""}`}
+        >
+          {images && images.length > 0 && (
+            <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+              {images.map((image, i) => (
+                <MessageImage key={i} image={image} loadImage={loadImage} />
+              ))}
+            </div>
+          )}
+          {/* A message of images alone has no bubble. */}
+          {(!images?.length || text?.trim() !== "") && (
+            <div className="max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap">
+              {/* A follow-up from an older log, which has no text for it. */}
+              {text ?? <span className="text-muted-foreground italic">Follow-up message</span>}
+            </div>
+          )}
         </div>
       );
     }
@@ -470,12 +518,12 @@ export const RowView = memo(function RowView({
           <span>
             {row.text}
             {/* A dropped follow-up this window sent: offer it again, rather than lose it. */}
-            {row.turnId && sentText !== undefined && onResend && (
+            {row.turnId && sent !== undefined && onResend && (
               <>
                 {" "}
                 <button
                   type="button"
-                  onClick={() => onResend(row.turnId!, sentText)}
+                  onClick={() => onResend(row.turnId!, sent)}
                   className="font-medium text-foreground underline underline-offset-2"
                 >
                   Send again
@@ -524,6 +572,48 @@ export const RowView = memo(function RowView({
     }
   }
 });
+
+/**
+ * One of a user message's images, as a thumbnail: at hand, or fetched by id. The same height
+ * either way, so the row doesn't jump when it loads.
+ */
+function MessageImage({
+  image,
+  loadImage,
+}: {
+  image: PromptImage | ImageId;
+  loadImage?: (imageId: ImageId) => Promise<string | undefined>;
+}) {
+  // By id: its data URL once fetched, or null when wispd couldn't serve it.
+  const [fetched, setFetched] = useState<{ id: ImageId; url: string | null }>();
+  useEffect(() => {
+    if (typeof image !== "string" || !loadImage) return;
+    let live = true;
+    void loadImage(image).then((url) => live && setFetched({ id: image, url: url ?? null }));
+    return () => {
+      live = false;
+    };
+  }, [image, loadImage]);
+  const url =
+    typeof image === "string" ? (fetched?.id === image ? fetched.url : undefined) : imageUrl(image);
+  if (url)
+    return (
+      <img
+        src={url}
+        alt="Image"
+        className="h-32 max-w-60 rounded-xl border border-border object-cover"
+      />
+    );
+  return (
+    <span
+      role="img"
+      aria-label={url === null ? "Image unavailable" : "Loading image"}
+      className="grid h-32 w-32 place-items-center rounded-xl border border-border bg-selected text-faint-foreground"
+    >
+      {url === null && <ImageOff aria-hidden className="size-5" />}
+    </span>
+  );
+}
 
 /**
  * A run of thinking, tool calls, and checklists under one dropdown. While the agent works its

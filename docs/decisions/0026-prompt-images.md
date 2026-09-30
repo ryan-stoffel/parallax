@@ -10,7 +10,7 @@ Ryan wants to paste images into the composer the way Claude desktop does: the im
 
 ## Decision
 
-- **Protocol.** `agent/start`, `agent/send`, `thread/start`, and `project/start` take optional `images`: a `mediaType` (`image/png`, `image/jpeg`, `image/gif`, or `image/webp`) and base64 `data`. They're behind the `promptImages` capability, since an older wispd would silently drop them (0007).
+- **Protocol.** `agent/start`, `agent/send`, `thread/start`, and `project/start` take optional `images`: a `mediaType` (`image/png`, `image/jpeg`, `image/gif`, or `image/webp`) and base64 `data`. They're behind the `promptImages` capability, since an older wispd would silently drop them (0007). A message with images may have no text (RYA-193): Claude Code then gets no text block, since the Messages API refuses a blank one.
 - **Caps.** Measured on `data`, the base64 text:
   - 5 MiB per image. That's the most every Claude platform accepts per image (Anthropic counts its limit on the base64), so an image wispd accepts, Claude accepts too.
   - 6 MiB per message and 10 images. The request has to fit in one 8 MiB frame next to up to 1 MiB of text.

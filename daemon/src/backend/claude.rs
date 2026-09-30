@@ -777,7 +777,8 @@ struct Message {
 
 impl Message {
     /// The message's content is `text` alone, or with images, the Messages API's base64 image
-    /// blocks and then `text` as a text block (RYA-191).
+    /// blocks and then `text` as a text block (RYA-191). A message of images alone has no text
+    /// block, since the API refuses a blank one (RYA-193).
     fn new(turn_id: Option<TurnId>, text: &str, images: &[PromptImage], follow_up: bool) -> Self {
         let uuid = turn_id.unwrap_or_else(TurnId::generate).to_string();
         let content = if images.is_empty() {
@@ -789,8 +790,9 @@ impl Message {
                     "source": {"type": "base64", "media_type": image.media_type, "data": image.data},
                 })
             });
-            let text = serde_json::json!({"type": "text", "text": text});
-            images.chain([text]).collect()
+            let text = (!text.trim().is_empty())
+                .then(|| serde_json::json!({"type": "text", "text": text}));
+            images.chain(text).collect()
         };
         let mut line = serde_json::json!({
             "type": "user",
