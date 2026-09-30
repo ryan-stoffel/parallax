@@ -8,7 +8,8 @@
       "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
       "prompt": "Add a dark mode to the settings page.",
       "model": "opus",
-      "effort": "high"
+      "effort": "high",
+      "permission": "plan"
     }
   },
   {
@@ -26,6 +27,7 @@
         "coordinatorThread": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
         "model": "opus",
         "effort": "high",
+        "permission": "plan",
         "createdAt": "2026-09-29T12:00:00Z",
         "updatedAt": "2026-09-29T12:00:01Z"
       }
@@ -86,9 +88,8 @@
         "kind": "agent.finished",
         "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
         "outcome": {
-          "status": "failed",
-          "failure": "policyViolation",
-          "message": "the coordinator's no-write turn changed the working tree:\n M src/settings.tsx"
+          "status": "completed",
+          "result": "Planned the dark mode in two tasks."
         }
       }
     }

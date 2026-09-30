@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tempfile::TempDir;
+use wisp_protocol::{CoordinatorThreadId, ProjectId};
 
 use super::stream::{Step, Translator};
 use super::{
@@ -16,10 +17,10 @@ use super::{
 };
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
-    AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, Credential, Event, EventStream,
-    FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow, ModelUsage, Outcome,
-    PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started, TodoItem, TodoStatus,
-    ToolPolicy, ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
+    AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, CoordinatorTools, Credential, Event,
+    EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow, ModelUsage,
+    Outcome, PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started, TodoItem,
+    TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
 };
 use crate::paths::DataDir;
 
@@ -357,8 +358,8 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
     );
 }
 
-/// RYA-176: a no-write run, the coordinator, has hooks off (0004) and can't read Claude Code's
-/// shared temp folder, which holds every session's files, in either spelling.
+/// RYA-176: a plain no-write run has hooks off (0004) and can't read Claude Code's shared temp
+/// folder, which holds every session's files, in either spelling.
 #[test]
 fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
     let args = super::arguments(&request(Path::new("/repo"))).unwrap();
@@ -374,6 +375,37 @@ fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
                 format!("Read(//private/tmp/claude-{uid}/**)"),
             ]},
         })
+    );
+}
+
+/// 0027: a coordinator runs as Claude Code in its mode, and without
+/// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, which would force "default"; it doesn't inherit it either.
+#[tokio::test]
+async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
+    let fake = Fake::new("tool-call");
+    let cwd = fake.root();
+    let request = RunRequest {
+        coordinator_tools: Some(CoordinatorTools {
+            program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
+            data_dir: cwd.join("data"),
+            project: ProjectId::generate(),
+            thread: CoordinatorThreadId::generate(),
+        }),
+        ..request(&cwd)
+    };
+    let expected: Vec<String> = super::arguments(&request)
+        .unwrap()
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+    run(&fake, request).await;
+    assert_eq!(fake.argv(), expected);
+    fake.assert_no_inherited_credentials(None);
+    let env = fake.env();
+    assert!(
+        !env.iter()
+            .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
+        "{env:?}"
     );
 }
 
@@ -601,10 +633,12 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
     );
 }
 
-/// RYA-97: a worker's permission picks only its mode, and its sandbox settings stay the same. A
-/// no-write run's mode is fixed (0004), so it takes no permission.
+/// RYA-97, 0027: a worker's permission picks Claude Code's mode of the same name, and its sandbox
+/// settings stay the same, except in bypass, where Claude Code refuses `--restricted` and the
+/// worker runs as full Claude Code. A no-write run's mode is fixed (0004), so it takes no
+/// permission.
 #[test]
-fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox() {
+fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
     let cwd = Path::new("/Users/u/wt");
     let mut worker = request(cwd);
     worker.policy = ToolPolicy::WorkspaceWrite;
@@ -626,16 +660,37 @@ fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox() {
     };
     let default = args(None);
     let edit = args(Some(AgentPermission::Edit));
-    let plan = args(Some(AgentPermission::Plan));
     assert_eq!(default, edit);
     assert_eq!(after(&edit, "--permission-mode"), "acceptEdits");
-    assert_eq!(after(&plan, "--permission-mode"), "plan");
-    assert_eq!(after(&plan, "--settings"), after(&edit, "--settings"));
+    for (permission, mode) in [
+        (AgentPermission::Auto, "auto"),
+        (AgentPermission::Manual, "default"),
+        (AgentPermission::Plan, "plan"),
+    ] {
+        let args = args(Some(permission));
+        assert_eq!(after(&args, "--permission-mode"), mode);
+        assert_eq!(after(&args, "--settings"), after(&edit, "--settings"));
+        assert!(args.starts_with(&edit[..super::BASE_ARGS.len() + WORKSPACE_WRITE_ARGS.len()]));
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "--permission-mode")
+                .count(),
+            1
+        );
+    }
+    let bypass = args(Some(AgentPermission::Bypass));
+    assert_eq!(after(&bypass, "--permission-mode"), "bypassPermissions");
+    for flag in [
+        "--restricted",
+        "--tools",
+        "--strict-mcp-config",
+        "--settings",
+    ] {
+        assert!(!bypass.contains(&flag.to_owned()), "{flag}: {bypass:?}");
+    }
     assert_eq!(
-        plan.iter()
-            .filter(|arg| *arg == "--permission-mode")
-            .count(),
-        1
+        bypass.iter().filter(|arg| *arg == "--add-dir").count(),
+        edit.iter().filter(|arg| *arg == "--add-dir").count()
     );
 
     let no_write = RunRequest {
@@ -803,7 +858,7 @@ async fn a_worker_whose_init_shows_another_permission_mode_is_stopped_before_any
     let (kind, message) = failure(&all);
     assert_eq!(kind, FailureKind::PolicyViolation);
     assert!(
-        message.contains(r#"permission mode "default" for a worker instead of "acceptEdits""#),
+        message.contains(r#"permission mode "default" in a worker run instead of "acceptEdits""#),
         "{message}"
     );
     assert!(
@@ -1666,41 +1721,37 @@ fn a_no_write_run_allows_only_the_read_tools() {
     );
 }
 
-/// #195: with wispd's tools attached, a coordinator's init may list exactly those eight MCP
-/// tools beyond its read tools; another server's tool, or a name outside the eight, still stops
-/// it, and without the tools attached even wispd's own names do.
+/// 0027: a coordinator and a bypass worker are full Claude Code, so their init may list any
+/// tool, another MCP server's included, in the mode they asked for. Without wispd's tools a
+/// no-write run keeps its read tools.
 #[test]
-fn a_coordinator_run_allows_the_read_tools_and_exactly_wispds_mcp_tools() {
-    let wispd = crate::mcp::ALLOWED_TOOLS
-        .iter()
-        .map(|tool| format!("{tool:?}"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let allowed = init_line(&format!(
-        r#"["Read","Glob","Grep","EndConversation",{wispd}]"#
-    ));
+fn a_coordinator_and_a_bypass_worker_allow_any_tool_in_the_mode_they_asked_for() {
+    let tools =
+        r#"["Read","Edit","Bash","Task","mcp__wispd__spawn_agent","mcp__linear__list_issues"]"#;
+    let loaded = init_line(tools);
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
-    assert_eq!(violation_kind(&translator.line(&allowed)), None);
-    for extra in [
-        r#"["Read","mcp__github__create_issue"]"#,
-        r#"["Read","mcp__wispd__plan_approve"]"#,
-        r#"["Read","mcp__wispd__spawn_agent","Bash"]"#,
-        r#"["Read","Edit"]"#,
-    ] {
-        let mut translator =
-            Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
-        assert_eq!(
-            violation_kind(&translator.line(&init_line(extra))),
-            Some(FailureKind::PolicyViolation),
-            "{extra}"
-        );
-    }
+    assert_eq!(violation_kind(&translator.line(&loaded)), None);
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none")
+        .with_coordinator_tools(true)
+        .with_permission_mode("bypassPermissions");
+    assert_eq!(
+        violation_kind(&translator.line(&loaded)),
+        Some(FailureKind::PolicyViolation),
+        "it reported acceptEdits"
+    );
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     assert_eq!(
-        violation_kind(&translator.line(&allowed)),
+        violation_kind(&translator.line(&loaded)),
         Some(FailureKind::PolicyViolation),
-        "wispd's tools count only when they were attached"
+        "without wispd's tools it isn't a coordinator"
     );
+
+    let bypass = String::from_utf8(loaded)
+        .unwrap()
+        .replace("acceptEdits", "bypassPermissions");
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none")
+        .with_permission_mode("bypassPermissions");
+    assert_eq!(violation_kind(&translator.line(bypass.as_bytes())), None);
 }
 
 fn failed_result() -> &'static [u8] {

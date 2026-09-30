@@ -36,7 +36,7 @@ export const models: Model[] = [
  * ponytail: mirrors wispd's `Backend::permissions`, which it doesn't report yet (RYA-154).
  */
 export const backends: Record<string, { provider: Provider; permissions: AgentPermission[] }> = {
-  claude: { provider: "Claude", permissions: ["edit", "plan"] },
+  claude: { provider: "Claude", permissions: ["auto", "manual", "edit", "plan", "bypass"] },
   codex: { provider: "Codex", permissions: ["edit"] },
 };
 

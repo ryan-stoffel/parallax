@@ -82,8 +82,9 @@ pub enum AgentPolicy {
     /// Edits in the run's worktree and the shared context folder, commands in the vendor's OS
     /// sandbox (0004, 0013).
     WorkspaceWrite,
-    /// Read-only tools in the project's repository, plus wispd's coordinator tools (0004, 0019,
-    /// 0024): a project's coordinator.
+    /// A project's coordinator (0024): full Claude Code in its permission mode, in the project's
+    /// repository, plus wispd's coordinator tools (0019, 0027). Without those tools, read-only
+    /// tools (0004).
     NoWrite,
     /// A policy this version does not know yet.
     #[serde(other)]
@@ -115,19 +116,27 @@ pub enum AgentEffort {
     Unknown,
 }
 
-/// How a run's agent may act inside its sandbox, behind the `runOptions` capability (RYA-97).
-/// Every value stays inside the worker sandbox (0013); none loosens it.
+/// A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
+/// which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
+/// worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
 ///
 /// A newer peer may send a value this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentPermission {
-    /// Edits its worktree and runs commands without asking: the default. Claude Code's
-    /// `acceptEdits`.
+    /// A classifier approves or blocks each action instead of a prompt: Claude Code's `auto`.
+    Auto,
+    /// Asks before each action that needs approval: Claude Code's `default`. Headless, a
+    /// request nobody can answer is denied.
+    Manual,
+    /// Edits files and runs commands without asking: the default. Claude Code's `acceptEdits`.
     Edit,
     /// Reads and plans without editing: Claude Code's plan mode, whose file tools refuse to
-    /// write. Its commands still run, in the same sandbox.
+    /// write.
     Plan,
+    /// Skips every permission check: Claude Code's `bypassPermissions`. A worker in this mode
+    /// runs without the worker sandbox, as Claude Code does on the user's own machine.
+    Bypass,
     /// A value this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -571,7 +580,8 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
-    /// How the agent may act inside its sandbox. Absent means `edit`.
+    /// The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
+    /// `coordinatorThread`, the coordinator's mode when it spawns the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,

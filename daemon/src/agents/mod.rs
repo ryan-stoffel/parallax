@@ -555,6 +555,42 @@ async fn record(
     recorded
 }
 
+/// A coordinator's subagent runs in the coordinator's current permission mode unless it names its
+/// own (0027): sets `options`' permission to the mode of the coordinator whose thread is
+/// `coordinator_thread`, its own run (0024), and returns it. The coordinator's mode only changes
+/// between its turns, so a retried spawn from the same turn inherits the same one.
+// ponytail: `create` drops an inherited mode the subagent's backend lacks, so a retry of that
+// spawn gets idConflict; keep requested and inherited modes apart if that bites.
+async fn inherit_permission(
+    daemon: &Arc<Daemon>,
+    coordinator_thread: Option<CoordinatorThreadId>,
+    options: &mut RunOptions,
+) -> Result<Option<AgentPermission>, ErrorObject> {
+    let Some(thread) = coordinator_thread.filter(|_| options.permission.is_none()) else {
+        return Ok(None);
+    };
+    let id = Uuid::from(thread);
+    let row = store(daemon, move |db| {
+        db.get_run(id).map_err(|e| store_error(&e))
+    })
+    .await?;
+    options.permission =
+        row.and_then(|row| row.fields.permission.as_deref().and_then(option_value));
+    Ok(options.permission)
+}
+
+/// Logs `run`'s `agent.started` on `project`'s events.
+async fn log_started(daemon: &Daemon, project: ProjectId, run: AgentRun) {
+    let event = WispEvent::AgentStarted {
+        run_id: run.id,
+        run: Some(run.clone()),
+    };
+    daemon
+        .log
+        .append(run.created_at, Some(project), event)
+        .await;
+}
+
 /// `agent/start`: see the module documentation. Idempotent on the run id.
 pub(crate) async fn start(
     daemon: Arc<Daemon>,
@@ -630,10 +666,11 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         images,
         account,
         coordinator_thread,
-        options,
+        mut options,
         thread,
     } = new;
     let _starting = agents.start_guard(run_id).await;
+    let inherited = inherit_permission(&daemon, coordinator_thread, &mut options).await?;
     // What the request asks for, as the runs table stores it. Routing fills in the backend below.
     let mut fields = RunFields {
         project_id: project.into(),
@@ -656,6 +693,9 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         return Ok(CreatedRun { run, thread: row });
     }
     let (prepared, scope_path) = prepare(&daemon, project, run_id, account, Role::Worker).await?;
+    if inherited.is_some_and(|mode| !prepared.resolved.backend().permissions().contains(&mode)) {
+        (options.permission, fields.permission) = (None, None);
+    }
     options.check(prepared.resolved.backend())?;
     let repo_path = match thread.as_ref().and_then(|thread| thread.scratch.clone()) {
         Some(scratch) => scratch.to_string_lossy().into_owned(),
@@ -680,18 +720,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         &created,
     )
     .await?;
-    let snapshot = agent_run(&row, Some(&worktree))?;
-    daemon
-        .log
-        .append(
-            snapshot.created_at,
-            Some(project),
-            WispEvent::AgentStarted {
-                run_id,
-                run: Some(snapshot),
-            },
-        )
-        .await;
+    log_started(&daemon, project, agent_run(&row, Some(&worktree))?).await;
     if let Some(thread) = &thread_row {
         crate::threads::log_started(&daemon, thread).await;
     }
