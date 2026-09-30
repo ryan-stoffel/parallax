@@ -1,19 +1,21 @@
 //! `agent/start`, `agent/send`, `agent/cancel`, `agent/list`, and `agent/events` (#156), behind
-//! the `agents` capability; the review methods (#157) behind `agentReview`; and `agent/openPr`
-//! (RYA-168) behind `openPr`. The runner itself is [`crate::agents`].
+//! the `agents` capability; the review methods (#157) behind `agentReview`; `agent/openPr`
+//! (RYA-168) behind `openPr`; and `agent/image` (RYA-191) behind `promptImages`. The runner itself
+//! is [`crate::agents`].
 
 use std::sync::Arc;
 
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentCancelParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentListParams,
-    AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy, AgentRequestChangesParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind, LoggedEvent,
+    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams,
+    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy,
+    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind,
+    LoggedEvent, PromptImage,
 };
 
 use super::Context;
-use crate::agents;
+use crate::{agents, images};
 
 /// The longest prompt or message wispd takes, in bytes. It goes on the CLI's stdin, never in
 /// argv, and into the event log.
@@ -59,6 +61,7 @@ pub(crate) async fn start(
         ));
     }
     check_text("prompt", &params.prompt)?;
+    images::check(&params.images)?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -73,6 +76,7 @@ pub(crate) async fn send(
     params: AgentSendParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     check_text("text", &params.text)?;
+    images::check(&params.images)?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -200,9 +204,17 @@ pub(crate) async fn request_changes(
             model: None,
             effort: None,
             permission: None,
+            images: Vec::new(),
         },
     )
     .await
+}
+
+pub(crate) async fn image(
+    context: &Context,
+    params: AgentImageParams,
+) -> Result<PromptImage, ErrorObject> {
+    agents::image(&context.daemon, params).await
 }
 
 pub(crate) async fn events(

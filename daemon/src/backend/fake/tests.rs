@@ -61,6 +61,7 @@ fn request(cwd: &Path) -> RunRequest {
         run_id: RunId::generate(),
         cwd: cwd.to_owned(),
         prompt: "Summarize the README.".into(),
+        images: Vec::new(),
         policy: ToolPolicy::NoWrite,
         sandbox: None,
         account: subscription(),
@@ -304,7 +305,8 @@ async fn cancel_mid_stream_interrupts_the_cli() {
     assert_eq!(
         run.send(FollowUp {
             turn_id: TurnId::generate(),
-            text: "too late".into()
+            text: "too late".into(),
+            images: Vec::new(),
         }),
         Err(SendError::Finished)
     );
@@ -351,6 +353,7 @@ async fn a_follow_up_becomes_the_next_turn() {
     let follow_up = FollowUp {
         turn_id,
         text: "Now the \"tests\",\nplease.".into(),
+        images: Vec::new(),
     };
     run.send(follow_up.clone()).unwrap();
     run.send(follow_up.clone()).unwrap();
@@ -399,6 +402,7 @@ async fn a_follow_up_the_cli_never_read_is_reported_dropped() {
     let sent = run.send(FollowUp {
         turn_id,
         text: "one more thing".into(),
+        images: Vec::new(),
     });
     let all = rest(&mut events).await;
     assert_eq!(outcome(&all), &Outcome::Cancelled);
@@ -416,6 +420,7 @@ async fn a_follow_up_the_cli_never_read_is_reported_dropped() {
         run.send(FollowUp {
             turn_id,
             text: "one more thing".into(),
+            images: Vec::new(),
         }),
         Err(SendError::Finished),
         "a retry must not claim the dropped message arrived"
@@ -458,6 +463,7 @@ async fn turns_finish_in_the_order_they_started() {
         run.send(FollowUp {
             turn_id,
             text: text.into(),
+            images: Vec::new(),
         })
         .unwrap();
     }
@@ -565,7 +571,8 @@ async fn a_backend_without_follow_ups_refuses_them_and_closes_stdin() {
     assert_eq!(
         run.send(FollowUp {
             turn_id: TurnId::generate(),
-            text: "hi".into()
+            text: "hi".into(),
+            images: Vec::new(),
         }),
         Err(SendError::Unsupported)
     );

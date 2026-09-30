@@ -160,6 +160,7 @@ fn message(run_id: RunId, text: &str) -> AgentSendParams {
         model: None,
         effort: None,
         permission: None,
+        images: Vec::new(),
     }
 }
 
@@ -175,6 +176,7 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
         effort: None,
         permission: None,
         branch_slug: None,
+        images: Vec::new(),
     }
 }
 

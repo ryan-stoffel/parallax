@@ -319,6 +319,7 @@ pub(crate) async fn start(
         effort,
         permission,
         branch_slug,
+        images,
     } = params;
     if let Some(slug) = &branch_slug
         && !valid_branch_slug(slug)
@@ -376,6 +377,7 @@ pub(crate) async fn start(
         run_id,
         scope,
         prompt,
+        images,
         account,
         coordinator_thread: None,
         options: RunOptions {

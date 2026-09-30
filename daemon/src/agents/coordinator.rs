@@ -40,6 +40,7 @@ pub(crate) async fn start(
         account,
         model,
         effort,
+        images,
     } = params;
     let _starting = daemon.agents.start_guard(run_id).await;
     let options = RunOptions {
@@ -114,7 +115,9 @@ pub(crate) async fn start(
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());
     let message = first_message(&prompt, &repo_path);
-    actor.launch(prepared, message, None, None, None).await;
+    actor
+        .launch(prepared, message, images, None, None, None)
+        .await;
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
     daemon.agents.spawn(actor);

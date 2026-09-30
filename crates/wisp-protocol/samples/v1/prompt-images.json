@@ -1,0 +1,179 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/start",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "prompt": "Why does this dialog overflow?",
+      "images": [
+        {
+          "mediaType": "image/png",
+          "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "thread": {
+        "id": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "createdAt": "2026-09-29T12:00:00Z"
+      },
+      "run": {
+        "id": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "prompt": "Why does this dialog overflow?",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "wisp/1a2b3c4d",
+        "worktreePath": "/Users/me/Library/Application Support/wisp/worktrees/wisp-5e6f7a8b/01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "createdAt": "2026-09-29T12:00:00Z",
+        "updatedAt": "2026-09-29T12:00:01Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f100-2b3c-7d4e-9f50-6a7b8c9d0e10",
+      "seq": 41,
+      "time": "2026-09-29T12:00:01Z",
+      "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "items": [
+          {
+            "kind": "turnStarted",
+            "images": ["01a0f100-3c4d-7e5f-8a61-7b8c9d0e1f11"]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/image",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "imageId": "01a0f100-3c4d-7e5f-8a61-7b8c9d0e1f11"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "mediaType": "image/png",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "agent/send",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "turnId": "01a0f100-4d5e-7f60-9b72-8c9d0e1f2a12",
+      "text": "And after the fix?",
+      "images": [
+        {
+          "mediaType": "image/gif",
+          "data": "R0lGODlhAQABAAAAACw="
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "run": {
+        "id": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "prompt": "Why does this dialog overflow?",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "wisp/1a2b3c4d",
+        "worktreePath": "/Users/me/Library/Application Support/wisp/worktrees/wisp-5e6f7a8b/01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "sessionId": "5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68",
+        "createdAt": "2026-09-29T12:00:00Z",
+        "updatedAt": "2026-09-29T12:00:20Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f100-2b3c-7d4e-9f50-6a7b8c9d0e10",
+      "seq": 57,
+      "time": "2026-09-29T12:00:21Z",
+      "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "items": [
+          {
+            "kind": "turnStarted",
+            "turnId": "01a0f100-4d5e-7f60-9b72-8c9d0e1f2a12",
+            "text": "And after the fix?",
+            "images": ["01a0f100-5e6f-7061-8c83-9d0e1f2a3b13"]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "agent/send",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "turnId": "01a0f100-6f70-7172-9d94-0e1f2a3b4c14",
+      "text": "This one is a big screenshot.",
+      "images": [
+        {
+          "mediaType": "image/jpeg",
+          "data": "/9j/4AAQSkZJRgABAQ=="
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32000,
+      "message": "image 1 is 7340032 bytes of base64; each must be at most 5242880",
+      "data": { "kind": "imageTooLarge" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "agent/image",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "imageId": "01a0f100-7a8b-7c9d-8e0f-1a2b3c4d5e15"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32000,
+      "message": "run 01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01 has no image 01a0f100-7a8b-7c9d-8e0f-1a2b3c4d5e15",
+      "data": { "kind": "imageNotFound" }
+    }
+  }
+]

@@ -25,10 +25,10 @@ use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, R
 use wisp_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
-    AgentEvents, AgentFile, AgentList, AgentOpenPr, AgentRequestChanges, AgentSend, AgentStart,
-    ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth,
-    HostVersion, Initialize, ProjectCreate, ProjectList, ProjectStart, RequestMethod, UsageGet,
-    UsageHistory,
+    AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges, AgentSend,
+    AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe,
+    HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList, ProjectStart, RequestMethod,
+    UsageGet, UsageHistory,
 };
 use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
@@ -161,7 +161,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     })
 }
 
-/// Answers an `agent/*` method (#156, #157), or `None` if there is no such method.
+/// Answers an `agent/*` method (#156, #157, RYA-191), or `None` if there is no such method.
 async fn agent_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
     Some(match request.method.as_str() {
         AgentStart::NAME => handle::<AgentStart, _, _>(request, |p| agent::start(context, p)).await,
@@ -173,6 +173,7 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentEvents::NAME => {
             handle::<AgentEvents, _, _>(request, |p| agent::events(context, p)).await
         }
+        AgentImage::NAME => handle::<AgentImage, _, _>(request, |p| agent::image(context, p)).await,
         AgentDiff::NAME => handle::<AgentDiff, _, _>(request, |p| agent::diff(context, p)).await,
         AgentFile::NAME => handle::<AgentFile, _, _>(request, |p| agent::file(context, p)).await,
         AgentAccept::NAME => {
