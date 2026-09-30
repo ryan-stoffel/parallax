@@ -37,6 +37,7 @@
 //!   its events, commits its changes, and resumes it after a restart.
 //! - `threads`: normal threads behind `thread/*` and `repo/*` (#110): runs with no coordinator
 //!   that belong to a repo entry, or to a scratch repository for a thread with no repo.
+//! - `images`: the caps and checks for images sent with a prompt or message (RYA-191).
 //! - [`windows`]: every Win32 call wispd makes, and the only module with `unsafe` code. Windows
 //!   only.
 
@@ -48,6 +49,7 @@ pub mod backend;
 mod context;
 mod detect;
 mod event_log;
+mod images;
 mod json;
 pub mod keystore;
 pub mod launch_agent;

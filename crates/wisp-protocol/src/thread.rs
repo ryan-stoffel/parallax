@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{AccountChoice, AgentEffort, AgentPermission, AgentRun, RunId};
+use crate::{AccountChoice, AgentEffort, AgentPermission, AgentRun, PromptImage, RunId};
 
 uuid_v7_id! {
     /// A repo entry's id: a version 7 UUID that the client generates once and sends again on
@@ -137,6 +137,9 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub branch_slug: Option<String>,
+    /// Images for the first message, as `agent/start`'s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PromptImage>,
 }
 
 /// Result of `thread/start`.

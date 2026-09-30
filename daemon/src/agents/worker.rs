@@ -487,6 +487,7 @@ mod tests {
                 turn_id: None,
                 cwd: dir.path().canonicalize().unwrap(),
                 prompt: "print the environment".into(),
+                images: Vec::new(),
                 policy: ToolPolicy::NoWrite,
                 sandbox: None,
                 account: AccountRef {

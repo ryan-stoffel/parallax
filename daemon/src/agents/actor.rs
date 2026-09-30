@@ -24,9 +24,10 @@ use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{AcceptId, AgentMerge};
 use wisp_protocol::{
     AccountChoice, AccountId, AgentFailureKind, AgentOutcome, AgentOutputItem, AgentRun,
-    CoordinatorThreadId, DiffSummary, ErrorKind, ProjectId, Role, RunId, TurnId, WispEvent,
+    CoordinatorThreadId, DiffSummary, ErrorKind, ImageId, ProjectId, PromptImage, Role, RunId,
+    TurnId, WispEvent,
 };
-use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, Worktree};
+use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree};
 
 use super::convert::{self, agent_run, item_bytes, option_name, option_value, output_item};
 use super::wake::{self, Wakes};
@@ -53,6 +54,8 @@ pub(super) enum Command {
     Send {
         turn_id: TurnId,
         text: String,
+        /// The message's images, already checked (RYA-191).
+        images: Vec<PromptImage>,
         /// A new model, effort, or permission for the run (RYA-161, RYA-163).
         options: RunOptions,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
@@ -137,6 +140,9 @@ pub(super) struct Actor {
     /// Messages sent to the run, by turn id, reloaded from the store after a restart. They make
     /// `agent/send` idempotent across CLI processes and fill in the logged `TurnStarted.text`.
     turns: HashMap<TurnId, String>,
+    /// The stored images of messages a CLI took, by turn id (`None` for the prompt's), until
+    /// their `TurnStarted` lists them (RYA-191, decision 0026).
+    images: HashMap<Option<TurnId>, Vec<ImageId>>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
     /// A coordinator's worktree, and its state when the CLI started (0004).
@@ -175,6 +181,7 @@ impl Actor {
             live: None,
             batch: Batch::default(),
             turns,
+            images: HashMap::new(),
             last_message,
             tree: None,
             violation: None,
@@ -256,10 +263,11 @@ impl Actor {
             Command::Send {
                 turn_id,
                 text,
+                images,
                 options,
                 reply,
             } => {
-                let answer = self.send(turn_id, text, options).await;
+                let answer = self.send(turn_id, text, images, options).await;
                 if answer.is_ok() && self.wakes.attended() {
                     self.save_wakes().await;
                 }
@@ -332,7 +340,10 @@ impl Actor {
             return;
         };
         info!(run = %self.id, "waking a coordinator: runs it started finished");
-        match self.resume(turn_id, text, RunOptions::default()).await {
+        match self
+            .resume(turn_id, text, Vec::new(), RunOptions::default())
+            .await
+        {
             Ok(_) if self.live.is_some() => {
                 self.wakes.delivered();
                 self.save_wakes().await;
@@ -565,6 +576,7 @@ impl Actor {
         &mut self,
         turn_id: TurnId,
         text: String,
+        images: Vec<PromptImage>,
         options: RunOptions,
     ) -> Result<AgentRun, ErrorObject> {
         if text.trim().is_empty() {
@@ -610,10 +622,12 @@ impl Actor {
             let follow_up = FollowUp {
                 turn_id,
                 text: text.clone(),
+                images: images.clone(),
             };
             match live.run.send(follow_up) {
                 Ok(()) => {
                     self.record_turn(turn_id, text.clone()).await;
+                    self.keep_images(Some(turn_id), images).await;
                     self.last_message = text;
                     return self.snapshot();
                 }
@@ -639,15 +653,17 @@ impl Actor {
                 }
             }
         }
-        self.resume(turn_id, text, changes).await
+        self.resume(turn_id, text, images, changes).await
     }
 
-    /// Starts a new CLI process for the run, resuming its vendor session with `text`, after
-    /// storing `changes` to its model, effort, and permission, which the new process runs with.
+    /// Starts a new CLI process for the run, resuming its vendor session with `text` and
+    /// `images`, after storing `changes` to its model, effort, and permission, which the new
+    /// process runs with.
     async fn resume(
         &mut self,
         turn_id: TurnId,
         text: String,
+        images: Vec<PromptImage>,
         changes: RunOptions,
     ) -> Result<AgentRun, ErrorObject> {
         let Some(session_id) = self.row.state.session_id.clone() else {
@@ -744,7 +760,7 @@ impl Actor {
         info!(run = %self.id, "resuming an agent run's session");
         let message = text.clone();
         if self
-            .launch(prepared, text, Some(turn_id), Some(resume), None)
+            .launch(prepared, text, images, Some(turn_id), Some(resume), None)
             .await
         {
             // Only a turn that reached a CLI counts as sent: a retry after a failed start
@@ -777,13 +793,49 @@ impl Actor {
         }
     }
 
-    /// Starts the run's CLI with `prompt` and records the result: `running`, or `failed` with
-    /// why. `paths` are a worker's worktree's and repository git folder's canonical paths, when
-    /// the caller already has them. Returns whether the CLI started.
+    /// Stores the images of `turn_id`'s message, which its CLI has now taken, for its
+    /// `TurnStarted` to list (RYA-191, decision 0026). If they can't be stored, the CLI still has
+    /// them, and the transcript shows the message without them.
+    async fn keep_images(&mut self, turn_id: Option<TurnId>, images: Vec<PromptImage>) {
+        if images.is_empty() {
+            return;
+        }
+        let ids: Vec<ImageId> = images.iter().map(|_| ImageId::generate()).collect();
+        let rows: Vec<_> = ids
+            .iter()
+            .zip(images)
+            .map(|(&id, image)| {
+                let stored = StoredImage {
+                    media_type: option_name(image.media_type).unwrap_or_default(),
+                    data: image.data,
+                };
+                (Uuid::from(id), stored)
+            })
+            .collect();
+        let run = self.row.id;
+        let stored = store(&self.daemon, move |db| {
+            db.add_images(run, &rows)
+                .map_err(|error| store_error(&error))
+        })
+        .await;
+        match stored {
+            Ok(()) => {
+                self.images.insert(turn_id, ids);
+            }
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not store a message's images");
+            }
+        }
+    }
+
+    /// Starts the run's CLI with `prompt` and `images` and records the result: `running`, or
+    /// `failed` with why. `paths` are a worker's worktree's and repository git folder's canonical
+    /// paths, when the caller already has them. Returns whether the CLI started.
     pub async fn launch(
         &mut self,
         prepared: Prepared,
         prompt: String,
+        images: Vec<PromptImage>,
         turn_id: Option<TurnId>,
         resume: Option<Resume>,
         paths: Option<(PathBuf, PathBuf)>,
@@ -819,6 +871,7 @@ impl Actor {
             turn_id,
             cwd,
             prompt,
+            images: images.clone(),
             policy: resolved.policy(),
             sandbox,
             account: AccountRef {
@@ -843,6 +896,7 @@ impl Actor {
                 self.row.state.account_id = account_id;
                 self.row.state.error = None;
                 self.save().await;
+                self.keep_images(turn_id, images).await;
                 true
             }
             Err(error) => {
@@ -1028,19 +1082,23 @@ impl Actor {
             _ => {
                 if let Some(mut item) = output_item(&event) {
                     // A follow-up's text, which `send` recorded before its CLI could report the
-                    // turn, so a transcript rebuilt from the log shows it (RYA-92). Capped like
-                    // every other text item.
+                    // turn, so a transcript rebuilt from the log shows it (RYA-92), capped like
+                    // every other text item, and the ids of any message's images (RYA-191).
                     if let AgentOutputItem::TurnStarted {
-                        turn_id: Some(turn_id),
+                        turn_id,
                         text,
                         wake,
+                        images,
                     } = &mut item
                     {
-                        *wake = self.wakes.was_sent(*turn_id);
-                        *text = self
-                            .turns
-                            .get(turn_id)
-                            .map(|sent| convert::truncate(sent, convert::MAX_TEXT_ITEM_BYTES));
+                        *images = self.images.remove(turn_id).unwrap_or_default();
+                        if let Some(turn_id) = turn_id {
+                            *wake = self.wakes.was_sent(*turn_id);
+                            *text = self
+                                .turns
+                                .get(turn_id)
+                                .map(|sent| convert::truncate(sent, convert::MAX_TEXT_ITEM_BYTES));
+                        }
                     }
                     self.push(item).await;
                 }

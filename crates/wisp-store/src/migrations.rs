@@ -249,6 +249,21 @@ const MIGRATIONS: &[Migration] = &[
             paused INTEGER NOT NULL
         );",
     },
+    // Images sent with a run's messages (RYA-191, decision 0026), which `turnStarted` names by id
+    // and `agent/image` serves: kept out of `events`, since one can be megabytes. `data` is the
+    // base64 the client sent. No foreign key, like `turns`, so `Store::delete_thread` deletes a
+    // thread's rows, and they wait on #207 otherwise, as its events do.
+    Migration {
+        version: 15,
+        sql: "CREATE TABLE images (
+            run_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, id)
+        );",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

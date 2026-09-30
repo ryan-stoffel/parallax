@@ -26,6 +26,7 @@ fn request(cwd: &Path) -> RunRequest {
         turn_id: None,
         cwd: cwd.to_owned(),
         prompt: "hi".into(),
+        images: Vec::new(),
         policy: ToolPolicy::WorkspaceWrite,
         sandbox: Some(WorkerSandbox::for_worktree(
             Path::new("/Users/u"),

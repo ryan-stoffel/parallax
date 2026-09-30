@@ -13,18 +13,19 @@ use tempfile::TempDir;
 use tokio::time::Instant;
 use wisp_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification};
 use wisp_protocol::methods::{
-    AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentList, AgentRequestChanges,
-    AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth, NotificationMethod,
-    ProjectCreate, RequestMethod, UsageGet,
+    AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
+    AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
+    NotificationMethod, ProjectCreate, RequestMethod, UsageGet,
 };
 use wisp_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
     AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFailureKind,
-    AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentListParams, AgentMerge,
-    AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRequestChangesParams,
-    AgentRun, AgentSendParams, AgentStartParams, AgentStatus, CoordinatorThreadId, DiffSummary,
-    ErrorKind, EventsEventParams, EventsSubscribeParams, HostHealthParams, InitializeResult,
-    Project, ProjectCreateParams, ProjectId, Provider, RunId, TurnId, UsageGetParams, WispEvent,
+    AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentImageParams,
+    AgentListParams, AgentMerge, AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy,
+    AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
+    CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
+    HostHealthParams, ImageId, ImageMediaType, InitializeResult, Project, ProjectCreateParams,
+    ProjectId, PromptImage, Provider, RunId, TurnId, UsageGetParams, WispEvent,
 };
 use wispd::backend::fake::{FakeBackend, Script, Step};
 use wispd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -118,6 +119,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         model: None,
         effort: None,
         permission: None,
+        images: Vec::new(),
     }
 }
 
@@ -129,6 +131,7 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
         model: None,
         effort: None,
         permission: None,
+        images: Vec::new(),
     }
 }
 
@@ -574,6 +577,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         turn_id: Some(first),
         text: Some("and the tests".to_owned()),
         wake: false,
+        images: Vec::new(),
     }));
     assert!(transcript.contains(&AgentOutputItem::Text {
         message_id: None,
@@ -615,6 +619,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         turn_id: Some(second),
         text: Some("one more thing".to_owned()),
         wake: false,
+        images: Vec::new(),
     }));
     let third = TurnId::generate();
     client
@@ -622,6 +627,90 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Completed)).await;
+    host.server.stop().await;
+}
+
+/// The ids of the images a transcript's `turnStarted` for `turn` lists (RYA-191).
+fn turn_images(transcript: &[AgentOutputItem], turn: Option<TurnId>) -> Vec<ImageId> {
+    transcript
+        .iter()
+        .find_map(|item| match item {
+            AgentOutputItem::TurnStarted {
+                turn_id, images, ..
+            } if *turn_id == turn => Some(images.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no turnStarted for {turn:?} in {transcript:?}"))
+}
+
+#[tokio::test]
+async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_and_served() {
+    let dir = temp_dir();
+    let host = Host::start(
+        dir,
+        fake(vec![
+            init("images-1"),
+            end_turn("First answer."),
+            Step::AwaitFollowUp,
+            end_turn("Second answer."),
+        ]),
+    );
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let png = PromptImage {
+        media_type: ImageMediaType::Png,
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+    };
+    let gif = PromptImage {
+        media_type: ImageMediaType::Gif,
+        data: "R0lGODlhAQABAAAAACw=".to_owned(),
+    };
+    let params = AgentStartParams {
+        images: vec![png.clone()],
+        ..start_params(project.id, "What is in this picture?")
+    };
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    let events = until(
+        &mut client,
+        has_item(AgentOutputItem::TurnFinished {
+            turn_id: None,
+            result: Some("First answer.".to_owned()),
+        }),
+    )
+    .await;
+    let [prompt_image] = turn_images(&items(&events), None)[..] else {
+        panic!("the prompt's turn lists its one image");
+    };
+
+    let too_many = AgentSendParams {
+        images: vec![gif.clone(); 11],
+        ..send_params(run_id, TurnId::generate(), "all of these")
+    };
+    let error = client.call::<AgentSend>(too_many).await.unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::ImageTooLarge);
+
+    let turn = TurnId::generate();
+    let follow_up = AgentSendParams {
+        images: vec![gif.clone(), png.clone()],
+        ..send_params(run_id, turn, "and these?")
+    };
+    client.call::<AgentSend>(follow_up).await.unwrap();
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let follow_up_images = turn_images(&items(&events), Some(turn));
+
+    let image = |image_id| AgentImageParams { run_id, image_id };
+    let mut served = Vec::new();
+    for id in [prompt_image].iter().chain(&follow_up_images) {
+        served.push(client.call::<AgentImage>(image(*id)).await.unwrap());
+    }
+    assert_eq!(served, [png.clone(), gif, png]);
+    let missing = client
+        .call::<AgentImage>(image(ImageId::generate()))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&missing), ErrorKind::ImageNotFound);
     host.server.stop().await;
 }
 
@@ -789,6 +878,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
             wake: false,
+            images: Vec::new(),
         },
         AgentOutputItem::SessionStarted {
             session_id: "hang-1".to_owned(),
@@ -861,6 +951,7 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
             wake: false,
+            images: Vec::new(),
         }),
     )
     .await;
