@@ -775,11 +775,14 @@ const markdownComponents: Components = {
   ),
 };
 
-/** An agent message, rendered from Markdown with GitHub's extensions. */
-export function MarkdownText({ text }: { text: string }) {
+/**
+ * An agent message, rendered from Markdown with GitHub's extensions. `components` replace some
+ * elements' renderers, such as the Context view's links; they get the same safe, HTML-free tree.
+ */
+export function MarkdownText({ text, components }: { text: string; components?: Components }) {
   return (
     <div className="markdown">
-      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <Markdown remarkPlugins={[remarkGfm]} components={{ ...markdownComponents, ...components }}>
         {text}
       </Markdown>
     </div>

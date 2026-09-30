@@ -14,7 +14,10 @@ import {
 export const shortcut = (keys: string) =>
   window.wisp.platform === "darwin" ? `⌘${keys.replace("Alt+", "⌥")}` : `Ctrl+${keys}`;
 
-/** A square, icon-only toolbar button. `label` is its accessible name and tooltip. */
+/**
+ * A square, icon-only toolbar button. `label` is its accessible name and tooltip; `aria-pressed`
+ * shows it on.
+ */
 export function IconButton({
   label,
   keys,
@@ -26,7 +29,7 @@ export function IconButton({
       type="button"
       aria-label={label}
       title={keys ? `${label} (${shortcut(keys)})` : label}
-      className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+      className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
       {...props}
     >
       {children}
