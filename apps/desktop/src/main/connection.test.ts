@@ -121,7 +121,8 @@ test("an incompatible protocol stops retrying until retry()", () => {
   child().reply({ id: child().request("initialize").id, error: incompatible });
   expect(state()).toMatchObject({
     status: "failed",
-    error: { reason: "incompatibleProtocol" },
+    // Its version rides along, so a packaged app can replace an old wispd (hosts.ts).
+    error: { reason: "incompatibleProtocol", wispd: "0.1.0" },
     retrying: false,
   });
   vi.advanceTimersByTime(60_000);
