@@ -8,8 +8,10 @@ import {
   Square,
   X,
 } from "lucide-react";
+import Bold from "@tiptap/extension-bold";
+import Italic from "@tiptap/extension-italic";
 import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { EditorContent, markInputRule, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
 import { useRef, useState, type ReactNode } from "react";
@@ -41,9 +43,34 @@ const accessOptions: Record<AgentPermission, PickerOption> = {
 const divider = <span aria-hidden className="mx-1 h-5 w-px bg-border" />;
 
 // The box's editor: typed Markdown (`- `, `1. `, ```` ``` ````, `> `, `#`, `**bold**`, `*italic*`,
-// `` `code` ``) formats as you type. Links and underline have no place in a prompt, and a trailing
-// empty line after a list or code block would only add height.
-const extensions = [StarterKit.configure({ link: false, underline: false, trailingNode: false })];
+// `` `code` ``) formats as you type. Nothing else rewrites what's typed: bold and italic come from
+// `**` and `*` only, with no space just inside them (as in CommonMark), so `__init__`, `_private_`,
+// and `a * b * c` stay as they are, and there's no strikethrough or `---` rule. Links and
+// underline have no place in a prompt, and a trailing empty line after a list or code block would
+// only add height.
+const extensions = [
+  StarterKit.configure({
+    bold: false,
+    italic: false,
+    strike: false,
+    horizontalRule: false,
+    link: false,
+    underline: false,
+    trailingNode: false,
+  }),
+  Bold.extend({
+    addInputRules() {
+      return [
+        markInputRule({ find: /(?:^|\s)(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/, type: this.type }),
+      ];
+    },
+  }),
+  Italic.extend({
+    addInputRules() {
+      return [markInputRule({ find: /(?:^|\s)(\*([^*\s](?:[^*]*[^*\s])?)\*)$/, type: this.type })];
+    },
+  }),
+];
 
 // What's sent is the box as Markdown. Text goes out as typed, unescaped, since the agent reads it
 // raw: `foo_bar` and `<div>` stay as they are.
@@ -52,11 +79,14 @@ const markdown = new MarkdownSerializer(
   {
     // Paragraphs, headings, and quotes share the defaults' names.
     ...nodes,
-    horizontalRule: nodes["horizontal_rule"]!,
     listItem: nodes["list_item"]!,
     bulletList: (state, node) => state.renderList(node, "  ", () => "- "),
-    orderedList: (state, node) =>
-      state.renderList(node, "   ", (i) => `${(node.attrs["start"] as number) + i}. `),
+    orderedList: (state, node) => {
+      // Nested lines indent as far as the widest number reaches.
+      const start = node.attrs["start"] as number;
+      const width = `${start + node.childCount - 1}. `.length;
+      state.renderList(node, " ".repeat(width), (i) => `${start + i}. `.padEnd(width));
+    },
     codeBlock: (state, node) => {
       // A fence longer than any run of backticks in the code.
       const runs = node.textContent.match(/`{3,}/g) ?? [];
@@ -75,7 +105,6 @@ const markdown = new MarkdownSerializer(
     ...marks,
     bold: marks["strong"]!,
     italic: marks["em"]!,
-    strike: { open: "~~", close: "~~", mixable: true, expelEnclosingWhitespace: true },
   },
 );
 
@@ -247,11 +276,21 @@ export function Composer({
           return true;
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of
-        // code, or out of an empty list item.
+        // code, or out of an empty list item. A line of just ``` or ```lang starts a code block,
+        // as ``` and a space does.
         return (
           event.shiftKey &&
           editor.commands.first(({ commands }) => [
             () => commands.newlineInCode(),
+            ({ state }) => {
+              const { $from } = state.selection;
+              const fence = /^```([a-z]*)$/.exec($from.parent.textContent);
+              return (
+                !!fence &&
+                commands.deleteRange({ from: $from.start(), to: $from.end() }) &&
+                commands.setCodeBlock(fence[1] ? { language: fence[1] } : undefined)
+              );
+            },
             () => commands.splitListItem("listItem"),
             () => commands.liftEmptyBlock(),
             () => commands.splitBlock(),
@@ -270,8 +309,20 @@ export function Composer({
         },
       },
       // Copy and cut give the selection's Markdown as its text, so pasting it back sends the same.
-      clipboardTextSerializer: (slice, view) =>
-        toMarkdown(view.state.schema.topNodeType.create(null, slice.content)),
+      // Within one line or code block, that's just its text (with any inline Markdown), not the
+      // block's markers or fences.
+      clipboardTextSerializer: (slice, view) => {
+        const { selection, schema } = view.state;
+        const { $from, $to } = selection;
+        const content =
+          $from.sameParent($to) && $from.parent.isTextblock
+            ? schema.nodes["paragraph"]!.create(
+                null,
+                $from.parent.slice($from.parentOffset, $to.parentOffset).content,
+              )
+            : slice.content;
+        return toMarkdown(schema.topNodeType.create(null, content));
+      },
       // Pasted lines are lines, as typed ones are: a paragraph each, blank ones kept.
       clipboardTextParser: (text, _context, _plain, view) => {
         const { schema } = view.state;

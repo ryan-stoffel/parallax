@@ -69,10 +69,38 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
-test("in a code block Enter adds a line and Cmd+Enter sends", async () => {
+test("typed text that only looks like Markdown is sent as typed", async () => {
   const onSend = vi.fn(async () => undefined);
   const { box, type, press } = render(onSend);
-  type("```ts ");
+  type("rename __init__ and _private_, then a * b * c");
+  await press("Enter", { shiftKey: true });
+  type("--- a/file.ts");
+  expect(box.querySelector("strong, em, hr")).toBeNull();
+
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "rename __init__ and _private_, then a * b * c\n--- a/file.ts",
+    {},
+  );
+});
+
+test("an ordered list's nested lines indent past its widest number", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, press } = render(onSend);
+  act(() => {
+    box.editor!.commands.setContent(
+      '<ol start="9"><li><p>a</p></li><li><p>b</p><ul><li><p>c</p></li></ul></li></ol>',
+    );
+  });
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("9.  a\n10. b\n    - c", {});
+});
+
+test("``` and Shift+Enter start a code block, where Enter adds a line and Cmd+Enter sends", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = render(onSend);
+  type("```ts");
+  await press("Enter", { shiftKey: true });
   type("let a = 1;");
   await press("Enter");
   type("a += 1;");
@@ -96,6 +124,29 @@ test("paste takes the plain text, its lines as they are", async () => {
 
   await press("Enter");
   expect(onSend).toHaveBeenCalledWith("Error\n  at main\n\nfn __init__()", {});
+});
+
+test("copying within one block gives just its text", async () => {
+  const { box, type, press } = render(vi.fn(async () => undefined));
+  const copy = (from: number, to: number) => {
+    const data = new DataTransfer();
+    act(() => {
+      box.editor!.commands.setTextSelection({ from, to });
+      box.dispatchEvent(new ClipboardEvent("copy", { clipboardData: data, bubbles: true }));
+    });
+    return data.getData("text/plain");
+  };
+  type("```");
+  await press("Enter", { shiftKey: true });
+  type("let yVariable = 1;");
+  // The code block's text starts at 1.
+  expect(copy(5, 14)).toBe("yVariable");
+
+  act(() => void box.editor!.commands.clearContent());
+  type("- ");
+  type("first **item** here");
+  // In a list item's paragraph, at 3.
+  expect(copy(9, 13)).toBe("**item**");
 });
 
 test("cut gives the Markdown as text, which pastes back the same", async () => {
