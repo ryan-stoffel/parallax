@@ -283,4 +283,5 @@ test("the book toggles between the board and All files, and search filters the f
   });
   expect(doc("notes.md")).not.toBeNull();
   expect(panel().querySelector("h2")?.textContent).toBe("ember");
+  expect(document.activeElement).toBe(button("Search files"));
 });

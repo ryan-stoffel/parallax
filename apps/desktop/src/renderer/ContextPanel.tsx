@@ -100,7 +100,13 @@ export function ContextPanel({
   const showFiles = allFiles || !notes || query !== undefined;
   const components = contextComponents(files, setOpenPath);
   const doc = (file: ContextFile) => (
-    <ContextDoc hostId={hostId} project={project} file={file} components={components} />
+    <ContextDoc
+      key={file.path}
+      hostId={hostId}
+      project={project}
+      file={file}
+      components={components}
+    />
   );
 
   let body: ReactNode;
@@ -191,11 +197,16 @@ export function ContextPanel({
             placeholder="Search files"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setQuery(undefined)}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              setQuery(undefined);
+              document.getElementById("context-search")?.focus();
+            }}
             className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
           />
         )}
         <IconButton
+          id="context-search"
           label={query === undefined ? "Search files" : "Close search"}
           onClick={() => {
             setOpenPath(undefined);
@@ -311,7 +322,10 @@ function RecentCard({
         aria-hidden
         className="context-preview max-h-24 overflow-hidden mask-b-from-60% px-3 pb-2"
       >
-        {content !== undefined && <MarkdownText text={content} components={previewComponents} />}
+        {/* More than a card shows, without rendering all of a large file. */}
+        {content !== undefined && (
+          <MarkdownText text={content.slice(0, 2000)} components={previewComponents} />
+        )}
       </div>
     </li>
   );

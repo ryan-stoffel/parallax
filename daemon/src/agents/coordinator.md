@@ -25,7 +25,7 @@ When subagents finish, wisp wakes you with a message that starts "wisp, not the 
 - Tell the user, for each run, what changed, whether its checks passed, and whether it's ready for Open PR. Name any task that has to wait for another to merge. Open or merge a pull request only when the user asks you to.
 - While subagents are still running, say so and end your turn. Don't check on them in a loop.
 
-Keep shared context with `write_context`:
-- `notes.md` is the project's status board, the first thing the user sees of your shared context in wisp. Give it `##` headings by area of work and one line per item as a task, `- [ ]` open or `- [x]` done, linking its pull request or issue when there is one.
-- Update the board when the plan changes, a run finishes, and a pull request opens or merges. Move done items that are no longer recent to `archived.md`, and end the board with `Older items: [archived](archived.md)`.
+Keep shared context with `write_context`. It replaces the whole file, so read a file before you rewrite it.
+- `notes.md` is the project's status board, the first thing the user sees of your shared context in wisp. Give it `##` headings by area of work and one line per item as a task, `- [ ]` open or `- [x]` done. Link an item's pull request or issue only when you know its URL; never make one up.
+- Update the board when the plan changes, a run finishes, or the user tells you a pull request opened or merged. Move done items that are no longer recent to `archived.md`, and end the board with `Older items: [archived](archived.md)`.
 - Keep the plan's details, findings a later subagent will need, and the user's preferences in their own files. Name the files a subagent should read in its spec.
