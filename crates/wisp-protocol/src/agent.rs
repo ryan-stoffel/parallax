@@ -75,19 +75,27 @@ pub enum AgentEffort {
     Unknown,
 }
 
-/// How a run's agent may act inside its sandbox, behind the `runOptions` capability (RYA-97).
-/// Every value stays inside the worker sandbox (0013); none loosens it.
+/// A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
+/// which each backend reports the subset of that it maps (RYA-188, 0026). A worker keeps the
+/// worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
 ///
 /// A newer peer may send a value this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentPermission {
-    /// Edits its worktree and runs commands without asking: the default. Claude Code's
-    /// `acceptEdits`.
+    /// A classifier approves or blocks each action instead of a prompt: Claude Code's `auto`.
+    Auto,
+    /// Asks before each action that needs approval: Claude Code's `default`. Headless, a
+    /// request nobody can answer is denied.
+    Manual,
+    /// Edits files and runs commands without asking: the default. Claude Code's `acceptEdits`.
     Edit,
     /// Reads and plans without editing: Claude Code's plan mode, whose file tools refuse to
-    /// write. Its commands still run, in the same sandbox.
+    /// write.
     Plan,
+    /// Skips every permission check: Claude Code's `bypassPermissions`. A worker in this mode
+    /// runs without the worker sandbox, as Claude Code does on the user's own machine.
+    Bypass,
     /// A value this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

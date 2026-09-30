@@ -53,7 +53,7 @@ flowchart LR
 ```
 
 * Desktop app ([0022](decisions/0022-desktop-app.md)): Electron, React, and TypeScript in `apps/desktop/`, laid out like T3 Code. A sidebar of projects and threads, the chat, and a side panel for diffs and review. Its main process runs `wispd attach`, locally or over the user's `ssh`, and speaks JSON-RPC to it ([0007](decisions/0007-editor-wispd-protocol.md), [0010](decisions/0010-wispd-attach.md)).
-* Host daemon (`wispd`): one per user per host. It runs the coordinator, which gets `wispd mcp`'s tools ([0019](decisions/0019-coordinator-mcp-tools.md)) on top of its CLI's own configuration ([0026](decisions/0026-coordinator-cli-configuration.md)), and agent runs, each a vendor CLI in its own worktree and sandbox ([0013](decisions/0013-worker-sandbox.md), [0014](decisions/0014-agent-runs.md)). It stores project state and the event log in SQLite, owns shared context, and listens for triggers.
+* Host daemon (`wispd`): one per user per host. It runs the coordinator, whose tools are `wispd mcp` ([0019](decisions/0019-coordinator-mcp-tools.md)) on top of Claude Code's own configuration, in the permission mode you pick ([0026](decisions/0026-claude-permission-modes.md)), and agent runs, each a vendor CLI in its own worktree and sandbox ([0013](decisions/0013-worker-sandbox.md), [0014](decisions/0014-agent-runs.md)). It stores project state and the event log in SQLite, owns shared context, and listens for triggers.
 * Subscriptions: `wispd` never handles consumer credentials. You sign in to each vendor's CLI on the host, and `wispd` routes each run to an account ([0004](decisions/0004-subscription-providers.md), [0012](decisions/0012-account-routing.md)).
 
 ## MVP and milestones

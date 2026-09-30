@@ -1,8 +1,8 @@
 //! A project's coordinator chat end to end (RYA-41, decision 0024): `project/start` against an
 //! in-process wispd whose backend is the fake CLI, in a real git repository. The coordinator runs
-//! in a detached worktree of its own (RYA-171).
+//! in the project's repository, in its permission mode (0026).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,10 +11,10 @@ use wisp_protocol::methods::{
     AgentCancel, AgentEvents, AgentSend, AgentStart, ProjectList, ProjectStart,
 };
 use wisp_protocol::{
-    AccountChoice, AgentCancelParams, AgentEventsParams, AgentFailureKind, AgentOutcome,
-    AgentOutputItem, AgentPolicy, AgentRun, AgentStartParams, AgentStatus, CoordinatorThreadId,
-    ErrorKind, EventsEventParams, ProjectId, ProjectListParams, ProjectStartParams, Provider,
-    RunId, TurnId, WispEvent,
+    AccountChoice, AgentCancelParams, AgentEventsParams, AgentOutputItem, AgentPermission,
+    AgentPolicy, AgentRun, AgentSendParams, AgentStartParams, AgentStatus, CoordinatorThreadId,
+    ErrorKind, ProjectId, ProjectListParams, ProjectStartParams, Provider, RunId, TurnId,
+    WispEvent,
 };
 use wispd::backend::fake::{FakeBackend, Step};
 use wispd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
@@ -22,7 +22,7 @@ use wispd::paths::DataDir;
 use wispd::routing::BackendRegistry;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, outcomes, project_params,
+    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params,
     send_params, subscribe, text, until, updated_to,
 };
 use crate::support::{PATIENCE, kind, temp_dir};
@@ -70,26 +70,12 @@ fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
         }),
         model: None,
         effort: None,
+        permission: None,
     }
 }
 
-fn head(repo: &Path) -> String {
-    git(repo, &["rev-parse", "HEAD"])
-}
-
-/// Where `host` runs `project`'s coordinator.
-fn worktree(host: &Host, project: ProjectId) -> PathBuf {
-    DataDir::new(host.dir.path())
-        .unwrap()
-        .coordinator_dir(project)
-}
-
-fn finished(event: &EventsEventParams) -> bool {
-    matches!(event.event, WispEvent::AgentFinished { .. })
-}
-
 #[tokio::test]
-async fn a_coordinator_runs_no_write_in_its_own_worktree_and_resumes_there_after_a_restart() {
+async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a_restart() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let script = || {
         vec![
@@ -102,8 +88,7 @@ async fn a_coordinator_runs_no_write_in_its_own_worktree_and_resumes_there_after
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
     let repo = PathBuf::from(&project.repo_path);
-    let worktree = worktree(&host, project.id);
-    let before = head(&repo);
+    let before = git(&repo, &["rev-parse", "HEAD"]);
     // The user's own uncommitted work stays in the checkout.
     std::fs::write(repo.join("notes.txt"), "mine\n").unwrap();
     subscribe(&mut client, project.id, 0).await;
@@ -138,8 +123,7 @@ async fn a_coordinator_runs_no_write_in_its_own_worktree_and_resumes_there_after
     }));
     let first = seen.lock().unwrap()[0].clone();
     assert_eq!(first.policy, ToolPolicy::NoWrite);
-    assert_eq!(first.cwd, worktree, "it runs in its own worktree");
-    assert_eq!(head(&worktree), before, "at the repository's HEAD");
+    assert_eq!(first.cwd, repo, "it runs in the user's checkout");
     assert!(first.sandbox.is_none());
     let tools = first.coordinator_tools.expect("wispd's tools are attached");
     assert_eq!((tools.project, tools.thread), (project.id, thread));
@@ -149,7 +133,11 @@ async fn a_coordinator_runs_no_write_in_its_own_worktree_and_resumes_there_after
         "{}",
         first.prompt
     );
-    assert_eq!(head(&repo), before, "a coordinator is never committed");
+    assert_eq!(
+        git(&repo, &["rev-parse", "HEAD"]),
+        before,
+        "a coordinator is never committed"
+    );
     assert_eq!(
         std::fs::read_to_string(repo.join("notes.txt")).unwrap(),
         "mine\n"
@@ -187,55 +175,9 @@ async fn a_coordinator_runs_no_write_in_its_own_worktree_and_resumes_there_after
         "a message resumes the session"
     );
     assert_eq!(resumed.prompt, "Go on.");
-    assert_eq!(
-        resumed.cwd, worktree,
-        "the session resumes where it started"
-    );
+    assert_eq!(resumed.cwd, repo, "the session resumes where it started");
     assert_eq!(resumed.policy, ToolPolicy::NoWrite);
     assert!(resumed.coordinator_tools.is_some());
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn a_turn_that_changes_the_working_tree_stops_and_names_the_change_without_reverting_it() {
-    let script = vec![
-        init("coordinator-1"),
-        Step::WriteFile {
-            path: "README.md".to_owned(),
-            content: "rewritten\n".to_owned(),
-        },
-        end_turn("Edited."),
-        Step::Hang,
-    ];
-    let host = Host::start(temp_dir(), fake(script));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-
-    let run = client
-        .call::<ProjectStart>(start_params(project.id, "Look around."))
-        .await
-        .unwrap()
-        .run;
-    let events = until(&mut client, updated_to(AgentStatus::Failed)).await;
-    let outcomes = outcomes(&events);
-    let [AgentOutcome::Failed { failure, message }] = outcomes.as_slice() else {
-        panic!("{events:#?}");
-    };
-    assert_eq!(*failure, AgentFailureKind::PolicyViolation);
-    assert!(message.contains("README.md"), "{message}");
-    let repo = PathBuf::from(&project.repo_path);
-    assert_eq!(
-        std::fs::read_to_string(worktree(&host, project.id).join("README.md")).unwrap(),
-        "rewritten\n",
-        "wispd reverts nothing during the turn"
-    );
-    assert_eq!(
-        std::fs::read_to_string(repo.join("README.md")).unwrap(),
-        "hello\n",
-        "the user's checkout is untouched"
-    );
-    assert_eq!(run.policy, AgentPolicy::NoWrite);
     host.server.stop().await;
 }
 
@@ -292,57 +234,6 @@ async fn a_new_start_replaces_the_coordinator_only_once_it_stops_running() {
     host.server.stop().await;
 }
 
-#[tokio::test]
-async fn the_users_edits_and_commits_during_a_turn_never_stop_it() {
-    let script = vec![
-        init("coordinator-1"),
-        Step::AwaitFollowUp,
-        end_turn("Done."),
-    ];
-    let host = Host::start(temp_dir(), fake(script));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    let repo = PathBuf::from(&project.repo_path);
-    let worktree = worktree(&host, project.id);
-    subscribe(&mut client, project.id, 0).await;
-
-    let run = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
-    // While its turn runs: an editor save, a commit that moves HEAD, and stray files.
-    std::fs::write(repo.join("README.md"), "edited\n").unwrap();
-    git(&repo, &["commit", "-qam", "Edit the README."]);
-    std::fs::write(repo.join("notes.txt"), "draft\n").unwrap();
-    std::fs::write(repo.join(".DS_Store"), "\0").unwrap();
-    client
-        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Go on."))
-        .await
-        .unwrap();
-    let events = until(&mut client, finished).await;
-    assert!(
-        matches!(
-            outcomes(&events).as_slice(),
-            [AgentOutcome::Completed { .. }]
-        ),
-        "{events:#?}"
-    );
-
-    // Its next CLI process reads the new commit.
-    client
-        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Look again."))
-        .await
-        .unwrap();
-    assert_eq!(head(&worktree), head(&repo));
-    assert_eq!(
-        std::fs::read_to_string(worktree.join("README.md")).unwrap(),
-        "edited\n"
-    );
-    assert!(!worktree.join("notes.txt").exists());
-    host.server.stop().await;
-}
-
 /// Workers on one script, and each coordinator launch on the next of its own, keeping every
 /// request.
 struct Roles {
@@ -358,6 +249,14 @@ impl Backend for Roles {
 
     fn capabilities(&self) -> Capabilities {
         self.worker.capabilities()
+    }
+
+    fn permissions(&self) -> &'static [AgentPermission] {
+        &[
+            AgentPermission::Edit,
+            AgentPermission::Plan,
+            AgentPermission::Bypass,
+        ]
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
@@ -431,6 +330,79 @@ async fn sessions(client: &mut Conn, runs: &[RunId]) {
         left.is_empty()
     })
     .await;
+}
+
+/// 0026: the coordinator runs in the mode it was started in, a subagent it spawns inherits it,
+/// and a mode changed between turns applies to its next turn and to the subagents after that.
+#[tokio::test]
+async fn subagents_inherit_the_coordinators_permission_mode_as_it_changes() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    // Workers never finish, so no wake-up takes a coordinator script.
+    let backends = roles(
+        vec![init("worker-1"), Step::AwaitFollowUp],
+        vec![
+            vec![init("coordinator-1"), end_turn("Planned.")],
+            vec![init("coordinator-1"), end_turn("Planned again.")],
+        ],
+        &seen,
+    );
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(ProjectStartParams {
+            permission: Some(AgentPermission::Bypass),
+            ..start_params(project.id, "Plan.")
+        })
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(
+        nth_launch(&seen, 0).await.permission,
+        Some(AgentPermission::Bypass)
+    );
+    let first = spawn(&mut client, &coordinator, "Add a README.").await;
+
+    client
+        .call::<AgentSend>(AgentSendParams {
+            permission: Some(AgentPermission::Plan),
+            ..send_params(coordinator.id, TurnId::generate(), "Only plan now.")
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        nth_launch(&seen, 1).await.permission,
+        Some(AgentPermission::Plan)
+    );
+    let second = spawn(&mut client, &coordinator, "Add a license.").await;
+    let own = client
+        .call::<AgentStart>(AgentStartParams {
+            coordinator_thread: coordinator.coordinator_thread,
+            permission: Some(AgentPermission::Edit),
+            ..crate::agents::start_params(project.id, "Fix a typo.")
+        })
+        .await
+        .unwrap()
+        .run
+        .id;
+
+    let launched = |run: RunId| {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .find(|request| request.run_id == run)
+            .map(|request| request.permission)
+    };
+    assert_eq!(launched(first), Some(Some(AgentPermission::Bypass)));
+    assert_eq!(launched(second), Some(Some(AgentPermission::Plan)));
+    assert_eq!(
+        launched(own),
+        Some(Some(AgentPermission::Edit)),
+        "a named mode wins"
+    );
+    host.server.stop().await;
 }
 
 /// RYA-42: two runs the coordinator started finish during its turn; once that turn ends, and with

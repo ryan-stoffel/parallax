@@ -9,8 +9,8 @@ use jiff::Timestamp;
 use serde_json::{Map, Value};
 
 use super::{
-    COORDINATOR_DENIED_TOOLS, COORDINATOR_PERMISSION_MODE, NO_WRITE_TOOLS, WORKER_MIN_VERSION,
-    WORKER_PERMISSION_MODE, WORKER_TOOLS,
+    BYPASS_PERMISSION_MODE, DEFAULT_PERMISSION_MODE, NO_WRITE_TOOLS, WORKER_MIN_VERSION,
+    WORKER_TOOLS,
 };
 use crate::backend::ToolPolicy;
 use crate::backend::event::{
@@ -91,11 +91,11 @@ pub(super) struct TurnDone {
 pub(super) struct Translator {
     policy: ToolPolicy,
     expected_key_source: &'static str,
-    /// wispd's MCP tools were attached, so a no-write run is a coordinator, whose `system/init`
-    /// is checked against [`COORDINATOR_DENIED_TOOLS`] and [`COORDINATOR_PERMISSION_MODE`]
-    /// instead of [`NO_WRITE_TOOLS`] (0026).
+    /// wispd's MCP tools were attached, so a no-write run is a coordinator: full Claude Code in
+    /// its permission mode (0026), whose `system/init` may list any tool.
     coordinator_tools: bool,
-    /// The permission mode a worker asked for, which its `system/init` must report.
+    /// The permission mode a worker or a coordinator asked for, which its `system/init` must
+    /// report.
     permission_mode: &'static str,
     verified: bool,
     session_id: Option<String>,
@@ -118,7 +118,7 @@ impl Translator {
             policy,
             expected_key_source,
             coordinator_tools: false,
-            permission_mode: WORKER_PERMISSION_MODE,
+            permission_mode: DEFAULT_PERMISSION_MODE,
             verified: false,
             session_id: None,
             denied: HashSet::new(),
@@ -136,8 +136,9 @@ impl Translator {
         self
     }
 
-    /// Expects a worker's `system/init` to report `mode` instead of [`WORKER_PERMISSION_MODE`],
-    /// for a worker that asked for another permission (RYA-97).
+    /// Expects a worker's or a coordinator's `system/init` to report `mode` instead of
+    /// [`DEFAULT_PERMISSION_MODE`], for a run that asked for another permission (RYA-97, 0026).
+    /// [`BYPASS_PERMISSION_MODE`] also lifts a worker's tool check: it runs as full Claude Code.
     pub fn with_permission_mode(mut self, mode: &'static str) -> Self {
         self.permission_mode = mode;
         self
@@ -237,10 +238,12 @@ impl Translator {
             return steps;
         }
         let coordinator = self.policy == ToolPolicy::NoWrite && self.coordinator_tools;
-        let run = match self.policy {
-            ToolPolicy::NoWrite if coordinator => "a coordinator run",
-            ToolPolicy::NoWrite => "a no-write run",
-            ToolPolicy::WorkspaceWrite => "a worker run",
+        let bypass = self.policy == ToolPolicy::WorkspaceWrite
+            && self.permission_mode == BYPASS_PERMISSION_MODE;
+        let (allowed, run) = match self.policy {
+            ToolPolicy::NoWrite if coordinator => (&[][..], "a coordinator run"),
+            ToolPolicy::NoWrite => (NO_WRITE_TOOLS, "a no-write run"),
+            ToolPolicy::WorkspaceWrite => (WORKER_TOOLS, "a worker run"),
         };
         let tools = message.get("tools").and_then(Value::as_array);
         let Some(tools) = tools else {
@@ -248,23 +251,14 @@ impl Translator {
             steps.push(violation(FailureKind::PolicyViolation, message));
             return steps;
         };
-        let tools = tools
-            .iter()
-            .map(|tool| tool.as_str().unwrap_or("<not a string>"));
-        if coordinator {
-            let failure = coordinator_violation(tools, text(message, "permissionMode"));
-            self.verified = failure.is_none();
-            steps.extend(failure);
-            return steps;
-        }
-        let allowed = match self.policy {
-            ToolPolicy::NoWrite => NO_WRITE_TOOLS,
-            ToolPolicy::WorkspaceWrite => WORKER_TOOLS,
-        };
+        // A coordinator and a bypass worker are full Claude Code, whose tools are whatever its
+        // configuration loads (0026).
         let offered: Vec<&str> = tools
+            .iter()
+            .map(|tool| tool.as_str().unwrap_or("<not a string>"))
             .filter(|tool| !allowed.contains(tool) && *tool != END_CONVERSATION)
             .collect();
-        if !offered.is_empty() {
+        if !coordinator && !bypass && !offered.is_empty() {
             let message = format!(
                 "Claude Code offered tools beyond {} in {run}: {}",
                 allowed.join(", "),
@@ -283,25 +277,31 @@ impl Translator {
                 steps.push(violation(FailureKind::PolicyViolation, message));
                 return steps;
             }
-            // Claude Code writes init before its first request, so this stops the worker before
-            // any tool runs.
-            let mode = text(message, "permissionMode");
-            if mode != Some(self.permission_mode) {
-                let reported = match mode {
-                    Some(mode) => format!("permission mode {mode:?}"),
-                    None => "no permission mode".to_owned(),
-                };
-                let message = format!(
-                    "Claude Code reported {reported} for a worker instead of {expected:?}. It \
-                     forces \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, which on \
-                     Linux lets a worker's commands write all of /home, /tmp, /var, /opt, /run, \
-                     /mnt, and /root. wispd doesn't set it for a worker, so check the env block \
-                     of Claude Code's managed settings",
-                    expected = self.permission_mode,
-                );
-                steps.push(violation(FailureKind::PolicyViolation, message));
-                return steps;
-            }
+        }
+        // Claude Code writes init before its first request, so this stops the run before any
+        // tool runs.
+        let mode = text(message, "permissionMode");
+        if (self.policy == ToolPolicy::WorkspaceWrite || coordinator)
+            && mode != Some(self.permission_mode)
+        {
+            let reported = match mode {
+                Some(mode) => format!("permission mode {mode:?}"),
+                None => "no permission mode".to_owned(),
+            };
+            let danger = if coordinator {
+                ""
+            } else {
+                ", which on Linux lets a worker's commands write all of /home, /tmp, /var, /opt, \
+                 /run, /mnt, and /root"
+            };
+            let message = format!(
+                "Claude Code reported {reported} in {run} instead of {expected:?}. It forces \
+                 \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on{danger}. wispd doesn't \
+                 set it for this run, so check the env block of Claude Code's managed settings",
+                expected = self.permission_mode,
+            );
+            steps.push(violation(FailureKind::PolicyViolation, message));
+            return steps;
         }
         self.verified = true;
         steps
@@ -525,41 +525,6 @@ fn text<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
 
 fn warning(warning: WarningKind, detail: String) -> Step {
     Step::Emit(Event::Warning { warning, detail })
-}
-
-/// Why a coordinator's `system/init` stops it, if it does (0026): its `tools` include any of
-/// [`COORDINATOR_DENIED_TOOLS`], or it reports a permission `mode` other than
-/// [`COORDINATOR_PERMISSION_MODE`]. In another mode `-p` would deny every tool no allow rule
-/// names, including every MCP server's, so the run fails loudly instead. Every other tool its
-/// CLI's configuration loads is allowed.
-fn coordinator_violation<'a>(
-    tools: impl Iterator<Item = &'a str>,
-    mode: Option<&str>,
-) -> Option<Step> {
-    let denied: Vec<&str> = tools
-        .filter(|tool| COORDINATOR_DENIED_TOOLS.contains(tool))
-        .collect();
-    if !denied.is_empty() {
-        let message = format!(
-            "Claude Code offered a coordinator tools that edit files or run commands: {}",
-            denied.join(", ")
-        );
-        return Some(violation(FailureKind::PolicyViolation, message));
-    }
-    if mode == Some(COORDINATOR_PERMISSION_MODE) {
-        return None;
-    }
-    let reported = match mode {
-        Some(mode) => format!("permission mode {mode:?}"),
-        None => "no permission mode".to_owned(),
-    };
-    let message = format!(
-        "Claude Code reported {reported} for a coordinator instead of \
-         {COORDINATOR_PERMISSION_MODE:?}, so it would deny every tool its MCP servers offer. It \
-         forces \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, so check the env block \
-         of Claude Code's managed settings, and whether they disable bypassPermissions mode"
-    );
-    Some(violation(FailureKind::PolicyViolation, message))
 }
 
 fn violation(failure: FailureKind, message: String) -> Step {

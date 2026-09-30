@@ -300,9 +300,9 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   answers["agent/cancel"] = () => ({ result: { run: started } });
   await renderApp();
   await openEmber();
-  // Claude's models, and no Access: a coordinator never writes.
+  // Claude's models and permission modes: a coordinator runs in the mode it's given (0026).
   expect(button("Model: Claude Opus 5.5")).not.toBeNull();
-  expect(document.querySelector('main [aria-label^="Access"]')).toBeNull();
+  expect(button("Access: Accept Edits")).not.toBeNull();
 
   type("Add a dark mode");
   await click(button("Send"));
@@ -319,6 +319,7 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
       prompt: "Add a dark mode",
       model: "claude-opus-5-5",
       effort: "high",
+      permission: "edit",
     },
   ]);
   expect(transcript()).toContain("Add a dark mode");

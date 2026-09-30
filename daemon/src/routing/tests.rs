@@ -5,10 +5,7 @@ use std::time::Duration;
 
 use wisp_protocol::{AccountChoice, AccountId, CoordinatorThreadId, ProjectId, Provider, Role};
 
-use super::{
-    BackendRegistry, Defaults, KeyAccounts, PolicyCheckError, RoutingError, check, resolve,
-    snapshot, start,
-};
+use super::{BackendRegistry, Defaults, KeyAccounts, RoutingError, resolve, start};
 use crate::backend::{
     AccountRef, Backend, CancelSwitch, Capabilities, CoordinatorTools, Credential, EVENT_BUFFER,
     Event, EventSink, EventStream, Failure, FailureKind, ModelUsage, Outcome, RunHandle, RunId,
@@ -430,8 +427,7 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
     assert_eq!(
         claude::arguments(sent).unwrap(),
         expected,
-        "without wispd's tools, Claude runs a coordinator's turn with exactly 0004's no-write \
-         flags, none of 0013's or 0026's"
+        "Claude runs a coordinator with exactly 0004's no-write flags, none of 0013's"
     );
 }
 
@@ -444,10 +440,10 @@ fn coordinator_tools() -> CoordinatorTools {
     }
 }
 
-/// #195, 0026: a coordinator gets wispd's MCP server on top of Claude Code's own configuration,
-/// with the write and shell tools denied instead of 0004's no-write flags.
+/// #195, 0026: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
+/// flags, `wispd mcp` joining its own MCP servers, and wispd's eight tools allowed in every mode.
 #[tokio::test]
-async fn a_coordinator_gets_wispds_mcp_server_on_its_cli_s_own_configuration() {
+async fn a_coordinator_gets_wispds_mcp_tools_on_claude_codes_own_configuration() {
     let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
         Outcome::Completed { result: None },
     )]]));
@@ -471,7 +467,6 @@ async fn a_coordinator_gets_wispds_mcp_server_on_its_cli_s_own_configuration() {
         .collect();
     let mut expected: Vec<String> = claude::BASE_ARGS
         .iter()
-        .chain(claude::COORDINATOR_ARGS)
         .map(|arg| (*arg).to_owned())
         .collect();
     let config = serde_json::json!({"mcpServers": {"wispd": {
@@ -485,18 +480,17 @@ async fn a_coordinator_gets_wispds_mcp_server_on_its_cli_s_own_configuration() {
         ],
     }}});
     expected.extend([
-        "--settings".to_owned(),
-        claude::coordinator_settings().to_string(),
+        "--permission-mode".to_owned(),
+        "acceptEdits".to_owned(),
         "--mcp-config".to_owned(),
         config.to_string(),
+        "--allowedTools".to_owned(),
+        "mcp__wispd__spawn_agent,mcp__wispd__list_agents,mcp__wispd__agent_status,\
+         mcp__wispd__message_agent,mcp__wispd__cancel_agent,mcp__wispd__agent_diff,\
+         mcp__wispd__read_context,mcp__wispd__write_context"
+            .to_owned(),
     ]);
     assert_eq!(args, expected);
-    for flag in ["--strict-mcp-config", "--setting-sources", "--restricted"] {
-        assert!(
-            !args.iter().any(|arg| arg == flag),
-            "{flag}: the user's and the repository's configuration load"
-        );
-    }
 }
 
 #[tokio::test]
@@ -811,113 +805,5 @@ async fn cancel_after_a_fallback_reaches_the_second_attempt() {
     assert!(
         switches[1].is_cancelled(),
         "cancel must reach the attempt that is actually running"
-    );
-}
-
-// ---------------------------------------------------------------------------------------------
-// snapshot() and check()
-// ---------------------------------------------------------------------------------------------
-
-fn git(repo: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .status()
-        .expect("git must be on PATH to run this test");
-    assert!(status.success(), "git {args:?} failed");
-}
-
-fn committed_repo() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    git(dir.path(), &["init", "-q"]);
-    git(
-        dir.path(),
-        &["config", "user.email", "wisp-test@example.com"],
-    );
-    git(dir.path(), &["config", "user.name", "wisp tests"]);
-    std::fs::write(dir.path().join("README.md"), "hello\n").unwrap();
-    git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-q", "-m", "initial"]);
-    dir
-}
-
-#[tokio::test]
-async fn a_clean_working_tree_has_no_violation() {
-    let dir = committed_repo();
-    let before = snapshot(dir.path()).await.unwrap();
-    assert_eq!(check(dir.path(), &before).await.unwrap(), None);
-}
-
-#[tokio::test]
-async fn a_change_to_a_tracked_file_is_a_violation() {
-    let dir = committed_repo();
-    let before = snapshot(dir.path()).await.unwrap();
-    std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
-
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert_eq!(violation.failure, FailureKind::PolicyViolation);
-}
-
-#[tokio::test]
-async fn a_new_untracked_file_is_also_a_violation() {
-    let dir = committed_repo();
-    let before = snapshot(dir.path()).await.unwrap();
-    std::fs::write(dir.path().join("new-file.txt"), "surprise").unwrap();
-
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert_eq!(violation.failure, FailureKind::PolicyViolation);
-}
-
-#[tokio::test]
-async fn a_tree_that_was_already_dirty_and_stays_that_way_has_no_violation() {
-    let dir = committed_repo();
-    std::fs::write(dir.path().join("README.md"), "dirty before the turn\n").unwrap();
-    std::fs::write(dir.path().join("already-there.txt"), "also dirty before").unwrap();
-
-    let before = snapshot(dir.path()).await.unwrap();
-    assert_eq!(
-        check(dir.path(), &before).await.unwrap(),
-        None,
-        "a tree that started dirty and stayed exactly that way is not a violation"
-    );
-}
-
-#[tokio::test]
-async fn a_further_edit_to_an_already_modified_file_is_still_a_violation() {
-    let dir = committed_repo();
-    std::fs::write(dir.path().join("README.md"), "first change\n").unwrap();
-    let before = snapshot(dir.path()).await.unwrap();
-
-    std::fs::write(
-        dir.path().join("README.md"),
-        "second change, during the turn\n",
-    )
-    .unwrap();
-
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert_eq!(violation.failure, FailureKind::PolicyViolation);
-}
-
-#[tokio::test]
-async fn a_violation_names_the_changed_paths() {
-    let dir = committed_repo();
-    let before = snapshot(dir.path()).await.unwrap();
-    std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
-
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert!(
-        violation.message.contains("README.md"),
-        "{}",
-        violation.message
-    );
-}
-
-#[tokio::test]
-async fn a_directory_that_is_not_a_git_repository_is_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let error = snapshot(dir.path()).await.unwrap_err();
-    assert!(
-        matches!(error, PolicyCheckError::GitFailed { .. }),
-        "{error:?}"
     );
 }

@@ -235,7 +235,7 @@ describe("with wispd's run options", () => {
     await renderApp();
     // No worker default yet, so Claude's choices, as the account chooser only offers Claude.
     expect(control("Model: Claude Opus 5.5")).not.toBeNull();
-    expect(control("Access: Edit")).not.toBeNull();
+    expect(control("Access: Accept Edits")).not.toBeNull();
 
     await pick("Claude Fable 5.1");
     await pick("Plan");

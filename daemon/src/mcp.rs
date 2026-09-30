@@ -52,6 +52,19 @@ pub const TOOLS: &[&str] = &[
     "write_context",
 ];
 
+/// [`TOOLS`] as Claude Code names them, `mcp__<server>__<tool>`: a coordinator's
+/// `--allowedTools`, so they run without asking in every permission mode (0026).
+pub const ALLOWED_TOOLS: &[&str] = &[
+    "mcp__wispd__spawn_agent",
+    "mcp__wispd__list_agents",
+    "mcp__wispd__agent_status",
+    "mcp__wispd__message_agent",
+    "mcp__wispd__cancel_agent",
+    "mcp__wispd__agent_diff",
+    "mcp__wispd__read_context",
+    "mcp__wispd__write_context",
+];
+
 /// The longest line the server reads from the CLI. A longer one gets an error and ends the
 /// server, since the stream can't be trusted to resynchronize after it.
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
@@ -696,10 +709,15 @@ impl Wispd {
 
 #[cfg(test)]
 mod tests {
-    use super::{TOOLS, clip, definitions, tail};
+    use super::{ALLOWED_TOOLS, SERVER, TOOLS, clip, definitions, tail};
 
     #[test]
-    fn the_server_lists_exactly_its_tools() {
+    fn the_allowlist_is_exactly_the_tools_under_the_servers_name() {
+        let expected: Vec<String> = TOOLS
+            .iter()
+            .map(|tool| format!("mcp__{SERVER}__{tool}"))
+            .collect();
+        assert_eq!(ALLOWED_TOOLS, expected.as_slice());
         let listed: Vec<String> = definitions()
             .as_array()
             .unwrap()

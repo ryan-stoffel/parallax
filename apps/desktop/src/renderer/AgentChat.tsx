@@ -221,7 +221,6 @@ export function AgentChat({
           }
           backend={run?.backend}
           started={run}
-          noWrite={run?.policy === "noWrite"}
           optionsDisabled={optionsDisabled}
         />
       </div>

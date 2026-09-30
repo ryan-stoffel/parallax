@@ -1,6 +1,6 @@
 # 0019: The coordinator's wisp tools are `wispd mcp`, bound to one project and thread
 
-- Status: accepted; the coordinator that runs with these tools, and the tools' skipping its own run, are in [0024](0024-coordinator-chat.md); the Claude coordinator's flags and allowlist are superseded by [0026](0026-coordinator-cli-configuration.md)
+- Status: accepted; the coordinator that runs with these tools, and the tools' skipping its own run, are in [0024](0024-coordinator-chat.md); the Claude coordinator's flags are superseded by [0026](0026-claude-permission-modes.md)
 - Date: 2026-09-26
 - Issue: #195
 
@@ -36,7 +36,7 @@ The coordinator is a no-write Claude Code or Codex run (0004, 0012). To plan and
 
 ### The coordinator's allowlist (Claude Code)
 
-> Superseded by [0026](0026-coordinator-cli-configuration.md): a coordinator now loads Claude Code's own configuration, MCP servers included, with `--permission-mode bypassPermissions` and `--disallowedTools Edit,Write,NotebookEdit,Bash,Monitor,EnterWorktree` instead of the flags below. `--allowedTools` and `mcp::ALLOWED_TOOLS` are gone, and its `system/init` check refuses only those six tools and any permission mode but `bypassPermissions`. `wispd mcp` itself is unchanged.
+> Superseded in part by [0026](0026-claude-permission-modes.md): the coordinator is full Claude Code in its permission mode, with none of 0004's no-write flags, and its `system/init` tools aren't checked. `--mcp-config` and `--allowedTools` with the eight tools stay, so wispd's tools work in every mode.
 
 A coordinator run is 0004's no-write command plus two flags. Its `--settings` now also deny reads under Claude Code's shared temp folder ([0024](0024-coordinator-chat.md)):
 

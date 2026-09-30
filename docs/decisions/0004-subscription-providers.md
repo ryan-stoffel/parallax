@@ -1,6 +1,6 @@
 # 0004: Subscriptions run through each vendor's official CLI
 
-- Status: accepted; where API keys are kept on Linux and Windows is in [0023](0023-cross-platform.md), and the no-write run's `--settings` deny of reads under Claude Code's shared temp folder is in [0024](0024-coordinator-chat.md); superseded in part by [0026](0026-coordinator-cli-configuration.md), which runs the coordinator with Claude Code's own configuration instead of the no-write flags below
+- Status: accepted; where API keys are kept on Linux and Windows is in [0023](0023-cross-platform.md), and the no-write run's `--settings` deny of reads under Claude Code's shared temp folder is in [0024](0024-coordinator-chat.md); the coordinator runs as full Claude Code in its permission mode instead of the no-write flags since [0026](0026-claude-permission-modes.md)
 - Date: 2026-09-23
 - Issue: #15
 
@@ -28,7 +28,7 @@ Versions read: Claude Code 2.1.281 [19], Codex CLI 0.156.1 [27], Cursor CLI 2026
 | Resume | `--resume <session_id>` [10] | `codex exec resume <thread_id>` [23] | `--resume <chatId>` [38] |
 | cwd and worktrees | Process cwd plus `--add-dir`; `-p` never shows the trust dialog [10][13] | `-C <dir>`; the dir must be in a git repo, and linked worktrees count [23][27] | `--workspace <dir>`; an untrusted folder fails without `--trust` [38][41] |
 | Model | `--model` [10] | `-m` [27] | `--model`; list with `agent models` [38] |
-| No-write mode | `--tools Read,Glob,Grep --setting-sources user --settings '{"disableAllHooks":true}' --strict-mcp-config --permission-mode dontAsk`. Write tools are removed, the project's settings, `env` block, and `.mcp.json` are skipped, and hooks are off, except managed-policy hooks [10][11][13]. `wispd`'s tools also need `--mcp-config` and `--allowedTools "mcp__wispd__*"`, or `dontAsk` denies them [10][11]. A coordinator runs differently since [0026](0026-coordinator-cli-configuration.md): its CLI's own configuration, `--permission-mode bypassPermissions`, and `--disallowedTools Edit,Write,NotebookEdit,Bash,Monitor,EnterWorktree` | `-s read-only`, which Seatbelt enforces for commands [25]. `wispd`'s MCP tools need `mcp_servers.wispd.default_tools_approval_mode = "approve"` and no destructive hint [26], since exec denies approval requests [27] | `--mode ask --sandbox enabled`. Ask mode disables MCP execution, so Cursor cannot coordinate, and staff say modes "were never meant to be isolation" [44] |
+| No-write mode | `--tools Read,Glob,Grep --setting-sources user --settings '{"disableAllHooks":true}' --strict-mcp-config --permission-mode dontAsk`. Write tools are removed, the project's settings, `env` block, and `.mcp.json` are skipped, and hooks are off, except managed-policy hooks [10][11][13]. `wispd`'s tools also need `--mcp-config` and `--allowedTools "mcp__wispd__*"`, or `dontAsk` denies them [10][11] | `-s read-only`, which Seatbelt enforces for commands [25]. `wispd`'s MCP tools need `mcp_servers.wispd.default_tools_approval_mode = "approve"` and no destructive hint [26], since exec denies approval requests [27] | `--mode ask --sandbox enabled`. Ask mode disables MCP execution, so Cursor cannot coordinate, and staff say modes "were never meant to be isolation" [44] |
 | Tool needs approval | Denied, with a `permission_denied` event [11] | exec runs with approval policy `never`. An approval request is denied, so that call fails and the turn continues [27] | Held back unless `--force` or an allow rule is set; the docs disagree on whether edits are blocked or only proposed [36][38] |
 | Cancel | SIGINT ends the turn; SIGTERM exits 143 and leaves the turn unfinished [11] | SIGINT interrupts the turn; there is no SIGTERM handler [27] | Undocumented; kill the process group |
 | Signed in | `claude auth status`: JSON, exit 0 or 1 [10] | `codex login status`: text on stderr, exit 0 or 1 [27] | `agent status --format json` [38][40] |
@@ -84,7 +84,7 @@ What it smooths over, beyond the table's differences:
 
 ## Consequences
 
-- Keys in the environment would reach the agent's shell, so `wispd` sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` for no-write runs other than the coordinator [16] (the coordinator runs without it since [0026](0026-coordinator-cli-configuration.md)), has the sandbox unset the key for a worker's commands instead (0013), and sets Codex's `shell_environment_policy.ignore_default_excludes=false` [26].
+- Keys in the environment would reach the agent's shell, so `wispd` sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` for no-write runs [16], has the sandbox unset the key for a worker's commands instead (0013), and sets Codex's `shell_environment_policy.ignore_default_excludes=false` [26].
 - On a remote Mac, SSH sessions may not reach the Keychain [12][46]. Running `wispd` as a LaunchAgent in the user's GUI session should avoid this, but that is unverified and requires the user to be logged in.
 
 ## Open risks

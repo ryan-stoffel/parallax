@@ -12,8 +12,7 @@ use wisp_protocol::{CoordinatorThreadId, ProjectId};
 
 use super::stream::{Step, Translator};
 use super::{
-    COORDINATOR_ARGS, COORDINATOR_DENIED_TOOL_LIST, COORDINATOR_DENIED_TOOLS, ClaudeBackend,
-    NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS, coordinator_settings,
+    ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS,
     no_write_settings, write_env_file,
 };
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
@@ -51,7 +50,6 @@ fn fixture(name: &str) -> &'static str {
         "provider" => include_str!("fixtures/provider.jsonl"),
         "subprocess-env" => include_str!("fixtures/subprocess-env.jsonl"),
         "scrub-mode" => include_str!("fixtures/scrub-mode.jsonl"),
-        "coordinator" => include_str!("fixtures/coordinator.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -359,9 +357,8 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
     );
 }
 
-/// RYA-176: a no-write run has hooks off (0004) and can't read Claude Code's shared temp folder,
-/// which holds every session's files, in either spelling. A coordinator gets the same deny rules
-/// with its hooks on (0026).
+/// RYA-176: a plain no-write run has hooks off (0004) and can't read Claude Code's shared temp
+/// folder, which holds every session's files, in either spelling.
 #[test]
 fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
     let args = super::arguments(&request(Path::new("/repo"))).unwrap();
@@ -378,72 +375,30 @@ fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
             ]},
         })
     );
-    let mut coordinator = settings;
-    coordinator
-        .as_object_mut()
-        .unwrap()
-        .remove("disableAllHooks");
-    assert_eq!(coordinator_settings(), coordinator);
 }
 
-/// 0026: a coordinator runs with Claude Code's own configuration, so none of 0004's flags that
-/// skip settings, hooks, and MCP servers; the write and shell tools denied; no prompts; and
-/// wispd's MCP server alongside the others. It runs without `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`,
-/// which would force permission mode "default", and doesn't inherit it either.
+/// 0026: a coordinator runs as Claude Code in its mode, and without
+/// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, which would force "default"; it doesn't inherit it either.
 #[tokio::test]
-async fn a_coordinator_loads_its_cli_s_own_configuration_minus_the_write_tools() {
-    let fake = Fake::new("coordinator");
+async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
+    let fake = Fake::new("tool-call");
     let cwd = fake.root();
-    let tools = CoordinatorTools {
-        program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
-        data_dir: cwd.join("data"),
-        project: ProjectId::generate(),
-        thread: CoordinatorThreadId::generate(),
-    };
     let request = RunRequest {
-        coordinator_tools: Some(tools.clone()),
+        coordinator_tools: Some(CoordinatorTools {
+            program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
+            data_dir: cwd.join("data"),
+            project: ProjectId::generate(),
+            thread: CoordinatorThreadId::generate(),
+        }),
         ..request(&cwd)
     };
-    let all = run(&fake, request).await;
-    assert_eq!(
-        outcome(&all),
-        &Outcome::Completed {
-            result: Some("Two issues are open.".into())
-        }
-    );
-
-    assert_eq!(
-        COORDINATOR_ARGS.join(" "),
-        "--permission-mode bypassPermissions --disallowedTools \
-         Edit,Write,NotebookEdit,Bash,Monitor,EnterWorktree"
-    );
-    assert_eq!(
-        COORDINATOR_DENIED_TOOL_LIST,
-        COORDINATOR_DENIED_TOOLS.join(",")
-    );
-    let argv = fake.argv();
-    let base = super::BASE_ARGS.len();
-    let flags = base + COORDINATOR_ARGS.len();
-    assert_eq!(argv[base..flags], *COORDINATOR_ARGS);
-    assert_eq!(
-        argv[flags..],
-        [
-            "--settings",
-            &coordinator_settings().to_string(),
-            "--mcp-config",
-            &tools.mcp_config().unwrap().to_string(),
-        ]
-    );
-    for flag in [
-        "--tools",
-        "--setting-sources",
-        "--strict-mcp-config",
-        "--restricted",
-        "--allowedTools",
-        "--dangerously-skip-permissions",
-    ] {
-        assert!(!argv.iter().any(|arg| arg == flag), "{flag}: {argv:?}");
-    }
+    let expected: Vec<String> = super::arguments(&request)
+        .unwrap()
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+    run(&fake, request).await;
+    assert_eq!(fake.argv(), expected);
     fake.assert_no_inherited_credentials(None);
     let env = fake.env();
     assert!(
@@ -677,10 +632,12 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
     );
 }
 
-/// RYA-97: a worker's permission picks only its mode, and its sandbox settings stay the same. A
-/// no-write run's mode is fixed (0004), so it takes no permission.
+/// RYA-97, 0026: a worker's permission picks Claude Code's mode of the same name, and its sandbox
+/// settings stay the same, except in bypass, where Claude Code refuses `--restricted` and the
+/// worker runs as full Claude Code. A no-write run's mode is fixed (0004), so it takes no
+/// permission.
 #[test]
-fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox() {
+fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
     let cwd = Path::new("/Users/u/wt");
     let mut worker = request(cwd);
     worker.policy = ToolPolicy::WorkspaceWrite;
@@ -702,16 +659,37 @@ fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox() {
     };
     let default = args(None);
     let edit = args(Some(AgentPermission::Edit));
-    let plan = args(Some(AgentPermission::Plan));
     assert_eq!(default, edit);
     assert_eq!(after(&edit, "--permission-mode"), "acceptEdits");
-    assert_eq!(after(&plan, "--permission-mode"), "plan");
-    assert_eq!(after(&plan, "--settings"), after(&edit, "--settings"));
+    for (permission, mode) in [
+        (AgentPermission::Auto, "auto"),
+        (AgentPermission::Manual, "default"),
+        (AgentPermission::Plan, "plan"),
+    ] {
+        let args = args(Some(permission));
+        assert_eq!(after(&args, "--permission-mode"), mode);
+        assert_eq!(after(&args, "--settings"), after(&edit, "--settings"));
+        assert!(args.starts_with(&edit[..super::BASE_ARGS.len() + WORKSPACE_WRITE_ARGS.len()]));
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "--permission-mode")
+                .count(),
+            1
+        );
+    }
+    let bypass = args(Some(AgentPermission::Bypass));
+    assert_eq!(after(&bypass, "--permission-mode"), "bypassPermissions");
+    for flag in [
+        "--restricted",
+        "--tools",
+        "--strict-mcp-config",
+        "--settings",
+    ] {
+        assert!(!bypass.contains(&flag.to_owned()), "{flag}: {bypass:?}");
+    }
     assert_eq!(
-        plan.iter()
-            .filter(|arg| *arg == "--permission-mode")
-            .count(),
-        1
+        bypass.iter().filter(|arg| *arg == "--add-dir").count(),
+        edit.iter().filter(|arg| *arg == "--add-dir").count()
     );
 
     let no_write = RunRequest {
@@ -879,7 +857,7 @@ async fn a_worker_whose_init_shows_another_permission_mode_is_stopped_before_any
     let (kind, message) = failure(&all);
     assert_eq!(kind, FailureKind::PolicyViolation);
     assert!(
-        message.contains(r#"permission mode "default" for a worker instead of "acceptEdits""#),
+        message.contains(r#"permission mode "default" in a worker run instead of "acceptEdits""#),
         "{message}"
     );
     assert!(
@@ -1689,60 +1667,37 @@ fn a_no_write_run_allows_only_the_read_tools() {
     );
 }
 
-/// A coordinator's init line: `tools`, then `mode`, a `permissionMode` field or nothing.
-fn coordinator_init(tools: &str, mode: &str) -> Vec<u8> {
-    format!(
-        r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"2.1.283","tools":{tools}{mode}}}"#
-    )
-    .into_bytes()
-}
-
-const BYPASS: &str = r#","permissionMode":"bypassPermissions""#;
-
-/// 0026: a coordinator may list whatever its CLI's configuration loads, such as another MCP
-/// server's tools and skills, but not a tool that edits files or runs commands.
+/// 0026: a coordinator and a bypass worker are full Claude Code, so their init may list any
+/// tool, another MCP server's included, in the mode they asked for. Without wispd's tools a
+/// no-write run keeps its read tools.
 #[test]
-fn a_coordinator_run_refuses_only_the_write_and_shell_tools() {
-    let loaded = coordinator_init(
-        r#"["Read","Glob","Grep","Task","Skill","WebFetch","WebSearch","mcp__wispd__spawn_agent","mcp__linear__list_issues"]"#,
-        BYPASS,
-    );
+fn a_coordinator_and_a_bypass_worker_allow_any_tool_in_the_mode_they_asked_for() {
+    let tools =
+        r#"["Read","Edit","Bash","Task","mcp__wispd__spawn_agent","mcp__linear__list_issues"]"#;
+    let loaded = init_line(tools);
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
     assert_eq!(violation_kind(&translator.line(&loaded)), None);
-    for denied in COORDINATOR_DENIED_TOOLS {
-        let tools = format!(r#"["Read","mcp__linear__list_issues","{denied}"]"#);
-        let mut translator =
-            Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
-        assert_eq!(
-            violation_kind(&translator.line(&coordinator_init(&tools, BYPASS))),
-            Some(FailureKind::PolicyViolation),
-            "{denied}"
-        );
-    }
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none")
+        .with_coordinator_tools(true)
+        .with_permission_mode("bypassPermissions");
+    assert_eq!(
+        violation_kind(&translator.line(&loaded)),
+        Some(FailureKind::PolicyViolation),
+        "it reported acceptEdits"
+    );
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     assert_eq!(
         violation_kind(&translator.line(&loaded)),
         Some(FailureKind::PolicyViolation),
-        "a no-write run without wispd's tools isn't a coordinator, and keeps its read tools"
+        "without wispd's tools it isn't a coordinator"
     );
-}
 
-/// 0026: a coordinator must run in bypassPermissions mode. In "default", which managed settings'
-/// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` forces, `-p` would deny every MCP tool, so it fails loudly.
-#[test]
-fn a_coordinator_must_report_bypass_permissions_mode() {
-    for (mode, refused) in [
-        (BYPASS, false),
-        (r#","permissionMode":"default""#, true),
-        (r#","permissionMode":"dontAsk""#, true),
-        ("", true),
-    ] {
-        let mut translator =
-            Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
-        let steps = translator.line(&coordinator_init(r#"["Read","Skill"]"#, mode));
-        let expected = refused.then_some(FailureKind::PolicyViolation);
-        assert_eq!(violation_kind(&steps), expected, "{mode}");
-    }
+    let bypass = String::from_utf8(loaded)
+        .unwrap()
+        .replace("acceptEdits", "bypassPermissions");
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none")
+        .with_permission_mode("bypassPermissions");
+    assert_eq!(violation_kind(&translator.line(bypass.as_bytes())), None);
 }
 
 fn failed_result() -> &'static [u8] {

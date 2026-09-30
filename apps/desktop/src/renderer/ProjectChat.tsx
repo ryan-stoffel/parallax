@@ -65,8 +65,8 @@ export function ProjectChat({
 
   // Starts the coordinator as run `id`. With no coordinator account on the host, the run gets the
   // host's first Claude account, its login before its keys (0004), and the chat says so.
-  const start = async (id: string, text: string, { model, effort }: RunOptions) => {
-    let error = await startCoordinator(project.id, id, text, { model, effort });
+  const start = async (id: string, text: string, { model, effort, permission }: RunOptions) => {
+    let error = await startCoordinator(project.id, id, text, { model, effort, permission });
     const kind = error?.data?.kind;
     if (kind === "noDefaultAccount" || kind === "accountNotFound") {
       const accounts = await accountOptions(hostId);
@@ -77,6 +77,7 @@ export function ProjectChat({
       error = await startCoordinator(project.id, id, text, {
         model,
         effort,
+        permission,
         account: first.account,
       });
       if (!error) setNotice(`Using ${first.label} for this Project's coordinator.`);
@@ -126,7 +127,6 @@ export function ProjectChat({
           newThread
           onSend={send}
           backend={backend}
-          noWrite
           disabledReason={disabledReason}
           tab={tab}
         />

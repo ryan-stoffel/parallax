@@ -33,11 +33,11 @@ use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, CoordinatorTools, Credential, Event, EventStream, Failure, FailureKind, FollowUp,
-    ModelUsage, Outcome, Resume, Run, RunRequest, SendError, Usage, WorkerSandbox,
+    AccountRef, CoordinatorTools, Credential, Event, EventStream, FollowUp, ModelUsage, Outcome,
+    Resume, Run, RunRequest, SendError, Usage, WorkerSandbox,
     run_temp::{self, RunTemp},
 };
-use crate::routing::{self, TreeSnapshot};
+use crate::routing;
 use crate::server::Daemon;
 use crate::worktree::PrError;
 
@@ -139,10 +139,6 @@ pub(super) struct Actor {
     turns: HashMap<TurnId, String>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
-    /// A coordinator's worktree, and its state when the CLI started (0004).
-    tree: Option<(PathBuf, TreeSnapshot)>,
-    /// How a coordinator's turn broke its no-write policy, which ends its CLI's run.
-    violation: Option<Failure>,
     stopping: bool,
     /// Set once `thread/delete` removed the run: the actor stops, refusing what is still queued.
     deleted: bool,
@@ -176,8 +172,6 @@ impl Actor {
             batch: Batch::default(),
             turns,
             last_message,
-            tree: None,
-            violation: None,
             stopping: false,
             deleted: false,
             wakes: Wakes::default(),
@@ -592,12 +586,6 @@ impl Actor {
                 .permission
                 .filter(|&p| option_name(p) != fields.permission),
         };
-        if self.is_coordinator() && changes.permission.is_some() {
-            return Err(ErrorObject::wisp(
-                ErrorKind::UnsupportedOption,
-                "a project's coordinator never edits, so it takes no permission",
-            ));
-        }
         let changing = changes != RunOptions::default();
         if changing && self.live.is_some() {
             return Err(ErrorObject::wisp(
@@ -799,7 +787,7 @@ impl Actor {
                 data_dir,
                 context,
             } => self.worker_setup(&home, &data_dir, &context, paths).await,
-            Place::Coordinator { repo } => self.coordinator_setup(repo).await,
+            Place::Coordinator { repo } => self.coordinator_setup(repo),
         };
         let Setup {
             cwd,
@@ -875,21 +863,9 @@ impl Actor {
         })
     }
 
-    /// A coordinator's worktree, moved to the repository's `HEAD` (RYA-171), and its wisp tools,
-    /// bound to its project and to its own thread (0019), after a snapshot of the worktree for
-    /// [`Actor::check_tree`]. Only the coordinator writes there, so the user's own edits, commits,
-    /// and stray files in the checkout never trip the check.
-    async fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
-        let cwd = self.daemon.data_dir.coordinator_dir(self.project);
-        self.daemon
-            .agents
-            .worktrees
-            .refresh_detached(&repo, &cwd)
-            .await
-            .map_err(|error| format!("could not prepare the coordinator's worktree: {error}"))?;
-        let before = routing::snapshot(&cwd)
-            .await
-            .map_err(|error| format!("could not read the coordinator's worktree: {error}"))?;
+    /// A coordinator runs in the project's repository (0026), with its wisp tools, bound to its
+    /// project and to its own thread (0019).
+    fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("could not find wispd's own executable: {error}"))?;
         let thread = self
@@ -904,41 +880,12 @@ impl Actor {
             project: self.project,
             thread,
         };
-        self.tree = Some((cwd.clone(), before));
         Ok(Setup {
-            cwd,
+            cwd: repo,
             sandbox: None,
             temp: None,
             tools: Some(tools),
         })
-    }
-
-    /// 0004's second check on a coordinator's no-write policy, after each turn and when its CLI
-    /// exits: compares its worktree with the snapshot taken before the CLI started. A change
-    /// stops the CLI and fails the run with the files that changed. wispd reverts nothing until
-    /// the next CLI process refreshes the worktree. Does nothing for any other run.
-    async fn check_tree(&mut self) {
-        let Some((worktree, before)) = &self.tree else {
-            return;
-        };
-        if self.violation.is_some() {
-            return;
-        }
-        let failure = match routing::check(worktree, before).await {
-            Ok(None) => return,
-            Ok(Some(failure)) => failure,
-            Err(error) => Failure {
-                failure: FailureKind::Internal,
-                message: format!("could not check the coordinator's worktree: {error}"),
-                exit: None,
-                stderr_tail: None,
-            },
-        };
-        warn!(run = %self.id, message = %failure.message, "stopping a coordinator whose turn changed its working tree");
-        if let Some(live) = &self.live {
-            live.run.cancel();
-        }
-        self.violation = Some(failure);
     }
 
     /// A new temp folder for the run's CLI (RYA-130), a resumed run's too, and its canonical
@@ -1022,7 +969,6 @@ impl Actor {
                 let outcome = outcome.clone();
                 self.record_usage(event).await;
                 self.clear_live();
-                self.check_tree().await;
                 self.finish(&outcome).await;
             }
             _ => {
@@ -1043,9 +989,6 @@ impl Actor {
                             .map(|sent| convert::truncate(sent, convert::MAX_TEXT_ITEM_BYTES));
                     }
                     self.push(item).await;
-                }
-                if matches!(event, Event::TurnFinished { .. }) {
-                    self.check_tree().await;
                 }
             }
         }
@@ -1075,13 +1018,11 @@ impl Actor {
         }
     }
 
-    /// Records how a CLI process ended: as a coordinator's policy violation, if its turn broke
-    /// it. Unless wispd stopped it, commits a worker's changes first, through #166's hardened
-    /// commit, and reports the commit, then wakes the coordinator that started the run.
+    /// Records how a CLI process ended. Unless wispd stopped it, commits a worker's changes first,
+    /// through #166's hardened commit, and reports the commit, then wakes the coordinator that
+    /// started the run.
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
-        let violation = self.violation.take().map(Outcome::Failed);
-        let outcome = violation.as_ref().unwrap_or(outcome);
         if self.stopping && matches!(outcome, Outcome::Cancelled) {
             info!(run = %self.id, "an agent run was interrupted because wispd is stopping");
             self.append(WispEvent::AgentFinished {
