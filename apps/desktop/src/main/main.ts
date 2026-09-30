@@ -73,6 +73,17 @@ ipcMain.handle(
     }),
 );
 
+// The commits develop has that the checkout lacks, which scripts/dev.mjs sends each new app and
+// after every check. Windows get each change; a (re)loaded renderer asks.
+let behind = 0;
+process.on("message", (message) => {
+  const count = (message as { behind?: unknown } | null)?.behind;
+  if (typeof count !== "number") return;
+  behind = count;
+  for (const win of BrowserWindow.getAllWindows()) win.webContents.send("wisp:behind", behind);
+});
+ipcMain.handle("wisp:behind", () => behind);
+
 // Names a new thread and its branch from its first prompt (see namer.ts).
 const namer = createNamer(path.join(app.getPath("userData"), "models"));
 ipcMain.handle("wisp:nameThread", (_event, prompt: unknown) =>

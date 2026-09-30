@@ -30,6 +30,12 @@ export interface WispBridge {
    * itself. Resolves to one line for people, such as "Up to date" or why it failed.
    */
   update(): Promise<string>;
+  /**
+   * Calls `listener` with how many commits develop has that `update` would pull, now and on every
+   * change; 0 when there's no update. Only changes while `updatable`. Returns the unsubscribe
+   * function.
+   */
+  onUpdateReady(listener: (commits: number) => void): () => void;
 
   /**
    * Names a new thread from its first prompt, with a model that runs on this computer. Resolves

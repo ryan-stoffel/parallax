@@ -10,6 +10,7 @@ import {
   CircleCheck,
   CirclePause,
   CircleSlash,
+  Download,
   Ellipsis,
   FileDiff,
   Folder,
@@ -31,6 +32,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  useEffect,
   useId,
   useRef,
   useState,
@@ -463,7 +465,10 @@ export function ThreadList({
   );
 }
 
-/** The footer's buttons: Settings, Usage, and Update under `pnpm dev`. */
+/**
+ * The footer's buttons: Settings, Usage, and Update under `pnpm dev`, which shows a download
+ * icon with a dot while develop has commits to pull.
+ */
 function Footer({
   onOpenSettings,
   onOpenUsage,
@@ -471,6 +476,9 @@ function Footer({
   // "Updating…" while Update runs, then its answer until the next click.
   const [update, setUpdate] = useState<string>();
   const updating = update === "Updating…";
+  const [behind, setBehind] = useState(0);
+  useEffect(() => (window.wisp.updatable ? window.wisp.onUpdateReady(setBehind) : undefined), []);
+  const ready = behind > 0 && !updating;
   const runUpdate = async () => {
     setUpdate("Updating…");
     setUpdate(await window.wisp.update());
@@ -492,11 +500,25 @@ function Footer({
         {window.wisp.updatable && (
           <span className="ml-auto">
             <IconButton
-              label="Update from develop"
+              label={
+                ready
+                  ? `Update ready: ${behind} new commit${behind === 1 ? "" : "s"} on develop`
+                  : "Update from develop"
+              }
               disabled={updating}
               onClick={() => void runUpdate()}
             >
-              <RefreshCw className={updating ? "animate-spin" : undefined} />
+              {ready ? (
+                <span className="relative grid">
+                  <Download />
+                  <span
+                    aria-hidden
+                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-ring"
+                  />
+                </span>
+              ) : (
+                <RefreshCw className={updating ? "animate-spin" : undefined} />
+              )}
             </IconButton>
           </span>
         )}
