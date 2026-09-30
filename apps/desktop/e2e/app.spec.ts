@@ -130,6 +130,58 @@ test("stops the thread", async () => {
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
 });
 
+// Runs the Edit menu's Copy or Paste as its Cmd/Ctrl+C or V does, which a synthetic keypress can't.
+const edit = (command: "copy" | "paste") =>
+  app.evaluate(({ BrowserWindow }, command) => {
+    BrowserWindow.getAllWindows()[0]!.webContents[command]();
+  }, command);
+
+test("copies the agent's reply into the composer, and right-click offers Copy and Paste (RYA-184)", async () => {
+  // Context menus are recorded instead of shown, since a shown one holds the main process.
+  await app.evaluate(({ Menu }) => {
+    const shown: string[][] = [];
+    Object.assign(globalThis, { shown });
+    Menu.prototype.popup = function (this: Electron.Menu) {
+      shown.push(this.items.map((item) => item.role ?? ""));
+    };
+  });
+  // Selected with the mouse, as a person would.
+  const reply = page.getByRole("log", { name: "Transcript" }).getByText("The fake agent is on it.");
+  const at = (await reply.boundingBox())!;
+  await page.mouse.move(at.x + 1, at.y + at.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(at.x + at.width - 1, at.y + at.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await reply.click({ button: "right" });
+  await edit("copy");
+
+  const message = page.getByRole("textbox", { name: "Message" });
+  await message.click({ button: "right" });
+  await edit("paste");
+  await expect(message).toHaveText("The fake agent is on it.");
+  const shown = await app.evaluate(() => (globalThis as { shown?: string[][] }).shown);
+  expect(shown).toEqual([["copy"], ["cut", "copy", "paste", "selectall"]]);
+  await message.press("ControlOrMeta+a");
+  await message.press("Backspace");
+});
+
+test("the composer grows upward as it fills, up to 40% of the window (RYA-184)", async () => {
+  const message = page.getByRole("textbox", { name: "Message" });
+  const before = (await message.boundingBox())!;
+  const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
+  await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), lines.join("\n"));
+  await message.click();
+  await edit("paste");
+  await expect(message).toContainText("line 40");
+
+  const after = (await message.boundingBox())!;
+  expect(after.height).toBeGreaterThan(before.height);
+  expect(Math.round(after.y + after.height)).toBe(Math.round(before.y + before.height));
+  expect(after.height).toBeLessThanOrEqual((await page.evaluate<number>("innerHeight")) * 0.4 + 1);
+  await message.press("ControlOrMeta+a");
+  await message.press("Backspace");
+});
+
 test("a follow-up's text is still there after a reload (RYA-92)", async () => {
   await page.getByRole("textbox", { name: "Message" }).fill("Check the links too");
   await page.getByRole("button", { name: "Send" }).click();

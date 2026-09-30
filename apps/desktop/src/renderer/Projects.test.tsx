@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
@@ -130,6 +131,9 @@ const inDialog = (name: string) =>
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
   );
 const nameBox = () => dialog().querySelector("input")!;
+// The main pane's composer, whose editor Tiptap keeps on its element for tests.
+const composer = () =>
+  document.querySelector<TiptapEditorHTMLElement>('main [role="textbox"][aria-label="Message"]');
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
 
@@ -163,7 +167,7 @@ test("a Project is one row that opens its chat: its repository and branch, with 
   expect(main.querySelector("h2")?.textContent).toBe("ember");
   expect(main.textContent).toContain("/src/ember");
   expect(main.textContent).toContain("main");
-  expect(main.querySelector("textarea")!.placeholder).toBe(
+  expect(composer()!.getAttribute("aria-placeholder")).toBe(
     "This host's wispd can't run a Project's coordinator yet",
   );
   expect(main.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.disabled).toBe(true);
@@ -272,13 +276,7 @@ const openEmber = () =>
   click(
     [...document.querySelectorAll("#sidebar li button")].find((b) => b.textContent === "ember3d"),
   );
-const type = (text: string) => {
-  const box = document.querySelector("main textarea")!;
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-};
+const type = (text: string) => act(() => void composer()!.editor!.commands.setContent(text));
 const button = (label: string) =>
   document.querySelector<HTMLButtonElement>(`main button[aria-label="${label}"]`);
 const transcript = () => document.querySelector('[role="log"]')?.textContent ?? "";
@@ -307,9 +305,7 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   type("Add a dark mode");
   await click(button("Send"));
   // Off while it starts, so a second Send can't race the first.
-  expect(document.querySelector<HTMLTextAreaElement>("main textarea")!.placeholder).toBe(
-    "Starting the coordinator…",
-  );
+  expect(composer()!.getAttribute("aria-placeholder")).toBe("Starting the coordinator…");
   await act(async () => release());
   await settle();
   expect(calls("project/start")).toEqual([

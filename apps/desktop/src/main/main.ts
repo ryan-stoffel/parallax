@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
 import path from "node:path";
 
 import { THEME_PREFERENCES } from "../preload/bridge";
@@ -52,6 +52,13 @@ app.on("web-contents-created", (_event, contents) => {
     if (isOpenableExternally(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
+  // Electron has no context menu of its own. Right-click offers the Edit menu's actions: all of
+  // them in a text box, Copy on selected text.
+  contents.on("context-menu", (_event, { isEditable, selectionText }) => {
+    const roles = isEditable ? (["cut", "copy", "paste", "selectAll"] as const) : ["copy" as const];
+    if (isEditable || selectionText)
+      Menu.buildFromTemplate(roles.map((role) => ({ role }))).popup();
+  });
 });
 
 ipcMain.handle("wisp:version", () => app.getVersion());
@@ -72,6 +79,17 @@ ipcMain.handle(
       process.send("update");
     }),
 );
+
+// The commits develop has that the checkout lacks, which scripts/dev.mjs sends each new app and
+// whenever a check changes it. Windows get each change; a (re)loaded renderer asks.
+let behind = 0;
+process.on("message", (message) => {
+  const count = (message as { behind?: unknown } | null)?.behind;
+  if (typeof count !== "number") return;
+  behind = count;
+  for (const win of BrowserWindow.getAllWindows()) win.webContents.send("wisp:behind", behind);
+});
+ipcMain.handle("wisp:behind", () => behind);
 
 // Names a new thread and its branch from its first prompt (see namer.ts).
 const namer = createNamer(path.join(app.getPath("userData"), "models"));
