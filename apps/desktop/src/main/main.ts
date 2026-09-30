@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
 import path from "node:path";
 
 import { THEME_PREFERENCES } from "../preload/bridge";
@@ -51,6 +51,13 @@ app.on("web-contents-created", (_event, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
     if (isOpenableExternally(url)) void shell.openExternal(url);
     return { action: "deny" };
+  });
+  // Electron has no context menu of its own. Right-click offers the Edit menu's actions: all of
+  // them in a text box, Copy on selected text.
+  contents.on("context-menu", (_event, { isEditable, selectionText }) => {
+    const roles = isEditable ? (["cut", "copy", "paste", "selectAll"] as const) : ["copy" as const];
+    if (isEditable || selectionText)
+      Menu.buildFromTemplate(roles.map((role) => ({ role }))).popup();
   });
 });
 

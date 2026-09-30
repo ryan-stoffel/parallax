@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
@@ -36,6 +37,11 @@ function render(node: ReactNode) {
     unmount = () => {};
   };
 }
+
+// The composer's editor, which Tiptap keeps on its element for tests.
+const composer = () =>
+  document.querySelector<TiptapEditorHTMLElement>('[role="textbox"][aria-label="Message"]')!;
+const type = (text: string) => act(() => void composer().editor!.commands.setContent(text));
 
 const row = (item: Item) =>
   render(<RowView row={item} live={false} open={false} onToggle={() => {}} />);
@@ -293,28 +299,24 @@ test("the composer tab shows the worktree and its branch", () => {
 test("Enter sends with a fresh v7 turn id, but not while an IME is composing", async () => {
   const { request } = fakeBridge(4);
   await renderChat();
-  const box = document.querySelector("textarea")!;
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      box,
-      "Also mention the tests.",
-    );
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const box = composer();
+  type("Also mention the tests.");
   expect(document.querySelector('button[aria-label="Stop"]')).toBeNull();
 
+  const dispatch = (event: Event) => act(async () => void box.dispatchEvent(event));
   const enter = (isComposing: boolean) =>
-    act(async () => {
-      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing, bubbles: true }));
-    });
+    dispatch(new KeyboardEvent("keydown", { key: "Enter", isComposing, bubbles: true }));
+  // An IME taking the Enter that confirms its text.
+  await dispatch(new CompositionEvent("compositionstart", { bubbles: true }));
   await enter(true);
+  await dispatch(new CompositionEvent("compositionend", { bubbles: true }));
   expect(request.mock.calls.some(([, method]) => method === "agent/send")).toBe(false);
 
   await enter(false);
   const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
   expect(send[2]).toMatchObject({ runId, text: "Also mention the tests." });
   expect((send[2] as { turnId: string }).turnId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7/);
-  expect(box.value).toBe("");
+  expect(box.textContent).toBe("");
   // Shown as pending until its turn starts.
   expect(transcriptText()).toContain("Also mention the tests.");
 });
@@ -322,14 +324,8 @@ test("Enter sends with a fresh v7 turn id, but not while an IME is composing", a
 test("a dropped follow-up sent from here can be sent again, once", async () => {
   const { request, emit } = fakeBridge(4);
   await renderChat();
-  const box = document.querySelector("textarea")!;
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      box,
-      "Also mention the tests.",
-    );
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const box = composer();
+  type("Also mention the tests.");
   await act(async () => {
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
@@ -407,7 +403,7 @@ test("while disconnected, nothing loads and the composer says why", async () => 
   });
   await renderChat();
   expect(request).not.toHaveBeenCalled();
-  expect(document.querySelector("textarea")!.placeholder).toBe("Disconnected from wispd");
+  expect(composer().getAttribute("aria-placeholder")).toBe("Disconnected from wispd");
   const send = document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
   expect(send.disabled).toBe(true);
 });
@@ -453,13 +449,13 @@ test("an open thread's composer picks within its provider and sends only what ch
   );
 
   await act(async () => listed.find((m) => m.textContent?.startsWith("Claude Sonnet 5"))!.click());
-  const set = (el: HTMLInputElement | HTMLTextAreaElement, value: string) =>
+  const set = (el: HTMLInputElement, value: string) =>
     act(() => {
       Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, value);
       el.dispatchEvent(new Event("input", { bubbles: true }));
     });
   set(document.querySelector<HTMLInputElement>('input[type="range"]')!, "0");
-  set(document.querySelector("textarea")!, "Just the summary");
+  type("Just the summary");
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
   );
