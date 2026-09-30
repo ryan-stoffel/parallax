@@ -59,9 +59,11 @@ jobs:
             echo "$tag is already published."
             build=false
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "build=$build" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
 
   # The installer on each target's own runner (0023, 0029), the same five as ci.yml's rust job.
   build:
