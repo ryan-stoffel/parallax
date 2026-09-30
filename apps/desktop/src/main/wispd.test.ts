@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { expect, test } from "vite-plus/test";
 
-import { findWispd, type WispdLookup } from "./wispd";
+import { dataDir, findWispd, type WispdLookup } from "./wispd";
 
 // Built with `path.join`, so the expectations hold on Windows too.
 const cargo = path.join("/repo/apps/desktop", "../../target/debug/wispd");
@@ -31,4 +31,12 @@ test("the bundled or Cargo-built wispd comes before PATH", () => {
   expect(find([bundled, onPath], { packaged: true })).toBe(bundled);
   expect(find([onPath])).toBe(onPath);
   expect(find([])).toBeUndefined();
+});
+
+test("the data folder is WISPD_DATA_DIR, else the OS's, as wispd finds it", () => {
+  expect(dataDir({ WISPD_DATA_DIR: "/d" }, "darwin", "/h")).toBe("/d");
+  expect(dataDir({}, "darwin", "/h")).toBe(path.join("/h", "Library/Application Support/wisp"));
+  expect(dataDir({ XDG_DATA_HOME: "/x" }, "linux", "/h")).toBe(path.join("/x", "wisp"));
+  // A relative XDG_DATA_HOME is ignored, as the XDG spec says.
+  expect(dataDir({ XDG_DATA_HOME: "x" }, "linux", "/h")).toBe(path.join("/h", ".local/share/wisp"));
 });

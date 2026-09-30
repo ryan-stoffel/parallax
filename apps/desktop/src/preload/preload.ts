@@ -6,6 +6,7 @@ import type {
   SshHost,
   SubscriptionMessage,
   TerminalMessage,
+  UpdateState,
   WispBridge,
 } from "./bridge";
 
@@ -25,11 +26,11 @@ const bridge: WispBridge = {
   pickFolder: () => ipcRenderer.invoke("wisp:pickFolder") as Promise<string | null>,
   updatable: process.argv.includes("--wisp-updatable"),
   update: () => ipcRenderer.invoke("wisp:update") as Promise<string>,
-  onUpdateReady(listener) {
-    const forward = (_event: unknown, commits: number) => listener(commits);
-    ipcRenderer.on("wisp:behind", forward);
-    void (ipcRenderer.invoke("wisp:behind") as Promise<number>).then(listener);
-    return () => ipcRenderer.removeListener("wisp:behind", forward);
+  onUpdateState(listener) {
+    const forward = (_event: unknown, state: UpdateState) => listener(state);
+    ipcRenderer.on("wisp:updateState", forward);
+    void (ipcRenderer.invoke("wisp:updateState") as Promise<UpdateState>).then(listener);
+    return () => ipcRenderer.removeListener("wisp:updateState", forward);
   },
 
   updateChannel: () => ipcRenderer.invoke("wisp:updateChannel"),

@@ -42,6 +42,7 @@ import {
   type ToggleEvent,
 } from "react";
 
+import type { UpdateState } from "../preload/bridge";
 import type { AgentRun, AgentStatus, Thread } from "../protocol/generated/protocol";
 import type { Selection, SettingsSection } from "./App";
 import { ConnectionStatus, StatusDot, statusLabel, useConnection } from "./ConnectionStatus";
@@ -466,8 +467,9 @@ export function ThreadList({
 }
 
 /**
- * The footer's buttons: Settings, Usage, and Update under `pnpm dev`, which shows a download
- * icon with a dot while the update channel's branch has commits to take.
+ * The footer's buttons: Settings, Usage, and Update when `updatable`, which shows a download
+ * icon with a dot while an update is ready to install: a downloaded release, or under `pnpm dev`
+ * the commits the channel's branch has. Its label carries the updater's note, such as an error.
  */
 function Footer({
   onOpenSettings,
@@ -476,9 +478,9 @@ function Footer({
   // "Updating…" while Update runs, then its answer until the next click.
   const [update, setUpdate] = useState<string>();
   const updating = update === "Updating…";
-  const [behind, setBehind] = useState(0);
-  useEffect(() => (window.wisp.updatable ? window.wisp.onUpdateReady(setBehind) : undefined), []);
-  const ready = behind > 0 && !updating;
+  const [state, setState] = useState<UpdateState>({});
+  useEffect(() => (window.wisp.updatable ? window.wisp.onUpdateState(setState) : undefined), []);
+  const ready = state.ready !== undefined && !updating;
   const runUpdate = async () => {
     setUpdate("Updating…");
     setUpdate(await window.wisp.update());
@@ -500,11 +502,7 @@ function Footer({
         {window.wisp.updatable && (
           <span className="ml-auto">
             <IconButton
-              label={
-                ready
-                  ? `Update ready: ${behind} commit${behind === 1 ? "" : "s"} to apply`
-                  : "Update wisp"
-              }
+              label={ready ? `Update ready: ${state.ready}` : (state.note ?? "Update wisp")}
               disabled={updating}
               onClick={() => void runUpdate()}
             >

@@ -404,5 +404,9 @@ function handshakeError(error: RpcError): ConnectionError {
   const detail = error.data.detail as IncompatibleProtocolDetail | undefined;
   const update =
     detail && detail.supported.max < PROTOCOL_VERSION ? "Update wispd." : "Update the app.";
-  return { reason: "incompatibleProtocol", message: `${error.message}. ${update}` };
+  return {
+    reason: "incompatibleProtocol",
+    message: `${error.message}. ${update}`,
+    ...(detail && { wispd: detail.wispd }),
+  };
 }

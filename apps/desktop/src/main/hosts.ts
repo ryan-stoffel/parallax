@@ -1,10 +1,12 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import path from "node:path";
 
 import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
 import {
   UPDATE_CHANNELS,
+  type ConnectionState,
   type RendererMethod,
   type RpcResponse,
   type SshHost,
@@ -23,7 +25,7 @@ import {
   writeTerminal,
   type Command,
 } from "./terminal";
-import { findWispd } from "./wispd";
+import { dataDir, findWispd, stopServe, wispdVersion } from "./wispd";
 
 // The methods the renderer may call, checked at runtime because the renderer is untrusted
 // (0022). Typed so that adding a method to the protocol fails the type-check until it is here.
@@ -80,13 +82,7 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
  */
 export function startHosts(onUpdateChannel: (channel: UpdateChannel) => void): void {
   addConnection("local", () => {
-    const wispd = findWispd({
-      env: process.env,
-      platform: process.platform,
-      packaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      appPath: app.getAppPath(),
-    });
+    const wispd = localWispd();
     return wispd === undefined ? undefined : [wispd, "attach"];
   });
   try {
@@ -208,6 +204,45 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
   return loginCommand(cli, path, ssh);
 }
 
+/** The local `wispd` binary (wispd.ts). */
+const localWispd = () =>
+  findWispd({
+    env: process.env,
+    platform: process.platform,
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  });
+
+/** Whether this launch has compared the local `wispd serve`'s version with its wispd's. */
+let serveChecked = false;
+
+/**
+ * After an update, the local `wispd serve` may still be the previous app's, since attach reuses a
+ * running one (0010). A packaged app stops a serve whose version differs from its bundled
+ * wispd's, older or newer (a move back to Standard), and reconnects, so attach starts the bundled
+ * one. Once per launch, so a serve started from elsewhere, such as a service pointing at another
+ * wispd, is never stopped twice. Not on Windows, whose installer stops every process running from
+ * the app's folder, `wispd.exe` included.
+ */
+async function replaceOtherServe(state: ConnectionState): Promise<void> {
+  if (!app.isPackaged || serveChecked || process.platform === "win32") return;
+  const running =
+    state.status === "connected"
+      ? state.wispd
+      : state.status === "failed"
+        ? state.error.wispd
+        : undefined;
+  if (running === undefined) return;
+  serveChecked = true;
+  const wispd = localWispd();
+  const bundled = wispd && (await wispdVersion(wispd));
+  if (!bundled || bundled === running) return;
+  console.log(`Replacing wispd serve ${running} with ${bundled}`);
+  await stopServe(dataDir(process.env, process.platform, homedir()));
+  connections.get("local")?.retry();
+}
+
 /** Starts a host's connection, replacing any it had. */
 function addConnection(hostId: string, command: () => string[] | undefined, destination?: string) {
   connections.get(hostId)?.dispose();
@@ -217,7 +252,9 @@ function addConnection(hostId: string, command: () => string[] | undefined, dest
     clientVersion: app.getVersion(),
     onState: (state) => {
       // A replaced or removed connection has nothing more to say.
-      if (connections.get(hostId) === created) broadcast("wisp:state", hostId, state);
+      if (connections.get(hostId) !== created) return;
+      broadcast("wisp:state", hostId, state);
+      if (hostId === "local") void replaceOtherServe(state);
     },
   });
   connections.set(hostId, created);
