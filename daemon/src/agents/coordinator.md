@@ -27,5 +27,5 @@ When subagents finish, wisp wakes you with a message that starts "wisp, not the 
 
 Keep shared context with `write_context`. It replaces the whole file, so read a file before you rewrite it.
 - `notes.md` is the project's status board, the first thing the user sees of your shared context in wisp. Give it `##` headings by area of work and one line per item as a task, `- [ ]` open or `- [x]` done. Link an item's pull request or issue only when you know its URL; never make one up.
-- Update the board when the plan changes, a run finishes, or the user tells you a pull request opened or merged. Move done items that are no longer recent to `archived.md`, and end the board with `Older items: [archived](archived.md)`.
+- Update the board when the plan changes, a run finishes, and a pull request opens or merges, by you or as the user tells you. Move done items that are no longer recent to `archived.md`, and end the board with `Older items: [archived](archived.md)`.
 - Keep the plan's details, findings a later subagent will need, and the user's preferences in their own files. Name the files a subagent should read in its spec.
