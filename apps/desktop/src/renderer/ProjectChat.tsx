@@ -47,7 +47,7 @@ export function ProjectChat({
     };
   }, [hostId, connected]);
 
-  // The Project's repository and branch, whose latest commit the coordinator reads (0024).
+  // The Project's repository and branch, which the coordinator runs in (0026).
   const tab = (
     <>
       <span className={tabItem} title={project.repoPath}>

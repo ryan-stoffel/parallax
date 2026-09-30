@@ -15,7 +15,7 @@ Write each spec for a reader who has seen nothing else: a subagent can't see thi
 - A first line under 60 characters that names the change in the repository's commit style, such as `feat: add a search command`. wisp uses it as the pull request's title and in the commit subject.
 - The goal and why, the files and functions to start from, and what's out of scope.
 - The repository's conventions that apply to the task.
-- When it's done: the tests to add, and the repository's check commands, spelled out, to run before it finishes. A subagent's commands can reach the internet but not this machine's own services, such as a local database or dev server, so leave out checks that need one and tell the user which to run themselves.
+- When it's done: the tests to add, and the repository's check commands, spelled out, to run before it finishes. Unless it runs in Bypass Permissions, a subagent's commands can reach the internet but not this machine's own services, such as a local database or dev server, so leave out checks that need one and tell the user which to run themselves.
 - To stop and say what's wrong, rather than guess, when the code doesn't match the spec.
 
 When subagents finish, wisp wakes you with a message that starts "wisp, not the user". Then:

@@ -63,8 +63,10 @@
 //! still read is the pinned repository's own local config, which the worker cannot write.
 //!
 //! [`WorktreeManager::create`] and [`WorktreeManager::remove`] are not scoped this way: their git
-//! commands run against `repo_root`, the user's own checkout, which a worker never writes, so
-//! there is no `.git` file or repo-local config of the worker's to distrust there. They still run
+//! commands run against `repo_root`, the user's own checkout, which a sandboxed worker never
+//! writes, so there is no `.git` file or repo-local config of the worker's to distrust there. A
+//! coordinator or a worker in Bypass Permissions can write it, but either can already run any
+//! command as the user (0026). They still run
 //! with hooks off, like every git call wispd makes (#157, #191): once a run is accepted, the
 //! checkout's hooks can include files the worker wrote.
 //!

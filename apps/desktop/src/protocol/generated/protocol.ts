@@ -1128,7 +1128,8 @@ export type AgentStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * How the agent may act inside its sandbox. Absent means `edit`.
+	 * The permission mode (RYA-97, 0026). Absent means `edit`, or for a run with a
+	 * `coordinatorThread`, the coordinator's mode when it spawns the run.
 	 */
 	permission?: AgentPermission,
 };

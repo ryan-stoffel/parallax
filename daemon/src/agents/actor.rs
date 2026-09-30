@@ -657,8 +657,7 @@ impl Actor {
             )
         };
         let role = if self.is_coordinator() {
-            // A replaced coordinator stays stopped: the project's worktree is its successor's
-            // (RYA-171), and a project has one live coordinator (0024).
+            // A replaced coordinator stays stopped: a project has one live coordinator (0024).
             let project = self.project;
             let current = store(&self.daemon, move |db| {
                 super::coordinator::coordinator_of(db, project.into())

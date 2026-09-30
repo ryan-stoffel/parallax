@@ -42,8 +42,9 @@ pub enum AgentPolicy {
     /// Edits in the run's worktree and the shared context folder, commands in the vendor's OS
     /// sandbox (0004, 0013).
     WorkspaceWrite,
-    /// Read-only tools in the project's repository, plus wispd's coordinator tools (0004, 0019,
-    /// 0024): a project's coordinator.
+    /// A project's coordinator (0024): full Claude Code in its permission mode, in the project's
+    /// repository, plus wispd's coordinator tools (0019, 0026). Without those tools, read-only
+    /// tools (0004).
     NoWrite,
     /// A policy this version does not know yet.
     #[serde(other)]
@@ -535,7 +536,8 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
-    /// How the agent may act inside its sandbox. Absent means `edit`.
+    /// The permission mode (RYA-97, 0026). Absent means `edit`, or for a run with a
+    /// `coordinatorThread`, the coordinator's mode when it spawns the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,

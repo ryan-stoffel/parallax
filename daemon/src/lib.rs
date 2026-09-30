@@ -30,8 +30,7 @@
 //!   Linux (RYA-19), and no store yet on Windows.
 //! - [`usage`]: turns backend usage events into `wisp-store` rows (#120).
 //! - `routing`: picks a task's backend and account, forces the coordinator's no-write policy,
-//!   falls a failed subscription run back to a key account, and checks a coordinator's turn
-//!   against the no-write policy (#119).
+//!   and falls a failed subscription run back to a key account (#119).
 //! - [`worktree`]: creates, inspects, and removes the git worktrees agent runs use (#154).
 //! - `agents`: the M3 runner behind `agent/*` (#156): starts a worker in its worktree, streams
 //!   its events, commits its changes, and resumes it after a restart.
