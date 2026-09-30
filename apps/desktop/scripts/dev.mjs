@@ -1,7 +1,9 @@
 // `pnpm dev`: serves the renderer with hot reload, rebuilds main and preload
 // on change, and runs Electron on the dev server, restarting it whenever those
 // bundles change. Quitting the app or Ctrl-C stops everything. The sidebar's
-// Update button asks this script, over Electron's IPC channel, to pull develop.
+// Update button asks this script, over Electron's IPC channel, to pull develop,
+// and this script tells the app, over the same channel, when develop has commits
+// to pull: it checks on start, every five minutes, and after each update.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, watch } from "node:fs";
 import { homedir } from "node:os";
@@ -10,6 +12,8 @@ import { fileURLToPath } from "node:url";
 
 import electron from "electron";
 import { createServer } from "vite-plus";
+
+import { commitsBehind } from "./behind.mjs";
 
 const bundles = ["dist/main/main.cjs", "dist/preload/preload.cjs"];
 
@@ -60,9 +64,20 @@ function restartApp() {
     stdio: ["inherit", "inherit", "inherit", "ipc"],
     env,
   });
+  child.send({ behind });
   child.on("message", (message) => {
     if (message !== "update") return;
-    updating ??= update().finally(() => (updating = undefined));
+    if (!updating) {
+      // Those commits are being pulled, so nothing is on offer until the check after it.
+      offer(0);
+      // After a check in flight, whose fetch would race the pull for git's locks.
+      updating = Promise.resolve(checking)
+        .then(update)
+        .finally(() => {
+          updating = undefined;
+          check();
+        });
+    }
     void updating.then((text) => child.connected && child.send({ update: text }));
   });
   // Quitting the app ends the dev session; a restart's kill doesn't.
@@ -80,8 +95,8 @@ let base;
 /**
  * Fast-forwards this checkout to origin/develop, then installs and rebuilds what changed. The
  * watchers reload the renderer and restart Electron; a new wispd starts on the app's reconnect.
- * Resolves to one line for the sidebar. New packages, and a change to this script or the Vite
- * config, need a manual restart of `pnpm dev`.
+ * Resolves to one line for the sidebar. New packages, and a change to this script, to
+ * scripts/behind.mjs, or to the Vite config, need a manual restart of `pnpm dev`.
  */
 async function update() {
   // Another branch is someone's work, which Update leaves alone. A detached HEAD fast-forwards.
@@ -123,18 +138,53 @@ async function update() {
   return changed.length ? updated : "Up to date";
 }
 
-/** Runs a command in the repo root (or `cwd`), echoing its output. Never rejects. */
-function run(command, args, cwd = "../..") {
+// What the Update button offers: the commits origin/develop has that this checkout lacks.
+let behind = 0;
+// The check in flight.
+let checking;
+
+/** Counts them (scripts/behind.mjs) in the background, unless a check or an update is running. */
+function check() {
+  if (updating || checking) return;
+  checking = commitsBehind((args) => run("git", args, "../..", true)).then((count) => {
+    checking = undefined;
+    // An update that started meanwhile is pulling them.
+    if (!updating) offer(count);
+  });
+}
+
+/** Records what the Update button offers, and tells the app when it changes. */
+function offer(count) {
+  if (count === behind) return;
+  behind = count;
+  if (app?.connected) app.send({ behind });
+}
+
+check();
+setInterval(check, 5 * 60_000);
+
+/**
+ * Runs a command in the repo root (or `cwd`), echoing its output. Never rejects. A background run
+ * doesn't echo and gives up after a minute, since a fetch can stall (sleep, a network change) and
+ * Update waits for it; its remote helper outlives a killed git and holds the pipes open, so it
+ * resolves without waiting for them.
+ */
+function run(command, args, cwd = "../..", background = false) {
   return new Promise((resolve) => {
     let out = "";
     const child = spawn(command, args, { cwd });
     for (const stream of [child.stdout, child.stderr])
       stream.on("data", (chunk) => {
         out += chunk;
-        process.stdout.write(chunk);
+        if (!background) process.stdout.write(chunk);
       });
     child.on("error", (error) => resolve({ code: -1, out: error.message }));
     child.on("close", (code) => resolve({ code, out: out.trim() }));
+    if (background)
+      setTimeout(() => {
+        child.kill();
+        resolve({ code: -1, out: "timed out" });
+      }, 60_000);
   });
 }
 

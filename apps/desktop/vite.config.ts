@@ -65,6 +65,6 @@ export default defineConfig({
   fmt: { ignorePatterns: ["src/protocol/generated/**"] },
   test: {
     root: ".",
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
   },
 });
