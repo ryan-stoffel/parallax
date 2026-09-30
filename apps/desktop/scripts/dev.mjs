@@ -1,10 +1,11 @@
 // `pnpm dev`: serves the renderer with hot reload, rebuilds main and preload
 // on change, and runs Electron on the dev server, restarting it whenever those
-// bundles change. Quitting the app or Ctrl-C stops everything. The sidebar's
-// Update button asks this script, over Electron's IPC channel, to pull develop,
-// and this script tells the app, over the same channel, when develop has commits
-// to pull: it checks on start, every minute, when a wisp window comes to the
-// front, and after each update.
+// bundles change. Quitting the app or Ctrl-C stops everything. The app tells this
+// script, over Electron's IPC channel, its update channel (scripts/channels.mjs),
+// and the sidebar's Update button asks it to move this checkout to the channel's
+// branch. This script tells the app, over the same channel, when that branch has
+// commits to take: it checks when the channel is set or changes, every minute,
+// when a wisp window comes to the front, and after each update.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, watch } from "node:fs";
 import { homedir } from "node:os";
@@ -14,7 +15,8 @@ import { fileURLToPath } from "node:url";
 import electron from "electron";
 import { createServer } from "vite-plus";
 
-import { commitsBehind } from "./behind.mjs";
+import { commitsBehind, whyNotMove } from "./behind.mjs";
+import { branchOf } from "./channels.mjs";
 import { restartNote } from "./restart.mjs";
 
 const bundles = ["dist/main/main.cjs", "dist/preload/preload.cjs"];
@@ -70,11 +72,14 @@ function restartApp() {
   child.on("message", (message) => {
     // Main asks when a window comes to the front, which needn't follow a check that just started.
     if (message === "check" && Date.now() - checkedAt > 10_000) check();
+    // Main says the channel on start, and again when it changes.
+    const next = branchOf(message?.channel);
+    if (next && next !== branch) follow(next);
     if (message !== "update") return;
     if (!updating) {
-      // Those commits are being pulled, so nothing is on offer until the check after it.
+      // Those commits are being taken, so nothing is on offer until the check after it.
       offer(0);
-      // After a check in flight, whose fetch would race the pull for git's locks.
+      // After a check in flight, whose fetch would race the move for git's locks.
       updating = Promise.resolve(checking)
         .then(update)
         .finally(() => {
@@ -92,24 +97,28 @@ function restartApp() {
 
 // The update in flight, shared by clicks that land while it runs.
 let updating;
-// The commit before a pull whose install or build hasn't succeeded yet, so the next click
+// The commit before a move whose install or build hasn't succeeded yet, so the next click
 // retries them rather than finding nothing new.
 let base;
 
 /**
- * Fast-forwards this checkout to origin/develop, then installs and rebuilds what changed. The
- * watchers reload the renderer and restart Electron; a new wispd starts on the app's reconnect.
- * Resolves to one line for the sidebar. New packages, and a change to scripts/ or the Vite config,
- * load only when wisp restarts, so then the line says to quit and reopen it (scripts/restart.mjs).
+ * Moves this checkout, detached, to the tip of the channel's branch on origin, then installs and
+ * rebuilds what changed, backward too when the channel moves from nightly to release. Leaves
+ * alone a checkout that whyNotMove refuses. The watchers reload the renderer and restart
+ * Electron; a new wispd starts on the app's reconnect. Resolves to one line for the sidebar. New
+ * packages, and a change to scripts/ or the Vite config, load only when wisp restarts, so then
+ * the line says to quit and reopen it (scripts/restart.mjs).
  */
 async function update() {
-  // Another branch is someone's work, which Update leaves alone. A detached HEAD fast-forwards.
-  const branch = (await run("git", ["branch", "--show-current"])).out;
-  if (branch && branch !== "develop")
-    return `Update follows develop, and this checkout is on ${branch}.`;
+  const target = branch;
+  if (!target) return "Update isn't ready yet.";
+  const refused = await whyNotMove(quietGit);
+  if (refused) return `Update follows ${target}, but ${refused}.`;
   base ??= (await run("git", ["rev-parse", "HEAD"])).out;
-  const pull = await run("git", ["pull", "--ff-only", "origin", "develop"]);
-  if (pull.code !== 0) return `git pull failed: ${errorLine(pull.out)}`;
+  const fetched = await run("git", ["fetch", "origin", target]);
+  if (fetched.code !== 0) return `git fetch failed: ${errorLine(fetched.out)}`;
+  const move = await run("git", ["checkout", "--detach", `origin/${target}`]);
+  if (move.code !== 0) return `git checkout failed: ${errorLine(move.out)}`;
   const after = (await run("git", ["rev-parse", "HEAD"])).out;
   const changed = (await run("git", ["diff", "--name-only", base, after])).out
     .split("\n")
@@ -143,19 +152,31 @@ async function update() {
   return changed.length ? updated : "Up to date";
 }
 
-// What the Update button offers: the commits origin/develop has that this checkout lacks.
+// The branch the app's update channel follows, once the app has said (scripts/channels.mjs).
+let branch;
+// What the Update button offers: the commits that branch has that this checkout lacks.
 let behind = 0;
 // The check in flight, and when the last one started.
 let checking;
 let checkedAt = 0;
 
+/** Follows a new channel's branch: drops the old offer, and counts once a check in flight ends. */
+function follow(next) {
+  branch = next;
+  offer(0);
+  void Promise.resolve(checking).then(check);
+}
+
+/** git in the repo root, quietly. */
+const quietGit = (args) => run("git", args, "../..", true);
+
 /** Counts them (scripts/behind.mjs) in the background, unless a check or an update is running. */
 function check() {
-  if (updating || checking) return;
+  if (!branch || updating || checking) return;
   checkedAt = Date.now();
-  checking = commitsBehind((args) => run("git", args, "../..", true)).then((count) => {
+  checking = commitsBehind(quietGit, branch).then((count) => {
     checking = undefined;
-    // An update that started meanwhile is pulling them.
+    // An update that started meanwhile is taking them.
     if (!updating) offer(count);
   });
 }
@@ -167,7 +188,6 @@ function offer(count) {
   if (app?.connected) app.send({ behind });
 }
 
-check();
 setInterval(check, 60_000);
 
 /**

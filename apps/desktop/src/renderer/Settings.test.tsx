@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, SshHost, WispBridge } from "../preload/bridge";
+import type { ConnectionState, SshHost, UpdateChannel, WispBridge } from "../preload/bridge";
+import type { SettingsSection } from "./App";
 import { Settings } from "./Settings";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -28,8 +29,15 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([host, , params]) => ({ host, params }));
 
+let channel: UpdateChannel;
+const setUpdateChannel = vi.fn(
+  async (_channel: UpdateChannel): Promise<string | undefined> => undefined,
+);
+
 beforeEach(() => {
   request.mockClear();
+  setUpdateChannel.mockClear();
+  channel = "nightly";
   answers = {
     "accounts/list": () => ({
       result: {
@@ -62,6 +70,8 @@ beforeEach(() => {
     hosts: async () => [mini],
     onHosts: () => () => {},
     request: request as unknown as WispBridge["request"],
+    updateChannel: async () => channel,
+    setUpdateChannel: setUpdateChannel as WispBridge["setUpdateChannel"],
   } as Partial<WispBridge> as WispBridge;
 });
 
@@ -71,11 +81,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function renderProviders() {
+async function renderSettings(name: SettingsSection = "providers") {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root.render(
-      <Settings section="providers" addingHost={false} theme="system" onThemeChange={() => {}} />,
+      <Settings section={name} addingHost={false} theme="system" onThemeChange={() => {}} />,
     ),
   );
   unmount = () => {
@@ -102,7 +112,7 @@ const click = async (element: HTMLElement) => {
 };
 
 test("lists each connected host's CLIs and keys, and links a missing CLI to its install page", async () => {
-  await renderProviders();
+  await renderSettings();
   expect(rows("This Mac")).toEqual([
     "Claude Code2.1.281 · MaxSigned in",
     "Codex0.156.1Not signed inSign in",
@@ -118,7 +128,7 @@ test("lists each connected host's CLIs and keys, and links a missing CLI to its 
 });
 
 test("adds a key, clearing it from its field after each try, and never gets it back", async () => {
-  await renderProviders();
+  await renderSettings();
   await click(button(section("This Mac"), "Add API key"));
   const form = document.querySelector<HTMLFormElement>('form[aria-label="Add API key"]')!;
   const keyField = form.querySelector<HTMLInputElement>('[name="key"]')!;
@@ -165,7 +175,7 @@ test("adds a key, clearing it from its field after each try, and never gets it b
 
 test("removes a key only once it's confirmed", async () => {
   answers["accounts/keys/remove"] = () => ({ result: {} });
-  await renderProviders();
+  await renderSettings();
   await click(button(work(), "Remove"));
   expect(work().textContent).toContain("Remove this key?");
   await click(button(work(), "Cancel"));
@@ -181,7 +191,7 @@ test("a key another client already removed goes when removed", async () => {
   answers["accounts/keys/remove"] = () => ({
     error: { code: -32000, message: "account not found", data: { kind: "accountNotFound" } },
   });
-  await renderProviders();
+  await renderSettings();
   await click(button(work(), "Remove"));
   await click(button(work(), "Remove"));
   expect(section("This Mac").textContent).not.toContain("Work");
@@ -201,7 +211,7 @@ test("Refresh probes the CLIs again, without undoing a remove made meanwhile", a
         });
     });
   answers["accounts/keys/remove"] = () => ({ result: {} });
-  await renderProviders();
+  await renderSettings();
   await click(button(section("This Mac"), "Refresh"));
   await click(button(work(), "Remove"));
   await click(button(work(), "Remove"));
@@ -241,7 +251,7 @@ test("shows each account's usage and limits for the chosen period, and keeps the
       ],
     },
   });
-  await renderProviders();
+  await renderSettings();
   expect(rows("This Mac")).toEqual([
     "Claude Code2.1.281 · Max1.2K tokens today, about $0.505-hour limit · 12% used · resets in 2 hSigned in",
     "Codex0.156.1No usage todayNot signed inSign in",
@@ -263,4 +273,29 @@ test("shows each account's usage and limits for the chosen period, and keeps the
   await settle();
   expect(calls("usage/get")).toHaveLength(2);
   expect(rows("This Mac")[0]).toContain("5-hour limit reached · resets in 2 h");
+});
+
+const channelRadio = (name: string) =>
+  [...section("Update channel").querySelectorAll("label")]
+    .find((l) => l.textContent === name)!
+    .querySelector("input")!;
+
+test("Updates shows the saved channel, and saves the one chosen", async () => {
+  channel = "release";
+  await renderSettings("general");
+  expect(channelRadio("Standard").checked).toBe(true);
+  expect(section("Updates").textContent).toContain("Released code only.");
+
+  await click(channelRadio("Nightly"));
+  expect(setUpdateChannel).toHaveBeenCalledWith("nightly");
+  expect(channelRadio("Nightly").checked).toBe(true);
+  expect(section("Updates").textContent).toContain("Every push to develop.");
+});
+
+test("a channel that can't be saved stays as it was, with the reason", async () => {
+  setUpdateChannel.mockResolvedValueOnce("wisp couldn't save its settings: disk full");
+  await renderSettings("general");
+  await click(channelRadio("Standard"));
+  expect(channelRadio("Nightly").checked).toBe(true);
+  expect(section("Updates").querySelector('[role="alert"]')?.textContent).toContain("disk full");
 });

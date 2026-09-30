@@ -1,7 +1,7 @@
 import { ArrowUpRight, Monitor, Moon, Plus, Sun } from "lucide-react";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 
-import type { RpcError, ThemePreference } from "../preload/bridge";
+import type { RpcError, ThemePreference, UpdateChannel } from "../preload/bridge";
 import {
   ErrorCodes,
   type CliKind,
@@ -70,6 +70,7 @@ export function Settings({ section, addingHost, theme, onThemeChange }: Settings
                 </div>
               </fieldset>
             </Section>
+            <UpdateSettings />
           </>
         ) : section === "hosts" ? (
           <HostsSettings addingHost={addingHost} />
@@ -78,6 +79,49 @@ export function Settings({ section, addingHost, theme, onThemeChange }: Settings
         )}
       </div>
     </div>
+  );
+}
+
+const updateChannels: { value: UpdateChannel; name: string; detail: string }[] = [
+  { value: "nightly", name: "Nightly", detail: "Every push to develop." },
+  { value: "release", name: "Standard", detail: "Released code only." },
+];
+
+/** Settings > General > Updates: which channel the sidebar's Update button follows. */
+function UpdateSettings() {
+  const [channel, setChannel] = useState<UpdateChannel>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    void window.wisp.updateChannel().then(setChannel);
+  }, []);
+  const choose = async (next: UpdateChannel) => {
+    const failed = await window.wisp.setUpdateChannel(next);
+    setError(failed);
+    if (!failed) setChannel(next);
+  };
+  return (
+    <Section title="Updates">
+      <div className={settingRow}>
+        <div>
+          <span className="block text-[13px] font-medium">Update channel</span>
+          <span className="block text-[12.5px] text-muted-foreground">
+            {updateChannels.find((c) => c.value === channel)?.detail ?? "Loading…"}
+          </span>
+        </div>
+        <Segmented
+          label="Update channel"
+          options={updateChannels}
+          value={channel ?? "nightly"}
+          onChange={(next) => void choose(next)}
+          disabled={channel === undefined}
+        />
+      </div>
+      {error && (
+        <p role="alert" className="px-4 pb-3 text-[12.5px] text-danger">
+          {error}
+        </p>
+      )}
+    </Section>
   );
 }
 

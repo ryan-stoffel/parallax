@@ -43,6 +43,8 @@ beforeEach(() => {
     hosts: async () => [mini],
     onHosts: () => () => {},
     saveHost,
+    // Settings opens on General, which shows the update channel.
+    updateChannel: async () => "nightly",
   } as Partial<WispBridge> as WispBridge;
 });
 
