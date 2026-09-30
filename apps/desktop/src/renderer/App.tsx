@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Thread } from "../protocol/generated/protocol";
 import { AgentChat } from "./AgentChat";
 import { useConnection } from "./ConnectionStatus";
+import { ContextPanel } from "./ContextPanel";
 import { NewThread } from "./NewThread";
 import { localId, useHosts } from "./hosts";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
@@ -299,6 +300,16 @@ export function App() {
               openId={agentId}
               onOpen={openAgent}
               disabledReason={offline}
+            />
+          )
+        }
+        context={
+          project && (
+            <ContextPanel
+              key={`${host.id}/${project.id}`}
+              hostId={host.id}
+              project={project.id}
+              connected={connected}
             />
           )
         }
