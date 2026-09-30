@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
@@ -119,12 +120,13 @@ async function pick(text: string) {
   await act(async () => item.click());
 }
 
+// The composer's editor, which Tiptap keeps on its element for tests.
+const composer = () =>
+  document.querySelector<TiptapEditorHTMLElement>('[role="textbox"][aria-label="Message"]')!;
+
 async function send(text: string) {
-  const box = document.querySelector("textarea")!;
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const box = composer();
+  act(() => void box.editor!.commands.setContent(text));
   await act(async () => {
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
@@ -183,12 +185,12 @@ test("Send shows the prompt at once while wispd starts the thread, and a failure
   await send("Tidy the README");
   expect(heading()).toBeUndefined();
   expect(document.querySelector('[role="log"]')?.textContent).toBe("Tidy the README");
-  expect(document.querySelector("textarea")!.placeholder).toBe("Starting thread…");
+  expect(composer().getAttribute("aria-placeholder")).toBe("Starting thread…");
 
   await act(async () => answer({ error: { code: -32000, message: "wispd is busy" } }));
   await settle();
   expect(heading()).toBe("What should we build in wisp?");
-  expect(document.querySelector("textarea")!.value).toBe("Tidy the README");
+  expect(composer().textContent).toBe("Tidy the README");
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("wispd is busy");
 });
 
@@ -422,7 +424,7 @@ describe("a host with no usable default account for threads", () => {
     expect(document.activeElement).toBe(chooser.querySelector("input:checked"));
     // No raw protocol text, and the prompt stays in the box.
     expect(document.body.textContent).not.toContain("raw protocol text");
-    expect(document.querySelector("textarea")!.value).toBe("Tidy the README");
+    expect(composer().textContent).toBe("Tidy the README");
 
     await act(async () => chooser.querySelectorAll("input")[1]!.click());
     await act(async () => button("Continue")!.click());

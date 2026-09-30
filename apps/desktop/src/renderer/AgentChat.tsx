@@ -20,6 +20,7 @@ import {
 import {
   memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -287,6 +288,15 @@ export function TranscriptView({
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
   }, [total, view.length]);
+  // As the composer grows it shrinks the list from below: keep the latest output in view.
+  useEffect(() => {
+    const el = scrollRef.current!;
+    const observer = new ResizeObserver(() => {
+      if (atBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <div
