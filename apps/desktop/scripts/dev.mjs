@@ -95,8 +95,8 @@ let base;
 /**
  * Fast-forwards this checkout to origin/develop, then installs and rebuilds what changed. The
  * watchers reload the renderer and restart Electron; a new wispd starts on the app's reconnect.
- * Resolves to one line for the sidebar. New packages, and a change to this script or the Vite
- * config, need a manual restart of `pnpm dev`.
+ * Resolves to one line for the sidebar. New packages, and a change to this script, to
+ * scripts/behind.mjs, or to the Vite config, need a manual restart of `pnpm dev`.
  */
 async function update() {
   // Another branch is someone's work, which Update leaves alone. A detached HEAD fast-forwards.
@@ -143,18 +143,19 @@ let behind = 0;
 // The check in flight.
 let checking;
 
-/** Counts them (scripts/behind.mjs) quietly, unless a check or an update is running. */
+/** Counts them (scripts/behind.mjs) in the background, unless a check or an update is running. */
 function check() {
   if (updating || checking) return;
-  checking = commitsBehind((args) => run("git", args, "../..", false)).then((count) => {
+  checking = commitsBehind((args) => run("git", args, "../..", true)).then((count) => {
     checking = undefined;
     // An update that started meanwhile is pulling them.
     if (!updating) offer(count);
   });
 }
 
-/** Records what the Update button offers, and tells the app. */
+/** Records what the Update button offers, and tells the app when it changes. */
 function offer(count) {
+  if (count === behind) return;
   behind = count;
   if (app?.connected) app.send({ behind });
 }
@@ -162,18 +163,28 @@ function offer(count) {
 check();
 setInterval(check, 5 * 60_000);
 
-/** Runs a command in the repo root (or `cwd`), echoing its output unless not to. Never rejects. */
-function run(command, args, cwd = "../..", echo = true) {
+/**
+ * Runs a command in the repo root (or `cwd`), echoing its output. Never rejects. A background run
+ * doesn't echo and gives up after a minute, since a fetch can stall (sleep, a network change) and
+ * Update waits for it; its remote helper outlives a killed git and holds the pipes open, so it
+ * resolves without waiting for them.
+ */
+function run(command, args, cwd = "../..", background = false) {
   return new Promise((resolve) => {
     let out = "";
     const child = spawn(command, args, { cwd });
     for (const stream of [child.stdout, child.stderr])
       stream.on("data", (chunk) => {
         out += chunk;
-        if (echo) process.stdout.write(chunk);
+        if (!background) process.stdout.write(chunk);
       });
     child.on("error", (error) => resolve({ code: -1, out: error.message }));
     child.on("close", (code) => resolve({ code, out: out.trim() }));
+    if (background)
+      setTimeout(() => {
+        child.kill();
+        resolve({ code: -1, out: "timed out" });
+      }, 60_000);
   });
 }
 

@@ -74,7 +74,7 @@ ipcMain.handle(
 );
 
 // The commits develop has that the checkout lacks, which scripts/dev.mjs sends each new app and
-// after every check. Windows get each change; a (re)loaded renderer asks.
+// whenever a check changes it. Windows get each change; a (re)loaded renderer asks.
 let behind = 0;
 process.on("message", (message) => {
   const count = (message as { behind?: unknown } | null)?.behind;
