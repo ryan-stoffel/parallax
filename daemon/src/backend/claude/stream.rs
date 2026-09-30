@@ -8,13 +8,15 @@ use std::collections::HashSet;
 use jiff::Timestamp;
 use serde_json::{Map, Value};
 
-use super::{NO_WRITE_TOOLS, WORKER_MIN_VERSION, WORKER_PERMISSION_MODE, WORKER_TOOLS};
+use super::{
+    COORDINATOR_DENIED_TOOLS, COORDINATOR_PERMISSION_MODE, NO_WRITE_TOOLS, WORKER_MIN_VERSION,
+    WORKER_PERMISSION_MODE, WORKER_TOOLS,
+};
 use crate::backend::ToolPolicy;
 use crate::backend::event::{
     Event, Failure, FailureKind, LimitStatus, LimitWindow, ModelUsage, TodoItem, TodoStatus,
     ToolStatus, Usage, WarningKind,
 };
-use crate::mcp;
 
 /// A `major.minor.patch` version, for comparing. Anything after the patch number, such as a
 /// pre-release tag, is ignored.
@@ -89,7 +91,9 @@ pub(super) struct TurnDone {
 pub(super) struct Translator {
     policy: ToolPolicy,
     expected_key_source: &'static str,
-    /// wispd's MCP tools were attached, so `system/init` may list [`mcp::ALLOWED_TOOLS`] too.
+    /// wispd's MCP tools were attached, so a no-write run is a coordinator, whose `system/init`
+    /// is checked against [`COORDINATOR_DENIED_TOOLS`] and [`COORDINATOR_PERMISSION_MODE`]
+    /// instead of [`NO_WRITE_TOOLS`] (0026).
     coordinator_tools: bool,
     /// The permission mode a worker asked for, which its `system/init` must report.
     permission_mode: &'static str,
@@ -126,7 +130,7 @@ impl Translator {
         }
     }
 
-    /// Also admits wispd's MCP tools in `system/init`, when `attached` (0019).
+    /// Checks `system/init` as a coordinator's when wispd's MCP tools were `attached` (0019, 0026).
     pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
         self.coordinator_tools = attached;
         self
@@ -232,9 +236,11 @@ impl Translator {
             steps.push(violation(FailureKind::UnexpectedApiKey, message));
             return steps;
         }
-        let (allowed, run) = match self.policy {
-            ToolPolicy::NoWrite => (NO_WRITE_TOOLS, "a no-write run"),
-            ToolPolicy::WorkspaceWrite => (WORKER_TOOLS, "a worker run"),
+        let coordinator = self.policy == ToolPolicy::NoWrite && self.coordinator_tools;
+        let run = match self.policy {
+            ToolPolicy::NoWrite if coordinator => "a coordinator run",
+            ToolPolicy::NoWrite => "a no-write run",
+            ToolPolicy::WorkspaceWrite => "a worker run",
         };
         let tools = message.get("tools").and_then(Value::as_array);
         let Some(tools) = tools else {
@@ -242,17 +248,21 @@ impl Translator {
             steps.push(violation(FailureKind::PolicyViolation, message));
             return steps;
         };
-        let wispd_tools: &[&str] = if self.coordinator_tools {
-            mcp::ALLOWED_TOOLS
-        } else {
-            &[]
+        let tools = tools
+            .iter()
+            .map(|tool| tool.as_str().unwrap_or("<not a string>"));
+        if coordinator {
+            let failure = coordinator_violation(tools, text(message, "permissionMode"));
+            self.verified = failure.is_none();
+            steps.extend(failure);
+            return steps;
+        }
+        let allowed = match self.policy {
+            ToolPolicy::NoWrite => NO_WRITE_TOOLS,
+            ToolPolicy::WorkspaceWrite => WORKER_TOOLS,
         };
         let offered: Vec<&str> = tools
-            .iter()
-            .map(|tool| tool.as_str().unwrap_or("<not a string>"))
-            .filter(|tool| {
-                !allowed.contains(tool) && !wispd_tools.contains(tool) && *tool != END_CONVERSATION
-            })
+            .filter(|tool| !allowed.contains(tool) && *tool != END_CONVERSATION)
             .collect();
         if !offered.is_empty() {
             let message = format!(
@@ -515,6 +525,41 @@ fn text<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
 
 fn warning(warning: WarningKind, detail: String) -> Step {
     Step::Emit(Event::Warning { warning, detail })
+}
+
+/// Why a coordinator's `system/init` stops it, if it does (0026): its `tools` include any of
+/// [`COORDINATOR_DENIED_TOOLS`], or it reports a permission `mode` other than
+/// [`COORDINATOR_PERMISSION_MODE`]. In another mode `-p` would deny every tool no allow rule
+/// names, including every MCP server's, so the run fails loudly instead. Every other tool its
+/// CLI's configuration loads is allowed.
+fn coordinator_violation<'a>(
+    tools: impl Iterator<Item = &'a str>,
+    mode: Option<&str>,
+) -> Option<Step> {
+    let denied: Vec<&str> = tools
+        .filter(|tool| COORDINATOR_DENIED_TOOLS.contains(tool))
+        .collect();
+    if !denied.is_empty() {
+        let message = format!(
+            "Claude Code offered a coordinator tools that edit files or run commands: {}",
+            denied.join(", ")
+        );
+        return Some(violation(FailureKind::PolicyViolation, message));
+    }
+    if mode == Some(COORDINATOR_PERMISSION_MODE) {
+        return None;
+    }
+    let reported = match mode {
+        Some(mode) => format!("permission mode {mode:?}"),
+        None => "no permission mode".to_owned(),
+    };
+    let message = format!(
+        "Claude Code reported {reported} for a coordinator instead of \
+         {COORDINATOR_PERMISSION_MODE:?}, so it would deny every tool its MCP servers offer. It \
+         forces \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, so check the env block \
+         of Claude Code's managed settings, and whether they disable bypassPermissions mode"
+    );
+    Some(violation(FailureKind::PolicyViolation, message))
 }
 
 fn violation(failure: FailureKind, message: String) -> Step {

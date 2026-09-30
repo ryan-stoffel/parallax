@@ -430,7 +430,8 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
     assert_eq!(
         claude::arguments(sent).unwrap(),
         expected,
-        "Claude runs a coordinator with exactly 0004's no-write flags, none of 0013's"
+        "without wispd's tools, Claude runs a coordinator's turn with exactly 0004's no-write \
+         flags, none of 0013's or 0026's"
     );
 }
 
@@ -443,10 +444,10 @@ fn coordinator_tools() -> CoordinatorTools {
     }
 }
 
-/// #195: a coordinator's allowlist is its read-only tools plus exactly wispd's eight MCP tools,
-/// with the no-write flags unchanged, and only the `wispd mcp` server connected.
+/// #195, 0026: a coordinator gets wispd's MCP server on top of Claude Code's own configuration,
+/// with the write and shell tools denied instead of 0004's no-write flags.
 #[tokio::test]
-async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
+async fn a_coordinator_gets_wispds_mcp_server_on_its_cli_s_own_configuration() {
     let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
         Outcome::Completed { result: None },
     )]]));
@@ -470,7 +471,7 @@ async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
         .collect();
     let mut expected: Vec<String> = claude::BASE_ARGS
         .iter()
-        .chain(claude::NO_WRITE_ARGS)
+        .chain(claude::COORDINATOR_ARGS)
         .map(|arg| (*arg).to_owned())
         .collect();
     let config = serde_json::json!({"mcpServers": {"wispd": {
@@ -485,20 +486,17 @@ async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
     }}});
     expected.extend([
         "--settings".to_owned(),
-        claude::no_write_settings().to_string(),
+        claude::coordinator_settings().to_string(),
         "--mcp-config".to_owned(),
         config.to_string(),
-        "--allowedTools".to_owned(),
-        "mcp__wispd__spawn_agent,mcp__wispd__list_agents,mcp__wispd__agent_status,\
-         mcp__wispd__message_agent,mcp__wispd__cancel_agent,mcp__wispd__agent_diff,\
-         mcp__wispd__read_context,mcp__wispd__write_context"
-            .to_owned(),
     ]);
     assert_eq!(args, expected);
-    assert!(
-        args.iter().any(|arg| arg == "--strict-mcp-config"),
-        "no MCP server but wispd's"
-    );
+    for flag in ["--strict-mcp-config", "--setting-sources", "--restricted"] {
+        assert!(
+            !args.iter().any(|arg| arg == flag),
+            "{flag}: the user's and the repository's configuration load"
+        );
+    }
 }
 
 #[tokio::test]
