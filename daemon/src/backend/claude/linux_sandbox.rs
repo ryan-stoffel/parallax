@@ -479,6 +479,7 @@ fi"#;
             turn_id: None,
             cwd: worktree.clone(),
             prompt: "Say hi.".into(),
+            images: Vec::new(),
             policy: ToolPolicy::WorkspaceWrite,
             sandbox: Some(WorkerSandbox::for_worktree(
                 root,

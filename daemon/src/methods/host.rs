@@ -13,9 +13,9 @@ use wisp_protocol::{
 };
 
 use super::Context;
-use crate::VERSION;
 use crate::logging::untrusted;
 use crate::server::Daemon;
+use crate::{VERSION, images};
 
 const SYSTEM_VERSION: &str = "/System/Library/CoreServices/SystemVersion.plist";
 
@@ -82,8 +82,16 @@ pub(crate) fn initialize(
 /// `sendOptions` (RYA-161): `agent/send` takes `effort` and `permission`, likewise, and its
 /// successor `sendModel` (RYA-163): `agent/send` also takes `model`, which a `sendOptions`-only
 /// wispd would silently ignore. M4 adds `coordinator` (RYA-41, 0024): `project/start` and
-/// `Project.coordinator`, and `openPr` (RYA-168): `agent/openPr`.
+/// `Project.coordinator`, and `openPr` (RYA-168): `agent/openPr`. `promptImages` (RYA-191, 0026):
+/// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
+/// older wispd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
+/// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
 fn capabilities_advertised() -> Capabilities {
+    let prompt_images = serde_json::Map::from_iter([
+        ("maxImages".to_owned(), images::MAX_IMAGES.into()),
+        ("maxImageBytes".to_owned(), images::MAX_IMAGE_BYTES.into()),
+        ("maxTotalBytes".to_owned(), images::MAX_TOTAL_BYTES.into()),
+    ]);
     Capabilities(BTreeMap::from([
         ("accounts".to_owned(), serde_json::Map::new()),
         ("agentClis".to_owned(), serde_json::Map::new()),
@@ -91,6 +99,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agents".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
+        ("promptImages".to_owned(), prompt_images),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),

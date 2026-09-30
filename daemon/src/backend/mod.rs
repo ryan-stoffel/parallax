@@ -37,7 +37,7 @@ use std::task::{Context, Poll};
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-pub use wisp_protocol::{AgentEffort, AgentPermission, RunId, TurnId};
+pub use wisp_protocol::{AgentEffort, AgentPermission, ImageMediaType, PromptImage, RunId, TurnId};
 use zeroize::Zeroize;
 
 pub use self::event::{
@@ -138,6 +138,9 @@ pub struct RunRequest {
     pub cwd: PathBuf,
     /// The first message.
     pub prompt: String,
+    /// Images the CLI gets beside the first message, never named in it (RYA-191). The caller has
+    /// checked them (`images::check`).
+    pub images: Vec<PromptImage>,
     /// What the agent's tools may do.
     pub policy: ToolPolicy,
     /// Where a [`ToolPolicy::WorkspaceWrite`] run may write and what it may not read (0013).
@@ -271,6 +274,8 @@ pub struct FollowUp {
     pub turn_id: TurnId,
     /// The message.
     pub text: String,
+    /// Images the CLI gets beside the message, as [`RunRequest::images`].
+    pub images: Vec<PromptImage>,
 }
 
 /// What an agent's tools may do (0004's policies).
@@ -737,6 +742,7 @@ mod tests {
         let turn = FollowUp {
             turn_id: TurnId::generate(),
             text: "and the tests".into(),
+            images: Vec::new(),
         };
         handle.send(turn.clone()).unwrap();
         handle.send(turn.clone()).unwrap();
@@ -754,6 +760,7 @@ mod tests {
             handle.send(FollowUp {
                 turn_id: TurnId::generate(),
                 text: "late".into(),
+                images: Vec::new(),
             }),
             Err(SendError::Finished)
         );
@@ -770,7 +777,8 @@ mod tests {
         assert_eq!(
             handle.send(FollowUp {
                 turn_id: TurnId::generate(),
-                text: "hi".into()
+                text: "hi".into(),
+                images: Vec::new(),
             }),
             Err(SendError::Unsupported)
         );

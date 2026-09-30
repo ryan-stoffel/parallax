@@ -69,7 +69,8 @@
 //! # Messages go on stdin
 //!
 //! With `--input-format stream-json`, the prompt and every follow-up are user messages on stdin,
-//! one JSON object per line, as the Agent SDK sends them. The prompt never goes in argv, where
+//! one JSON object per line, as the Agent SDK sends them, with a message's images as base64 image
+//! blocks before its text (RYA-191). The prompt never goes in argv, where
 //! `ps` would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id,
 //! which the CLI echoes in `result.user_message_uuids`: several messages sent close together can
 //! run as one turn, and those ids say which turns a result ended. Once no turn is outstanding,
@@ -133,8 +134,8 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
-    EventSink, FollowUp, Run, RunHandle, RunId, RunRequest, SendError, StartError, Started,
-    ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
+    EventSink, FollowUp, PromptImage, Run, RunHandle, RunId, RunRequest, SendError, StartError,
+    Started, ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::mcp;
 
@@ -706,7 +707,8 @@ impl Backend for ClaudeBackend {
             violation: None,
             env_file,
         };
-        tokio::spawn(driver.run(Message::new(request.turn_id, &request.prompt, false)));
+        let prompt = Message::new(request.turn_id, &request.prompt, &request.images, false);
+        tokio::spawn(driver.run(prompt));
         Ok(Started {
             run: Arc::new(ClaudeRun { handle, stop }),
             events,
@@ -746,11 +748,25 @@ struct Message {
 }
 
 impl Message {
-    fn new(turn_id: Option<TurnId>, text: &str, follow_up: bool) -> Self {
+    /// The message's content is `text` alone, or with images, the Messages API's base64 image
+    /// blocks and then `text` as a text block (RYA-191).
+    fn new(turn_id: Option<TurnId>, text: &str, images: &[PromptImage], follow_up: bool) -> Self {
         let uuid = turn_id.unwrap_or_else(TurnId::generate).to_string();
+        let content = if images.is_empty() {
+            Value::from(text)
+        } else {
+            let images = images.iter().map(|image| {
+                serde_json::json!({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": image.media_type, "data": image.data},
+                })
+            });
+            let text = serde_json::json!({"type": "text", "text": text});
+            images.chain([text]).collect()
+        };
         let mut line = serde_json::json!({
             "type": "user",
-            "message": {"role": "user", "content": text},
+            "message": {"role": "user", "content": content},
             "parent_tool_use_id": null,
             "uuid": uuid,
         })
@@ -910,7 +926,12 @@ impl Driver {
                 },
                 follow_up = self.control.recv(), if control_open => match follow_up {
                     Some(follow_up) => {
-                        let message = Message::new(Some(follow_up.turn_id), &follow_up.text, true);
+                        let message = Message::new(
+                            Some(follow_up.turn_id),
+                            &follow_up.text,
+                            &follow_up.images,
+                            true,
+                        );
                         if let Err(message) = stdin.send(message) {
                             self.dropped(&message).await;
                         }
@@ -1020,7 +1041,12 @@ impl Driver {
             late.push(follow_up);
         }
         for follow_up in late {
-            let message = Message::new(Some(follow_up.turn_id), &follow_up.text, true);
+            let message = Message::new(
+                Some(follow_up.turn_id),
+                &follow_up.text,
+                &follow_up.images,
+                true,
+            );
             if let Err(message) = stdin.send(message) {
                 self.dropped(&message).await;
             }

@@ -427,6 +427,7 @@ async fn the_coordinator_never_sees_or_steers_its_own_run() {
             }),
             model: None,
             effort: None,
+            images: Vec::new(),
         })
         .await
         .unwrap()

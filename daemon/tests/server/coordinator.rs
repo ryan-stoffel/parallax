@@ -70,6 +70,7 @@ fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
         }),
         model: None,
         effort: None,
+        images: Vec::new(),
     }
 }
 
@@ -514,6 +515,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         turn_id: wake.turn_id,
         text: Some(wake.prompt.clone()),
         wake: true,
+        images: Vec::new(),
     }));
     host.server.stop().await;
 }

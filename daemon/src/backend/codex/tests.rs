@@ -13,13 +13,15 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
 
-use super::{CodexBackend, WORKER_FEATURES, worker_overrides, write_zdotdir};
+use super::{
+    CodexBackend, WORKER_FEATURES, arguments, worker_overrides, write_images, write_zdotdir,
+};
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::sandbox::unreadable_in_home;
 use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, Credential, Event, EventStream,
-    FailureKind, ModelUsage, Outcome, Resume, RunId, RunRequest, StartError, Started, ToolPolicy,
-    ToolStatus, Usage, WarningKind, WorkerSandbox,
+    FailureKind, ImageMediaType, ModelUsage, Outcome, PromptImage, Resume, RunId, RunRequest,
+    StartError, Started, ToolPolicy, ToolStatus, Usage, WarningKind, WorkerSandbox,
 };
 use crate::keystore::{KeyStore, MemoryKeyStore};
 use crate::paths::DataDir;
@@ -145,6 +147,7 @@ fn request(cwd: &Path) -> RunRequest {
         turn_id: Some(TURN.parse().unwrap()),
         cwd: cwd.to_owned(),
         prompt: "Run `echo hello`, then create hello.txt.".into(),
+        images: Vec::new(),
         policy: ToolPolicy::WorkspaceWrite,
         sandbox: Some(sandbox(cwd)),
         account: AccountRef {
@@ -427,6 +430,49 @@ async fn a_resumed_thread_reports_only_what_it_adds() {
     );
 }
 
+/// A resumed thread's images reach `codex exec resume` as `--image=` files in the data folder's
+/// `tmp/`, which are gone once it exits (RYA-191).
+#[tokio::test]
+async fn images_reach_codex_as_files_that_go_when_it_exits() {
+    let fake = Fake::new("resume");
+    let mut resumed = request(&fake.root());
+    resumed.resume = Some(Resume::new(THREAD));
+    resumed.images = vec![PromptImage {
+        media_type: ImageMediaType::Png,
+        data: "iVBORw0KGgo=".into(),
+    }];
+    run(&fake.backend, resumed).await;
+
+    let argv = fake.argv();
+    let [.., image, thread, dash] = &argv[..] else {
+        panic!("{argv:?}");
+    };
+    assert_eq!([thread.as_str(), dash.as_str()], [THREAD, "-"]);
+    let path = Path::new(image.strip_prefix("--image=").unwrap());
+    assert!(path.starts_with(fake.root().join("data/tmp")), "{image}");
+    assert_eq!(path.extension().unwrap(), "png");
+    assert!(!path.parent().unwrap().exists(), "the images go with codex");
+    assert!(
+        !fake.recorded("stdin").contains("png"),
+        "the prompt never names them"
+    );
+}
+
+#[test]
+fn image_files_hold_the_decoded_bytes_in_a_private_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(write_images(dir.path(), &[]).unwrap().is_none());
+    let jpeg = PromptImage {
+        media_type: ImageMediaType::Jpeg,
+        data: "/9j/".into(),
+    };
+    let (folder, paths) = write_images(dir.path(), &[jpeg]).unwrap().unwrap();
+    assert_eq!(paths, [folder.path().join("1.jpg")]);
+    assert_eq!(fs::read(&paths[0]).unwrap(), b"\xff\xd8\xff");
+    let mode = fs::metadata(folder.path()).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700);
+}
+
 #[tokio::test]
 async fn an_api_key_account_gets_only_its_key() {
     let fake = Fake::new("worker");
@@ -560,6 +606,11 @@ async fn requests_codex_can_t_run_are_refused_before_spawning() {
     plan.permission = Some(AgentPermission::Plan);
     assert!(matches!(refuse(plan), StartError::Unsupported(_)));
     assert!(fake.argv().is_empty(), "nothing was spawned");
+    let comma = [PathBuf::from("/Users/a,b/1.png")];
+    assert!(matches!(
+        arguments(&request(&cwd), None, &comma),
+        Err(StartError::Invalid(_))
+    ));
 }
 
 #[test]
