@@ -327,7 +327,7 @@ test("a thread can start with an image alone, titled Image, and nothing to name 
   capabilities = {
     promptImages: { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 },
   };
-  vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1 }));
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1, close() {} }));
   answers["thread/start"] = (p) => ({
     result: {
       thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },

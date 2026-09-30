@@ -1468,6 +1468,31 @@ async fn images_go_before_the_text_as_base64_blocks_and_a_message_of_images_alon
 }
 
 #[tokio::test]
+async fn a_resumed_session_starts_on_images_alone() {
+    let fake = Fake::new("resume");
+    let request = RunRequest {
+        prompt: String::new(),
+        images: vec![PromptImage {
+            media_type: ImageMediaType::Png,
+            data: "iVBORw0KGgo=".into(),
+        }],
+        resume: Some(Resume {
+            session_id: SESSION.into(),
+            usage_totals: Vec::new(),
+        }),
+        ..request(&fake.root())
+    };
+    run(&fake, request).await;
+    assert_eq!(
+        fake.stdin()[0]["message"]["content"],
+        serde_json::json!([{
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
+        }])
+    );
+}
+
+#[tokio::test]
 async fn cancel_interrupts_the_cli_with_sigint() {
     let fake = Fake::new("cancel");
     let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;

@@ -388,7 +388,7 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
 });
 
 test("a pasted image goes with agent/send beside the text, and shows while it's pending", async () => {
-  vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1 }));
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1, close() {} }));
   const promptImages = { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 };
   const { request } = fakeBridge(4, { capabilities: { promptImages } });
   await renderChat();

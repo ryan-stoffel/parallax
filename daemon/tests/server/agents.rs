@@ -722,6 +722,44 @@ async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_a
 }
 
 #[tokio::test]
+async fn an_image_sent_alone_after_the_cli_exits_resumes_the_run() {
+    let dir = temp_dir();
+    let host = Host::start(dir, fake(vec![init("images-2"), end_turn("Done.")]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let params = start_params(project.id, "Tidy the README");
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // The CLI has exited, so this starts a new process on the same session (RYA-202).
+    let png = PromptImage {
+        media_type: ImageMediaType::Png,
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+    };
+    let turn = TurnId::generate();
+    let resumed = client
+        .call::<AgentSend>(AgentSendParams {
+            images: vec![png.clone()],
+            ..send_params(run_id, turn, "")
+        })
+        .await
+        .unwrap();
+    assert_eq!(resumed.run.status, AgentStatus::Running);
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let [image_id] = turn_images(&items(&events), Some(turn))[..] else {
+        panic!("the resumed turn lists its one image");
+    };
+    let served = client
+        .call::<AgentImage>(AgentImageParams { run_id, image_id })
+        .await
+        .unwrap();
+    assert_eq!(served, png);
+    host.server.stop().await;
+}
+
+#[tokio::test]
 async fn cancel_stops_a_running_worker() {
     let dir = temp_dir();
     let host = Host::start(dir, fake(hang()));
