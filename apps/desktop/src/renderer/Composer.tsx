@@ -2,9 +2,12 @@ import {
   ArrowUp,
   File,
   FilePen,
+  Hand,
   ListChecks,
   LoaderCircle,
   Paperclip,
+  ShieldOff,
+  Sparkles,
   Square,
   X,
 } from "lucide-react";
@@ -22,21 +25,39 @@ import { ModelMenu } from "./ModelMenu";
 import { backends, models, type Model, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
 
-// The permissions wispd takes (RYA-97), all inside the worker sandbox (0013). Asking first and
-// leaving the sandbox wait on RYA-125. Plan isn't read-only: its commands can still write.
+// Claude Code's permission modes, under its own names (0027). Every mode but Bypass keeps a
+// worker in its sandbox (0013). wisp can't show Manual's approval requests yet, so they're denied.
 const accessOptions: Record<AgentPermission, PickerOption> = {
+  auto: {
+    value: "auto",
+    label: "Auto",
+    icon: <Sparkles />,
+    description: "A classifier approves or blocks each action instead of asking you.",
+  },
+  manual: {
+    value: "manual",
+    label: "Manual",
+    icon: <Hand />,
+    description: "Asks before edits and commands. Until wisp shows those requests, they're denied.",
+  },
   edit: {
     value: "edit",
-    label: "Edit",
+    label: "Accept Edits",
     icon: <FilePen />,
-    description: "Edits files and runs commands in its sandbox without stopping to ask.",
+    description: "Accepts file edits without asking.",
   },
   plan: {
     value: "plan",
     label: "Plan",
     icon: <ListChecks />,
+    description: "Explores and writes a plan without editing files.",
+  },
+  bypass: {
+    value: "bypass",
+    label: "Bypass Permissions",
+    icon: <ShieldOff />,
     description:
-      "Writes a plan instead of editing. Its file tools can't change files, but its commands still can.",
+      "Skips every permission check, with no sandbox, like Claude Code on your own machine.",
   },
 };
 
@@ -163,8 +184,6 @@ export interface ComposerProps {
    * provider, since a session can't move to another CLI.
    */
   started?: Pick<AgentRun, "model" | "effort" | "permission">;
-  /** A no-write run, such as a Project's coordinator (0024): its access is fixed, so none is offered or sent. */
-  noWrite?: boolean;
   /** Why the model, effort, and access can't change right now, which turns them off. */
   optionsDisabled?: string;
 }
@@ -183,7 +202,6 @@ export function Composer({
   footer,
   backend,
   started,
-  noWrite,
   optionsDisabled,
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
@@ -198,7 +216,7 @@ export function Composer({
   const [pickedPermission, setPermission] = useState<AgentPermission>();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const run = backend === undefined ? undefined : backends[backend];
-  const permissions = noWrite ? [] : (run?.permissions ?? []);
+  const permissions = run?.permissions ?? [];
   const runModels = models.filter((m) => m.provider === run?.provider);
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
@@ -222,8 +240,7 @@ export function Composer({
       ...(effort !== startedEffort && { effort }),
       ...(permission !== startedPermission && { permission }),
     };
-  else if (run)
-    options = { ...(model && { model: model.id }), effort, ...(!noWrite && { permission }) };
+  else if (run) options = { ...(model && { model: model.id }), effort, permission };
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
   const canSend = !!onSend && !disabledReason && text.trim() !== "";
