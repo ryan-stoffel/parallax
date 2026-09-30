@@ -87,7 +87,7 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
         >
           <PanelLeft />
         </IconButton>
-        <span className="flex-1 text-[13px] font-medium text-muted-foreground">wisp</span>
+        <span className="flex-1 text-[13px] font-bold text-muted-foreground">wisp</span>
         <IconButton label="New thread" keys="N" onClick={onNewThread}>
           <SquarePen />
         </IconButton>
