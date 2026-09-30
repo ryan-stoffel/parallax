@@ -3,7 +3,8 @@
 // bundles change. Quitting the app or Ctrl-C stops everything. The sidebar's
 // Update button asks this script, over Electron's IPC channel, to pull develop,
 // and this script tells the app, over the same channel, when develop has commits
-// to pull: it checks on start, every five minutes, and after each update.
+// to pull: it checks on start, every minute, when a wisp window comes to the
+// front, and after each update.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, watch } from "node:fs";
 import { homedir } from "node:os";
@@ -67,6 +68,8 @@ function restartApp() {
   });
   child.send({ behind });
   child.on("message", (message) => {
+    // Main asks when a window comes to the front, which needn't follow a check that just started.
+    if (message === "check" && Date.now() - checkedAt > 10_000) check();
     if (message !== "update") return;
     if (!updating) {
       // Those commits are being pulled, so nothing is on offer until the check after it.
@@ -142,12 +145,14 @@ async function update() {
 
 // What the Update button offers: the commits origin/develop has that this checkout lacks.
 let behind = 0;
-// The check in flight.
+// The check in flight, and when the last one started.
 let checking;
+let checkedAt = 0;
 
 /** Counts them (scripts/behind.mjs) in the background, unless a check or an update is running. */
 function check() {
   if (updating || checking) return;
+  checkedAt = Date.now();
   checking = commitsBehind((args) => run("git", args, "../..", true)).then((count) => {
     checking = undefined;
     // An update that started meanwhile is pulling them.
@@ -163,7 +168,7 @@ function offer(count) {
 }
 
 check();
-setInterval(check, 5 * 60_000);
+setInterval(check, 60_000);
 
 /**
  * Runs a command in the repo root (or `cwd`), echoing its output. Never rejects. A background run

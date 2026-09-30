@@ -90,6 +90,8 @@ process.on("message", (message) => {
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send("wisp:behind", behind);
 });
 ipcMain.handle("wisp:behind", () => behind);
+// A window coming to the front asks dev.mjs to check now, while it's there to ask.
+app.on("browser-window-focus", () => process.connected && process.send?.("check"));
 
 // Names a new thread and its branch from its first prompt (see namer.ts).
 const namer = createNamer(path.join(app.getPath("userData"), "models"));
