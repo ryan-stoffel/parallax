@@ -1,6 +1,6 @@
 # 0029: App packaging and release builds
 
-- Status: accepted
+- Status: accepted; versions, macOS signing, and the update metadata superseded by [0030](0030-release-versions.md)
 - Date: 2026-09-30
 - Issue: RYA-66
 
@@ -11,7 +11,7 @@ The releases 0028 publishes carried only notes. The app needs `wispd` inside its
 ## Decision
 
 - **Tool: electron-builder**, a dev dependency of `apps/desktop/` configured in `electron-builder.yml`. It runs after `vp build` and `vp pack`, which still produce `dist/`. 0022 rejected Electron Forge for tying the build to packaging.
-- **One installer per OS.** More formats (a zip for auto-update, deb and rpm) are config lines for later.
+- **One installer per OS.** [0030](0030-release-versions.md) adds a macOS zip for the updater. More formats (deb and rpm) are config lines for later.
 
   | Target | Runner | Installer | `wispd` |
   | --- | --- | --- | --- |
@@ -23,20 +23,19 @@ The releases 0028 publishes carried only notes. The app needs `wispd` inside its
 
 - **Each installer is built on its own runner**, with no cross-compiling. `scripts/ci/package-app` builds `wispd --release` for the runner's target, then `dist/`, then the installer, into `apps/desktop/release/`. It puts `wispd` (`wispd.exe`) in the package's resources folder, through `extraResources`, and the same script builds an installer on a developer's machine.
 - **Native modules** are unpacked from `app.asar`: `node-pty` (its prebuilds and macOS `spawn-helper`), `node-llama-cpp`, and the `@node-llama-cpp/<platform>` package holding its llama.cpp binary. Only `node-pty` and `node-llama-cpp` are `dependencies`; everything the bundles inline is a dev dependency, so electron-builder doesn't copy it into the package too. pnpm's strict `node_modules` needed no workaround, because electron-builder reads pnpm's layout itself.
-- **Version** is stamped at build time with `-c.extraMetadata.version` and never committed: `0.0.0-nightly.<YYYYMMDD>.g<sha7>` on `develop` and `0.0.0-release.<YYYYMMDD>.g<sha7>` on `main`, the tag's date and sha as a semver prerelease. The `g` keeps a sha made of digits from becoming a numeric identifier, which semver forbids with a leading zero. A local build is `0.0.0-local`.
-- **Builds are unsigned.** No signing or notarization code exists; `package-app` sets `CSC_IDENTITY_AUTO_DISCOVERY=false` unless it is already set, so a local build doesn't pick up a Developer ID from the keychain. electron-builder's own `CSC_*` behavior is otherwise untouched, for RYA-65. An unsigned macOS arm64 app launches without ad-hoc signing. Known limitation: Windows Smart App Control, which clean Windows 11 installs start in evaluation mode and many end up with on, blocks an unsigned `wispd.exe` or installer outright, not just with a warning, and a self-signed certificate doesn't pass it. Ryan chose to leave Windows unsigned for now; the Windows installers won't run on machines with it on until RYA-65 signs them.
+- **Version** is stamped at build time with `-c.extraMetadata.version` and never committed. [0030](0030-release-versions.md) sets it (`YYMM.1DDHH.1MMSS`, plus `-nightly` off `main`). A local build is `0.0.0-local`.
+- **Builds are unsigned**, except the macOS release build, which [0030](0030-release-versions.md) signs and notarizes. Without a certificate (`CSC_KEYCHAIN` or `CSC_LINK`), `package-app` sets `CSC_IDENTITY_AUTO_DISCOVERY=false` unless it is already set, so a local build doesn't pick up a Developer ID from the keychain. An unsigned macOS arm64 app launches without ad-hoc signing. Known limitation: Windows Smart App Control, which clean Windows 11 installs start in evaluation mode and many end up with on, blocks an unsigned `wispd.exe` or installer outright, not just with a warning, and a self-signed certificate doesn't pass it. Ryan chose to leave Windows unsigned for now; the Windows installers won't run on machines with it on until RYA-65 signs them.
 - **`release.yml`** is a `plan` job, a `build` matrix of the five runners, and a `publish` job:
-  - `plan` computes 0028's tag (from the commit's date and sha) and the version, and finds out whether the release exists. If it does, nothing else runs, so a re-run of a published commit is cheap.
-  - `build` runs `package-app` on each runner and uploads the installer as a workflow artifact. It runs no tests or lint: the PR that landed the commit already passed CI.
-  - `publish` needs every build, so a failed build publishes nothing. It creates the release with 0028's tag, notes, and prerelease or Latest flag, attaching the five installers and a `SHA256SUMS` file in one `gh release create`. Only this job has `contents: write`.
+  - `plan` computes the version and tag (0030, from the commit's time) and finds out whether the release exists. If it does, nothing else runs, so a re-run of a published commit is cheap.
+  - `build` runs `package-app` on each runner and uploads the installer and its update metadata as a workflow artifact. It runs no tests or lint: the PR that landed the commit already passed CI.
+  - `publish` needs every build, so a failed build publishes nothing. It creates the release with 0028's notes and prerelease or Latest flag, attaching the installers, 0030's update files, and a `SHA256SUMS` file in one `gh release create`. Only this job has `contents: write`.
   - `workflow_dispatch` runs `plan` and `build` on any branch and never publishes, to prove the pipeline before merge. Its installers stay in the run's artifacts.
-- **The app's updater is unchanged.** It still follows a channel's branch by git (RYA-204). Reading these releases is RYA-68.
+- **The app's updater is unchanged.** It still follows a channel's branch by git (RYA-204). Reading these releases is RYA-68, against the metadata 0030 adds.
 
 ## Still open
 
-- RYA-64: signing, and the real versions and their policy.
-- RYA-65: the certificates and secrets that signing and notarization need.
-- RYA-68: an updater that reads these releases, which will likely want a zip on macOS and the `.blockmap` files.
+- Windows and Linux signing (RYA-64, RYA-65). macOS signing and the versions are 0030's.
+- RYA-68: an updater that reads these releases.
 - RYA-28: bundling `wispd` builds for remote hosts. Releases carry no standalone `wispd`, and an installer holds only its own target's.
 - The app icon is Electron's default.
 
