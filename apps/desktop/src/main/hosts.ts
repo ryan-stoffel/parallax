@@ -1,10 +1,12 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import path from "node:path";
 
 import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
 import {
   UPDATE_CHANNELS,
+  type ConnectionState,
   type RendererMethod,
   type RpcResponse,
   type SshHost,
@@ -23,7 +25,7 @@ import {
   writeTerminal,
   type Command,
 } from "./terminal";
-import { findWispd } from "./wispd";
+import { dataDir, findWispd, replaceServe, wispdVersion } from "./wispd";
 
 // The methods the renderer may call, checked at runtime because the renderer is untrusted
 // (0022). Typed so that adding a method to the protocol fails the type-check until it is here.
@@ -80,13 +82,7 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
  */
 export function startHosts(onUpdateChannel: (channel: UpdateChannel) => void): void {
   addConnection("local", () => {
-    const wispd = findWispd({
-      env: process.env,
-      platform: process.platform,
-      packaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      appPath: app.getAppPath(),
-    });
+    const wispd = localWispd();
     return wispd === undefined ? undefined : [wispd, "attach"];
   });
   try {
@@ -208,6 +204,51 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
   return loginCommand(cli, path, ssh);
 }
 
+/** The local `wispd` binary (wispd.ts). */
+const localWispd = () =>
+  findWispd({
+    env: process.env,
+    platform: process.platform,
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  });
+
+/**
+ * How often this launch has compared the local `wispd serve`'s version with its wispd's: at most
+ * twice, so a re-attach to a serve still shutting down gets one more try.
+ */
+let serveChecks = 0;
+
+/**
+ * After an update, the local `wispd serve` may still be the previous app's, since attach reuses a
+ * running one (0010). A packaged app replaces it when its version differs from the bundled
+ * wispd's, older or newer (a move back to Standard), and reconnects, so attach starts the bundled
+ * one. Only a serve a packaged wisp started is replaced (`replaceServe`), never a dev checkout's or
+ * a wispd on PATH. Not on Windows, whose installer stops every process running from the app's
+ * folder, `wispd.exe` included.
+ */
+async function replaceOtherServe(state: ConnectionState): Promise<void> {
+  if (!app.isPackaged || serveChecks >= 2 || process.platform === "win32") return;
+  const running =
+    state.status === "connected"
+      ? state.wispd
+      : state.status === "failed"
+        ? state.error.wispd
+        : undefined;
+  if (running === undefined) return;
+  serveChecks++;
+  const wispd = localWispd();
+  const bundled = wispd === undefined ? undefined : await wispdVersion(wispd);
+  const { stopped, why } = await replaceServe(
+    dataDir(process.env, process.platform, homedir()),
+    running,
+    bundled,
+  );
+  console.log(`wisp: ${why}`);
+  if (stopped) connections.get("local")?.retry();
+}
+
 /** Starts a host's connection, replacing any it had. */
 function addConnection(hostId: string, command: () => string[] | undefined, destination?: string) {
   connections.get(hostId)?.dispose();
@@ -217,7 +258,9 @@ function addConnection(hostId: string, command: () => string[] | undefined, dest
     clientVersion: app.getVersion(),
     onState: (state) => {
       // A replaced or removed connection has nothing more to say.
-      if (connections.get(hostId) === created) broadcast("wisp:state", hostId, state);
+      if (connections.get(hostId) !== created) return;
+      broadcast("wisp:state", hostId, state);
+      if (hostId === "local") void replaceOtherServe(state);
     },
   });
   connections.set(hostId, created);

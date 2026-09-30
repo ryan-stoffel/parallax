@@ -16,7 +16,8 @@ export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 /**
  * The Updates setting: nightly follows every push to develop, release only released code (main).
- * scripts/channels.mjs holds the branch each follows.
+ * A packaged app takes the channel's GitHub releases (0028); under `pnpm dev`, the branch that
+ * scripts/channels.mjs names.
  */
 export const UPDATE_CHANNELS = ["nightly", "release"] as const;
 export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
@@ -30,19 +31,22 @@ export interface WispBridge {
   setThemeSource(preference: ThemePreference): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
-  /** Whether `update` can run: the app runs under `pnpm dev`, from a checkout. */
+  /**
+   * Whether `update` can run: in a packaged app, which installs releases (RYA-68), or under
+   * `pnpm dev`, from a checkout (RYA-204).
+   */
   updatable: boolean;
   /**
-   * Moves the checkout to the update channel's branch and rebuilds what changed; the app then
-   * reloads itself. Resolves to one line for people, such as "Up to date" or why it failed.
+   * Packaged: installs the downloaded release and relaunches, or else checks now. Under `pnpm
+   * dev`: moves the checkout to the update channel's branch and rebuilds what changed; the app
+   * then reloads itself. Resolves to one line for people, such as "Up to date" or why it failed.
    */
   update(): Promise<string>;
   /**
-   * Calls `listener` with how many commits the channel's branch has that `update` would take, now
-   * and on every change; 0 when there's no update. Only changes while `updatable`. Returns the
-   * unsubscribe function.
+   * Calls `listener` with what the Update button shows, now and on every change. Only changes
+   * while `updatable`. Returns the unsubscribe function.
    */
-  onUpdateReady(listener: (commits: number) => void): () => void;
+  onUpdateState(listener: (state: UpdateState) => void): () => void;
   /** The saved update channel; nightly until one is chosen. */
   updateChannel(): Promise<UpdateChannel>;
   /**
@@ -117,6 +121,14 @@ export interface WispBridge {
   onTerminal(listener: (message: TerminalMessage) => void): () => void;
 }
 
+/** What the sidebar's Update button shows. */
+export type UpdateState = {
+  /** What `update` would install, such as "3 commits to apply"; undefined while nothing is. */
+  ready?: string;
+  /** One line on the button about the last check, such as a download or an error. */
+  note?: string;
+};
+
 export type TerminalMessage = { type: "data"; data: string } | { type: "exit"; exitCode: number };
 
 /** A thread's name: a `title` for lists, and a `slug` to name its worktree branch `wisp/<slug>`. */
@@ -173,6 +185,8 @@ export type ConnectionError = {
     | "sshSetup";
   /** For people: what went wrong and how to fix it. */
   message: string;
+  /** wispd's version, when it refused the handshake. */
+  wispd?: string;
   /** How `wispd attach` exited, or ssh for a host. */
   exitCode?: number | null;
   /** The end of attach's stderr, and ssh's for a host, if they wrote any. */

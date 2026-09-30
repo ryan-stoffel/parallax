@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { WispBridge } from "../preload/bridge";
+import type { UpdateState, WispBridge } from "../preload/bridge";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -23,7 +23,7 @@ afterEach(() => {
   act(() => unmount());
   delete bridge.updatable;
   delete bridge.update;
-  delete bridge.onUpdateReady;
+  delete bridge.onUpdateState;
 });
 
 function renderApp() {
@@ -78,17 +78,20 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   act(() => unmount());
 
   let answer: (text: string) => void = () => {};
-  let ready: (commits: number) => void = () => {};
+  let publish: (state: UpdateState) => void = () => {};
   Object.assign(bridge, {
     updatable: true,
     update: () => new Promise<string>((resolve) => (answer = resolve)),
-    onUpdateReady: (listener: (commits: number) => void) => {
-      ready = listener;
+    onUpdateState: (listener: (state: UpdateState) => void) => {
+      publish = listener;
       return () => {};
     },
   });
   renderApp();
-  act(() => ready(3));
+  // A background check's note, such as a download or an error, is the button's label.
+  act(() => publish({ note: "Can't reach GitHub to check for updates." }));
+  expect(button("Can't reach GitHub to check for updates.")).not.toBeNull();
+  act(() => publish({ ready: "3 commits to apply" }));
   act(() => button("Update ready: 3 commits to apply")!.click());
   // The connection's status line shares the footer.
   const status = () =>
@@ -96,7 +99,7 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   expect(status()).toContain("Updating…");
   expect(button("Update wisp")!.disabled).toBe(true);
   await act(async () => answer("Updated to abc1234"));
-  act(() => ready(0));
+  act(() => publish({}));
   expect(status()).toContain("Updated to abc1234");
   expect(button("Update wisp")!.disabled).toBe(false);
 });
