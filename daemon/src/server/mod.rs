@@ -29,7 +29,6 @@ use setup::Pipe;
 use setup::Socket;
 pub use setup::prepare_data_dir;
 
-use crate::VERSION;
 use crate::agents::{self, Agents};
 use crate::backend::Backend;
 use crate::backend::claude::ClaudeBackend;
@@ -349,7 +348,7 @@ impl Server {
             }
         };
         info!(
-            version = VERSION,
+            version = crate::version(),
             pid = std::process::id(),
             data_dir = %data_dir.root().display(),
             socket = %socket_path.path.display(),

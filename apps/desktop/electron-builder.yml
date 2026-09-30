@@ -35,22 +35,24 @@ asarUnpack:
   - node_modules/node-pty/**
   - node_modules/node-llama-cpp/**
   - node_modules/@node-llama-cpp/**
-# wispd, built for this target, goes in the resources folder, where findWispd looks (WISPD_BIN
-# is set by package-app).
+# wispd, built for this target, and wispd.version, the version it reports (0030), go in the
+# resources folder, where findWispd looks. package-app puts both in target/package-resources.
 extraResources:
-  - from: ${env.WISPD_BIN}
+  - from: ../../target/package-resources
     to: .
 artifactName: wisp-${version}-${os}-${arch}.${ext}
-# The updater installs from the zip; the dmg is for first installs. Signing and notarizing happen
-# only when CSC_KEYCHAIN (or CSC_LINK) and the APPLE_API_* variables are set (release.yml's macOS build): everything
-# in the bundle, wispd included, gets the hardened runtime and a secure timestamp.
+# The updater installs from the zip; the dmg is for first installs. Signing happens only when
+# CSC_KEYCHAIN (or CSC_LINK) is set (release.yml's macOS build): everything in the bundle, wispd
+# included, gets the hardened runtime and a secure timestamp. electron-builder notarizes only when
+# the APPLE_API_* variables are set too, which release.yml doesn't do: it notarizes the dmg after
+# publishing (0030).
 mac:
   target: [dmg, zip]
   category: public.app-category.developer-tools
   entitlements: entitlements.mac.plist
   entitlementsInherit: entitlements.mac.plist
-# Signed with the app's identity when there is one. release.yml notarizes and staples it after the
-# build, which changes its bytes, so it stays out of the update metadata (the updater reads the zip).
+# Signed with the app's identity when there is one. The updater reads the zip, so the dmg stays out
+# of the update metadata.
 dmg:
   sign: true
   writeUpdateInfo: false

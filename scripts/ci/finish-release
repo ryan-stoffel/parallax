@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Finishes the release TAG once every build has attached what it could (release.yml's finish job):
+# joins the two Windows builds' <channel>.yml into the one the release carries, then, when every
+# build succeeded, writes SHA256SUMS from the digests GitHub keeps for each file.
+#
+# Arguments: the x64 and arm64 builds' <channel>.yml (either may be missing). Environment: TAG,
+# CHANNEL, ALL_BUILT (true when every build succeeded), GH_TOKEN, and GH_REPO. DRY_RUN=1 prints
+# each write instead of making it, and skips SHA256SUMS, which needs a published release.
+set -euo pipefail
+
+write() {
+  if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
+}
+
+out=$(mktemp -d)
+# electron-updater on Windows reads one <channel>.yml and installs the file whose name has its
+# arch, falling back to the first file. So a list with only x64 would give arm64 machines the x64
+# installer, and the release gets the file only when both builds made one (0030).
+if [ -f "$1" ] && [ -f "$2" ]; then
+  ruby -ryaml -e 'x64 = YAML.load_file(ARGV[0]); x64["files"] += YAML.load_file(ARGV[1])["files"]; File.write(ARGV[2], x64.to_yaml)' \
+    "$1" "$2" "$out/$CHANNEL.yml"
+  cat "$out/$CHANNEL.yml"
+  write release upload "$TAG" "$out/$CHANNEL.yml" --clobber
+else
+  echo "A Windows build made no $CHANNEL.yml, so $TAG has no Windows update metadata yet."
+fi
+
+if [ "$ALL_BUILT" != true ] || [ "${DRY_RUN:-}" = 1 ]; then
+  echo "Not writing SHA256SUMS: not every build succeeded, or this is a dry run."
+  exit 0
+fi
+# The same format as sha256sum's, from GitHub's own digest of each file, so nothing is downloaded.
+gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets | sort_by(.name)[] | select(.name != "SHA256SUMS") | "\(.digest // "none") \(.name)"' |
+  while read -r digest name; do
+    if [[ $digest != sha256:* ]]; then echo "finish-release: no sha256 digest for $name" >&2; exit 1; fi
+    printf '%s  %s\n' "${digest#sha256:}" "$name"
+  done > "$out/SHA256SUMS"
+cat "$out/SHA256SUMS"
+write release upload "$TAG" "$out/SHA256SUMS" --clobber

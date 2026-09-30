@@ -13,9 +13,9 @@ use wisp_protocol::{
 };
 
 use super::Context;
+use crate::images;
 use crate::logging::untrusted;
 use crate::server::Daemon;
-use crate::{VERSION, images};
 
 const SYSTEM_VERSION: &str = "/System/Library/CoreServices/SystemVersion.plist";
 
@@ -40,7 +40,7 @@ pub(crate) fn initialize(
             &IncompatibleProtocolDetail {
                 requested: protocol,
                 supported: ProtocolRange::SUPPORTED,
-                wispd: VERSION.to_owned(),
+                wispd: crate::version().to_owned(),
             },
         ));
     };
@@ -59,7 +59,7 @@ pub(crate) fn initialize(
     );
     let result = InitializeResult {
         protocol: version,
-        wispd: VERSION.to_owned(),
+        wispd: crate::version().to_owned(),
         log_id: daemon.log.id(),
         capabilities: capabilities_advertised(),
         max_frame_bytes: u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX),
@@ -118,7 +118,7 @@ pub(crate) fn health(context: &Context, _: HostHealthParams) -> HostHealthResult
 
 pub(crate) fn version(context: &Context, _: HostVersionParams) -> HostVersionResult {
     HostVersionResult {
-        wispd: VERSION.to_owned(),
+        wispd: crate::version().to_owned(),
         protocol: ProtocolRange::SUPPORTED,
         os: context.daemon.os.clone(),
         arch: std::env::consts::ARCH.to_owned(),

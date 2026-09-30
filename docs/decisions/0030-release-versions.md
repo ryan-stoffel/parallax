@@ -1,6 +1,6 @@
 # 0030: Release versions, update metadata, and macOS signing
 
-- Status: accepted; supersedes in part [0028](0028-release-channels.md) (tags) and [0029](0029-app-packaging.md) (versions, unsigned macOS builds, one installer per OS)
+- Status: accepted; supersedes in part [0028](0028-release-channels.md) (tags) and [0029](0029-app-packaging.md) (versions, unsigned macOS builds, one installer per OS). RYA-211 moved `wispd`'s version out of the binary and notarization after publishing (below).
 - Date: 2026-09-30
 - Issue: RYA-206 (absorbs RYA-205)
 
@@ -29,6 +29,13 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
 - Two commits in the same second get the same version. The second one's release is then skipped as already published.
 - A local build is `0.0.0-local` (0029).
 
+### `wispd`'s version (RYA-211)
+
+- `wispd --version`, the protocol's `initialize` and `host/version`, and the `LaunchAgent`'s probe report the app's version, as before, but `wispd` reads it at run time. `package-app` writes it to `wispd.version`, one line beside the bundled `wispd` (`Wisp.app/Contents/Resources/` on macOS, `resources/` on Windows and Linux), and `wispd::version()` reads that file beside its own executable (`current_exe`, symlinks resolved). Without the file, as in a cargo build, it reports `Cargo.toml`'s placeholder.
+- Before, `WISP_VERSION` was compiled in (`option_env!`), so every release rebuilt `wispd` even when no Rust changed. Now one `wispd` build is packaged into any app version, and `release.yml` caches it (0029).
+- `main` reads the version first thing, and it's kept for the life of the process. So a `serve` that outlives an app update still reports the version it started as, and the app's check after an update (RYA-68: the running serve's version against `<bundled wispd> --version`) still sees them differ and replaces it, as it did when the version was compiled in.
+- On macOS the file is in the bundle before electron-builder signs it, so it is a sealed resource and `codesign --verify --strict` covers it.
+
 ### Channels
 
 - 0028's contract stays: nightly is a GitHub prerelease, and standard is marked Latest. `electron-updater` names the standard channel `latest`, and the version's prerelease identifier names the other: `nightly`.
@@ -56,30 +63,31 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
   | Linux x86_64 | `latest-linux.yml` / `nightly-linux.yml` | the AppImage (its blockmap is inside it) |
   | Linux arm64 | `latest-linux-arm64.yml` / `nightly-linux-arm64.yml` | the AppImage |
 
-- **macOS builds a zip as well as the dmg.** The zip is what the updater installs. The dmg is for first installs and stays out of the metadata (`dmg.writeUpdateInfo: false`), because stapling it after the build changes its bytes.
-- **Windows:** both Windows runners write the same `<channel>.yml`. The `publish` job joins their `files` lists into one, since `NsisUpdater` picks the file whose name contains its arch. Each build is downloaded into its own folder so neither copy overwrites the other. Any other file name two builds share fails the job.
-- Each release attaches every installer, the zip, the blockmaps, and the channel's four `.yml` files, and `SHA256SUMS` covers all of them.
+- **macOS builds a zip as well as the dmg.** The zip is what the updater installs. The dmg is for first installs and stays out of the metadata (`dmg.writeUpdateInfo: false`).
+- **Windows:** both Windows runners write the same `<channel>.yml`. Neither attaches it: each uploads it as a small workflow artifact, and `release.yml`'s `finish` job, after all builds, joins their `files` lists into one and attaches that, since `NsisUpdater` picks the file whose name contains its arch. It does so only when both builds made one: `NsisUpdater` falls back to the first file, so a list with only x64 would give arm64 machines the x64 installer. Every other file name is unique to its build.
+- Each release attaches every installer, the zip, the blockmaps, and the channel's four `.yml` files. `SHA256SUMS` covers all of them and is written last, from GitHub's own digest of each file, once every build succeeded.
 
 ### macOS signing and notarization
 
 - **Only the macOS build signs, on every run of `release.yml`:** pushes to `develop` and `main`, and `workflow_dispatch`, which proves it on a branch but never publishes.
-  - The secrets from RYA-65 go only to the two macOS steps: `CSC_LINK` (a base64 `.p12`), `CSC_KEY_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`.
-  - The `.p8` key is written to a file in `$RUNNER_TEMP` with mode 600 and passed as `APPLE_API_KEY`.
+  - The secrets from RYA-65 go only to two steps: `CSC_LINK` (a base64 `.p12`) and `CSC_KEY_PASSWORD` to the macOS build's package step, and `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER` to the `notarize` job's notarize step.
+  - The `.p8` key is written to a file in `$RUNNER_TEMP` with mode 600 and removed after use.
 - The workflow imports the certificate into a keychain of its own, in `$RUNNER_TEMP`, and names it in `CSC_KEYCHAIN`. electron-builder 26.15.3 can import `CSC_LINK` itself, but it then unlocks that keychain with the certificate's password instead of the keychain's, so the build fails.
-- electron-builder signs with the Developer ID Application certificate from that keychain. It signs every binary in the bundle with the hardened runtime and a secure timestamp. That covers `Contents/Resources/wispd`, node-pty's `pty.node` and `spawn-helper`, and node-llama-cpp's addon and dylibs, since `@electron/osx-sign` walks all of `Contents/`. It then notarizes the app with the API key and staples it, before it builds the dmg and zip. It also signs the dmg.
+- electron-builder signs with the Developer ID Application certificate from that keychain. It signs every binary in the bundle with the hardened runtime and a secure timestamp. That covers `Contents/Resources/wispd`, node-pty's `pty.node` and `spawn-helper`, and node-llama-cpp's addon and dylibs, since `@electron/osx-sign` walks all of `Contents/`. It then builds the dmg and zip, and signs the dmg. It doesn't notarize: the build has no `APPLE_API_*` variables.
 - **Entitlements** (`apps/desktop/entitlements.mac.plist`, for the app and everything in it) are `com.apple.security.cs.allow-jit` only, for V8. Everything the app loads is signed with its own Team ID, so library validation passes without `disable-library-validation`. Spawning processes (node-pty's shell, `wispd`, and the agents `wispd` starts) needs no entitlement.
-- After the build, the job:
-  1. notarizes the dmg with `notarytool` and prints Apple's log if it isn't accepted
-  2. staples and validates the dmg
-  3. runs `codesign --verify --deep --strict`, `spctl --assess --type execute`, and `stapler validate` on the app
+- The build runs `codesign --verify --deep --strict` on the app and publishes (0029).
+- **Notarization comes after publishing (RYA-211).** It took about 3.5 of the build's 6.7 minutes, and updates don't need it: Squirrel.Mac checks the code signature, and an installed update carries no quarantine flag, so Gatekeeper doesn't assess it. Notarizing a disk image gets tickets for the image and everything in it, the app included. So `release.yml`'s `notarize` job, after the builds, takes the published dmg (the run's artifact on `workflow_dispatch`) and:
+  1. notarizes it with `notarytool` and prints Apple's log if it isn't accepted
+  2. runs `spctl --assess` on the dmg, then `codesign --verify --deep --strict` and `spctl --assess --type execute` on the app inside it
 
-  Any failure fails the job, so no release is published.
-- **`package-app` signs only when `CSC_KEYCHAIN` or `CSC_LINK` is set.** Otherwise it still sets `CSC_IDENTITY_AUTO_DISCOVERY=false`, so a local build never signs with an identity in the login keychain. It leaves auto-discovery on when a certificate is given, because without it electron-builder finds no identity and silently skips signing. Notarization runs only when the `APPLE_API_*` variables are set.
+  A failure fails the job, which alerts, and leaves the release published. Until the ticket exists, a dmg downloaded by hand may get a Gatekeeper prompt on first open.
+- **Nothing is stapled.** Stapling changes the dmg's bytes, so it would mean replacing the published file, which leaves the release briefly without a dmg, and `SHA256SUMS`. Without a staple, Gatekeeper looks the ticket up online on first open.
+- **`package-app` signs only when `CSC_KEYCHAIN` or `CSC_LINK` is set.** Otherwise it still sets `CSC_IDENTITY_AUTO_DISCOVERY=false`, so a local build never signs with an identity in the login keychain. It leaves auto-discovery on when a certificate is given, because without it electron-builder finds no identity and silently skips signing. electron-builder notarizes only when the `APPLE_API_*` variables are set, which `release.yml` no longer does.
 - Windows and Linux stay unsigned (RYA-65; 0029's Smart App Control limitation stands).
 
 ## Consequences
 
-- The macOS build takes longer: Apple's notarization service runs twice (app and dmg), usually a few minutes each. An outage there fails the release.
+- Apple's notarization service runs once per release, on the dmg, after it is published. An outage there fails the `notarize` job but not the release or updates; fresh downloads prompt until it is re-run.
 - Squirrel.Mac requires each update to be signed like the running app. Changing the signing certificate's Team ID would strand installed apps on the old one.
 - `app.getVersion()` and `wispd`'s reported version are these date versions. Nothing in the code parses them.
 - A release carries 13 files plus `SHA256SUMS` (0029's five installers, the zip, three blockmaps, four `.yml`). Each release is about 175 MB bigger for the zip.

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Attaches this build's installer and update metadata, from apps/desktop/release/, to the release
+# TAG (0028, 0029), creating the release if no other build has yet. Each release.yml build runs it
+# as soon as its own package is ready, so one OS never waits for another.
+#
+# Environment: TAG, CHANNEL (nightly or latest), GITHUB_SHA (the tag's commit), NOTES_START (the
+# channel's previous release, where the notes start; empty for none), and GH_TOKEN and GH_REPO for
+# gh. DRY_RUN=1 prints each write instead of making it (workflow_dispatch).
+set -euo pipefail
+
+cd "$(dirname "$0")/../../apps/desktop/release"
+
+write() {
+  if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
+}
+
+# The installers, the macOS zip, and the blockmaps; then the channel's update metadata. Both
+# Windows builds write <channel>.yml, so neither attaches it: release.yml's finish job joins them.
+files=()
+for f in wisp-*; do [ -f "$f" ] && files+=("$f"); done
+metadata=()
+for f in "$CHANNEL"*.yml; do [ -f "$f" ] && [ "$f" != "$CHANNEL.yml" ] && metadata+=("$f"); done
+if [ ${#files[@]} = 0 ]; then echo "publish-build: no installer in $PWD" >&2; exit 1; fi
+
+attached() { gh release view "$TAG" --json assets --jq '.assets[].name'; }
+
+if ! existing=$(attached 2> /dev/null); then
+  # Nightly is a prerelease; standard is marked Latest (0028). Notes cover the PRs since the
+  # channel's previous release.
+  args=(--target "$GITHUB_SHA" --generate-notes)
+  if [ "$CHANNEL" = nightly ]; then args+=(--prerelease); else args+=(--latest); fi
+  if [ -n "${NOTES_START:-}" ]; then args+=(--notes-start-tag "$NOTES_START"); fi
+  # Created without files, so two builds racing to create it can't both succeed: GitHub allows one
+  # release per tag, and the loser attaches to the winner's.
+  if write release create "$TAG" "${args[@]}"; then
+    existing=
+  elif existing=$(attached); then
+    echo "Another build created $TAG first."
+  else
+    exit 1
+  fi
+fi
+
+# On a re-run, a build whose files are all attached already has nothing to do.
+missing=0
+for f in "${files[@]}" "${metadata[@]}"; do grep -qxF -- "$f" <<< "$existing" || missing=1; done
+if [ "$missing" = 0 ]; then
+  echo "This build's files are already on $TAG."
+  exit 0
+fi
+
+# The metadata goes last, so an updater never finds it before the files it names. A failed upload
+# fails the job and leaves the metadata off; re-running the job replaces what did arrive.
+write release upload "$TAG" "${files[@]}" --clobber
+if [ ${#metadata[@]} -gt 0 ]; then write release upload "$TAG" "${metadata[@]}" --clobber; fi
