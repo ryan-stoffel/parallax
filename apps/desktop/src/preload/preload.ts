@@ -25,6 +25,12 @@ const bridge: WispBridge = {
   pickFolder: () => ipcRenderer.invoke("wisp:pickFolder") as Promise<string | null>,
   updatable: process.argv.includes("--wisp-updatable"),
   update: () => ipcRenderer.invoke("wisp:update") as Promise<string>,
+  onUpdateReady(listener) {
+    const forward = (_event: unknown, commits: number) => listener(commits);
+    ipcRenderer.on("wisp:behind", forward);
+    void (ipcRenderer.invoke("wisp:behind") as Promise<number>).then(listener);
+    return () => ipcRenderer.removeListener("wisp:behind", forward);
+  },
 
   nameThread: (prompt) => ipcRenderer.invoke("wisp:nameThread", prompt),
 
