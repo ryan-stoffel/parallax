@@ -8,6 +8,7 @@ target/
 # Desktop app
 node_modules/
 apps/desktop/dist/
+apps/desktop/release/
 
 # Env and secrets
 .env

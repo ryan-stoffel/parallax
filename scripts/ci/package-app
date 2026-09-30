@@ -1,0 +1,40 @@
+#!/bin/sh
+# Builds the app's installer for this OS and arch into apps/desktop/release/, unsigned (0029):
+# a release `wispd` for the target, the app's dist/, then electron-builder. WISP_VERSION is the
+# version to stamp into the build (default 0.0.0-local); it is never committed.
+set -eu
+
+cd "$(dirname "$0")/../.."
+set -x
+
+version=${WISP_VERSION:-0.0.0-local}
+# Unsigned (0029): don't pick up a Developer ID from the local keychain. Signing, when RYA-65 adds
+# it, sets CSC_IDENTITY_AUTO_DISCOVERY or CSC_LINK itself.
+export CSC_IDENTITY_AUTO_DISCOVERY=${CSC_IDENTITY_AUTO_DISCOVERY:-false}
+
+# wispd is built for the runner's own arch. Linux ships the static musl build (0023).
+host=$(rustc -vV | sed -n 's/^host: //p')
+arch=${host%%-*}
+triple=$host
+if [ "$(uname -s)" = Linux ]; then
+  triple=$arch-unknown-linux-musl
+  rustup target add "$triple"
+fi
+cargo build --release --locked -p wispd --target "$triple"
+
+case $arch in
+  aarch64) builder_arch=--arm64 ;;
+  x86_64) builder_arch=--x64 ;;
+  *) echo "package-app: no installer for $arch" >&2; exit 1 ;;
+esac
+exe=
+case $host in *-windows-*) exe=.exe ;; esac
+
+cd apps/desktop
+node --version
+pnpm --version
+pnpm install --frozen-lockfile
+pnpm build
+# electron-builder.yml copies WISPD_BIN, relative to apps/desktop, into the app's resources.
+WISPD_BIN=../../target/$triple/release/wispd$exe pnpm exec electron-builder \
+  --publish never "$builder_arch" -c.extraMetadata.version="$version"
