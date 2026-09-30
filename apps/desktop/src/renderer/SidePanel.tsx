@@ -86,11 +86,15 @@ export function SidePanel({
     setActive(s);
   };
   // Closing the shown tab shows the one after it, or before it; closing the last shows the list.
+  // Focus moves to the shown tab, or to + with none shown, so it stays in the panel, where the
+  // list's letters work.
   const closeView = (s: Surface) => {
     const i = tabs.indexOf(s);
     const rest = tabs.toSpliced(i, 1);
+    const next = s === active ? rest[Math.min(i, rest.length - 1)] : active;
     setTabs(rest);
-    if (s === active) setActive(rest[Math.min(i, rest.length - 1)]);
+    setActive(next);
+    document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
   };
   const viewOf = (s: Surface) =>
     s.name === "Agents" && agents ? (
@@ -122,22 +126,16 @@ export function SidePanel({
     >
       <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
         {leading}
-        <div
-          role="tablist"
-          aria-label="Open views"
-          className="flex min-w-0 gap-0.5 overflow-x-auto"
-        >
+        <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
           {tabs.map((s) => (
-            <div
+            <li
               key={s.name}
               className={`flex shrink-0 items-center rounded-lg ${s === active ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
             >
               <button
                 type="button"
-                role="tab"
                 id={`side-panel-tab-${s.key}`}
-                aria-selected={s === active}
-                aria-controls={`side-panel-view-${s.key}`}
+                aria-current={s === active ? "true" : undefined}
                 onClick={() => setActive(s)}
                 className="flex items-center gap-1.5 py-1 pl-2 text-[13px]"
               >
@@ -153,10 +151,14 @@ export function SidePanel({
               >
                 <X />
               </button>
-            </div>
+            </li>
           ))}
-        </div>
-        <IconButton label="Open a view" onClick={() => setActive(undefined)}>
+        </ul>
+        <IconButton
+          id="side-panel-open-view"
+          label="Open a view"
+          onClick={() => setActive(undefined)}
+        >
           <Plus />
         </IconButton>
         <div className="ml-auto flex items-center gap-0.5">
@@ -178,14 +180,7 @@ export function SidePanel({
         </div>
       </TopBar>
       {tabs.map((s) => (
-        <div
-          key={s.name}
-          role="tabpanel"
-          id={`side-panel-view-${s.key}`}
-          aria-labelledby={`side-panel-tab-${s.key}`}
-          hidden={s !== active}
-          className="flex min-h-0 flex-1 flex-col"
-        >
+        <div key={s.name} hidden={s !== active} className="flex min-h-0 flex-1 flex-col">
           {viewOf(s)}
         </div>
       ))}

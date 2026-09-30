@@ -7,7 +7,7 @@ import { describeError } from "./errors";
 import { age } from "./Sidebar";
 
 /** Applies one of a Project's events to its context files: a changed file joins or replaces its row, by path. */
-export function applyContextEvent(files: ContextFile[], event: WispEvent): ContextFile[] {
+function applyContextEvent(files: ContextFile[], event: WispEvent): ContextFile[] {
   if (event.kind !== "context.changed") return files;
   const rest = files.filter((f) => f.path !== event.file.path);
   return [...rest, event.file].sort((a, b) => (a.path < b.path ? -1 : 1));
@@ -17,7 +17,7 @@ export function applyContextEvent(files: ContextFile[], event: WispEvent): Conte
  * A Project's shared context files (0005), by path, kept live: `context/list`, then the Project's
  * `context.changed` events, starting over on `resync`. Loads only while `connected`.
  */
-export function useProjectContext(hostId: string, project: string, connected: boolean) {
+function useProjectContext(hostId: string, project: string, connected: boolean) {
   const [files, setFiles] = useState<ContextFile[]>([]);
   const [error, setError] = useState<string>();
 
