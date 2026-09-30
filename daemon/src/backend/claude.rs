@@ -9,13 +9,19 @@
 //! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
 //!   also keeps the file tools out of Claude Code's shared temp folder (RYA-176). As a second
 //!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
-//!   [`FailureKind::PolicyViolation`]. A coordinator's run also gets wispd's own MCP tools
-//!   (0019): `--mcp-config` with only the `wispd mcp` server, and `--allowedTools` with exactly
-//!   [`crate::mcp::ALLOWED_TOOLS`], which `dontAsk` would otherwise deny. `--strict-mcp-config`
-//!   still keeps every other MCP server out, and those tools are all `system/init` may add.
+//!   [`FailureKind::PolicyViolation`].
+//! - **A coordinator**, a no-write run with wispd's own MCP tools attached (0019), is full Claude
+//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `wispd mcp`
+//!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
+//!   with [`crate::mcp::ALLOWED_TOOLS`], so wispd's tools work in every mode. Its user and
+//!   project settings, hooks, skills, plugins, and subagents all load, as in a terminal. As a
+//!   second check, a coordinator whose `system/init` reports another permission mode fails with
+//!   [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
-//!   [`worker_permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
-//!   each writable folder:
+//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
+//!   each writable folder. In [`AgentPermission::Bypass`] a worker is full Claude Code instead,
+//!   as on the user's own machine (0027): only its permission mode and `--add-dir`, with no
+//!   sandbox, and its `system/init` may list any tool. Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
@@ -30,7 +36,7 @@
 //!
 //!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`],
 //!   reports a Claude Code older than [`WORKER_MIN_VERSION`], or reports a permission mode
-//!   other than the one it asked for ([`worker_permission_mode`]), fails with
+//!   other than the one it asked for ([`permission_mode`]), fails with
 //!   [`FailureKind::PolicyViolation`].
 //!
 //!   Only macOS and Linux run workers, with the same settings. On Linux,
@@ -90,12 +96,13 @@
 //! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it wispd
 //! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
 //! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
-//! it. No run inherits [`SCRUB_ENV`]; a no-write run sets it, so the CLI's own subprocesses
-//! don't get the key. A worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed
+//! it. No run inherits [`SCRUB_ENV`]; a no-write run other than a coordinator sets it, so the
+//! CLI's own subprocesses don't get the key. A worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed
 //! commands only: the helpers Claude Code runs outside the sandbox, such as `git` and `rg`, still
 //! inherit it.
 //!
-//! A project's `env` block can still set variables for a worker (0004, #134), so the output is
+//! A project's `env` block can still set variables for a worker, and a coordinator or a bypass
+//! worker loads the repository's settings (0004, #134, 0027), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
 //! a `result` whose `modelUsage` names a provider other than `firstParty`, kill the CLI's process
 //! group at once and fail the run with [`FailureKind::UnexpectedApiKey`].
@@ -152,9 +159,10 @@ pub const BASE_ARGS: &[&str] = &[
     "stream-json",
 ];
 
-/// [`ToolPolicy::NoWrite`]'s fixed arguments, as 0004 has them: read-only built-in tools, only
-/// the user's settings (so no project `env` block or hooks), no MCP servers but wispd's, and
-/// every call that would prompt denied. [`arguments`] adds [`no_write_settings`] after them.
+/// [`ToolPolicy::NoWrite`]'s fixed arguments for a run that isn't a coordinator, as 0004 has
+/// them: read-only built-in tools, only the user's settings (so no project `env` block or hooks),
+/// no MCP servers, and every call that would prompt denied. [`arguments`] adds
+/// [`no_write_settings`] after them.
 pub const NO_WRITE_ARGS: &[&str] = &[
     "--tools",
     "Read,Glob,Grep",
@@ -165,13 +173,14 @@ pub const NO_WRITE_ARGS: &[&str] = &[
     "dontAsk",
 ];
 
-/// The `--settings` a no-write run gets: hooks off (0004), and no `Read` under Claude Code's
-/// shared temp folder, `/tmp/claude-<uid>` in both spellings ([`commands_temp`]), which holds
-/// every session's files and which Claude Code otherwise lets it read outside its cwd (RYA-176).
-/// 0013 hides the same folder from workers. A `Read` rule covers `Glob` and `Grep` too. The
-/// folder is always in `/tmp`, because no no-write run gets [`TEMP_ENV`]: every agent CLI starts
-/// from wispd's allowlisted environment (`agents::worker::agent_environment`, 0014), which drops
-/// an inherited one, and only a worker has one injected.
+/// The `--settings` a no-write run other than a coordinator gets: hooks off (0004), and no `Read`
+/// under Claude Code's shared temp folder, `/tmp/claude-<uid>` in both spellings
+/// ([`commands_temp`]), which holds every session's files and which Claude Code otherwise lets it
+/// read outside its cwd (RYA-176). 0013 hides the same folder from workers. A `Read` rule covers
+/// `Glob` and `Grep` too. The folder is always in `/tmp`, because no no-write run gets
+/// [`TEMP_ENV`]: every agent CLI starts from wispd's allowlisted environment
+/// (`agents::worker::agent_environment`, 0014), which drops an inherited one, and only a worker
+/// has one injected.
 #[must_use]
 pub fn no_write_settings() -> Value {
     let deny: Vec<String> = ["/tmp", "/private/tmp"]
@@ -213,15 +222,19 @@ pub const WORKER_TOOL_LIST: &str =
 /// interface addresses aren't: 0013 records that gap.
 pub const WORKER_DENIED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "[::]"];
 
-/// The permission mode a worker asks for by default ([`worker_permission_mode`]). A worker must
-/// then report the mode it asked for in `system/init`. Claude Code forces `default` instead when
+/// The permission mode a worker or a coordinator asks for by default ([`permission_mode`]). It
+/// must then report the mode it asked for in `system/init`. Claude Code forces `default` instead when
 /// [`SCRUB_ENV`] is on, so another mode there means the worker's own process runs in scrub mode,
 /// whatever `linux_sandbox::check_host` saw (RYA-118).
-pub const WORKER_PERMISSION_MODE: &str = "acceptEdits";
+pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
 
-/// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013). [`arguments`] adds the run's
-/// `--permission-mode` ([`worker_permission_mode`]), [`worker_settings`], and `--add-dir`
-/// folders after them.
+/// [`AgentPermission::Bypass`]'s mode. Claude Code refuses it under `--restricted`, so a worker
+/// in it runs without the worker sandbox (0027).
+pub const BYPASS_PERMISSION_MODE: &str = "bypassPermissions";
+
+/// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013), in every mode but
+/// [`AgentPermission::Bypass`]. [`arguments`] adds the run's `--permission-mode`
+/// ([`permission_mode`]), [`worker_settings`], and `--add-dir` folders after them.
 pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
     "--restricted",
     "--tools",
@@ -240,8 +253,14 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
-/// The worker permissions Claude Code maps, both inside the worker sandbox (0013).
-const PERMISSIONS: &[AgentPermission] = &[AgentPermission::Edit, AgentPermission::Plan];
+/// Claude Code's permission modes, in the order its own picker lists them (0027).
+const PERMISSIONS: &[AgentPermission] = &[
+    AgentPermission::Auto,
+    AgentPermission::Manual,
+    AgentPermission::Edit,
+    AgentPermission::Plan,
+    AgentPermission::Bypass,
+];
 
 /// The oldest Claude Code that has every flag and setting a worker relies on: `--restricted`
 /// arrived in 2.1.248, the last of them (0013). An older CLI rejects the unknown flag, and a
@@ -258,7 +277,8 @@ pub const SCRUBBED_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAU
 
 /// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key; the
 /// configuration folder, which [`apply_credential`] sets only to the account's own; and
-/// [`SCRUB_ENV`], which a no-write run sets itself and a worker must not get (RYA-112).
+/// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or a coordinator must not
+/// get (RYA-112, 0027).
 pub const SCRUBBED_VARS: &[&str] = &["AWS_BEARER_TOKEN_BEDROCK", CONFIG_DIR_ENV, SCRUB_ENV];
 
 /// The variable that picks a second account's configuration folder.
@@ -285,7 +305,10 @@ const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1
 /// settings can still set it, and their `env` beats wispd's, so on Linux
 /// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (RYA-112), and
 /// on every OS a worker whose `system/init` shows the permission mode it forces fails
-/// (RYA-118). It forces a no-write run's mode to `default` as well, so those aren't checked.
+/// (RYA-118). A coordinator doesn't get it either: it would force `default`, where headless Claude
+/// Code denies every tool nobody approved, so a coordinator that reports another mode than it
+/// asked for fails the same way (0027). It forces a plain no-write run's mode to `default` as
+/// well, so those aren't checked.
 const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 
 /// Variables a worker's commands never see (0013): an API key account's key, and the token for
@@ -417,34 +440,37 @@ impl ClaudeBackend {
 /// # Errors
 ///
 /// [`StartError::Invalid`] if the model or the resume id could be read as an option, if a
-/// worker has no usable [`WorkerSandbox`], or if a no-write run asks for a permission.
+/// worker has no usable [`WorkerSandbox`], or if a no-write run other than a coordinator asks for
+/// a permission.
 /// [`StartError::Unsupported`] for an effort or permission this version doesn't know.
 pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
-    let policy = match request.policy {
+    let coordinator = request.coordinator_tools.is_some();
+    if coordinator && request.policy != ToolPolicy::NoWrite {
+        return Err(StartError::Invalid(
+            "wispd's coordinator tools are only for a no-write run".into(),
+        ));
+    }
+    let bypass = request.policy == ToolPolicy::WorkspaceWrite
+        && request.permission == Some(AgentPermission::Bypass);
+    let policy: &[&str] = match request.policy {
+        ToolPolicy::NoWrite if coordinator => &[],
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
+        ToolPolicy::WorkspaceWrite if bypass => &[],
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
-    match request.policy {
-        ToolPolicy::WorkspaceWrite => {
-            let mode = worker_permission_mode(request.permission)?;
-            args.extend(["--permission-mode".into(), mode.into()]);
-        }
-        ToolPolicy::NoWrite if request.permission.is_some() => {
+    if request.policy == ToolPolicy::NoWrite && !coordinator {
+        if request.permission.is_some() {
             return Err(StartError::Invalid(
                 "a no-write run takes no permission; its mode is fixed (0004)".into(),
             ));
         }
-        ToolPolicy::NoWrite => {
-            args.extend(["--settings".into(), no_write_settings().to_string().into()]);
-        }
+        args.extend(["--settings".into(), no_write_settings().to_string().into()]);
+    } else {
+        let mode = permission_mode(request.permission)?;
+        args.extend(["--permission-mode".into(), mode.into()]);
     }
     if let Some(tools) = &request.coordinator_tools {
-        if request.policy != ToolPolicy::NoWrite {
-            return Err(StartError::Invalid(
-                "wispd's coordinator tools are only for a no-write run".into(),
-            ));
-        }
         args.extend([
             "--mcp-config".into(),
             tools.mcp_config()?.to_string().into(),
@@ -453,12 +479,14 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         ]);
     }
     if let Some(sandbox) = worker_sandbox(request)? {
-        let config_home = match &request.account.credential {
-            Credential::Subscription { config_home } => config_home.as_deref(),
-            Credential::ApiKey(_) => None,
-        };
-        let settings = worker_settings(sandbox, &request.cwd, config_home);
-        args.extend(["--settings".into(), settings.to_string().into()]);
+        if !bypass {
+            let config_home = match &request.account.credential {
+                Credential::Subscription { config_home } => config_home.as_deref(),
+                Credential::ApiKey(_) => None,
+            };
+            let settings = worker_settings(sandbox, &request.cwd, config_home);
+            args.extend(["--settings".into(), settings.to_string().into()]);
+        }
         for dir in &sandbox.writable {
             args.extend(["--add-dir".into(), dir.into()]);
         }
@@ -550,19 +578,19 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
         .collect()
 }
 
-/// A worker's `--permission-mode` for `permission` (RYA-97): `acceptEdits` by default, or `plan`,
-/// whose file tools refuse to write. Neither loosens the worker sandbox (0013): its commands run
-/// in the same sandbox either way.
+/// A worker's or a coordinator's `--permission-mode` for `permission`: Claude Code's own mode of
+/// the same name (RYA-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
 ///
 /// # Errors
 ///
 /// [`StartError::Unsupported`] for a permission this version doesn't know.
-pub fn worker_permission_mode(
-    permission: Option<AgentPermission>,
-) -> Result<&'static str, StartError> {
+pub fn permission_mode(permission: Option<AgentPermission>) -> Result<&'static str, StartError> {
     match permission {
-        None | Some(AgentPermission::Edit) => Ok(WORKER_PERMISSION_MODE),
+        None | Some(AgentPermission::Edit) => Ok(DEFAULT_PERMISSION_MODE),
+        Some(AgentPermission::Auto) => Ok("auto"),
+        Some(AgentPermission::Manual) => Ok("default"),
         Some(AgentPermission::Plan) => Ok("plan"),
+        Some(AgentPermission::Bypass) => Ok(BYPASS_PERMISSION_MODE),
         Some(AgentPermission::Unknown) => Err(StartError::Unsupported(
             "Claude Code has no mode for this permission".into(),
         )),
@@ -669,7 +697,7 @@ impl Backend for ClaudeBackend {
         for (name, value) in ALWAYS_SET {
             spec.inject.set(name, value);
         }
-        if request.policy == ToolPolicy::NoWrite {
+        if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
             spec.inject.set(SCRUB_ENV, "1");
         }
         let env_file = match self.launcher.base().get("PATH") {
@@ -702,7 +730,7 @@ impl Backend for ClaudeBackend {
             stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
                 .with_coordinator_tools(request.coordinator_tools.is_some())
-                .with_permission_mode(worker_permission_mode(request.permission)?),
+                .with_permission_mode(permission_mode(request.permission)?),
             turns: VecDeque::new(),
             violation: None,
             env_file,

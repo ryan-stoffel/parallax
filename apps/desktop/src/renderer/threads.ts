@@ -200,8 +200,11 @@ export interface ThreadsView {
   ) => Promise<RpcError | undefined>;
 }
 
-/** What a new coordinator runs on: its model, effort, and account (`project/start`'s). */
-export type CoordinatorOptions = Pick<ProjectStartParams, "model" | "effort" | "account">;
+/** What a new coordinator runs on: its model, effort, permission, and account (`project/start`'s). */
+export type CoordinatorOptions = Pick<
+  ProjectStartParams,
+  "model" | "effort" | "permission" | "account"
+>;
 
 /**
  * A host's threads and projects, kept live: `thread/list`, `agent/list` (for titles and runs), and

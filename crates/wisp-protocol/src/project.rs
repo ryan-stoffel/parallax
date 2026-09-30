@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{AccountChoice, AgentEffort, PromptImage, RunId};
+use crate::{AccountChoice, AgentEffort, AgentPermission, PromptImage, RunId};
 
 uuid_v7_id! {
     /// A project's id: a version 7 UUID that the client generates once and sends again on every
@@ -110,6 +110,10 @@ pub struct ProjectStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
+    /// The permission mode, as `agent/start`'s (RYA-188). Absent means the backend's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
     /// Images for the first message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,

@@ -1,12 +1,12 @@
 //! A project's coordinator chat (RYA-41, decision 0024): a no-write run with wispd's MCP tools
-//! bound to the project and to the run's own id as its coordinator thread (0019).
+//! bound to the project and to the run's own id as its coordinator thread (0019). The Claude
+//! backend runs it as full Claude Code in its permission mode (0027).
 //!
 //! `project/start` records it like any run, without a worktree row, and hands it to the same
 //! actor as a worker's, so `agent/send`, `agent/cancel`, `agent/events`, the `agent.*` events, and
-//! resuming after a restart work unchanged. The actor runs it in the project's own detached
-//! worktree, [`crate::paths::DataDir::coordinator_dir`], which it moves to the repository's `HEAD`
-//! before each CLI process (RYA-171). A project has one live coordinator: a new run replaces the
-//! last one unless that one is still starting or running, and takes over the same worktree.
+//! resuming after a restart work unchanged. The actor runs it in the project's repository, as
+//! Claude Code runs in the folder it was started in (0027). A project has one live coordinator: a
+//! new run replaces the last one unless that one is still starting or running.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,13 +14,13 @@ use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{AgentRun, ErrorKind, ProjectStartParams, Role, RunId, WispEvent};
+use wisp_protocol::{AgentRun, ErrorKind, ProjectStartParams, Role, RunId};
 use wisp_store::{RunFields, RunState};
 
 use super::actor::Actor;
 use super::convert::{NO_WRITE, RUNNING, STARTING, agent_run, option_name};
 use super::worker::worker_unavailable;
-use super::{RunOptions, existing, prepare, requested_account, store, store_error};
+use super::{RunOptions, existing, log_started, prepare, requested_account, store, store_error};
 use crate::backend::Backend;
 use crate::server::Daemon;
 
@@ -40,13 +40,14 @@ pub(crate) async fn start(
         account,
         model,
         effort,
+        permission,
         images,
     } = params;
     let _starting = daemon.agents.start_guard(run_id).await;
     let options = RunOptions {
         model,
         effort,
-        permission: None,
+        permission,
     };
     let mut fields = RunFields {
         project_id: project.into(),
@@ -57,7 +58,7 @@ pub(crate) async fn start(
         coordinator_thread: Some(Uuid::from(run_id)),
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
-        permission: None,
+        permission: options.permission.and_then(option_name),
     };
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
         return Ok(run);
@@ -99,18 +100,7 @@ pub(crate) async fn start(
             .map_err(|e| store_error(&e))
     })
     .await?;
-    let snapshot = agent_run(&row, None)?;
-    daemon
-        .log
-        .append(
-            snapshot.created_at,
-            Some(project),
-            WispEvent::AgentStarted {
-                run_id,
-                run: Some(snapshot),
-            },
-        )
-        .await;
+    log_started(&daemon, project, agent_run(&row, None)?).await;
     info!(run = %run_id, project = %project, backend = %row.fields.backend, "created a project's coordinator");
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());
@@ -165,8 +155,7 @@ fn newest(db: &wisp_store::Store, project: Uuid) -> Result<Option<wisp_store::Ru
 /// The coordinator's first message: its instructions, where it is, then the user's message.
 fn first_message(message: &str, repo: &str) -> String {
     format!(
-        "{INSTRUCTIONS}\nThe project's repository is {repo}. Your working directory is a copy of \
-         its latest commit, updated each time wispd starts you, so it doesn't have the user's \
-         uncommitted changes.\n\nThe user's message:\n{message}"
+        "{INSTRUCTIONS}\nThe project's repository is {repo}, your working directory: the user's \
+         own checkout, uncommitted changes included.\n\nThe user's message:\n{message}"
     )
 }

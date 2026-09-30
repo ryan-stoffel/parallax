@@ -129,9 +129,13 @@ export function AgentChat({
   const restart = async () => {
     if (!stuck) return;
     setStartingOver(true);
-    // The new run keeps this one's model and effort unless the message changed them.
-    const { model = run?.model, effort = run?.effort } = stuck.options;
-    const failed = await startOver(stuck.text, { model, effort });
+    // The new run keeps this one's model, effort, and mode unless the message changed them.
+    const {
+      model = run?.model,
+      effort = run?.effort,
+      permission = run?.permission,
+    } = stuck.options;
+    const failed = await startOver(stuck.text, { model, effort, permission });
     setStartingOver(false);
     if (failed) setRefused({ ...stuck, why: failed });
   };
@@ -222,7 +226,6 @@ export function AgentChat({
           }
           backend={run?.backend}
           started={run}
-          noWrite={run?.policy === "noWrite"}
           optionsDisabled={optionsDisabled}
         />
       </div>

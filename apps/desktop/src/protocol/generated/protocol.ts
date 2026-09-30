@@ -1133,7 +1133,8 @@ export type AgentStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * How the agent may act inside its sandbox. Absent means `edit`.
+	 * The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
+	 * `coordinatorThread`, the coordinator's mode when it spawns the run.
 	 */
 	permission?: AgentPermission,
 	/**
@@ -1155,12 +1156,13 @@ export type AgentStartParams = {
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
- * How a run's agent may act inside its sandbox, behind the `runOptions` capability (RYA-97).
- * Every value stays inside the worker sandbox (0013); none loosens it.
+ * A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
+ * which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
+ * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
  *
  * A newer peer may send a value this version does not know; treat it as unknown.
  */
-export type AgentPermission = "edit" | "plan";
+export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
 
 /**
  * What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
@@ -2368,6 +2370,10 @@ export type ProjectStartParams = {
 	 * How hard the model thinks, as `agent/start`'s. Absent means the CLI's default.
 	 */
 	effort?: AgentEffort,
+	/**
+	 * The permission mode, as `agent/start`'s (RYA-188). Absent means the backend's default.
+	 */
+	permission?: AgentPermission,
 	/**
 	 * Images for the first message, as `agent/start`'s.
 	 */
