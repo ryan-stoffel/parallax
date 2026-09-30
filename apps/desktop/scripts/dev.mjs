@@ -174,10 +174,12 @@ const quietGit = (args) => run("git", args, "../..", true);
 function check() {
   if (!branch || updating || checking) return;
   checkedAt = Date.now();
-  checking = commitsBehind(quietGit, branch).then((count) => {
+  const checked = branch;
+  checking = commitsBehind(quietGit, checked).then((count) => {
     checking = undefined;
-    // An update that started meanwhile is taking them.
-    if (!updating) offer(count);
+    // An update that started meanwhile is taking them, and a channel change made the count stale
+    // (follow() starts the check for the new branch).
+    if (!updating && branch === checked) offer(count);
   });
 }
 

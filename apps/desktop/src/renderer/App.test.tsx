@@ -62,7 +62,7 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   renderApp();
   // Update is only for `pnpm dev`.
-  expect(button("Update from develop")).toBeNull();
+  expect(button("Update wisp")).toBeNull();
 
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
@@ -89,14 +89,14 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   });
   renderApp();
   act(() => ready(3));
-  act(() => button("Update ready: 3 new commits on develop")!.click());
+  act(() => button("Update ready: 3 commits to apply")!.click());
   // The connection's status line shares the footer.
   const status = () =>
     [...document.querySelectorAll('#sidebar [role="status"]')].map((s) => s.textContent);
   expect(status()).toContain("Updating…");
-  expect(button("Update from develop")!.disabled).toBe(true);
+  expect(button("Update wisp")!.disabled).toBe(true);
   await act(async () => answer("Updated to abc1234"));
   act(() => ready(0));
   expect(status()).toContain("Updated to abc1234");
-  expect(button("Update from develop")!.disabled).toBe(false);
+  expect(button("Update wisp")!.disabled).toBe(false);
 });
