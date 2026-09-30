@@ -40,15 +40,23 @@ const maxEdge = 2000;
  */
 export async function readImage(file: Blob, maxBytes: number): Promise<PromptImage | string> {
   if (!mediaTypes.includes(file.type)) return "Only PNG, JPEG, GIF, and WebP images can be sent.";
+  let bitmap: ImageBitmap | undefined;
   try {
-    return await fit(file, maxBytes);
+    bitmap = await createImageBitmap(file);
+    return await fit(file, bitmap, maxBytes);
   } catch {
     return "That image couldn't be read.";
+  } finally {
+    // Its decoded pixels are megabytes for a photo: free them now, not whenever GC runs.
+    bitmap?.close();
   }
 }
 
-async function fit(file: Blob, maxBytes: number): Promise<PromptImage | string> {
-  const bitmap = await createImageBitmap(file);
+async function fit(
+  file: Blob,
+  bitmap: ImageBitmap,
+  maxBytes: number,
+): Promise<PromptImage | string> {
   const long = Math.max(bitmap.width, bitmap.height);
   if (long <= maxEdge) {
     const image = fromDataUrl(await dataUrlOf(file));
@@ -58,7 +66,11 @@ async function fit(file: Blob, maxBytes: number): Promise<PromptImage | string> 
   for (let edge = Math.min(long, maxEdge); edge >= 100; edge = Math.floor(edge * 0.75)) {
     canvas.width = Math.max(1, Math.round((bitmap.width * edge) / long));
     canvas.height = Math.max(1, Math.round((bitmap.height * edge) / long));
-    canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    // Sizing the canvas resets its context, so this goes after. The default smoothing aliases
+    // text in a scaled-down screenshot.
+    const context = canvas.getContext("2d")!;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     // A browser without WebP gives PNG instead, which the data URL says.
     const image = fromDataUrl(canvas.toDataURL("image/webp", 0.9));
     if (image.data.length <= maxBytes) return image;

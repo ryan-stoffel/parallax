@@ -678,7 +678,8 @@ impl Backend for ClaudeBackend {
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
-        if request.prompt.is_empty() {
+        // Images alone are a message too (RYA-202), as a resumed run's may be.
+        if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
         if request.policy != ToolPolicy::NoWrite && !self.capabilities().worker_sandbox {
