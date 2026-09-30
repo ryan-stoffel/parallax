@@ -558,7 +558,7 @@ export function Composer({
               aria-label={stopping ? "Stopping" : "Stop"}
               disabled={stopping}
               onClick={() => void stop()}
-              className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground disabled:opacity-50"
+              className="grid size-9 place-items-center rounded-full bg-danger text-background disabled:opacity-50"
             >
               {stopping ? (
                 <LoaderCircle className="size-4.5 animate-spin" />
