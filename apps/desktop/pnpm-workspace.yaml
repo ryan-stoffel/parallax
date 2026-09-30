@@ -12,6 +12,8 @@ allowBuilds:
   # Its script builds llama.cpp from source when no prebuilt binary (the
   # @node-llama-cpp/<platform> packages) fits: slow, and needs a toolchain.
   node-llama-cpp: false
+  # Squirrel.Windows, which electron-builder only uses for a target we don't build.
+  electron-winstaller: false
 
 # Vite+ asks for these so every tool shares its Vite and Vitest.
 overrides:

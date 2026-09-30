@@ -135,7 +135,7 @@ Windows and Linux are supported, for the app and for `wispd`. This supersedes PL
 - **Linux binaries** are static musl builds, so they run on any distro with no glibc floor. The spawn above needs only `POSIX_SPAWN_SETSID`, which musl has. Nothing links a system library: SQLite is bundled, and the Secret Service store is pure Rust.
 - **macOS x86_64 isn't built.** 0006's reason still holds: macOS 27 runs only on Apple silicon. Adding it later is one more target on the macOS runner.
 - **Windows** needs Windows 10 1809 or later, or Windows 11. That's the first version with the OpenSSH Client feature and ConPTY.
-- **Releases** ship the app for these five targets. Each package bundles the local `wispd` and the others, for installs on remote hosts (RYA-66). Installer formats and signing are RYA-64's.
+- **Releases** ship the app for these five targets. Each package bundles the local `wispd` (RYA-66). Bundling the others, for installs on remote hosts, is RYA-28's. Installer formats and signing are RYA-64's.
 
 ## Alternatives
 
