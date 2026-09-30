@@ -51,6 +51,10 @@ mac:
   category: public.app-category.developer-tools
   entitlements: entitlements.mac.plist
   entitlementsInherit: entitlements.mac.plist
+  # Chromium's 223 .pak files (locales and resources) aren't code, so they aren't signed one by one (each a codesign
+  # run and a trip to Apple's timestamp server, about two minutes in all): Electron Framework's own
+  # signature seals them as resources, like every other data file (RYA-211).
+  signIgnore: ['\.pak$']
 # Signed with the app's identity when there is one. The updater reads the zip, so the dmg stays out
 # of the update metadata.
 dmg:
