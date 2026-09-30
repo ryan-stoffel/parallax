@@ -4,9 +4,18 @@ appId: dev.wisp.desktop
 productName: Wisp
 directories:
   output: release
-# The workflow attaches the files to the release itself, and the app's updater doesn't read them
-# (RYA-68), so electron-builder has nothing to publish or write update metadata for.
-publish: null
+# Where the app's updater (electron-updater, RYA-68) looks: the app ships this as app-update.yml
+# in its resources folder, and the build writes the channel's update metadata next to the
+# installers (0030). `${channel}` is the version's first prerelease identifier, or `latest`:
+# nightly builds write nightly*.yml, standard builds latest*.yml. The owner and repo are explicit
+# because electron-builder can't find the repo from apps/desktop (no .git there), and a GitHub
+# config it can't resolve crashed the build ("reading 'channel'"). CI runs with --publish never;
+# release.yml attaches the files.
+publish:
+  provider: github
+  owner: ryan-stoffel
+  repo: wisp
+  channel: ${channel}
 # node-pty and node-llama-cpp ship prebuilt binaries for every target, so nothing needs compiling.
 # @electron/rebuild would fetch Electron's headers and run node-gyp anyway on some runners.
 npmRebuild: false
@@ -32,9 +41,19 @@ extraResources:
   - from: ${env.WISPD_BIN}
     to: .
 artifactName: wisp-${version}-${os}-${arch}.${ext}
+# The updater installs from the zip; the dmg is for first installs. Signing and notarizing happen
+# only when CSC_LINK and the APPLE_API_* variables are set (release.yml's macOS build): everything
+# in the bundle, wispd included, gets the hardened runtime and a secure timestamp.
 mac:
-  target: dmg
+  target: [dmg, zip]
   category: public.app-category.developer-tools
+  entitlements: entitlements.mac.plist
+  entitlementsInherit: entitlements.mac.plist
+# Signed with the app's identity when there is one. release.yml notarizes and staples it after the
+# build, which changes its bytes, so it stays out of the update metadata (the updater reads the zip).
+dmg:
+  sign: true
+  writeUpdateInfo: false
 win:
   target: nsis
 linux:
