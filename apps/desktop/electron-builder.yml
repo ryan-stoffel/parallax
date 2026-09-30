@@ -1,0 +1,42 @@
+# The installer for the current OS and arch (0029). scripts/ci/package-app builds wispd and the
+# app's dist/ first, and passes the arch and version on the command line.
+appId: dev.wisp.desktop
+productName: Wisp
+directories:
+  output: release
+# The workflow attaches the files to the release itself, and the app's updater doesn't read them
+# (RYA-68), so electron-builder has nothing to publish or write update metadata for.
+publish: null
+# node-pty and node-llama-cpp ship prebuilt binaries for every target, so nothing needs compiling.
+# @electron/rebuild would fetch Electron's headers and run node-gyp anyway on some runners.
+npmRebuild: false
+# dist/ is the whole app: vite.config.ts bundles every dependency except the ones below. Only
+# `dependencies` are packaged, and package.json keeps just those there.
+# node-llama-cpp's CUDA and Vulkan binaries (Linux and Windows x64 only) add 200 to 300 MB and need
+# the vendor's GPU runtime installed; without them it runs on the CPU, which is enough for the
+# thread namer's small model.
+files:
+  - dist/**
+  - package.json
+  - "!node_modules/@node-llama-cpp/*-cuda*/**"
+  - "!node_modules/@node-llama-cpp/*-vulkan/**"
+# Native code can't load from inside app.asar. node-pty's prebuilds and spawn-helper, and
+# node-llama-cpp with the @node-llama-cpp/<platform> package holding its llama.cpp binary.
+asarUnpack:
+  - node_modules/node-pty/**
+  - node_modules/node-llama-cpp/**
+  - node_modules/@node-llama-cpp/**
+# wispd, built for this target, goes in the resources folder, where findWispd looks (WISPD_BIN
+# is set by package-app).
+extraResources:
+  - from: ${env.WISPD_BIN}
+    to: .
+artifactName: wisp-${version}-${os}-${arch}.${ext}
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+win:
+  target: nsis
+linux:
+  target: AppImage
+  category: Development
