@@ -12,16 +12,16 @@
 //!
 //! # What owns calling this, and how
 //!
-//! #156's runner (`crate::agents`) calls `resolve` and `start` for workers; nothing calls
-//! `snapshot` or `check` yet. Who owns what (see #119's decision record, 0012):
+//! #156's runner (`crate::agents`) calls `resolve` and `start` for workers, and for a project's
+//! coordinator (RYA-41, 0024), whose turns it also checks with `snapshot` and `check`. Who owns
+//! what (see #119's decision record, 0012):
 //!
 //! - #156 (the M3 runner, workers only) calls `resolve` and `start` for a worker's
 //!   `workspace-write` run, maps [`Event::AccountFallback`] to an `agent/*` notification, and
 //!   charges usage after it to `to_account`, not the account the run started on.
-//! - Whichever M4 issue runs a coordinator's turn (0012, since M4's task issues don't exist yet)
-//!   calls `resolve` and `start` the same way, and additionally calls [`snapshot`] before the
-//!   turn and [`check`] after it, stopping the run and reporting a `policyViolation` event on a
-//!   violation.
+//! - The same runner runs a project's coordinator (0024): `resolve` and `start` the same way,
+//!   plus [`snapshot`] before each CLI process and [`check`] after each turn, stopping the run
+//!   and reporting a `policyViolation` on a violation.
 //! - [`start`]'s returned [`Started::run`] already forwards to whichever attempt is actually
 //!   running, including after a fallback (see [`FallbackRun`]), so a caller never needs to track
 //!   that itself.
@@ -552,10 +552,10 @@ pub enum PolicyCheckError {
 
 /// Takes a fingerprint of `repo_path`'s working tree: `git status --porcelain=v1 -z
 /// --untracked-files=all --ignore-submodules=none`, a `git diff --binary --no-ext-diff` against
-/// `HEAD` (or the empty tree, in a repository with no commits yet), and the contents of every
-/// untracked file the status lists, all under one hash. [`check`] compares it against a later
-/// snapshot to tell whether a coordinator's no-write turn changed anything (0004): a tree that was
-/// already dirty when this is taken and stays exactly as dirty is not a violation.
+/// `HEAD`, and the contents of every untracked file the status lists, all under one hash.
+/// [`check`] compares it against a later snapshot to tell whether a coordinator's no-write turn
+/// changed anything (0004): a tree that was already dirty when this is taken and stays exactly as
+/// dirty is not a violation.
 ///
 /// Runs git with `-c core.fsmonitor=false`, so an untrusted repo's `fsmonitor` hook never runs as
 /// part of wispd, `GIT_OPTIONAL_LOCKS=0`, so this never waits on or takes the user's index lock,
@@ -567,7 +567,7 @@ pub enum PolicyCheckError {
 /// # Errors
 ///
 /// [`PolicyCheckError`] if `git` could not be run or failed, such as when `repo_path` is not a
-/// git repository.
+/// git repository or has no commits yet.
 pub async fn snapshot(repo_path: &Path) -> Result<TreeSnapshot, PolicyCheckError> {
     let repo_path = repo_path.to_owned();
     let digest = tokio::task::spawn_blocking(move || fingerprint(&repo_path))
@@ -613,28 +613,6 @@ pub async fn check(
     }))
 }
 
-/// The empty tree's well-known object id, the same for every git repository: `git hash-object -t
-/// tree /dev/null`. [`fingerprint`] diffs against it instead of `HEAD` in a repository with no
-/// commits yet, where `HEAD` doesn't resolve to anything `git diff` can use.
-const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-
-/// What [`fingerprint`] diffs the working tree against: `HEAD` once it resolves to a commit, or
-/// the empty tree before the repository's first commit, so a coordinator working in a brand new
-/// project doesn't fail every turn's check.
-fn diff_target(repo_path: &Path) -> Result<&'static str, PolicyCheckError> {
-    let resolves = std::process::Command::new("git")
-        .arg("-c")
-        .arg("core.fsmonitor=false")
-        .args(["rev-parse", "--verify", "-q", "HEAD"])
-        .current_dir(repo_path)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?
-        .success();
-    Ok(if resolves { "HEAD" } else { EMPTY_TREE })
-}
-
 fn fingerprint(repo_path: &Path) -> Result<[u8; 32], PolicyCheckError> {
     let status = run_git(
         repo_path,
@@ -646,8 +624,7 @@ fn fingerprint(repo_path: &Path) -> Result<[u8; 32], PolicyCheckError> {
             "--ignore-submodules=none",
         ],
     )?;
-    let target = diff_target(repo_path)?;
-    let diff = run_git(repo_path, &["diff", target, "--binary", "--no-ext-diff"])?;
+    let diff = run_git(repo_path, &["diff", "HEAD", "--binary", "--no-ext-diff"])?;
     let mut hasher = Sha256::new();
     hasher.update(&status);
     hasher.update(&diff);

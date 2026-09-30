@@ -11,18 +11,25 @@ import type {
   AgentToolStatus,
   JsonValue,
   LoggedEvent,
+  WispEvent,
 } from "../protocol/generated/protocol";
 
 /** One row of the transcript. `key` is stable across re-renders; `at` is when it began. */
 export type Item = ItemBody & { at?: string };
 
 type ItemBody =
-  /** `text` is null for a follow-up logged by a wispd from before it recorded the text. */
-  | { kind: "user"; key: string; text: string | null; turnId?: string }
+  /**
+   * `text` is null for a follow-up logged by a wispd from before it recorded the text. `wake` marks
+   * a turn wispd sent a coordinator itself, when runs it started finished (0025).
+   */
+  | { kind: "user"; key: string; text: string | null; turnId?: string; wake?: boolean }
   /** `partial` while it is still arriving as `textDelta`s. */
   | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
   | { kind: "reasoning"; key: string; text: string }
-  /** `status` is absent until its result arrives; `name` is null for a result with no call. */
+  /**
+   * `status` is absent until its result arrives; `name` is null for a result with no call.
+   * `subagent` is the first line of the prompt of the subagent a coordinator's wispd tool names.
+   */
   | {
       kind: "tool";
       key: string;
@@ -31,6 +38,7 @@ type ItemBody =
       input?: JsonValue;
       status?: AgentToolStatus;
       output?: string;
+      subagent?: string;
     }
   | { kind: "todo"; key: string; items: AgentTodoItem[] }
   /** `turnId` marks a follow-up that never reached the agent. */
@@ -64,17 +72,12 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
     const key = (i: number | string = 0) => `${at}:${i}`;
     const before = items.length;
 
+    run = updateRun(run, event);
     switch (event.kind) {
       case "agent.started":
-        run = event.run;
-        if (run) push({ kind: "user", key: key(), text: run.prompt });
-        break;
-      case "agent.updated":
-        // `error` is absent once the run goes again; the rest only ever arrives.
-        if (run) run = { ...run, ...event.state, error: event.state.error };
+        if (event.run) push({ kind: "user", key: key(), text: event.run.prompt });
         break;
       case "agent.accountFallback":
-        if (run) run = { ...run, accountId: event.toAccount };
         push({
           kind: "notice",
           key: key(),
@@ -85,6 +88,14 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
       case "agent.finished":
         push({ kind: "end", key: key(), outcome: event.outcome });
         break;
+      case "agent.wakeupsPaused":
+        push({
+          kind: "notice",
+          key: key(),
+          tone: "info",
+          text: "Wake-ups are paused: finished subagents won't wake the coordinator. Your next message resumes them.",
+        });
+        break;
       case "agent.output":
         event.items.forEach((item, i) => applyOutput(items, item, key(i)));
         break;
@@ -92,6 +103,21 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
     for (let i = before; i < items.length; i++) items[i] = { ...items[i]!, at: time };
   }
   return { run, items, seq };
+}
+
+/** A run as `event` leaves it: `agent.started` sets it, and `agent.updated` and fallbacks change it. */
+export function updateRun(run: AgentRun | undefined, event: WispEvent): AgentRun | undefined {
+  switch (event.kind) {
+    case "agent.started":
+      return event.run;
+    case "agent.updated":
+      // `error` is absent once the run goes again; the rest only ever arrives.
+      return run && { ...run, ...event.state, error: event.state.error };
+    case "agent.accountFallback":
+      return run && { ...run, accountId: event.toAccount };
+    default:
+      return run;
+  }
 }
 
 // ponytail: copies the item list per event and scans back for matches; fine for
@@ -112,7 +138,13 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     case "turnStarted":
       // The run's first turn has no id; its prompt came with agent.started.
       if (item.turnId)
-        items.push({ kind: "user", key, text: item.text ?? null, turnId: item.turnId });
+        items.push({
+          kind: "user",
+          key,
+          text: item.text ?? null,
+          turnId: item.turnId,
+          ...(item.wake && { wake: true }),
+        });
       break;
     case "textDelta": {
       const found = target(item.messageId);
@@ -137,9 +169,15 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     case "reasoning":
       items.push({ kind: "reasoning", key, text: item.text });
       break;
-    case "toolCall":
-      items.push({ kind: "tool", key, callId: item.callId, name: item.name, input: item.input });
+    case "toolCall": {
+      const { callId, name, input } = item;
+      const runId = name?.startsWith(wispdTools)
+        ? (input as { runId?: unknown } | null | undefined)?.runId
+        : undefined;
+      const subagent = typeof runId === "string" ? subagentTitle(items, runId) : undefined;
+      items.push({ kind: "tool", key, callId, name, input, ...(subagent && { subagent }) });
       break;
+    }
     case "toolResult": {
       const i = items.findLastIndex((x) => x.kind === "tool" && x.callId === item.callId);
       const result = { status: item.status, output: item.output };
@@ -174,6 +212,30 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     }
     // sessionStarted and usage aren't shown.
   }
+}
+
+/** The prefix of a coordinator's wispd tools as Claude Code names them (0019), `mcp__wispd__spawn_agent`. */
+export const wispdTools = "mcp__wispd__";
+
+/**
+ * The first line of subagent `runId`'s prompt, from the newest earlier wispd tool answer that
+ * lists it: spawn_agent's, message_agent's, or cancel_agent's run, agent_status's `run`, or
+ * list_agents' `runs`.
+ */
+function subagentTitle(items: Item[], runId: string): string | undefined {
+  type Summary = { runId?: unknown; prompt?: unknown };
+  for (const x of items.toReversed()) {
+    if (x.kind !== "tool" || !x.name?.startsWith(wispdTools) || !x.output?.includes(runId))
+      continue;
+    try {
+      const answer = JSON.parse(x.output) as Summary & { run?: Summary; runs?: Summary[] };
+      const run = [answer, answer.run, ...(answer.runs ?? [])].find((r) => r?.runId === runId);
+      if (typeof run?.prompt === "string") return run.prompt.trim().split("\n")[0];
+    } catch {
+      // Not JSON, or cut short: an older answer may still have it.
+    }
+  }
+  return undefined;
 }
 
 /** A run of agent activity between its messages, collapsed to one row: thinking, tool calls, and checklists. */
@@ -248,7 +310,7 @@ export function accountLabel(accountId: string): string {
 const failures: Record<AgentFailureKind, string> = {
   notSignedIn: "not signed in",
   rateLimited: "rate limited",
-  policyViolation: "blocked by its sandbox",
+  policyViolation: "stopped by wisp's safety check",
   unexpectedApiKey: "found an unexpected API key",
   vendorError: "the provider returned an error",
   crashed: "the CLI crashed",

@@ -34,7 +34,7 @@ use wispd::routing::BackendRegistry;
 
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
-fn git(dir: &Path, args: &[&str]) -> String {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -59,25 +59,25 @@ pub(crate) fn real_repo(dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn fake(steps: Vec<Step>) -> BackendRegistry {
+    let mut backends = BackendRegistry::new();
+    backends.register(Provider::Anthropic, Arc::new(fake_backend(steps)));
+    backends
+}
+
+/// The fake CLI playing `steps`, as the `fake` account's backend.
+pub(crate) fn fake_backend(steps: Vec<Step>) -> FakeBackend {
     let scratch = tempfile::tempdir().unwrap();
     let launcher = Launcher::new(
         DataDir::new(scratch.path()).unwrap(),
         Environment::inherited(),
     );
-    let mut backends = BackendRegistry::new();
-    backends.register(
-        Provider::Anthropic,
-        Arc::new(
-            FakeBackend::new(launcher, Script { steps }).with_cancel_policy(CancelPolicy {
-                signal: Signal::INT,
-                group: false,
-                // The fake's shell can lose a SIGINT that lands while it forks (#188), so
-                // `SIGKILL` follows soon.
-                grace: Duration::from_millis(500),
-            }),
-        ),
-    );
-    backends
+    FakeBackend::new(launcher, Script { steps }).with_cancel_policy(CancelPolicy {
+        signal: Signal::INT,
+        group: false,
+        // The fake's shell can lose a SIGINT that lands while it forks (#188), so `SIGKILL`
+        // follows soon.
+        grace: Duration::from_millis(500),
+    })
 }
 
 pub(crate) fn init(session_id: &str) -> Step {
@@ -121,7 +121,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
     }
 }
 
-fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSendParams {
+pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSendParams {
     AgentSendParams {
         run_id,
         turn_id,
@@ -146,7 +146,7 @@ impl Host {
         Self { dir, server }
     }
 
-    async fn restart(self, backends: BackendRegistry) -> Self {
+    pub(crate) async fn restart(self, backends: BackendRegistry) -> Self {
         let Self { dir, server } = self;
         server.stop().await;
         Self::start(dir, backends)
@@ -170,7 +170,7 @@ pub(crate) async fn create(client: &mut Conn, params: ProjectCreateParams) -> Pr
     client.call::<ProjectCreate>(params).await.unwrap().project
 }
 
-async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
+pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
     client
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
@@ -249,7 +249,7 @@ impl Conn {
 }
 
 /// Events until one matches `done`, which is included.
-async fn until(
+pub(crate) async fn until(
     client: &mut Conn,
     mut done: impl FnMut(&EventsEventParams) -> bool,
 ) -> Vec<EventsEventParams> {
@@ -269,7 +269,7 @@ async fn until(
     }
 }
 
-fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) -> bool {
+pub(crate) fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) -> bool {
     move |event| matches!(&event.event, WispEvent::AgentUpdated { state, .. } if state.status == status)
 }
 
@@ -277,7 +277,7 @@ fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) -> bool {
     move |event| matches!(&event.event, WispEvent::AgentOutput { items, .. } if items.contains(&item))
 }
 
-fn items(events: &[EventsEventParams]) -> Vec<AgentOutputItem> {
+pub(crate) fn items(events: &[EventsEventParams]) -> Vec<AgentOutputItem> {
     events
         .iter()
         .filter_map(|event| match &event.event {
@@ -300,7 +300,7 @@ fn kinds(events: &[EventsEventParams]) -> Vec<String> {
         .collect()
 }
 
-fn outcomes(events: &[EventsEventParams]) -> Vec<AgentOutcome> {
+pub(crate) fn outcomes(events: &[EventsEventParams]) -> Vec<AgentOutcome> {
     events
         .iter()
         .filter_map(|event| match &event.event {
@@ -573,6 +573,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
     assert!(transcript.contains(&AgentOutputItem::TurnStarted {
         turn_id: Some(first),
         text: Some("and the tests".to_owned()),
+        wake: false,
     }));
     assert!(transcript.contains(&AgentOutputItem::Text {
         message_id: None,
@@ -613,6 +614,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
     assert!(transcript.contains(&AgentOutputItem::TurnStarted {
         turn_id: Some(second),
         text: Some("one more thing".to_owned()),
+        wake: false,
     }));
     let third = TurnId::generate();
     client
@@ -786,6 +788,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
+            wake: false,
         },
         AgentOutputItem::SessionStarted {
             session_id: "hang-1".to_owned(),
@@ -857,6 +860,7 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
         has_item(AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
+            wake: false,
         }),
     )
     .await;

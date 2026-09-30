@@ -23,7 +23,7 @@ use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
     AccountChoice, AccountId, ErrorKind, KeyAccount, Project, ProjectCreateParams, ProjectId,
-    Provider, Role, StoreState,
+    Provider, Role, RunId, StoreState,
 };
 use wisp_store::{AccountFields, ProjectFields, RoleDefault, Store, StoreError};
 
@@ -209,11 +209,15 @@ pub(crate) fn fields(params: ProjectCreateParams) -> (Uuid, ProjectFields) {
     )
 }
 
-/// A store row as the protocol's project, with the branch its repository has checked out now.
+/// A store row as the protocol's project, with the branch its repository has checked out now and
+/// its coordinator run, if it has one (0024).
 ///
 /// wispd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
-pub(crate) fn project(row: wisp_store::Project) -> Result<Project, ErrorObject> {
+pub(crate) fn project(
+    row: wisp_store::Project,
+    coordinator: Option<RunId>,
+) -> Result<Project, ErrorObject> {
     let id = ProjectId::try_from(row.id).map_err(|_| {
         error!(id = %row.id, "a stored project's id is not a UUIDv7");
         ErrorObject::internal_error(format!("the stored project {} has an invalid id", row.id))
@@ -223,6 +227,7 @@ pub(crate) fn project(row: wisp_store::Project) -> Result<Project, ErrorObject> 
         name: row.name,
         branch: repo::branch(Path::new(&row.repo_path)),
         repo_path: row.repo_path,
+        coordinator,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -417,7 +422,7 @@ mod tests {
     #[test]
     fn rows_map_to_protocol_projects_field_for_field() {
         let id = ProjectId::generate();
-        let mapped = project(row(id.into())).unwrap();
+        let mapped = project(row(id.into()), None).unwrap();
         assert_eq!(mapped.id, id);
         assert_eq!(mapped.name, "wisp");
         assert_eq!(mapped.repo_path, "/src/wisp");
@@ -439,7 +444,7 @@ mod tests {
 
     #[test]
     fn a_row_whose_id_is_not_v7_is_an_internal_error() {
-        let error = project(row(Uuid::nil())).unwrap_err();
+        let error = project(row(Uuid::nil()), None).unwrap_err();
         assert_eq!(error.code, INTERNAL_ERROR);
     }
 

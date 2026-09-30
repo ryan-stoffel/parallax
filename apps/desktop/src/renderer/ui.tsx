@@ -275,6 +275,8 @@ export function Picker({
 export interface Crumb {
   label: string;
   icon?: ReactNode;
+  /** Makes it a link back to that page. */
+  onClick?: () => void;
 }
 
 /** Where the user is: host, workspace, then the current page, split by slashes. */
@@ -282,21 +284,23 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
   return (
     <nav aria-label="Breadcrumb" className="min-w-0">
       <ol className="flex min-w-0 items-center gap-2 text-[13px]">
-        {items.map(({ label, icon }, i) => {
+        {items.map(({ label, icon, onClick }, i) => {
           const last = i === items.length - 1;
+          const Tag = onClick ? "button" : "span";
           return (
             // The slash is CSS content, so it stays out of the crumb's text.
             <li
               key={i}
               className={`flex min-w-0 items-center gap-2 ${last ? "" : "shrink-0"} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""}`}
             >
-              <span
+              <Tag
+                {...(onClick && { type: "button", onClick })}
                 aria-current={last ? "page" : undefined}
-                className={`flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${last ? "font-medium text-foreground" : "text-muted-foreground"}`}
+                className={`flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${last ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "rounded-md hover:text-foreground" : ""}`}
               >
                 {icon}
                 <span className="truncate">{label}</span>
-              </span>
+              </Tag>
             </li>
           );
         })}

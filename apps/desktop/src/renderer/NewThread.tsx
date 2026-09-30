@@ -2,7 +2,7 @@ import { Folder, GitBranch, House, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError, ThreadName } from "../preload/bridge";
-import type { AccountChoice, Repo } from "../protocol/generated/protocol";
+import type { AccountChoice, Repo, Role } from "../protocol/generated/protocol";
 import { TranscriptView } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
 import { describeError } from "./errors";
@@ -50,17 +50,18 @@ interface Attempt {
   name: ThreadName;
 }
 
-/** An account a worker can run on, as the account chooser lists it. */
-interface AccountOption {
+/** An account a worker or coordinator can run on, as the account chooser lists it. */
+export interface AccountOption {
   label: string;
   account: AccountChoice;
 }
 
 /**
- * The host's accounts a thread can run on: its signed-in Claude Code login, then its Anthropic key
- * accounts. Resolves to wispd's error, for people, when either list fails.
+ * The host's accounts a thread or a Project's coordinator can run on: its signed-in Claude Code
+ * login, then its Anthropic key accounts. Resolves to wispd's error, for people, when either list
+ * fails.
  */
-async function accountOptions(hostId: string): Promise<AccountOption[] | string> {
+export async function accountOptions(hostId: string): Promise<AccountOption[] | string> {
   const [clis, keys] = await Promise.all([
     window.wisp.request(hostId, "accounts/list", {}),
     window.wisp.request(hostId, "accounts/keys/list", {}),
@@ -86,20 +87,19 @@ async function accountOptions(hostId: string): Promise<AccountOption[] | string>
 }
 
 /**
- * The backend the host's new threads run on: its worker default's, or Claude's with no default,
- * since the account chooser only offers Claude accounts (`accountOptions`). Undefined when that
- * can't be told.
+ * The backend the host's new runs in `role` run on: its default's, or Claude's with no default,
+ * since only Claude accounts are offered (`accountOptions`). Undefined when that can't be told.
  */
-async function workerBackend(hostId: string): Promise<string | undefined> {
+export async function defaultBackend(hostId: string, role: Role): Promise<string | undefined> {
   const defaults = await window.wisp.request(hostId, "accounts/defaults/get", {});
   if ("error" in defaults) return undefined;
-  const worker = defaults.result.worker;
-  if (!worker) return "claude";
-  if (worker.kind === "subscription") return worker.backend;
-  if (worker.kind !== "key") return undefined;
+  const choice = defaults.result[role];
+  if (!choice) return "claude";
+  if (choice.kind === "subscription") return choice.backend;
+  if (choice.kind !== "key") return undefined;
   const keys = await window.wisp.request(hostId, "accounts/keys/list", {});
   if ("error" in keys) return undefined;
-  const provider = keys.result.accounts.find((k) => k.id === worker.id)?.provider;
+  const provider = keys.result.accounts.find((k) => k.id === choice.id)?.provider;
   return provider === "anthropic" ? "claude" : provider === "openai" ? "codex" : undefined;
 }
 
@@ -132,7 +132,7 @@ export function NewThread({
   useEffect(() => {
     if (!runOptions) return;
     let live = true;
-    void workerBackend(hostId).then((b) => live && setBackend(b));
+    void defaultBackend(hostId, "worker").then((b) => live && setBackend(b));
     return () => {
       live = false;
     };

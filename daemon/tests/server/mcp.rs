@@ -10,10 +10,10 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
-use wisp_protocol::methods::{AgentList, AgentStart, ContextList, ContextRead};
+use wisp_protocol::methods::{AgentList, AgentStart, ContextList, ContextRead, ProjectStart};
 use wisp_protocol::{
-    AgentListParams, AgentRun, AgentStatus, ContextListParams, ContextReadParams,
-    CoordinatorThreadId, ProjectId, RunId,
+    AccountChoice, AgentListParams, AgentRun, AgentStatus, ContextListParams, ContextReadParams,
+    CoordinatorThreadId, ProjectId, ProjectStartParams, RunId,
 };
 use wispd::backend::fake::Step;
 use wispd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, TOOLS};
@@ -410,4 +410,40 @@ async fn tool_inputs_are_size_limited() {
     assert!(answer["id"].is_null());
     let status = timeout(PATIENCE, mcp.child.wait()).await.unwrap().unwrap();
     assert!(!status.success(), "the server ends after an oversized line");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_coordinator_never_sees_or_steers_its_own_run() {
+    let host = Host::start(temp_dir(), fake(vec![init("coordinator-1"), Step::Hang]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let coordinator = client
+        .call::<ProjectStart>(ProjectStartParams {
+            project: project.id,
+            run_id: RunId::generate(),
+            prompt: "Plan.".to_owned(),
+            account: Some(AccountChoice::Subscription {
+                backend: "fake".to_owned(),
+            }),
+            model: None,
+            effort: None,
+        })
+        .await
+        .unwrap()
+        .run;
+    let thread = coordinator.coordinator_thread.unwrap();
+    let mut mcp = Mcp::start(host.dir.path(), project.id, thread).await;
+
+    let listed = mcp.ok("list_agents", json!({})).await;
+    assert_eq!(listed["runs"], json!([]));
+    let refused = mcp
+        .refused(
+            "message_agent",
+            json!({"runId": coordinator.id.to_string(), "text": "Talk to yourself."}),
+        )
+        .await;
+    assert!(
+        refused.contains("this project has no agent run"),
+        "{refused}"
+    );
 }

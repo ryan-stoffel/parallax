@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type { RpcError, ThreadName } from "../preload/bridge";
-import type { AgentRun, Repo, Thread, WispEvent } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  Project,
+  ProjectStartParams,
+  Repo,
+  Thread,
+  WispEvent,
+} from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import type { RunOptions } from "./models";
 import { uuidv7 } from "./uuidv7";
 
-/** A host's repo entries and normal threads (0017), and each thread's title and run. */
+/** A host's projects, repo entries, and normal threads (0017), and each thread's title and run. */
 export interface ThreadsState {
+  projects: Project[];
   repos: Repo[];
   threads: Thread[];
   /** By run id: the first line of the run's prompt, since a thread has no title of its own. */
@@ -19,11 +27,19 @@ export interface ThreadsState {
   runs: Readonly<Record<string, AgentRun>>;
 }
 
-export const emptyThreads: ThreadsState = { repos: [], threads: [], titles: {}, runs: {} };
+export const emptyThreads: ThreadsState = {
+  projects: [],
+  repos: [],
+  threads: [],
+  titles: {},
+  runs: {},
+};
 
 export type ThreadsAction =
-  | { type: "snapshot"; repos: Repo[]; threads: Thread[]; runs: AgentRun[] }
+  | { type: "snapshot"; projects: Project[]; repos: Repo[]; threads: Thread[]; runs: AgentRun[] }
   | { type: "runs"; runs: AgentRun[] }
+  /** A Project's new coordinator, which no host-level event announces (0024). */
+  | { type: "coordinator"; run: AgentRun }
   | { type: "event"; event: WispEvent };
 
 /** Applies a snapshot, runs' titles, or a host-level event. Events are upserts, so a repeat is harmless. */
@@ -31,6 +47,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
   switch (action.type) {
     case "snapshot":
       return {
+        projects: action.projects,
         repos: action.repos,
         threads: action.threads,
         titles: titlesOf(action.runs),
@@ -42,9 +59,18 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         titles: { ...state.titles, ...titlesOf(action.runs) },
         runs: { ...state.runs, ...byId(action.runs) },
       };
+    case "coordinator":
+      return {
+        ...threadsReducer(state, { type: "runs", runs: [action.run] }),
+        projects: state.projects.map((p) =>
+          p.id === action.run.project ? { ...p, coordinator: action.run.id } : p,
+        ),
+      };
     case "event": {
       const e = action.event;
       switch (e.kind) {
+        case "project.created":
+          return { ...state, projects: upsert(state.projects, e.project) };
         case "repo.added":
           return { ...state, repos: upsert(state.repos, e.repo) };
         case "thread.started":
@@ -70,9 +96,12 @@ function byId(runs: AgentRun[]): Record<string, AgentRun> {
 }
 
 function titlesOf(runs: AgentRun[]): Record<string, string> {
-  return Object.fromEntries(
-    runs.map((r) => [r.id, readTitle(r.id) ?? r.prompt.trim().split("\n")[0]!]),
-  );
+  return Object.fromEntries(runs.map((r) => [r.id, titleOf(r)]));
+}
+
+/** A run's title: its thread's generated title, or else its prompt's first line. */
+export function titleOf(run: AgentRun): string {
+  return readTitle(run.id) ?? run.prompt.trim().split("\n")[0]!;
 }
 
 // A thread's generated title, kept in this app: wispd has no title of its own. Run ids are unique
@@ -152,11 +181,32 @@ export interface ThreadsView {
   remove: (thread: Thread) => Promise<string | undefined>;
   /** Lists a repo entry's runs again, so their status is current. Failures are ignored. */
   refresh: (repo: string) => void;
+  /**
+   * Creates a project on a repository's path. Reuse `id`, with the same name and path, to retry.
+   * Resolves to the project or an error message.
+   */
+  createProject: (id: string, name: string, repoPath: string) => Promise<Project | string>;
+  /**
+   * Starts a Project's coordinator with `prompt`, or starts it over with a new `runId` (0024), then
+   * keeps it as the Project's. Reusing `runId` to retry is safe with any prompt or options: a
+   * failed `project/start` creates nothing, and one whose answer was lost shows up in
+   * `project/list` after a reconnect. Resolves to wispd's error, or undefined.
+   */
+  startCoordinator: (
+    project: string,
+    runId: string,
+    prompt: string,
+    options: CoordinatorOptions,
+  ) => Promise<RpcError | undefined>;
 }
 
+/** What a new coordinator runs on: its model, effort, and account (`project/start`'s). */
+export type CoordinatorOptions = Pick<ProjectStartParams, "model" | "effort" | "account">;
+
 /**
- * A host's threads, kept live: `thread/list` and `agent/list` (for titles and runs), then host-level
- * events after the list's `seq`, starting over on `resync`. Loads only while `connected`.
+ * A host's threads and projects, kept live: `thread/list`, `agent/list` (for titles and runs), and
+ * `project/list`, then host-level events after the thread list's `seq`, starting over on `resync`.
+ * Loads only while `connected`.
  */
 export function useThreads(hostId: string, connected: boolean): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
@@ -165,7 +215,7 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
   const [shownHost, setShownHost] = useState(hostId);
   if (shownHost !== hostId) {
     setShownHost(hostId);
-    dispatch({ type: "snapshot", repos: [], threads: [], runs: [] });
+    dispatch({ type: "snapshot", projects: [], repos: [], threads: [], runs: [] });
     setError(undefined);
   }
   // The host shown now, so `refresh` drops a late answer from one the user has left.
@@ -187,7 +237,17 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
       const runs = await window.wisp.request(hostId, "agent/list", {});
       if (stopped) return;
       if ("error" in runs) return setError(runs.error.message);
-      dispatch({ type: "snapshot", ...list.result, runs: runs.result.runs });
+      // Also after the list, whose older `seq` the subscription starts from: a project it
+      // replays is already here, and applying it again changes nothing.
+      const projects = await window.wisp.request(hostId, "project/list", {});
+      if (stopped) return;
+      if ("error" in projects) return setError(projects.error.message);
+      dispatch({
+        type: "snapshot",
+        ...list.result,
+        projects: projects.result.projects,
+        runs: runs.result.runs,
+      });
       setError(undefined);
       const since = { after: list.result.seq, logId: list.logId };
       unsubscribe = window.wisp.subscribe(hostId, since, (message) => {
@@ -283,5 +343,45 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     [hostId],
   );
 
-  return { state, error, addRepo, start, archive, remove, refresh };
+  const createProject = useCallback(
+    async (id: string, name: string, repoPath: string) => {
+      const answer = await window.wisp.request(hostId, "project/create", { id, name, repoPath });
+      if ("error" in answer) return describeError(answer.error);
+      // Not into another host's list, if the user has left this one.
+      if (shown.current === hostId)
+        dispatch({
+          type: "event",
+          event: { kind: "project.created", project: answer.result.project },
+        });
+      return answer.result.project;
+    },
+    [hostId],
+  );
+
+  const startCoordinator = useCallback(
+    async (project: string, runId: string, prompt: string, options: CoordinatorOptions) => {
+      const answer = await window.wisp.request(hostId, "project/start", {
+        project,
+        runId,
+        prompt,
+        ...options,
+      });
+      if ("error" in answer) return answer.error;
+      if (shown.current === hostId) dispatch({ type: "coordinator", run: answer.result.run });
+      return undefined;
+    },
+    [hostId],
+  );
+
+  return {
+    state,
+    error,
+    addRepo,
+    start,
+    archive,
+    remove,
+    refresh,
+    createProject,
+    startCoordinator,
+  };
 }

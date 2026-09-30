@@ -1,8 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { _electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+
+import { uuidv7 } from "../src/renderer/uuidv7";
 
 // The built app against a real wispd whose workers are the fake backend playing agent.json
 // (RYA-16). WISPD_PATH defaults to the repo's debug build, which must have the fake backend:
@@ -78,15 +81,20 @@ test.afterEach(async () => {
   console.log(`--- the window's text\n${await page.locator("body").innerText()}`);
 });
 
+/**
+ * The pid of each `serve` that `wispd attach` started, oldest first. They come from the log, since
+ * Windows won't read wispd.lock while serve holds it locked.
+ */
+function servePids(): number[] {
+  const log = path.join(dataDir, "logs/wispd.log");
+  const text = existsSync(log) ? readFileSync(log, "utf8") : "";
+  return [...text.matchAll(/listening.* pid=(\d+)/g)].map((m) => Number.parseInt(m[1]!, 10));
+}
+
 test.afterAll(async () => {
   await app?.close();
-  // `wispd attach` started a detached `serve`, which outlives the app. Its pid comes from the log,
-  // since Windows won't read wispd.lock while serve holds it locked.
-  const log = path.join(dataDir, "logs/wispd.log");
-  const listening = existsSync(log)
-    ? /listening.* pid=(\d+)/.exec(readFileSync(log, "utf8"))
-    : null;
-  const pid = Number.parseInt(listening?.[1] ?? "", 10);
+  // `wispd attach` started a detached `serve`, which outlives the app.
+  const pid = servePids().at(-1) ?? 0;
   // Never pid 0 or below, which process.kill reads as a whole process group.
   if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
 });
@@ -151,4 +159,123 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
   // The sign-in's end ran accounts/refresh, which found the fake signed in.
   await expect(codex(/^CodexInstalledNo usage todaySigned in$/)).toBeVisible();
+});
+
+test("creates a project on a repository it adds, and opens it (RYA-166)", async () => {
+  const repo = path.join(mkdtempSync(path.join(tmpdir(), "wisp-e2e-repo-")), "ember");
+  mkdirSync(repo);
+  execFileSync("git", ["init", "-q", repo]);
+  // A coordinator runs on a copy of the latest commit, so the repository needs one (0024).
+  const identity = ["-c", "user.name=wisp", "-c", "user.email=wisp@localhost"];
+  execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
+  // The native folder picker can't be driven, so it answers with the repository.
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+  }, repo);
+
+  // The sign-in test left Settings open.
+  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "New project" }).click();
+  const dialog = page.getByRole("dialog", { name: "Create Project" });
+  await dialog.getByRole("button", { name: /^Repository/ }).click();
+  await page.getByRole("menuitemradio", { name: "Add repository…" }).click();
+  await expect(dialog.getByRole("textbox", { name: "Name" })).toHaveValue("ember");
+  await dialog.getByRole("button", { name: "Create Project" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
+  const projects = page.getByRole("region", { name: "Projects" });
+  await expect(projects.getByRole("listitem")).toHaveText([/^ember/]);
+});
+
+test("chats with the project's coordinator, whose transcript outlives a reload and a wispd restart (RYA-46)", async () => {
+  // Reconnecting after the restart waits out the app's backoff.
+  test.slow();
+  // As for threads: the fake runs coordinators once it's their default.
+  const set = await page.evaluate(`window.wisp.request("local", "accounts/defaults/set", {
+    role: "coordinator",
+    account: { kind: "subscription", backend: "fake" },
+  })`);
+  expect(set).not.toHaveProperty("error");
+  // The project chat reads the default when it opens, to offer its backend's models, so reopen it.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Back to app" }).click();
+
+  // The last test left the ember project open.
+  const message = page.getByRole("textbox", { name: "Message" });
+  await message.fill("Plan the ember release");
+  await page.getByRole("button", { name: "Send" }).click();
+  const transcript = page.getByRole("log", { name: "Transcript" });
+  await expect(transcript.getByText("Plan the ember release")).toBeVisible();
+  await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(transcript.getByText("Stopped")).toBeVisible();
+  await message.fill("Start with the changelog");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
+
+  await page.reload();
+  const projects = page.getByRole("region", { name: "Projects" });
+  await projects.getByRole("button", { name: /^ember/ }).click();
+  await expect(transcript.getByText("Start with the changelog")).toBeVisible();
+
+  // Stop wispd with the coordinator running. The app reconnects through a new `serve`, which
+  // marks the run interrupted, and the transcript loads again.
+  const [pid] = servePids();
+  expect(pid).toBeGreaterThan(1);
+  process.kill(pid!, "SIGTERM");
+  await expect(transcript.getByText(/^Interrupted when wispd stopped/)).toBeVisible({
+    timeout: 45_000,
+  });
+  expect(servePids().length).toBeGreaterThan(1);
+  await expect(transcript.getByText("Plan the ember release")).toBeVisible();
+  await expect(transcript.getByText("Start with the changelog")).toBeVisible();
+});
+
+test("lists the project's subagents, opens their chats, and marks the coordinator's wake-up (RYA-47)", async () => {
+  // The last test left ember's coordinator open, interrupted by the restart.
+  await page.getByRole("button", { name: "Show side panel" }).click();
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await panel.getByRole("button", { name: /^Agents/ }).click();
+  await expect(panel.getByText("No agents yet")).toBeVisible();
+
+  // One started by hand, on the worker default the thread test set.
+  await panel.getByRole("textbox", { name: "New subagent's task" }).fill("Write the changelog");
+  await panel.getByRole("button", { name: "Start subagent" }).click();
+  const agents = panel.getByRole("list", { name: "Agents" });
+  await expect(agents.getByRole("button", { name: /^Write the changelog.*by you/ })).toBeVisible();
+
+  // One the coordinator started, as `wispd mcp`'s spawn_agent does (0019): it arrives by event.
+  const listed = (await page.evaluate(`window.wisp.request("local", "project/list", {})`)) as {
+    result: { projects: { id: string; coordinator: string }[] };
+  };
+  const ember = listed.result.projects[0]!;
+  const params = {
+    runId: uuidv7(),
+    project: ember.id,
+    prompt: "Tag the release",
+    policy: "workspaceWrite",
+    coordinatorThread: ember.coordinator,
+  };
+  const started = await page.evaluate(
+    `window.wisp.request("local", "agent/start", ${JSON.stringify(params)})`,
+  );
+  expect(started).not.toHaveProperty("error");
+  const tag = agents.getByRole("button", { name: /^Tag the release.*by coordinator/ });
+  await expect(tag).toBeVisible();
+
+  // Its chat, with the project still open. Stopping it wakes the coordinator (0025).
+  await tag.click();
+  const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(crumbs).toContainText("Tag the release");
+  const transcript = page.getByRole("log", { name: "Transcript" });
+  await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(transcript.getByText("Stopped")).toBeVisible();
+  await expect(agents.getByRole("button", { name: /^Tag the release.*Stopped/ })).toBeVisible();
+
+  await crumbs.getByRole("button", { name: "ember" }).click();
+  await expect(transcript.getByText("Plan the ember release")).toBeVisible();
+  await expect(transcript.getByText("From wisp: subagents finished")).toBeVisible();
 });

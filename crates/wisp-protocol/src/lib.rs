@@ -89,12 +89,13 @@ pub use host::{
 pub use id::InvalidId;
 pub use project::{
     Project, ProjectCreateParams, ProjectCreateResult, ProjectId, ProjectListParams,
-    ProjectListResult,
+    ProjectListResult, ProjectStartParams,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,
     AgentDiffResult, AgentDiffStats, AgentFileParams, AgentFileResult, AgentFileSide,
-    AgentFileStatus, AgentMerge, AgentMergeKind, AgentRequestChangesParams,
+    AgentFileStatus, AgentMerge, AgentMergeKind, AgentOpenPrParams, AgentOpenPrResult,
+    AgentRequestChangesParams,
 };
 pub use thread::{
     Repo, RepoAddParams, RepoAddResult, RepoId, Thread, ThreadArchiveParams, ThreadArchiveResult,
@@ -135,6 +136,7 @@ mod tests {
             name: "wisp".to_owned(),
             repo_path: "/Users/me/src/wisp".to_owned(),
             branch: Some("main".to_owned()),
+            coordinator: None,
             created_at: "2026-09-24T12:00:00Z".parse().unwrap(),
             updated_at: "2026-09-24T12:05:00.125Z".parse().unwrap(),
         }

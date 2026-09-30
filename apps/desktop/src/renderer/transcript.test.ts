@@ -139,6 +139,22 @@ test("a follow-up shows the text its turnStarted logged", () => {
   expect(of(t.items, "user").at(-1)).toMatchObject({ text: "And the tests.", turnId });
 });
 
+test("a wake-up is marked as wisp's, and a pause says the next message resumes them (0025)", () => {
+  const turnId = uuidv7();
+  const text = "wisp, not the user: runs you started finished.";
+  const t = build(
+    ...upTo(1),
+    output({ kind: "turnStarted", turnId, text, wake: true }),
+    at({ kind: "agent.wakeupsPaused", runId }),
+  );
+  expect(of(t.items, "user").at(-1)).toMatchObject({ text, turnId, wake: true });
+  expect(of(t.items, "user")[0]).not.toHaveProperty("wake");
+  expect(t.items.at(-1)).toMatchObject({
+    kind: "notice",
+    text: "Wake-ups are paused: finished subagents won't wake the coordinator. Your next message resumes them.",
+  });
+});
+
 test("uuidv7 puts the time first and sets the version and variant", () => {
   const id = uuidv7(0x0190_1234_5678);
   expect(id).toMatch(/^01901234-5678-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -183,4 +199,37 @@ test("messages split work rows and stay in order; a mid-run notice folds, and a 
 
   // A turn that ends on a tool ends with its last item, not the next turn's message.
   expect(groupWork([rows[3]!, rows[6]!])[0]).toMatchObject({ endedAt: at(10) });
+});
+
+test("a coordinator's wispd tool that names a subagent gets its prompt's first line from an earlier answer", () => {
+  const call = (callId: string, tool: string, input: Record<string, string>) => ({
+    kind: "toolCall" as const,
+    callId,
+    name: `mcp__wispd__${tool}`,
+    input,
+  });
+  const answer = (callId: string, value: unknown) => ({
+    kind: "toolResult" as const,
+    callId,
+    status: "ok" as const,
+    output: JSON.stringify(value, null, 2),
+  });
+  const t = build(
+    output(
+      call("1", "spawn_agent", { prompt: "Fix the login bug\nwith a test" }),
+      answer("1", { runId: "r-1", prompt: "Fix the login bug\nwith a test", status: "starting" }),
+      call("2", "list_agents", {}),
+      answer("2", { runs: [{ runId: "r-0", prompt: "Write the plan" }] }),
+      call("3", "agent_status", { runId: "r-1" }),
+      call("4", "cancel_agent", { runId: "r-0" }),
+      call("5", "agent_diff", { runId: "r-9" }),
+    ),
+  );
+  expect(of(t.items, "tool").map((i) => i.subagent)).toEqual([
+    undefined,
+    undefined,
+    "Fix the login bug",
+    "Write the plan",
+    undefined, // no answer named it
+  ]);
 });

@@ -48,6 +48,18 @@ test("a user message shows its text, or a neutral label when the log has none", 
   expect(document.body.textContent).toBe("Follow-up message");
 });
 
+test("a wake-up reads as from wisp, with its message folded away", () => {
+  row({
+    kind: "user",
+    key: "w",
+    text: "wisp, not the user: runs you started finished.",
+    wake: true,
+  });
+  expect(document.querySelector("summary")!.textContent).toBe("From wisp: subagents finished");
+  expect(document.querySelector("details")!.open).toBe(false);
+  expect(document.querySelector(".bg-selected")).toBeNull();
+});
+
 test("an assistant message renders Markdown, but never raw HTML or images", () => {
   row({
     kind: "assistant",
@@ -105,6 +117,43 @@ test("a tool call with an oversized input says so", () => {
   expect(document.querySelector("details")!.textContent).toContain("Too large to show (89 KB)");
 });
 
+test("a coordinator's wispd tool calls read as what they did, and to what", () => {
+  const summary = (name: string, input: Record<string, string>, subagent?: string) => {
+    row({ kind: "tool", key: "t", callId: "1", name, input, ...(subagent && { subagent }) });
+    const text = document.querySelector("summary")!.textContent;
+    act(() => unmount());
+    return text;
+  };
+  expect(summary("mcp__wispd__spawn_agent", { prompt: "Fix the login bug\nwith a test" })).toBe(
+    "Started a subagentFix the login bug",
+  );
+  expect(summary("mcp__wispd__agent_status", { runId: "r-1" }, "Fix the login bug")).toBe(
+    "Checked on a subagentFix the login bug",
+  );
+  expect(summary("mcp__wispd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
+    "Wrote shared contextplan.md",
+  );
+  // A wispd tool this app doesn't know keeps its name.
+  expect(summary("mcp__wispd__plan_approve", {})).toBe("mcp__wispd__plan_approve");
+});
+
+test("a coordinator's no-write stop lists the files it changed", () => {
+  row({
+    kind: "end",
+    key: "e",
+    outcome: {
+      status: "failed",
+      failure: "policyViolation",
+      message:
+        "the coordinator's no-write turn changed the working tree:\n M src/settings.tsx\n?? notes.md",
+    },
+  });
+  const alert = document.querySelector('[role="alert"]')!;
+  expect(alert.querySelector("p")!.textContent).toBe("Failed: stopped by wisp's safety check");
+  expect(alert.textContent).toContain("the coordinator's no-write turn changed the working tree:");
+  expect(alert.querySelector("pre")!.textContent).toBe(" M src/settings.tsx\n?? notes.md");
+});
+
 test("reasoning, checklists, and notices render quietly", () => {
   row({ kind: "reasoning", key: "r", text: "The build uses cargo." });
   expect(document.querySelector("summary")!.textContent).toBe("Thinking");
@@ -147,13 +196,18 @@ test("a failed run shows why; other endings are a divider", () => {
  * A bridge serving the sample's events up to `seq`, two per page, that records calls.
  * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as wispd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
+ * wispd advertises `capabilities`, and `agent/openPr` answers `prUrl`.
  */
-function fakeBridge(seq: number, { listSeq = seq, resyncs = 0, cancelError = "" } = {}) {
+function fakeBridge(
+  seq: number,
+  { listSeq = seq, resyncs = 0, cancelError = "", capabilities = {}, prUrl = "" } = {},
+) {
   let listener: (m: SubscriptionMessage) => void = () => {};
   const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
       return { error: { code: -32000, message: cancelError } };
+    if (method === "agent/openPr") return { result: { url: prUrl }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
     return { result: { events: rest.slice(0, 2), more: rest.length > 2 }, logId: "log-1" };
@@ -170,7 +224,7 @@ function fakeBridge(seq: number, { listSeq = seq, resyncs = 0, cancelError = "" 
       status: "connected",
       wispd: "0.1.0",
       protocol: 1,
-      capabilities: {},
+      capabilities,
     }),
     onConnectionState: () => () => {},
     request,
@@ -188,8 +242,8 @@ const settle = async () => {
   for (let i = 0; i < 20; i++) await act(async () => {});
 };
 
-async function renderChat() {
-  render(<AgentChat hostId="local" runId={runId} />);
+async function renderChat(noRepo?: boolean) {
+  render(<AgentChat hostId="local" runId={runId} noRepo={noRepo} />);
   await settle(); // the connection state and the pages
 }
 
@@ -310,6 +364,38 @@ test("Stop cancels, and a failed cancel says why and allows another try", async 
   expect(document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.disabled).toBe(
     false,
   );
+});
+
+test("a finished run opens a pull request titled like its thread, then links to it", async () => {
+  const openPr = () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Open PR");
+  // Not while the run goes, nor in a thread with no repo, nor from a wispd that can't.
+  fakeBridge(4, { capabilities: { openPr: {} } });
+  await renderChat();
+  expect(openPr()).toBeUndefined();
+  act(() => unmount());
+  fakeBridge(8, { capabilities: { openPr: {} } });
+  await renderChat(true);
+  expect(openPr()).toBeUndefined();
+  act(() => unmount());
+  fakeBridge(8);
+  await renderChat();
+  expect(openPr()).toBeUndefined();
+  act(() => unmount());
+
+  const url = "https://github.com/me/app/pull/42";
+  const { request } = fakeBridge(8, { capabilities: { openPr: {} }, prUrl: url });
+  await renderChat();
+  await act(async () => openPr()!.click());
+  expect(request).toHaveBeenCalledWith("local", "agent/openPr", {
+    runId,
+    title: "Add a README that explains how to build the app.",
+  });
+  // An https link in a new window, which main opens in the browser.
+  const link = document.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!;
+  expect(link.textContent).toBe("PR #42");
+  expect(link.target).toBe("_blank");
+  expect(openPr()).toBeUndefined();
 });
 
 test("while disconnected, nothing loads and the composer says why", async () => {

@@ -543,14 +543,17 @@ fn summary(binding: &Binding, run: &AgentRun) -> Value {
     })
 }
 
-/// The bound project's runs.
+/// The bound project's runs, without its coordinator (0024): the model never sees or steers its
+/// own run, which would message itself.
 async fn project_runs(binding: &Binding, wispd: &mut Wispd) -> Result<Vec<AgentRun>, String> {
-    Ok(wispd
+    let mut runs = wispd
         .call::<AgentList>(AgentListParams {
             project: Some(binding.project),
         })
         .await?
-        .runs)
+        .runs;
+    runs.retain(|run| run.policy != AgentPolicy::NoWrite);
+    Ok(runs)
 }
 
 /// Run `run_id`, if it belongs to the bound project: the binding check every tool that takes a
@@ -722,6 +725,20 @@ mod tests {
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
         assert_eq!(listed, TOOLS);
+    }
+
+    #[test]
+    fn the_coordinators_instructions_name_only_real_tools() {
+        let instructions = include_str!("agents/coordinator.md");
+        // Every `snake_case` span between backticks.
+        for name in instructions.split('`').skip(1).step_by(2) {
+            if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                assert!(
+                    TOOLS.contains(&name),
+                    "coordinator.md names `{name}`, not a tool"
+                );
+            }
+        }
     }
 
     #[test]

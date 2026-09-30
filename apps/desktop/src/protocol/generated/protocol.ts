@@ -161,6 +161,12 @@ export type WispRequests = {
 	 */
 	"agent/requestChanges": { params: AgentRequestChangesParams, result: AgentRunResult },
 	/**
+	 * `agent/openPr`: pushes a finished run's branch to the repository's `origin` and opens
+	 * a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
+	 * `openPr` capability.
+	 */
+	"agent/openPr": { params: AgentOpenPrParams, result: AgentOpenPrResult },
+	/**
 	 * `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
 	 * (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
 	 */
@@ -185,6 +191,13 @@ export type WispRequests = {
 	 * stopping its CLI first if it runs.
 	 */
 	"thread/delete": { params: ThreadDeleteParams, result: ThreadDeleteResult },
+	/**
+	 * `project/start`: starts a project's coordinator chat, a no-write run in its repository
+	 * with wispd's coordinator tools (0024), idempotent on its client-generated run id. It
+	 * replaces the project's last coordinator unless that one is running. Gated on the
+	 * `coordinator` capability.
+	 */
+	"project/start": { params: ProjectStartParams, result: AgentRunResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -394,6 +407,11 @@ export type Project = {
 	 */
 	branch?: string,
 	/**
+	 * The run of the project's coordinator chat, the newest one `project/start` started (0024).
+	 * Its transcript, messages, and Stop go through `agent/*` like any run's.
+	 */
+	coordinator?: RunId,
+	/**
 	 * When the project was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -408,6 +426,12 @@ export type Project = {
  * retry of `project/create`.
  */
 export type ProjectId = string;
+
+/**
+ * An agent run's id: a version 7 UUID that the client generates once and sends again on every
+ * retry of `agent/start`, so a retry never starts a second agent.
+ */
+export type RunId = string;
 
 /**
  * Params of `project/create`.
@@ -1080,7 +1104,8 @@ export type AgentStartParams = {
 	 */
 	prompt: string,
 	/**
-	 * What the run's tools may do. Only `workspaceWrite` exists.
+	 * What the run's tools may do: only `workspaceWrite`. A project's coordinator, the one
+	 * `noWrite` run, is started with `project/start`.
 	 */
 	policy: AgentPolicy,
 	/**
@@ -1126,23 +1151,18 @@ export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentPermission = "edit" | "plan";
 
 /**
- * What a run's tools may do. Only workers run through `agent/start`.
+ * What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
+ * which `project/start` starts, is `noWrite`.
  *
  * A newer wispd may send a policy this version does not know; treat it as unknown.
  */
-export type AgentPolicy = "workspaceWrite";
+export type AgentPolicy = "workspaceWrite" | "noWrite";
 
 /**
  * A project's coordinator thread (M4, #195, decision 0019). Runs the coordinator starts
  * through its wisp tools carry it, so a client can tell them from runs it started itself.
  */
 export type CoordinatorThreadId = string;
-
-/**
- * An agent run's id: a version 7 UUID that the client generates once and sends again on every
- * retry of `agent/start`, so a retry never starts a second agent.
- */
-export type RunId = string;
 
 /**
  * Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
@@ -1483,7 +1503,11 @@ export type WispEvent = { "kind": "project.created",
 	/**
 	 * What happened to the project's repository.
 	 */
-	merge: AgentMerge, } | { "kind": "repo.added",
+	merge: AgentMerge, } | { "kind": "agent.wakeupsPaused",
+	/**
+	 * The coordinator's run id.
+	 */
+	runId: RunId, } | { "kind": "repo.added",
 	/**
 	 * The entry.
 	 */
@@ -1582,7 +1606,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 * the prompt's turn, whose text is the run's `prompt`, and in logs from before wispd
 	 * recorded it.
 	 */
-	text?: string, } | { "kind": "textDelta",
+	text?: string,
+	/**
+	 * True for a wake-up (RYA-42, decision 0025): a turn wispd sent a project's coordinator
+	 * on its own, not the user, because runs it started finished. `text` lists them.
+	 */
+	wake?: boolean, } | { "kind": "textDelta",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
@@ -2042,6 +2071,41 @@ export type AgentRequestChangesParams = {
 };
 
 /**
+ * Params of `agent/openPr` (RYA-168): wispd pushes the run's branch to the repository's `origin`
+ * on the host, as the user, and opens a pull request for it against the GitHub repository's
+ * default branch with `gh`.
+ *
+ * Idempotent: when the branch already has an open pull request, it pushes any new commits and
+ * returns that one.
+ */
+export type AgentOpenPrParams = {
+	/**
+	 * The run. It must have finished, have a commit, and work in a repository: a thread with no
+	 * repo has no `origin`.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's title, such as the thread's. wispd takes its first line, cut to 256
+	 * characters.
+	 */
+	title: string,
+	/**
+	 * Its description, at most 64 KiB. Absent means empty.
+	 */
+	body?: string,
+};
+
+/**
+ * Result of `agent/openPr`.
+ */
+export type AgentOpenPrResult = {
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+};
+
+/**
  * Params of `thread/list`.
  */
 export type ThreadListParams = Record<symbol, never>;
@@ -2198,6 +2262,47 @@ export type ThreadDeleteParams = {
 export type ThreadDeleteResult = Record<symbol, never>;
 
 /**
+ * Params of `project/start`: starts the project's coordinator chat (0024), behind the
+ * `coordinator` capability.
+ *
+ * The coordinator is a run with policy `noWrite` in the project's repository, whose
+ * `coordinatorThread` is its own id. Later messages, Stop, and its transcript go through
+ * `agent/send`, `agent/cancel`, and `agent/events`, and its events are the project's `agent.*`
+ * events. Idempotent on `runId` like `agent/start`: the same params return the run, and
+ * different ones fail with `idConflict`. A project's coordinator is its newest one, which
+ * `Project.coordinator` names. A new `runId` starts over: it replaces the coordinator unless that
+ * one is starting or running, when it fails with `idConflict`. So a coordinator whose session
+ * can't be resumed never locks its project.
+ */
+export type ProjectStartParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
+	/**
+	 * The coordinator run's id, a version 7 UUID generated by the client.
+	 */
+	runId: RunId,
+	/**
+	 * The user's first message.
+	 */
+	prompt: string,
+	/**
+	 * The account to run on. Absent means the coordinator role's default
+	 * (`accounts/defaults/*`). Only a backend that can coordinate takes it: Claude Code.
+	 */
+	account?: AccountChoice,
+	/**
+	 * The model, as `agent/start`'s. Absent means the CLI's default.
+	 */
+	model?: string,
+	/**
+	 * How hard the model thinks, as `agent/start`'s. Absent means the CLI's default.
+	 */
+	effort?: AgentEffort,
+};
+
+/**
  * Params of `$/cancelRequest`.
  */
 export type CancelRequestParams = {
@@ -2259,7 +2364,7 @@ export type ErrorData = {
  * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

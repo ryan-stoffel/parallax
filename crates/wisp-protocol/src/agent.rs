@@ -32,7 +32,8 @@ uuid_v7_id! {
     TurnId
 }
 
-/// What a run's tools may do. Only workers run through `agent/start`.
+/// What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
+/// which `project/start` starts, is `noWrite`.
 ///
 /// A newer wispd may send a policy this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -41,6 +42,9 @@ pub enum AgentPolicy {
     /// Edits in the run's worktree and the shared context folder, commands in the vendor's OS
     /// sandbox (0004, 0013).
     WorkspaceWrite,
+    /// Read-only tools in the project's repository, plus wispd's coordinator tools (0004, 0019,
+    /// 0024): a project's coordinator.
+    NoWrite,
     /// A policy this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -101,7 +105,7 @@ pub enum AgentStatus {
     Starting,
     /// Its CLI is running.
     Running,
-    /// Its CLI finished its work, and wispd committed the changes.
+    /// Its CLI finished its work, and wispd committed a worker's changes.
     Completed,
     /// It failed; `error` says why.
     Failed,
@@ -379,6 +383,10 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         text: Option<String>,
+        /// True for a wake-up (RYA-42, decision 0025): a turn wispd sent a project's coordinator
+        /// on its own, not the user, because runs it started finished. `text` lists them.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        wake: bool,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {
@@ -497,7 +505,8 @@ pub struct AgentStartParams {
     pub project: ProjectId,
     /// The task.
     pub prompt: String,
-    /// What the run's tools may do. Only `workspaceWrite` exists.
+    /// What the run's tools may do: only `workspaceWrite`. A project's coordinator, the one
+    /// `noWrite` run, is started with `project/start`.
     pub policy: AgentPolicy,
     /// The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
     #[serde(default, skip_serializing_if = "Option::is_none")]

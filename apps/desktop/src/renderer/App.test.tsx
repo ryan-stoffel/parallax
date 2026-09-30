@@ -56,18 +56,6 @@ test("the side panel toggle reports and flips the panel's state", () => {
   expect(panel.hidden).toBe(true);
 });
 
-test("a Project is one row that opens its chat, with no thread level", () => {
-  renderApp();
-  const project = [...document.querySelectorAll<HTMLButtonElement>("#sidebar li button")].find(
-    (b) => b.textContent?.startsWith("ember"),
-  )!;
-  act(() => project.click());
-
-  const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["This Mac", "ember"]);
-  expect(project.getAttribute("aria-current")).toBe("page");
-});
-
 test("the footer's Usage opens the Usage page, and Update shows its answer", async () => {
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
