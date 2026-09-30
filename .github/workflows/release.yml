@@ -43,13 +43,14 @@ jobs:
       - name: Plan the release
         id: plan
         run: |
-          # The version is the commit's committer time in UTC as YYMM.DDHH.MMSS (0030): the same
-          # on a re-run, rising with every commit, and each part at most 65535 for Windows.
-          # 10# drops leading zeros, which semver forbids.
+          # The version is the commit's committer time in UTC as YYMM.1DDHH.1MMSS (0030): the same
+          # on a re-run, rising with every commit, and each part at most 65535 for Windows. The
+          # leading 1s keep every tag the same length, because GitHub orders releases from the
+          # same day by tag name as text, and the updater takes the first one it finds.
           t=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" --jq .commit.committer.date)
           [[ $t =~ ^20([0-9]{2})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$ ]]
           m=("${BASH_REMATCH[@]}")
-          version="$((10#${m[1]}${m[2]})).$((10#${m[3]}${m[4]})).$((10#${m[5]}${m[6]}))"
+          version="${m[1]}${m[2]}.1${m[3]}${m[4]}.1${m[5]}${m[6]}"
           # Only main is the standard channel: electron-updater's `latest`. Any other branch, from
           # workflow_dispatch, builds as a nightly, a prerelease of the same time, so the standard
           # release of a commit is newer than its nightly.
