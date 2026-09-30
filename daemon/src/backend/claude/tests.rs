@@ -1419,7 +1419,7 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
 }
 
 #[tokio::test]
-async fn images_go_before_the_text_as_base64_blocks_in_the_prompt_and_follow_ups() {
+async fn images_go_before_the_text_as_base64_blocks_and_a_message_of_images_alone_has_no_text() {
     let png = PromptImage {
         media_type: ImageMediaType::Png,
         data: "iVBORw0KGgo=".into(),
@@ -1440,7 +1440,7 @@ async fn images_go_before_the_text_as_base64_blocks_in_the_prompt_and_follow_ups
     ));
     run.send(FollowUp {
         turn_id: turn(TURN_2),
-        text: "And this one.".into(),
+        text: String::new(),
         images: vec![gif],
     })
     .unwrap();
@@ -1463,7 +1463,7 @@ async fn images_go_before_the_text_as_base64_blocks_in_the_prompt_and_follow_ups
     );
     assert_eq!(
         stdin[1]["message"]["content"],
-        serde_json::json!([block("image/gif", "R0lGODlh"), text("And this one.")])
+        serde_json::json!([block("image/gif", "R0lGODlh")])
     );
 }
 

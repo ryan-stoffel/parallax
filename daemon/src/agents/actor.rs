@@ -573,7 +573,7 @@ impl Actor {
         images: Vec<PromptImage>,
         options: RunOptions,
     ) -> Result<AgentRun, ErrorObject> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && images.is_empty() {
             return Err(ErrorObject::invalid_params("text must not be empty"));
         }
         if self.accepted() {

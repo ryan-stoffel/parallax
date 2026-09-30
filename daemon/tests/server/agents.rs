@@ -690,11 +690,18 @@ async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_a
     };
     let error = client.call::<AgentSend>(too_many).await.unwrap_err();
     assert_eq!(kind(&error), ErrorKind::ImageTooLarge);
+    let blank = send_params(run_id, TurnId::generate(), " ");
+    let error = client.call::<AgentSend>(blank).await.unwrap_err();
+    assert_eq!(
+        error.code, INVALID_PARAMS,
+        "no text and no images: {error:?}"
+    );
 
     let turn = TurnId::generate();
     let follow_up = AgentSendParams {
         images: vec![gif.clone(), png.clone()],
-        ..send_params(run_id, turn, "and these?")
+        // Images alone, with no text (RYA-193).
+        ..send_params(run_id, turn, "")
     };
     client.call::<AgentSend>(follow_up).await.unwrap();
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;

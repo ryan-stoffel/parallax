@@ -139,6 +139,19 @@ test("a follow-up shows the text its turnStarted logged", () => {
   expect(of(t.items, "user").at(-1)).toMatchObject({ text: "And the tests.", turnId });
 });
 
+test("a message's image ids come from its turnStarted: the prompt's from the turn with no id (RYA-193)", () => {
+  const turnId = uuidv7();
+  const t = build(
+    ...upTo(1),
+    output({ kind: "turnStarted", images: ["i-1", "i-2"] }),
+    output({ kind: "turnStarted", turnId, text: "", images: ["i-3"] }),
+  );
+  const [prompt, followUp] = of(t.items, "user");
+  expect(prompt).toMatchObject({ kind: "user", images: ["i-1", "i-2"] });
+  expect(prompt).not.toHaveProperty("turnId");
+  expect(followUp).toMatchObject({ text: "", turnId, images: ["i-3"] });
+});
+
 test("a wake-up is marked as wisp's, and a pause says the next message resumes them (0025)", () => {
   const turnId = uuidv7();
   const text = "wisp, not the user: runs you started finished.";

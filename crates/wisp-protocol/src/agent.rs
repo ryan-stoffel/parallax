@@ -587,8 +587,8 @@ pub struct AgentStartParams {
     pub permission: Option<AgentPermission>,
     /// Images for the prompt, sent only to a wispd that advertises `promptImages`. Its options
     /// give the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of `data`, past which
-    /// the request fails with `imageTooLarge`. A retry must repeat them; wispd doesn't compare
-    /// them.
+    /// the request fails with `imageTooLarge`. With images, the prompt may be empty (RYA-193). A
+    /// retry must repeat them; wispd doesn't compare them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
 }

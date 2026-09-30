@@ -1,11 +1,12 @@
 import { Folder, GitBranch } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { Project } from "../protocol/generated/protocol";
+import type { Project, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
+import { imageCaps } from "./images";
 import type { RunOptions } from "./models";
 import { accountOptions, defaultBackend } from "./NewThread";
 import { ProjectIcon } from "./Sidebar";
@@ -65,8 +66,13 @@ export function ProjectChat({
 
   // Starts the coordinator as run `id`. With no coordinator account on the host, the run gets the
   // host's first Claude account, its login before its keys (0004), and the chat says so.
-  const start = async (id: string, text: string, { model, effort, permission }: RunOptions) => {
-    let error = await startCoordinator(project.id, id, text, { model, effort, permission });
+  const start = async (
+    id: string,
+    text: string,
+    { model, effort, permission }: RunOptions,
+    images: PromptImage[],
+  ) => {
+    let error = await startCoordinator(project.id, id, text, images, { model, effort, permission });
     const kind = error?.data?.kind;
     if (kind === "noDefaultAccount" || kind === "accountNotFound") {
       const accounts = await accountOptions(hostId);
@@ -74,7 +80,7 @@ export function ProjectChat({
       const first = accounts[0];
       if (!first)
         return "No account can run the coordinator yet. Sign in to Claude Code, or add an API key, then try again.";
-      error = await startCoordinator(project.id, id, text, {
+      error = await startCoordinator(project.id, id, text, images, {
         model,
         effort,
         permission,
@@ -95,13 +101,13 @@ export function ProjectChat({
         notice={notice}
         tab={tab}
         // A new coordinator replaces one that can't take messages (0024).
-        startOver={(text, options) => start(uuidv7(), text, options)}
+        startOver={(text, options, images) => start(uuidv7(), text, options, images)}
       />
     );
 
-  const send = async (text: string, options: RunOptions) => {
+  const send = async (text: string, options: RunOptions, images: PromptImage[]) => {
     setStarting(true);
-    const failed = await start(runId, text, options);
+    const failed = await start(runId, text, options, images);
     setStarting(false);
     return failed;
   };
@@ -129,6 +135,7 @@ export function ProjectChat({
           backend={backend}
           disabledReason={disabledReason}
           tab={tab}
+          imageCaps={imageCaps(connection)}
         />
       </div>
     </>

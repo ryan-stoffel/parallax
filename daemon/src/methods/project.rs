@@ -100,8 +100,7 @@ pub(crate) async fn start(
     context: &Context,
     params: ProjectStartParams,
 ) -> Result<AgentRunResult, ErrorObject> {
-    super::agent::check_text("prompt", &params.prompt)?;
-    crate::images::check(&params.images)?;
+    super::agent::check_message("prompt", &params.prompt, &params.images)?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
