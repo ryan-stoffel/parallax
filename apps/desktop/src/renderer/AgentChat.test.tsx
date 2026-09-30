@@ -54,6 +54,44 @@ test("a user message shows its text, or a neutral label when the log has none", 
   expect(document.body.textContent).toBe("Follow-up message");
 });
 
+test("a user message shows its images over its text: fetched by id, or at hand when sent from here", async () => {
+  const url = (data: string) => `data:image/png;base64,${data}`;
+  const loadImage = vi.fn(async (id: string) => (id === "i-1" ? url("AAAA") : undefined));
+  render(
+    <RowView
+      row={{ kind: "user", key: "a", text: "", images: ["i-1", "i-2"] }}
+      live={false}
+      open={false}
+      onToggle={() => {}}
+      loadImage={loadImage}
+    />,
+  );
+  await act(async () => {});
+  expect([...document.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual([
+    url("AAAA"),
+  ]);
+  expect(document.querySelector('[aria-label="Image unavailable"]')).not.toBeNull();
+  // Images alone get no bubble.
+  expect(document.body.textContent).toBe("");
+  act(() => unmount());
+
+  render(
+    <RowView
+      row={{
+        kind: "pending",
+        key: "p",
+        text: "And this?",
+        images: [{ mediaType: "image/png", data: "BBBB" }],
+      }}
+      live={false}
+      open={false}
+      onToggle={() => {}}
+    />,
+  );
+  expect(document.querySelector("img")?.getAttribute("src")).toBe(url("BBBB"));
+  expect(document.body.textContent).toBe("And this?");
+});
+
 test("a wake-up reads as from wisp, with its message folded away", () => {
   row({
     kind: "user",
@@ -349,6 +387,32 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   expect(sendAgain()).toBeUndefined();
 });
 
+test("a pasted image goes with agent/send beside the text, and shows while it's pending", async () => {
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1 }));
+  const promptImages = { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 };
+  const { request } = fakeBridge(4, { capabilities: { promptImages } });
+  await renderChat();
+  const data = new DataTransfer();
+  data.items.add(new File([Uint8Array.of(0x89, 0x50, 0x4e, 0x47)], "a.png", { type: "image/png" }));
+  act(() => {
+    composer().dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+  });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  await act(async () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+
+  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  expect(send[2]).toMatchObject({
+    runId,
+    text: "",
+    images: [{ mediaType: "image/png", data: "iVBORw==" }],
+  });
+  const img = document.querySelector('[role="log"] img');
+  expect(img?.getAttribute("src")).toBe("data:image/png;base64,iVBORw==");
+  vi.unstubAllGlobals();
+});
+
 test("Stop cancels, and a failed cancel says why and allows another try", async () => {
   const { request } = fakeBridge(4, { cancelError: "wispd is gone" });
   await renderChat();
@@ -460,10 +524,11 @@ test("an open thread's composer picks within its provider and sends only what ch
     document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
   );
   // Access is still the run's, so it isn't sent.
-  expect(onSend).toHaveBeenCalledWith("Just the summary", {
-    model: "claude-sonnet-5",
-    effort: "low",
-  });
+  expect(onSend).toHaveBeenCalledWith(
+    "Just the summary",
+    { model: "claude-sonnet-5", effort: "low" },
+    [],
+  );
 });
 
 test("while a run goes, only the last work row shows what the agent is doing", () => {

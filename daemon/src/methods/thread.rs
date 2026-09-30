@@ -50,8 +50,7 @@ async fn start(
     context: &Context,
     params: ThreadStartParams,
 ) -> Result<ThreadStartResult, ErrorObject> {
-    super::agent::check_text("prompt", &params.prompt)?;
-    crate::images::check(&params.images)?;
+    super::agent::check_message("prompt", &params.prompt, &params.images)?;
     let daemon = Arc::clone(&context.daemon);
     context
         .daemon

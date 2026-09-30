@@ -196,6 +196,38 @@ test("a follow-up's text is still there after a reload (RYA-92)", async () => {
   await expect(transcript.getByText("Follow-up message")).toHaveCount(0);
 });
 
+test("a pasted image sits in the composer, goes with the message, and outlives a reload (RYA-193)", async () => {
+  // Wider than the 2000 px an image is sent at, so the composer redraws it smaller.
+  await app.evaluate(async ({ clipboard, ClipboardItem, nativeImage }) => {
+    const [width, height] = [2400, 12];
+    const pixels = Buffer.alloc(width * height * 4, 0x80);
+    const png = nativeImage.createFromBitmap(pixels, { width, height }).toPNG();
+    await clipboard.write([new ClipboardItem({ "image/png": new Blob([png]) })]);
+  });
+  const message = page.getByRole("textbox", { name: "Message" });
+  await message.click();
+  await edit("paste");
+  const thumbnail = page.getByRole("img", { name: "Image 1" });
+  await expect(thumbnail).toBeVisible();
+  await expect(message).toHaveText("");
+  // e2e/ has no DOM types.
+  const width = (img: unknown) => (img as { naturalWidth: number }).naturalWidth;
+  expect(await thumbnail.evaluate(width)).toBe(2000);
+
+  // The image alone: the thread was left running, so the fake takes it as a follow-up.
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(thumbnail).toHaveCount(0);
+  const transcript = page.getByRole("log", { name: "Transcript" });
+  const sent = transcript.getByRole("img", { name: "Image", exact: true });
+  await expect(sent).toBeVisible();
+
+  // Rebuilt from the log, the image comes from wispd.
+  await page.reload();
+  await page.getByRole("button", { name: /Tidy up the README/ }).click();
+  await expect(sent).toBeVisible();
+  expect(await sent.evaluate(width)).toBe(2000);
+});
+
 test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();

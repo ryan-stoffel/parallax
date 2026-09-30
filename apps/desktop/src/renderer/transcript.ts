@@ -9,6 +9,7 @@ import type {
   AgentStatus,
   AgentTodoItem,
   AgentToolStatus,
+  ImageId,
   JsonValue,
   LoggedEvent,
   WispEvent,
@@ -20,9 +21,17 @@ export type Item = ItemBody & { at?: string };
 type ItemBody =
   /**
    * `text` is null for a follow-up logged by a wispd from before it recorded the text. `wake` marks
-   * a turn wispd sent a coordinator itself, when runs it started finished (0025).
+   * a turn wispd sent a coordinator itself, when runs it started finished (0025). `images` are the
+   * ids of the images sent with it, for `agent/image` (RYA-193).
    */
-  | { kind: "user"; key: string; text: string | null; turnId?: string; wake?: boolean }
+  | {
+      kind: "user";
+      key: string;
+      text: string | null;
+      turnId?: string;
+      wake?: boolean;
+      images?: ImageId[];
+    }
   /** `partial` while it is still arriving as `textDelta`s. */
   | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
   | { kind: "reasoning"; key: string; text: string }
@@ -135,8 +144,8 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
   };
 
   switch (item.kind) {
-    case "turnStarted":
-      // The run's first turn has no id; its prompt came with agent.started.
+    case "turnStarted": {
+      const images = item.images?.length ? { images: item.images } : {};
       if (item.turnId)
         items.push({
           kind: "user",
@@ -144,8 +153,17 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
           text: item.text ?? null,
           turnId: item.turnId,
           ...(item.wake && { wake: true }),
+          ...images,
         });
+      else {
+        // The run's first turn has no id; its prompt came with agent.started, and gets its images.
+        const i = items.findIndex((x) => x.kind === "user" && !x.turnId);
+        const prompt = items[i];
+        if (prompt?.kind === "user" && item.images?.length)
+          items[i] = { ...prompt, images: item.images };
+      }
       break;
+    }
     case "textDelta": {
       const found = target(item.messageId);
       if (found) items[found.i] = { ...found.item, text: found.item.text + item.text };

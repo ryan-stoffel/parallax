@@ -2,11 +2,13 @@ import { Folder, GitBranch, House, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError, ThreadName } from "../preload/bridge";
-import type { AccountChoice, Repo, Role } from "../protocol/generated/protocol";
+import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
 import { TranscriptView } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
+import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
+import { imageCaps } from "./images";
 import type { RunOptions } from "./models";
 import { RunTargetMenu } from "./RunTargetMenu";
 import { noRepo, type ThreadGroup } from "./threads";
@@ -31,6 +33,7 @@ interface NewThreadProps {
     runId: string,
     groupId: string,
     prompt: string,
+    images: PromptImage[],
     options: RunOptions,
     name?: ThreadName,
   ) => Promise<RpcError | undefined>;
@@ -46,6 +49,7 @@ interface Attempt {
   runId: string;
   groupId: string;
   prompt: string;
+  images: PromptImage[];
   options: RunOptions;
   name: ThreadName;
 }
@@ -137,15 +141,16 @@ export function NewThread({
       live = false;
     };
   }, [hostId, runOptions]);
+  const connection = useConnection(hostId);
   const [repoError, setRepoError] = useState<string>();
   // Open while the host needs an account for the failed start.
   const [choices, setChoices] = useState<AccountOption[]>();
   const [picked, setPicked] = useState(0);
   const [choosing, setChoosing] = useState(false);
   const [chooseError, setChooseError] = useState<string>();
-  // The prompt of a start in flight. Starting takes wispd a moment (a worktree, a worker), so the
-  // screen shows it as the thread it opens meanwhile.
-  const [starting, setStarting] = useState<string>();
+  // The prompt and images of a start in flight. Starting takes wispd a moment (a worktree, a
+  // worker), so the screen shows them as the thread it opens meanwhile.
+  const [starting, setStarting] = useState<{ prompt: string; images: PromptImage[] }>();
   const failed = useRef<Attempt>(undefined);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
 
@@ -168,6 +173,7 @@ export function NewThread({
       attempt.runId,
       attempt.groupId,
       attempt.prompt,
+      attempt.images,
       attempt.options,
       attempt.name,
     );
@@ -210,24 +216,28 @@ export function NewThread({
     return attemptStart(attempt, false, notice);
   };
 
-  const send = async (prompt: string, options: RunOptions) => {
+  const send = async (prompt: string, options: RunOptions, images: PromptImage[]) => {
     setChoices(undefined);
     const last = failed.current;
-    // wispd refuses a run id reused with other options, so changing one starts afresh.
+    // wispd refuses a run id reused with other options, so changing one starts afresh. It doesn't
+    // compare images, so this does: a failed send puts back the very same ones.
     const same =
       last &&
       last.groupId === group.id &&
       last.prompt === prompt &&
+      last.images.length === images.length &&
+      last.images.every((image, i) => image === images[i]) &&
       JSON.stringify(last.options) === JSON.stringify(options)
         ? last
         : undefined;
-    setStarting(prompt);
-    // A retry keeps its name, so the same start is the same request.
-    const name = same?.name ?? (await window.wisp.nameThread(prompt));
+    setStarting({ prompt, images });
+    // A retry keeps its name, so the same start is the same request. Images alone name nothing.
+    const name = same?.name ?? (prompt.trim() ? await window.wisp.nameThread(prompt) : {});
     const error = await attemptStart({
       runId: same?.runId ?? uuidv7(),
       groupId: group.id,
       prompt,
+      images,
       options,
       name,
     });
@@ -267,7 +277,14 @@ export function NewThread({
     >
       {starting !== undefined && (
         <TranscriptView
-          rows={[{ kind: "pending", key: "pending:prompt", text: starting }]}
+          rows={[
+            {
+              kind: "pending",
+              key: "pending:prompt",
+              text: starting.prompt,
+              images: starting.images,
+            },
+          ]}
           sent={new Map()}
           live={false}
         />
@@ -329,6 +346,7 @@ export function NewThread({
           // Hidden while starting, as the opened thread's composer has none.
           backend={runOptions && starting === undefined ? backend : undefined}
           disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
+          imageCaps={imageCaps(connection)}
           tab={
             starting !== undefined ? (
               <span className={tabItem}>

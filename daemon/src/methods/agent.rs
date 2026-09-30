@@ -34,8 +34,14 @@ const MAX_EVENTS_LIMIT: u32 = 1000;
 /// leaves room for the envelope. A page holds at least one event whatever its size.
 pub(crate) const MAX_EVENTS_PAGE_BYTES: usize = 4 * 1024 * 1024;
 
-pub(super) fn check_text(name: &str, text: &str) -> Result<(), ErrorObject> {
-    if text.trim().is_empty() {
+/// Checks a prompt or message: its text, which may be empty only when it has images (RYA-193),
+/// and its images (`images::check`).
+pub(super) fn check_message(
+    name: &str,
+    text: &str,
+    images: &[PromptImage],
+) -> Result<(), ErrorObject> {
+    if text.trim().is_empty() && images.is_empty() {
         return Err(ErrorObject::invalid_params(format!(
             "{name} must not be empty"
         )));
@@ -45,7 +51,7 @@ pub(super) fn check_text(name: &str, text: &str) -> Result<(), ErrorObject> {
             "{name} must be at most {MAX_TEXT_BYTES} bytes"
         )));
     }
-    Ok(())
+    images::check(images)
 }
 
 // The runner's work runs detached from the request (`Agents::detached`), so a dropped
@@ -60,8 +66,7 @@ pub(crate) async fn start(
             "policy must be workspaceWrite, the only policy agent/start takes",
         ));
     }
-    check_text("prompt", &params.prompt)?;
-    images::check(&params.images)?;
+    check_message("prompt", &params.prompt, &params.images)?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -75,8 +80,7 @@ pub(crate) async fn send(
     context: &Context,
     params: AgentSendParams,
 ) -> Result<AgentRunResult, ErrorObject> {
-    check_text("text", &params.text)?;
-    images::check(&params.images)?;
+    check_message("text", &params.text, &params.images)?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon

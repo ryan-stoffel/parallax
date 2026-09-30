@@ -19,8 +19,14 @@ import StarterKit from "@tiptap/starter-kit";
 import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
 import { useRef, useState, type ReactNode } from "react";
 
-import type { AgentEffort, AgentPermission, AgentRun } from "../protocol/generated/protocol";
+import type {
+  AgentEffort,
+  AgentPermission,
+  AgentRun,
+  PromptImage,
+} from "../protocol/generated/protocol";
 import { EffortMenu } from "./EffortMenu";
+import { imageUrl, readImage, type ImageCaps } from "./images";
 import { ModelMenu } from "./ModelMenu";
 import { backends, models, type Model, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
@@ -157,10 +163,15 @@ export interface ComposerProps {
   /** Whether it starts a new thread, which only changes its hint. */
   newThread?: boolean;
   /**
-   * Sends the text, with the chosen run options (empty without `backend`). Resolves to an error
-   * message, which puts the text back; `""` puts it back with no message. Absent: Send stays off.
+   * Sends the text and images, with the chosen run options (empty without `backend`). Resolves to
+   * an error message, which puts them back; `""` puts them back with no message. Absent: Send
+   * stays off.
    */
-  onSend?: (text: string, options: RunOptions) => Promise<string | undefined>;
+  onSend?: (
+    text: string,
+    options: RunOptions,
+    images: PromptImage[],
+  ) => Promise<string | undefined>;
   /**
    * While set, an empty box shows Stop instead of Send. Resolves to an error message.
    * Stop stays pending until the caller drops `onStop`, when the run stops.
@@ -186,12 +197,16 @@ export interface ComposerProps {
   started?: Pick<AgentRun, "model" | "effort" | "permission">;
   /** Why the model, effort, and access can't change right now, which turns them off. */
   optionsDisabled?: string;
+  /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
+  imageCaps?: ImageCaps;
 }
 
 /**
  * The prompt box, the same on every screen. It formats Markdown as you type and sends it as
  * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
  * block Enter adds a line and Cmd/Ctrl+Enter sends. It grows with its text up to 40% of the window.
+ * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
+ * it (RYA-193).
  */
 export function Composer({
   newThread,
@@ -203,13 +218,17 @@ export function Composer({
   backend,
   started,
   optionsDisabled,
+  imageCaps,
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
   const [stopping, setStopping] = useState(false);
-  // Files picked with the paperclip. Shown as chips; wispd doesn't take attachments yet.
+  // Files that aren't images, shown as chips; wispd doesn't take them yet.
   const [files, setFiles] = useState<File[]>([]);
+  const [images, setImages] = useState<PromptImage[]>([]);
+  // Why an image wasn't added, shown by the thumbnails.
+  const [imageError, setImageError] = useState<string>();
   const filePicker = useRef<HTMLInputElement>(null);
   const [pickedModel, setModel] = useState<Model>();
   const [pickedEffort, setEffort] = useState<AgentEffort>();
@@ -243,20 +262,45 @@ export function Composer({
   else if (run) options = { ...(model && { model: model.id }), effort, permission };
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
-  const canSend = !!onSend && !disabledReason && text.trim() !== "";
-  const showStop = !!onStop && !disabledReason && text.trim() === "";
+  const empty = text.trim() === "" && images.length === 0;
+  const canSend = !!onSend && !disabledReason && !empty;
+  const showStop = !!onStop && !disabledReason && empty;
+
+  // Adds pasted, dropped, or picked files: images as thumbnails, anything else as a chip. Each
+  // image gets an even share of the total cap, so any number of them up to the most fits it.
+  const addFiles = async (added: File[]) => {
+    const isImage = (f: File) => f.type.startsWith("image/");
+    setFiles((all) => [...all, ...added.filter((f) => !isImage(f))]);
+    const picked = added.filter(isImage);
+    setImageError(undefined);
+    if (picked.length === 0) return;
+    if (!imageCaps) return setImageError("This host's wispd can't take images.");
+    const { maxImages, maxImageBytes, maxTotalBytes } = imageCaps;
+    const room = Math.max(0, maxImages - images.length);
+    const share = Math.min(maxImageBytes, Math.floor(maxTotalBytes / maxImages));
+    const read = await Promise.all(picked.slice(0, room).map((f) => readImage(f, share)));
+    const errors = read.filter((r) => typeof r === "string");
+    if (picked.length > room) errors.push(`A message takes at most ${maxImages} images.`);
+    setImageError(errors[0]);
+    const ok = read.filter((r) => typeof r !== "string");
+    setImages((all) => [...all, ...ok].slice(0, maxImages));
+  };
 
   const submit = async () => {
     if (!canSend) return;
     const sent = editor.getJSON();
+    const sentImages = images;
     editor.commands.clearContent();
+    setImages([]);
     setError(undefined);
-    const failed = await onSend(text, options);
+    setImageError(undefined);
+    const failed = await onSend(text, options, sentImages);
     if (failed === undefined) setFiles([]);
     else if (!editor.isDestroyed) {
-      // Put it back ahead of anything typed while it was in flight.
+      // Put it back ahead of anything typed or added while it was in flight.
       const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);
       editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });
+      setImages((added) => [...sentImages, ...added]);
       setError(failed);
     }
   };
@@ -314,14 +358,19 @@ export function Composer({
           ])
         );
       },
-      // Paste takes plain text only, so nothing brings in its source's styling. Anything else (an
-      // image, say) falls through to the editor, which drops it.
+      // Paste takes files (a screenshot, a copied image) above the text, so a copied file's name
+      // never lands in it. Text copied from an app (Office, Notes, a web page) can carry a picture
+      // of itself too: with HTML beside it, it's text. Text is plain only, so nothing brings in its
+      // source's styling. Anything else falls through to the editor, which drops it.
       handleDOMEvents: {
         paste: (view, event) => {
-          const text = event.clipboardData?.getData("text/plain");
-          if (!text) return false;
+          const data = event.clipboardData;
+          const text = data?.getData("text/plain");
+          const files = text && data?.getData("text/html") ? [] : [...(data?.files ?? [])];
+          if (files.length === 0 && !text) return false;
           event.preventDefault();
-          view.pasteText(text);
+          if (files.length > 0) void addFiles(files);
+          else view.pasteText(text!);
           return true;
         },
       },
@@ -368,8 +417,42 @@ export function Composer({
           e.preventDefault();
           void submit();
         }}
+        // Files dropped anywhere on the box are added, before the editor can take them as text.
+        onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
+        onDropCapture={(e) => {
+          if (e.dataTransfer.files.length === 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          void addFiles([...e.dataTransfer.files]);
+        }}
         className="relative z-10 rounded-3xl border border-border bg-surface shadow-composer focus-within:border-ring"
       >
+        {(images.length > 0 || imageError) && (
+          <div className="flex flex-wrap items-center gap-2 px-4 pt-3.5">
+            {images.map((image, i) => (
+              <span key={i} className="relative">
+                <img
+                  src={imageUrl(image)}
+                  alt={`Image ${i + 1}`}
+                  className="size-14 rounded-xl border border-border object-cover"
+                />
+                <button
+                  type="button"
+                  aria-label={`Remove image ${i + 1}`}
+                  onClick={() => setImages((all) => all.filter((_, j) => j !== i))}
+                  className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
+            ))}
+            {imageError && (
+              <p role="alert" className="text-[12.5px] text-danger">
+                {imageError}
+              </p>
+            )}
+          </div>
+        )}
         <div className="relative">
           {!text && (
             <p
@@ -448,8 +531,7 @@ export function Composer({
             multiple
             hidden
             onChange={(e) => {
-              const picked = Array.from(e.target.files ?? []);
-              setFiles((all) => [...all, ...picked]);
+              void addFiles(Array.from(e.target.files ?? []));
               e.target.value = "";
             }}
           />
