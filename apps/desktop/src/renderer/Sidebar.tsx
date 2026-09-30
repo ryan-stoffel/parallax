@@ -592,6 +592,12 @@ function ThreadRow({
   };
   const Logo = run?.backend ? backendLogos[run.backend] : undefined;
   const hasDetails = !!(run?.branch || run?.diff || Logo);
+  const archiveLabel = (
+    <>
+      {thread.archived ? <ArchiveRestore aria-hidden /> : <Check aria-hidden />}
+      {thread.archived ? "Unarchive" : "Archive"}
+    </>
+  );
   return (
     <li
       className="group/row relative"
@@ -615,7 +621,7 @@ function ThreadRow({
           >
             {title}
           </span>
-          <span className="shrink-0 text-[11.5px] text-faint-foreground group-has-[:focus-visible]/row:invisible group-hover/row:invisible">
+          <span className="shrink-0 text-[11.5px] text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden">
             {run?.status === "failed" ? (
               <span className="flex items-center gap-1 text-danger">
                 <CircleAlert aria-hidden className="size-3.5" />
@@ -624,6 +630,15 @@ function ThreadRow({
             ) : (
               age(thread.createdAt)
             )}
+          </span>
+          {/* An invisible copy of the actions below, holding their width while they show, so a
+              long title ends in an ellipsis before them. pr-7.5 is Archive's right padding, the
+              gap, and the actions button. */}
+          <span
+            aria-hidden
+            className="invisible hidden shrink-0 items-center gap-1 pr-7.5 pl-1.5 text-[11.5px] group-has-[:focus-visible]/row:flex group-hover/row:flex [&_svg]:size-3.5"
+          >
+            {archiveLabel}
           </span>
         </span>
         {hasDetails && (
@@ -648,8 +663,7 @@ function ThreadRow({
           }}
           className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
-          {thread.archived ? <ArchiveRestore aria-hidden /> : <Check aria-hidden />}
-          {thread.archived ? "Unarchive" : "Archive"}
+          {archiveLabel}
         </button>
         <button
           ref={actions}
