@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import { Picker, type PickerOption } from "./ui";
+import { moveFocus, Picker, type PickerOption } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The menu's items are in the DOM either way.
@@ -72,4 +72,32 @@ test("Up and Down move between a menu's items, wrapping at the ends", () => {
   press("ArrowDown");
   expect(focused()).toBe("ember");
   expect(menu.contains(document.activeElement)).toBe(true);
+});
+
+test("Up and Down pass a menu's disabled items", () => {
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  render(
+    <div role="menu" onKeyDown={moveFocus}>
+      <button type="button" role="menuitem">
+        Choose folder…
+      </button>
+      <button type="button" role="menuitem" disabled>
+        Browse folders
+      </button>
+      <button type="button" role="menuitem">
+        wisp
+      </button>
+    </div>,
+  );
+  const press = (key: string) =>
+    act(() => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  const focused = () => document.activeElement?.textContent;
+
+  document.querySelector<HTMLElement>('[role="menuitem"]')!.focus();
+  press("ArrowDown");
+  expect(focused()).toBe("wisp");
+  press("ArrowUp");
+  expect(focused()).toBe("Choose folder…");
 });
