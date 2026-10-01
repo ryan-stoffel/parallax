@@ -1,35 +1,51 @@
 #!/usr/bin/env bash
 # Finishes the release TAG once every build has attached what it could (release.yml's finish job):
-# joins the two Windows builds' <channel>.yml into the one the release carries, then, when every
-# build succeeded, writes SHA256SUMS from the digests GitHub keeps for each file.
+# joins the Windows builds' <channel>-win-x64.yml and <channel>-win-arm64.yml, as attached to the
+# release, into the <channel>.yml the updater reads, then, when every build succeeded, writes
+# SHA256SUMS from the digests GitHub keeps for each file. Reading the metadata from the release
+# means it always describes the installers there, whichever run attached them.
 #
-# Arguments: the x64 and arm64 builds' <channel>.yml (either may be missing). Environment: TAG,
-# CHANNEL, ALL_BUILT (true when every build succeeded), GH_TOKEN, and GH_REPO. DRY_RUN=1 prints
-# each write instead of making it, and skips SHA256SUMS, which needs a published release.
+# Environment: TAG, CHANNEL, ALL_BUILT (true when every build succeeded), GH_TOKEN, and GH_REPO.
+# DRY_RUN=1 prints each write instead of making it, reads the two files from the folder given as
+# the argument (workflow_dispatch has no release), and skips SHA256SUMS.
 set -euo pipefail
 
 write() {
   if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
 }
 
+x64=$CHANNEL-win-x64.yml
+arm64=$CHANNEL-win-arm64.yml
 out=$(mktemp -d)
+if [ "${DRY_RUN:-}" = 1 ]; then
+  for f in "$x64" "$arm64"; do if [ -f "$1/$f" ]; then cp "$1/$f" "$out/"; fi; done
+else
+  assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+  for f in "$x64" "$arm64"; do
+    if grep -qxF -- "$f" <<< "$assets"; then gh release download "$TAG" --pattern "$f" --dir "$out"; fi
+  done
+fi
+
 # electron-updater on Windows reads one <channel>.yml and installs the file whose name has its
 # arch, falling back to the first file. So a list with only x64 would give arm64 machines the x64
 # installer, and the release gets the file only when both builds made one (0030).
-if [ -f "$1" ] && [ -f "$2" ]; then
+joined=false
+if [ -f "$out/$x64" ] && [ -f "$out/$arm64" ]; then
   ruby -ryaml -e 'x64 = YAML.load_file(ARGV[0]); x64["files"] += YAML.load_file(ARGV[1])["files"]; File.write(ARGV[2], x64.to_yaml)' \
-    "$1" "$2" "$out/$CHANNEL.yml"
+    "$out/$x64" "$out/$arm64" "$out/$CHANNEL.yml"
   cat "$out/$CHANNEL.yml"
   write release upload "$TAG" "$out/$CHANNEL.yml" --clobber
+  joined=true
 else
-  echo "A Windows build made no $CHANNEL.yml, so $TAG has no Windows update metadata yet."
+  echo "$TAG lacks a Windows build's metadata, so it gets no $CHANNEL.yml yet."
 fi
 
-if [ "$ALL_BUILT" != true ] || [ "${DRY_RUN:-}" = 1 ]; then
+if [ "$ALL_BUILT" != true ] || [ "$joined" != true ] || [ "${DRY_RUN:-}" = 1 ]; then
   echo "Not writing SHA256SUMS: not every build succeeded, or this is a dry run."
   exit 0
 fi
 # The same format as sha256sum's, from GitHub's own digest of each file, so nothing is downloaded.
+# With it, the release is complete: plan skips it from then on.
 gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets | sort_by(.name)[] | select(.name != "SHA256SUMS") | "\(.digest // "none") \(.name)"' |
   while read -r digest name; do
     if [[ $digest != sha256:* ]]; then echo "finish-release: no sha256 digest for $name" >&2; exit 1; fi

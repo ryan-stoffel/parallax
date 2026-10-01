@@ -64,8 +64,8 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
   | Linux arm64 | `latest-linux-arm64.yml` / `nightly-linux-arm64.yml` | the AppImage |
 
 - **macOS builds a zip as well as the dmg.** The zip is what the updater installs. The dmg is for first installs and stays out of the metadata (`dmg.writeUpdateInfo: false`).
-- **Windows:** both Windows runners write the same `<channel>.yml`. Neither attaches it: each uploads it as a small workflow artifact, and `release.yml`'s `finish` job, after all builds, joins their `files` lists into one and attaches that, since `NsisUpdater` picks the file whose name contains its arch. It does so only when both builds made one: `NsisUpdater` falls back to the first file, so a list with only x64 would give arm64 machines the x64 installer. Every other file name is unique to its build.
-- Each release attaches every installer, the zip, the blockmaps, and the channel's four `.yml` files. `SHA256SUMS` covers all of them and is written last, from GitHub's own digest of each file, once every build succeeded.
+- **Windows:** both Windows runners write the same `<channel>.yml`. Each attaches its own as `<channel>-win-x64.yml` or `<channel>-win-arm64.yml`, next to its installer and only when it attached that installer, and no updater reads those names. `release.yml`'s `finish` job, after all builds, joins the two from the release into `<channel>.yml`, since `NsisUpdater` picks the file whose name contains its arch. Reading them from the release, not from the run, means the joined file always describes the installers there, even after a re-run rebuilds them. It joins only when both exist: `NsisUpdater` falls back to the first file, so a list with only x64 would give arm64 machines the x64 installer. Every other file name is unique to its build.
+- Each release attaches every installer, the zip, the blockmaps, the channel's four `.yml` files, and the two Windows per-arch `.yml`. `SHA256SUMS` covers all of them and is written last, from GitHub's own digest of each file, once every build succeeded.
 
 ### macOS signing and notarization
 
@@ -77,7 +77,7 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
 - Chromium's `.pak` files in Electron Framework (223 of them) aren't signed one by one (`mac.signIgnore`, RYA-211). They aren't code, and the framework's signature seals them as resources either way; signing each separately cost a `codesign` run and a timestamp request apiece, about two minutes per build.
 - **Entitlements** (`apps/desktop/entitlements.mac.plist`, for the app and everything in it) are `com.apple.security.cs.allow-jit` only, for V8. Everything the app loads is signed with its own Team ID, so library validation passes without `disable-library-validation`. Spawning processes (node-pty's shell, `wispd`, and the agents `wispd` starts) needs no entitlement.
 - The build runs `codesign --verify --deep --strict` on the app and publishes (0029).
-- **Notarization comes after publishing (RYA-211).** It took about 3.5 of the build's 6.7 minutes, and updates don't need it: Squirrel.Mac checks the code signature, and an installed update carries no quarantine flag, so Gatekeeper doesn't assess it. Notarizing a disk image gets tickets for the image and everything in it, the app included. So `release.yml`'s `notarize` job, after the builds, takes the published dmg (the run's artifact on `workflow_dispatch`) and:
+- **Notarization comes after publishing (RYA-211).** Each notarization took a minute or more of the build (the dmg's took 67 s), and updates don't need it: Squirrel.Mac checks the code signature, and an installed update carries no quarantine flag, so Gatekeeper doesn't assess it. Notarizing a disk image gets tickets for the image and everything in it, the app included. So `release.yml`'s `notarize` job, after the builds, takes the published dmg (the run's artifact on `workflow_dispatch`) and:
   1. notarizes it with `notarytool` and prints Apple's log if it isn't accepted
   2. runs `spctl --assess` on the dmg, then `codesign --verify --deep --strict` and `spctl --assess --type execute` on the app inside it
 
@@ -91,5 +91,5 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
 - Apple's notarization service runs once per release, on the dmg, after it is published. An outage there fails the `notarize` job but not the release or updates; fresh downloads prompt until it is re-run.
 - Squirrel.Mac requires each update to be signed like the running app. Changing the signing certificate's Team ID would strand installed apps on the old one.
 - `app.getVersion()` and `wispd`'s reported version are these date versions. Nothing in the code parses them.
-- A release carries 13 files plus `SHA256SUMS` (0029's five installers, the zip, three blockmaps, four `.yml`). Each release is about 175 MB bigger for the zip.
+- A release carries 15 files plus `SHA256SUMS` (0029's five installers, the zip, three blockmaps, four `.yml`, and the two Windows per-arch `.yml`). Each release is about 175 MB bigger for the zip.
 - Unsigned Windows builds still update: their `app-update.yml` names no `publisherName`, so `electron-updater` skips its signature check.

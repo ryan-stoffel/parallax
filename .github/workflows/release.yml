@@ -27,11 +27,13 @@ defaults:
     shell: bash
 
 jobs:
-  # The version, tag, and channel for this commit, where its notes start, and whether a build is
-  # needed at all.
+  # The version, tag, and channel for this commit, and whether a build is needed at all. On push
+  # it creates the release as a draft, with its notes, for the builds to attach to.
   plan:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -39,8 +41,7 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       version: ${{ steps.plan.outputs.version }}
       channel: ${{ steps.plan.outputs.channel }}
-      notes-start: ${{ steps.plan.outputs.notes-start }}
-      build: ${{ steps.plan.outputs.build }}
+      build: ${{ steps.draft.outputs.build }}
     steps:
       - name: Plan the release
         id: plan
@@ -58,40 +59,34 @@ jobs:
           # release of a commit is newer than its nightly.
           channel=nightly
           if [ "$GITHUB_REF" = refs/heads/main ]; then channel=latest; else version+=-nightly; fi
-          tag=v$version
-          build=true
-          # finish writes SHA256SUMS once every build has attached its files, so a release with it
-          # is complete: nothing to do. A release without it gets the builds again, and each
-          # attaches only what's missing.
-          if [ "$GITHUB_EVENT_NAME" = push ] &&
-            gh release view "$tag" --json assets --jq '.assets[].name' 2> /dev/null | grep -qx SHA256SUMS; then
-            echo "$tag is already published."
-            build=false
-          fi
-          # Notes start at the channel's previous release, including the date-sha tags from before
-          # 0030 (nightly-*, release-*).
-          if [ "$channel" = nightly ]; then
-            pattern='^v[0-9]+\.[0-9]+\.[0-9]+-nightly$|^nightly-'
-          else
-            pattern='^v[0-9]+\.[0-9]+\.[0-9]+$|^release-'
-          fi
-          notes_start=$(gh release list --limit 1000 --json tagName |
-            jq -r --arg tag "$tag" --arg pattern "$pattern" '[.[].tagName | select(test($pattern) and . != $tag)][0] // empty')
           {
-            echo "tag=$tag"
+            echo "tag=v$version"
             echo "version=$version"
             echo "channel=$channel"
-            echo "notes-start=$notes_start"
-            echo "build=$build"
           } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+
+      # A dry run on workflow_dispatch, which never publishes.
+      - name: Create the draft release
+        id: draft
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          CHANNEL: ${{ steps.plan.outputs.channel }}
+          DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
+        run: scripts/ci/draft-release >> "$GITHUB_OUTPUT"
 
   # The installer on each target's own runner (0023, 0029), the same five as ci.yml's rust job,
   # attached to the release as soon as it's built (0028).
   build:
     needs: plan
     if: needs.plan.outputs.build == 'true'
-    # For the publish step, the only one given the token: in the others it made electron-builder
-    # try to publish.
+    # For the publish step. Of the run steps, only it has the token in its environment: in the
+    # others it made electron-builder try to publish. checkout and setup-node still get it through
+    # their default `token` input.
     permissions:
       contents: write
     strategy:
@@ -214,15 +209,14 @@ jobs:
         if: runner.os == 'macOS'
         run: codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/Wisp.app
 
-      # Straight from the runner to the release: creates it if this build is first, else attaches.
-      # A dry run on workflow_dispatch.
+      # Straight from the runner to plan's draft, then publishes it: the first build done makes the
+      # release visible. A dry run on workflow_dispatch.
       - name: Publish this build
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
-          NOTES_START: ${{ needs.plan.outputs.notes-start }}
           DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
         run: scripts/ci/publish-build
 
@@ -240,19 +234,22 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+          overwrite: true
 
-      # Both Windows builds write <channel>.yml, which finish joins into the release's one.
+      # On workflow_dispatch, what finish's dry run joins. On push it reads the release instead.
       - name: Upload the Windows update metadata
-        if: runner.os == 'Windows'
+        if: github.event_name != 'push' && runner.os == 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-update-${{ matrix.os }}
-          path: apps/desktop/release/${{ needs.plan.outputs.channel }}.yml
+          path: apps/desktop/release/${{ needs.plan.outputs.channel }}-win-*.yml
           if-no-files-found: error
           retention-days: 1
+          overwrite: true
 
-  # After every build, off the path to the update: joins the Windows builds' update metadata and,
-  # when all five succeeded, writes SHA256SUMS. A dry run on workflow_dispatch.
+  # After every build, off the path to the update: joins the Windows builds' update metadata, as
+  # attached to the release, and when all five succeeded writes SHA256SUMS. A dry run on
+  # workflow_dispatch, from the builds' artifacts.
   finish:
     needs: [plan, build]
     if: ${{ !cancelled() && needs.plan.outputs.build == 'true' }}
@@ -266,9 +263,11 @@ jobs:
           persist-credentials: false
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: github.event_name != 'push'
         with:
           pattern: windows-update-*
           path: windows
+          merge-multiple: true
 
       - name: Finish the release
         env:
@@ -278,14 +277,13 @@ jobs:
           CHANNEL: ${{ needs.plan.outputs.channel }}
           ALL_BUILT: ${{ needs.build.result == 'success' }}
           DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
-        run: |
-          scripts/ci/finish-release "windows/windows-update-windows-2025/$CHANNEL.yml" \
-            "windows/windows-update-windows-11-arm/$CHANNEL.yml"
+        run: scripts/ci/finish-release windows
 
   # Notarizes the published dmg, which also notarizes the app inside it, off the path to the
   # update: Squirrel.Mac needs the update signed, not notarized (0030). Until it's done, a dmg
   # downloaded by hand may get a Gatekeeper prompt. Without a staple, Gatekeeper finds the ticket
-  # online. A failure fails this job and leaves the release published.
+  # online. A failure fails this job and leaves the release published. With no dmg, because the
+  # macOS build failed, it skips: that build's own failure is the alert.
   notarize:
     needs: [plan, build]
     if: ${{ !cancelled() && needs.plan.outputs.build == 'true' }}
@@ -298,14 +296,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
-        run: gh release download "$TAG" --pattern 'wisp-*.dmg' --dir dmg
+        run: |
+          mkdir dmg
+          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          if grep -q '^wisp-.*\.dmg$' <<< "$assets"; then
+            gh release download "$TAG" --pattern 'wisp-*.dmg' --dir dmg
+          fi
 
       - name: Download the built dmg
         if: github.event_name != 'push'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: installer-macos-26
+          pattern: installer-macos-26
           path: dmg
+          merge-multiple: true
 
       # The API key reaches only this step.
       - name: Notarize the dmg and verify the app
@@ -315,10 +319,15 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
+          shopt -s nullglob
+          dmg=(wisp-*.dmg)
+          if [ ${#dmg[@]} = 0 ]; then
+            echo "::notice::No dmg to notarize: the macOS build didn't produce one."
+            exit 0
+          fi
           key=$RUNNER_TEMP/apple-api-key.p8
           (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
           unset APPLE_API_KEY_P8
-          dmg=(wisp-*.dmg)
           result=$(xcrun notarytool submit "${dmg[0]}" --key "$key" --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER" --wait --output-format json) || true
           echo "$result"

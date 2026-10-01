@@ -86,8 +86,9 @@ pub fn version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     VERSION.get_or_init(|| {
         std::env::current_exe()
-            .and_then(std::fs::canonicalize)
             .ok()
+            // Through any symlink to the real file; the path as given if that fails.
+            .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe))
             .and_then(|exe| stamped_version(&exe))
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned())
     })
