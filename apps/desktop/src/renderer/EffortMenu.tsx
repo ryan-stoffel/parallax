@@ -69,7 +69,7 @@ export function EffortMenu({
           <span
             key={level}
             aria-hidden
-            className={`effort-icon grid size-9 shrink-0 place-items-center rounded-full [&_svg]:size-4.5 ${full ? "bg-amber-500/15 text-amber-500" : "bg-ring/15 text-ring"}`}
+            className={`effort-icon grid size-9 shrink-0 place-items-center rounded-full [&_svg]:size-4.5 ${full ? "bg-amber-500/15 text-amber-500" : "bg-accent/15 text-accent"}`}
           >
             <Icon />
           </span>
@@ -88,7 +88,7 @@ export function EffortMenu({
             {/* Square on the right, where the thumb covers it. */}
             <div
               aria-hidden
-              className={`effort-fill absolute inset-y-0 left-0 rounded-l-full bg-linear-to-r from-ring to-[color-mix(in_srgb,var(--ring)_65%,white)] transition-[width] ${spring}`}
+              className={`effort-fill absolute inset-y-0 left-0 rounded-l-full bg-linear-to-r from-accent to-[color-mix(in_srgb,var(--accent)_65%,white)] transition-[width] ${spring}`}
               style={{ width: at(level) }}
             />
             {levels.map((l, i) => (

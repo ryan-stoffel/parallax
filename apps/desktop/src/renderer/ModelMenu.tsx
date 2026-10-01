@@ -170,7 +170,7 @@ export function ModelMenu({
                       <span className="flex items-center gap-2 text-[13.5px]">
                         {m.name}
                         {m.isNew && (
-                          <span className="rounded border border-ring px-1 text-[10.5px] font-semibold text-ring">
+                          <span className="rounded border border-accent px-1 text-[10.5px] font-semibold text-accent">
                             NEW
                           </span>
                         )}
@@ -182,7 +182,7 @@ export function ModelMenu({
                     </span>
                     <Check
                       aria-hidden
-                      className={`size-4 shrink-0 text-ring ${key === keyOf(chosen) ? "" : "invisible"}`}
+                      className={`size-4 shrink-0 text-accent ${key === keyOf(chosen) ? "" : "invisible"}`}
                     />
                   </button>
                   <button
