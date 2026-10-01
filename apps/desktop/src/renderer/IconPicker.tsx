@@ -106,9 +106,10 @@ export function IconPicker({
                   e.preventDefault();
                   grid.current?.querySelector<HTMLElement>('[tabindex="0"]')?.focus();
                 } else if (e.key === "Enter") {
-                  // Picks the first match, and never submits a form around it.
+                  // Picks the first match, and never submits a form around it. With nothing typed
+                  // it picks nothing, since the box has focus as the picker opens.
                   e.preventDefault();
-                  if (shown[0]) choose(withGlyph(shown[0].name));
+                  if (q && shown[0]) choose(withGlyph(shown[0].name));
                 }
               }}
               className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"

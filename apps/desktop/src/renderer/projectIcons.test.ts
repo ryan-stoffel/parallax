@@ -1,4 +1,5 @@
-import { FolderKanban } from "lucide-react";
+// The whole set, to look names up in; the app imports only the curated icons.
+import * as lucide from "lucide-react";
 import { expect, test } from "vite-plus/test";
 
 import { defaultIcon, iconColors, iconLook, projectIcons } from "./projectIcons";
@@ -16,8 +17,8 @@ test("about 150 icons, each under its own Lucide name, which wispd accepts as a 
   expect(new Set(projectIcons.map((i) => i.label)).size).toBe(projectIcons.length);
   for (const i of projectIcons) {
     expect(i.name).toMatch(/^[a-z0-9-]{1,64}$/);
-    // Lucide names each glyph after its canonical name, so an alias or a mix-up shows here.
-    expect(i.Icon.displayName).toBe(pascal(i.name));
+    // Lucide's icon of that name, or of an old name Lucide keeps as an alias, so a mix-up shows.
+    expect((lucide as Record<string, unknown>)[pascal(i.name)]).toBe(i.Icon);
   }
   expect(projectIcons[0]!.name).toBe(defaultIcon.name);
   expect(projectIcons.find((i) => i.name === "folder-git-2")?.label).toBe("Folder git");
@@ -40,10 +41,10 @@ test("an icon draws its glyph in its color, and falls back to FolderKanban and t
     Icon: rocket,
     color: "text-project-green",
   });
-  expect(iconLook(undefined)).toEqual({ Icon: FolderKanban, color: "text-accent" });
+  expect(iconLook(undefined)).toEqual({ Icon: lucide.FolderKanban, color: "text-accent" });
   expect(iconLook({ name: "rocket" })).toEqual({ Icon: rocket, color: "text-accent" });
   expect(iconLook({ name: "not-an-icon", color: "green" })).toEqual({
-    Icon: FolderKanban,
+    Icon: lucide.FolderKanban,
     color: "text-project-green",
   });
   expect(iconLook({ name: "rocket", color: "chartreuse" })).toEqual({

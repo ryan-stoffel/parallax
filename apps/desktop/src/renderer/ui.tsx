@@ -106,14 +106,27 @@ export const menuItem =
   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
 
 /**
- * Opens a menu on a right-click by clicking its trigger. Where the right-click arrives while the
- * button is still down (macOS and Linux), the menu opens on its release, which would otherwise
- * close it again as a click outside a popover.
+ * Opens a menu on a right-click by clicking its trigger. Where the right-click arrives while a
+ * button is still down (a right-click on macOS and Linux, Control-click on macOS), the menu opens
+ * on its release, which would otherwise close it again as a click outside a popover. A release the
+ * window never sees, as when the button is held while switching apps, opens nothing: the window's
+ * blur, a cancelled pointer, or the next press ends the wait.
  */
 export function openOnContextMenu(e: MouseEvent<HTMLElement>, trigger: HTMLElement | null) {
   e.preventDefault();
-  if ((e.buttons & 2) === 0) return trigger?.click();
-  window.addEventListener("pointerup", () => trigger?.click(), { once: true });
+  if (e.buttons === 0) return trigger?.click();
+  const wait = new AbortController();
+  const { signal } = wait;
+  window.addEventListener(
+    "pointerup",
+    () => {
+      wait.abort();
+      trigger?.click();
+    },
+    { signal },
+  );
+  for (const type of ["blur", "pointercancel", "pointerdown"])
+    window.addEventListener(type, () => wait.abort(), { signal });
 }
 
 /** Up and Down move focus between a menu's items, wrapping at the ends and passing disabled ones. */

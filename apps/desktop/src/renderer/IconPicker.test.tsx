@@ -104,6 +104,16 @@ test("search matches names and keywords, Enter picks the first match, and nothin
   expect(panel().textContent).toContain("No icons match");
 });
 
+test("Enter in an empty search box picks nothing, so opening and pressing Enter keeps the icon", () => {
+  const onPick = render({ name: "rocket", color: "green" });
+  toggle("open");
+  press("Enter");
+  type("   ");
+  press("Enter");
+  expect(onPick).not.toHaveBeenCalled();
+  expect(selected()).toEqual(["Rocket"]);
+});
+
 test("a color or an icon picks both together, from the picker's own last pick, and it stays open", () => {
   const onPick = render({ name: "rocket", color: "green" });
   toggle("open");

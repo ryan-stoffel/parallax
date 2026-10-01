@@ -594,7 +594,8 @@ function ProjectRow({
   const button = useRef<HTMLButtonElement>(null);
   const iconSpot = useRef<HTMLSpanElement>(null);
   const picker = useRef<HTMLDivElement>(null);
-  const [renaming, setRenaming] = useState(false);
+  // The name the field opened with, while Rename is open.
+  const [renaming, setRenaming] = useState<string>();
   // The new name, shown until wispd answers.
   const [saving, setSaving] = useState<string>();
   // Set while the name box is open, so Enter and the blur that follows save once.
@@ -602,7 +603,7 @@ function ProjectRow({
   // After Enter or Escape, the row takes focus back from the name box.
   const refocus = useRef(false);
   useEffect(() => {
-    if (renaming || !refocus.current) return;
+    if (renaming !== undefined || !refocus.current) return;
     refocus.current = false;
     button.current?.focus();
   }, [renaming]);
@@ -613,16 +614,17 @@ function ProjectRow({
   };
   const startRename = () => {
     editing.current = true;
-    setRenaming(true);
+    setRenaming(project.name);
   };
-  // An empty or unchanged name saves nothing.
+  // An empty name, or the one the field opened with, saves nothing, even if another client has
+  // renamed the Project since.
   const endRename = async (name: string | undefined, focusRow: boolean) => {
     if (!editing.current) return;
     editing.current = false;
     refocus.current = focusRow;
-    setRenaming(false);
+    setRenaming(undefined);
     const next = name?.trim();
-    if (!next || next === project.name) return;
+    if (!next || next === renaming) return;
     setSaving(next);
     await onUpdate({ name: next });
     setSaving(undefined);
@@ -631,19 +633,21 @@ function ProjectRow({
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
   return (
     <li className="group/row relative">
-      {renaming ? (
+      {renaming !== undefined ? (
         <div
           className={`${row} ${selected ? current : ""} outline-2 -outline-offset-2 outline-ring`}
         >
           <span className="grid shrink-0 place-items-center">{icon}</span>
           <input
             aria-label="Project name"
-            defaultValue={project.name}
+            defaultValue={renaming}
             autoFocus
             spellCheck={false}
             autoComplete="off"
             onFocus={(e) => e.currentTarget.select()}
             onKeyDown={(e) => {
+              // Enter and Escape belong to an input method while it composes.
+              if (e.nativeEvent.isComposing) return;
               if (e.key === "Enter") void endRename(e.currentTarget.value, true);
               else if (e.key === "Escape") void endRename(undefined, true);
             }}
@@ -678,7 +682,7 @@ function ProjectRow({
           )}
         </button>
       )}
-      {editable && !renaming && (
+      {editable && renaming === undefined && (
         <>
           <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
             <button

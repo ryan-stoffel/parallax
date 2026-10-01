@@ -572,6 +572,43 @@ test("Rename edits a Project's name in its row: Enter or leaving the field saves
   expect(projectRows()).toEqual(["photon two3h", "ember app3d"]);
 });
 
+test("Enter and Escape while an input method is composing leave the rename field open", async () => {
+  capabilities = { projectEdit: {} };
+  answers["project/update"] = updates;
+  await renderApp();
+  await click(menuItem("ember", "Rename"));
+  typeInto(nameEditor()!, "ember app");
+  for (const key of ["Enter", "Escape"])
+    act(() => {
+      nameEditor()!.dispatchEvent(
+        new KeyboardEvent("keydown", { key, isComposing: true, bubbles: true }),
+      );
+    });
+  await settle();
+  expect(nameEditor()?.value).toBe("ember app");
+  expect(calls("project/update")).toEqual([]);
+
+  press("Enter");
+  await settle();
+  expect(calls("project/update")).toEqual([{ project: "p-ember", name: "ember app" }]);
+});
+
+test("a rename left as it opened sends nothing, even after another client renamed the project", async () => {
+  capabilities = { projectEdit: {} };
+  answers["project/update"] = updates;
+  await renderApp();
+  await click(menuItem("ember", "Rename"));
+  await projectEvent(8, "project.updated", {
+    ...project("ember", "2026-09-26T12:00:00Z"),
+    name: "ember (renamed elsewhere)",
+  });
+  expect(nameEditor()!.value).toBe("ember");
+  press("Enter");
+  await settle();
+  expect(calls("project/update")).toEqual([]);
+  expect(projectRows()).toEqual(["photon3h", "ember (renamed elsewhere)3d"]);
+});
+
 test("a rename shows its name while wispd answers, then wispd's error under the projects list", async () => {
   capabilities = { projectEdit: {} };
   let release = () => {};

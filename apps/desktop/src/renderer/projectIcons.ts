@@ -166,7 +166,7 @@ export interface IconChoice {
 
 // The picker's icons, in its order. Each is imported by name, so the bundle holds only these and
 // never Lucide's whole set. A name is stored on the host, so a Lucide rename keeps the old name
-// here and imports the new glyph.
+// here and imports the new glyph; the test checks the old name is still Lucide's alias for it.
 const icons: [name: string, Icon: LucideIcon, keywords: string][] = [
   ["folder-kanban", FolderKanban, "project board default"],
   ["folder", Folder, "directory files"],
