@@ -2,7 +2,8 @@
 //! asks wispd over stdio before a tool call that would prompt, and runs it or not on wispd's
 //! answer, and a run whose client doesn't is denied as before. In Plan, a worker hands its plan
 //! over the same way (RYA-243). A worker also keeps its plan with Claude Code's task tools, which
-//! ask nothing (RYA-248). Each test starts the CLI through wispd's own Claude backend, so
+//! ask nothing (RYA-248), and so do a coordinator and a bypass worker, whose `--allowedTools`
+//! turns them on (RYA-249). Each test starts the CLI through wispd's own Claude backend, so
 //! the arguments, the translator that reads the CLI's `can_use_tool` request, and the driver that
 //! writes the `control_response` are the ones a real run uses. A local fake Messages API asks for
 //! the tool calls, so no account or Anthropic connection is needed. Set `WISP_SANDBOX_CLAUDE` to
@@ -505,6 +506,100 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
     // mount point that keeps commands from creating Claude Code's settings files, which git
     // doesn't track.
     assert_eq!(files_in(&worktree.join(".claude")), Vec::<PathBuf>::new());
+}
+
+/// A coordinator in Manual, with the prompt channel, keeps its plan with the task tools on a model
+/// outside 2.1.283's built-in list (RYA-249). It has no `--tools`, so its `--allowedTools` is what
+/// turns them on.
+#[tokio::test]
+async fn a_coordinator_keeps_its_plan_with_the_task_tools_on_any_model() {
+    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        return;
+    };
+    let folders = Folders::new();
+    let request = RunRequest {
+        model: Some("claude-opus-5-5".into()),
+        ..coordinator(&folders.project, &folders.data)
+    };
+    plans_with_the_task_tools(&claude, &folders, request).await;
+}
+
+/// A worker in Bypass Permissions, which has no `--tools` either, does the same (RYA-249).
+#[tokio::test]
+async fn a_bypass_worker_keeps_its_plan_with_the_task_tools_on_any_model() {
+    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        return;
+    };
+    let folders = Folders::new();
+    let (_worktree, mut request, _temp) = worker(&folders, AgentPermission::Bypass);
+    request.model = Some("claude-opus-5-5".into());
+    plans_with_the_task_tools(&claude, &folders, request).await;
+}
+
+/// Runs `request` against a fake API that asks for `TaskCreate`, `TaskUpdate`, and `TaskList`.
+/// Each answers as 2.1.283's task tools do, none asks wispd, and the CLI keeps the session's list
+/// in its configuration folder, `.claude` in `HOME`.
+async fn plans_with_the_task_tools(claude: &OsStr, folders: &Folders, request: RunRequest) {
+    let task = |name, input| ToolCall { name, input };
+    let api = fake_api(vec![
+        task(
+            "TaskCreate",
+            json!({
+                "subject": "Add tests",
+                "description": "Cover the parser",
+                "activeForm": "Adding tests",
+            }),
+        ),
+        task(
+            "TaskUpdate",
+            json!({"taskId": "1", "status": "in_progress"}),
+        ),
+        task("TaskList", json!({})),
+    ])
+    .await;
+    let backend = claude_backend(claude, &api, &folders.root, &folders.home, &folders.data);
+
+    let events = drive(&backend, request, |asked| {
+        panic!("a task tool asked: {asked:?}")
+    })
+    .await;
+    assert_eq!(
+        results(&events),
+        [
+            (
+                "toolu_01WispProbe",
+                ToolStatus::Ok,
+                "Task #1 created successfully: Add tests"
+            ),
+            (
+                "toolu_01WispProbe1",
+                ToolStatus::Ok,
+                "Updated task #1 status"
+            ),
+            (
+                "toolu_01WispProbe2",
+                ToolStatus::Ok,
+                "#1 [in_progress] Add tests"
+            ),
+        ],
+        "{events:#?}"
+    );
+    assert_eq!(outcome(&events), &done(), "{events:#?}");
+
+    let session = events
+        .iter()
+        .find_map(|event| match event {
+            Event::SessionStarted { session_id, .. } => Some(session_id.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let list = folders.home.join(".claude/tasks").join(session);
+    let saved: Value =
+        serde_json::from_str(&fs::read_to_string(list.join("1.json")).unwrap()).unwrap();
+    assert_eq!(saved["subject"], "Add tests");
+    assert_eq!(saved["status"], "in_progress");
 }
 
 /// Every file under `folder`, which may not exist.
