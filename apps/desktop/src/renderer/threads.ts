@@ -4,7 +4,9 @@ import type { RpcError, ThreadName } from "../preload/bridge";
 import type {
   AgentRun,
   Project,
+  ProjectIcon as ProjectIconValue,
   ProjectStartParams,
+  ProjectUpdateParams,
   PromptImage,
   Repo,
   Thread,
@@ -71,6 +73,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
       const e = action.event;
       switch (e.kind) {
         case "project.created":
+        case "project.updated":
           return { ...state, projects: upsert(state.projects, e.project) };
         case "repo.added":
           return { ...state, repos: upsert(state.repos, e.repo) };
@@ -187,10 +190,20 @@ export interface ThreadsView {
   /** Lists a repo entry's runs again, so their status is current. Failures are ignored. */
   refresh: (repo: string) => void;
   /**
-   * Creates a project on a repository's path. Reuse `id`, with the same name and path, to retry.
-   * Resolves to the project or an error message.
+   * Creates a project on a repository's path, with `icon` if one was chosen. Reuse `id`, with the
+   * same name, path, and icon, to retry. Resolves to the project or an error message.
    */
-  createProject: (id: string, name: string, repoPath: string) => Promise<Project | string>;
+  createProject: (
+    id: string,
+    name: string,
+    repoPath: string,
+    icon?: ProjectIconValue,
+  ) => Promise<Project | string>;
+  /**
+   * Renames a project or sets its icon, which replaces the whole icon (0032). Resolves to an error
+   * message, or undefined.
+   */
+  updateProject: (project: string, change: ProjectChange) => Promise<string | undefined>;
   /**
    * Starts a Project's coordinator with `prompt` and its `images`, or starts it over with a new
    * `runId` (0024), then keeps it as the Project's. Reusing `runId` to retry is safe with any
@@ -205,6 +218,9 @@ export interface ThreadsView {
     options: CoordinatorOptions,
   ) => Promise<RpcError | undefined>;
 }
+
+/** What `project/update` changes: a project's name, its icon, or both. */
+export type ProjectChange = Omit<ProjectUpdateParams, "project">;
 
 /** What a new coordinator runs on: its model, effort, permission, and account (`project/start`'s). */
 export type CoordinatorOptions = Pick<
@@ -355,8 +371,13 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
   );
 
   const createProject = useCallback(
-    async (id: string, name: string, repoPath: string) => {
-      const answer = await window.wisp.request(hostId, "project/create", { id, name, repoPath });
+    async (id: string, name: string, repoPath: string, icon?: ProjectIconValue) => {
+      const answer = await window.wisp.request(hostId, "project/create", {
+        id,
+        name,
+        repoPath,
+        ...(icon && { icon }),
+      });
       if ("error" in answer) return describeError(answer.error);
       // Not into another host's list, if the user has left this one.
       if (shown.current === hostId)
@@ -365,6 +386,20 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
           event: { kind: "project.created", project: answer.result.project },
         });
       return answer.result.project;
+    },
+    [hostId],
+  );
+
+  const updateProject = useCallback(
+    async (project: string, change: ProjectChange) => {
+      const answer = await window.wisp.request(hostId, "project/update", { project, ...change });
+      if ("error" in answer) return describeError(answer.error);
+      if (shown.current === hostId)
+        dispatch({
+          type: "event",
+          event: { kind: "project.updated", project: answer.result.project },
+        });
+      return undefined;
     },
     [hostId],
   );
@@ -400,6 +435,7 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
     remove,
     refresh,
     createProject,
+    updateProject,
     startCoordinator,
   };
 }

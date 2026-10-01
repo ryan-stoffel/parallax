@@ -364,3 +364,47 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
   await expect(transcript.getByText("From wisp: subagents finished")).toBeVisible();
 });
+
+test("renames the project and picks its icon from its row, and both outlive a reload (RYA-230)", async () => {
+  // The last test left ember open. Its row's actions show on hover.
+  const projects = page.getByRole("region", { name: "Projects" });
+  await projects.getByRole("listitem").hover();
+  await projects.getByRole("button", { name: "Project actions" }).click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  const name = projects.getByRole("textbox", { name: "Project name" });
+  await expect(name).toBeFocused();
+  await name.fill("ember app");
+  await name.press("Enter");
+  const row = projects.getByRole("button", { name: /^ember app/ });
+  await expect(row).toBeFocused();
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember app");
+
+  // Right-clicking the row opens the same menu. A color, then an icon by keyboard.
+  await row.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Change icon" }).click();
+  const picker = page.getByRole("dialog", { name: "Project icon" });
+  const search = picker.getByRole("searchbox", { name: "Search icons" });
+  await expect(search).toBeFocused();
+  await picker.getByTitle("Green").click();
+  await expect(picker.getByRole("radio", { name: "Green" })).toBeChecked();
+  await search.fill("rocket");
+  await search.press("ArrowDown");
+  const rocket = picker.getByRole("option", { name: "Rocket" });
+  await expect(rocket).toBeFocused();
+  await rocket.press("Enter");
+  await expect(rocket).toHaveAttribute("aria-selected", "true");
+  await rocket.press("Escape");
+  await expect(picker).toBeHidden();
+  const icon = row.locator("svg");
+  await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
+
+  // The name and icon are the host's (0032).
+  await page.reload();
+  await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
+  const listed = (await page.evaluate(`window.wisp.request("local", "project/list", {})`)) as {
+    result: { projects: { name: string; icon?: { name: string; color?: string } }[] };
+  };
+  expect(listed.result.projects).toMatchObject([
+    { name: "ember app", icon: { name: "rocket", color: "green" } },
+  ]);
+});
