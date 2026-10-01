@@ -501,8 +501,25 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
         serde_json::from_str(&fs::read_to_string(list.join("1.json")).unwrap()).unwrap();
     assert_eq!(saved["subject"], "Add tests");
     assert_eq!(saved["status"], "completed");
-    assert!(
-        !worktree.join(".claude").exists(),
-        "nothing in the worktree"
-    );
+    // Nothing of it in the worktree. On Linux, the sandbox leaves an empty `.claude` there: the
+    // mount point that keeps commands from creating Claude Code's settings files, which git
+    // doesn't track.
+    assert_eq!(files_in(&worktree.join(".claude")), Vec::<PathBuf>::new());
+}
+
+/// Every file under `folder`, which may not exist.
+fn files_in(folder: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    entries
+        .map(|entry| entry.unwrap().path())
+        .flat_map(|path| {
+            if path.is_dir() {
+                files_in(&path)
+            } else {
+                vec![path]
+            }
+        })
+        .collect()
 }

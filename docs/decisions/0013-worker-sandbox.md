@@ -309,7 +309,7 @@ The backend's fixtures are those runs.
 | The same, with `CLAUDE_CODE_ENABLE_TASKS=false` | `system/init` lists `TodoWrite` and not the task tools |
 | The same, resumed with `--resume` | `TaskList` lists the first process's task, and the next `TaskCreate` gets the next id |
 
-Sandboxed Bash couldn't start there, because the container ran as root, which wispd doesn't support (Setup, above). So `daemon/tests/permission_requests.rs` runs a worker through wispd's backend with the pinned Claude Code on CI's Linux legs: its init passes wispd's check, `TaskCreate` and `TaskUpdate` answer as above, the list is in the configuration folder and not the worktree, and a script the worker runs can't read it. `daemon/src/backend/claude/fixtures/worker-tasks.jsonl` is that hand run's transcript.
+Sandboxed Bash couldn't start there, because the container ran as root, which wispd doesn't support (Setup, above). So `daemon/tests/permission_requests.rs` runs a worker through wispd's backend with the pinned Claude Code on CI's Linux legs: its init passes wispd's check, `TaskCreate` and `TaskUpdate` answer as above, the list is in the configuration folder and not the worktree, and a script the worker runs can't read it. The first run of that test found an empty `.claude` folder in the worktree. It isn't the task tools': after any sandboxed command on Linux, Claude Code 2.1.283's sandbox leaves the empty mount point it binds there to keep commands from creating its settings files. Git doesn't track an empty folder, so wispd's commit doesn't carry it. `daemon/src/backend/claude/fixtures/worker-tasks.jsonl` is that hand run's transcript.
 
 ## Sources
 
