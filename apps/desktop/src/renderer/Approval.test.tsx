@@ -70,9 +70,9 @@ const append = (event: WispEvent) => {
 };
 const output = (...items: AgentOutputItem[]) => append({ kind: "agent.output", runId, items });
 const emit = (...items: AgentOutputItem[]) =>
-  act(() => listener({ type: "event", event: { subscription: "s", ...output(...items) } }));
+  act(async () => listener({ type: "event", event: { subscription: "s", ...output(...items) } }));
 const emitEvent = (event: WispEvent) =>
-  act(() => listener({ type: "event", event: { subscription: "s", ...append(event) } }));
+  act(async () => listener({ type: "event", event: { subscription: "s", ...append(event) } }));
 
 const asked = (approvalId: string, more: Partial<ApprovalRequest> = {}): AgentOutputItem => ({
   kind: "approvalRequested",
@@ -193,7 +193,7 @@ test("a waiting request is pinned over the composer, outside the transcript, wit
 
 test("Approve answers with agent/approve, shows the answer on its way, then collapses to a line", async () => {
   output(asked("a1"));
-  let release = (_: RpcResponse<unknown>) => {};
+  let release: (answer: RpcResponse<unknown>) => void = () => {};
   approve = () => new Promise((resolve) => (release = resolve));
   await renderChat();
   await click(inCard("Approve"));
