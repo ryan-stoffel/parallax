@@ -397,6 +397,66 @@ body {
   }
 }
 
+/* The agent's plan (Plan.tsx). The progress bar eases to its new width, a step that finishes
+   draws its check, and the strip over the composer rises from behind it. A proposed plan's
+   Markdown starts flush with its card. Under reduced motion, nothing moves. */
+.plan-bar {
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* A quiet rail from each step's mark to the next one's. */
+.plan-step:not(:last-child)::after {
+  position: absolute;
+  top: 24px;
+  bottom: -4px;
+  left: 7.5px;
+  width: 1px;
+  background: var(--border);
+  content: "";
+}
+.plan-check-draw circle {
+  transform-origin: center;
+  animation: plan-check-disc 0.28s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+.plan-check-draw path {
+  stroke-dasharray: 1;
+  animation: plan-check-path 0.36s 0.1s cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+@keyframes plan-check-disc {
+  from {
+    opacity: 0;
+    scale: 0.4;
+  }
+}
+@keyframes plan-check-path {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.plan-strip {
+  animation: plan-strip-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes plan-strip-in {
+  from {
+    opacity: 0;
+    translate: 0 70%;
+  }
+}
+.proposed-plan > .markdown > :first-child {
+  margin-top: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .plan-bar {
+    transition: none;
+  }
+  .plan-check-draw :is(circle, path),
+  .plan-strip {
+    animation: none;
+  }
+}
+
 /*! The loaders (Loader.tsx) are ported from Dani Asyrofi's loading indicators,
    https://loading.daniasyrofi.com, under the MIT License:
 
