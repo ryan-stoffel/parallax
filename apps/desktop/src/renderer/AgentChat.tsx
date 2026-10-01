@@ -1,19 +1,32 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  Ban,
+  Bot,
+  Brain,
   Check,
   ChevronRight,
-  CircleDashed,
-  CircleX,
   Copy,
+  Ellipsis,
+  FilePlus,
+  FileText,
   FolderGit2,
   GitBranch,
   GitPullRequest,
   GitPullRequestArrow,
+  Globe,
+  Hammer,
   ImageOff,
   Info,
-  Ban,
+  ListChecks,
+  Pencil,
+  Plug,
+  Search,
+  Sparkles,
+  SquareTerminal,
   TriangleAlert,
   Workflow,
+  X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   memo,
@@ -28,7 +41,13 @@ import {
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import type { AgentRun, ImageId, JsonValue, PromptImage } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  AgentToolStatus,
+  ImageId,
+  JsonValue,
+  PromptImage,
+} from "../protocol/generated/protocol";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -512,7 +531,12 @@ export const RowView = memo(function RowView({
           id={row.key}
           open={open}
           onToggle={onToggle}
-          summary={<span className="text-muted-foreground">Thinking</span>}
+          summary={
+            <>
+              <icons.thinking aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="text-muted-foreground">Thinking</span>
+            </>
+          }
         >
           <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
             {row.text}
@@ -796,6 +820,7 @@ const loaders = {
   reading: { kind: "bands", variant: "descend" },
   searching: { kind: "matrix", variant: "scan" },
   editing: { kind: "cells", variant: "merge" },
+  writing: { kind: "cells", variant: "merge" },
   fetching: { kind: "beacon", variant: "rise" },
   agent: { kind: "orbit", variant: "oppose" },
   skill: { kind: "lift", variant: "rise" },
@@ -805,26 +830,54 @@ const loaders = {
   working: { kind: "orbit", variant: "chase" },
 } as const satisfies Record<string, LoaderStyle>;
 
+type Kind = keyof typeof loaders;
+
+/** The icon for each kind of work, in place of its loader once it's done. */
+const icons = {
+  thinking: Brain,
+  shell: SquareTerminal,
+  reading: FileText,
+  searching: Search,
+  editing: Pencil,
+  writing: FilePlus,
+  fetching: Globe,
+  agent: Bot,
+  skill: Sparkles,
+  mcp: Plug,
+  wispd: Workflow,
+  planning: ListChecks,
+  working: Hammer,
+} as const satisfies Record<Kind, LucideIcon>;
+
 // The kind of work a tool does, by the names common tools use.
-const toolLoaders: Partial<Record<string, LoaderStyle>> = {
-  Bash: loaders.shell,
-  Read: loaders.reading,
-  NotebookRead: loaders.reading,
-  LS: loaders.reading,
-  Grep: loaders.searching,
-  Glob: loaders.searching,
-  WebSearch: loaders.searching,
-  ToolSearch: loaders.searching,
-  Edit: loaders.editing,
-  MultiEdit: loaders.editing,
-  Write: loaders.editing,
-  NotebookEdit: loaders.editing,
-  WebFetch: loaders.fetching,
-  Task: loaders.agent,
-  Agent: loaders.agent,
-  Skill: loaders.skill,
-  TodoWrite: loaders.planning,
+const toolKinds: Partial<Record<string, Kind>> = {
+  Bash: "shell",
+  Read: "reading",
+  NotebookRead: "reading",
+  LS: "reading",
+  Grep: "searching",
+  Glob: "searching",
+  WebSearch: "searching",
+  ToolSearch: "searching",
+  Edit: "editing",
+  MultiEdit: "editing",
+  NotebookEdit: "editing",
+  Write: "writing",
+  WebFetch: "fetching",
+  Task: "agent",
+  Agent: "agent",
+  Skill: "skill",
+  TodoWrite: "planning",
 };
+
+/** The kind of work a tool call does: a wispd or other MCP server's tool, or by its name. */
+function toolKind(item: Extract<Item, { kind: "tool" }>): Kind {
+  if (item.name?.startsWith(wispdTools)) return "wispd";
+  if (mcpTool(item.name)) return "mcp";
+  // The table's own names only, so "constructor" or "toString" is any other tool.
+  const name = item.name ?? "";
+  return (Object.hasOwn(toolKinds, name) && toolKinds[name]) || "working";
+}
 
 /** What the agent is doing: a label, what it's doing it to, and the loader drawn beside them. */
 export interface Activity {
@@ -839,22 +892,18 @@ export function activity(item?: Item): Activity {
     case "reasoning":
       return { label: "Thinking", loader: loaders.thinking };
     case "tool": {
+      const loader = loaders[toolKind(item)];
       const wispd = wispdCall(item);
-      if (wispd) return { ...wispd, loader: loaders.wispd };
+      if (wispd) return { ...wispd, loader };
       // Including a wispd tool this app doesn't know.
       const mcp = mcpTool(item.name);
-      if (mcp)
-        return {
-          label: `Using ${mcp.server}`,
-          detail: mcp.tool,
-          loader: item.name?.startsWith(wispdTools) ? loaders.wispd : loaders.mcp,
-        };
+      if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool, loader };
       if (item.name === "Skill")
-        return { label: "Using skill", detail: skillName(item.input), loader: loaders.skill };
+        return { label: "Using skill", detail: skillName(item.input), loader };
       return {
         label: verbs[item.name ?? ""] ?? item.name ?? "Working",
         detail: toolHint(item.input),
-        loader: toolLoaders[item.name ?? ""] ?? loaders.working,
+        loader,
       };
     }
     case "todo":
@@ -875,21 +924,12 @@ function ToolCall({
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
 }) {
-  const icons: Partial<Record<string, ReactNode>> = {
-    ok: <Check aria-label="Succeeded" />,
-    error: <CircleX aria-label="Failed" className="text-danger" />,
-    denied: <Ban aria-label="Denied" className="text-danger" />,
-  };
   const named = wispdCall(item) ?? namedTool(item);
-  let icon = item.status ? icons[item.status] : undefined;
-  icon ??=
-    live && !item.status ? (
-      <span role="img" aria-label="Running" className="block">
-        <Loader {...activity(item).loader} size={14} />
-      </span>
-    ) : (
-      <CircleDashed aria-label="No result" />
-    );
+  const kind = toolKind(item);
+  const status = item.status ?? (live ? "running" : "none");
+  // A status newer than this app reads as no result.
+  const look = (statuses as Partial<Record<string, Look>>)[status] ?? statuses.none;
+  const Icon = icons[kind];
   return (
     <Disclosure
       id={item.key}
@@ -897,7 +937,20 @@ function ToolCall({
       onToggle={onToggle}
       summary={
         <>
-          <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{icon}</span>
+          {/* Its kind: the loader while it runs, then the icon, with a mark unless it succeeded. */}
+          <span aria-hidden className={`relative shrink-0 ${look.color}`}>
+            {status === "running" ? (
+              <Loader {...loaders[kind]} size={14} />
+            ) : (
+              <Icon className={`size-3.5 ${look.faded ? "opacity-50" : ""}`} />
+            )}
+            {look.mark && (
+              <look.mark
+                strokeWidth={3}
+                className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
+              />
+            )}
+          </span>
           <span className="shrink-0 font-medium">{named?.label ?? item.name ?? "Tool"}</span>
           {named ? (
             <span className="truncate text-muted-foreground">{named.detail}</span>
@@ -906,6 +959,7 @@ function ToolCall({
               {toolHint(item.input)}
             </span>
           )}
+          <span className="sr-only">{look.said}</span>
         </>
       }
     >
@@ -916,6 +970,25 @@ function ToolCall({
     </Disclosure>
   );
 }
+
+/** How a tool call went: its icon's color, mark, and fading, and in words for screen readers. */
+interface Look {
+  color: string;
+  mark?: LucideIcon;
+  /** Whether the icon fades, as for a call that never finished. */
+  faded?: boolean;
+  said: string;
+}
+
+// An unfinished call's icon is half its faint color, so it stands apart from a finished one's
+// muted icon, and its mark is an ellipsis, which no round icon can swallow as a ring could.
+const statuses = {
+  running: { color: "", said: "Running" },
+  ok: { color: "text-muted-foreground", said: "Succeeded" },
+  error: { color: "text-danger", mark: X, said: "Failed" },
+  denied: { color: "text-danger", mark: Ban, said: "Denied" },
+  none: { color: "text-faint-foreground", mark: Ellipsis, faded: true, said: "No result" },
+} satisfies Record<"running" | AgentToolStatus | "none", Look>;
 
 /** A collapsed-by-default row, open state kept by the transcript. */
 function Disclosure({
