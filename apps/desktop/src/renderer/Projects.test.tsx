@@ -21,8 +21,16 @@ import type {
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-// happy-dom has no popovers. The Workspace menu's items are in the DOM either way.
+// happy-dom has no popovers. The Workspace menu's items are in the DOM either way. Showing one
+// sends only the event that draws an icon picker, and keeps what it was shown under.
 HTMLElement.prototype.hidePopover = () => {};
+let popoverSources: (HTMLElement | undefined)[];
+HTMLElement.prototype.showPopover = function (this: HTMLElement, options?: ShowPopoverOptions) {
+  popoverSources.push(options?.source);
+  this.dispatchEvent(
+    Object.assign(new Event("beforetoggle"), { oldState: "closed", newState: "open" }),
+  );
+};
 // happy-dom lays nothing out: a tall transcript and short rows, so the virtualized list renders all.
 Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
   get(this: HTMLElement) {
@@ -74,6 +82,7 @@ const setState = (hostId: string, state: ConnectionState) => {
 beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
+  popoverSources = [];
   listeners = new Set();
   capabilities = {};
   sshHosts = [];
@@ -136,9 +145,9 @@ const click = async (element: Element | null | undefined) => {
   await settle();
 };
 const projectRows = () =>
-  [...document.querySelectorAll('[aria-labelledby="projects-heading"] li button')].map(
-    (b) => b.textContent,
-  );
+  [
+    ...document.querySelectorAll('[aria-labelledby="projects-heading"] li > button:first-child'),
+  ].map((b) => b.textContent);
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 const dialog = () =>
@@ -449,6 +458,342 @@ test("the Workspace menu searches every host's repositories, Enter picks the fir
   expect(document.activeElement?.textContent).toBe("web");
   press("ArrowDown");
   expect(document.activeElement?.textContent).toBe("wisp");
+});
+
+const projectsList = () =>
+  document.querySelector<HTMLElement>('#sidebar [aria-labelledby="projects-heading"]')!;
+/** A Project's row in the sidebar, by its name. */
+const projectRow = (name: string) =>
+  [...projectsList().querySelectorAll<HTMLLIElement>("li")].find((li) =>
+    li.querySelector(":scope > button:first-child")?.textContent?.startsWith(name),
+  )!;
+const rowButton = (name: string) =>
+  projectRow(name).querySelector<HTMLButtonElement>(":scope > button:first-child")!;
+const menuItem = (name: string, item: string) =>
+  [...projectRow(name).querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+    (b) => b.textContent === item,
+  );
+const nameEditor = () =>
+  projectsList().querySelector<HTMLInputElement>('input[aria-label="Project name"]');
+/** The Lucide glyph and color an icon draws, from its classes. */
+const looks = (svg: Element | null | undefined) => {
+  const classes = [...(svg?.classList ?? [])];
+  return [
+    classes.find((c) => c.startsWith("lucide-"))?.slice("lucide-".length),
+    classes.find((c) => c.startsWith("text-")),
+  ];
+};
+const rowIcon = (name: string) => looks(rowButton(name).querySelector("svg"));
+const iconPicker = (within: Element) =>
+  within.querySelector<HTMLElement>('[role="dialog"][aria-label="Project icon"]');
+const pickIcon = (within: Element, label: string) =>
+  click(iconPicker(within)!.querySelector(`[role="option"][aria-label="${label}"]`));
+const pickColor = (within: Element, label: string) =>
+  click(iconPicker(within)!.querySelector(`input[type="radio"][aria-label="${label}"]`));
+const projectEvent = (seq: number, kind: "project.updated", p: Project) =>
+  act(async () =>
+    deliver({
+      type: "event",
+      event: { subscription: "s-1", seq, time: "", event: { kind, project: p } },
+    }),
+  );
+/** `project/update` answering with ember or photon as changed. */
+const updates: Answer = (p) => {
+  const before = [
+    project("ember", "2026-09-26T12:00:00Z"),
+    project("photon", "2026-09-29T09:00:00Z"),
+  ].find((x) => x.id === p["project"])!;
+  const { name, icon } = p as { name?: string; icon?: Project["icon"] };
+  return { result: { project: { ...before, ...(name && { name }), ...(icon && { icon }) } } };
+};
+
+test("Rename edits a Project's name in its row: Enter or leaving the field saves, and Escape, an empty name, or the same name save nothing", async () => {
+  capabilities = { projectEdit: {} };
+  answers["project/update"] = updates;
+  await renderApp();
+  const actions = projectRow("ember").querySelector<HTMLButtonElement>(
+    'button[aria-label="Project actions"]',
+  )!;
+  expect(actions.getAttribute("popovertarget")).toBe(
+    projectRow("ember").querySelector('[role="menu"]')!.id,
+  );
+  expect(
+    [...projectRow("ember").querySelectorAll('[role="menuitem"]')].map((b) => b.textContent),
+  ).toEqual(["Rename", "Change icon"]);
+  // Right-clicking the row opens the same menu: on the button's release where it comes while the
+  // button is down (macOS, Linux), since the release would close a menu shown before it.
+  const opened = vi.fn();
+  actions.addEventListener("click", opened);
+  const pressed = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, buttons: 2 });
+  act(() => void rowButton("ember").dispatchEvent(pressed));
+  expect(pressed.defaultPrevented).toBe(true);
+  expect(opened).not.toHaveBeenCalled();
+  act(() => void window.dispatchEvent(new Event("pointerup")));
+  expect(opened).toHaveBeenCalledTimes(1);
+  const released = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  act(() => void rowButton("ember").dispatchEvent(released));
+  expect(released.defaultPrevented).toBe(true);
+  expect(opened).toHaveBeenCalledTimes(2);
+
+  await click(menuItem("ember", "Rename"));
+  expect(nameEditor()!.value).toBe("ember");
+  expect(document.activeElement).toBe(nameEditor());
+  typeInto(nameEditor()!, "  ember app ");
+  press("Enter");
+  await settle();
+  expect(calls("project/update")).toEqual([{ project: "p-ember", name: "ember app" }]);
+  expect(nameEditor()).toBeNull();
+  expect(projectRows()).toEqual(["photon3h", "ember app3d"]);
+  expect(document.activeElement).toBe(rowButton("ember app"));
+
+  // Escape, an empty name, and the same name each close the field and save nothing.
+  await click(menuItem("photon", "Rename"));
+  typeInto(nameEditor()!, "photon two");
+  press("Escape");
+  await click(menuItem("photon", "Rename"));
+  typeInto(nameEditor()!, "   ");
+  press("Enter");
+  await click(menuItem("photon", "Rename"));
+  press("Enter");
+  await settle();
+  expect(nameEditor()).toBeNull();
+  expect(calls("project/update")).toHaveLength(1);
+  expect(projectRows()).toEqual(["photon3h", "ember app3d"]);
+
+  await click(menuItem("photon", "Rename"));
+  typeInto(nameEditor()!, "photon two");
+  await act(async () => nameEditor()!.blur());
+  await settle();
+  expect(calls("project/update")).toEqual([
+    { project: "p-ember", name: "ember app" },
+    { project: "p-photon", name: "photon two" },
+  ]);
+  // A rename isn't activity (0032): the order stays.
+  expect(projectRows()).toEqual(["photon two3h", "ember app3d"]);
+});
+
+test("a rename shows its name while wispd answers, then wispd's error under the projects list", async () => {
+  capabilities = { projectEdit: {} };
+  let release = () => {};
+  answers["project/update"] = async () => {
+    await new Promise<void>((resolve) => (release = resolve));
+    return { error: { code: -32602, message: "Invalid params: name must be at most 256 bytes" } };
+  };
+  await renderApp();
+  await click(menuItem("ember", "Rename"));
+  typeInto(nameEditor()!, "a very long name");
+  press("Enter");
+  await settle();
+  expect(projectRows()).toEqual(["photon3h", "a very long name3d"]);
+  await act(async () => release());
+  await settle();
+  expect(projectRows()).toEqual(["photon3h", "ember3d"]);
+  expect(projectsList().querySelector('[role="alert"]')?.textContent).toBe(
+    "Invalid params: name must be at most 256 bytes",
+  );
+});
+
+test("Change icon opens the picker under the row's icon, and each pick saves the glyph and color together at once", async () => {
+  capabilities = { projectEdit: {} };
+  // Held until released, as over a slow ssh link.
+  const pending: (() => void)[] = [];
+  answers["project/update"] = async (p, host) => {
+    await new Promise<void>((resolve) => pending.push(resolve));
+    return updates(p, host);
+  };
+  await renderApp();
+  expect(rowIcon("ember")).toEqual(["folder-kanban", "text-accent"]);
+  const row = projectRow("ember");
+  expect(iconPicker(row)!.childElementCount).toBe(0);
+
+  await click(menuItem("ember", "Change icon"));
+  expect(popoverSources).toEqual([rowButton("ember").querySelector("span")]);
+  expect(popoverSources[0]!.querySelector("svg")).not.toBeNull();
+  expect(
+    iconPicker(row)!
+      .querySelector('[role="option"][aria-selected="true"]')!
+      .getAttribute("aria-label"),
+  ).toBe("Folder kanban");
+
+  // A color, then an icon before the first answer: the second keeps the color.
+  await pickColor(row, "Violet");
+  await pickIcon(row, "Rocket");
+  expect(calls("project/update")).toEqual([
+    { project: "p-ember", icon: { name: "folder-kanban", color: "violet" } },
+    { project: "p-ember", icon: { name: "rocket", color: "violet" } },
+  ]);
+  expect(hostsOf("project/update")).toEqual(["local", "local"]);
+  // The picker stays open for the next pick.
+  expect(iconPicker(row)!.childElementCount).toBeGreaterThan(0);
+
+  await act(async () => pending.forEach((resolve) => resolve()));
+  await settle();
+  expect(rowIcon("ember")).toEqual(["rocket", "text-project-violet"]);
+
+  // The accent sends the icon with no color (0032).
+  await pickColor(row, "Accent");
+  expect(calls("project/update").at(-1)).toEqual({ project: "p-ember", icon: { name: "rocket" } });
+});
+
+test("another client's project.updated renames a row and changes its icon, in the breadcrumb and the chat too", async () => {
+  capabilities = { projectEdit: {} };
+  await renderApp();
+  await click(rowButton("ember"));
+  await projectEvent(8, "project.updated", {
+    ...project("ember", "2026-09-26T12:00:00Z"),
+    name: "ember app",
+    icon: { name: "rocket", color: "green" },
+  });
+  expect(projectRows()).toEqual(["photon3h", "ember app3d"]);
+  expect(rowIcon("ember app")).toEqual(["rocket", "text-project-green"]);
+  expect(crumbs()).toEqual(["This Mac", "ember app"]);
+  const crumbIcon = document.querySelector('[aria-label="Breadcrumb"] li:last-child svg');
+  expect(looks(crumbIcon)).toEqual(["rocket", "text-project-green"]);
+  expect(looks(document.querySelector("main svg.size-10"))).toEqual([
+    "rocket",
+    "text-project-green",
+  ]);
+});
+
+test("an icon name or color this app doesn't know draws FolderKanban or the accent in its place", async () => {
+  answers["project/list"] = () => ({
+    result: {
+      projects: [
+        {
+          ...project("ember", "2026-09-26T12:00:00Z"),
+          icon: { name: "not-an-icon", color: "red" },
+        },
+        {
+          ...project("photon", "2026-09-29T09:00:00Z"),
+          icon: { name: "bug", color: "chartreuse" },
+        },
+        { ...project("wisp", "2026-09-28T09:00:00Z"), icon: { name: "nope" } },
+      ],
+      seq: 7,
+    },
+  });
+  await renderApp();
+  expect(rowIcon("ember")).toEqual(["folder-kanban", "text-project-red"]);
+  expect(rowIcon("photon")).toEqual(["bug", "text-accent"]);
+  expect(rowIcon("wisp")).toEqual(["folder-kanban", "text-accent"]);
+  await click(rowButton("ember"));
+  const crumbIcon = document.querySelector('[aria-label="Breadcrumb"] li:last-child svg');
+  expect(looks(crumbIcon)).toEqual(["folder-kanban", "text-project-red"]);
+  expect(looks(document.querySelector("main svg.size-10"))).toEqual([
+    "folder-kanban",
+    "text-project-red",
+  ]);
+});
+
+const iconButton = () =>
+  dialog().querySelector<HTMLButtonElement>('button[aria-label="Choose icon"]');
+const dialogIcon = () => looks(dialog().querySelector("svg.size-8"));
+// happy-dom has no popovers, so the picker gets the event a browser sends as its button opens it.
+const openDialogPicker = async () => {
+  const picker = iconPicker(dialog())!;
+  expect(iconButton()!.getAttribute("popovertarget")).toBe(picker.id);
+  await act(async () => {
+    picker.dispatchEvent(
+      Object.assign(new Event("beforetoggle"), { oldState: "closed", newState: "open" }),
+    );
+  });
+};
+
+test("Create Project's icon opens the picker, project/create sends the chosen icon, and a new icon is a new try", async () => {
+  capabilities = { projectEdit: {} };
+  let fails = 2;
+  answers["project/create"] = (p) =>
+    fails-- > 0
+      ? { error: { code: -32000, message: "/src/wisp is not the top folder of a git repository" } }
+      : {
+          result: {
+            project: { ...project("wisp", "2026-09-29T12:00:00Z"), id: p["id"], icon: p["icon"] },
+          },
+        };
+  await renderApp();
+  await openNewProject();
+  expect(dialogIcon()).toEqual(["folder-kanban", "text-accent"]);
+  await openDialogPicker();
+  await pickColor(dialog(), "Teal");
+  await pickIcon(dialog(), "Rocket");
+  expect(dialogIcon()).toEqual(["rocket", "text-project-teal"]);
+  // Choosing in the dialog sends nothing until Create.
+  expect(calls("project/update")).toEqual([]);
+
+  await click(inDialog("Create Project"));
+  await pickIcon(dialog(), "Bug");
+  await click(inDialog("Create Project"));
+  await click(inDialog("Create Project"));
+  const [first, second, retry] = calls("project/create");
+  expect(first).toEqual({
+    id: expect.any(String),
+    name: "wisp",
+    repoPath: "/src/wisp",
+    icon: { name: "rocket", color: "teal" },
+  });
+  expect(second).toEqual({
+    ...first,
+    id: expect.any(String),
+    icon: { name: "bug", color: "teal" },
+  });
+  expect(second!["id"]).not.toBe(first!["id"]);
+  expect(retry).toEqual(second);
+  expect(dialog().open).toBe(false);
+  expect(rowIcon("wisp")).toEqual(["bug", "text-project-teal"]);
+
+  // It opens again on the default.
+  await openNewProject();
+  expect(dialogIcon()).toEqual(["folder-kanban", "text-accent"]);
+});
+
+test("without projectEdit, a Project row has no actions and Create Project's icon is no button, and nothing sends an icon", async () => {
+  await renderApp();
+  expect(projectRow("ember").querySelector('button[aria-label="Project actions"]')).toBeNull();
+  expect(projectRow("ember").querySelector('[role="menu"]')).toBeNull();
+  expect(iconPicker(projectRow("ember"))).toBeNull();
+  const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  act(() => void rowButton("ember").dispatchEvent(contextMenu));
+  expect(contextMenu.defaultPrevented).toBe(false);
+  // The age stays put on hover and focus.
+  expect(rowButton("ember").lastElementChild!.className).not.toContain("hidden");
+
+  await openNewProject();
+  expect(iconButton()).toBeNull();
+  expect(iconPicker(dialog())).toBeNull();
+  expect(dialogIcon()).toEqual(["folder-kanban", "text-accent"]);
+});
+
+test("Create Project's icon follows the Workspace's host: an icon only where that host's wispd keeps one", async () => {
+  sshHosts = [mini];
+  states[mini.id] = { ...connected, capabilities: { projectEdit: {} } };
+  const api = repo("api");
+  answers["thread/list"] = reposOn({ [mini.id]: [api] });
+  answers["project/create"] = () => ({
+    error: { code: -32000, message: "not a repository", data: { kind: "notARepository" } },
+  });
+  await renderApp();
+  await openNewProject();
+  // This computer's wispd has no projectEdit here.
+  expect(iconButton()).toBeNull();
+
+  await openWorkspaces();
+  await click(workspaceItem("api"));
+  expect(workspaceButton()).toBe("Workspace: api on Mac mini");
+  await openDialogPicker();
+  await pickIcon(dialog(), "Rocket");
+  expect(dialogIcon()).toEqual(["rocket", "text-accent"]);
+  await click(inDialog("Create Project"));
+
+  await click(workspaceItem("wisp"));
+  expect(iconButton()).toBeNull();
+  expect(dialogIcon()).toEqual(["folder-kanban", "text-accent"]);
+  await click(inDialog("Create Project"));
+
+  expect(calls("project/create")).toEqual([
+    { id: expect.any(String), name: "api", repoPath: "/srv/api", icon: { name: "rocket" } },
+    { id: expect.any(String), name: "wisp", repoPath: "/src/wisp" },
+  ]);
+  expect(hostsOf("project/create")).toEqual([mini.id, "local"]);
 });
 
 /** A Project's coordinator run, as `project/start` answers it (0024). */

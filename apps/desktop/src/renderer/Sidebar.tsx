@@ -14,7 +14,6 @@ import {
   Ellipsis,
   FileDiff,
   Folder,
-  FolderKanban,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -43,16 +42,24 @@ import {
 } from "react";
 
 import type { UpdateState } from "../preload/bridge";
-import type { AgentRun, AgentStatus, Thread } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  AgentStatus,
+  Project,
+  ProjectIcon as ProjectIconValue,
+  Thread,
+} from "../protocol/generated/protocol";
 import type { Selection, SettingsSection } from "./App";
 import { ConnectionStatus, StatusDot, statusLabel, useConnection } from "./ConnectionStatus";
 import { localId, type Host } from "./hosts";
+import { IconPicker } from "./IconPicker";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
-import { groupOf, groupThreads, noRepo, type ThreadsView } from "./threads";
+import { iconLook } from "./projectIcons";
+import { groupOf, groupThreads, noRepo, type ProjectChange, type ThreadsView } from "./threads";
 import { accountLabel, statusLabel as runStatusLabel } from "./transcript";
-import { IconButton, menuItem, menuPanel, moveFocus, TopBar } from "./ui";
+import { IconButton, menuItem, menuPanel, moveFocus, openOnContextMenu, TopBar } from "./ui";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
@@ -113,9 +120,19 @@ interface ThreadListProps {
   onDelete: (thread: Thread) => Promise<string | undefined>;
 }
 
-/** Every Project's icon, in the sidebar, the breadcrumb, and its chat, in the accent. */
-export function ProjectIcon({ className = "" }: { className?: string }) {
-  return <FolderKanban aria-hidden className={`text-accent ${className}`} />;
+/**
+ * A Project's icon, in the sidebar, the breadcrumb, its chat, and Create Project: its glyph in its
+ * color, or `FolderKanban` in the accent for none, or for a name or color this app doesn't know.
+ */
+export function ProjectIcon({
+  icon,
+  className = "",
+}: {
+  icon?: ProjectIconValue;
+  className?: string;
+}) {
+  const { Icon, color } = iconLook(icon);
+  return <Icon aria-hidden className={`${color} ${className}`} />;
 }
 
 // How long a pointer rests on a thread before its card shows. Moving to another thread while
@@ -145,7 +162,11 @@ export function ThreadList({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  const [projectError, setProjectError] = useState<string>();
   const [query, setQuery] = useState("");
+  // Renaming a Project and choosing its icon need a wispd with `projectEdit` (0032).
+  const connection = useConnection(host.id);
+  const editable = connection?.status === "connected" && "projectEdit" in connection.capabilities;
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [card, setCard] = useState<{ thread: Thread; top: number; left: number }>();
   const cardTimer = useRef<number>(undefined);
@@ -244,26 +265,24 @@ export function ThreadList({
             </IconButton>
           </header>
           <ul>
-            {shownProjects.map((p) => {
-              const selected = selection.kind === "project" && selection.projectId === p.id;
-              return (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    aria-current={selected ? "page" : undefined}
-                    onClick={() => onSelect({ kind: "project", projectId: p.id })}
-                    className={`${row} ${selected ? current : "text-foreground/80"}`}
-                  >
-                    <ProjectIcon className="size-4 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                    <span className="shrink-0 text-[11.5px] text-faint-foreground">
-                      {age(p.updatedAt)}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
+            {shownProjects.map((p) => (
+              <ProjectRow
+                key={p.id}
+                project={p}
+                selected={selection.kind === "project" && selection.projectId === p.id}
+                editable={editable}
+                onOpen={() => onSelect({ kind: "project", projectId: p.id })}
+                onUpdate={async (change) =>
+                  setProjectError(await threads.updateProject(p.id, change))
+                }
+              />
+            ))}
           </ul>
+          {projectError && (
+            <p role="alert" className="px-2 pb-1 text-[12px] text-danger">
+              {projectError}
+            </p>
+          )}
         </section>
       )}
 
@@ -546,6 +565,177 @@ function HostRow({ host, open, onOpen }: { host: Host; open: boolean; onOpen: ()
       <StatusDot state={state} />
       {status && <span className="sr-only">{status}</span>}
     </button>
+  );
+}
+
+/**
+ * A Project's row: its icon, name, and age. Where its host's wispd can edit Projects, hovering or
+ * focusing it swaps the age for its actions, which also open by right-clicking the row: Rename,
+ * which edits the name in place, and Change icon, which opens the icon picker under the row's icon.
+ */
+function ProjectRow({
+  project,
+  selected,
+  editable,
+  onOpen,
+  onUpdate,
+}: {
+  project: Project;
+  selected: boolean;
+  editable: boolean;
+  onOpen: () => void;
+  /** Sends `project/update`, and settles once wispd has answered. */
+  onUpdate: (change: ProjectChange) => Promise<void>;
+}) {
+  const menuId = useId();
+  const pickerId = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const actions = useRef<HTMLButtonElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const iconSpot = useRef<HTMLSpanElement>(null);
+  const picker = useRef<HTMLDivElement>(null);
+  const [renaming, setRenaming] = useState(false);
+  // The new name, shown until wispd answers.
+  const [saving, setSaving] = useState<string>();
+  // Set while the name box is open, so Enter and the blur that follows save once.
+  const editing = useRef(false);
+  // After Enter or Escape, the row takes focus back from the name box.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (renaming || !refocus.current) return;
+    refocus.current = false;
+    button.current?.focus();
+  }, [renaming]);
+
+  const choose = (action: () => void) => () => {
+    menu.current?.hidePopover();
+    action();
+  };
+  const startRename = () => {
+    editing.current = true;
+    setRenaming(true);
+  };
+  // An empty or unchanged name saves nothing.
+  const endRename = async (name: string | undefined, focusRow: boolean) => {
+    if (!editing.current) return;
+    editing.current = false;
+    refocus.current = focusRow;
+    setRenaming(false);
+    const next = name?.trim();
+    if (!next || next === project.name) return;
+    setSaving(next);
+    await onUpdate({ name: next });
+    setSaving(undefined);
+  };
+
+  const icon = <ProjectIcon icon={project.icon} className="size-4" />;
+  return (
+    <li className="group/row relative">
+      {renaming ? (
+        <div
+          className={`${row} ${selected ? current : ""} outline-2 -outline-offset-2 outline-ring`}
+        >
+          <span className="grid shrink-0 place-items-center">{icon}</span>
+          <input
+            aria-label="Project name"
+            defaultValue={project.name}
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+            onFocus={(e) => e.currentTarget.select()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void endRename(e.currentTarget.value, true);
+              else if (e.key === "Escape") void endRename(undefined, true);
+            }}
+            onBlur={(e) => void endRename(e.currentTarget.value, false)}
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground focus-visible:outline-none"
+          />
+        </div>
+      ) : (
+        <button
+          ref={button}
+          type="button"
+          aria-current={selected ? "page" : undefined}
+          onClick={onOpen}
+          onContextMenu={editable ? (e) => openOnContextMenu(e, actions.current) : undefined}
+          className={`${row} ${selected ? current : "text-foreground/80"}`}
+        >
+          <span ref={iconSpot} className="grid shrink-0 place-items-center">
+            {icon}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{saving ?? project.name}</span>
+          <span
+            className={`shrink-0 text-[11.5px] text-faint-foreground ${editable ? "group-has-[:focus-visible]/row:hidden group-hover/row:hidden" : ""}`}
+          >
+            {age(project.updatedAt)}
+          </span>
+          {/* Holds the actions button's room while it shows, so a long name ends before it. */}
+          {editable && (
+            <span
+              aria-hidden
+              className="hidden w-4.5 shrink-0 group-has-[:focus-visible]/row:block group-hover/row:block"
+            />
+          )}
+        </button>
+      )}
+      {editable && !renaming && (
+        <>
+          <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
+            <button
+              ref={actions}
+              type="button"
+              aria-label="Project actions"
+              title="Project actions"
+              popoverTarget={menuId}
+              className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+            >
+              <Ellipsis />
+            </button>
+          </div>
+          <div
+            ref={menu}
+            id={menuId}
+            popover="auto"
+            role="menu"
+            aria-label="Project actions"
+            onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+              if (e.newState === "open")
+                e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+            }}
+            onKeyDown={moveFocus}
+            className={`${menuPanel("end")} min-w-36 p-1`}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className={menuItem}
+              onClick={choose(startRename)}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={menuItem}
+              onClick={choose(() =>
+                picker.current?.showPopover({ source: iconSpot.current ?? undefined }),
+              )}
+            >
+              Change icon
+            </button>
+          </div>
+        </>
+      )}
+      {/* Each pick saves at once; the picker stays open for the next. */}
+      {editable && (
+        <IconPicker
+          ref={picker}
+          id={pickerId}
+          value={project.icon}
+          onPick={(next) => void onUpdate({ icon: next })}
+        />
+      )}
+    </li>
   );
 }
 

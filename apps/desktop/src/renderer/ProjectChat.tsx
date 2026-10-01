@@ -126,7 +126,7 @@ export function ProjectChat({
   return (
     <>
       <div className="flex flex-1 flex-col items-center justify-center px-8 pb-[8vh] text-center">
-        <ProjectIcon className="size-10" />
+        <ProjectIcon icon={project.icon} className="size-10" />
         <h2 className="mt-5 text-[18px] font-medium tracking-tight">{project.name}</h2>
         <p className="mt-2 max-w-sm text-[14px] text-muted-foreground">
           Agents working on {project.name} report back and coordinate here.

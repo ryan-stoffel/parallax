@@ -6,6 +6,7 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   type ToggleEvent,
 } from "react";
@@ -86,16 +87,34 @@ export function Segmented<T extends string>({
 export const menuButton =
   "flex items-center gap-1.5 rounded-lg py-1 pr-1.5 pl-2 text-[13.5px] text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
 
+const panelAreas = {
+  start: "[position-area:bottom_span-right]",
+  end: "[position-area:bottom_span-left]",
+  center: "[position-area:bottom]",
+};
+
 /**
  * A menu's panel, a native popover: under its trigger and lined up with its left edge (`end`:
- * its right edge), flipping when there's no room. Escape and clicking away close it.
+ * its right edge; `center`: centered under it), flipping when there's no room. Escape and
+ * clicking away close it.
  */
-export const menuPanel = (align: "start" | "end" = "start") =>
-  `inset-auto m-0 mt-2 rounded-lg border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block,flip-inline] ${align === "start" ? "[position-area:bottom_span-right]" : "[position-area:bottom_span-left]"}`;
+export const menuPanel = (align: "start" | "end" | "center" = "start") =>
+  `inset-auto m-0 mt-2 rounded-lg border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block,flip-inline] ${panelAreas[align]}`;
 
 /** A row in a menu panel. */
 export const menuItem =
   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
+
+/**
+ * Opens a menu on a right-click by clicking its trigger. Where the right-click arrives while the
+ * button is still down (macOS and Linux), the menu opens on its release, which would otherwise
+ * close it again as a click outside a popover.
+ */
+export function openOnContextMenu(e: MouseEvent<HTMLElement>, trigger: HTMLElement | null) {
+  e.preventDefault();
+  if ((e.buttons & 2) === 0) return trigger?.click();
+  window.addEventListener("pointerup", () => trigger?.click(), { once: true });
+}
 
 /** Up and Down move focus between a menu's items, wrapping at the ends and passing disabled ones. */
 export function moveFocus(e: KeyboardEvent<HTMLElement>) {
