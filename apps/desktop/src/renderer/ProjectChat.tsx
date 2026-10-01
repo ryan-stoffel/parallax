@@ -1,8 +1,9 @@
 import { Folder, GitBranch } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Project, PromptImage } from "../protocol/generated/protocol";
-import { AgentChat } from "./AgentChat";
+import { AgentChat, PinnedApprovals } from "./AgentChat";
+import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -23,12 +24,15 @@ export function ProjectChat({
   project,
   prompt,
   startCoordinator,
+  others,
 }: {
   hostId: string;
   project: Project;
   /** The coordinator's first message, shown until its transcript loads. */
   prompt?: string;
   startCoordinator: ThreadsView["startCoordinator"];
+  /** Permission requests the Project's subagents wait on, pinned over the composer (RYA-196). */
+  others?: readonly Asked[];
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -41,6 +45,9 @@ export function ProjectChat({
   const [notice, setNotice] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
   const [backend, setBackend] = useState<string>();
+  // Before there's a coordinator, subagents started by hand still ask here (RYA-196).
+  const { answers, answer, dismiss } = useAnswers(hostId);
+  const asked = useMemo(() => queueOf(others ?? [], answers), [others, answers]);
   useEffect(() => {
     if (!connected) return;
     let live = true;
@@ -106,6 +113,7 @@ export function ProjectChat({
         tab={tab}
         // A new coordinator replaces one that can't take messages (0024).
         startOver={(text, options, images) => start(uuidv7(), text, options, images)}
+        others={others}
       />
     );
 
@@ -133,6 +141,13 @@ export function ProjectChat({
         </p>
       </div>
       <div className="mx-auto w-full max-w-3xl px-6 pb-5">
+        <PinnedApprovals
+          asked={asked}
+          answers={answers}
+          onAnswer={(a, choice, message) => void answer(a, choice, message)}
+          onDismiss={dismiss}
+          disabledReason={connected ? undefined : "Connecting to wispd…"}
+        />
         <Composer
           newThread
           onSend={send}
@@ -140,6 +155,8 @@ export function ProjectChat({
           disabledReason={disabledReason}
           tab={tab}
           imageCaps={imageCaps(connection)}
+          // The coordinator asks only through a wispd that sends its requests.
+          manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
         />
       </div>
     </>

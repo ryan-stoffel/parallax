@@ -32,7 +32,8 @@ import { backends, models, type Model, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). Every mode but Bypass keeps a
-// worker in its sandbox (0013). wisp can't show Manual's approval requests yet, so they're denied.
+// worker in its sandbox (0013). Manual's requests, and Auto's undecided ones, come to the chat as
+// approval cards (RYA-196), unless the run can't send them (`manualDenied`).
 const accessOptions: Record<AgentPermission, PickerOption> = {
   auto: {
     value: "auto",
@@ -44,7 +45,7 @@ const accessOptions: Record<AgentPermission, PickerOption> = {
     value: "manual",
     label: "Manual",
     icon: <Hand />,
-    description: "Asks before edits and commands. Until wisp shows those requests, they're denied.",
+    description: "Asks you before edits and commands.",
   },
   edit: {
     value: "edit",
@@ -160,6 +161,12 @@ const toMarkdown = (node: ProseMirrorNode) =>
 const hasText = (html: string) =>
   !!new DOMParser().parseFromString(html, "text/html").body.textContent?.trim();
 
+/** Manual's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
+const manualDenials = {
+  host: "Asks before edits and commands. This host's wispd can't show those requests, so they're denied.",
+  run: "Asks before edits and commands. This chat started before wisp could show those requests, so they're denied.",
+};
+
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
 export const tabItem =
   "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
@@ -204,6 +211,11 @@ export interface ComposerProps {
   optionsDisabled?: string;
   /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
   imageCaps?: ImageCaps;
+  /**
+   * Why Manual's requests are denied instead of coming to the chat (0031): the host's wispd lacks
+   * `approvals`, or the open run started without them. Absent: they come as approval cards.
+   */
+  manualDenied?: keyof typeof manualDenials;
 }
 
 /**
@@ -224,6 +236,7 @@ export function Composer({
   started,
   optionsDisabled,
   imageCaps,
+  manualDenied,
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
@@ -525,7 +538,11 @@ export function Composer({
                       label="Access"
                       value={permission}
                       onChange={(value) => setPermission(value as AgentPermission)}
-                      options={permissions.map((p) => accessOptions[p])}
+                      options={permissions.map((p) =>
+                        p === "manual" && manualDenied
+                          ? { ...accessOptions[p], description: manualDenials[manualDenied] }
+                          : accessOptions[p],
+                      )}
                       panelClassName="w-[25rem]"
                     />
                   </>

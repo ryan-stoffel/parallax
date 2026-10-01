@@ -42,6 +42,8 @@
   --danger: #c42b2b;
   /* The semantic amber, for marks and icons beside a label (--danger is the red). */
   --warning: #d97706;
+  /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
+  --added: #15803d;
   --working: var(--accent);
   /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
      each mixed into the surface so they stay opaque. Both modes compute from their own surface,
@@ -81,6 +83,7 @@
   --primary-foreground: #0d0d0d;
   --danger: #ff8f8a;
   --warning: #f59e0b;
+  --added: #4ade80;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
   --project-red: #f87171;
   --project-orange: #fb923c;
@@ -113,6 +116,7 @@
   --color-ring: var(--ring);
   --color-danger: var(--danger);
   --color-warning: var(--warning);
+  --color-added: var(--added);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -476,12 +480,23 @@ body {
 .proposed-plan > .markdown > :first-child {
   margin-top: 0;
 }
+/* A permission request's card (Approval.tsx) rises into place over the composer. */
+.approval-in {
+  animation: approval-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes approval-in {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .plan-bar {
     transition: none;
   }
   .plan-check-draw :is(circle, path),
-  .plan-strip {
+  .plan-strip,
+  .approval-in {
     animation: none;
   }
 }

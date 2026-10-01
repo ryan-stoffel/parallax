@@ -347,6 +347,12 @@ export function NewThread({
           backend={runOptions && starting === undefined ? backend : undefined}
           disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
           imageCaps={imageCaps(connection)}
+          // A new thread asks only through a wispd that sends its requests (RYA-196).
+          manualDenied={
+            connection?.status === "connected" && !("approvals" in connection.capabilities)
+              ? "host"
+              : undefined
+          }
           tab={
             starting !== undefined ? (
               <span className={tabItem}>

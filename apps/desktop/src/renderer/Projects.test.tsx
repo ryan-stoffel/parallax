@@ -12,6 +12,7 @@ import type {
   WispBridge,
 } from "../preload/bridge";
 import type {
+  AgentOutputItem,
   AgentRun,
   LoggedEvent,
   Project,
@@ -1243,4 +1244,218 @@ test("another Project's Agents view starts with an empty box and never gets a la
   await act(async () => release());
   await settle();
   expect(agentRows()).toEqual([]);
+});
+
+// --- RYA-196: permission requests in a Project ---
+
+const plan = "## Plan\n\n1. Cut the release branch\n2. Write the changelog";
+const bashAsk = (approvalId: string): AgentOutputItem => ({
+  kind: "approvalRequested",
+  approvalId,
+  toolName: "Bash",
+  input: { command: "git tag v1.2.0" },
+  callId: `toolu_${approvalId}`,
+  expiresAt: "2026-09-29T12:30:00Z",
+});
+const planAsk = (input: Record<string, string>): AgentOutputItem[] => [
+  { kind: "toolCall", callId: "toolu_p1", name: "ExitPlanMode", input: {} },
+  {
+    kind: "approvalRequested",
+    approvalId: "p1",
+    toolName: "ExitPlanMode",
+    input,
+    callId: "toolu_p1",
+    interactive: true,
+    expiresAt: "2026-09-29T12:30:00Z",
+  },
+];
+/**
+ * Ember open on its coordinator, if it has one, with `runs` after it. Each run's log is its start,
+ * then `items` for it as one output. wispd advertises approvals, and allows what's answered.
+ */
+async function openEmberAsking(
+  coordinator: AgentRun | undefined,
+  runs: AgentRun[],
+  items: Record<string, AgentOutputItem[]>,
+) {
+  capabilities = { coordinator: {}, approvals: {} };
+  const all = [...(coordinator ? [coordinator] : []), ...runs];
+  answers["project/list"] = () => ({
+    result: {
+      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: coordinator?.id }],
+      seq: 7,
+    },
+  });
+  answers["agent/list"] = (p) => ({
+    result: { runs: p["project"] === "p-ember" ? all : [], seq: 7 },
+  });
+  answers["agent/events"] = (params) => {
+    const r = all.find((run) => run.id === params["runId"])!;
+    const events: LoggedEvent[] = [
+      {
+        seq: 8,
+        time: "2026-09-29T12:00:00Z",
+        event: { kind: "agent.started", runId: r.id, run: r },
+      },
+    ];
+    if (items[r.id])
+      events.push({
+        seq: 9,
+        time: "2026-09-29T12:00:01Z",
+        event: { kind: "agent.output", runId: r.id, items: items[r.id]! },
+      });
+    return {
+      result: { events: events.filter((e) => e.seq > Number(params["after"])), more: false },
+    };
+  };
+  answers["agent/approve"] = () => ({ result: { decision: "allowed", by: "user" } });
+  await renderApp();
+  await openEmber();
+}
+const pinned = () => document.querySelector('main section[aria-label="Approval requests"]');
+const pinnedButton = (name: string) =>
+  [...(pinned()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === name);
+const asking = (run: AgentRun): AgentRun => ({ ...run, approvals: true });
+
+test("with approvals, a coordinator and a subagent started here ask wispd to forward their requests", async () => {
+  capabilities = { coordinator: {}, approvals: {} };
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  let started: AgentRun | undefined;
+  answers["project/start"] = (p) => {
+    started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
+    return { result: { run: started } };
+  };
+  answers["agent/start"] = (p) => ({
+    result: { run: subagent(p["runId"] as string, p["prompt"] as string) },
+  });
+  answers["agent/events"] = serveEvents(() => [started]);
+  await renderApp();
+  await openEmber();
+  type("Add a dark mode");
+  await click(button("Send"));
+  expect(calls("project/start")).toEqual([expect.objectContaining({ approvals: true })]);
+
+  await click(button("Show side panel"));
+  await click(
+    [...document.querySelectorAll("#side-panel button")].find((b) =>
+      b.textContent?.startsWith("Agents"),
+    ),
+  );
+  const box = document.querySelector<HTMLTextAreaElement>(
+    '#side-panel textarea[aria-label="New subagent\'s task"]',
+  )!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      box,
+      "Bump the version",
+    );
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(document.querySelector('#side-panel button[aria-label="Start subagent"]'));
+  expect(calls("agent/start")).toEqual([
+    expect.objectContaining({ prompt: "Bump the version", approvals: true }),
+  ]);
+});
+
+for (const [name, input, shows] of [
+  [
+    "with its plan",
+    { plan, planFilePath: "/home/me/.claude/plans/release.md" },
+    "Cut the release branch",
+  ],
+  ["without one", {}, "The plan didn't come with the request."],
+] as const)
+  test(`a coordinator's ExitPlanMode ${name} is pinned in its chat, and Approve plan allows it as asked`, async () => {
+    const coordinator = asking({
+      ...coordinatorRun(coordinatorId, "Plan the release"),
+      permission: "plan",
+    });
+    await openEmberAsking(coordinator, [], { [coordinatorId]: planAsk(input) });
+    expect(pinned()!.textContent).toContain("Proposed plan");
+    expect(pinned()!.textContent).toContain(shows);
+    // Its own request, so it names no other run.
+    expect(pinned()!.textContent).not.toContain("Coordinator");
+    await click(pinnedButton("Approve plan"));
+    expect(calls("agent/approve")).toEqual([
+      { runId: coordinatorId, approvalId: "p1", decision: "allow" },
+    ]);
+    expect(pinned()).toBeNull();
+    expect(transcript()).toContain("Approved the plan");
+  });
+
+test("a subagent's request is pinned in the coordinator's chat by name, its row says it waits, and Open its chat goes there", async () => {
+  const docs = asking(subagent("01a0d391-0000-7000-8000-000000000002", "Write the docs"));
+  await openEmberAsking(asking(coordinatorRun(coordinatorId, "Plan the release")), [docs], {
+    [docs.id]: [bashAsk("s1")],
+  });
+  expect(pinned()!.textContent).toContain("Subagent: Write the docs");
+  expect(pinned()!.textContent).toContain("git tag v1.2.0");
+  await click(button("Show side panel"));
+  await click(
+    [...document.querySelectorAll("#side-panel button")].find((b) =>
+      b.textContent?.startsWith("Agents"),
+    ),
+  );
+  expect(agentRow("Write the docs")!.textContent).toContain("Needs approval");
+
+  await click(pinnedButton("Open its chat"));
+  expect(crumbs()).toEqual(["This Mac", "ember", "Write the docs"]);
+  // Its own chat pins it as its own.
+  expect(pinned()!.textContent).not.toContain("Subagent:");
+  await click(document.querySelector('[aria-label="Breadcrumb"] button'));
+
+  // Answered from the coordinator's chat, for the subagent's run.
+  await click(pinnedButton("Approve"));
+  expect(calls("agent/approve")).toEqual([{ runId: docs.id, approvalId: "s1", decision: "allow" }]);
+  expect(pinned()).toBeNull();
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s",
+        seq: 10,
+        time: "",
+        event: {
+          kind: "agent.output",
+          runId: docs.id,
+          items: [{ kind: "approvalResolved", approvalId: "s1", decision: "allowed", by: "user" }],
+        },
+      },
+    }),
+  );
+  expect(agentRow("Write the docs")!.textContent).not.toContain("Needs approval");
+});
+
+test("a subagent's chat pins the coordinator's request too, and a Project with no coordinator pins its subagents'", async () => {
+  const docs = asking(subagent("01a0d391-0000-7000-8000-000000000002", "Write the docs"));
+  await openEmberAsking(asking(coordinatorRun(coordinatorId, "Plan the release")), [docs], {
+    [coordinatorId]: [bashAsk("c1")],
+  });
+  expect(pinned()!.textContent).not.toContain("Coordinator");
+  await click(button("Show side panel"));
+  await click(
+    [...document.querySelectorAll("#side-panel button")].find((b) =>
+      b.textContent?.startsWith("Agents"),
+    ),
+  );
+  await click(agentRow("Write the docs"));
+  expect(pinned()!.textContent).toContain("Coordinator");
+  act(() => unmount());
+
+  const byHand = asking(
+    subagent("01a0d391-0000-7000-8000-000000000003", "Tag the release", {
+      coordinatorThread: undefined,
+    }),
+  );
+  await openEmberAsking(undefined, [byHand], { [byHand.id]: [bashAsk("h1")] });
+  expect(pinned()!.textContent).toContain("Subagent: Tag the release");
+  await click(pinnedButton("Approve"));
+  expect(calls("agent/approve")).toContainEqual({
+    runId: byHand.id,
+    approvalId: "h1",
+    decision: "allow",
+  });
+  expect(pinned()).toBeNull();
 });

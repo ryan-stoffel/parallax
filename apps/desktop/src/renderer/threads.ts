@@ -231,9 +231,10 @@ export type CoordinatorOptions = Pick<
 /**
  * A host's threads and projects, kept live: `thread/list`, `agent/list` (for titles and runs), and
  * `project/list`, then host-level events after the thread list's `seq`, starting over on `resync`.
- * Loads only while `connected`.
+ * Loads only while `connected`. With `approvals`, the host's wispd advertises them, and the threads
+ * and coordinators started here forward their permission requests (RYA-196, 0031).
  */
-export function useThreads(hostId: string, connected: boolean): ThreadsView {
+export function useThreads(hostId: string, connected: boolean, approvals = false): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
   // Another host starts empty, rather than showing this one's threads until its list loads.
@@ -327,6 +328,7 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
         ...(groupId !== noRepo && { repo: groupId }),
         ...options,
         ...(name?.slug && { branchSlug: name.slug }),
+        ...(approvals && { approvals }),
       });
       if ("error" in answer) return answer.error;
       if (name?.title) saveTitle(runId, name.title);
@@ -334,7 +336,7 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
       dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
       return undefined;
     },
-    [hostId],
+    [hostId, approvals],
   );
 
   const archive = useCallback(
@@ -418,12 +420,13 @@ export function useThreads(hostId: string, connected: boolean): ThreadsView {
         prompt,
         ...(images.length > 0 && { images }),
         ...options,
+        ...(approvals && { approvals }),
       });
       if ("error" in answer) return answer.error;
       if (shown.current === hostId) dispatch({ type: "coordinator", run: answer.result.run });
       return undefined;
     },
-    [hostId],
+    [hostId, approvals],
   );
 
   return {

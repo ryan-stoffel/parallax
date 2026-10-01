@@ -75,6 +75,28 @@ const thumbnails = () =>
   [...document.querySelectorAll("form img")].map((img) => img.getAttribute("alt"));
 const alert = () => document.querySelector('[role="alert"]')?.textContent;
 
+test("Manual says its requests are denied when they can't come to the chat, and why (RYA-196)", () => {
+  const manual = () =>
+    [
+      ...document.querySelectorAll('[role="menu"][aria-label="Access"] [role="menuitemradio"]'),
+    ].find((o) => o.textContent?.startsWith("Manual"))!.textContent;
+  const shown = (manualDenied?: "host" | "run") => {
+    const root = createRoot(document.body.appendChild(document.createElement("div")));
+    act(() => root.render(<Composer backend="claude" manualDenied={manualDenied} />));
+    const text = manual();
+    act(() => root.unmount());
+    document.body.innerHTML = "";
+    return text;
+  };
+  expect(shown()).toBe("ManualAsks you before edits and commands.");
+  expect(shown("host")).toBe(
+    "ManualAsks before edits and commands. This host's wispd can't show those requests, so they're denied.",
+  );
+  expect(shown("run")).toBe(
+    "ManualAsks before edits and commands. This chat started before wisp could show those requests, so they're denied.",
+  );
+});
+
 test("Markdown formats as you type and is sent as Markdown, with the text as typed", async () => {
   const onSend = vi.fn(async () => undefined);
   const { box, type, press } = render(onSend);

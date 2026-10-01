@@ -2,7 +2,15 @@ import { expect, test } from "vite-plus/test";
 
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
 import type { AgentOutputItem, LoggedEvent, WispEvent } from "../protocol/generated/protocol";
-import { applyEvents, emptyTranscript, groupWork, workedFor, type Item } from "./transcript";
+import {
+  applyEvents,
+  emptyTranscript,
+  groupWork,
+  trackApprovals,
+  waitingApprovals,
+  workedFor,
+  type Item,
+} from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
 const runId = "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01";
@@ -24,6 +32,7 @@ test("rebuilds the sample run's transcript, item by item", () => {
   expect(t.seq).toBe(8);
   expect(t.items.map((i) => i.kind)).toEqual([
     "user", // the prompt, from agent.started
+    "session", // the CLI's session, never shown (RYA-250)
     "assistant", // msg_1: its delta, then its full text
     "reasoning",
     "todo",
@@ -51,6 +60,9 @@ test("rebuilds the sample run's transcript, item by item", () => {
     { name: "Write", status: "ok", output: "File created" },
     { name: "Bash", status: "denied", input: { truncated: true } },
     { name: null, callId: "toolu_3", status: "error" },
+  ]);
+  expect(of(t.items, "session")).toEqual([
+    { kind: "session", key: "3:0", sessionId: "session-7f3a", at: "2026-09-25T12:00:02Z" },
   ]);
   expect(of(t.items, "notice").map((i) => i.tone)).toEqual(["info", "warning", "warning"]);
   expect(of(t.items, "end")[0]!.outcome).toEqual({
@@ -245,4 +257,141 @@ test("a coordinator's wispd tool that names a subagent gets its prompt's first l
     "Write the plan",
     undefined, // no answer named it
   ]);
+});
+
+// RYA-196: permission requests (0031).
+const asked = (approvalId: string, more: Partial<AgentOutputItem> = {}): AgentOutputItem =>
+  ({
+    kind: "approvalRequested",
+    approvalId,
+    toolName: "Bash",
+    input: { command: "pnpm test" },
+    callId: `toolu_${approvalId}`,
+    expiresAt: "2026-10-01T12:30:00Z",
+    ...more,
+  }) as AgentOutputItem;
+const timed = (event: WispEvent, time: string): LoggedEvent => ({ ...at(event), time });
+
+test("a permission request is an item until its resolution says how it ended, and when", () => {
+  const t = build(
+    timed(
+      { kind: "agent.output", runId, items: [asked("a1", { alwaysAllow: ["Bash(pnpm test:*)"] })] },
+      "2026-10-01T12:00:00Z",
+    ),
+    timed({ kind: "agent.output", runId, items: [asked("a2")] }, "2026-10-01T12:00:01Z"),
+    timed(
+      {
+        kind: "agent.output",
+        runId,
+        items: [
+          {
+            kind: "approvalResolved",
+            approvalId: "a1",
+            decision: "allowed",
+            by: "user",
+            always: true,
+          },
+        ],
+      },
+      "2026-10-01T12:00:05Z",
+    ),
+  );
+  const [first, second] = of(t.items, "approval");
+  expect(first).toMatchObject({
+    at: "2026-10-01T12:00:00Z",
+    request: { approvalId: "a1", toolName: "Bash", alwaysAllow: ["Bash(pnpm test:*)"] },
+    resolved: { decision: "allowed", by: "user", always: true, at: "2026-10-01T12:00:05Z" },
+  });
+  expect(first!.request).not.toHaveProperty("kind");
+  expect(second!.resolved).toBeUndefined();
+  expect(waitingApprovals(t.items).map((a) => a.request.approvalId)).toEqual(["a2"]);
+});
+
+test("the run's end ends a request still waiting, as withdrawn; one answered keeps its answer", () => {
+  const t = build(
+    output(asked("a1"), asked("a2")),
+    output({
+      kind: "approvalResolved",
+      approvalId: "a1",
+      decision: "denied",
+      by: "user",
+      message: "No.",
+    }),
+    {
+      ...at({ kind: "agent.finished", runId, outcome: { status: "interrupted" } }),
+      time: "2026-10-01T12:10:00Z",
+    },
+  );
+  expect(of(t.items, "approval").map((a) => a.resolved)).toEqual([
+    { decision: "denied", by: "user", message: "No.", at: "" },
+    { decision: "withdrawn", by: "stop", at: "2026-10-01T12:10:00Z" },
+  ]);
+  expect(waitingApprovals(t.items)).toEqual([]);
+});
+
+test("ExitPlanMode's call takes the plan its request carries, and never loses its own", () => {
+  const plan = { plan: "1. Add a README.", planFilePath: "/home/me/.claude/plans/readme.md" };
+  const call = (callId: string, input: Record<string, string>) =>
+    ({ kind: "toolCall", callId, name: "ExitPlanMode", input }) as const;
+  const t = build(
+    output(
+      call("toolu_p1", {}),
+      asked("p1", { toolName: "ExitPlanMode", input: plan, callId: "toolu_p1", interactive: true }),
+    ),
+    output(
+      call("toolu_p2", { plan: "The model's own." }),
+      asked("p2", { toolName: "ExitPlanMode", input: plan, callId: "toolu_p2" }),
+    ),
+    // With no plan in the request, the call stays as it was.
+    output(
+      call("toolu_p3", {}),
+      asked("p3", { toolName: "ExitPlanMode", input: {}, callId: "toolu_p3" }),
+    ),
+  );
+  expect(of(t.items, "tool").map((i) => i.input)).toEqual([
+    { plan: "1. Add a README." },
+    { plan: "The model's own." },
+    {},
+  ]);
+});
+
+test("a Project's waiting requests are tracked by run, once each, until resolved or ended", () => {
+  const other = "01a0d391-0000-7000-8000-000000000001";
+  const req = (seq: number, run: string, approvalId: string): LoggedEvent => ({
+    seq,
+    time: `2026-10-01T12:00:0${seq % 10}Z`,
+    event: { kind: "agent.output", runId: run, items: [asked(approvalId)] },
+  });
+  // A page of the run's log, then the subscription repeating its last event.
+  let byRun = trackApprovals({}, [req(1, runId, "a1"), req(2, other, "b1"), req(3, other, "b2")]);
+  byRun = trackApprovals(byRun, [req(3, other, "b2")]);
+  const ids = (run: string) =>
+    byRun[run]!.items.map((i) => (i as { request: { approvalId: string } }).request.approvalId);
+  expect(ids(runId)).toEqual(["a1"]);
+  expect(ids(other)).toEqual(["b1", "b2"]);
+
+  byRun = trackApprovals(byRun, [
+    // Text and other runs' items don't matter; a resolution and the run's end do.
+    {
+      seq: 4,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "text", text: "Hi" }] },
+    },
+    {
+      seq: 5,
+      time: "",
+      event: {
+        kind: "agent.output",
+        runId: other,
+        items: [{ kind: "approvalResolved", approvalId: "b1", decision: "expired", by: "timeout" }],
+      },
+    },
+    {
+      seq: 6,
+      time: "",
+      event: { kind: "agent.finished", runId, outcome: { status: "cancelled" } },
+    },
+  ]);
+  expect(ids(runId)).toEqual([]);
+  expect(ids(other)).toEqual(["b2"]);
 });
