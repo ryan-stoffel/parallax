@@ -82,6 +82,9 @@ const field = (input: JsonValue | undefined, name: string) => {
   const value = isObject(input) ? input[name] : undefined;
   return typeof value === "string" ? value : undefined;
 };
+/** The first of `names` that `input` has as a non-empty string, as Claude Code reads its aliases. */
+const aliased = (input: JsonValue | undefined, ...names: string[]) =>
+  names.map((name) => field(input, name)).find((value) => value?.trim());
 const taskStates: Partial<Record<string, AgentTodoStatus>> = {
   pending: "pending",
   in_progress: "inProgress",
@@ -92,39 +95,44 @@ const taskStates: Partial<Record<string, AgentTodoStatus>> = {
  * Applies a call of Claude Code's task tools to `tasks`, and says whether it applied. TaskCreate
  * adds a step under the id its result names, "Task #3 created successfully: …", or under its call
  * until that result arrives or if it can't be read, so the step shows either way. TaskUpdate
- * changes a step's status, subject, or `activeForm`, or removes it, by `taskId`; Claude Code
- * answers one it couldn't apply in words, such as "Task not found", without failing the call, so
- * only "Updated task #…" or no result yet counts. TaskList, TaskGet, and failed calls change
- * nothing.
+ * changes a step's status, subject, or `activeForm`, or removes it, by the id its result names,
+ * "Updated task #3 status". Claude Code answers one it couldn't apply in words, such as "Task not
+ * found", without failing the call, so only that answer or no result yet counts. TaskList,
+ * TaskGet, and failed calls change nothing. 2.1.283 takes `id` or `task_id` for `taskId`, and
+ * `active_form` for `activeForm`, so those count too (RYA-250).
  */
 function applyTask(tasks: Map<string, Task>, item: Tool): boolean {
   if (failed(item)) return false;
   const { input, output } = item;
+  const active = aliased(input, "activeForm", "active_form");
   if (item.name === "TaskCreate") {
     const subject =
       field(input, "subject") ?? /created successfully: (.+)/s.exec(output ?? "")?.[1];
     if (!subject) return false;
     const id = /^Task #([^\s:]+)/.exec(output ?? "")?.[1] ?? `call:${item.callId}`;
-    // A list Claude Code started afresh, as after an account fallback, reuses ids.
-    tasks.delete(id);
-    tasks.set(id, { text: subject, status: "pending", active: field(input, "activeForm") });
+    tasks.set(id, { text: subject, status: "pending", active });
     return true;
   }
-  if (item.name !== "TaskUpdate" || (output !== undefined && !output.startsWith("Updated task #")))
-    return false;
-  const id = field(input, "taskId") ?? "";
-  const task = tasks.get(id);
-  if (!task) return false;
+  if (item.name !== "TaskUpdate") return false;
+  // Until the result arrives, by the id in the call, read in the order Claude Code reads it.
+  const id =
+    output === undefined
+      ? aliased(input, "taskId", "id", "task_id")
+      : /^Updated task #(\S+)/.exec(output)?.[1];
+  const task = tasks.get(id ?? "");
+  if (!id || !task) return false;
   const status = field(input, "status");
   if (status === "deleted") {
     tasks.delete(id);
     return true;
   }
-  // Without `away`: a step put away comes back once it's updated, as when it's reopened.
+  const next = taskStates[status ?? ""] ?? task.status;
   tasks.set(id, {
     text: field(input, "subject") ?? task.text,
-    status: taskStates[status ?? ""] ?? task.status,
-    active: field(input, "activeForm") ?? task.active,
+    status: next,
+    active: active ?? task.active,
+    // A step put away comes back only when it's taken up again, not when it's otherwise changed.
+    away: task.away && next === "completed",
   });
   return true;
 }

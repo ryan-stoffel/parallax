@@ -54,7 +54,12 @@ type ItemBody =
   /** `turnId` marks a follow-up that never reached the agent. */
   | { kind: "notice"; key: string; tone: "info" | "warning"; text: string; turnId?: string }
   /** How one CLI process of the run ended. */
-  | { kind: "end"; key: string; outcome: AgentOutcome };
+  | { kind: "end"; key: string; outcome: AgentOutcome }
+  /**
+   * Where a CLI process started or resumed its session, by the vendor's id. Never shown:
+   * `withTaskLists` takes it out, and starts a new task list when the id changes (RYA-250).
+   */
+  | { kind: "session"; key: string; sessionId: string };
 
 export interface Transcript {
   /** Absent until `agent.started` is in. */
@@ -145,6 +150,9 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
   };
 
   switch (item.kind) {
+    case "sessionStarted":
+      items.push({ kind: "session", key, sessionId: item.sessionId });
+      break;
     case "turnStarted": {
       const images = item.images?.length ? { images: item.images } : {};
       if (item.turnId)
@@ -229,7 +237,7 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
         items.push({ kind: "assistant", key, text: item.result });
       break;
     }
-    // sessionStarted and usage aren't shown.
+    // usage isn't shown.
   }
 }
 
