@@ -14,15 +14,16 @@
 //!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `wispd mcp`
 //!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
 //!   with [`crate::mcp::ALLOWED_TOOLS`], so wispd's tools work in every mode, and [`TODO_TOOLS`],
-//!   so it keeps a plan on every model (RYA-249). Its user and project settings, hooks, skills,
-//!   plugins, and subagents all load, as in a terminal. As a second check, a coordinator whose
-//!   `system/init` reports another permission mode fails with [`FailureKind::PolicyViolation`].
+//!   so it keeps a plan on every model (RYA-249), then `--settings` with only [`settings_env`].
+//!   Its user and project settings, hooks, skills, plugins, and subagents all load, as in a
+//!   terminal. As a second check, a coordinator whose `system/init` reports another permission
+//!   mode fails with [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
 //!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
 //!   each writable folder. In [`AgentPermission::Bypass`] a worker is full Claude Code instead,
 //!   as on the user's own machine (0027): only its permission mode, `--allowedTools` with
-//!   [`TODO_TOOLS`], and `--add-dir`, with no sandbox, and its `system/init` may list any tool.
-//!   Otherwise:
+//!   [`TODO_TOOLS`], `--add-dir`, and `--settings` with only [`settings_env`], with no sandbox,
+//!   and its `system/init` may list any tool. Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
@@ -108,6 +109,16 @@
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
 //! a `result` whose `modelUsage` names a provider other than `firstParty`, kill the CLI's process
 //! group at once and fail the run with [`FailureKind::UnexpectedApiKey`].
+//!
+//! # The task list
+//!
+//! Claude Code's task tools keep a session's list under its session id, unless [`TASK_LIST_ENV`]
+//! names a list that other sessions share (RYA-251). No run inherits it ([`SCRUBBED_VARS`]), but
+//! the CLI also copies settings `env` blocks into its own process: its global config's, which
+//! even `--restricted` reads, and those of the user, project, and local settings that a
+//! coordinator and a bypass worker load. So every run's `--settings`, which the CLI applies after
+//! them, sets it empty ([`settings_env`]). Managed settings are applied last, so their `env`
+//! still picks the list for every run (0013).
 //!
 //! # Permission requests
 //!
@@ -198,14 +209,30 @@ pub const NO_WRITE_ARGS: &[&str] = &[
 /// `Glob` and `Grep` too. The folder is always in `/tmp`, because no no-write run gets
 /// [`TEMP_ENV`]: every agent CLI starts from wispd's allowlisted environment
 /// (`agents::worker::agent_environment`, 0014), which drops an inherited one, and only a worker
-/// has one injected.
+/// has one injected. Like every run's, it holds [`settings_env`].
 #[must_use]
 pub fn no_write_settings() -> Value {
     let deny: Vec<String> = ["/tmp", "/private/tmp"]
         .into_iter()
         .map(|temp| format!("Read(/{}/**)", commands_temp(Path::new(temp)).display()))
         .collect();
-    serde_json::json!({"disableAllHooks": true, "permissions": {"deny": deny}})
+    serde_json::json!({
+        "disableAllHooks": true,
+        "permissions": {"deny": deny},
+        "env": settings_env(),
+    })
+}
+
+/// The `env` in every run's `--settings` (RYA-251): [`TASK_LIST_ENV`] empty, which Claude Code
+/// 2.1.283 treats as unset, so the run keeps its session's own task list. The CLI copies into its
+/// own process the `env` of its global config (`.claude.json` in the configuration folder, which
+/// even `--restricted` reads), then of the user's, the project's, and the local settings it loads,
+/// then of `--settings`, then of managed settings. So this beats every one but managed settings,
+/// whose `env` still picks the list for every run (0013). The CLI keeps only the last
+/// `--settings`, so each run gets one, with this in it.
+#[must_use]
+pub fn settings_env() -> Value {
+    serde_json::json!({ TASK_LIST_ENV: "" })
 }
 
 /// The only built-in tools a no-write run's `system/init` may list. `EndConversation` stays
@@ -341,10 +368,23 @@ pub const WORKER_MIN_VERSION: &str = "2.1.248";
 pub const SCRUBBED_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_OAUTH_"];
 
 /// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key; the
-/// configuration folder, which [`apply_credential`] sets only to the account's own; and
+/// configuration folder, which [`apply_credential`] sets only to the account's own;
 /// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or a coordinator must not
-/// get (RYA-112, 0027).
-pub const SCRUBBED_VARS: &[&str] = &["AWS_BEARER_TOKEN_BEDROCK", CONFIG_DIR_ENV, SCRUB_ENV];
+/// get (RYA-112, 0027); and [`TASK_LIST_ENV`], which would share one task list (RYA-251).
+pub const SCRUBBED_VARS: &[&str] = &[
+    "AWS_BEARER_TOKEN_BEDROCK",
+    CONFIG_DIR_ENV,
+    SCRUB_ENV,
+    TASK_LIST_ENV,
+];
+
+/// The variable that picks Claude Code's task list (RYA-251). 2.1.283 keeps a session's list in
+/// `tasks/<session id>` in the configuration folder, unless this is set and not empty: then every
+/// session with the same value shares one list, other threads and the user's own Claude Code
+/// sessions included, and a run with the task tools could read, change, or delete their tasks.
+/// No run inherits it ([`SCRUBBED_VARS`]), and every run's `--settings` sets it empty
+/// ([`settings_env`]).
+pub const TASK_LIST_ENV: &str = "CLAUDE_CODE_TASK_LIST_ID";
 
 /// The variable that picks a second account's configuration folder.
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
@@ -567,6 +607,12 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             args.extend(["--add-dir".into(), dir.into()]);
         }
     }
+    if coordinator || bypass {
+        // Full Claude Code loads the user's and the project's settings, whose `env` could share
+        // its task list, so it gets `--settings` only for this (RYA-251).
+        let settings = serde_json::json!({"env": settings_env()});
+        args.extend(["--settings".into(), settings.to_string().into()]);
+    }
     if let Some(model) = &request.model {
         check_argument("model", model)?;
         args.extend(["--model".into(), model.into()]);
@@ -594,7 +640,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
 /// path, such as wispd's data folder, which holds the worktree, the context folder, and a normal
 /// thread's scratch repository (#110). The rest of the temp folder stays hidden: the CLI's own
 /// unsandboxed processes keep files there. A second account's `config_home` is unreadable too.
-/// [`WORKER_DENIED_WRITES`] aren't writable.
+/// [`WORKER_DENIED_WRITES`] aren't writable. Like every run's, it holds [`settings_env`].
 #[must_use]
 pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<&Path>) -> Value {
     let unreadable = strings(
@@ -644,6 +690,7 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
             },
             "credentials": {"envVars": withheld},
         },
+        "env": settings_env(),
     })
 }
 
