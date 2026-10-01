@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use wisp_protocol::{AgentApprovalBy, AgentApprovalDecision, AgentApproveResult, ApprovalId};
 
 /// How long a permission request waits for an answer before wispd denies it.
-pub(crate) const APPROVAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+pub(crate) const APPROVAL_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// What the agent is told when the user denies a request without a message.
 pub(super) const DENIED: &str = "The user denied permission for this tool call.";
@@ -127,7 +127,7 @@ mod tests {
         let mut approvals = Approvals::default();
         let now = Instant::now();
         let (first, second) = (ApprovalId::generate(), ApprovalId::generate());
-        approvals.add(second, now + Duration::from_secs(60), true);
+        approvals.add(second, now + Duration::from_mins(1), true);
         approvals.add(first, now + Duration::from_secs(30), false);
         assert_eq!(approvals.due(), Some(now + Duration::from_secs(30)));
         assert_eq!(approvals.pending(), [first, second], "oldest first");
@@ -145,7 +145,7 @@ mod tests {
         let cancelled = ended(AgentApprovalDecision::Denied, AgentApprovalBy::Cancel);
         assert!(!approvals.resolve(first, cancelled), "resolved once");
         assert!(matches!(approvals.lookup(first), Lookup::Resolved(r) if r == expired));
-        assert_eq!(approvals.due(), Some(now + Duration::from_secs(60)));
+        assert_eq!(approvals.due(), Some(now + Duration::from_mins(1)));
         assert!(matches!(
             approvals.lookup(ApprovalId::generate()),
             Lookup::Unknown

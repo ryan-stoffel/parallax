@@ -21,7 +21,7 @@ use crate::agents::{
 use crate::support::{InProcess, kind, temp_dir};
 
 /// Long enough that no request expires during a test that doesn't wait for it.
-const NEVER: Duration = Duration::from_secs(600);
+const NEVER: Duration = Duration::from_mins(10);
 
 /// A host whose runs play `steps`, and whose permission requests expire after `timeout`.
 fn host(steps: Vec<Step>, timeout: Duration) -> Host {
