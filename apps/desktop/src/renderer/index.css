@@ -50,6 +50,17 @@
   --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
   --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
   --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
+  /* A Project icon's colors (projectIcons.ts), by the key wispd keeps. Each keeps at least 3:1
+     on the sidebar, the dialogs, and a selected row, in both themes. */
+  --project-red: #dc2626;
+  --project-orange: #ea580c;
+  --project-yellow: #a16207;
+  --project-green: #15803d;
+  --project-teal: #0d9488;
+  --project-sky: #0284c7;
+  --project-violet: #7c3aed;
+  --project-pink: #db2777;
+  --project-gray: #71717a;
 }
 
 :root.dark {
@@ -71,6 +82,15 @@
   --danger: #ff8f8a;
   --warning: #f59e0b;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
+  --project-red: #f87171;
+  --project-orange: #fb923c;
+  --project-yellow: #facc15;
+  --project-green: #4ade80;
+  --project-teal: #2dd4bf;
+  --project-sky: #38bdf8;
+  --project-violet: #a78bfa;
+  --project-pink: #f472b6;
+  --project-gray: #a1a1aa;
 }
 
 @theme inline {
@@ -97,6 +117,15 @@
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-working: var(--working);
+  --color-project-red: var(--project-red);
+  --color-project-orange: var(--project-orange);
+  --color-project-yellow: var(--project-yellow);
+  --color-project-green: var(--project-green);
+  --color-project-teal: var(--project-teal);
+  --color-project-sky: var(--project-sky);
+  --color-project-violet: var(--project-violet);
+  --color-project-pink: var(--project-pink);
+  --color-project-gray: var(--project-gray);
   --shadow-composer: var(--shadow-composer);
 }
 

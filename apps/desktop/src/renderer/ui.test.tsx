@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import { moveFocus, Picker, type PickerOption } from "./ui";
+import { moveFocus, openOnContextMenu, Picker, type PickerOption } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The menu's items are in the DOM either way.
@@ -100,4 +100,42 @@ test("Up and Down pass a menu's disabled items", () => {
   expect(focused()).toBe("wisp");
   press("ArrowUp");
   expect(focused()).toBe("Choose folder…");
+});
+
+test("a right-click that arrives with a button down opens its menu on the release, and a lost release opens nothing", () => {
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const trigger = document.createElement("button");
+  const opened = vi.fn();
+  trigger.addEventListener("click", opened);
+  render(
+    <button type="button" onContextMenu={(e) => openOnContextMenu(e, trigger)}>
+      ember
+    </button>,
+  );
+  const contextMenu = (buttons: number) => {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, buttons });
+    act(() => void document.querySelector("button")!.dispatchEvent(event));
+    return event;
+  };
+  const windowEvent = (type: string) => act(() => void window.dispatchEvent(new Event(type)));
+
+  // Released already (Windows, the menu key): at once.
+  expect(contextMenu(0).defaultPrevented).toBe(true);
+  expect(opened).toHaveBeenCalledTimes(1);
+  // A right-click on macOS and Linux holds the right button; Control-click on macOS, the left.
+  for (const [i, buttons] of [2, 1].entries()) {
+    expect(contextMenu(buttons).defaultPrevented).toBe(true);
+    expect(opened).toHaveBeenCalledTimes(1 + i);
+    windowEvent("pointerup");
+    expect(opened).toHaveBeenCalledTimes(2 + i);
+  }
+  // A release the window never sees, as when the button is held through switching apps, ends the
+  // wait at the window's blur, a cancelled pointer, or the next press, so a later click opens
+  // nothing.
+  for (const type of ["blur", "pointercancel", "pointerdown"]) {
+    contextMenu(2);
+    windowEvent(type);
+    windowEvent("pointerup");
+  }
+  expect(opened).toHaveBeenCalledTimes(3);
 });
