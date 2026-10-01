@@ -1,6 +1,6 @@
 # 0012: Routing a task to a backend and account
 
-- Status: accepted
+- Status: accepted; the coordinator's turns call `snapshot` and `check` as of [0024](0024-coordinator-chat.md), and no longer since [0027](0027-claude-permission-modes.md)
 - Date: 2026-09-25
 - Issue: #119
 

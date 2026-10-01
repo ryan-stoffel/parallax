@@ -8,7 +8,7 @@ use std::process::Command;
 
 use wisp_protocol::RunId;
 
-use super::{ChangeStatus, WorktreeError, WorktreeManager};
+use super::{ChangeStatus, WorktreeError, WorktreeManager, short_hash, valid_branch_slug};
 use crate::backend::process::{Environment, Launcher};
 use crate::paths::DataDir;
 
@@ -128,6 +128,45 @@ async fn create_makes_a_worktree_on_a_new_branch_from_head() {
         2,
         "the main worktree plus the new one"
     );
+}
+
+#[tokio::test]
+async fn create_named_uses_the_slug_and_keeps_names_unique() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+
+    let first = mgr
+        .create_named(&repo, RunId::generate(), None, Some("fix-login-bug"))
+        .await
+        .unwrap();
+    assert_eq!(first.branch, "wisp/fix-login-bug");
+
+    let second_id = RunId::generate();
+    let second = mgr
+        .create_named(&repo, second_id, None, Some("fix-login-bug"))
+        .await
+        .unwrap();
+    let short = short_hash(&second_id.to_string());
+    assert_eq!(second.branch, format!("wisp/fix-login-bug-{short}"));
+
+    // An invalid slug falls back to the run's short id rather than reaching git.
+    let odd = mgr
+        .create_named(&repo, RunId::generate(), None, Some("--bad/name"))
+        .await
+        .unwrap();
+    assert!(!odd.branch.contains("bad"), "{odd:?}");
+}
+
+#[test]
+fn branch_slugs_are_lowercase_words_joined_by_hyphens() {
+    for ok in ["a", "fix-login-bug", "v2-api", &"a".repeat(40)] {
+        assert!(valid_branch_slug(ok), "{ok}");
+    }
+    for bad in ["", "-a", "a-", "Fix", "a b", "a/b", "a.b", &"a".repeat(41)] {
+        assert!(!valid_branch_slug(bad), "{bad}");
+    }
 }
 
 #[tokio::test]

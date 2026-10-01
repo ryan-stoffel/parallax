@@ -1,22 +1,31 @@
 //! `agent/start`, `agent/send`, `agent/cancel`, `agent/list`, and `agent/events` (#156), behind
-//! the `agents` capability. The runner itself is [`crate::agents`].
+//! the `agents` capability; the review methods (#157) behind `agentReview`; `agent/openPr`
+//! (RYA-168) behind `openPr`; and `agent/image` (RYA-191) behind `promptImages`. The runner itself
+//! is [`crate::agents`].
 
 use std::sync::Arc;
 
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentCancelParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentListParams,
-    AgentListResult, AgentPolicy, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
-    AgentStartParams, ErrorKind, LoggedEvent,
+    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams,
+    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy,
+    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind,
+    LoggedEvent, PromptImage,
 };
 
 use super::Context;
-use crate::agents;
+use crate::{agents, images};
 
 /// The longest prompt or message wispd takes, in bytes. It goes on the CLI's stdin, never in
 /// argv, and into the event log.
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
+
+/// The longest pull request title GitHub takes, in characters.
+const MAX_PR_TITLE_CHARS: usize = 256;
+
+/// The longest pull request body wispd passes on, in bytes: GitHub's limit is 65,536 characters.
+const MAX_PR_BODY_BYTES: usize = 64 * 1024;
 
 const DEFAULT_EVENTS_LIMIT: u32 = 500;
 const MAX_EVENTS_LIMIT: u32 = 1000;
@@ -25,8 +34,14 @@ const MAX_EVENTS_LIMIT: u32 = 1000;
 /// leaves room for the envelope. A page holds at least one event whatever its size.
 pub(crate) const MAX_EVENTS_PAGE_BYTES: usize = 4 * 1024 * 1024;
 
-pub(super) fn check_text(name: &str, text: &str) -> Result<(), ErrorObject> {
-    if text.trim().is_empty() {
+/// Checks a prompt or message: its text, which may be empty only when it has images (RYA-193),
+/// and its images (`images::check`).
+pub(super) fn check_message(
+    name: &str,
+    text: &str,
+    images: &[PromptImage],
+) -> Result<(), ErrorObject> {
+    if text.trim().is_empty() && images.is_empty() {
         return Err(ErrorObject::invalid_params(format!(
             "{name} must not be empty"
         )));
@@ -36,7 +51,7 @@ pub(super) fn check_text(name: &str, text: &str) -> Result<(), ErrorObject> {
             "{name} must be at most {MAX_TEXT_BYTES} bytes"
         )));
     }
-    Ok(())
+    images::check(images)
 }
 
 // The runner's work runs detached from the request (`Agents::detached`), so a dropped
@@ -51,7 +66,7 @@ pub(crate) async fn start(
             "policy must be workspaceWrite, the only policy agent/start takes",
         ));
     }
-    check_text("prompt", &params.prompt)?;
+    check_message("prompt", &params.prompt, &params.images)?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -65,7 +80,7 @@ pub(crate) async fn send(
     context: &Context,
     params: AgentSendParams,
 ) -> Result<AgentRunResult, ErrorObject> {
-    check_text("text", &params.text)?;
+    check_message("text", &params.text, &params.images)?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -145,6 +160,35 @@ pub(crate) async fn accept(
         .await
 }
 
+/// `agent/openPr`: the title's first line, cut to GitHub's limit, and the body, checked here;
+/// the push and `gh` run through the run's actor.
+pub(crate) async fn open_pr(
+    context: &Context,
+    params: AgentOpenPrParams,
+) -> Result<AgentOpenPrResult, ErrorObject> {
+    let AgentOpenPrParams {
+        run_id,
+        title,
+        body,
+    } = params;
+    let Some(title) = title.lines().map(str::trim).find(|line| !line.is_empty()) else {
+        return Err(ErrorObject::invalid_params("title must not be empty"));
+    };
+    let title = title.chars().take(MAX_PR_TITLE_CHARS).collect();
+    let body = body.unwrap_or_default();
+    if body.len() > MAX_PR_BODY_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "body must be at most {MAX_PR_BODY_BYTES} bytes"
+        )));
+    }
+    let daemon = Arc::clone(&context.daemon);
+    context
+        .daemon
+        .agents
+        .detached(agents::open_pr(daemon, run_id, title, body))
+        .await
+}
+
 /// `agent/requestChanges`: the reviewer's follow-up, sent the way `agent/send` sends one.
 pub(crate) async fn request_changes(
     context: &Context,
@@ -161,9 +205,20 @@ pub(crate) async fn request_changes(
             run_id,
             turn_id,
             text,
+            model: None,
+            effort: None,
+            permission: None,
+            images: Vec::new(),
         },
     )
     .await
+}
+
+pub(crate) async fn image(
+    context: &Context,
+    params: AgentImageParams,
+) -> Result<PromptImage, ErrorObject> {
+    agents::image(&context.daemon, params).await
 }
 
 pub(crate) async fn events(
@@ -245,6 +300,9 @@ mod tests {
                     policy: "workspaceWrite".to_owned(),
                     backend: "fake".to_owned(),
                     coordinator_thread: None,
+                    model: None,
+                    effort: None,
+                    permission: None,
                 };
                 let state = RunState {
                     status: "running".to_owned(),

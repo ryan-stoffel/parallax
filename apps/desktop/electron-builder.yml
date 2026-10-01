@@ -1,0 +1,67 @@
+# The installer for the current OS and arch (0029). scripts/ci/package-app builds wispd and the
+# app's dist/ first, and passes the arch and version on the command line.
+appId: dev.wisp.desktop
+productName: Wisp
+directories:
+  output: release
+# Where the app's updater (electron-updater, RYA-68) looks: the app ships this as app-update.yml
+# in its resources folder, and the build writes the channel's update metadata next to the
+# installers (0030). `${channel}` is the version's first prerelease identifier, or `latest`:
+# nightly builds write nightly*.yml, standard builds latest*.yml. The owner and repo are explicit
+# because electron-builder can't find the repo from apps/desktop (no .git there), and a GitHub
+# config it can't resolve crashed the build ("reading 'channel'"). CI runs with --publish never;
+# release.yml attaches the files.
+publish:
+  provider: github
+  owner: ryan-stoffel
+  repo: wisp
+  channel: ${channel}
+# node-pty and node-llama-cpp ship prebuilt binaries for every target, so nothing needs compiling.
+# @electron/rebuild would fetch Electron's headers and run node-gyp anyway on some runners.
+npmRebuild: false
+# dist/ is the whole app: vite.config.ts bundles every dependency except the ones below. Only
+# `dependencies` are packaged, and package.json keeps just those there.
+# node-llama-cpp's CUDA and Vulkan binaries (Linux and Windows x64 only) add 200 to 300 MB and need
+# the vendor's GPU runtime installed; without them it runs on the CPU, which is enough for the
+# thread namer's small model.
+files:
+  - dist/**
+  - package.json
+  - "!node_modules/@node-llama-cpp/*-cuda*/**"
+  - "!node_modules/@node-llama-cpp/*-vulkan/**"
+# Native code can't load from inside app.asar. node-pty's prebuilds and spawn-helper, and
+# node-llama-cpp with the @node-llama-cpp/<platform> package holding its llama.cpp binary.
+asarUnpack:
+  - node_modules/node-pty/**
+  - node_modules/node-llama-cpp/**
+  - node_modules/@node-llama-cpp/**
+# wispd, built for this target, and wispd.version, the version it reports (0030), go in the
+# resources folder, where findWispd looks. package-app puts both in target/package-resources.
+extraResources:
+  - from: ../../target/package-resources
+    to: .
+artifactName: wisp-${version}-${os}-${arch}.${ext}
+# The updater installs from the zip; the dmg is for first installs. Signing happens only when
+# CSC_KEYCHAIN (or CSC_LINK) is set (release.yml's macOS build): everything in the bundle, wispd
+# included, gets the hardened runtime and a secure timestamp. electron-builder notarizes only when
+# the APPLE_API_* variables are set too, which release.yml doesn't do: it notarizes the dmg after
+# publishing (0030).
+mac:
+  target: [dmg, zip]
+  category: public.app-category.developer-tools
+  entitlements: entitlements.mac.plist
+  entitlementsInherit: entitlements.mac.plist
+  # Chromium's 223 .pak files (locales and resources) aren't code, so they aren't signed one by one (each a codesign
+  # run and a trip to Apple's timestamp server, about two minutes in all): Electron Framework's own
+  # signature seals them as resources, like every other data file (RYA-211).
+  signIgnore: ['\.pak$']
+# Signed with the app's identity when there is one. The updater reads the zip, so the dmg stays out
+# of the update metadata.
+dmg:
+  sign: true
+  writeUpdateInfo: false
+win:
+  target: nsis
+linux:
+  target: AppImage
+  category: Development

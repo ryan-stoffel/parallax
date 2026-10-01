@@ -16,26 +16,38 @@
 //! 0004 has the Claude backend do with Anthropic's variables. Like every backend, it refuses a
 //! workspace-write run without a [`WorkerSandbox`](super::WorkerSandbox) (0013), though it
 //! enforces none of it.
+//!
+//! Outside unit tests, a `wispd` built with the `fake-backend` feature runs every worker on this
+//! backend when [`SCRIPT_ENV`] names a script, for the app's end-to-end tests (RYA-16).
 
 use std::collections::VecDeque;
+use std::ffi::OsStr;
 use std::fmt::Write as _;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
-use tokio::net::unix::pipe;
 use tokio::sync::mpsc;
 
 use super::event::{Event, Failure, FailureKind, ModelUsage, Outcome, WarningKind};
 use super::process::{
-    CancelPolicy, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, StdinMode,
+    CancelPolicy, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, StdinMode, StdinPipe,
 };
 use super::sandbox::worker_sandbox;
 use super::{
     Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, EventSink, FollowUp, RunHandle,
     RunRequest, StartError, Started, ToolPolicy, TurnId,
 };
+
+// The feature swaps real agents for scripted ones, so no release may ever have it.
+#[cfg(all(feature = "fake-backend", not(debug_assertions)))]
+compile_error!("the fake-backend feature is for test builds; never build a release with it");
+
+/// The variable naming a JSON script (a [`Script`]) that `wispd serve` runs every worker on,
+/// instead of a vendor CLI. Only builds with the `fake-backend` feature take it.
+pub const SCRIPT_ENV: &str = "WISPD_FAKE_BACKEND";
 
 /// The variable the fake CLI takes an API key from.
 pub const API_KEY_ENV: &str = "FAKE_API_KEY";
@@ -166,6 +178,29 @@ impl FakeBackend {
         self
     }
 
+    /// The fake `wispd serve` runs workers on: `None` when [`SCRIPT_ENV`] is unset, else one
+    /// playing the script it names through `launcher`.
+    ///
+    /// # Errors
+    ///
+    /// If the script can't be read or parsed, or this build lacks the `fake-backend` feature, so
+    /// a release refuses to start rather than ignore the variable.
+    pub fn from_env(launcher: &Launcher) -> io::Result<Option<Self>> {
+        Self::from_script_path(std::env::var_os(SCRIPT_ENV).as_deref(), launcher)
+    }
+
+    fn from_script_path(path: Option<&OsStr>, launcher: &Launcher) -> io::Result<Option<Self>> {
+        let Some(path) = path else { return Ok(None) };
+        if !cfg!(feature = "fake-backend") {
+            return Err(io::Error::other(format!(
+                "{SCRIPT_ENV} is set, but this wispd was built without the fake-backend feature, \
+                 which only test builds have; unset it"
+            )));
+        }
+        let script = Script::from_json(&std::fs::read_to_string(path)?)?;
+        Ok(Some(Self::new(launcher.clone(), script)))
+    }
+
     /// Takes no follow-ups, and gives the CLI a closed stdin, as `codex exec` needs.
     #[must_use]
     pub fn without_follow_ups(mut self) -> Self {
@@ -191,7 +226,8 @@ impl Backend for FakeBackend {
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
-        if request.prompt.is_empty() {
+        // Images alone are a message too (RYA-202), as a resumed run's may be.
+        if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
         if let Some(resume) = &request.resume
@@ -267,7 +303,7 @@ enum Delivery {
 /// Writes follow-ups to stdin in order, off the driver's loop, so a CLI that stops reading stdin
 /// can't keep the driver from reading its stdout.
 async fn write_follow_ups(
-    mut stdin: pipe::Sender,
+    mut stdin: StdinPipe,
     mut queue: mpsc::UnboundedReceiver<FollowUp>,
     results: mpsc::UnboundedSender<Delivery>,
 ) {
@@ -673,5 +709,5 @@ fn compile(script: &Script) -> Result<String, String> {
     Ok(out)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

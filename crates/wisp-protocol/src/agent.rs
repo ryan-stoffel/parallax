@@ -32,7 +32,48 @@ uuid_v7_id! {
     TurnId
 }
 
-/// What a run's tools may do. Only workers run through `agent/start`.
+uuid_v7_id! {
+    /// A stored image's id (RYA-191, decision 0026): a version 7 UUID that wispd generates once a
+    /// message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
+    ImageId
+}
+
+/// An image's file type (RYA-191): the four that Claude and Codex both take.
+///
+/// A newer peer may send a type this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+pub enum ImageMediaType {
+    /// PNG.
+    #[serde(rename = "image/png")]
+    Png,
+    /// JPEG.
+    #[serde(rename = "image/jpeg")]
+    Jpeg,
+    /// GIF.
+    #[serde(rename = "image/gif")]
+    Gif,
+    /// WebP.
+    #[serde(rename = "image/webp")]
+    Webp,
+    /// A type this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
+/// decision 0026). The CLI gets it beside the text, never as a file name or path in it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptImage {
+    /// Its file type, which its bytes must match.
+    pub media_type: ImageMediaType,
+    /// The image file's bytes, in standard base64 with padding.
+    pub data: String,
+}
+
+/// What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
+/// which `project/start` starts, is `noWrite`.
 ///
 /// A newer wispd may send a policy this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -41,7 +82,62 @@ pub enum AgentPolicy {
     /// Edits in the run's worktree and the shared context folder, commands in the vendor's OS
     /// sandbox (0004, 0013).
     WorkspaceWrite,
+    /// A project's coordinator (0024): full Claude Code in its permission mode, in the project's
+    /// repository, plus wispd's coordinator tools (0019, 0027). Without those tools, read-only
+    /// tools (0004).
+    NoWrite,
     /// A policy this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// How hard a run's model thinks, behind the `runOptions` capability (RYA-97). Claude Code takes
+/// every level as `--effort`, and downgrades `xhigh` on models that lack it. A backend that can't
+/// honor a level refuses the run with `unsupportedOption`.
+///
+/// A newer peer may send a level this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentEffort {
+    /// The least thinking.
+    Low,
+    /// Some thinking.
+    Medium,
+    /// More thinking.
+    High,
+    /// More than `high`, on models that offer it.
+    Xhigh,
+    /// The most thinking.
+    Max,
+    /// A level this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
+/// which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
+/// worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
+///
+/// A newer peer may send a value this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentPermission {
+    /// A classifier approves or blocks each action instead of a prompt: Claude Code's `auto`.
+    Auto,
+    /// Asks before each action that needs approval: Claude Code's `default`. Headless, a
+    /// request nobody can answer is denied.
+    Manual,
+    /// Edits files and runs commands without asking: the default. Claude Code's `acceptEdits`.
+    Edit,
+    /// Reads and plans without editing: Claude Code's plan mode, whose file tools refuse to
+    /// write.
+    Plan,
+    /// Skips every permission check: Claude Code's `bypassPermissions`. A worker in this mode
+    /// runs without the worker sandbox, as Claude Code does on the user's own machine.
+    Bypass,
+    /// A value this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
     Unknown,
@@ -58,7 +154,7 @@ pub enum AgentStatus {
     Starting,
     /// Its CLI is running.
     Running,
-    /// Its CLI finished its work, and wispd committed the changes.
+    /// Its CLI finished its work, and wispd committed a worker's changes.
     Completed,
     /// It failed; `error` says why.
     Failed,
@@ -138,6 +234,19 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// Its model: what it was started with, or what `agent/send` last changed it to. Absent
+    /// means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// Its effort, as `model`. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// Its permission, as `model`. Absent means `edit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -165,6 +274,18 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub diff: Option<DiffSummary>,
+    /// Its model, which `agent/send` can change (RYA-163). Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// Its effort, which `agent/send` can change (RYA-161). Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
     /// When it changed, in RFC 3339 UTC.
     pub updated_at: Timestamp,
 }
@@ -305,6 +426,20 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         turn_id: Option<TurnId>,
+        /// A follow-up's message, as `agent/send` took it, cut short when it is long. Absent for
+        /// the prompt's turn, whose text is the run's `prompt`, and in logs from before wispd
+        /// recorded it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        text: Option<String>,
+        /// True for a wake-up (RYA-42, decision 0025): a turn wispd sent a project's coordinator
+        /// on its own, not the user, because runs it started finished. `text` lists them.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        wake: bool,
+        /// The images sent with the turn's message, the prompt's or a follow-up's, in order, for
+        /// `agent/image` (RYA-191). Absent when it had none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImageId>,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {
@@ -423,7 +558,8 @@ pub struct AgentStartParams {
     pub project: ProjectId,
     /// The task.
     pub prompt: String,
-    /// What the run's tools may do. Only `workspaceWrite` exists.
+    /// What the run's tools may do: only `workspaceWrite`. A project's coordinator, the one
+    /// `noWrite` run, is started with `project/start`.
     pub policy: AgentPolicy,
     /// The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -434,6 +570,27 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
+    /// it, `effort`, and `permission` only to a wispd that advertises `runOptions`. The run keeps
+    /// all three when it resumes, and a retry must repeat them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// How hard the model thinks. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
+    /// `coordinatorThread`, the coordinator's mode when it spawns the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
+    /// Images for the prompt, sent only to a wispd that advertises `promptImages`. Its options
+    /// give the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of `data`, past which
+    /// the request fails with `imageTooLarge`. With images, the prompt may be empty (RYA-193). A
+    /// retry must repeat them; wispd doesn't compare them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PromptImage>,
 }
 
 /// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
@@ -458,6 +615,25 @@ pub struct AgentSendParams {
     pub turn_id: TurnId,
     /// The message.
     pub text: String,
+    /// A new model for the run and every later resume (RYA-163), sent only to a wispd that
+    /// advertises `sendModel`. It should be one the run's backend runs, since a session can't move
+    /// to another CLI; wispd can't check that, so another's fails the run with the CLI's own error.
+    /// Absent, or the run's own, changes nothing. A different one fails with
+    /// `unsupportedOption` while the run's CLI is running, since it can't change mid-process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// A new effort (RYA-161), as `model`. `sendOptions` is enough for it and `permission`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// A new permission (RYA-161), as `effort`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
+    /// Images for the message, as `agent/start`'s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PromptImage>,
 }
 
 /// Params of `agent/cancel`: stops a running agent, which ends as `cancelled`. Cancelling a run
@@ -502,6 +678,17 @@ pub struct AgentEventsParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<u32>,
+}
+
+/// Params of `agent/image`: one image sent with a run's messages, by an id from its
+/// `turnStarted` (RYA-191). Its result is the [`PromptImage`] as it was sent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentImageParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The image.
+    pub image_id: ImageId,
 }
 
 /// Result of `agent/events`.

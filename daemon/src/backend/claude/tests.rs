@@ -8,15 +8,19 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tempfile::TempDir;
+use wisp_protocol::{CoordinatorThreadId, ProjectId};
 
 use super::stream::{Step, Translator};
-use super::{ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS};
+use super::{
+    ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS,
+    no_write_settings, write_env_file,
+};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
-    AccountRef, ApiKey, Backend, Credential, Event, EventStream, FailureKind, FollowUp,
-    LimitStatus, LimitWindow, ModelUsage, Outcome, Resume, RunId, RunRequest, SendError,
-    StartError, Started, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind,
-    WorkerSandbox,
+    AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, CoordinatorTools, Credential, Event,
+    EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow, ModelUsage,
+    Outcome, PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started, TodoItem,
+    TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
 };
 use crate::paths::DataDir;
 
@@ -45,6 +49,7 @@ fn fixture(name: &str) -> &'static str {
         "follow-up-no-echo" => include_str!("fixtures/follow-up-no-echo.jsonl"),
         "provider" => include_str!("fixtures/provider.jsonl"),
         "subprocess-env" => include_str!("fixtures/subprocess-env.jsonl"),
+        "scrub-mode" => include_str!("fixtures/scrub-mode.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -95,6 +100,9 @@ impl Fake {
             ("FAKE_CLAUDE_FIXTURE", fixture_path.display().to_string()),
             ("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22".into()),
             ("KEPT", "yes".into()),
+            // Set in wispd's own environment: a no-write run sets it anyway, and a worker must
+            // not get it (RYA-112).
+            ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "0".into()),
         ]
         .into_iter()
         .chain(
@@ -160,6 +168,7 @@ fn request(cwd: &Path) -> RunRequest {
         turn_id: Some(turn(TURN_1)),
         cwd: cwd.to_owned(),
         prompt: "Summarize the README.\nKeep it short.".into(),
+        images: Vec::new(),
         policy: ToolPolicy::NoWrite,
         sandbox: None,
         account: AccountRef {
@@ -168,6 +177,8 @@ fn request(cwd: &Path) -> RunRequest {
         },
         resume: None,
         model: None,
+        effort: None,
+        permission: None,
         coordinator_tools: None,
     }
 }
@@ -311,18 +322,22 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
         "--input-format",
         "stream-json",
     ];
+    let settings = no_write_settings().to_string();
     expected.extend(NO_WRITE_ARGS);
+    expected.extend(["--settings", &settings]);
     assert_eq!(fake.argv(), expected);
     assert_eq!(
         NO_WRITE_ARGS.join(" "),
-        r#"--tools Read,Glob,Grep --setting-sources user --settings {"disableAllHooks":true} --strict-mcp-config --permission-mode dontAsk"#,
-        "0004's no-write policy, exactly"
+        "--tools Read,Glob,Grep --setting-sources user --strict-mcp-config --permission-mode \
+         dontAsk",
+        "0004's no-write flags, before its settings"
     );
     let env = fake.env();
     let working_dir = format!("PWD={}", cwd.display());
     assert!(env.contains(&working_dir), "{env:?}");
     fake.assert_no_inherited_credentials(None);
     assert!(!env.iter().any(|var| var.starts_with("SSH_CONNECTION=")));
+    assert!(!env.iter().any(|var| var.starts_with("CLAUDE_ENV_FILE=")));
     for set in [
         "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
         "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1",
@@ -343,6 +358,57 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
     );
 }
 
+/// RYA-176: a plain no-write run has hooks off (0004) and can't read Claude Code's shared temp
+/// folder, which holds every session's files, in either spelling.
+#[test]
+fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
+    let args = super::arguments(&request(Path::new("/repo"))).unwrap();
+    let at = args.iter().position(|arg| arg == "--settings").unwrap();
+    let settings: Value = serde_json::from_str(args[at + 1].to_str().unwrap()).unwrap();
+    let uid = rustix::process::getuid().as_raw();
+    assert_eq!(
+        settings,
+        serde_json::json!({
+            "disableAllHooks": true,
+            "permissions": {"deny": [
+                format!("Read(//tmp/claude-{uid}/**)"),
+                format!("Read(//private/tmp/claude-{uid}/**)"),
+            ]},
+        })
+    );
+}
+
+/// 0027: a coordinator runs as Claude Code in its mode, and without
+/// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, which would force "default"; it doesn't inherit it either.
+#[tokio::test]
+async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
+    let fake = Fake::new("tool-call");
+    let cwd = fake.root();
+    let request = RunRequest {
+        coordinator_tools: Some(CoordinatorTools {
+            program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
+            data_dir: cwd.join("data"),
+            project: ProjectId::generate(),
+            thread: CoordinatorThreadId::generate(),
+        }),
+        ..request(&cwd)
+    };
+    let expected: Vec<String> = super::arguments(&request)
+        .unwrap()
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+    run(&fake, request).await;
+    assert_eq!(fake.argv(), expected);
+    fake.assert_no_inherited_credentials(None);
+    let env = fake.env();
+    assert!(
+        !env.iter()
+            .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
+        "{env:?}"
+    );
+}
+
 /// A sandbox as #156 builds it, for a worktree at `cwd`.
 fn worker_sandbox(cwd: &Path) -> WorkerSandbox {
     WorkerSandbox::for_worktree(
@@ -351,20 +417,21 @@ fn worker_sandbox(cwd: &Path) -> WorkerSandbox {
         cwd,
         Path::new("/Users/u/src/app/.git"),
         Path::new("/Users/u/Library/Application Support/wisp/context/p"),
+        Path::new("/tmp/wisp-625c7f6d/Ab12Cd"),
     )
 }
 
-/// A worker's policy, sandbox, model, and second account reached the CLI.
+/// A worker's policy, sandbox, model, effort, and second account reached the CLI.
 fn assert_worker_invocation(fake: &Fake) {
     let argv = fake.argv();
     let cwd = fake.root().display().to_string();
     let mut expected: Vec<&str> = WORKSPACE_WRITE_ARGS.to_vec();
-    expected.push("--settings");
+    expected.extend(["--permission-mode", "acceptEdits", "--settings"]);
     assert_eq!(argv[6..6 + expected.len()], expected);
     assert_eq!(
         WORKSPACE_WRITE_ARGS.join(" "),
         "--restricted --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
-         TodoWrite --strict-mcp-config --permission-mode acceptEdits",
+         TodoWrite --strict-mcp-config",
         "0013's worker policy, exactly"
     );
     assert_eq!(WORKER_TOOL_LIST, WORKER_TOOLS.join(","));
@@ -376,12 +443,13 @@ fn assert_worker_invocation(fake: &Fake) {
         .map(|path| path.display().to_string())
         .collect();
     deny_read.push("/tmp/claude-second-account".into());
+    let uid = rustix::process::getuid().as_raw();
     assert_eq!(
         settings,
         serde_json::json!({
             "disableAllHooks": true,
             "permissions": {
-                "allow": ["WebFetch(domain:*)", "WebSearch"],
+                "allow": ["Bash", "WebFetch(domain:*)", "WebSearch"],
                 "deny": [
                     "WebFetch(domain:localhost)",
                     "WebFetch(domain:127.0.0.1)",
@@ -408,9 +476,21 @@ fn assert_worker_invocation(fake: &Fake) {
                         "/Users/u/Library/Application Support/wisp/context/p",
                         format!("{cwd}/.git"),
                         "/Users/u/src/app/.git",
+                        format!("/tmp/wisp-625c7f6d/Ab12Cd/claude-{uid}"),
                     ],
-                    "denyWrite": [format!("{cwd}/.git"), "/Users/u/src/app/.git"],
+                    "denyWrite": [
+                        format!("{cwd}/.git"),
+                        "/Users/u/src/app/.git",
+                        "/tmp/claude",
+                        "/private/tmp/claude",
+                        "~/.npm/_logs",
+                        "~/.claude/debug",
+                    ],
                 },
+                "credentials": {"envVars": [
+                    {"name": "ANTHROPIC_API_KEY", "mode": "deny"},
+                    {"name": "CLAUDE_CODE_MESSAGING_TOKEN", "mode": "deny"},
+                ]},
             },
         })
     );
@@ -420,7 +500,9 @@ fn assert_worker_invocation(fake: &Fake) {
             "--add-dir",
             "/Users/u/Library/Application Support/wisp/context/p",
             "--model",
-            "claude-sonnet-4-6"
+            "claude-sonnet-4-6",
+            "--effort",
+            "high",
         ]
     );
     for flag in [
@@ -431,6 +513,95 @@ fn assert_worker_invocation(fake: &Fake) {
         assert!(!argv.iter().any(|arg| arg == flag), "{flag}: {argv:?}");
     }
     fake.assert_no_inherited_credentials(Some("/tmp/claude-second-account"));
+    // On Linux the flag would widen the sandbox's writes (RYA-20); `credentials` stands in for it.
+    // The fake's base environment sets it, so this also checks that a worker drops it (RYA-112).
+    let env = fake.env();
+    assert!(
+        !env.iter()
+            .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
+        "{env:?}"
+    );
+    // The run's own temp folder (RYA-130).
+    let temp = "CLAUDE_CODE_TMPDIR=/tmp/wisp-625c7f6d/Ab12Cd".to_owned();
+    assert!(env.contains(&temp), "{env:?}");
+}
+
+/// Claude Code gives commands its temp folder only while `<folder>/claude-<uid>` fits in 44
+/// bytes, and the shared one otherwise, so a longer folder refuses the worker (RYA-130).
+#[test]
+fn a_worker_s_temp_folder_must_leave_claude_code_room() {
+    let uid = rustix::process::getuid().as_raw().to_string();
+    let fits = format!(
+        "/tmp/{}",
+        "x".repeat(44 - "/tmp//claude-".len() - uid.len())
+    );
+    assert_eq!(
+        super::worker_temp(Path::new(&fits)).unwrap(),
+        Path::new(&fits)
+    );
+    let error = super::worker_temp(Path::new(&format!("{fits}x"))).unwrap_err();
+    assert!(
+        error.to_string().contains("every session shares"),
+        "{error}"
+    );
+    // macOS's canonical `/private/tmp` is spelled `/tmp`, where it links, to save the room.
+    let canonical = super::worker_temp(Path::new(&format!("/private{fits}")));
+    if cfg!(target_os = "macos") {
+        assert_eq!(canonical.unwrap(), Path::new(&fits));
+    } else {
+        assert!(canonical.is_err());
+    }
+}
+
+/// A worker gets a script that keeps the CLI's `PATH` in its Bash commands (RYA-126), in the data
+/// folder, and it's gone once the run has ended.
+#[tokio::test]
+async fn a_worker_s_env_file_restores_its_path_and_ends_with_the_run() {
+    let fake = Fake::new("tool-call");
+    let mut request = request(&fake.root());
+    request.policy = ToolPolicy::WorkspaceWrite;
+    request.sandbox = Some(worker_sandbox(&fake.root()));
+    run(&fake, request).await;
+    let env_file = fake
+        .env()
+        .iter()
+        .find_map(|var| var.strip_prefix("CLAUDE_ENV_FILE="))
+        .map(PathBuf::from)
+        .unwrap();
+    assert_eq!(
+        env_file.parent(),
+        Some(fake.root().join("data/tmp").as_path())
+    );
+    assert_eq!(
+        fake.recorded("env-file"),
+        format!(
+            "export PATH='{}/bin:/usr/bin:/bin'${{PATH:+:$PATH}}\n",
+            fake.root().display()
+        )
+    );
+    assert!(!env_file.exists());
+}
+
+/// The script quotes the `PATH` it restores, keeps what the shell had after it, and is private.
+#[test]
+fn the_env_file_puts_the_path_back_in_front_and_is_private() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = write_env_file(&dir.path().join("tmp"), "/it's/bin:/usr/bin".as_ref()).unwrap();
+    let mode = fs::metadata(&file).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", ". \"$0\"; printf %s \"$PATH\""])
+        .arg(&*file)
+        .env("PATH", "/set/by/zshenv")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "/it's/bin:/usr/bin:/set/by/zshenv"
+    );
+    let path = file.to_path_buf();
+    drop(file);
+    assert!(!path.exists());
 }
 
 #[test]
@@ -458,8 +629,78 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
     }
     assert_eq!(
         list("/permissions/allow"),
-        ["WebFetch(domain:*)", "WebSearch"]
+        ["Bash", "WebFetch(domain:*)", "WebSearch"]
     );
+}
+
+/// RYA-97, 0027: a worker's permission picks Claude Code's mode of the same name, and its sandbox
+/// settings stay the same, except in bypass, where Claude Code refuses `--restricted` and the
+/// worker runs as full Claude Code. A no-write run's mode is fixed (0004), so it takes no
+/// permission.
+#[test]
+fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
+    let cwd = Path::new("/Users/u/wt");
+    let mut worker = request(cwd);
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(cwd));
+    let args = |permission| -> Vec<String> {
+        let request = RunRequest {
+            permission,
+            ..worker.clone()
+        };
+        super::arguments(&request)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect()
+    };
+    let after = |args: &[String], flag: &str| {
+        let at = args.iter().position(|arg| arg == flag).unwrap();
+        args[at + 1].clone()
+    };
+    let default = args(None);
+    let edit = args(Some(AgentPermission::Edit));
+    assert_eq!(default, edit);
+    assert_eq!(after(&edit, "--permission-mode"), "acceptEdits");
+    for (permission, mode) in [
+        (AgentPermission::Auto, "auto"),
+        (AgentPermission::Manual, "default"),
+        (AgentPermission::Plan, "plan"),
+    ] {
+        let args = args(Some(permission));
+        assert_eq!(after(&args, "--permission-mode"), mode);
+        assert_eq!(after(&args, "--settings"), after(&edit, "--settings"));
+        assert!(args.starts_with(&edit[..super::BASE_ARGS.len() + WORKSPACE_WRITE_ARGS.len()]));
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "--permission-mode")
+                .count(),
+            1
+        );
+    }
+    let bypass = args(Some(AgentPermission::Bypass));
+    assert_eq!(after(&bypass, "--permission-mode"), "bypassPermissions");
+    for flag in [
+        "--restricted",
+        "--tools",
+        "--strict-mcp-config",
+        "--settings",
+    ] {
+        assert!(!bypass.contains(&flag.to_owned()), "{flag}: {bypass:?}");
+    }
+    assert_eq!(
+        bypass.iter().filter(|arg| *arg == "--add-dir").count(),
+        edit.iter().filter(|arg| *arg == "--add-dir").count()
+    );
+
+    let no_write = RunRequest {
+        permission: Some(AgentPermission::Edit),
+        ..request(cwd)
+    };
+    assert!(matches!(
+        super::arguments(&no_write),
+        Err(StartError::Invalid(_))
+    ));
 }
 
 #[test]
@@ -519,6 +760,7 @@ async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
     request.policy = ToolPolicy::WorkspaceWrite;
     request.sandbox = Some(worker_sandbox(&fake.root()));
     request.model = Some("claude-sonnet-4-6".into());
+    request.effort = Some(AgentEffort::High);
     request.account.credential = Credential::Subscription {
         config_home: Some("/tmp/claude-second-account".into()),
     };
@@ -601,6 +843,28 @@ async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
         &Outcome::Completed {
             result: Some("Fixed the off-by-one in the parser. I couldn't run the tests.".into())
         }
+    );
+}
+
+/// A worker's own init shows scrub mode, which the Linux host check runs in another process and
+/// can miss (RYA-118): wispd stops it at init, before its Bash call.
+#[tokio::test]
+async fn a_worker_whose_init_shows_another_permission_mode_is_stopped_before_any_tool() {
+    let fake = Fake::new("scrub-mode");
+    let mut request = request(&fake.root());
+    request.policy = ToolPolicy::WorkspaceWrite;
+    request.sandbox = Some(worker_sandbox(&fake.root()));
+    let all = run(&fake, request).await;
+    let (kind, message) = failure(&all);
+    assert_eq!(kind, FailureKind::PolicyViolation);
+    assert!(
+        message.contains(r#"permission mode "default" in a worker run instead of "acceptEdits""#),
+        "{message}"
+    );
+    assert!(
+        !all.iter()
+            .any(|event| matches!(event, Event::ToolCall { .. })),
+        "{all:?}"
     );
 }
 
@@ -715,6 +979,7 @@ async fn a_result_without_ids_or_a_queue_count_ends_every_turn() {
     run.send(FollowUp {
         turn_id: turn(TURN_2),
         text: "Fix the tests too.".into(),
+        images: Vec::new(),
     })
     .unwrap();
     let all = rest(&mut events).await;
@@ -1005,7 +1270,7 @@ async fn a_no_write_run_offered_write_tools_is_stopped() {
 }
 
 #[tokio::test]
-async fn malformed_and_unknown_lines_are_skipped_with_warnings() {
+async fn malformed_lines_warn_and_unknown_types_are_skipped_quietly() {
     let fake = Fake::new("malformed");
     let all = run(&fake, request(&fake.root())).await;
     assert_eq!(
@@ -1014,7 +1279,6 @@ async fn malformed_and_unknown_lines_are_skipped_with_warnings() {
             WarningKind::MalformedLine,
             WarningKind::MalformedLine,
             WarningKind::MalformedLine,
-            WarningKind::UnknownEvent,
             WarningKind::MalformedLine,
         ]
     );
@@ -1039,6 +1303,7 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
     let follow_up = FollowUp {
         turn_id: turn(TURN_2),
         text: "Fix the tests too.".into(),
+        images: Vec::new(),
     };
     run.send(follow_up.clone()).unwrap();
     run.send(follow_up).unwrap();
@@ -1081,7 +1346,8 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
     assert_eq!(
         run.send(FollowUp {
             turn_id: TurnId::generate(),
-            text: "too late".into()
+            text: "too late".into(),
+            images: Vec::new(),
         }),
         Err(SendError::Finished)
     );
@@ -1099,6 +1365,7 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
     run.send(FollowUp {
         turn_id: turn(TURN_2),
         text: "And now the docs.".into(),
+        images: Vec::new(),
     })
     .unwrap();
     let all = rest(&mut events).await;
@@ -1152,6 +1419,80 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
 }
 
 #[tokio::test]
+async fn images_go_before_the_text_as_base64_blocks_and_a_message_of_images_alone_has_no_text() {
+    let png = PromptImage {
+        media_type: ImageMediaType::Png,
+        data: "iVBORw0KGgo=".into(),
+    };
+    let gif = PromptImage {
+        media_type: ImageMediaType::Gif,
+        data: "R0lGODlh".into(),
+    };
+    let fake = Fake::new("follow-up-turns");
+    let request = RunRequest {
+        images: vec![png, gif.clone()],
+        ..request(&fake.root())
+    };
+    let Started { run, mut events } = launch(&fake.backend, request).await;
+    assert!(matches!(
+        next(&mut events).await,
+        Event::SessionStarted { .. }
+    ));
+    run.send(FollowUp {
+        turn_id: turn(TURN_2),
+        text: String::new(),
+        images: vec![gif],
+    })
+    .unwrap();
+    rest(&mut events).await;
+    let block = |media_type: &str, data: &str| {
+        serde_json::json!({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        })
+    };
+    let text = |text: &str| serde_json::json!({"type": "text", "text": text});
+    let stdin = fake.stdin();
+    assert_eq!(
+        stdin[0]["message"]["content"],
+        serde_json::json!([
+            block("image/png", "iVBORw0KGgo="),
+            block("image/gif", "R0lGODlh"),
+            text("Summarize the README.\nKeep it short."),
+        ])
+    );
+    assert_eq!(
+        stdin[1]["message"]["content"],
+        serde_json::json!([block("image/gif", "R0lGODlh")])
+    );
+}
+
+#[tokio::test]
+async fn a_resumed_session_starts_on_images_alone() {
+    let fake = Fake::new("resume");
+    let request = RunRequest {
+        prompt: String::new(),
+        images: vec![PromptImage {
+            media_type: ImageMediaType::Png,
+            data: "iVBORw0KGgo=".into(),
+        }],
+        resume: Some(Resume {
+            session_id: SESSION.into(),
+            usage_totals: Vec::new(),
+        }),
+        ..request(&fake.root())
+    };
+    run(&fake, request).await;
+    assert_eq!(
+        fake.stdin()[0]["message"]["content"],
+        serde_json::json!([{
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
+        }])
+    );
+}
+
+#[tokio::test]
 async fn cancel_interrupts_the_cli_with_sigint() {
     let fake = Fake::new("cancel");
     let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
@@ -1162,7 +1503,8 @@ async fn cancel_interrupts_the_cli_with_sigint() {
     // The fake CLI prints `@trap-armed` right after installing its SIGINT trap (fake-claude.sh),
     // which the translator reports as a malformed line. Waiting for it here is a deterministic
     // handshake: cancel() below can never race the trap's own installation (#149), unlike waiting
-    // for a wall-clock margin.
+    // for a wall-clock margin. The fake then blocks reading stdin, which cancel closes after the
+    // SIGINT, so a trap that bash left pending still runs at EOF (RYA-120, cancel.jsonl).
     assert!(matches!(
         next(&mut events).await,
         Event::Warning {
@@ -1249,6 +1591,14 @@ fn an_init_that_does_not_say_where_its_credentials_came_from_is_refused() {
 }
 
 #[test]
+fn command_lifecycle_messages_are_skipped_without_a_notice() {
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    // Shape from the claude-codes changelog, not recorded from a run.
+    let line = br#"{"type":"command_lifecycle","command_uuid":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01","state":"started","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68"}"#;
+    assert_eq!(translator.line(line), []);
+}
+
+#[test]
 fn output_before_the_init_is_refused() {
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     let assistant =
@@ -1263,9 +1613,10 @@ fn init_line(tools: &str) -> Vec<u8> {
     init_with_version(tools, "2.1.281")
 }
 
+/// An init line in a worker's permission mode. No-write runs don't check theirs.
 fn init_with_version(tools: &str, version: &str) -> Vec<u8> {
     format!(
-        r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"{version}","tools":{tools}}}"#
+        r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"{version}","permissionMode":"acceptEdits","tools":{tools}}}"#
     )
     .into_bytes()
 }
@@ -1301,6 +1652,42 @@ fn a_worker_on_a_claude_code_too_old_to_sandbox_it_is_stopped() {
         None,
         "no-write runs have no floor"
     );
+}
+
+#[test]
+fn a_worker_must_report_the_permission_mode_it_asked_for() {
+    let init = |mode: &str| {
+        format!(
+            r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"2.1.283","tools":["Read"]{mode}}}"#
+        )
+    };
+    for (mode, refused) in [
+        (r#","permissionMode":"acceptEdits""#, false),
+        (r#","permissionMode":"default""#, true),
+        (r#","permissionMode":"bypassPermissions""#, true),
+        ("", true),
+    ] {
+        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+        let steps = translator.line(init(mode).as_bytes());
+        let expected = refused.then_some(FailureKind::PolicyViolation);
+        assert_eq!(violation_kind(&steps), expected, "{mode}");
+    }
+    // A plan worker (RYA-97) must report plan mode, and scrub mode's "default" still fails it.
+    for (mode, refused) in [
+        (r#","permissionMode":"plan""#, false),
+        (r#","permissionMode":"acceptEdits""#, true),
+        (r#","permissionMode":"default""#, true),
+    ] {
+        let mut translator =
+            Translator::new(ToolPolicy::WorkspaceWrite, "none").with_permission_mode("plan");
+        let steps = translator.line(init(mode).as_bytes());
+        let expected = refused.then_some(FailureKind::PolicyViolation);
+        assert_eq!(violation_kind(&steps), expected, "{mode}");
+    }
+    // wispd sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB for a no-write run, which forces "default".
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    let steps = translator.line(init(r#","permissionMode":"default""#).as_bytes());
+    assert_eq!(violation_kind(&steps), None);
 }
 
 fn violation_kind(steps: &[Step]) -> Option<FailureKind> {
@@ -1359,41 +1746,37 @@ fn a_no_write_run_allows_only_the_read_tools() {
     );
 }
 
-/// #195: with wispd's tools attached, a coordinator's init may list exactly those eight MCP
-/// tools beyond its read tools; another server's tool, or a name outside the eight, still stops
-/// it, and without the tools attached even wispd's own names do.
+/// 0027: a coordinator and a bypass worker are full Claude Code, so their init may list any
+/// tool, another MCP server's included, in the mode they asked for. Without wispd's tools a
+/// no-write run keeps its read tools.
 #[test]
-fn a_coordinator_run_allows_the_read_tools_and_exactly_wispds_mcp_tools() {
-    let wispd = crate::mcp::ALLOWED_TOOLS
-        .iter()
-        .map(|tool| format!("{tool:?}"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let allowed = init_line(&format!(
-        r#"["Read","Glob","Grep","EndConversation",{wispd}]"#
-    ));
+fn a_coordinator_and_a_bypass_worker_allow_any_tool_in_the_mode_they_asked_for() {
+    let tools =
+        r#"["Read","Edit","Bash","Task","mcp__wispd__spawn_agent","mcp__linear__list_issues"]"#;
+    let loaded = init_line(tools);
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
-    assert_eq!(violation_kind(&translator.line(&allowed)), None);
-    for extra in [
-        r#"["Read","mcp__github__create_issue"]"#,
-        r#"["Read","mcp__wispd__plan_approve"]"#,
-        r#"["Read","mcp__wispd__spawn_agent","Bash"]"#,
-        r#"["Read","Edit"]"#,
-    ] {
-        let mut translator =
-            Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
-        assert_eq!(
-            violation_kind(&translator.line(&init_line(extra))),
-            Some(FailureKind::PolicyViolation),
-            "{extra}"
-        );
-    }
+    assert_eq!(violation_kind(&translator.line(&loaded)), None);
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none")
+        .with_coordinator_tools(true)
+        .with_permission_mode("bypassPermissions");
+    assert_eq!(
+        violation_kind(&translator.line(&loaded)),
+        Some(FailureKind::PolicyViolation),
+        "it reported acceptEdits"
+    );
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     assert_eq!(
-        violation_kind(&translator.line(&allowed)),
+        violation_kind(&translator.line(&loaded)),
         Some(FailureKind::PolicyViolation),
-        "wispd's tools count only when they were attached"
+        "without wispd's tools it isn't a coordinator"
     );
+
+    let bypass = String::from_utf8(loaded)
+        .unwrap()
+        .replace("acceptEdits", "bypassPermissions");
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none")
+        .with_permission_mode("bypassPermissions");
+    assert_eq!(violation_kind(&translator.line(bypass.as_bytes())), None);
 }
 
 fn failed_result() -> &'static [u8] {

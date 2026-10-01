@@ -1,6 +1,7 @@
-//! The protocol between the editor and `wispd`, from decision record 0007.
+//! The protocol between the client and `wispd`, from decision record 0007.
 //!
-//! This crate is the single source of truth for it.
+//! This crate is the single source of truth for it. The desktop app's TypeScript types are generated
+//! from the types here (see [`typescript`]).
 //!
 //! - [`framing`]: newline-delimited JSON, one compact message per line, at most
 //!   [`framing::MAX_FRAME_BYTES`] per line.
@@ -44,6 +45,7 @@ pub mod methods;
 mod project;
 mod review;
 mod thread;
+pub mod typescript;
 mod usage;
 
 #[cfg(test)]
@@ -55,10 +57,12 @@ pub use account::{
     Provider, RawKey,
 };
 pub use agent::{
-    AgentCancelParams, AgentEventsParams, AgentEventsResult, AgentFailureKind, AgentListParams,
-    AgentListResult, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRun, AgentRunResult,
-    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus,
-    AgentToolStatus, CoordinatorThreadId, DiffSummary, LoggedEvent, RunId, TurnId,
+    AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult, AgentFailureKind,
+    AgentImageParams, AgentListParams, AgentListResult, AgentOutcome, AgentOutputItem,
+    AgentPermission, AgentPolicy, AgentRun, AgentRunResult, AgentRunState, AgentSendParams,
+    AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus, AgentToolStatus,
+    CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId,
+    TurnId,
 };
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,
@@ -85,20 +89,24 @@ pub use host::{
 };
 pub use id::InvalidId;
 pub use project::{
-    Project, ProjectCreateParams, ProjectCreateResult, ProjectId, ProjectListParams,
-    ProjectListResult,
+    Project, ProjectCreateParams, ProjectCreateResult, ProjectIcon, ProjectId, ProjectListParams,
+    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,
     AgentDiffResult, AgentDiffStats, AgentFileParams, AgentFileResult, AgentFileSide,
-    AgentFileStatus, AgentMerge, AgentMergeKind, AgentRequestChangesParams,
+    AgentFileStatus, AgentMerge, AgentMergeKind, AgentOpenPrParams, AgentOpenPrResult,
+    AgentRequestChangesParams,
 };
 pub use thread::{
     Repo, RepoAddParams, RepoAddResult, RepoId, Thread, ThreadArchiveParams, ThreadArchiveResult,
     ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
     ThreadStartResult,
 };
-pub use usage::{AccountUsage, UsageGetParams, UsageGetResult, UsageLimitWindow, UsagePeriod};
+pub use usage::{
+    AccountRuns, AccountUsage, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod,
+};
 
 /// The newest protocol version this crate speaks. Versions start at 1.
 ///
@@ -127,8 +135,10 @@ mod tests {
         Project {
             id: ProjectId::generate(),
             name: "wisp".to_owned(),
+            icon: None,
             repo_path: "/Users/me/src/wisp".to_owned(),
             branch: Some("main".to_owned()),
+            coordinator: None,
             created_at: "2026-09-24T12:00:00Z".parse().unwrap(),
             updated_at: "2026-09-24T12:05:00.125Z".parse().unwrap(),
         }
@@ -190,11 +200,7 @@ mod tests {
             projects: vec![project(), project()],
             seq: (1 << 53) - 1,
         });
-        round_trip(&ProjectCreateParams {
-            id: ProjectId::generate(),
-            name: "wisp".to_owned(),
-            repo_path: "/".to_owned(),
-        });
+        // `project_edit_types_round_trip_and_omit_what_is_absent` covers `ProjectCreateParams`.
         round_trip(&ProjectCreateResult { project: project() });
         for project in [None, Some(ProjectId::generate())] {
             round_trip(&EventsSubscribeParams { after: 7, project });
@@ -247,6 +253,80 @@ mod tests {
     }
 
     #[test]
+    fn project_edit_types_round_trip_and_omit_what_is_absent() {
+        let icons = [
+            ProjectIcon {
+                name: "rocket".to_owned(),
+                color: Some("green".to_owned()),
+            },
+            ProjectIcon {
+                name: "folder-kanban".to_owned(),
+                color: None,
+            },
+        ];
+        for icon in [None, Some(icons[0].clone()), Some(icons[1].clone())] {
+            let with_icon = Project {
+                icon: icon.clone(),
+                ..project()
+            };
+            round_trip(&with_icon);
+            round_trip(&ProjectCreateParams {
+                id: ProjectId::generate(),
+                name: "wisp".to_owned(),
+                repo_path: "/".to_owned(),
+                icon: icon.clone(),
+            });
+            round_trip(&ProjectUpdateResult {
+                project: with_icon.clone(),
+            });
+            round_trip(&EventsEventParams {
+                subscription: SubscriptionId::generate(),
+                seq: 9,
+                time: "2026-10-01T12:00:00Z".parse().unwrap(),
+                project: None,
+                event: WispEvent::ProjectUpdated { project: with_icon },
+            });
+            for name in [None, Some("roster".to_owned())] {
+                round_trip(&ProjectUpdateParams {
+                    project: ProjectId::generate(),
+                    name,
+                    icon: icon.clone(),
+                });
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(&icons[1]).unwrap(),
+            json!({"name": "folder-kanban"})
+        );
+        let id = ProjectId::generate();
+        assert_eq!(
+            serde_json::to_value(ProjectUpdateParams {
+                project: id,
+                name: None,
+                icon: None,
+            })
+            .unwrap(),
+            json!({"project": id}),
+            "absent fields are left out, so an older peer reads them as unchanged"
+        );
+        assert!(
+            serde_json::to_value(project())
+                .unwrap()
+                .get("icon")
+                .is_none()
+        );
+        assert!(
+            serde_json::from_value::<ProjectIcon>(json!({"color": "green"})).is_err(),
+            "an icon needs a name"
+        );
+        assert!(
+            serde_json::from_value::<ProjectUpdateParams>(json!({"project": id, "icon": "rocket"}))
+                .is_err(),
+            "an icon is an object"
+        );
+    }
+
+    #[test]
     fn account_default_types_round_trip() {
         round_trip(&AccountsDefaultsGetParams {});
         for account in [
@@ -276,14 +356,14 @@ mod tests {
 
     #[test]
     fn context_types_round_trip() {
-        for last_writer in [None, Some("editor".to_owned())] {
+        for last_writer in [None, Some("app".to_owned())] {
             round_trip(&context_file(last_writer));
         }
         round_trip(&ContextListParams {
             project: ProjectId::generate(),
         });
         round_trip(&ContextListResult {
-            files: vec![context_file(None), context_file(Some("editor".to_owned()))],
+            files: vec![context_file(None), context_file(Some("app".to_owned()))],
         });
         round_trip(&ContextReadParams {
             project: ProjectId::generate(),
@@ -293,7 +373,7 @@ mod tests {
             file: context_file(None),
             content: "# Notes".to_owned(),
         });
-        for writer in [None, Some("editor".to_owned())] {
+        for writer in [None, Some("app".to_owned())] {
             round_trip(&ContextWriteParams {
                 id: ContextWriteId::generate(),
                 project: ProjectId::generate(),
@@ -303,7 +383,7 @@ mod tests {
             });
         }
         round_trip(&ContextWriteResult {
-            file: context_file(Some("editor".to_owned())),
+            file: context_file(Some("app".to_owned())),
         });
         round_trip(&EventsEventParams {
             subscription: SubscriptionId::generate(),
@@ -311,7 +391,7 @@ mod tests {
             time: "2026-09-24T12:00:00Z".parse().unwrap(),
             project: Some(ProjectId::generate()),
             event: WispEvent::ContextChanged {
-                file: context_file(Some("editor".to_owned())),
+                file: context_file(Some("app".to_owned())),
             },
         });
     }
@@ -399,6 +479,29 @@ mod tests {
                     cost_usd_micros: Some(1),
                 },
                 limits: Vec::new(),
+            }],
+        });
+        round_trip(&UsageHistoryParams {
+            since: project().created_at,
+        });
+        let hour = |model: Option<&str>, cost_usd_micros| UsageHour {
+            hour: "2026-09-29T19:00:00Z".parse().unwrap(),
+            account_id: "claude-max".to_owned(),
+            model: model.map(str::to_owned),
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            cost_usd_micros,
+        };
+        let unnamed = serde_json::to_value(hour(None, None)).unwrap();
+        assert!(unnamed.get("model").is_none());
+        assert!(unnamed.get("costUsdMicros").is_none());
+        round_trip(&UsageHistoryResult {
+            hours: vec![hour(None, None), hour(Some("opus"), Some(0))],
+            runs: vec![AccountRuns {
+                account_id: "claude-max".to_owned(),
+                runs: 2,
             }],
         });
     }

@@ -1,6 +1,8 @@
 //! Mapping between the runner's inputs and outputs: backend events to the protocol's transcript
 //! items, and store rows to the protocol's runs.
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::error;
 use wisp_protocol::jsonrpc::ErrorObject;
@@ -23,9 +25,9 @@ pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 pub(super) const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;
 
 /// The longest free text field of any other `agent.output` item — `Text`, `TextDelta`,
-/// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result` — in bytes, at the same
-/// cap as a tool's output (#190 N8). Without this, one item near 0007's 8 MiB frame would close
-/// every subscriber and then be replayed again on every reconnect.
+/// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result`, `TurnStarted.text` — in
+/// bytes, at the same cap as a tool's output (#190 N8). Without this, one item near 0007's 8 MiB
+/// frame would close every subscriber and then be replayed again on every reconnect.
 pub(super) const MAX_TEXT_ITEM_BYTES: usize = 32 * 1024;
 
 /// The longest a short identifier gets to be, in bytes: `ToolCall`'s `call_id` and `name`,
@@ -53,6 +55,9 @@ pub(super) const ACCEPTED: &str = "accepted";
 
 /// The store's text for the only policy `agent/start` takes.
 pub(super) const WORKSPACE_WRITE: &str = "workspaceWrite";
+
+/// The store's text for a project coordinator's policy (0024).
+pub(crate) const NO_WRITE: &str = "noWrite";
 
 fn status(text: &str) -> AgentStatus {
     match text {
@@ -86,10 +91,10 @@ pub(crate) fn agent_run(
         id,
         project,
         prompt: row.fields.prompt.clone(),
-        policy: if row.fields.policy == WORKSPACE_WRITE {
-            AgentPolicy::WorkspaceWrite
-        } else {
-            AgentPolicy::Unknown
+        policy: match row.fields.policy.as_str() {
+            WORKSPACE_WRITE => AgentPolicy::WorkspaceWrite,
+            NO_WRITE => AgentPolicy::NoWrite,
+            _ => AgentPolicy::Unknown,
         },
         status: status(&state.status),
         backend: row.fields.backend.clone(),
@@ -106,9 +111,26 @@ pub(crate) fn agent_run(
             .map(CoordinatorThreadId::try_from)
             .transpose()
             .map_err(|_| corrupt("coordinator thread id"))?,
+        model: row.fields.model.clone(),
+        effort: row.fields.effort.as_deref().and_then(option_value),
+        permission: row.fields.permission.as_deref().and_then(option_value),
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
+}
+
+/// An effort's or a permission's protocol name, such as `high`, as the runs table stores it.
+pub(super) fn option_name(value: impl Serialize) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// A stored effort or permission, back from its protocol name: `Unknown` for a name this version
+/// doesn't know.
+pub(super) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
+    serde_json::from_value(Value::String(name.to_owned())).ok()
 }
 
 /// The part of a stored run that `agent.updated` reports.
@@ -120,6 +142,9 @@ pub(super) fn run_state(row: &wisp_store::Run) -> AgentRunState {
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),
+        model: row.fields.model.clone(),
+        effort: row.fields.effort.as_deref().and_then(option_value),
+        permission: row.fields.permission.as_deref().and_then(option_value),
         updated_at: row.updated_at,
     }
 }
@@ -289,7 +314,14 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             session_id: truncate(session_id, MAX_ID_BYTES),
             model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
         },
-        Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted { turn_id: *turn_id },
+        // The backend knows only the id; the run's actor adds a follow-up's text (RYA-92), marks
+        // a coordinator's wake-up (RYA-42), and lists the message's images (RYA-191).
+        Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted {
+            turn_id: *turn_id,
+            text: None,
+            wake: false,
+            images: Vec::new(),
+        },
         Event::TextDelta { message_id, text } => AgentOutputItem::TextDelta {
             message_id: id(message_id.as_deref()),
             text: truncate(text, MAX_TEXT_ITEM_BYTES),

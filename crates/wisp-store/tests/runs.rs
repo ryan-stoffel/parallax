@@ -16,6 +16,9 @@ fn fields(project_id: Uuid) -> RunFields {
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
         coordinator_thread: None,
+        model: Some("opus".to_owned()),
+        effort: Some("high".to_owned()),
+        permission: None,
     }
 }
 
@@ -337,15 +340,18 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     }
     // Roll the database back to what #119 left on develop: schema 6, no runs, events, git_dir or
     // base_dirty columns, turns table (#190's migration 10; dropping `runs` already undoes #157's
-    // migration 8 columns on it, since they're columns of the table this drops wholesale), or the
-    // normal threads tables (#110's migration 9).
+    // migration 8 columns on it, since they're columns of the table this drops wholesale), the
+    // normal threads tables (#110's migration 9), the wakes table (RYA-178's migration 14), the
+    // images table (RYA-191's migration 15), or the project icon columns (RYA-227's migration 16).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
-             DROP TABLE threads; DROP TABLE repos;
+             DROP TABLE threads; DROP TABLE repos; DROP TABLE wakes; DROP TABLE images;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
+             ALTER TABLE projects DROP COLUMN icon_name;
+             ALTER TABLE projects DROP COLUMN icon_color;
              DELETE FROM schema_version WHERE version >= 7;",
         )
         .unwrap();

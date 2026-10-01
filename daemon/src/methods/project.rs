@@ -1,16 +1,21 @@
-//! `project/list` and `project/create`.
+//! `project/list`, `project/create`, `project/start`, which starts a project's coordinator behind
+//! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
+//! icon behind the `projectEdit` capability (RYA-227, 0032).
 
 use std::path::{Component, Path};
 use std::sync::Arc;
 
+use jiff::Timestamp;
 use tracing::{info, warn};
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    ErrorKind, ProjectCreateParams, ProjectCreateResult, ProjectListParams, ProjectListResult,
-    WispEvent,
+    AgentRunResult, ErrorKind, ProjectCreateParams, ProjectCreateResult, ProjectIcon,
+    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
+    ProjectUpdateResult, WispEvent,
 };
 
 use super::Context;
+use crate::agents::coordinator;
 use crate::repo;
 use crate::store::{self, store_error};
 
@@ -28,7 +33,10 @@ pub(crate) async fn list(
             let seq = log.head();
             let projects = rows
                 .into_iter()
-                .map(store::project)
+                .map(|row| {
+                    let coordinator = coordinator::coordinator_of(store, row.id)?;
+                    store::project(row, coordinator)
+                })
                 .collect::<Result<_, _>>()?;
             Ok(ProjectListResult { projects, seq })
         })
@@ -67,7 +75,8 @@ pub(crate) async fn create(
             let row = store
                 .create_project(id, &fields)
                 .map_err(|error| store_error(&error))?;
-            let project = store::project(row)?;
+            let coordinator = coordinator::coordinator_of(store, id)?;
+            let project = store::project(row, coordinator)?;
             if !existed {
                 let seq = log.append_blocking(
                     project.created_at,
@@ -88,35 +97,94 @@ pub(crate) async fn create(
         .await
 }
 
+/// Starts the project's coordinator, detached from the request as `agent/start` is, so a dropped
+/// connection never leaves it half started.
+pub(crate) async fn start(
+    context: &Context,
+    params: ProjectStartParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    super::agent::check_message("prompt", &params.prompt, &params.images)?;
+    let daemon = Arc::clone(&context.daemon);
+    let run = context
+        .daemon
+        .agents
+        .detached(coordinator::start(daemon, params))
+        .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// Renames a project or sets its icon, and appends `project.updated` when that changed anything.
+///
+/// The event is appended in the job that writes the row, as `project/create`'s is, so a
+/// `project/list` snapshot and its `seq` always agree. `updatedAt` stays as it is (0032).
+pub(crate) async fn update(
+    context: &Context,
+    params: ProjectUpdateParams,
+) -> Result<ProjectUpdateResult, ErrorObject> {
+    if let Some(name) = &params.name {
+        check_name(name)?;
+    }
+    if let Some(icon) = &params.icon {
+        check_icon(icon)?;
+    }
+    let log = Arc::clone(&context.daemon.log);
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |store| {
+            let (id, edit) = store::edit(params);
+            let (row, changed) = store
+                .update_project(id, &edit)
+                .map_err(|error| store_error(&error))?;
+            let coordinator = coordinator::coordinator_of(store, id)?;
+            let project = store::project(row, coordinator)?;
+            if changed {
+                let seq = log.append_blocking(
+                    Timestamp::now(),
+                    None,
+                    WispEvent::ProjectUpdated {
+                        project: project.clone(),
+                    },
+                );
+                info!(project = %project.id, seq, "updated a project");
+            }
+            Ok(ProjectUpdateResult { project })
+        })
+        .await
+}
+
 /// The longest `name` wispd accepts, in bytes.
 const MAX_NAME_BYTES: usize = 256;
 
 /// The longest `repoPath` wispd accepts, in bytes: macOS's `PATH_MAX`.
 const MAX_REPO_PATH_BYTES: usize = 1024;
 
-// The limits also bound every `project.created` event, and with it the event log's memory, far
-// below the frame limit.
+/// The longest icon name wispd accepts, in characters (0032).
+const MAX_ICON_NAME_CHARS: usize = 64;
+
+/// The longest icon color wispd accepts, in characters (0032).
+const MAX_ICON_COLOR_CHARS: usize = 32;
+
+// The limits also bound every `project.created` and `project.updated` event, and with it the
+// event log's memory, far below the frame limit.
 fn check(params: &ProjectCreateParams) -> Result<(), ErrorObject> {
     let ProjectCreateParams {
-        name, repo_path, ..
+        name,
+        repo_path,
+        icon,
+        ..
     } = params;
-    if name.trim().is_empty() {
-        return Err(ErrorObject::invalid_params("name must not be empty"));
-    }
-    if name.len() > MAX_NAME_BYTES {
-        return Err(ErrorObject::invalid_params(format!(
-            "name must be at most {MAX_NAME_BYTES} bytes"
-        )));
+    check_name(name)?;
+    if let Some(icon) = icon {
+        check_icon(icon)?;
     }
     if repo_path.len() > MAX_REPO_PATH_BYTES {
         return Err(ErrorObject::invalid_params(format!(
             "repoPath must be at most {MAX_REPO_PATH_BYTES} bytes"
         )));
     }
-    if name.contains('\0') || repo_path.contains('\0') {
-        return Err(ErrorObject::invalid_params(
-            "name and repoPath must not contain NUL",
-        ));
+    if repo_path.contains('\0') {
+        return Err(ErrorObject::invalid_params("repoPath must not contain NUL"));
     }
     if !Path::new(repo_path).is_absolute() {
         return Err(ErrorObject::invalid_params(
@@ -139,19 +207,107 @@ fn check(params: &ProjectCreateParams) -> Result<(), ErrorObject> {
     Ok(())
 }
 
-#[cfg(test)]
+/// The rules for a project's name, in `project/create` and `project/update` alike.
+fn check_name(name: &str) -> Result<(), ErrorObject> {
+    if name.trim().is_empty() {
+        return Err(ErrorObject::invalid_params("name must not be empty"));
+    }
+    if name.len() > MAX_NAME_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "name must be at most {MAX_NAME_BYTES} bytes"
+        )));
+    }
+    if name.contains('\0') {
+        return Err(ErrorObject::invalid_params("name must not contain NUL"));
+    }
+    Ok(())
+}
+
+/// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0032). wispd never reads them, so
+/// that is all it checks.
+fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
+    check_key("icon.name", &icon.name, MAX_ICON_NAME_CHARS)?;
+    if let Some(color) = &icon.color {
+        check_key("icon.color", color, MAX_ICON_COLOR_CHARS)?;
+    }
+    Ok(())
+}
+
+fn check_key(field: &str, key: &str, max: usize) -> Result<(), ErrorObject> {
+    let allowed = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-';
+    if (1..=max).contains(&key.len()) && key.bytes().all(allowed) {
+        Ok(())
+    } else {
+        Err(ErrorObject::invalid_params(format!(
+            "{field} must be 1 to {max} characters of a-z, 0-9, and -"
+        )))
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use wisp_protocol::jsonrpc::INVALID_PARAMS;
-    use wisp_protocol::{ProjectCreateParams, ProjectId};
+    use wisp_protocol::{ProjectCreateParams, ProjectIcon, ProjectId};
 
-    use super::{MAX_NAME_BYTES, MAX_REPO_PATH_BYTES, check};
+    use super::{
+        MAX_ICON_COLOR_CHARS, MAX_ICON_NAME_CHARS, MAX_NAME_BYTES, MAX_REPO_PATH_BYTES, check,
+        check_icon,
+    };
 
     fn params(name: &str, repo_path: &str) -> ProjectCreateParams {
         ProjectCreateParams {
             id: ProjectId::generate(),
             name: name.to_owned(),
             repo_path: repo_path.to_owned(),
+            icon: None,
         }
+    }
+
+    fn icon(name: &str, color: Option<&str>) -> ProjectIcon {
+        ProjectIcon {
+            name: name.to_owned(),
+            color: color.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn icons_are_short_keys_of_lowercase_letters_digits_and_hyphens() {
+        let longest_name = "a".repeat(MAX_ICON_NAME_CHARS);
+        let longest_color = "b".repeat(MAX_ICON_COLOR_CHARS);
+        for valid in [
+            icon("rocket", None),
+            icon("folder-kanban", Some("green")),
+            icon("x", Some("2")),
+            icon("arrow-up-01", Some("sky-500")),
+            icon(&longest_name, Some(&longest_color)),
+        ] {
+            assert!(check_icon(&valid).is_ok(), "{valid:?}");
+        }
+        for invalid in [
+            icon("", None),
+            icon("Rocket", None),
+            icon("rocket ship", None),
+            icon("rocket_ship", None),
+            icon("rocket\0", None),
+            icon("ra\u{301}cket", None),
+            icon(&format!("{longest_name}a"), None),
+            icon("rocket", Some("")),
+            icon("rocket", Some("Green")),
+            icon("rocket", Some("#00ff00")),
+            icon("rocket", Some(&format!("{longest_color}b"))),
+        ] {
+            let error = check_icon(&invalid).unwrap_err();
+            assert_eq!(error.code, INVALID_PARAMS, "{invalid:?}");
+        }
+        let error = check(&ProjectCreateParams {
+            icon: Some(icon("Rocket", None)),
+            ..params("wisp", "/src/wisp")
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.message,
+            "Invalid params: icon.name must be 1 to 64 characters of a-z, 0-9, and -"
+        );
     }
 
     #[test]

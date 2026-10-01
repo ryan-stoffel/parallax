@@ -5,31 +5,41 @@
 //! [`Shutdown::trigger`] is called, and shuts down gracefully.
 
 mod connection;
-mod setup;
+pub(crate) mod setup;
 
 use std::io;
+#[cfg(unix)]
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(unix)]
+use tokio::net::UnixListener;
 use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{Instrument, info, info_span, warn};
 
+use setup::InstanceLock;
+#[cfg(windows)]
+use setup::Pipe;
+#[cfg(unix)]
+use setup::Socket;
 pub use setup::prepare_data_dir;
-use setup::{InstanceLock, Socket};
 
-use crate::VERSION;
 use crate::agents::{self, Agents};
+use crate::backend::Backend;
 use crate::backend::claude::ClaudeBackend;
+use crate::backend::codex::CodexBackend;
+use crate::backend::fake::FakeBackend;
 use crate::backend::process::{Environment, Launcher};
+use crate::backend::run_temp;
 use crate::context::ContextIndex;
 use crate::detect::CliDetector;
 use crate::event_log::EventLog;
-use crate::keystore::{KeyStore, KeychainStore};
+use crate::keystore::{self, KeyStore};
 use crate::methods;
 use crate::paths::DataDir;
 use crate::routing::BackendRegistry;
@@ -51,7 +61,7 @@ pub struct Config {
     /// sends `host/health` every 30 s.
     pub idle_timeout: Duration,
     /// How often the server checks that its socket file still exists, and binds it again if
-    /// not. 60 s by default.
+    /// not. 60 s by default. Windows' named pipe needs no check.
     pub socket_check_interval: Duration,
     /// How long a shutdown waits for in-flight requests before it cancels them. 10 s by default.
     pub shutdown_grace: Duration,
@@ -83,7 +93,8 @@ pub struct Config {
     /// Replies one connection may have waiting to be written. 32 by default.
     pub outbound_queue: usize,
     /// The backends workers run on (#156). `None`, the default, registers Claude Code for
-    /// Anthropic accounts; tests register a fake.
+    /// Anthropic accounts, or the fake backend when `WISPD_FAKE_BACKEND` names a script
+    /// ([`FakeBackend::from_env`]), and Codex for `OpenAI` accounts; tests register a fake.
     pub backends: Option<BackendRegistry>,
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
     /// default, is wispd's own with the usual install folders on `PATH` (#96, decision 0014).
@@ -134,7 +145,8 @@ pub enum StartError {
         /// What is wrong with it.
         reason: String,
     },
-    /// Something that is not a socket is where the socket goes, so wispd won't remove it.
+    /// Something that is not a socket is where the socket goes, so wispd won't remove it. Unix
+    /// only.
     #[error("{} is not a socket, so wispd won't remove it", .path.display())]
     NotASocket {
         /// The socket path.
@@ -196,7 +208,7 @@ pub(crate) struct Daemon {
     pub limits: Limits,
     /// Detects the vendor CLIs for `accounts/list` and `accounts/refresh` (#114).
     pub cli_detector: CliDetector,
-    /// Where key accounts' API keys live (#117): the real login Keychain, except in tests.
+    /// Where key accounts' API keys live (#117): the OS's real store, except in tests.
     pub keys: Arc<dyn KeyStore>,
     /// wispd's data folder, so `context/*` (#155) and the runner (#156) can find a project's
     /// shared context folder.
@@ -214,13 +226,18 @@ pub(crate) struct Limits {
     pub outbound_queue: usize,
 }
 
-/// A started server, bound to its socket and holding the instance lock.
+/// A started server, bound to its socket or pipe and holding the instance lock.
 pub struct Server {
     config: Config,
     daemon: Arc<Daemon>,
     lock: InstanceLock,
+    #[cfg(unix)]
     socket: Socket,
+    #[cfg(unix)]
     listener: StdUnixListener,
+    /// The pipe, which is its own listener.
+    #[cfg(windows)]
+    socket: Pipe,
     /// Kept alive for as long as the server runs; dropping it stops the watch (#155).
     context_watcher: Option<notify::RecommendedWatcher>,
 }
@@ -232,7 +249,6 @@ impl std::fmt::Debug for Server {
             .field("daemon", &self.daemon)
             .field("lock", &self.lock)
             .field("socket", &self.socket)
-            .field("listener", &self.listener)
             .finish_non_exhaustive()
     }
 }
@@ -246,8 +262,10 @@ impl std::fmt::Debug for Daemon {
 }
 
 impl Server {
-    /// Prepares the data folder, takes the instance lock, removes an old socket, binds the new
-    /// one, and opens the store.
+    /// Prepares the data folder, takes the instance lock, removes what earlier runs left in their
+    /// temp folders, removes an old socket, binds the new one, and opens the store. On Windows it
+    /// creates the named pipe instead of the socket, so it must be called inside a tokio runtime
+    /// there.
     ///
     /// A store that can't be opened doesn't stop the server; `host/health` reports it.
     ///
@@ -259,6 +277,7 @@ impl Server {
         let data_dir = &config.data_dir;
         prepare_data_dir(data_dir.root())?;
         let lock = InstanceLock::acquire(&data_dir.lock_file(), data_dir.root())?;
+        run_temp::sweep(data_dir);
         let socket_path = data_dir
             .socket_path()
             .map_err(|error| StartError::io("finding the socket path", error))?;
@@ -268,17 +287,27 @@ impl Server {
                 "the socket path in the data folder is too long, so the socket is in the user's temporary folder"
             );
         }
+        #[cfg(unix)]
         let (socket, listener) = Socket::bind(&socket_path.path)?;
+        #[cfg(windows)]
+        let socket = Pipe::create(&socket_path.path)?;
         let environment = config
             .agent_environment
             .clone()
             .unwrap_or_else(agents::worker::agent_environment);
         let launcher = Launcher::new(data_dir.clone(), environment);
+        let fake = FakeBackend::from_env(&launcher)
+            .map_err(|error| StartError::io("setting up the fake backend", error))?;
         let backends = config.backends.clone().unwrap_or_else(|| {
+            let backend: Arc<dyn Backend> = match fake {
+                Some(fake) => Arc::new(fake),
+                None => Arc::new(ClaudeBackend::new(launcher.clone())),
+            };
             let mut backends = BackendRegistry::new();
+            backends.register(wisp_protocol::Provider::Anthropic, backend);
             backends.register(
-                wisp_protocol::Provider::Anthropic,
-                Arc::new(ClaudeBackend::new(launcher.clone())),
+                wisp_protocol::Provider::Openai,
+                Arc::new(CodexBackend::new(launcher.clone())),
             );
             backends
         });
@@ -300,7 +329,7 @@ impl Server {
                 max_requests_in_flight: config.max_requests_in_flight.max(1),
                 outbound_queue: config.outbound_queue.max(1),
             },
-            keys: Arc::new(KeychainStore::new()),
+            keys: keystore::system_store(),
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
             agents: Agents::new(backends, worktrees),
@@ -319,10 +348,10 @@ impl Server {
             }
         };
         info!(
-            version = VERSION,
+            version = crate::version(),
             pid = std::process::id(),
             data_dir = %data_dir.root().display(),
-            socket = %socket.path().display(),
+            socket = %socket_path.path.display(),
             log_id = %daemon.log.id(),
             "listening"
         );
@@ -331,12 +360,13 @@ impl Server {
             daemon,
             lock,
             socket,
+            #[cfg(unix)]
             listener,
             context_watcher,
         })
     }
 
-    /// The socket the server listens on.
+    /// The socket, or on Windows the pipe, the server listens on.
     #[must_use]
     pub fn socket_path(&self) -> &Path {
         self.socket.path()
@@ -345,7 +375,8 @@ impl Server {
     /// Accepts connections until `shutdown` is triggered, then shuts down gracefully.
     ///
     /// Shutting down stops accepting connections and removes the socket, stops reading requests,
-    /// waits for the ones in flight, stops the store, and removes the lock file.
+    /// waits for the ones in flight, stops the store, and removes the lock file. Windows keeps the
+    /// lock file (0023).
     ///
     /// # Errors
     ///
@@ -355,12 +386,19 @@ impl Server {
             config,
             daemon,
             lock,
+            #[cfg(unix)]
             mut socket,
+            #[cfg(windows)]
+            socket,
+            #[cfg(unix)]
             listener,
             context_watcher,
         } = self;
         // Kept alive to the end of `run`, so the watch lasts exactly as long as the server does.
         let _context_watcher = context_watcher;
+        #[cfg(windows)]
+        let mut listener = socket;
+        #[cfg(unix)]
         let mut listener = match UnixListener::from_std(listener) {
             Ok(listener) => listener,
             Err(error) => {
@@ -373,7 +411,6 @@ impl Server {
         agents::recover(&daemon).await;
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
-        let euid = rustix::process::geteuid().as_raw();
         let period = config.socket_check_interval;
         let mut check = time::interval_at(time::Instant::now() + period, period);
         check.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -383,9 +420,14 @@ impl Server {
             tokio::select! {
                 biased;
                 () = shutdown.graceful.cancelled() => break,
-                _ = check.tick() => rebind(&mut socket, &mut listener),
+                _ = check.tick(), if cfg!(unix) => {
+                    #[cfg(unix)]
+                    rebind(&mut socket, &mut listener);
+                }
                 accepted = listener.accept() => match accepted {
-                    Ok((stream, _)) => {
+                    Ok(stream) => {
+                        #[cfg(unix)]
+                        let (stream, _) = stream;
                         connection_id += 1;
                         let accepted = Accepted {
                             daemon: &daemon,
@@ -393,7 +435,8 @@ impl Server {
                             stop_reading: &shutdown.graceful,
                             abort: &abort,
                         };
-                        accepted.spawn(stream, connection_id, euid);
+                        let peer = Peer::of(&stream);
+                        accepted.spawn(stream, connection_id, peer);
                     }
                     Err(error) => {
                         warn!(%error, "could not accept a connection");
@@ -404,6 +447,7 @@ impl Server {
         }
 
         drop(listener);
+        #[cfg(unix)]
         socket.remove();
         info!("shutting down");
         connections.close();
@@ -437,13 +481,54 @@ struct Accepted<'a> {
     abort: &'a CancellationToken,
 }
 
-impl Accepted<'_> {
-    // Only this user's processes may connect. The folder's permissions already keep others
-    // out; this checks again with getpeereid.
-    fn spawn(&self, stream: UnixStream, id: u64, euid: u32) {
-        let span = info_span!("connection", id);
+/// Who is at the other end of a connection.
+#[derive(Debug)]
+enum Peer {
+    ThisUser,
+    /// Another user, as the OS identifies them or their process.
+    Other(String),
+    /// Nobody knows: reading the peer failed.
+    Unknown(io::Error),
+}
+
+impl Peer {
+    /// With getpeereid. The folder's permissions already keep other users out; this checks
+    /// again.
+    #[cfg(unix)]
+    fn of(stream: &tokio::net::UnixStream) -> Self {
+        let euid = rustix::process::geteuid().as_raw();
         match stream.peer_cred() {
-            Ok(peer) if peer.uid() == euid => {
+            Ok(peer) if peer.uid() == euid => Self::ThisUser,
+            Ok(peer) => Self::Other(format!("uid {}", peer.uid())),
+            Err(error) => Self::Unknown(error),
+        }
+    }
+
+    /// With the client's process's user SID. The pipe's DACL already keeps other users out;
+    /// this checks again (0023).
+    #[cfg(windows)]
+    fn of(pipe: &tokio::net::windows::named_pipe::NamedPipeServer) -> Self {
+        let pid = match crate::windows::pipe_client_pid(pipe) {
+            Ok(pid) => pid,
+            Err(error) => return Self::Unknown(error),
+        };
+        match crate::windows::runs_as_this_user(pid) {
+            Ok(true) => Self::ThisUser,
+            Ok(false) => Self::Other(format!("pid {pid}")),
+            Err(error) => Self::Unknown(error),
+        }
+    }
+}
+
+impl Accepted<'_> {
+    /// Serves `stream` if `peer` is this user; only this user's processes may connect.
+    fn spawn<S>(&self, stream: S, id: u64, peer: Peer)
+    where
+        S: AsyncRead + AsyncWrite + Send + Sync + 'static,
+    {
+        let span = info_span!("connection", id);
+        match peer {
+            Peer::ThisUser => {
                 let serve = connection::serve(
                     stream,
                     Arc::clone(self.daemon),
@@ -452,16 +537,17 @@ impl Accepted<'_> {
                 );
                 self.connections.spawn(serve.instrument(span));
             }
-            Ok(peer) => {
-                warn!(parent: &span, uid = peer.uid(), "refused a connection from another user");
+            Peer::Other(peer) => {
+                warn!(parent: &span, %peer, "refused a connection from another user");
             }
-            Err(error) => {
+            Peer::Unknown(error) => {
                 warn!(parent: &span, %error, "refused a connection whose user can't be read");
             }
         }
     }
 }
 
+#[cfg(unix)]
 fn rebind(socket: &mut Socket, listener: &mut UnixListener) {
     match socket.rebind_if_gone() {
         Ok(None) => {}
@@ -524,14 +610,11 @@ mod tests {
     use std::time::Duration;
 
     use tokio::io::AsyncReadExt;
-    use tokio::net::UnixStream;
     use tokio_util::sync::CancellationToken;
     use tokio_util::task::TaskTracker;
 
-    use super::{Accepted, Daemon};
+    use super::{Accepted, Daemon, Peer};
 
-    // A socketpair's peer is this process, so expecting another uid stands in for a client
-    // that runs as another user.
     #[tokio::test]
     async fn only_a_peer_running_as_this_user_is_served() {
         let dir = tempfile::tempdir().unwrap();
@@ -544,16 +627,20 @@ mod tests {
             stop_reading: &token,
             abort: &token,
         };
-        let euid = rustix::process::geteuid().as_raw();
 
-        let (server, mut client) = UnixStream::pair().unwrap();
-        accepted.spawn(server, 1, euid.wrapping_add(1));
+        let (server, mut client) = tokio::io::duplex(64);
+        accepted.spawn(server, 1, Peer::Other("uid 1".to_owned()));
         assert!(connections.is_empty());
         let mut byte = [0];
         assert_eq!(client.read(&mut byte).await.unwrap(), 0, "closed at once");
 
-        let (server, _client) = UnixStream::pair().unwrap();
-        accepted.spawn(server, 2, euid);
+        let (server, mut client) = tokio::io::duplex(64);
+        accepted.spawn(server, 2, Peer::Unknown(std::io::Error::other("no peer")));
+        assert!(connections.is_empty());
+        assert_eq!(client.read(&mut byte).await.unwrap(), 0, "closed at once");
+
+        let (server, _client) = tokio::io::duplex(64);
+        accepted.spawn(server, 3, Peer::ThisUser);
         assert_eq!(connections.len(), 1);
         token.cancel();
         connections.close();

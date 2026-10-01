@@ -49,6 +49,7 @@ pub struct UsagePeriod {
     /// The cost, when the vendor reports one for this account in the period. Absent, not zero,
     /// when it never does (0004: Codex and Cursor report no cost).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub cost_usd_micros: Option<u64>,
 }
 
@@ -62,10 +63,68 @@ pub struct UsageLimitWindow {
     pub window: String,
     /// How much of the window is used, from 0 to 100, when the vendor says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub used_percent: Option<f64>,
     /// When the window resets, when the vendor says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub resets_at: Option<Timestamp>,
     /// When wispd captured this snapshot.
     pub captured_at: Timestamp,
+}
+
+/// Params of `usage/history`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHistoryParams {
+    /// The start of the range, inclusive. The range ends now.
+    pub since: Timestamp,
+}
+
+/// Result of `usage/history`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHistoryResult {
+    /// Usage summed per UTC hour, account, and model, oldest hour first. Hours with no usage are
+    /// left out.
+    pub hours: Vec<UsageHour>,
+    /// How many runs each account used in the range. Accounts with none are left out.
+    pub runs: Vec<AccountRuns>,
+}
+
+/// One account's usage of one model within one UTC hour.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHour {
+    /// The start of the UTC hour, such as `2026-09-29T19:00:00Z`.
+    pub hour: Timestamp,
+    /// wispd's id for the account (#114, #117).
+    pub account_id: String,
+    /// The model, when the vendor named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// Input tokens, not counting cache reads and writes.
+    pub input_tokens: u64,
+    /// Output tokens, including reasoning.
+    pub output_tokens: u64,
+    /// Input tokens read from the prompt cache.
+    pub cache_read_tokens: u64,
+    /// Input tokens written to the prompt cache.
+    pub cache_write_tokens: u64,
+    /// The cost, when the vendor reported one in this hour. Absent, not zero, when it did not
+    /// (0004: Codex and Cursor report no cost).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cost_usd_micros: Option<u64>,
+}
+
+/// How many distinct runs used an account in a range.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRuns {
+    /// wispd's id for the account (#114, #117).
+    pub account_id: String,
+    /// Runs with at least one usage delta in the range.
+    pub runs: u32,
 }

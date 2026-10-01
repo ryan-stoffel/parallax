@@ -61,12 +61,15 @@ fn request(cwd: &Path) -> RunRequest {
         run_id: RunId::generate(),
         cwd: cwd.to_owned(),
         prompt: "Summarize the README.".into(),
+        images: Vec::new(),
         policy: ToolPolicy::NoWrite,
         sandbox: None,
         account: subscription(),
         turn_id: None,
         resume: None,
         model: None,
+        effort: None,
+        permission: None,
         coordinator_tools: None,
     }
 }
@@ -164,6 +167,7 @@ async fn an_api_key_account_gets_its_key_and_a_subscription_its_config_home() {
         &root(),
         Path::new("/Users/u/src/app/.git"),
         Path::new("/Users/u/wisp/context/p"),
+        Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
     ));
     request.account.credential = Credential::ApiKey(ApiKey::new("sk-fake-123".into()));
     let mut events = launch(&backend("context"), request.clone()).await.events;
@@ -301,7 +305,8 @@ async fn cancel_mid_stream_interrupts_the_cli() {
     assert_eq!(
         run.send(FollowUp {
             turn_id: TurnId::generate(),
-            text: "too late".into()
+            text: "too late".into(),
+            images: Vec::new(),
         }),
         Err(SendError::Finished)
     );
@@ -348,6 +353,7 @@ async fn a_follow_up_becomes_the_next_turn() {
     let follow_up = FollowUp {
         turn_id,
         text: "Now the \"tests\",\nplease.".into(),
+        images: Vec::new(),
     };
     run.send(follow_up.clone()).unwrap();
     run.send(follow_up.clone()).unwrap();
@@ -396,6 +402,7 @@ async fn a_follow_up_the_cli_never_read_is_reported_dropped() {
     let sent = run.send(FollowUp {
         turn_id,
         text: "one more thing".into(),
+        images: Vec::new(),
     });
     let all = rest(&mut events).await;
     assert_eq!(outcome(&all), &Outcome::Cancelled);
@@ -413,6 +420,7 @@ async fn a_follow_up_the_cli_never_read_is_reported_dropped() {
         run.send(FollowUp {
             turn_id,
             text: "one more thing".into(),
+            images: Vec::new(),
         }),
         Err(SendError::Finished),
         "a retry must not claim the dropped message arrived"
@@ -455,6 +463,7 @@ async fn turns_finish_in_the_order_they_started() {
         run.send(FollowUp {
             turn_id,
             text: text.into(),
+            images: Vec::new(),
         })
         .unwrap();
     }
@@ -562,7 +571,8 @@ async fn a_backend_without_follow_ups_refuses_them_and_closes_stdin() {
     assert_eq!(
         run.send(FollowUp {
             turn_id: TurnId::generate(),
-            text: "hi".into()
+            text: "hi".into(),
+            images: Vec::new(),
         }),
         Err(SendError::Unsupported)
     );
@@ -730,6 +740,21 @@ async fn backends_work_behind_trait_objects() {
         let all = rest(&mut events).await;
         assert!(matches!(outcome(&all), Outcome::Completed { .. }));
     }
+}
+
+#[cfg(not(feature = "fake-backend"))]
+#[test]
+fn a_build_without_the_feature_refuses_a_script() {
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/backend/fake/fixtures/hang.json"
+    );
+    assert!(FakeBackend::from_script_path(Some(script.as_ref()), &launcher()).is_err());
+    assert!(
+        FakeBackend::from_script_path(None, &launcher())
+            .unwrap()
+            .is_none()
+    );
 }
 
 async fn wait_until_gone(pid: &str) {

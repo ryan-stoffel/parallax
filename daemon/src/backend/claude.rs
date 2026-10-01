@@ -3,35 +3,80 @@
 //! # The command
 //!
 //! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json` in
-//! the run's cwd, plus the policy's flags, `--model`, and `--resume <session id>` (0004 [10]):
+//! the run's cwd, plus the policy's flags, `--model`, `--effort`, and `--resume <session id>`
+//! (0004 [10]):
 //!
-//! - **No-write** is exactly 0004's: [`NO_WRITE_ARGS`]. As a second check, a no-write run whose
-//!   `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
-//!   [`FailureKind::PolicyViolation`]. A coordinator's run also gets wispd's own MCP tools
-//!   (0019): `--mcp-config` with only the `wispd mcp` server, and `--allowedTools` with exactly
-//!   [`crate::mcp::ALLOWED_TOOLS`], which `dontAsk` would otherwise deny. `--strict-mcp-config`
-//!   still keeps every other MCP server out, and those tools are all `system/init` may add.
-//! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then
-//!   [`worker_settings`] as `--settings`, then `--add-dir` for each writable folder:
+//! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
+//!   also keeps the file tools out of Claude Code's shared temp folder (RYA-176). As a second
+//!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
+//!   [`FailureKind::PolicyViolation`].
+//! - **A coordinator**, a no-write run with wispd's own MCP tools attached (0019), is full Claude
+//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `wispd mcp`
+//!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
+//!   with [`crate::mcp::ALLOWED_TOOLS`], so wispd's tools work in every mode. Its user and
+//!   project settings, hooks, skills, plugins, and subagents all load, as in a terminal. As a
+//!   second check, a coordinator whose `system/init` reports another permission mode fails with
+//!   [`FailureKind::PolicyViolation`].
+//! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
+//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
+//!   each writable folder. In [`AgentPermission::Bypass`] a worker is full Claude Code instead,
+//!   as on the user's own machine (0027): only its permission mode and `--add-dir`, with no
+//!   sandbox, and its `system/init` may list any tool. Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
 //!   - `--tools` names exactly [`WORKER_TOOLS`]. `Bash` is among them because Claude Code's own
-//!     Seatbelt sandbox holds every command: writes only to the working directories and the
-//!     session temp folder, no reads of the sandbox's `unreadable` paths, and no writes to git
-//!     metadata. `failIfUnavailable` and `allowUnsandboxedCommands: false` keep a command from
-//!     ever running outside it. Commands, `WebFetch`, and `WebSearch` reach any host but
-//!     [`WORKER_DENIED_HOSTS`] (Ryan, #137), so the unreadable paths are what keep secrets in.
+//!     sandbox (Seatbelt on macOS, bubblewrap on Linux) holds every command: writes only to the
+//!     working directories and the run's temp folder, no reads of the sandbox's `unreadable`
+//!     paths, and no writes to git metadata. `failIfUnavailable` and
+//!     `allowUnsandboxedCommands: false` keep a command from ever running outside it. Commands,
+//!     `WebFetch`, and `WebSearch` reach any host but [`WORKER_DENIED_HOSTS`] (Ryan, #137), so
+//!     the unreadable paths are what keep secrets in.
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
 //!
-//!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`], or
-//!   a Claude Code older than [`WORKER_MIN_VERSION`], fails with
+//!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`],
+//!   reports a Claude Code older than [`WORKER_MIN_VERSION`], or reports a permission mode
+//!   other than the one it asked for ([`permission_mode`]), fails with
 //!   [`FailureKind::PolicyViolation`].
+//!
+//!   Only macOS and Linux run workers, with the same settings. On Linux,
+//!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
+//!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). It also
+//!   refuses a worker when Claude Code runs with [`SCRUB_ENV`] on, which managed settings can
+//!   set (RYA-112). That check runs in a separate process, so the permission mode check, which
+//!   the flag fails, backs it up from inside the worker's own (RYA-118). Elsewhere the backend
+//!   reports no `worker_sandbox` and refuses a workspace-write run.
+//!
+//! # A worker's temp folder
+//!
+//! Claude Code keeps its temp files in `$CLAUDE_CODE_TMPDIR/claude-<uid>`, `/tmp/claude-<uid>` by
+//! default, which every Claude Code session of the user shares, and its sandbox lets commands
+//! write there. So a worker's CLI gets [`TEMP_ENV`] set to the run's own folder,
+//! [`WorkerSandbox::temp`] (RYA-130), and its commands get `<temp>/claude-<uid>` as their
+//! `TMPDIR`. Claude Code does that only while the path fits in [`MAX_COMMAND_TEMP_BYTES`], and
+//! falls back to the shared folder otherwise, so a longer one refuses the worker
+//! ([`worker_temp`]). The rest of the run's folder stays hidden from commands, and the settings
+//! take back the paths the sandbox always lets them write ([`WORKER_DENIED_WRITES`]).
+//!
+//! The CLI's own `TMPDIR` stays wispd's. Claude Code keeps its sandbox's Linux proxy bridges
+//! there, which commands must reach, and Node's compile cache, which they must not write. In the
+//! run's folder the first would be hidden and cut commands off the network (RYA-107).
+//!
+//! # A worker's `PATH`
+//!
+//! Claude Code runs each Bash command through the user's `$SHELL`, and zsh reads `/etc/zshenv`
+//! and `~/.zshenv` for every command, so startup files that set `PATH` outright replace the
+//! `PATH` wispd gave the CLI. Claude Code's shell snapshot would put it back, but the snapshot
+//! sits in the configuration folder, which a worker's commands can't read (RYA-126). So a worker
+//! also gets [`ENV_FILE_ENV`]: [`write_env_file`] writes a script into the data folder's `tmp/`
+//! that puts the CLI's `PATH` back in front, which the CLI reads itself and runs before each
+//! command. The run's driver deletes it once the CLI has exited.
 //!
 //! # Messages go on stdin
 //!
 //! With `--input-format stream-json`, the prompt and every follow-up are user messages on stdin,
-//! one JSON object per line, as the Agent SDK sends them. The prompt never goes in argv, where
+//! one JSON object per line, as the Agent SDK sends them, with a message's images as base64 image
+//! blocks before its text (RYA-191). The prompt never goes in argv, where
 //! `ps` would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id,
 //! which the CLI echoes in `result.user_message_uuids`: several messages sent close together can
 //! run as one turn, and those ids say which turns a result ended. Once no turn is outstanding,
@@ -51,9 +96,13 @@
 //! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it wispd
 //! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
 //! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
-//! it.
+//! it. No run inherits [`SCRUB_ENV`]; a no-write run other than a coordinator sets it, so the
+//! CLI's own subprocesses don't get the key. A worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed
+//! commands only: the helpers Claude Code runs outside the sandbox, such as `git` and `rg`, still
+//! inherit it.
 //!
-//! A project's `env` block can still set variables for a worker (0004, #134), so the output is
+//! A project's `env` block can still set variables for a worker, and a coordinator or a bypass
+//! worker loads the repository's settings (0004, #134, 0027), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
 //! a `result` whose `modelUsage` names a provider other than `firstParty`, kill the CLI's process
 //! group at once and fail the run with [`FailureKind::UnexpectedApiKey`].
@@ -64,34 +113,36 @@
 //! `SIGINT`, closes stdin so the CLI exits after the interrupted turn, and kills the process
 //! group if it is still running after the grace period.
 
+#[cfg(target_os = "linux")]
+pub mod linux_sandbox;
 mod stream;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rustix::process::Signal;
 use serde_json::Value;
+use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
-use tokio::net::unix::pipe;
 use tokio::sync::{Notify, mpsc};
 
 pub(crate) use self::stream::version as parse_version;
 use self::stream::{Step, Translator, TurnDone};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
-    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec,
-    StdinMode,
+    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
+    SpawnError, StdinMode, StdinPipe,
 };
 use super::sandbox::worker_sandbox;
 use super::{
-    Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, EventSink, FollowUp, Run,
-    RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
-    WorkerSandbox,
+    AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
+    EventSink, FollowUp, PromptImage, Run, RunHandle, RunId, RunRequest, SendError, StartError,
+    Started, ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::mcp;
 
@@ -108,20 +159,36 @@ pub const BASE_ARGS: &[&str] = &[
     "stream-json",
 ];
 
-/// [`ToolPolicy::NoWrite`]'s arguments, exactly as 0004 has them: read-only built-in tools, only
-/// the user's settings (so no project `env` block or hooks), hooks off, no MCP servers but
-/// wispd's, and every call that would prompt denied.
+/// [`ToolPolicy::NoWrite`]'s fixed arguments for a run that isn't a coordinator, as 0004 has
+/// them: read-only built-in tools, only the user's settings (so no project `env` block or hooks),
+/// no MCP servers, and every call that would prompt denied. [`arguments`] adds
+/// [`no_write_settings`] after them.
 pub const NO_WRITE_ARGS: &[&str] = &[
     "--tools",
     "Read,Glob,Grep",
     "--setting-sources",
     "user",
-    "--settings",
-    r#"{"disableAllHooks":true}"#,
     "--strict-mcp-config",
     "--permission-mode",
     "dontAsk",
 ];
+
+/// The `--settings` a no-write run other than a coordinator gets: hooks off (0004), and no `Read`
+/// under Claude Code's shared temp folder, `/tmp/claude-<uid>` in both spellings
+/// ([`commands_temp`]), which holds every session's files and which Claude Code otherwise lets it
+/// read outside its cwd (RYA-176). 0013 hides the same folder from workers. A `Read` rule covers
+/// `Glob` and `Grep` too. The folder is always in `/tmp`, because no no-write run gets
+/// [`TEMP_ENV`]: every agent CLI starts from wispd's allowlisted environment
+/// (`agents::worker::agent_environment`, 0014), which drops an inherited one, and only a worker
+/// has one injected.
+#[must_use]
+pub fn no_write_settings() -> Value {
+    let deny: Vec<String> = ["/tmp", "/private/tmp"]
+        .into_iter()
+        .map(|temp| format!("Read(/{}/**)", commands_temp(Path::new(temp)).display()))
+        .collect();
+    serde_json::json!({"disableAllHooks": true, "permissions": {"deny": deny}})
+}
 
 /// The only built-in tools a no-write run's `system/init` may list. `EndConversation` stays
 /// whatever `--tools` says (the CLI reference), and only ends the session. A coordinator run
@@ -155,21 +222,51 @@ pub const WORKER_TOOL_LIST: &str =
 /// interface addresses aren't: 0013 records that gap.
 pub const WORKER_DENIED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "[::]"];
 
-/// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013). [`arguments`] adds the run's
-/// [`worker_settings`] and `--add-dir` folders after them.
+/// The permission mode a worker or a coordinator asks for by default ([`permission_mode`]). It
+/// must then report the mode it asked for in `system/init`. Claude Code forces `default` instead when
+/// [`SCRUB_ENV`] is on, so another mode there means the worker's own process runs in scrub mode,
+/// whatever `linux_sandbox::check_host` saw (RYA-118).
+pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
+
+/// [`AgentPermission::Bypass`]'s mode. Claude Code refuses it under `--restricted`, so a worker
+/// in it runs without the worker sandbox (0027).
+pub const BYPASS_PERMISSION_MODE: &str = "bypassPermissions";
+
+/// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013), in every mode but
+/// [`AgentPermission::Bypass`]. [`arguments`] adds the run's `--permission-mode`
+/// ([`permission_mode`]), [`worker_settings`], and `--add-dir` folders after them.
 pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
     "--restricted",
     "--tools",
     WORKER_TOOL_LIST,
     "--strict-mcp-config",
-    "--permission-mode",
-    "acceptEdits",
+];
+
+/// Every [`AgentEffort`] but the fallback: `--effort` takes them all. Claude Code downgrades
+/// `xhigh` on models that lack it, and only warns about a level it doesn't know, so wispd sends
+/// only these.
+const EFFORTS: &[AgentEffort] = &[
+    AgentEffort::Low,
+    AgentEffort::Medium,
+    AgentEffort::High,
+    AgentEffort::Xhigh,
+    AgentEffort::Max,
+];
+
+/// Claude Code's permission modes, in the order its own picker lists them (0027).
+const PERMISSIONS: &[AgentPermission] = &[
+    AgentPermission::Auto,
+    AgentPermission::Manual,
+    AgentPermission::Edit,
+    AgentPermission::Plan,
+    AgentPermission::Bypass,
 ];
 
 /// The oldest Claude Code that has every flag and setting a worker relies on: `--restricted`
 /// arrived in 2.1.248, the last of them (0013). An older CLI rejects the unknown flag, and a
 /// worker whose `system/init` reports an older version fails, but #156 also checks the detected
-/// version before it starts one, for a clearer error.
+/// version before it starts one, for a clearer error. Linux workers need 2.1.275 or later:
+/// `linux_sandbox::check_host` reads a `sandbox status` field that arrived then (RYA-112).
 pub const WORKER_MIN_VERSION: &str = "2.1.248";
 
 /// Prefixes of inherited variables no run gets: Anthropic credentials, endpoints, profiles, and
@@ -178,9 +275,11 @@ pub const WORKER_MIN_VERSION: &str = "2.1.248";
 /// OAuth tokens (`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`).
 pub const SCRUBBED_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_OAUTH_"];
 
-/// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key, and the
-/// configuration folder, which [`apply_credential`] sets only to the account's own.
-pub const SCRUBBED_VARS: &[&str] = &["AWS_BEARER_TOKEN_BEDROCK", CONFIG_DIR_ENV];
+/// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key; the
+/// configuration folder, which [`apply_credential`] sets only to the account's own; and
+/// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or a coordinator must not
+/// get (RYA-112, 0027).
+pub const SCRUBBED_VARS: &[&str] = &["AWS_BEARER_TOKEN_BEDROCK", CONFIG_DIR_ENV, SCRUB_ENV];
 
 /// The variable that picks a second account's configuration folder.
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
@@ -195,12 +294,103 @@ pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// string as [`API_KEY_ENV`] (0004's table), but the two names are checked independently.
 pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
 
-/// Variables every run gets: keep credentials out of the agent's own subprocesses (0004
-/// Consequences), and report a startup failure as a `result` instead of on stderr alone.
-const ALWAYS_SET: &[(&str, &str)] = &[
-    ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
-    ("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1"),
+/// Variables every run gets: report a startup failure as a `result` instead of on stderr alone.
+const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")];
+
+/// Set to `1` for a no-write run, to keep credentials out of the CLI's own subprocesses, such as
+/// wispd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
+/// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
+/// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
+/// from a worker's commands instead, and [`SCRUBBED_VARS`] keeps an inherited one out. Managed
+/// settings can still set it, and their `env` beats wispd's, so on Linux
+/// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (RYA-112), and
+/// on every OS a worker whose `system/init` shows the permission mode it forces fails
+/// (RYA-118). A coordinator doesn't get it either: it would force `default`, where headless Claude
+/// Code denies every tool nobody approved, so a coordinator that reports another mode than it
+/// asked for fails the same way (0027). It forces a plain no-write run's mode to `default` as
+/// well, so those aren't checked.
+const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
+
+/// Variables a worker's commands never see (0013): an API key account's key, and the token for
+/// Claude Code's own messaging socket. `sandbox.credentials` unsets them for each sandboxed
+/// command, as [`SCRUB_ENV`] would.
+pub const WORKER_WITHHELD_VARS: &[&str] = &[API_KEY_ENV, "CLAUDE_CODE_MESSAGING_TOKEN"];
+
+/// Paths Claude Code 2.1.283's sandbox lets every command write whatever the settings say, which
+/// a worker's `denyWrite` takes back (RYA-130): `/tmp/claude` in both spellings, npm's log folder,
+/// and Claude Code's debug logs. `~/` is the CLI's `HOME`. A `denyWrite` rule beats them.
+pub const WORKER_DENIED_WRITES: &[&str] = &[
+    "/tmp/claude",
+    "/private/tmp/claude",
+    "~/.npm/_logs",
+    "~/.claude/debug",
 ];
+
+/// The variable naming Claude Code's temp folder, which it uses `claude-<uid>` in, apart from the
+/// process's own `TMPDIR`.
+pub const TEMP_ENV: &str = "CLAUDE_CODE_TMPDIR";
+
+/// The longest `$CLAUDE_CODE_TMPDIR/claude-<uid>` that Claude Code 2.1.283 gives a command as
+/// `TMPDIR`. A longer one gets the shared `/tmp/claude-<uid>` instead, which a worker can't use.
+pub const MAX_COMMAND_TEMP_BYTES: usize = 44;
+
+/// The folder a worker's CLI gets as [`TEMP_ENV`]: `temp`, the run's own (RYA-130), spelled as
+/// short as it can be. On macOS, `/private/tmp/...` becomes `/tmp/...`, where `/tmp`
+/// links, which saves 8 of the [`MAX_COMMAND_TEMP_BYTES`].
+///
+/// # Errors
+///
+/// [`StartError::Invalid`] if [`commands_temp`] in it is longer than [`MAX_COMMAND_TEMP_BYTES`].
+pub fn worker_temp(temp: &Path) -> Result<PathBuf, StartError> {
+    let temp = match temp.strip_prefix("/private/tmp") {
+        Ok(rest) if cfg!(target_os = "macos") => Path::new("/tmp").join(rest),
+        _ => temp.to_owned(),
+    };
+    let commands = commands_temp(&temp);
+    if commands.as_os_str().len() > MAX_COMMAND_TEMP_BYTES {
+        return Err(StartError::Invalid(format!(
+            "the worker's temp folder {} is longer than {MAX_COMMAND_TEMP_BYTES} bytes, so Claude \
+             Code would give its commands the one every session shares instead",
+            commands.display()
+        )));
+    }
+    Ok(temp)
+}
+
+/// `<temp>/claude-<uid>`: the folder Claude Code makes in its temp folder `temp` and gives
+/// sandboxed commands as their `TMPDIR`, which its sandbox lets them write.
+#[must_use]
+pub fn commands_temp(temp: &Path) -> PathBuf {
+    #[cfg(unix)]
+    let uid = rustix::process::getuid().as_raw();
+    // What Claude Code uses where there is no uid.
+    #[cfg(not(unix))]
+    let uid = 0;
+    temp.join(format!("claude-{uid}"))
+}
+
+/// The variable naming a script that Claude Code reads and runs before each Bash command, after
+/// the shell's startup files and its own shell snapshot (2.1.283). See [`write_env_file`].
+pub const ENV_FILE_ENV: &str = "CLAUDE_ENV_FILE";
+
+/// Writes a worker's [`ENV_FILE_ENV`] script into `dir`, which no worker may read or write
+/// (wispd's data folder's `tmp/`), and returns its path, which deletes the file when dropped. The
+/// script puts `path`, the `PATH` the CLI started with, in front of whatever `PATH` the shell's
+/// startup files left (RYA-126). The file is new, has a random name, and only its owner may read
+/// or write it.
+///
+/// # Errors
+///
+/// If `dir` can't be created or the file can't be written.
+pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
+    std::fs::create_dir_all(dir)?;
+    let mut file = tempfile::Builder::new()
+        .prefix("claude-env-")
+        .suffix(".sh")
+        .tempfile_in(dir)?;
+    file.write_all(&prepend_path_line(path))?;
+    Ok(file.into_temp_path())
+}
 
 /// A [`Backend`] that runs Claude Code.
 #[derive(Clone, Debug)]
@@ -249,20 +439,38 @@ impl ClaudeBackend {
 ///
 /// # Errors
 ///
-/// [`StartError::Invalid`] if the model or the resume id could be read as an option, or if a
-/// worker has no usable [`WorkerSandbox`].
+/// [`StartError::Invalid`] if the model or the resume id could be read as an option, if a
+/// worker has no usable [`WorkerSandbox`], or if a no-write run other than a coordinator asks for
+/// a permission.
+/// [`StartError::Unsupported`] for an effort or permission this version doesn't know.
 pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
-    let policy = match request.policy {
+    let coordinator = request.coordinator_tools.is_some();
+    if coordinator && request.policy != ToolPolicy::NoWrite {
+        return Err(StartError::Invalid(
+            "wispd's coordinator tools are only for a no-write run".into(),
+        ));
+    }
+    let bypass = request.policy == ToolPolicy::WorkspaceWrite
+        && request.permission == Some(AgentPermission::Bypass);
+    let policy: &[&str] = match request.policy {
+        ToolPolicy::NoWrite if coordinator => &[],
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
+        ToolPolicy::WorkspaceWrite if bypass => &[],
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
-    if let Some(tools) = &request.coordinator_tools {
-        if request.policy != ToolPolicy::NoWrite {
+    if request.policy == ToolPolicy::NoWrite && !coordinator {
+        if request.permission.is_some() {
             return Err(StartError::Invalid(
-                "wispd's coordinator tools are only for a no-write run".into(),
+                "a no-write run takes no permission; its mode is fixed (0004)".into(),
             ));
         }
+        args.extend(["--settings".into(), no_write_settings().to_string().into()]);
+    } else {
+        let mode = permission_mode(request.permission)?;
+        args.extend(["--permission-mode".into(), mode.into()]);
+    }
+    if let Some(tools) = &request.coordinator_tools {
         args.extend([
             "--mcp-config".into(),
             tools.mcp_config()?.to_string().into(),
@@ -271,36 +479,46 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         ]);
     }
     if let Some(sandbox) = worker_sandbox(request)? {
-        let config_home = match &request.account.credential {
-            Credential::Subscription { config_home } => config_home.as_deref(),
-            Credential::ApiKey(_) => None,
-        };
-        let settings = worker_settings(sandbox, &request.cwd, config_home);
-        args.extend(["--settings".into(), settings.to_string().into()]);
+        if !bypass {
+            let config_home = match &request.account.credential {
+                Credential::Subscription { config_home } => config_home.as_deref(),
+                Credential::ApiKey(_) => None,
+            };
+            let settings = worker_settings(sandbox, &request.cwd, config_home);
+            args.extend(["--settings".into(), settings.to_string().into()]);
+        }
         for dir in &sandbox.writable {
             args.extend(["--add-dir".into(), dir.into()]);
         }
     }
     if let Some(model) = &request.model {
-        check_value("model", model)?;
+        check_argument("model", model)?;
         args.extend(["--model".into(), model.into()]);
     }
+    if let Some(effort) = request.effort {
+        args.extend(["--effort".into(), effort_level(effort)?.into()]);
+    }
     if let Some(resume) = &request.resume {
-        check_value("resume id", &resume.session_id)?;
+        check_argument("resume id", &resume.session_id)?;
         args.extend(["--resume".into(), resume.session_id.clone().into()]);
     }
     Ok(args)
 }
 
-/// The `--settings` a worker runs with (0013): hooks off; the web tools allowed; and Claude Code's
-/// Bash sandbox on, with no way around it, `sandbox`'s paths, and every host but
-/// [`WORKER_DENIED_HOSTS`]. `WebFetch(domain:*)` is what opens the network: the sandbox takes its
-/// allowlist from `WebFetch` allow rules, and a bare `*` matches every host. The denied hosts are
-/// `WebFetch` deny rules as well as `deniedDomains`, because the sandbox's list binds only
-/// commands, and a deny rule beats the `*` allow for the tool. `cwd`, the writable folders, and
-/// the read-only git paths stay readable inside an unreadable path, such as wispd's data folder,
-/// which holds the worktree, the context folder, and a normal thread's scratch repository
-/// (#110). A second account's `config_home` is unreadable too.
+/// The `--settings` a worker runs with (0013): hooks off; Bash and the web tools allowed; and
+/// Claude Code's Bash sandbox on, with no way around it, `sandbox`'s paths, every host but
+/// [`WORKER_DENIED_HOSTS`], and no [`WORKER_WITHHELD_VARS`]. `WebFetch(domain:*)` is what opens
+/// the network: the sandbox takes its allowlist from `WebFetch` allow rules, and a bare `*`
+/// matches every host. The denied hosts are `WebFetch` deny rules as well as `deniedDomains`,
+/// because the sandbox's list binds only commands, and a deny rule beats the `*` allow for the
+/// tool. Bash is an allow rule as well, not only `autoAllowBashIfSandboxed`, so it stays allowed
+/// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders,
+/// the read-only git paths, and the commands' `TMPDIR` in the run's temp folder
+/// ([`commands_temp`], which Claude Code lets them write) stay readable inside an unreadable
+/// path, such as wispd's data folder, which holds the worktree, the context folder, and a normal
+/// thread's scratch repository (#110). The rest of the temp folder stays hidden: the CLI's own
+/// unsandboxed processes keep files there. A second account's `config_home` is unreadable too.
+/// [`WORKER_DENIED_WRITES`] aren't writable.
 #[must_use]
 pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<&Path>) -> Value {
     let unreadable = strings(
@@ -313,17 +531,23 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
     let readable = strings(
         std::iter::once(cwd)
             .chain(sandbox.writable.iter().map(PathBuf::as_path))
-            .chain(sandbox.read_only.iter().map(PathBuf::as_path)),
+            .chain(sandbox.read_only.iter().map(PathBuf::as_path))
+            .chain([commands_temp(&sandbox.temp).as_path()]),
     );
-    let read_only = strings(sandbox.read_only.iter().map(PathBuf::as_path));
+    let mut read_only = strings(sandbox.read_only.iter().map(PathBuf::as_path));
+    read_only.extend(WORKER_DENIED_WRITES.iter().map(|&path| path.to_owned()));
     let denied_fetches: Vec<String> = WORKER_DENIED_HOSTS
         .iter()
         .map(|host| format!("WebFetch(domain:{host})"))
         .collect();
+    let withheld: Vec<Value> = WORKER_WITHHELD_VARS
+        .iter()
+        .map(|name| serde_json::json!({"name": name, "mode": "deny"}))
+        .collect();
     serde_json::json!({
         "disableAllHooks": true,
         "permissions": {
-            "allow": ["WebFetch(domain:*)", "WebSearch"],
+            "allow": ["Bash", "WebFetch(domain:*)", "WebSearch"],
             "deny": denied_fetches,
         },
         "sandbox": {
@@ -342,6 +566,7 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
                 "allowRead": readable,
                 "denyWrite": read_only,
             },
+            "credentials": {"envVars": withheld},
         },
     })
 }
@@ -353,16 +578,39 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
         .collect()
 }
 
-fn check_value(what: &str, value: &str) -> Result<(), StartError> {
-    if value.is_empty()
-        || value.starts_with('-')
-        || value.chars().any(|c| c.is_control() || c.is_whitespace())
-    {
-        return Err(StartError::Invalid(format!(
-            "the {what} {value:?} is not a usable argument"
-        )));
+/// A worker's or a coordinator's `--permission-mode` for `permission`: Claude Code's own mode of
+/// the same name (RYA-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
+///
+/// # Errors
+///
+/// [`StartError::Unsupported`] for a permission this version doesn't know.
+pub fn permission_mode(permission: Option<AgentPermission>) -> Result<&'static str, StartError> {
+    match permission {
+        None | Some(AgentPermission::Edit) => Ok(DEFAULT_PERMISSION_MODE),
+        Some(AgentPermission::Auto) => Ok("auto"),
+        Some(AgentPermission::Manual) => Ok("default"),
+        Some(AgentPermission::Plan) => Ok("plan"),
+        Some(AgentPermission::Bypass) => Ok(BYPASS_PERMISSION_MODE),
+        Some(AgentPermission::Unknown) => Err(StartError::Unsupported(
+            "Claude Code has no mode for this permission".into(),
+        )),
     }
-    Ok(())
+}
+
+/// `--effort`'s value for `effort`.
+fn effort_level(effort: AgentEffort) -> Result<&'static str, StartError> {
+    Ok(match effort {
+        AgentEffort::Low => "low",
+        AgentEffort::Medium => "medium",
+        AgentEffort::High => "high",
+        AgentEffort::Xhigh => "xhigh",
+        AgentEffort::Max => "max",
+        AgentEffort::Unknown => {
+            return Err(StartError::Unsupported(
+                "Claude Code has no such effort level".into(),
+            ));
+        }
+    })
 }
 
 /// The variables of `base` that no run gets: [`SCRUBBED_PREFIXES`] and [`SCRUBBED_VARS`].
@@ -417,21 +665,51 @@ impl Backend for ClaudeBackend {
             coordinator: true,
             reports_cost: true,
             rate_limits: true,
-            worker_sandbox: true,
+            worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
         }
     }
 
+    fn efforts(&self) -> &'static [AgentEffort] {
+        EFFORTS
+    }
+
+    fn permissions(&self) -> &'static [AgentPermission] {
+        PERMISSIONS
+    }
+
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
-        if request.prompt.is_empty() {
+        // Images alone are a message too (RYA-202), as a resumed run's may be.
+        if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
+        }
+        if request.policy != ToolPolicy::NoWrite && !self.capabilities().worker_sandbox {
+            return Err(StartError::Unsupported(
+                "wispd can't check Claude Code's worker sandbox on this OS yet (decision 0023)"
+                    .into(),
+            ));
         }
         let mut spec = ProcessSpec::new(self.program.clone(), &request.cwd);
         spec.args = arguments(&request)?;
+        if let Some(sandbox) = worker_sandbox(&request)? {
+            spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
+        }
         spec.scrub = scrubbed(self.launcher.base());
         let expected_key_source = apply_credential(&request.account.credential, &mut spec)?;
         for (name, value) in ALWAYS_SET {
             spec.inject.set(name, value);
         }
+        if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
+            spec.inject.set(SCRUB_ENV, "1");
+        }
+        let env_file = match self.launcher.base().get("PATH") {
+            Some(path) if request.policy == ToolPolicy::WorkspaceWrite => {
+                let dir = self.launcher.data_dir().temp_dir();
+                let file = write_env_file(&dir, path).map_err(SpawnError::Io)?;
+                spec.inject.set(ENV_FILE_ENV, file.as_os_str());
+                Some(file)
+            }
+            _ => None,
+        };
         spec.stdin = StdinMode::Piped;
         spec.limits = self.limits;
 
@@ -452,11 +730,14 @@ impl Backend for ClaudeBackend {
             switch,
             stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
-                .with_coordinator_tools(request.coordinator_tools.is_some()),
+                .with_coordinator_tools(request.coordinator_tools.is_some())
+                .with_permission_mode(permission_mode(request.permission)?),
             turns: VecDeque::new(),
             violation: None,
+            env_file,
         };
-        tokio::spawn(driver.run(Message::new(request.turn_id, &request.prompt, false)));
+        let prompt = Message::new(request.turn_id, &request.prompt, &request.images, false);
+        tokio::spawn(driver.run(prompt));
         Ok(Started {
             run: Arc::new(ClaudeRun { handle, stop }),
             events,
@@ -496,11 +777,27 @@ struct Message {
 }
 
 impl Message {
-    fn new(turn_id: Option<TurnId>, text: &str, follow_up: bool) -> Self {
+    /// The message's content is `text` alone, or with images, the Messages API's base64 image
+    /// blocks and then `text` as a text block (RYA-191). A message of images alone has no text
+    /// block, since the API refuses a blank one (RYA-193).
+    fn new(turn_id: Option<TurnId>, text: &str, images: &[PromptImage], follow_up: bool) -> Self {
         let uuid = turn_id.unwrap_or_else(TurnId::generate).to_string();
+        let content = if images.is_empty() {
+            Value::from(text)
+        } else {
+            let images = images.iter().map(|image| {
+                serde_json::json!({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": image.media_type, "data": image.data},
+                })
+            });
+            let text = (!text.trim().is_empty())
+                .then(|| serde_json::json!({"type": "text", "text": text}));
+            images.chain(text).collect()
+        };
         let mut line = serde_json::json!({
             "type": "user",
-            "message": {"role": "user", "content": text},
+            "message": {"role": "user", "content": content},
             "parent_tool_use_id": null,
             "uuid": uuid,
         })
@@ -524,7 +821,7 @@ enum Delivery {
 /// Writes messages to stdin in order, off the driver's loop, so a CLI that stops reading stdin
 /// can't keep the driver from reading its stdout.
 async fn write_messages(
-    mut stdin: pipe::Sender,
+    mut stdin: StdinPipe,
     mut queue: mpsc::UnboundedReceiver<Message>,
     results: mpsc::UnboundedSender<Delivery>,
 ) {
@@ -601,6 +898,8 @@ struct Driver {
     /// Turns the CLI has been sent but hasn't finished, oldest first: their ids and `uuid`s.
     turns: VecDeque<(Option<TurnId>, String)>,
     violation: Option<Failure>,
+    /// A worker's [`ENV_FILE_ENV`] script, deleted once the CLI has exited.
+    env_file: Option<TempPath>,
 }
 
 impl Driver {
@@ -658,7 +957,12 @@ impl Driver {
                 },
                 follow_up = self.control.recv(), if control_open => match follow_up {
                     Some(follow_up) => {
-                        let message = Message::new(Some(follow_up.turn_id), &follow_up.text, true);
+                        let message = Message::new(
+                            Some(follow_up.turn_id),
+                            &follow_up.text,
+                            &follow_up.images,
+                            true,
+                        );
                         if let Err(message) = stdin.send(message) {
                             self.dropped(&message).await;
                         }
@@ -679,6 +983,7 @@ impl Driver {
         };
 
         self.drop_undelivered(stdin).await;
+        self.env_file = None;
         let outcome = self.outcome(exit);
         let _ = self.sink.finish(outcome).await;
     }
@@ -767,7 +1072,12 @@ impl Driver {
             late.push(follow_up);
         }
         for follow_up in late {
-            let message = Message::new(Some(follow_up.turn_id), &follow_up.text, true);
+            let message = Message::new(
+                Some(follow_up.turn_id),
+                &follow_up.text,
+                &follow_up.images,
+                true,
+            );
             if let Err(message) = stdin.send(message) {
                 self.dropped(&message).await;
             }

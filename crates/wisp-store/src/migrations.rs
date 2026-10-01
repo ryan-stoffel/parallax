@@ -230,6 +230,47 @@ const MIGRATIONS: &[Migration] = &[
         version: 12,
         sql: "ALTER TABLE worktrees ADD COLUMN base_dirty INTEGER NOT NULL DEFAULT 0;",
     },
+    // The model, effort, and permission a run asked for (RYA-97), each NULL for the CLI's
+    // default. Part of `agent/start`'s idempotent params, and passed again when a run resumes.
+    Migration {
+        version: 13,
+        sql: "ALTER TABLE runs ADD COLUMN model TEXT;
+        ALTER TABLE runs ADD COLUMN effort TEXT;
+        ALTER TABLE runs ADD COLUMN permission TEXT;",
+    },
+    // A coordinator's wake-up count and pause (RYA-178, decision 0025), so a restart neither
+    // resets the cap nor lifts a pause. No row means none in a row and not paused. No foreign
+    // key, like `turns`.
+    Migration {
+        version: 14,
+        sql: "CREATE TABLE wakes (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            in_a_row INTEGER NOT NULL,
+            paused INTEGER NOT NULL
+        );",
+    },
+    // Images sent with a run's messages (RYA-191, decision 0026), which `turnStarted` names by id
+    // and `agent/image` serves: kept out of `events`, since one can be megabytes. `data` is the
+    // base64 the client sent. No foreign key, like `turns`, so `Store::delete_thread` deletes a
+    // thread's rows, and they wait on #207 otherwise, as its events do.
+    Migration {
+        version: 15,
+        sql: "CREATE TABLE images (
+            run_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, id)
+        );",
+    },
+    // A project's icon (RYA-227, decision 0032), as the client sent it: a Lucide icon's name and
+    // an optional palette key. A NULL `icon_name` means no icon, so existing projects have none.
+    Migration {
+        version: 16,
+        sql: "ALTER TABLE projects ADD COLUMN icon_name TEXT;
+        ALTER TABLE projects ADD COLUMN icon_color TEXT;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

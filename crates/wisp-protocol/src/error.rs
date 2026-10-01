@@ -25,9 +25,10 @@ pub enum ErrorKind {
     /// No key account has the given id.
     AccountNotFound,
     /// The Keychain is locked, or access to an item was denied. Distinct from a bare internal
-    /// error so the editor can tell "locked" from "broken" (#117).
+    /// error so the client can tell "locked" from "broken" (#117).
     KeychainUnavailable,
-    /// A create reused an existing id with different params.
+    /// A create reused an existing id with different params, or `project/start` named a new run
+    /// while the project's coordinator is starting or running.
     IdConflict,
     /// No shared context file has the given path (#155).
     ContextNotFound,
@@ -44,7 +45,7 @@ pub enum ErrorKind {
     /// wispd won't start a worker as asked: its backend doesn't implement the worker sandbox
     /// (0013), the CLI is missing or older than the version the sandbox needs, or a path it would
     /// sandbox holds `*`, `?`, `[`, or `]`. The message says which, and for an old CLI names both
-    /// versions.
+    /// versions. `project/start` fails with it too when the account's backend can't coordinate.
     WorkerUnavailable,
     /// wispd could not create the run's worktree, for example because the project's repository
     /// has uncommitted changes. The message says what to do.
@@ -65,6 +66,31 @@ pub enum ErrorKind {
     RepoNotFound,
     /// No normal thread has the given run id (#110).
     ThreadNotFound,
+    /// A run named no account, and its role has no default (0012). Set one with
+    /// `accounts/defaults/set`, then retry with the same run id.
+    NoDefaultAccount,
+    /// The run's backend can't honor a `model`, `effort`, or `permission` that `agent/start` or
+    /// `thread/start` asked for, or the model's name can't be passed to its CLI (RYA-97). Nothing
+    /// was created. The message names the option, the value, and the backend.
+    UnsupportedOption,
+    /// `agent/openPr` refused before pushing anything: the run is still running, it has no commit
+    /// beyond its base, or it is a thread with no repo, which has no `origin` (RYA-168).
+    PrRefused,
+    /// `agent/openPr` could not push the run's branch: the repository has no `origin`, or git
+    /// failed. The message carries git's stderr.
+    PushFailed,
+    /// `gh` isn't installed on the host, or isn't signed in. The message says which, with gh's
+    /// stderr. The branch was pushed first.
+    GhUnavailable,
+    /// `gh` could not find or open the pull request, for example because `origin` isn't a GitHub
+    /// repository. The message carries gh's stderr. The branch was pushed first.
+    PrFailed,
+    /// An image in `images` is over the per-image cap, or a message's images are over the
+    /// per-message cap or count, which `promptImages`' options give (RYA-191). The message says
+    /// which. Nothing was sent.
+    ImageTooLarge,
+    /// No image of the run has the given id (RYA-191).
+    ImageNotFound,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -83,7 +109,7 @@ pub struct ErrorData {
     pub detail: Option<Value>,
 }
 
-/// The `detail` of `incompatibleProtocol`. Its shape never changes, so every editor can read it
+/// The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it
 /// from every wispd.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -92,7 +118,7 @@ pub struct IncompatibleProtocolDetail {
     pub requested: ProtocolRange,
     /// The versions wispd speaks.
     pub supported: ProtocolRange,
-    /// wispd's release version, so the editor can say which side to update.
+    /// wispd's release version, so the client can say which side to update.
     pub wispd: String,
 }
 
@@ -169,6 +195,12 @@ mod tests {
             (ErrorKind::MergeConflict, "mergeConflict"),
             (ErrorKind::RepoNotFound, "repoNotFound"),
             (ErrorKind::ThreadNotFound, "threadNotFound"),
+            (ErrorKind::NoDefaultAccount, "noDefaultAccount"),
+            (ErrorKind::UnsupportedOption, "unsupportedOption"),
+            (ErrorKind::PrRefused, "prRefused"),
+            (ErrorKind::PushFailed, "pushFailed"),
+            (ErrorKind::GhUnavailable, "ghUnavailable"),
+            (ErrorKind::PrFailed, "prFailed"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

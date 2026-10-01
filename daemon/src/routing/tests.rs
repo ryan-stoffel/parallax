@@ -5,10 +5,7 @@ use std::time::Duration;
 
 use wisp_protocol::{AccountChoice, AccountId, CoordinatorThreadId, ProjectId, Provider, Role};
 
-use super::{
-    BackendRegistry, Defaults, KeyAccounts, PolicyCheckError, RoutingError, check, resolve,
-    snapshot, start,
-};
+use super::{BackendRegistry, Defaults, KeyAccounts, RoutingError, resolve, start};
 use crate::backend::{
     AccountRef, Backend, CancelSwitch, Capabilities, CoordinatorTools, Credential, EVENT_BUFFER,
     Event, EventSink, EventStream, Failure, FailureKind, ModelUsage, Outcome, RunHandle, RunId,
@@ -26,6 +23,7 @@ fn request(cwd: &Path) -> RunRequest {
         turn_id: None,
         cwd: cwd.to_owned(),
         prompt: "hi".into(),
+        images: Vec::new(),
         policy: ToolPolicy::WorkspaceWrite,
         sandbox: Some(WorkerSandbox::for_worktree(
             Path::new("/Users/u"),
@@ -33,6 +31,7 @@ fn request(cwd: &Path) -> RunRequest {
             cwd,
             Path::new("/Users/u/src/app/.git"),
             Path::new("/Users/u/wisp/context/p"),
+            Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
         )),
         account: AccountRef {
             id: "unset".into(),
@@ -40,6 +39,8 @@ fn request(cwd: &Path) -> RunRequest {
         },
         resume: None,
         model: None,
+        effort: None,
+        permission: None,
         coordinator_tools: None,
     }
 }
@@ -420,8 +421,10 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
     let sent = &backend.calls()[0];
     assert_eq!(sent.policy, ToolPolicy::NoWrite);
     assert_eq!(sent.sandbox, None, "a coordinator gets no worker sandbox");
+    let settings = claude::no_write_settings().to_string();
     let mut expected: Vec<&str> = claude::BASE_ARGS.to_vec();
     expected.extend(claude::NO_WRITE_ARGS);
+    expected.extend(["--settings", &settings]);
     assert_eq!(
         claude::arguments(sent).unwrap(),
         expected,
@@ -438,10 +441,10 @@ fn coordinator_tools() -> CoordinatorTools {
     }
 }
 
-/// #195: a coordinator's allowlist is its read-only tools plus exactly wispd's eight MCP tools,
-/// with the no-write flags unchanged, and only the `wispd mcp` server connected.
+/// #195, 0027: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
+/// flags, `wispd mcp` joining its own MCP servers, and wispd's eight tools allowed in every mode.
 #[tokio::test]
-async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
+async fn a_coordinator_gets_wispds_mcp_tools_on_claude_codes_own_configuration() {
     let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
         Outcome::Completed { result: None },
     )]]));
@@ -465,7 +468,6 @@ async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
         .collect();
     let mut expected: Vec<String> = claude::BASE_ARGS
         .iter()
-        .chain(claude::NO_WRITE_ARGS)
         .map(|arg| (*arg).to_owned())
         .collect();
     let config = serde_json::json!({"mcpServers": {"wispd": {
@@ -479,6 +481,8 @@ async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
         ],
     }}});
     expected.extend([
+        "--permission-mode".to_owned(),
+        "acceptEdits".to_owned(),
         "--mcp-config".to_owned(),
         config.to_string(),
         "--allowedTools".to_owned(),
@@ -488,10 +492,6 @@ async fn a_coordinator_gets_exactly_wispds_mcp_tools_on_top_of_no_write() {
             .to_owned(),
     ]);
     assert_eq!(args, expected);
-    assert!(
-        args.iter().any(|arg| arg == "--strict-mcp-config"),
-        "no MCP server but wispd's"
-    );
 }
 
 #[tokio::test]
@@ -524,6 +524,7 @@ fn claude_refuses_the_coordinator_tools_on_a_worker() {
     ));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn start_passes_a_worker_its_sandbox() {
     let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
@@ -805,126 +806,5 @@ async fn cancel_after_a_fallback_reaches_the_second_attempt() {
     assert!(
         switches[1].is_cancelled(),
         "cancel must reach the attempt that is actually running"
-    );
-}
-
-// ---------------------------------------------------------------------------------------------
-// snapshot() and check()
-// ---------------------------------------------------------------------------------------------
-
-fn git(repo: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .status()
-        .expect("git must be on PATH to run this test");
-    assert!(status.success(), "git {args:?} failed");
-}
-
-fn committed_repo() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    git(dir.path(), &["init", "-q"]);
-    git(
-        dir.path(),
-        &["config", "user.email", "wisp-test@example.com"],
-    );
-    git(dir.path(), &["config", "user.name", "wisp tests"]);
-    std::fs::write(dir.path().join("README.md"), "hello\n").unwrap();
-    git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-q", "-m", "initial"]);
-    dir
-}
-
-#[tokio::test]
-async fn a_clean_working_tree_has_no_violation() {
-    let dir = committed_repo();
-    let before = snapshot(dir.path()).await.unwrap();
-    assert_eq!(check(dir.path(), &before).await.unwrap(), None);
-}
-
-#[tokio::test]
-async fn a_change_to_a_tracked_file_is_a_violation() {
-    let dir = committed_repo();
-    let before = snapshot(dir.path()).await.unwrap();
-    std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
-
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert_eq!(violation.failure, FailureKind::PolicyViolation);
-}
-
-#[tokio::test]
-async fn a_new_untracked_file_is_also_a_violation() {
-    let dir = committed_repo();
-    let before = snapshot(dir.path()).await.unwrap();
-    std::fs::write(dir.path().join("new-file.txt"), "surprise").unwrap();
-
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert_eq!(violation.failure, FailureKind::PolicyViolation);
-}
-
-#[tokio::test]
-async fn a_tree_that_was_already_dirty_and_stays_that_way_has_no_violation() {
-    let dir = committed_repo();
-    std::fs::write(dir.path().join("README.md"), "dirty before the turn\n").unwrap();
-    std::fs::write(dir.path().join("already-there.txt"), "also dirty before").unwrap();
-
-    let before = snapshot(dir.path()).await.unwrap();
-    assert_eq!(
-        check(dir.path(), &before).await.unwrap(),
-        None,
-        "a tree that started dirty and stayed exactly that way is not a violation"
-    );
-}
-
-#[tokio::test]
-async fn a_further_edit_to_an_already_modified_file_is_still_a_violation() {
-    let dir = committed_repo();
-    std::fs::write(dir.path().join("README.md"), "first change\n").unwrap();
-    let before = snapshot(dir.path()).await.unwrap();
-
-    std::fs::write(
-        dir.path().join("README.md"),
-        "second change, during the turn\n",
-    )
-    .unwrap();
-
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert_eq!(violation.failure, FailureKind::PolicyViolation);
-}
-
-#[tokio::test]
-async fn a_repository_with_no_commits_yet_can_still_be_snapshotted() {
-    let dir = tempfile::tempdir().unwrap();
-    git(dir.path(), &["init", "-q"]);
-
-    let before = snapshot(dir.path()).await.unwrap();
-    assert_eq!(check(dir.path(), &before).await.unwrap(), None);
-
-    std::fs::write(dir.path().join("new.txt"), "first write, ever").unwrap();
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert_eq!(violation.failure, FailureKind::PolicyViolation);
-}
-
-#[tokio::test]
-async fn a_violation_names_the_changed_paths() {
-    let dir = committed_repo();
-    let before = snapshot(dir.path()).await.unwrap();
-    std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
-
-    let violation = check(dir.path(), &before).await.unwrap().unwrap();
-    assert!(
-        violation.message.contains("README.md"),
-        "{}",
-        violation.message
-    );
-}
-
-#[tokio::test]
-async fn a_directory_that_is_not_a_git_repository_is_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let error = snapshot(dir.path()).await.unwrap_err();
-    assert!(
-        matches!(error, PolicyCheckError::GitFailed { .. }),
-        "{error:?}"
     );
 }

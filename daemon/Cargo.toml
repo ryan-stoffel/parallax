@@ -11,14 +11,16 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# `fake-backend` lets `WISPD_FAKE_BACKEND` run workers on the fake backend, for the app's end-to-end
+# tests (RYA-16). Test builds only: it refuses to compile without debug assertions.
+[features]
+fake-backend = []
+
 [dependencies]
 clap = { workspace = true, features = ["derive", "env"] }
 futures-util = { workspace = true, features = ["sink", "std"] }
 jiff = { workspace = true, features = ["serde", "tz-system", "tzdb-zoneinfo"] }
-nix = { workspace = true, features = ["process", "signal"] }
 notify.workspace = true
-rustix = { workspace = true, features = ["fs", "process"] }
-security-framework.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
@@ -32,6 +34,37 @@ uuid.workspace = true
 wisp-protocol = { path = "../crates/wisp-protocol" }
 wisp-store = { path = "../crates/wisp-store" }
 zeroize.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["process", "signal"] }
+rustix = { workspace = true, features = ["fs", "process"] }
+
+# Agent CLIs run through tokio's process support, and every Win32 call wispd makes is in
+# `src/windows.rs` (0023).
+[target.'cfg(windows)'.dependencies]
+tokio = { workspace = true, features = ["process"] }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+# The Keychain (0004) and FSEvents (0005) are macOS's. On Linux, notify's default backend is
+# inotify, and on Windows ReadDirectoryChangesW (0023).
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { workspace = true, features = ["macos_fsevent"] }
+security-framework.workspace = true
+
+# API keys go in the Secret Service over D-Bus, in pure Rust: tokio and Rust crypto only, so the
+# static musl build links neither libdbus nor OpenSSL (0023).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring-core = "1.0.0"
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 
 [dev-dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -6,34 +6,23 @@
 //! the run, and retries once on a key-account fallback if it fails signed out or rate limited
 //! (0004's fallback).
 //!
-//! What checks a coordinator's turn for a policy violation lives here too, in [`snapshot`] and
-//! [`check`]: a backend's own arguments and tool list already keep a no-write run from calling a
-//! write tool (0004), but this is 0004's second check, and it doesn't depend on any one backend.
-//!
 //! # What owns calling this, and how
 //!
-//! #156's runner (`crate::agents`) calls `resolve` and `start` for workers; nothing calls
-//! `snapshot` or `check` yet. Who owns what (see #119's decision record, 0012):
+//! #156's runner (`crate::agents`) calls `resolve` and `start` for workers, and for a project's
+//! coordinator (RYA-41, 0024). Who owns what (see #119's decision record, 0012):
 //!
 //! - #156 (the M3 runner, workers only) calls `resolve` and `start` for a worker's
 //!   `workspace-write` run, maps [`Event::AccountFallback`] to an `agent/*` notification, and
 //!   charges usage after it to `to_account`, not the account the run started on.
-//! - Whichever M4 issue runs a coordinator's turn (0012, since M4's task issues don't exist yet)
-//!   calls `resolve` and `start` the same way, and additionally calls [`snapshot`] before the
-//!   turn and [`check`] after it, stopping the run and reporting a `policyViolation` event on a
-//!   violation.
+//! - The same runner runs a project's coordinator (0024): `resolve` and `start` the same way.
 //! - [`start`]'s returned [`Started::run`] already forwards to whichever attempt is actually
 //!   running, including after a fallback (see [`FallbackRun`]), so a caller never needs to track
 //!   that itself.
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use sha2::{Digest, Sha256};
 use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
 
 use crate::backend::key_account::{self, KeyAccountError};
@@ -526,193 +515,6 @@ async fn drive_with_fallback(
             return;
         }
     }
-}
-
-/// A fingerprint of a working tree's tracked and untracked state, taken by [`snapshot`] before a
-/// coordinator's turn and compared by [`check`] after it. Equal snapshots mean nothing changed,
-/// whether or not the tree was already dirty when the turn started (0004: "if `git status`
-/// changes during its turn").
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TreeSnapshot([u8; 32]);
-
-/// Why [`snapshot`] or [`check`] could not read the working tree.
-#[derive(Debug, thiserror::Error)]
-pub enum PolicyCheckError {
-    /// `git` could not be run at all.
-    #[error("could not run git: {0}")]
-    Spawn(#[from] std::io::Error),
-    /// The blocking task that ran `git` panicked.
-    #[error("checking the working tree panicked: {0}")]
-    Panicked(String),
-    /// `git` itself failed, such as when `repo_path` is not a git repository.
-    #[error("git failed: {stderr}")]
-    GitFailed {
-        /// Its stderr.
-        stderr: String,
-    },
-}
-
-/// Takes a fingerprint of `repo_path`'s working tree: `git status --porcelain=v1 -z
-/// --untracked-files=all --ignore-submodules=none`, a `git diff --binary --no-ext-diff` against
-/// `HEAD` (or the empty tree, in a repository with no commits yet), and the contents of every
-/// untracked file the status lists, all under one hash. [`check`] compares it against a later
-/// snapshot to tell whether a coordinator's no-write turn changed anything (0004): a tree that was
-/// already dirty when this is taken and stays exactly as dirty is not a violation.
-///
-/// Runs git with `-c core.fsmonitor=false`, so an untrusted repo's `fsmonitor` hook never runs as
-/// part of wispd, `GIT_OPTIONAL_LOCKS=0`, so this never waits on or takes the user's index lock,
-/// and `--no-ext-diff`, so a repo's configured `diff.external` never runs inside wispd either.
-///
-/// This only ever sees what `git status` and `git diff` see: a write to a file `.gitignore`
-/// excludes passes uncaught (0004 accepts this; see decision 0012).
-///
-/// # Errors
-///
-/// [`PolicyCheckError`] if `git` could not be run or failed, such as when `repo_path` is not a
-/// git repository.
-pub async fn snapshot(repo_path: &Path) -> Result<TreeSnapshot, PolicyCheckError> {
-    let repo_path = repo_path.to_owned();
-    let digest = tokio::task::spawn_blocking(move || fingerprint(&repo_path))
-        .await
-        .map_err(|error| PolicyCheckError::Panicked(error.to_string()))??;
-    Ok(TreeSnapshot(digest))
-}
-
-/// 0004's second check on the coordinator's no-write policy: compares a fresh [`snapshot`] of
-/// `repo_path` against `before`, which the caller took earlier, such as right before the turn
-/// started. Returns the [`Failure`] to end the run with if anything changed, or `None` if the
-/// tree matches `before`, dirty or not.
-///
-/// # Errors
-///
-/// [`PolicyCheckError`], the same as [`snapshot`].
-pub async fn check(
-    repo_path: &Path,
-    before: &TreeSnapshot,
-) -> Result<Option<Failure>, PolicyCheckError> {
-    let after = snapshot(repo_path).await?;
-    if after == *before {
-        return Ok(None);
-    }
-    // Cheap next to the hashing `snapshot` already did, and only run on the rare violation path:
-    // a second, human-readable status naming what changed, for 0004's "shows the diff" (#119's
-    // review, N5). If this second call itself fails, the violation is still reported, just
-    // without the paths.
-    let paths = changed_paths(repo_path).await.unwrap_or_default();
-    let message = if paths.is_empty() {
-        "the coordinator's no-write turn changed the working tree".to_owned()
-    } else {
-        format!(
-            "the coordinator's no-write turn changed the working tree:\n{}",
-            paths.join("\n")
-        )
-    };
-    Ok(Some(Failure {
-        failure: FailureKind::PolicyViolation,
-        message,
-        exit: None,
-        stderr_tail: None,
-    }))
-}
-
-/// The empty tree's well-known object id, the same for every git repository: `git hash-object -t
-/// tree /dev/null`. [`fingerprint`] diffs against it instead of `HEAD` in a repository with no
-/// commits yet, where `HEAD` doesn't resolve to anything `git diff` can use.
-const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-
-/// What [`fingerprint`] diffs the working tree against: `HEAD` once it resolves to a commit, or
-/// the empty tree before the repository's first commit, so a coordinator working in a brand new
-/// project doesn't fail every turn's check.
-fn diff_target(repo_path: &Path) -> Result<&'static str, PolicyCheckError> {
-    let resolves = std::process::Command::new("git")
-        .arg("-c")
-        .arg("core.fsmonitor=false")
-        .args(["rev-parse", "--verify", "-q", "HEAD"])
-        .current_dir(repo_path)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?
-        .success();
-    Ok(if resolves { "HEAD" } else { EMPTY_TREE })
-}
-
-fn fingerprint(repo_path: &Path) -> Result<[u8; 32], PolicyCheckError> {
-    let status = run_git(
-        repo_path,
-        &[
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-        ],
-    )?;
-    let target = diff_target(repo_path)?;
-    let diff = run_git(repo_path, &["diff", target, "--binary", "--no-ext-diff"])?;
-    let mut hasher = Sha256::new();
-    hasher.update(&status);
-    hasher.update(&diff);
-    for path in untracked_paths(&status) {
-        hasher.update(&path);
-        hasher.update([0]);
-        if let Ok(contents) = std::fs::read(repo_path.join(OsStr::from_bytes(&path))) {
-            hasher.update(&contents);
-        }
-    }
-    let mut digest = [0u8; 32];
-    digest.copy_from_slice(&hasher.finalize());
-    Ok(digest)
-}
-
-/// The paths `git status` lists as changed, one per line, for a violation's message. A separate,
-/// human-readable call from [`fingerprint`]'s hashed one, made only once a violation is already
-/// known.
-async fn changed_paths(repo_path: &Path) -> Result<Vec<String>, PolicyCheckError> {
-    let repo_path = repo_path.to_owned();
-    let output = tokio::task::spawn_blocking(move || {
-        run_git(
-            &repo_path,
-            &[
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=all",
-                "--ignore-submodules=none",
-            ],
-        )
-    })
-    .await
-    .map_err(|error| PolicyCheckError::Panicked(error.to_string()))??;
-    Ok(String::from_utf8_lossy(&output)
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect())
-}
-
-fn run_git(repo_path: &Path, args: &[&str]) -> Result<Vec<u8>, PolicyCheckError> {
-    let output = std::process::Command::new("git")
-        .arg("-c")
-        .arg("core.fsmonitor=false")
-        .args(args)
-        .current_dir(repo_path)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()?;
-    if !output.status.success() {
-        return Err(PolicyCheckError::GitFailed {
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        });
-    }
-    Ok(output.stdout)
-}
-
-/// The paths of `??` (untracked) entries in `-z`-terminated porcelain output.
-fn untracked_paths(porcelain_z: &[u8]) -> Vec<Vec<u8>> {
-    porcelain_z
-        .split(|&b| b == 0)
-        .filter(|entry| entry.starts_with(b"?? "))
-        .map(|entry| entry[3..].to_vec())
-        .collect()
 }
 
 #[cfg(test)]

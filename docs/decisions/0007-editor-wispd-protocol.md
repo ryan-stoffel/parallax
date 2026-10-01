@@ -1,6 +1,6 @@
 # 0007: JSON-RPC over `wispd attach`, locally and over SSH
 
-- Status: accepted; the `agents` capability's methods are partly superseded by [0014](0014-agent-runs.md), which renames `agent/stop` to `agent/cancel` and `agent/output` to `agent/events`, and adds `agent/send` from 0011
+- Status: accepted; the `agents` capability's methods are partly superseded by [0014](0014-agent-runs.md), which renames `agent/stop` to `agent/cancel` and `agent/output` to `agent/events`, and adds `agent/send` from 0011; its TypeScript client and the generated types' location are superseded by [0022](0022-desktop-app.md); the local transport on Linux and Windows (a per-user named pipe there) is in [0023](0023-cross-platform.md); the `coordinator` capability is `project/start` and the `agent/*` methods instead of `coordinator/send`, `coordinator/stop`, and `coordinator.*` events ([0024](0024-coordinator-chat.md))
 - Date: 2026-09-24
 - Issue: #56
 

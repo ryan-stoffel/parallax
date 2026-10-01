@@ -50,7 +50,7 @@ impl WorktreeManager {
             path,
             &[
                 "-c",
-                "core.hooksPath=/dev/null",
+                super::NO_HOOKS,
                 "commit",
                 "--quiet",
                 "--allow-empty",

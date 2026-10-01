@@ -6,7 +6,7 @@ use crate::Store;
 use crate::error::StoreError;
 use crate::timestamp;
 
-/// The fields of a project that a caller supplies and can change.
+/// The fields of a project that a caller supplies.
 ///
 /// A project has no host field: every project in a store is on the host
 /// whose wispd owns that store (decision record 0009).
@@ -14,6 +14,23 @@ use crate::timestamp;
 pub struct ProjectFields {
     pub name: String,
     pub repo_path: String,
+    pub icon: Option<ProjectIcon>,
+}
+
+/// A project's icon, stored as the client sent it and never read
+/// (RYA-227, decision record 0032).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectIcon {
+    pub name: String,
+    pub color: Option<String>,
+}
+
+/// What [`Store::update_project`] changes. A field that is `None` stays as
+/// it is, and `icon` replaces the whole icon.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectEdit {
+    pub name: Option<String>,
+    pub icon: Option<ProjectIcon>,
 }
 
 /// A project row.
@@ -22,6 +39,7 @@ pub struct Project {
     pub id: Uuid,
     pub name: String,
     pub repo_path: String,
+    pub icon: Option<ProjectIcon>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -32,23 +50,30 @@ struct RawProject {
     id: String,
     name: String,
     repo_path: String,
+    icon: Option<ProjectIcon>,
     created_at: String,
     updated_at: String,
 }
 
 impl RawProject {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let icon_name: Option<String> = row.get(5)?;
+        let icon_color: Option<String> = row.get(6)?;
         Ok(Self {
             id: row.get(0)?,
             name: row.get(1)?,
             repo_path: row.get(2)?,
+            icon: icon_name.map(|name| ProjectIcon {
+                name,
+                color: icon_color,
+            }),
             created_at: row.get(3)?,
             updated_at: row.get(4)?,
         })
     }
 
     fn matches(&self, fields: &ProjectFields) -> bool {
-        self.name == fields.name && self.repo_path == fields.repo_path
+        self.name == fields.name && self.repo_path == fields.repo_path && self.icon == fields.icon
     }
 
     fn into_project(self) -> Result<Project, StoreError> {
@@ -56,16 +81,25 @@ impl RawProject {
             id: Uuid::parse_str(&self.id)?,
             name: self.name,
             repo_path: self.repo_path,
+            icon: self.icon,
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
         })
     }
 }
 
+/// The `icon_name` and `icon_color` columns for `icon`, both NULL for none.
+fn icon_columns(icon: Option<&ProjectIcon>) -> (Option<&str>, Option<&str>) {
+    (
+        icon.map(|icon| icon.name.as_str()),
+        icon.and_then(|icon| icon.color.as_deref()),
+    )
+}
+
 fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawProject>, StoreError> {
     Ok(conn
         .query_row(
-            "SELECT id, name, repo_path, created_at, updated_at
+            "SELECT id, name, repo_path, created_at, updated_at, icon_name, icon_color
              FROM projects WHERE id = ?1",
             params![id_text],
             RawProject::from_row,
@@ -106,14 +140,23 @@ impl Store {
 
         let now = timestamp::now();
 
+        let (icon_name, icon_color) = icon_columns(fields.icon.as_ref());
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "INSERT INTO projects (id, name, repo_path, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?4)
+            "INSERT INTO projects
+                 (id, name, repo_path, created_at, updated_at, icon_name, icon_color)
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)
              ON CONFLICT (id) DO NOTHING",
-            params![id_text, fields.name, fields.repo_path, now],
+            params![
+                id_text,
+                fields.name,
+                fields.repo_path,
+                now,
+                icon_name,
+                icon_color
+            ],
         )?;
         let created = tx.changes() == 1;
 
@@ -149,7 +192,7 @@ impl Store {
     /// are corrupt.
     pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, repo_path, created_at, updated_at
+            "SELECT id, name, repo_path, created_at, updated_at, icon_name, icon_color
              FROM projects
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -162,30 +205,49 @@ impl Store {
         Ok(projects)
     }
 
-    /// Replaces the mutable fields of an existing project and bumps
-    /// `updated_at`.
+    /// Renames project `id` or sets its icon, as `edit` says, and returns
+    /// the project with whether anything changed. When nothing would
+    /// change, it writes nothing.
+    ///
+    /// `repo_path` never changes, and `updated_at` stays as it is: a rename
+    /// or a new icon is not activity (decision record 0032).
     ///
     /// # Errors
     ///
     /// Returns [`StoreError::NotFound`] if no project has `id`, or a
     /// database error.
-    pub fn update_project(&self, id: Uuid, fields: &ProjectFields) -> Result<Project, StoreError> {
+    pub fn update_project(
+        &mut self,
+        id: Uuid,
+        edit: &ProjectEdit,
+    ) -> Result<(Project, bool), StoreError> {
         let id_text = id.to_string();
-        let now = timestamp::now();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut raw = fetch_raw(&tx, &id_text)?.ok_or(StoreError::NotFound { id })?;
 
-        let changed = self.conn.execute(
-            "UPDATE projects
-             SET name = ?2, repo_path = ?3, updated_at = ?4
-             WHERE id = ?1",
-            params![id_text, fields.name, fields.repo_path, now],
-        )?;
-        if changed == 0 {
-            return Err(StoreError::NotFound { id });
+        let mut changed = false;
+        if let Some(name) = &edit.name
+            && *name != raw.name
+        {
+            raw.name.clone_from(name);
+            changed = true;
+        }
+        if edit.icon.is_some() && edit.icon != raw.icon {
+            raw.icon.clone_from(&edit.icon);
+            changed = true;
         }
 
-        fetch_raw(&self.conn, &id_text)?
-            .ok_or(StoreError::NotFound { id })?
-            .into_project()
+        if changed {
+            let (icon_name, icon_color) = icon_columns(raw.icon.as_ref());
+            tx.execute(
+                "UPDATE projects SET name = ?2, icon_name = ?3, icon_color = ?4 WHERE id = ?1",
+                params![id_text, raw.name, icon_name, icon_color],
+            )?;
+            tx.commit()?;
+        }
+        Ok((raw.into_project()?, changed))
     }
 
     /// Deletes a project by id, if it exists.

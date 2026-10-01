@@ -15,7 +15,7 @@ use wisp_protocol::{
 };
 use wisp_store::StoreError;
 
-use crate::keystore::{KeyStore, KeyStoreError};
+use crate::keystore::{KeyStore, KeyStoreError, UNAVAILABLE_MESSAGE};
 use crate::methods::Context;
 use crate::store::{self, account_store_error};
 
@@ -179,14 +179,12 @@ fn remove_account(
 }
 
 /// The protocol error for a failed `KeyStore` call: `keychainUnavailable` when the Keychain is
-/// locked or access was denied, so the editor can tell that apart from a bare internal error;
-/// anything else stays a plain internal error, since its detail is not something to show.
+/// locked, access was denied, or this OS has no store yet, so the editor can tell that apart from
+/// a bare internal error; anything else stays a plain internal error, since its detail is not
+/// something to show.
 fn map_keychain_error(error: &KeyStoreError) -> ErrorObject {
     if error.is_unavailable() {
-        ErrorObject::wisp(
-            ErrorKind::KeychainUnavailable,
-            "the keychain is locked or access was denied",
-        )
+        ErrorObject::wisp(ErrorKind::KeychainUnavailable, UNAVAILABLE_MESSAGE)
     } else {
         ErrorObject::internal_error("the keychain failed")
     }
@@ -589,15 +587,29 @@ mod tests {
         let keys = MemoryKeyStore::new();
 
         tracing::subscriber::with_default(subscriber, || {
-            add_account(
-                &mut db_store,
-                &keys,
-                AccountId::generate(),
-                Provider::Anthropic,
-                "Personal".to_owned(),
-                secret,
-            )
-            .expect("add should succeed");
+            // A parallel test can replace the global callsite interest just after a rebuild.
+            // Retry until this scoped subscriber actually sees the add, then check its output.
+            for _ in 0..20 {
+                tracing::callsite::rebuild_interest_cache();
+                add_account(
+                    &mut db_store,
+                    &keys,
+                    AccountId::generate(),
+                    Provider::Anthropic,
+                    "Personal".to_owned(),
+                    secret,
+                )
+                .expect("add should succeed");
+                if buffer
+                    .lock()
+                    .unwrap()
+                    .windows("added a key account".len())
+                    .any(|window| window == b"added a key account")
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
         });
 
         let logged = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();

@@ -1,7 +1,8 @@
 //! The M3 runner (#156, decision 0014): runs a worker end to end.
 //!
 //! `agent/start` resolves the worker's account through routing (#119), refuses a worker wispd
-//! can't sandbox (0013), creates the run's worktree (#154), records the run, and starts the
+//! can't sandbox (0013) or a model, effort, or permission its backend can't honor (RYA-97),
+//! creates the run's worktree (#154), records the run, and starts the
 //! backend in the worktree with the project's shared context folder (#155) writable. From then
 //! on one [`actor`] task per run owns it: it streams the backend's events into the event log as
 //! `agent.*` events, records usage (#120) against whichever account the run is on, takes
@@ -11,11 +12,18 @@
 //! A run outlives its CLI processes: `agent/send` to a run whose CLI has ended resumes the
 //! vendor session in the same worktree. When wispd stops, running CLIs are cancelled and their
 //! runs recorded `interrupted`; a run still `starting` or `running` in the store when wispd
-//! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`.
+//! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`, and
+//! either wakes the coordinator that started it once wispd starts again ([`wake::catch_up`]).
+//!
+//! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
+//! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
+//! ([`wake`]).
 
 mod actor;
 mod convert;
+pub(crate) mod coordinator;
 pub(crate) mod review;
+mod wake;
 pub(crate) mod worker;
 
 use std::collections::HashMap;
@@ -31,17 +39,18 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentOutcome, AgentRun, AgentRunState,
-    AgentSendParams, AgentStartParams, CoordinatorThreadId, ErrorKind, ProjectId, Role, RunId,
-    TurnId, WispEvent,
+    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentEffort, AgentImageParams,
+    AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun, AgentRunState, AgentSendParams,
+    AgentStartParams, CoordinatorThreadId, ErrorKind, ImageMediaType, ProjectId, PromptImage, Role,
+    RunId, TurnId, WispEvent,
 };
 use wisp_store::{RunFields, RunState, StoreError, WorktreeFields};
 
 use self::actor::{Actor, Command};
 pub(crate) use self::convert::agent_run as snapshot;
-use self::convert::{STARTING, WORKSPACE_WRITE, agent_run};
+use self::convert::{STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
 use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
-use crate::backend::ToolPolicy;
+use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
 use crate::worktree::{CreatedWorktree, WorktreeError, WorktreeManager};
@@ -133,13 +142,24 @@ impl std::fmt::Debug for Agents {
     }
 }
 
-/// What starting a worker's CLI needs, from [`prepare`].
+/// What starting a run's CLI needs, from [`prepare`].
 pub(super) struct Prepared {
     resolved: Resolved,
     accounts: StoredKeyAccounts,
-    home: PathBuf,
-    data_dir: PathBuf,
-    context: PathBuf,
+    place: Place,
+}
+
+/// Where a run's CLI starts, and what that needs.
+pub(super) enum Place {
+    /// A worker, in its worktree, inside the worker sandbox (0013), which needs these folders.
+    Worker {
+        home: PathBuf,
+        data_dir: PathBuf,
+        context: PathBuf,
+    },
+    /// A project's coordinator, with no sandbox (0024), in a detached worktree of `repo` that the
+    /// actor refreshes before each CLI process (RYA-171).
+    Coordinator { repo: PathBuf },
 }
 
 impl Agents {
@@ -249,12 +269,14 @@ fn requested_account(account: Option<&AccountChoice>) -> Option<String> {
 }
 
 /// The project's repository, the routing inputs, and the paths run `run` of `project` needs,
-/// checked: everything that can refuse a worker before anything is created.
+/// checked: everything that can refuse a worker, or a coordinator when `role` is one, before
+/// anything is created.
 pub(super) async fn prepare(
     daemon: &Arc<Daemon>,
     project: ProjectId,
     run: RunId,
     requested: Option<AccountChoice>,
+    role: Role,
 ) -> Result<(Prepared, String), ErrorObject> {
     let (repo_path, context_scope, defaults, accounts) = store(daemon, move |db| {
         let repo_path = crate::threads::scope_path(db, project)?;
@@ -277,25 +299,43 @@ pub(super) async fn prepare(
         coordinator: defaults.coordinator,
         worker: defaults.worker,
     };
+    let policy = match role {
+        Role::Coordinator => ToolPolicy::NoWrite,
+        Role::Worker => ToolPolicy::WorkspaceWrite,
+    };
     let resolved = routing::resolve(
         &daemon.agents.backends,
         &accounts,
         &defaults,
-        Role::Worker,
+        role,
         requested,
-        ToolPolicy::WorkspaceWrite,
+        policy,
     )
     .map_err(|error| routing_error(&error))?;
+    if role == Role::Coordinator {
+        coordinator::check_backend(resolved.backend())?;
+        let place = Place::Coordinator {
+            repo: PathBuf::from(&repo_path),
+        };
+        let prepared = Prepared {
+            resolved,
+            accounts,
+            place,
+        };
+        return Ok((prepared, repo_path));
+    }
     worker::check_backend(resolved.backend())?;
     if let Some(cli) = worker::cli_of(resolved.backend()) {
-        let find = |clis: &[wisp_protocol::DetectedCli]| {
-            clis.iter().find(|detected| detected.cli == cli).cloned()
-        };
-        let cached = find(&daemon.cli_detector.list().await.clis);
-        if worker::check_claude(cached.as_ref()).is_err() {
+        // Only this CLI's status: a full probe also waits on the slowest of the others.
+        let mut detected = daemon.cli_detector.get(cli).await;
+        if worker::check_version(cli, Some(&detected)).is_err() {
             // The user may have just updated the CLI: look again before refusing.
-            let fresh = find(&daemon.cli_detector.refresh().await.clis);
-            worker::check_claude(fresh.as_ref())?;
+            detected = daemon.cli_detector.refresh_one(cli).await;
+            worker::check_version(cli, Some(&detected))?;
+        }
+        #[cfg(target_os = "linux")]
+        if cli == wisp_protocol::CliKind::Claude {
+            worker::check_linux_sandbox(&daemon.cli_detector, Some(&detected)).await?;
         }
     }
     let home = worker::home()?;
@@ -310,18 +350,66 @@ pub(super) async fn prepare(
     let prepared = Prepared {
         resolved,
         accounts,
-        home,
-        data_dir,
-        context,
+        place: Place::Worker {
+            home,
+            data_dir,
+            context,
+        },
     };
     Ok((prepared, repo_path))
 }
 
+/// What a run asks of its CLI beyond the prompt (RYA-97), each `None` for the CLI's default. The
+/// run keeps them for every launch, including a resume.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RunOptions {
+    pub model: Option<String>,
+    pub effort: Option<AgentEffort>,
+    pub permission: Option<AgentPermission>,
+}
+
+impl RunOptions {
+    /// Refuses, with `unsupportedOption`, a model name that can't be a CLI argument, or an
+    /// effort or permission that `backend` doesn't map.
+    fn check(&self, backend: &dyn Backend) -> Result<(), ErrorObject> {
+        let refuse = |detail: String| ErrorObject::wisp(ErrorKind::UnsupportedOption, detail);
+        let name = backend.name();
+        if let Some(model) = &self.model
+            && check_argument("model", model).is_err()
+        {
+            return Err(refuse(format!(
+                "the model {model:?} can't be passed to the {name} backend's CLI"
+            )));
+        }
+        if let Some(effort) = self.effort
+            && !backend.efforts().contains(&effort)
+        {
+            let effort = option_name(effort).unwrap_or_default();
+            return Err(refuse(format!(
+                "the {name} backend can't run with effort {effort}"
+            )));
+        }
+        if let Some(permission) = self.permission
+            && !backend.permissions().contains(&permission)
+        {
+            let permission = option_name(permission).unwrap_or_default();
+            return Err(refuse(format!(
+                "the {name} backend can't run with permission {permission}"
+            )));
+        }
+        Ok(())
+    }
+}
+
 fn routing_error(error: &RoutingError) -> ErrorObject {
     match error {
-        RoutingError::NoAccount { .. } => ErrorObject::invalid_params(
-            "no account was named, and the worker role has no default; set one with \
-             accounts/defaults/set",
+        &RoutingError::NoAccount { role } => ErrorObject::wisp(
+            ErrorKind::NoDefaultAccount,
+            format!(
+                "no account was named, and the {} role has no default; set one with \
+                 accounts/defaults/set",
+                crate::store::role_text(role)
+            ),
         ),
         &RoutingError::UnknownKeyAccount { id } => ErrorObject::wisp(
             ErrorKind::AccountNotFound,
@@ -340,14 +428,13 @@ fn worktree_failed(error: &WorktreeError) -> ErrorObject {
     ErrorObject::wisp(ErrorKind::WorktreeFailed, error.to_string())
 }
 
-/// The run `run_id` already is, for a retry of `agent/start` with the same params, or
-/// `idConflict` if they differ. `None` for a new run.
+/// The run `run_id` already is, for a retry of `agent/start` that asks for the same `fields`, or
+/// `idConflict` if they differ. The backend isn't compared: routing resolves it, not the
+/// request. `None` for a new run.
 async fn existing(
     daemon: &Arc<Daemon>,
     run_id: RunId,
-    project: ProjectId,
-    prompt: &str,
-    (requested, coordinator_thread): (Option<&str>, Option<CoordinatorThreadId>),
+    fields: &RunFields,
 ) -> Result<Option<AgentRun>, ErrorObject> {
     let found = store(daemon, move |db| {
         let Some(row) = db.get_run(run_id.into()).map_err(|e| store_error(&e))? else {
@@ -362,17 +449,16 @@ async fn existing(
     let Some((row, worktree)) = found else {
         return Ok(None);
     };
-    let same = row.fields.project_id == Uuid::from(project)
-        && row.fields.prompt == prompt
-        && row.fields.policy == WORKSPACE_WRITE
-        && row.fields.requested_account.as_deref() == requested
-        && row.fields.coordinator_thread == coordinator_thread.map(Uuid::from);
-    if !same {
+    let stored = RunFields {
+        backend: fields.backend.clone(),
+        ..row.fields.clone()
+    };
+    if stored != *fields {
         return Err(ErrorObject::wisp(
             ErrorKind::IdConflict,
             format!(
-                "run {run_id} exists with a different project, prompt, account, policy, or \
-                 coordinator thread"
+                "run {run_id} exists with a different project, prompt, account, policy, \
+                 coordinator thread, model, effort, or permission"
             ),
         ));
     }
@@ -386,10 +472,12 @@ async fn create_worktree(
     agents: &Agents,
     repo_path: &Path,
     run_id: RunId,
+    thread: Option<&NewThread>,
 ) -> Result<(CreatedWorktree, PathBuf, PathBuf), ErrorObject> {
+    let branch_slug = thread.and_then(|thread| thread.branch_slug.as_deref());
     let created = agents
         .worktrees
-        .create(repo_path, run_id, None)
+        .create_named(repo_path, run_id, None, branch_slug)
         .await
         .map_err(|error| worktree_failed(&error))?;
     let paths = async {
@@ -467,6 +555,42 @@ async fn record(
     recorded
 }
 
+/// A coordinator's subagent runs in the coordinator's current permission mode unless it names its
+/// own (0027): sets `options`' permission to the mode of the coordinator whose thread is
+/// `coordinator_thread`, its own run (0024), and returns it. The coordinator's mode only changes
+/// between its turns, so a retried spawn from the same turn inherits the same one.
+// ponytail: `create` drops an inherited mode the subagent's backend lacks, so a retry of that
+// spawn gets idConflict; keep requested and inherited modes apart if that bites.
+async fn inherit_permission(
+    daemon: &Arc<Daemon>,
+    coordinator_thread: Option<CoordinatorThreadId>,
+    options: &mut RunOptions,
+) -> Result<Option<AgentPermission>, ErrorObject> {
+    let Some(thread) = coordinator_thread.filter(|_| options.permission.is_none()) else {
+        return Ok(None);
+    };
+    let id = Uuid::from(thread);
+    let row = store(daemon, move |db| {
+        db.get_run(id).map_err(|e| store_error(&e))
+    })
+    .await?;
+    options.permission =
+        row.and_then(|row| row.fields.permission.as_deref().and_then(option_value));
+    Ok(options.permission)
+}
+
+/// Logs `run`'s `agent.started` on `project`'s events.
+async fn log_started(daemon: &Daemon, project: ProjectId, run: AgentRun) {
+    let event = WispEvent::AgentStarted {
+        run_id: run.id,
+        run: Some(run.clone()),
+    };
+    daemon
+        .log
+        .append(run.created_at, Some(project), event)
+        .await;
+}
+
 /// `agent/start`: see the module documentation. Idempotent on the run id.
 pub(crate) async fn start(
     daemon: Arc<Daemon>,
@@ -478,14 +602,24 @@ pub(crate) async fn start(
         prompt,
         account,
         coordinator_thread,
+        model,
+        effort,
+        permission,
+        images,
         ..
     } = params;
     let new = NewRun {
         run_id,
         scope: project,
         prompt,
+        images,
         account,
         coordinator_thread,
+        options: RunOptions {
+            model,
+            effort,
+            permission,
+        },
         thread: None,
     };
     Ok(create(daemon, new).await?.run)
@@ -498,9 +632,12 @@ pub(crate) struct NewRun {
     /// The project, or for a thread its repo entry, whose id the run's events go to.
     pub scope: ProjectId,
     pub prompt: String,
+    /// The prompt's images (RYA-191), already checked.
+    pub images: Vec<PromptImage>,
     pub account: Option<AccountChoice>,
     /// The coordinator thread starting the run through `wispd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    pub options: RunOptions,
     pub thread: Option<NewThread>,
 }
 
@@ -509,6 +646,8 @@ pub(crate) struct NewThread {
     /// A thread with no repo's own scratch repository, which the caller made. Its worktree is
     /// cut from this instead of from the scope's path.
     pub scratch: Option<PathBuf>,
+    /// The name after `wisp/` for the worktree's branch, already checked.
+    pub branch_slug: Option<String>,
 }
 
 /// A created run, and its thread row for a normal thread.
@@ -524,22 +663,28 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         run_id,
         scope: project,
         prompt,
+        images,
         account,
         coordinator_thread,
+        mut options,
         thread,
     } = new;
     let _starting = agents.start_guard(run_id).await;
-    let requested = requested_account(account.as_ref());
+    let inherited = inherit_permission(&daemon, coordinator_thread, &mut options).await?;
+    // What the request asks for, as the runs table stores it. Routing fills in the backend below.
+    let mut fields = RunFields {
+        project_id: project.into(),
+        prompt: prompt.clone(),
+        requested_account: requested_account(account.as_ref()),
+        policy: WORKSPACE_WRITE.to_owned(),
+        backend: String::new(),
+        coordinator_thread: coordinator_thread.map(Uuid::from),
+        model: options.model.clone(),
+        effort: options.effort.and_then(option_name),
+        permission: options.permission.and_then(option_name),
+    };
 
-    if let Some(run) = existing(
-        &daemon,
-        run_id,
-        project,
-        &prompt,
-        (requested.as_deref(), coordinator_thread),
-    )
-    .await?
-    {
+    if let Some(run) = existing(&daemon, run_id, &fields).await? {
         let row = if thread.is_some() {
             Some(crate::threads::existing_thread(&daemon, run_id).await?)
         } else {
@@ -547,22 +692,19 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         };
         return Ok(CreatedRun { run, thread: row });
     }
-    let (prepared, scope_path) = prepare(&daemon, project, run_id, account).await?;
+    let (prepared, scope_path) = prepare(&daemon, project, run_id, account, Role::Worker).await?;
+    if inherited.is_some_and(|mode| !prepared.resolved.backend().permissions().contains(&mode)) {
+        (options.permission, fields.permission) = (None, None);
+    }
+    options.check(prepared.resolved.backend())?;
     let repo_path = match thread.as_ref().and_then(|thread| thread.scratch.clone()) {
         Some(scratch) => scratch.to_string_lossy().into_owned(),
         None => scope_path,
     };
     let (created, worktree_path, git_common_dir) =
-        create_worktree(agents, Path::new(&repo_path), run_id).await?;
+        create_worktree(agents, Path::new(&repo_path), run_id, thread.as_ref()).await?;
 
-    let fields = RunFields {
-        project_id: project.into(),
-        prompt: prompt.clone(),
-        requested_account: requested,
-        policy: WORKSPACE_WRITE.to_owned(),
-        backend: prepared.resolved.backend().name().to_owned(),
-        coordinator_thread: coordinator_thread.map(Uuid::from),
-    };
+    fields.backend = prepared.resolved.backend().name().into();
     let state = RunState {
         status: STARTING.to_owned(),
         account_id: prepared.resolved.account_id(),
@@ -578,18 +720,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         &created,
     )
     .await?;
-    let snapshot = agent_run(&row, Some(&worktree))?;
-    daemon
-        .log
-        .append(
-            snapshot.created_at,
-            Some(project),
-            WispEvent::AgentStarted {
-                run_id,
-                run: Some(snapshot),
-            },
-        )
-        .await;
+    log_started(&daemon, project, agent_run(&row, Some(&worktree))?).await;
     if let Some(thread) = &thread_row {
         crate::threads::log_started(&daemon, thread).await;
     }
@@ -597,23 +728,20 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
 
     // A run just created here has no sent turns yet.
     let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
-    let task = match &thread {
-        Some(thread) => worker::thread_prompt(
-            &prompt,
-            &worktree_path,
-            &prepared.context,
-            thread.scratch.is_some(),
-        ),
-        None => worker::worker_prompt(&prompt, &worktree_path, &prepared.context),
+    let Place::Worker { context, .. } = &prepared.place else {
+        return Err(ErrorObject::internal_error(
+            "a worker was prepared as a coordinator",
+        ));
     };
+    let task = match &thread {
+        Some(thread) => {
+            worker::thread_prompt(&prompt, &worktree_path, context, thread.scratch.is_some())
+        }
+        None => worker::worker_prompt(&prompt, &worktree_path, context),
+    };
+    let paths = Some((worktree_path, git_common_dir));
     actor
-        .launch(
-            prepared,
-            task,
-            None,
-            None,
-            Some((worktree_path, git_common_dir)),
-        )
+        .launch(prepared, task, images, None, None, paths)
         .await;
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
@@ -656,7 +784,11 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| run_not_found(id))?;
         let worktree = db.get_worktree(id.into()).map_err(|e| store_error(&e))?;
-        if worktree.is_none() && row.state.status != convert::ACCEPTED {
+        // Only an accepted run has lost its worktree, and a coordinator never had one (0024).
+        if worktree.is_none()
+            && row.state.status != convert::ACCEPTED
+            && row.fields.policy != convert::NO_WRITE
+        {
             return Err(ErrorObject::internal_error(format!(
                 "run {id} has no recorded worktree"
             )));
@@ -710,13 +842,54 @@ pub(crate) async fn send(
         run_id,
         turn_id,
         text,
+        model,
+        effort,
+        permission,
+        images,
     } = params;
+    let options = RunOptions {
+        model,
+        effort,
+        permission,
+    };
     ask(&daemon, run_id, |reply| Command::Send {
         turn_id,
         text,
+        images,
+        options,
         reply,
     })
     .await
+}
+
+/// `agent/image`: one of a run's stored images (RYA-191, decision 0026).
+pub(crate) async fn image(
+    daemon: &Arc<Daemon>,
+    params: AgentImageParams,
+) -> Result<PromptImage, ErrorObject> {
+    let AgentImageParams { run_id, image_id } = params;
+    let stored = store(daemon, move |db| {
+        if db
+            .get_run(run_id.into())
+            .map_err(|e| store_error(&e))?
+            .is_none()
+        {
+            return Err(run_not_found(run_id));
+        }
+        db.image(run_id.into(), image_id.into())
+            .map_err(|e| store_error(&e))
+    })
+    .await?
+    .ok_or_else(|| {
+        ErrorObject::wisp(
+            ErrorKind::ImageNotFound,
+            format!("run {run_id} has no image {image_id}"),
+        )
+    })?;
+    Ok(PromptImage {
+        media_type: option_value(&stored.media_type).unwrap_or(ImageMediaType::Unknown),
+        data: stored.data,
+    })
 }
 
 /// `agent/cancel`.
@@ -745,9 +918,26 @@ pub(crate) async fn accept(
     Ok(AgentAcceptResult { run, merge })
 }
 
+/// `agent/openPr`: through the run's actor, as `agent/accept` is (RYA-168).
+pub(crate) async fn open_pr(
+    daemon: Arc<Daemon>,
+    run_id: RunId,
+    title: String,
+    body: String,
+) -> Result<AgentOpenPrResult, ErrorObject> {
+    let url = ask(&daemon, run_id, |reply| Command::OpenPr {
+        title,
+        body,
+        reply,
+    })
+    .await?;
+    Ok(AgentOpenPrResult { url })
+}
+
 /// Marks every run the store still has as `starting` or `running` as `interrupted`: wispd
-/// stopped without recording how they ended, as after a crash. Called once at startup, before
-/// any connection is accepted.
+/// stopped without recording how they ended, as after a crash. Then wakes each project's
+/// coordinator for what it missed while wispd was stopped ([`wake::catch_up`], RYA-178). Called
+/// once at startup, before any connection is accepted.
 pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     let recovered = store(daemon, |db| {
         let mut recovered = Vec::new();
@@ -794,6 +984,9 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                                 session_id: run.session_id,
                                 error: run.error,
                                 diff: run.diff,
+                                model: run.model,
+                                effort: run.effort,
+                                permission: run.permission,
                                 updated_at: run.updated_at,
                             },
                         },
@@ -803,6 +996,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
         }
         Err(error) => warn!(error = %error.message, "could not recover interrupted agent runs"),
     }
+    wake::catch_up(daemon).await;
 }
 
 #[cfg(test)]
@@ -883,21 +1077,26 @@ mod tests {
             Arc::ptr_eq(&first, &retry),
             "a queued retry shares the first attempt's own lock"
         );
-        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let retry_task = tokio::spawn({
             let retry = Arc::clone(&retry);
-            let entered = Arc::clone(&entered);
             async move {
                 let _guard = retry.lock_owned().await;
-                entered.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         });
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!retry_task.is_finished(), "the retry is still queued");
 
-        // The first attempt "fails" (a real caller's `Starting` guard would drop here) and
-        // releases, exactly as `agents::start`/`actor_for` do on any error path.
-        drop(first_guard);
+        // Only the map, the first attempt's guard, and the queued retry may hold the lock when
+        // `release` runs, as in real use (RYA-91): the test's own `first`/`retry` clones would
+        // keep the entry alive by themselves and hide a `release` that removes it too eagerly.
+        // Checked with a `Weak`, which also serves the sweep check at the end.
+        let old = Arc::downgrade(&retry);
+        drop((first, retry));
+
+        // The first attempt "fails" and releases, exactly as `agents::start`/`actor_for` do on any
+        // error path. `Starting::drop` calls `release` while its guard is still alive, so the
+        // guard is dropped only after the check below (RYA-91): dropping it first let the retry
+        // take the lock on the other worker before the check ran.
         locks.release(id);
 
         // A caller arriving after the release, while the retry is still queued, must still be
@@ -905,25 +1104,19 @@ mod tests {
         // actor(id)`/`existing()`) to protect a third caller from racing the retry.
         let fresh = locks.get(id);
         assert!(
-            Arc::ptr_eq(&retry, &fresh),
+            Arc::ptr_eq(&old.upgrade().unwrap(), &fresh),
             "a caller after the release still contends for the queued retry's own lock"
         );
-        assert!(
-            !entered.load(std::sync::atomic::Ordering::SeqCst),
-            "the retry has not run yet: nothing has bypassed it"
-        );
+        drop(first_guard);
 
         retry_task.await.unwrap();
-        assert!(entered.load(std::sync::atomic::Ordering::SeqCst));
 
-        // Once nobody but the map itself holds it — dropping every local clone this test kept
-        // around, not just the ones a real caller would have released already — the *next* `get`
-        // sweeps it away and a later caller gets a brand-new, uncontended lock: the entry doesn't
-        // leak forever. Checked with a `Weak` rather than comparing the new `Arc`'s address to
-        // the old one's: once the old allocation is freed, a new one is free to reuse the very
-        // same address, which would make a raw-pointer comparison an unreliable false negative.
-        let old = Arc::downgrade(&retry);
-        drop((first, retry, fresh));
+        // Once nobody but the map itself holds it, the *next* `get` sweeps it away and a later
+        // caller gets a brand-new, uncontended lock: the entry doesn't leak forever. Checked with
+        // the `Weak` rather than comparing the new `Arc`'s address to the old one's: once the old
+        // allocation is freed, a new one is free to reuse the very same address, which would make
+        // a raw-pointer comparison an unreliable false negative.
+        drop(fresh);
         let after = locks.get(id);
         assert!(
             old.upgrade().is_none(),
