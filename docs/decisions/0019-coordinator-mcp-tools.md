@@ -36,7 +36,7 @@ The coordinator is a no-write Claude Code or Codex run (0004, 0012). To plan and
 
 ### The coordinator's allowlist (Claude Code)
 
-> Superseded in part by [0027](0027-claude-permission-modes.md): the coordinator is full Claude Code in its permission mode, with none of 0004's no-write flags, and its `system/init` tools aren't checked. `--mcp-config` and `--allowedTools` with the eight tools stay, so wispd's tools work in every mode.
+> Superseded in part by [0027](0027-claude-permission-modes.md): the coordinator is full Claude Code in its permission mode, with none of 0004's no-write flags, and its `system/init` tools aren't checked. `--mcp-config` and `--allowedTools` with the eight tools stay, so wispd's tools work in every mode. Since RYA-249 the allowlist also names Claude Code's todo tools after them ([0027](0027-claude-permission-modes.md#the-todo-tools)).
 
 A coordinator run is 0004's no-write command plus two flags. Its `--settings` now also deny reads under Claude Code's shared temp folder ([0024](0024-coordinator-chat.md)):
 

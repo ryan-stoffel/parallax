@@ -444,6 +444,7 @@ fn coordinator_tools() -> CoordinatorTools {
 
 /// #195, 0027: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
 /// flags, `wispd mcp` joining its own MCP servers, and wispd's eight tools allowed in every mode.
+/// The allowlist also names Claude Code's todo tools, so it keeps a plan on any model (RYA-249).
 #[tokio::test]
 async fn a_coordinator_gets_wispds_mcp_tools_on_claude_codes_own_configuration() {
     let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
@@ -489,7 +490,8 @@ async fn a_coordinator_gets_wispds_mcp_tools_on_claude_codes_own_configuration()
         "--allowedTools".to_owned(),
         "mcp__wispd__spawn_agent,mcp__wispd__list_agents,mcp__wispd__agent_status,\
          mcp__wispd__message_agent,mcp__wispd__cancel_agent,mcp__wispd__agent_diff,\
-         mcp__wispd__read_context,mcp__wispd__write_context"
+         mcp__wispd__read_context,mcp__wispd__write_context,\
+         TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate"
             .to_owned(),
     ]);
     assert_eq!(args, expected);
