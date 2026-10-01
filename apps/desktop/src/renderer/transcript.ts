@@ -36,8 +36,9 @@ type ItemBody =
   | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
   | { kind: "reasoning"; key: string; text: string }
   /**
-   * `status` is absent until its result arrives; `name` is null for a result with no call.
-   * `subagent` is the first line of the prompt of the subagent a coordinator's wispd tool names.
+   * `status` is absent until its result arrives, and `endedAt` is when it did; `name` is null
+   * for a result with no call. `subagent` is the first line of the prompt of the subagent a
+   * coordinator's wispd tool names.
    */
   | {
       kind: "tool";
@@ -47,6 +48,7 @@ type ItemBody =
       input?: JsonValue;
       status?: AgentToolStatus;
       output?: string;
+      endedAt?: string;
       subagent?: string;
     }
   | { kind: "todo"; key: string; items: AgentTodoItem[] }
@@ -106,7 +108,7 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
         });
         break;
       case "agent.output":
-        event.items.forEach((item, i) => applyOutput(items, item, key(i)));
+        event.items.forEach((item, i) => applyOutput(items, item, key(i), time));
         break;
     }
     for (let i = before; i < items.length; i++) items[i] = { ...items[i]!, at: time };
@@ -131,7 +133,7 @@ export function updateRun(run: AgentRun | undefined, event: WispEvent): AgentRun
 
 // ponytail: copies the item list per event and scans back for matches; fine for
 // thousands of items, since wispd coalesces output every 50 ms.
-function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
+function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: string) {
   const last = items.at(-1);
   // The assistant message a text item continues: same vendor id, or the partial one just before.
   const target = (messageId?: string) => {
@@ -198,7 +200,7 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
     }
     case "toolResult": {
       const i = items.findLastIndex((x) => x.kind === "tool" && x.callId === item.callId);
-      const result = { status: item.status, output: item.output };
+      const result = { status: item.status, output: item.output, endedAt: time };
       if (i >= 0) items[i] = { ...(items[i] as Extract<Item, { kind: "tool" }>), ...result };
       else items.push({ kind: "tool", key, callId: item.callId, name: null, ...result });
       break;

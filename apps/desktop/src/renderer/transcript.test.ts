@@ -214,6 +214,23 @@ test("messages split work rows and stay in order; a mid-run notice folds, and a 
   expect(groupWork([rows[3]!, rows[6]!])[0]).toMatchObject({ endedAt: at(10) });
 });
 
+test("a tool call keeps when it began, and its result when it arrived", () => {
+  const timed = (time: string, ...items: AgentOutputItem[]): LoggedEvent => ({
+    ...output(...items),
+    time,
+  });
+  const t = build(
+    timed("2026-01-01T00:00:01.000Z", { kind: "toolCall", callId: "1", name: "Bash", input: {} }),
+    timed("2026-01-01T00:00:04.600Z", { kind: "toolResult", callId: "1", status: "ok" }),
+    // A result with no call began and ended when it arrived.
+    timed("2026-01-01T00:00:05.000Z", { kind: "toolResult", callId: "2", status: "error" }),
+  );
+  expect(of(t.items, "tool")).toMatchObject([
+    { callId: "1", at: "2026-01-01T00:00:01.000Z", endedAt: "2026-01-01T00:00:04.600Z" },
+    { callId: "2", at: "2026-01-01T00:00:05.000Z", endedAt: "2026-01-01T00:00:05.000Z" },
+  ]);
+});
+
 test("a coordinator's wispd tool that names a subagent gets its prompt's first line from an earlier answer", () => {
   const call = (callId: string, tool: string, input: Record<string, string>) => ({
     kind: "toolCall" as const,
