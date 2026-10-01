@@ -217,20 +217,21 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
 }
 
 // The input field a card's header shows beside the tool's name, by the names common tools use:
-// what it acts on, or what it's for. The command, URL, or query itself is in the preview.
+// what it acts on, or what it's for. The command, URL, or query itself is in the preview. A path
+// is cut from its start, so the file's name stays.
 const pathTools = ["Edit", "MultiEdit", "Write", "Read", "NotebookEdit", "NotebookRead", "LS"];
 function headerDetail(request: ApprovalRequest, tool: ToolLook) {
   const { toolName, input } = request;
   if (toolName === "Bash" || toolName === "Task" || toolName === "Agent")
-    return { text: field(input, "description"), mono: false };
+    return { text: field(input, "description"), path: false };
   if (pathTools.includes(toolName))
     return {
       text: field(input, "file_path") ?? field(input, "notebook_path") ?? field(input, "path"),
-      mono: true,
+      path: true,
     };
-  if (toolName === "Grep" || toolName === "Glob") return { text: field(input, "path"), mono: true };
+  if (toolName === "Grep" || toolName === "Glob") return { text: field(input, "path"), path: true };
   // An MCP server's tool or a skill, which the transcript names by what it is.
-  if (tool.label !== toolName) return { text: tool.detail, mono: false };
+  if (tool.label !== toolName) return { text: tool.detail, path: false };
   return undefined;
 }
 
@@ -272,6 +273,7 @@ export function diffLines(before: string, after: string, context = 2): DiffLine[
           x[i] === y[j]
             ? lcs[(i + 1) * w + j + 1]! + 1
             : Math.max(lcs[(i + 1) * w + j]!, lcs[i * w + j + 1]!);
+    // Removed lines go before added ones, as diffs read.
     let i = 0;
     let j = 0;
     while (i < x.length || j < y.length) {
@@ -279,9 +281,9 @@ export function diffLines(before: string, after: string, context = 2): DiffLine[
         middle.push({ op: " ", text: x[i]! });
         i++;
         j++;
-      } else if (j < y.length && (i === x.length || lcs[i * w + j + 1]! >= lcs[(i + 1) * w + j]!))
-        middle.push({ op: "+", text: y[j++]! });
-      else middle.push({ op: "-", text: x[i++]! });
+      } else if (i < x.length && (j === y.length || lcs[(i + 1) * w + j]! >= lcs[i * w + j + 1]!))
+        middle.push({ op: "-", text: x[i++]! });
+      else middle.push({ op: "+", text: y[j++]! });
     }
   }
   const all = [
@@ -412,38 +414,62 @@ function Diff({ before, after }: { before: string; after: string }) {
   );
 }
 
+// Arguments shown before Show all, and each one's lines.
+const previewFields = 6;
+
 /**
- * An MCP call's or any other tool's arguments, a name and value each, cut short with Show all
- * unless `whole`.
+ * An MCP call's or any other tool's arguments, a name and value each: text as it reads, anything
+ * else as JSON. Cut to a few lines each, with Show all, unless `whole`.
  */
 function Fields({ input, whole = false }: { input: Record<string, JsonValue>; whole?: boolean }) {
   const [all, setAll] = useState(whole);
+  const list = useRef<HTMLDListElement>(null);
   const entries = Object.entries(input);
-  const shown = all ? entries : entries.slice(0, 6);
-  const long = entries.some(([, v]) => valueText(v).split("\n").length > 3);
+  const shown = all ? entries : entries.slice(0, previewFields);
+  // Whether a value is cut to its three lines, measured; by its length where nothing lays out.
+  const [clamped, setClamped] = useState(false);
+  useLayoutEffect(() => {
+    const el = list.current!;
+    const measure = () =>
+      setClamped(
+        [...el.querySelectorAll("dd")].some((dd) => dd.scrollHeight > dd.clientHeight + 1),
+      );
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [all]);
+  const long = entries.some(([, v]) => {
+    const text = valueText(v, false);
+    return text.length > 300 || text.split("\n").length > 3;
+  });
   return (
     <div>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-lg border border-border bg-sidebar px-2.5 py-2 text-[12px] leading-relaxed">
+      <dl
+        ref={list}
+        className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[12.5px] leading-relaxed"
+      >
         {shown.map(([name, value]) => (
           <div key={name} className="contents">
             <dt className="text-faint-foreground">{name}</dt>
             <dd
-              className={`font-mono break-words whitespace-pre-wrap ${all ? "" : "line-clamp-3"}`}
+              className={`break-words whitespace-pre-wrap ${typeof value === "string" ? "" : "font-mono text-[12px]"} ${all ? "" : "line-clamp-3"}`}
             >
-              {valueText(value)}
+              {valueText(value, all)}
             </dd>
           </div>
         ))}
       </dl>
-      {(entries.length > shown.length || long || all) && (
+      {(entries.length > shown.length || long || clamped || all) && (
         <ShowAll all={all} onToggle={() => setAll(!all)} />
       )}
     </div>
   );
 }
 
-const valueText = (value: JsonValue) =>
-  typeof value === "string" ? value : JSON.stringify(value, null, 2);
+/** A value as text: a string as it is, anything else as JSON, laid out once shown whole. */
+const valueText = (value: JsonValue, whole = true) =>
+  typeof value === "string" ? value : JSON.stringify(value, null, whole ? 2 : undefined);
 
 /**
  * What a request will do, by the names common tools use: the command, the edit as a diff, the
@@ -749,13 +775,18 @@ function ApprovalCard({
         <tool.Icon aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
         <span id={titleId} className="flex min-w-0 items-center gap-2">
           <span className="shrink-0 font-medium">{tool.label}</span>
-          {detail?.text && (
-            <span
-              className={`truncate text-muted-foreground ${detail.mono ? "font-mono text-[12px]" : ""}`}
-            >
-              {detail.text}
-            </span>
-          )}
+          {detail?.text &&
+            (detail.path ? (
+              // Right to left, so the ellipsis takes the path's start; <bdi> keeps it in order.
+              <span
+                title={detail.text}
+                className="truncate text-left font-mono text-[12px] text-muted-foreground [direction:rtl]"
+              >
+                <bdi>{detail.text}</bdi>
+              </span>
+            ) : (
+              <span className="truncate text-muted-foreground">{detail.text}</span>
+            ))}
         </span>
         <span
           id={statusId}
