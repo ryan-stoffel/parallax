@@ -32,6 +32,7 @@ test("rebuilds the sample run's transcript, item by item", () => {
   expect(t.seq).toBe(8);
   expect(t.items.map((i) => i.kind)).toEqual([
     "user", // the prompt, from agent.started
+    "session", // the CLI's session, never shown (RYA-250)
     "assistant", // msg_1: its delta, then its full text
     "reasoning",
     "todo",
@@ -59,6 +60,9 @@ test("rebuilds the sample run's transcript, item by item", () => {
     { name: "Write", status: "ok", output: "File created" },
     { name: "Bash", status: "denied", input: { truncated: true } },
     { name: null, callId: "toolu_3", status: "error" },
+  ]);
+  expect(of(t.items, "session")).toEqual([
+    { kind: "session", key: "3:0", sessionId: "session-7f3a", at: "2026-09-25T12:00:02Z" },
   ]);
   expect(of(t.items, "notice").map((i) => i.tone)).toEqual(["info", "warning", "warning"]);
   expect(of(t.items, "end")[0]!.outcome).toEqual({

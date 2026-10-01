@@ -59,7 +59,12 @@ type ItemBody =
    */
   | { kind: "approval"; key: string; request: ApprovalRequest; resolved?: ApprovalResolution }
   /** How one CLI process of the run ended. */
-  | { kind: "end"; key: string; outcome: AgentOutcome };
+  | { kind: "end"; key: string; outcome: AgentOutcome }
+  /**
+   * Where a CLI process started or resumed its session, by the vendor's id. Never shown:
+   * `withTaskLists` takes it out, and starts a new task list when the id changes (RYA-250).
+   */
+  | { kind: "session"; key: string; sessionId: string };
 
 /** A permission request as `approvalRequested` carries it. */
 export type ApprovalRequest = Omit<Extract<AgentOutputItem, { kind: "approvalRequested" }>, "kind">;
@@ -169,6 +174,9 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
   };
 
   switch (item.kind) {
+    case "sessionStarted":
+      items.push({ kind: "session", key, sessionId: item.sessionId });
+      break;
     case "turnStarted": {
       const images = item.images?.length ? { images: item.images } : {};
       if (item.turnId)
@@ -282,7 +290,7 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
         items[i] = { ...asked, resolved: { ...resolution, at: time } };
       break;
     }
-    // sessionStarted and usage aren't shown.
+    // usage isn't shown.
   }
 }
 

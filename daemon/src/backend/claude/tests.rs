@@ -13,8 +13,8 @@ use wisp_protocol::{CoordinatorThreadId, ProjectId};
 use super::stream::{Ask, Step, Translator};
 use super::{
     ClaudeBackend, EXIT_PLAN_MODE, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST, PLAN_WORKSPACE_WRITE_ARGS,
-    PROMPT_TOOL_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS, no_write_settings,
-    write_env_file,
+    PROMPT_TOOL_ARGS, TODO_TOOLS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS,
+    no_write_settings, write_env_file,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
@@ -25,6 +25,7 @@ use crate::backend::{
     RunRequest, SendError, StartError, Started, TodoItem, TodoStatus, ToolPolicy, ToolStatus,
     TurnId, Usage, WarningKind, WorkerSandbox,
 };
+use crate::mcp;
 use crate::paths::DataDir;
 
 const SESSION: &str = "5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68";
@@ -59,6 +60,7 @@ fn fixture(name: &str) -> &'static str {
         "approval-exit" => include_str!("fixtures/approval-exit.jsonl"),
         "worker-exit-plan" => include_str!("fixtures/worker-exit-plan.jsonl"),
         "worker-tasks" => include_str!("fixtures/worker-tasks.jsonl"),
+        "coordinator-tasks" => include_str!("fixtures/coordinator-tasks.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -1821,6 +1823,146 @@ async fn a_worker_plans_with_claude_code_s_task_tools() {
         !all.iter()
             .any(|event| matches!(event, Event::TodoList { .. })),
         "{all:?}"
+    );
+    assert_eq!(
+        outcome(&all),
+        &Outcome::Completed {
+            result: Some("done".into())
+        }
+    );
+}
+
+/// RYA-249: a coordinator and a bypass worker have no `--tools`, so they name the todo tools in
+/// `--allowedTools`, which turns them on for any model, in every mode. A coordinator's list
+/// starts with wispd's own tools. Any other worker names them in `--tools` and gets no
+/// allowlist, and a plain no-write run keeps 0004's flags.
+#[test]
+fn a_coordinator_and_a_bypass_worker_allow_the_todo_tools_in_every_mode() {
+    let todo = "TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate";
+    assert_eq!(TODO_TOOLS.join(","), todo);
+    assert!(WORKER_TOOLS.ends_with(TODO_TOOLS), "{WORKER_TOOLS:?}");
+    let cwd = Path::new("/Users/u/wt");
+    let mut worker = request(cwd);
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(cwd));
+    let allowed = |request: &RunRequest| -> Vec<String> {
+        let args: Vec<String> = super::arguments(request)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        args.iter()
+            .enumerate()
+            .filter(|(_, arg)| *arg == "--allowedTools")
+            .map(|(at, _)| args[at + 1].clone())
+            .collect()
+    };
+    let coordinator_list = format!("{},{todo}", mcp::ALLOWED_TOOLS.join(","));
+    for permission in [
+        None,
+        Some(AgentPermission::Edit),
+        Some(AgentPermission::Auto),
+        Some(AgentPermission::Manual),
+        Some(AgentPermission::Plan),
+        Some(AgentPermission::Bypass),
+    ] {
+        for approvals in [false, true] {
+            let run = RunRequest {
+                permission,
+                approvals,
+                ..coordinator(cwd)
+            };
+            assert_eq!(allowed(&run), [coordinator_list.as_str()], "{permission:?}");
+            let run = RunRequest {
+                permission,
+                approvals,
+                ..worker.clone()
+            };
+            let expected: &[&str] = if permission == Some(AgentPermission::Bypass) {
+                &[todo]
+            } else {
+                &[]
+            };
+            assert_eq!(allowed(&run), expected, "{permission:?}");
+        }
+    }
+    assert_eq!(allowed(&request(cwd)), Vec::<String>::new());
+}
+
+/// RYA-249: a coordinator on Claude Code 2.1.283 and a model outside its built-in list plans with
+/// the task tools, which its `--allowedTools` turns on and its init lists. Each call and its
+/// result reach the app as they are, as a worker's do (RYA-248).
+#[tokio::test]
+async fn a_coordinator_plans_with_claude_code_s_task_tools_on_any_model() {
+    let fake = Fake::new("coordinator-tasks");
+    let request = RunRequest {
+        model: Some("claude-opus-5-5".into()),
+        ..coordinator(&fake.root())
+    };
+    let all = run(&fake, request).await;
+    let argv = fake.argv();
+    let allowed = argv.iter().position(|arg| arg == "--allowedTools").unwrap();
+    assert!(
+        argv[allowed + 1].ends_with(",TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate"),
+        "{argv:?}"
+    );
+    assert!(!argv.iter().any(|arg| arg == "--tools"), "{argv:?}");
+
+    let calls: Vec<(&str, Value)> = all
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolCall { name, input, .. } => Some((name.as_str(), input.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            (
+                "TaskCreate",
+                serde_json::json!({
+                    "subject": "Add tests",
+                    "description": "Cover the parser",
+                    "activeForm": "Adding tests",
+                })
+            ),
+            (
+                "TaskUpdate",
+                serde_json::json!({"taskId": "1", "status": "in_progress"})
+            ),
+            ("TaskList", serde_json::json!({})),
+        ]
+    );
+    let results: Vec<(&str, ToolStatus, Option<&str>)> = all
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolResult {
+                call_id,
+                status,
+                output,
+            } => Some((call_id.as_str(), *status, output.as_deref())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            (
+                "toolu_01WispProbe",
+                ToolStatus::Ok,
+                Some("Task #1 created successfully: Add tests")
+            ),
+            (
+                "toolu_01WispProbe1",
+                ToolStatus::Ok,
+                Some("Updated task #1 status")
+            ),
+            (
+                "toolu_01WispProbe2",
+                ToolStatus::Ok,
+                Some("#1 [in_progress] Add tests")
+            ),
+        ]
     );
     assert_eq!(
         outcome(&all),

@@ -82,6 +82,9 @@ const field = (input: JsonValue | undefined, name: string) => {
   const value = isObject(input) ? input[name] : undefined;
   return typeof value === "string" ? value : undefined;
 };
+/** The first of `names` that `input` has as a non-empty string, as Claude Code reads its aliases. */
+const aliased = (input: JsonValue | undefined, ...names: string[]) =>
+  names.map((name) => field(input, name)).find((value) => value?.trim());
 const taskStates: Partial<Record<string, AgentTodoStatus>> = {
   pending: "pending",
   in_progress: "inProgress",
@@ -92,39 +95,44 @@ const taskStates: Partial<Record<string, AgentTodoStatus>> = {
  * Applies a call of Claude Code's task tools to `tasks`, and says whether it applied. TaskCreate
  * adds a step under the id its result names, "Task #3 created successfully: …", or under its call
  * until that result arrives or if it can't be read, so the step shows either way. TaskUpdate
- * changes a step's status, subject, or `activeForm`, or removes it, by `taskId`; Claude Code
- * answers one it couldn't apply in words, such as "Task not found", without failing the call, so
- * only "Updated task #…" or no result yet counts. TaskList, TaskGet, and failed calls change
- * nothing.
+ * changes a step's status, subject, or `activeForm`, or removes it, by the id its result names,
+ * "Updated task #3 status". Claude Code answers one it couldn't apply in words, such as "Task not
+ * found", without failing the call, so only that answer or no result yet counts. TaskList,
+ * TaskGet, and failed calls change nothing. 2.1.283 takes `id` or `task_id` for `taskId`, and
+ * `active_form` for `activeForm`, so those count too (RYA-250).
  */
 function applyTask(tasks: Map<string, Task>, item: Tool): boolean {
   if (failed(item)) return false;
   const { input, output } = item;
+  const active = aliased(input, "activeForm", "active_form");
   if (item.name === "TaskCreate") {
     const subject =
       field(input, "subject") ?? /created successfully: (.+)/s.exec(output ?? "")?.[1];
     if (!subject) return false;
     const id = /^Task #([^\s:]+)/.exec(output ?? "")?.[1] ?? `call:${item.callId}`;
-    // A list Claude Code started afresh, as after an account fallback, reuses ids.
-    tasks.delete(id);
-    tasks.set(id, { text: subject, status: "pending", active: field(input, "activeForm") });
+    tasks.set(id, { text: subject, status: "pending", active });
     return true;
   }
-  if (item.name !== "TaskUpdate" || (output !== undefined && !output.startsWith("Updated task #")))
-    return false;
-  const id = field(input, "taskId") ?? "";
-  const task = tasks.get(id);
-  if (!task) return false;
+  if (item.name !== "TaskUpdate") return false;
+  // Until the result arrives, by the id in the call, read in the order Claude Code reads it.
+  const id =
+    output === undefined
+      ? aliased(input, "taskId", "id", "task_id")
+      : /^Updated task #(\S+)/.exec(output)?.[1];
+  const task = tasks.get(id ?? "");
+  if (!id || !task) return false;
   const status = field(input, "status");
   if (status === "deleted") {
     tasks.delete(id);
     return true;
   }
-  // Without `away`: a step put away comes back once it's updated, as when it's reopened.
+  const next = taskStates[status ?? ""] ?? task.status;
   tasks.set(id, {
     text: field(input, "subject") ?? task.text,
-    status: taskStates[status ?? ""] ?? task.status,
-    active: field(input, "activeForm") ?? task.active,
+    status: next,
+    active: active ?? task.active,
+    // A step put away comes back only when it's taken up again, not when it's otherwise changed.
+    away: task.away && next === "completed",
   });
   return true;
 }
@@ -139,20 +147,33 @@ const checklists = new WeakMap<Item, Todo>();
  * lasts the session, across turns and resumes. So after each call that changes it, the whole list
  * goes in as a checklist, as wispd puts one after TodoWrite, and the plan card and strip read it
  * the same way. A list whose every step is done is put away when the next turn starts, as Claude
- * Code's own view of it is; a step a later TaskUpdate touches comes back.
+ * Code's own view of it is; a step a later TaskUpdate reopens comes back. The session rows go: a
+ * new session, as an account fallback starts with ids from 1 again, starts a new list, and clears
+ * the plan if it showed steps, while a resume keeps its session and so its list (RYA-250).
  */
 export function withTaskLists<R extends { kind: string; key: string }>(
   rows: readonly (Item | R)[],
 ): (Item | R)[] {
   const tasks = new Map<string, Task>();
   const shown = () => [...tasks.values()].filter((t) => !t.away);
+  let session: string | undefined;
   const out: (Item | R)[] = [];
   for (const row of rows) {
-    out.push(row);
     const item = row as Item;
-    if (item.kind === "user" && shown().every((t) => t.status === "completed"))
-      for (const task of tasks.values()) task.away = true;
-    if (item.kind !== "tool" || !applyTask(tasks, item)) continue;
+    if (item.kind === "session") {
+      const fresh = session !== undefined && item.sessionId !== session;
+      session = item.sessionId;
+      if (!fresh) continue;
+      // Steps that showed give way to an empty checklist, so the strip drops them.
+      const showing = shown().length > 0;
+      tasks.clear();
+      if (!showing) continue;
+    } else {
+      out.push(row);
+      if (item.kind === "user" && shown().every((t) => t.status === "completed"))
+        for (const task of tasks.values()) task.away = true;
+      if (item.kind !== "tool" || !applyTask(tasks, item)) continue;
+    }
     const steps = shown();
     const items = steps.map(({ text, status }) => ({ text, status }));
     const active = steps.find((t) => t.status === "inProgress")?.active;

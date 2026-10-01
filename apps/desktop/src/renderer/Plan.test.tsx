@@ -227,6 +227,15 @@ const update = (key: string, input: Record<string, string>) =>
       .filter((k) => k !== "taskId")
       .join(", ")}`,
   );
+// wispd's log of a run, rebuilt as useAgentRun does: a call and its result are logged apart.
+const runId = "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01";
+let seq = 0;
+const at = (event: WispEvent): LoggedEvent => ({ seq: ++seq, time: "", event });
+const output = (...items: AgentOutputItem[]) => at({ kind: "agent.output", runId, items });
+const call = (callId: string, name: string, input: JsonValue, result: string) => [
+  output({ kind: "toolCall", callId, name, input }),
+  output({ kind: "toolResult", callId, status: "ok", output: result }),
+];
 const plans = (rows: ReturnType<typeof withPlans>) =>
   rows.filter((r): r is PlanRow => r.kind === "plan");
 const tools = (rows: ReturnType<typeof withPlans>) =>
@@ -401,14 +410,6 @@ test("TodoWrite and the task tools in one run make one plan: whichever wrote las
 });
 
 test("a task list rebuilt from the logged events, as on opening a thread or resuming it, is the same plan", () => {
-  let seq = 0;
-  const runId = "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01";
-  const at = (event: WispEvent): LoggedEvent => ({ seq: ++seq, time: "", event });
-  const output = (...items: AgentOutputItem[]) => at({ kind: "agent.output", runId, items });
-  const call = (callId: string, name: string, input: JsonValue, result: string) => [
-    output({ kind: "toolCall", callId, name, input }),
-    output({ kind: "toolResult", callId, status: "ok", output: result }),
-  ];
   const events = [
     output({ kind: "turnStarted", turnId: "t1", text: "Add tests" }),
     ...call("c1", "TaskCreate", { subject: "Add tests", description: "d" }, "Task #1 created"),
@@ -435,6 +436,168 @@ test("a task list rebuilt from the logged events, as on opening a thread or resu
   expect(latestPlan(whole.items)).toEqual({
     items: [step("Add tests", "completed"), step("Run the checks", "pending")],
   });
+});
+
+test("a TaskUpdate counts by the id its result names, whichever name its call gave the id (RYA-250)", () => {
+  // 2.1.283 reads `id`, then `task_id`, as `taskId`, and `active_form` as `activeForm`, on both
+  // tools. Its answer names the id it used.
+  const items = [
+    user("u1"),
+    create("c1", "1", "Add tests"),
+    taskCall(
+      "c2",
+      "TaskCreate",
+      { subject: "Run the checks", description: "d", active_form: "Running the checks" },
+      "Task #2 created successfully: Run the checks",
+    ),
+    taskCall(
+      "p1",
+      "TaskUpdate",
+      { id: "1", status: "in_progress", active_form: "Adding tests" },
+      "Updated task #1 status, activeForm",
+    ),
+  ];
+  expect(latestPlan(items)).toEqual({
+    items: [step("Add tests", "inProgress"), step("Run the checks", "pending")],
+    active: "Adding tests",
+  });
+  const later = [
+    taskCall("p2", "TaskUpdate", { task_id: "1", status: "completed" }, "Updated task #1 status"),
+    // With both, the CLI reads `id` first.
+    taskCall(
+      "p3",
+      "TaskUpdate",
+      { id: "2", task_id: "1", status: "in_progress" },
+      "Updated task #2 status",
+    ),
+  ];
+  const rows = withPlans([...items, ...later]);
+  expect(tools(rows)).toEqual([]);
+  expect(plans(rows)[0]!.items).toEqual([
+    step("Add tests", "completed"),
+    step("Run the checks", "inProgress"),
+  ]);
+  expect(latestPlan([...items, ...later])?.active).toBe("Running the checks");
+  // Its result's id counts even when the call's can't be read, as for an input too large to carry:
+  // it applied, so its row goes.
+  const cut = taskCall(
+    "p2",
+    "TaskUpdate",
+    { truncated: true, bytes: 40_000 },
+    "Updated task #1 subject, description",
+  );
+  expect(tools(withPlans([...items, cut]))).toEqual([]);
+  // While the result is on its way, the call's id counts, by whichever name it has.
+  for (const name of ["id", "task_id"]) {
+    const waiting = taskCall("p2", "TaskUpdate", { [name]: "2", status: "completed" });
+    expect(plans(withPlans([...items, waiting]))[0]!.items).toEqual([
+      step("Add tests", "inProgress"),
+      step("Run the checks", "completed"),
+    ]);
+  }
+});
+
+test("a new session starts a new task list, as an account fallback's does; a resume keeps its own (RYA-250)", () => {
+  const events = [
+    output({ kind: "sessionStarted", sessionId: "first" }),
+    output({ kind: "turnStarted", turnId: "t1", text: "Add tests" }),
+    ...call("c1", "TaskCreate", { subject: "Add tests", description: "d" }, "Task #1 created"),
+    ...call("c2", "TaskCreate", { subject: "Run the checks", description: "d" }, "Task #2 created"),
+    ...call("c3", "TaskCreate", { subject: "Ship it", description: "d" }, "Task #3 created"),
+    ...call("p1", "TaskUpdate", { taskId: "1", status: "in_progress" }, "Updated task #1 status"),
+    // The attempt was rate limited: the request runs again on another account, in a new session
+    // whose ids start at 1 again.
+    at({
+      kind: "agent.accountFallback",
+      runId,
+      fromAccount: "claude",
+      toAccount: "01a0d34b-3c4d-7e5f-a061-7b8c9d0e1f22",
+      reason: "rateLimited",
+    }),
+    output({ kind: "sessionStarted", sessionId: "second" }),
+    ...call("c4", "TaskCreate", { subject: "Write tests", description: "d" }, "Task #1 created"),
+    ...call("c5", "TaskCreate", { subject: "Check them", description: "d" }, "Task #2 created"),
+    at({ kind: "agent.finished", runId, outcome: { status: "interrupted" } }),
+    // The thread resumed: the same session, so the same list.
+    output({ kind: "sessionStarted", sessionId: "second" }),
+    output({ kind: "turnStarted", turnId: "t2", text: "Go on" }),
+    ...call("p2", "TaskUpdate", { taskId: "2", status: "in_progress" }, "Updated task #2 status"),
+  ];
+  const upTo = (n: number) => applyEvents(emptyTranscript, events.slice(0, n), runId).items;
+  // The new session drops the failed attempt's steps, so the strip says nothing until it plans.
+  const fallback = events.findIndex((e) => e.event.kind === "agent.accountFallback");
+  expect(latestPlan(upTo(fallback + 1))?.items).toHaveLength(3);
+  expect(upTo(fallback + 2).at(-1)).toMatchObject({ kind: "session", sessionId: "second" });
+  expect(latestPlan(upTo(fallback + 2))).toBeUndefined();
+
+  const { items } = applyEvents(emptyTranscript, events, runId);
+  expect(items.filter((i) => i.kind === "session")).toHaveLength(3);
+  const rows = withPlans(items);
+  // The session rows go; the fallback's notice stays, and the plan says it was cleared after it.
+  expect(rows.map((r) => r.kind).join(" ")).toBe(
+    "user plan todo todo todo notice todo todo todo end user plan",
+  );
+  expect(plans(rows).map((p) => p.items)).toEqual([
+    [step("Write tests", "pending"), step("Check them", "pending")],
+    [step("Write tests", "pending"), step("Check them", "inProgress")],
+  ]);
+  const lines = rows
+    .filter((r): r is PlanUpdate => r.kind === "todo")
+    .map((r) => (r.items.length ? planChanges(r.previous!, r.items) : "Cleared the plan"));
+  expect(lines).toEqual([
+    "Added: Run the checks",
+    "Added: Ship it",
+    "Started: Add tests",
+    "Cleared the plan",
+    "Added: Write tests",
+    "Added: Check them",
+  ]);
+  expect(latestPlan(items)).toEqual({
+    items: [step("Write tests", "pending"), step("Check them", "inProgress")],
+  });
+  // A session whose list showed nothing has nothing to clear; the rows just go.
+  const session = (key: string, sessionId: string): Item => ({ kind: "session", key, sessionId });
+  expect(withTaskLists([session("s1", "first"), user("u1"), session("s2", "second")])).toEqual([
+    user("u1"),
+  ]);
+});
+
+test("a finished list stays put away through updates that don't reopen a step (RYA-250)", () => {
+  const finished = [
+    user("u1"),
+    create("c1", "1", "Add tests"),
+    update("p1", { taskId: "1", status: "completed" }),
+    user("u2"),
+  ];
+  // 2.1.283's answer names only the fields that changed: none for a no-op, or for a step marked
+  // done again.
+  for (const later of [
+    taskCall("p2", "TaskUpdate", { taskId: "1" }, "Updated task #1 "),
+    taskCall(
+      "p2",
+      "TaskUpdate",
+      { taskId: "1", description: "More" },
+      "Updated task #1 description",
+    ),
+    taskCall("p2", "TaskUpdate", { taskId: "1", status: "completed" }, "Updated task #1 "),
+    taskCall("p2", "TaskUpdate", { taskId: "1", status: "completed" }),
+  ]) {
+    expect(withPlans([...finished, later]).map((r) => r.kind)).toEqual([
+      "user",
+      "plan",
+      "todo",
+      "user",
+    ]);
+    expect(latestPlan([...finished, later])).toBeUndefined();
+  }
+  // Taken up again, to do or under way, it comes back.
+  for (const [status, state] of [
+    ["pending", "pending"],
+    ["in_progress", "inProgress"],
+  ] as const)
+    expect(
+      plans(withPlans([...finished, update("p2", { taskId: "1", status })])).at(-1),
+    ).toMatchObject({ key: "p2:tasks", items: [step("Add tests", state)], latest: true });
 });
 
 test("a task list's checklists, and their update lines, keep their objects while unchanged", () => {
