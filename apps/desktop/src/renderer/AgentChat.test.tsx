@@ -49,6 +49,13 @@ const type = (text: string) => act(() => void composer().editor!.commands.setCon
 
 const row = (item: Item) =>
   render(<RowView row={item} live={false} open={false} onToggle={() => {}} />);
+// A row's summary as it shows, without what only screen readers hear.
+const shown = () => {
+  const summary = document.querySelector("summary")!.cloneNode(true) as Element;
+  summary.querySelectorAll(".sr-only").forEach((e) => e.remove());
+  return summary.textContent;
+};
+const said = () => document.querySelector("summary .sr-only")?.textContent;
 
 test("a message on its way to the agent shows at full strength", () => {
   render(
@@ -155,8 +162,8 @@ test("a tool call collapses its input and output under its name", () => {
   render(<RowView row={tool} live={false} open={false} onToggle={toggled} />);
   const details = document.querySelector("details")!;
   expect(details.open).toBe(false);
-  expect(document.querySelector("summary")!.textContent).toBe("Bashcargo test");
-  expect(document.querySelector('[aria-label="Failed"]')).not.toBeNull();
+  expect(shown()).toBe("Bashcargo test");
+  expect(said()).toBe("Failed");
 
   act(() => {
     details.open = true;
@@ -181,7 +188,7 @@ test("a tool call with an oversized input says so", () => {
 test("a coordinator's wispd tool calls read as what they did, and to what", () => {
   const summary = (name: string, input: Record<string, string>, subagent?: string) => {
     row({ kind: "tool", key: "t", callId: "1", name, input, ...(subagent && { subagent }) });
-    const text = document.querySelector("summary")!.textContent;
+    const text = shown();
     act(() => unmount());
     return text;
   };
@@ -201,7 +208,7 @@ test("a coordinator's wispd tool calls read as what they did, and to what", () =
 test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
   const summary = (name: string, input: Record<string, string>) => {
     row({ kind: "tool", key: "t", callId: "1", name, input });
-    const text = document.querySelector("summary")!.textContent;
+    const text = shown();
     act(() => unmount());
     return text;
   };
@@ -283,18 +290,113 @@ test("each kind of work has its own loader, and MCP tools and skills read by nam
   expect(activity()).toEqual({ label: "Working", loader: loader("orbit", "chase") });
 });
 
-test("a running tool call draws its work's loader, and a finished one its status", () => {
+test("a running tool call draws its work's loader, and a finished one its kind's icon", () => {
   const tool: Item = { kind: "tool", key: "t", callId: "1", name: "Read", input: {} };
   render(<RowView row={tool} live open={false} onToggle={() => {}} />);
-  const running = document.querySelector('[aria-label="Running"]')!;
-  expect(running.querySelector('[data-loader="bands"][data-variant="descend"]')).not.toBeNull();
-  // Screen readers hear the label, not the loader.
-  expect(running.querySelector(".loader")!.getAttribute("aria-hidden")).toBe("true");
+  const summary = () => document.querySelector("summary")!;
+  expect(summary().querySelector('[data-loader="bands"][data-variant="descend"]')).not.toBeNull();
+  // Screen readers hear the word, not the loader.
+  expect(summary().querySelector(".loader")!.closest('[aria-hidden="true"]')).not.toBeNull();
+  expect(said()).toBe("Running");
   act(() => unmount());
 
   render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
-  expect(document.querySelector('[aria-label="Succeeded"]')).not.toBeNull();
   expect(document.querySelector(".loader")).toBeNull();
+  expect(summary().querySelector("svg.lucide-file-text")).not.toBeNull();
+  expect(said()).toBe("Succeeded");
+});
+
+test("each kind of tool has its icon once it's done, as its loader matches it while it runs", () => {
+  // The icon each finished tool shows, by its lucide name.
+  const icon = (name: string | null, input: Record<string, string> = {}) => {
+    row({ kind: "tool", key: "t", callId: "1", name, input, status: "ok" });
+    const svg = document.querySelector("summary svg:not(.lucide-chevron-right)")!;
+    act(() => unmount());
+    return svg.getAttribute("class")!.split(" ")[1];
+  };
+  expect(
+    Object.fromEntries(
+      [
+        "Task",
+        "Agent",
+        "Bash",
+        "Read",
+        "Grep",
+        "Glob",
+        "WebSearch",
+        "Edit",
+        "MultiEdit",
+        "Write",
+        "WebFetch",
+        "mcp__linear__save_issue",
+        "Skill",
+        "mcp__wispd__spawn_agent",
+        "mcp__wispd__plan_approve",
+        "TodoWrite",
+        "Frobnicate",
+      ].map((name) => [name, icon(name)]),
+    ),
+  ).toEqual({
+    Task: "lucide-bot",
+    Agent: "lucide-bot",
+    Bash: "lucide-square-terminal",
+    Read: "lucide-file-text",
+    Grep: "lucide-search",
+    Glob: "lucide-search",
+    WebSearch: "lucide-search",
+    Edit: "lucide-pencil",
+    MultiEdit: "lucide-pencil",
+    Write: "lucide-file-plus",
+    WebFetch: "lucide-globe",
+    mcp__linear__save_issue: "lucide-plug",
+    Skill: "lucide-sparkles",
+    mcp__wispd__spawn_agent: "lucide-workflow",
+    // A wispd tool this app doesn't know is still wispd's.
+    mcp__wispd__plan_approve: "lucide-workflow",
+    TodoWrite: "lucide-list-checks",
+    Frobnicate: "lucide-hammer",
+  });
+  expect(icon(null)).toBe("lucide-hammer");
+
+  // Thinking has the brain.
+  row({ kind: "reasoning", key: "r", text: "Hm" });
+  expect(document.querySelector("summary svg.lucide-brain")).not.toBeNull();
+});
+
+test("a failed, denied, or unfinished tool call marks its icon, and says how it went in words", () => {
+  const tool = (status?: "ok" | "error" | "denied"): Item => ({
+    kind: "tool",
+    key: "t",
+    callId: "1",
+    name: "Bash",
+    input: { command: "git push" },
+    ...(status && { status }),
+  });
+  // The kind's icon, and the mark at its corner.
+  const slot = () => {
+    const icon = document.querySelector("summary .lucide-square-terminal")!;
+    return {
+      color: icon.parentElement!.className.match(/text-[\w-]+/)?.[0],
+      mark: icon.nextElementSibling?.getAttribute("class")?.split(" ")[1],
+      said: said(),
+    };
+  };
+  row(tool("error"));
+  expect(slot()).toEqual({ color: "text-danger", mark: "lucide-circle-x", said: "Failed" });
+  act(() => unmount());
+  row(tool("denied"));
+  expect(slot()).toEqual({ color: "text-danger", mark: "lucide-ban", said: "Denied" });
+  act(() => unmount());
+  // No result, and the run has stopped: unfinished.
+  row(tool());
+  expect(slot()).toEqual({
+    color: "text-faint-foreground",
+    mark: "lucide-circle-dashed",
+    said: "No result",
+  });
+  act(() => unmount());
+  row(tool("ok"));
+  expect(slot()).toEqual({ color: "text-muted-foreground", mark: undefined, said: "Succeeded" });
 });
 
 test("a coordinator's no-write stop lists the files it changed", () => {
@@ -316,7 +418,7 @@ test("a coordinator's no-write stop lists the files it changed", () => {
 
 test("reasoning, checklists, and notices render quietly", () => {
   row({ kind: "reasoning", key: "r", text: "The build uses cargo." });
-  expect(document.querySelector("summary")!.textContent).toBe("Thinking");
+  expect(shown()).toBe("Thinking");
   act(() => unmount());
 
   row({
