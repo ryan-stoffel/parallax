@@ -153,7 +153,7 @@ export function MenuOption({
       )}
       {/* Always takes its room, so choosing never rewraps a row or resizes the menu. */}
       <span className={`grid h-5 place-items-center ${checked ? "" : "invisible"}`}>
-        <Check aria-hidden className="text-ring" />
+        <Check aria-hidden className="text-accent" />
       </span>
     </button>
   );

@@ -111,9 +111,9 @@ interface ThreadListProps {
   onDelete: (thread: Thread) => Promise<string | undefined>;
 }
 
-/** Every Project's icon, in the sidebar, the breadcrumb, and its chat. -500 reads on both themes. */
+/** Every Project's icon, in the sidebar, the breadcrumb, and its chat, in the accent. */
 export function ProjectIcon({ className = "" }: { className?: string }) {
-  return <FolderKanban aria-hidden className={`text-violet-500 ${className}`} />;
+  return <FolderKanban aria-hidden className={`text-accent ${className}`} />;
 }
 
 // How long a pointer rests on a thread before its card shows. Moving to another thread while
@@ -511,7 +511,7 @@ function Footer({
                   <Download />
                   <span
                     aria-hidden
-                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-ring"
+                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-accent"
                   />
                 </span>
               ) : (
