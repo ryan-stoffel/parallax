@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, test } from "vite-plus/test";
+import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { WispBridge } from "../preload/bridge";
 import type { UsageHour } from "../protocol/generated/protocol";
@@ -10,11 +10,13 @@ import {
   buckets,
   change,
   niceTop,
+  resetTime,
   stack,
   summarize,
   tokensOf,
   UsagePage,
   type Measures,
+  type Range,
 } from "./UsagePage";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -37,12 +39,13 @@ test("ranges end now: the last 24 hours, or whole local days ending today", () =
   expect(week.starts.every((s) => midnight(s) === s)).toBe(true);
 });
 
-test("the range before is as long and ends where the range starts", () => {
+test("the range before is as long, ends where the range starts, and counts up to as far in", () => {
   const now = Date.parse("2026-09-29T19:42:00Z");
   const day = buckets("24h", now);
   expect(day.previous).toHaveLength(24);
   expect(day.previous.at(-1)).toBe(day.starts[0]! - HOUR);
   expect(day.previous[0]).toBe(Date.parse("2026-09-27T20:00:00Z"));
+  expect(day.until).toBe(Date.parse("2026-09-28T19:42:00Z"));
 
   const month = buckets("30d", now);
   expect(month.previous).toHaveLength(30);
@@ -51,6 +54,61 @@ test("the range before is as long and ends where the range starts", () => {
   before.setDate(before.getDate() - 1);
   expect(month.previous.at(-1)).toBe(before.getTime());
   expect(new Set([...month.previous, ...month.starts]).size).toBe(60);
+  // As far into the range before's last day as now is into today.
+  expect(month.until - midnight(month.until)).toBe(now - midnight(now));
+  expect(midnight(month.until)).toBe(month.previous.at(-1));
+});
+
+/** `range`'s summary over a flat `tokens` an hour from well before it to `now`. */
+function flat(range: Range, now: number, tokens = 10) {
+  const span = buckets(range, now);
+  const hours: UsageHour[] = [];
+  for (let at = span.previous[0]! - 24 * HOUR; at <= now; at += HOUR)
+    hours.push(usage(Math.floor(at / HOUR) * HOUR, "claude", "opus", tokens, tokens * 100));
+  const history = {
+    hours: hours.filter((h) => Date.parse(h.hour) >= span.starts[0]!),
+    runs: [],
+    keys: [],
+    previous: hours,
+  };
+  return {
+    span,
+    summary: summarize([history], span.starts, span.hourly, span.previous, span.until),
+  };
+}
+
+test("a flat rate shows no change at any time of day, though the range's last bucket isn't over", () => {
+  for (const clock of [
+    [0, 30],
+    [9, 30],
+    [16, 5],
+    [23, 50],
+  ] as const)
+    for (const range of ["24h", "7d", "30d"] as const) {
+      const now = new Date(2026, 8, 29, ...clock).getTime();
+      const { summary } = flat(range, now);
+      expect(change(summary.total.cost, summary.previous!.cost)).toBe(0);
+    }
+});
+
+test("days stay local days across a daylight saving change, and the change stays within an hour", () => {
+  // Node follows a change to TZ at once.
+  vi.stubEnv("TZ", "America/New_York");
+  try {
+    // New York falls back on Sunday, November 1, 2026: that day has 25 hours.
+    const now = new Date(2026, 10, 3, 14, 30).getTime();
+    expect(new Date(now).getTimezoneOffset()).toBe(300);
+    const { span, summary } = flat("7d", now);
+    expect(span.starts.every((s) => new Date(s).getHours() === 0)).toBe(true);
+    const lengths = span.starts.slice(1).map((s, i) => (s - span.starts[i]!) / HOUR);
+    expect(lengths.sort((a, b) => a - b)).toEqual([24, 24, 24, 24, 24, 25]);
+    expect(new Date(span.until).getHours()).toBe(14);
+    expect(new Date(span.until).getDate()).toBe(27);
+    // The range really is an hour longer than the range before.
+    expect(tokensOf(summary.total) - tokensOf(summary.previous!)).toBe(10);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 test("history sums by backend, model, and bucket, and keeps unreported cost apart", () => {
@@ -156,6 +214,10 @@ test("the range before sums only its own hours, and only when every host reached
   expect(
     summarize([host([], earlier), host([])], starts, hourly, previous).previous,
   ).toBeUndefined();
+  // Hours from `until` on are past the point the range has reached.
+  expect(
+    summarize([host([], earlier)], starts, hourly, previous, previous.at(-1)!).previous,
+  ).toMatchObject({ input: 40, unpriced: 0 });
 });
 
 test("a change is a fraction of the range before, and needs a range before with some", () => {
@@ -211,16 +273,59 @@ test("models rank by the measure, share the whole, and the chart stacks two and 
   expect(parts[2]!.values.at(-1)).toBe(500_000);
   expect(parts.every((p) => p.values.length === starts.length)).toBe(true);
 
-  // By tokens, every model counts, and the stack's third part keeps its own name when it's one.
-  const rowsByTokens = attribute(summary.models.slice(0, 3), tokensOf);
-  expect(rowsByTokens.map((r) => [r.model.model, r.part])).toEqual([
-    ["sonnet", 0],
-    ["opus", 1],
+  // By tokens the list reorders, but every model keeps its part, and so its color.
+  const byTokens = attribute(summary.models, tokensOf);
+  expect(byTokens.map((r) => [r.model.model, r.part])).toEqual([
+    ["gpt", 2],
+    ["sonnet", 1],
+    ["opus", 0],
+    ["haiku-2", 2],
     ["haiku", 2],
   ]);
-  expect(stack(rowsByTokens, tokensOf).map((p) => p.name)).toEqual(["sonnet", "opus", "haiku"]);
-  const shares = attribute(summary.models, tokensOf).map((r) => r.share!);
-  expect(shares.reduce((a, b) => a + b)).toBeCloseTo(1);
+  expect(stack(byTokens, tokensOf).map((p) => [p.name, p.part])).toEqual([
+    ["opus", 0],
+    ["sonnet", 1],
+    ["3 other models", 2],
+  ]);
+  expect(byTokens.map((r) => r.share!).reduce((a, b) => a + b)).toBeCloseTo(1);
+
+  // With three models, the third part keeps its own name.
+  const three = summary.models.filter((m) => m.model.startsWith("haiku") || m.model === "opus");
+  expect(stack(attribute(three, tokensOf), tokensOf).map((p) => p.name)).toEqual([
+    "opus",
+    "haiku-2",
+    "haiku",
+  ]);
+
+  // A tie on both measures falls to the name, whatever order the hours came in.
+  const tied = summarize(
+    [
+      {
+        hours: [
+          usage(last, "claude", "b-model", 10, 100),
+          usage(last, "claude", "a-model", 10, 100),
+        ],
+        runs: [],
+        keys: [],
+      },
+    ],
+    starts,
+    hourly,
+  );
+  expect(attribute(tied.models, cost).map((r) => [r.model.model, r.part])).toEqual([
+    ["a-model", 0],
+    ["b-model", 1],
+  ]);
+});
+
+test("a reset says its day when it isn't today", () => {
+  const at = (day: number, hour: number) => new Date(2026, 9, day, hour).getTime();
+  // Thursday, October 1, at 10 PM.
+  const now = at(1, 22);
+  expect(resetTime(at(1, 23), now)).toMatch(/^11:00\sPM$/);
+  expect(resetTime(at(2, 17), now)).toMatch(/^tomorrow 5:00\sPM$/);
+  expect(resetTime(at(4, 9), now)).toMatch(/^Sun 9:00\sAM$/);
+  expect(resetTime(at(11, 9), now)).toBe("Oct 11");
 });
 
 test("a chart's axis tops out at four even steps", () => {
@@ -296,14 +401,59 @@ test("Cost leads with the total, its change, and the busiest model, and reads ea
   ).toHaveLength(1);
   expect(labels.filter((l) => l.includes(": $0.00 "))).toHaveLength(29);
 
-  // Arrow keys move along the bars, and the focused one shows its readout.
+  // Arrow keys, Home, and End move along the bars, stopping at either end, and the focused one
+  // shows its numbers.
+  const press = (key: string) =>
+    act(() => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  const readout = () => document.querySelector("[data-readout]")?.textContent;
   act(() => bars.at(-1)!.focus());
-  act(() => {
-    bars.at(-1)!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-  });
+  press("ArrowLeft");
   expect(document.activeElement).toBe(bars.at(-2));
   expect(bars.at(-2)!.tabIndex).toBe(0);
   expect(bars.at(-2)!.hasAttribute("data-active")).toBe(true);
+  expect(readout()).toContain(bars.at(-2)!.getAttribute("aria-label")!.split(":")[0]);
+  press("Home");
+  press("ArrowLeft");
+  expect(document.activeElement).toBe(bars[0]);
+  press("End");
+  press("ArrowRight");
+  expect(document.activeElement).toBe(bars.at(-1));
+  expect(readout()).toContain(bars.at(-1)!.getAttribute("aria-label")!.split(":")[0]);
+
+  // Escape hides the numbers and leaves focus where it was.
+  press("Escape");
+  expect(readout()).toBeUndefined();
+  expect(document.activeElement).toBe(bars.at(-1));
+});
+
+test("an answer for a range left behind doesn't replace the range shown", async () => {
+  let release = () => {};
+  let hold: Promise<void> | undefined;
+  const answer = history([usage(lastHour, "claude", "opus", 100, 2_000_000)]);
+  await renderPage({
+    "accounts/keys/list": () => ({ accounts: [] }),
+    "usage/history": async (params) => {
+      // Only the requests made while it's set wait for it.
+      const wait = hold;
+      await wait;
+      return answer(params);
+    },
+  });
+  hold = new Promise((resolve) => (release = resolve));
+  act(() => document.querySelector<HTMLInputElement>('input[value="7d"]')!.click());
+  await settle();
+  hold = undefined;
+  act(() => document.querySelector<HTMLInputElement>('input[value="90d"]')!.click());
+  await settle();
+  expect(document.querySelectorAll("[data-bar]")).toHaveLength(90);
+
+  // 7 days' answer comes last, and is dropped.
+  release();
+  await settle();
+  expect(document.querySelectorAll("[data-bar]")).toHaveLength(90);
+  expect(document.querySelector('[aria-busy="true"]')).toBeNull();
 });
 
 test("a new range keeps the last one in view, dimmed, until its answer comes", async () => {

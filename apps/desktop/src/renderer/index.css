@@ -44,10 +44,11 @@
   --warning: #d97706;
   --working: var(--accent);
   /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
-     each mixed into the surface so they stay opaque. Both modes compute from their own surface. */
+     each mixed into the surface so they stay opaque. Both modes compute from their own surface,
+     which leaves the neutral lighter than the tint in light and darker in dark, apart in both. */
   --chart-1: var(--accent);
-  --chart-2: color-mix(in oklab, var(--accent) 50%, var(--surface));
-  --chart-3: color-mix(in oklab, var(--foreground) 30%, var(--surface));
+  --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
+  --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
   --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
 }
 
@@ -69,8 +70,6 @@
   --primary-foreground: #0d0d0d;
   --danger: #ff8f8a;
   --warning: #f59e0b;
-  /* A stronger tint, which a dark surface dims more. */
-  --chart-2: color-mix(in oklab, var(--accent) 60%, var(--surface));
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
 }
 

@@ -125,18 +125,19 @@ function dayStart(at: number): number {
 /**
  * Where `range` starts at `now`, and its chart's buckets by start time: the last 24 hours for
  * Past 24h, otherwise whole local days ending today. `previous` are the buckets of the range of
- * the same length just before it, to compare with.
+ * the same length just before it, to compare with. Its last bucket is only compared up to
+ * `until`, as far into it as `now` is into the range's last, since that one isn't over yet.
  */
 export function buckets(
   range: Range,
   now: number,
-): { starts: number[]; previous: number[]; hourly: boolean } {
+): { starts: number[]; previous: number[]; until: number; hourly: boolean } {
   if (range === "24h") {
     // ponytail: UTC hours, which are local hours except in half-hour time zones.
     const hour = Math.floor(now / HOUR) * HOUR;
     const run = (back: number) =>
       Array.from({ length: 24 }, (_, i) => hour - (back + 23 - i) * HOUR);
-    return { starts: run(0), previous: run(24), hourly: true };
+    return { starts: run(0), previous: run(24), until: now - 24 * HOUR, hourly: true };
   }
   const days = rangeDays[range];
   const run = (back: number) =>
@@ -145,7 +146,10 @@ export function buckets(
       d.setDate(d.getDate() - (back + days - 1 - i));
       return dayStart(d.getTime());
     });
-  return { starts: run(0), previous: run(days), hourly: false };
+  // By the calendar, so the clock time holds across a daylight saving change.
+  const until = new Date(now);
+  until.setDate(until.getDate() - days);
+  return { starts: run(0), previous: run(days), until: until.getTime(), hourly: false };
 }
 
 /** Tokens by kind and the cost reported for them. `unpriced` counts tokens no cost came with. */
@@ -202,14 +206,16 @@ export interface Summary {
 }
 
 /**
- * Every host's history summed by backend, model, and bucket, and over the `previous` buckets. An
- * hour outside the buckets, from an answer for a longer range, is left out.
+ * Every host's history summed by backend, model, and bucket, and over the `previous` buckets up
+ * to `until` (by the hour). An hour outside the buckets, from an answer for a longer range, is
+ * left out.
  */
 export function summarize(
   histories: HostHistory[],
   starts: number[],
   hourly: boolean,
   previous: number[] = [],
+  until = Infinity,
 ): Summary {
   const index = new Map(starts.map((start, i) => [start, i]));
   const total = zero();
@@ -259,7 +265,7 @@ export function summarize(
     before = zero();
     for (const h of histories.flatMap((h) => h.previous!)) {
       const at = Date.parse(h.hour);
-      if (earlier.has(hourly ? at : dayStart(at))) add(before, h);
+      if (at < until && earlier.has(hourly ? at : dayStart(at))) add(before, h);
     }
   }
   return {
@@ -284,11 +290,22 @@ export interface Attribution {
   part: number;
 }
 
+/** Models by `measure`, most first, then by tokens, then by name, so ties hold still. */
+function rank(models: Summary["models"], measure: (m: Measures) => number) {
+  return [...models].sort(
+    (a, b) =>
+      measure(b.total) - measure(a.total) ||
+      tokensOf(b.total) - tokensOf(a.total) ||
+      `${a.backend}/${a.model}`.localeCompare(`${b.backend}/${b.model}`),
+  );
+}
+
 /**
- * The range's models by `measure`, most first (then by tokens), each with its share of the whole
- * and the part of the chart's stack it's drawn in: the first two have their own, and the rest
- * share a third, unless there are only three. A model `unreported` says `measure` can't count,
- * such as one with no reported cost, has no share.
+ * The range's models by `measure`, most first, each with its share of the whole and the part of
+ * the chart's stack it's drawn in. The parts are the same in Cost and Tokens, so a model keeps
+ * its color: ranked by cost when any model reported one, else by tokens, the first two have
+ * their own and the rest share a third, unless there are only three. A model `unreported` says
+ * `measure` can't count, such as one with no reported cost, has no share.
  */
 export function attribute(
   models: Summary["models"],
@@ -296,14 +313,13 @@ export function attribute(
   unreported: (m: Measures) => boolean = () => false,
 ): Attribution[] {
   const whole = models.reduce((sum, m) => sum + measure(m.total), 0);
-  const ranked = [...models].sort(
-    (a, b) => measure(b.total) - measure(a.total) || tokensOf(b.total) - tokensOf(a.total),
-  );
-  const drawn = ranked.filter((m) => measure(m.total) > 0).length;
-  return ranked.map((model, i) => ({
+  const priced = models.some((m) => m.total.cost > 0);
+  const stacked = rank(models, priced ? (m) => m.cost : tokensOf);
+  const parts = new Map(stacked.map((m, i) => [m, stacked.length <= 3 ? i : Math.min(i, 2)]));
+  return rank(models, measure).map((model) => ({
     model,
     ...(whole > 0 && !unreported(model.total) && { share: measure(model.total) / whole }),
-    part: drawn <= 3 ? i : Math.min(i, 2),
+    part: parts.get(model)!,
   }));
 }
 
@@ -311,26 +327,33 @@ export function attribute(
 export interface Part {
   name: string;
   backend?: Backend;
+  /** Its place in the stack, from the bottom, which picks its fill. */
+  part: number;
   /** Per bucket. */
   values: number[];
 }
 
-/** The chart's parts, bottom up, from `attribute`'s rows: each part's `measure` per bucket. */
+/**
+ * The chart's parts, bottom up, from `attribute`'s rows: each part's `measure` per bucket. A
+ * part `measure` has none of, such as a model with no reported cost on Cost, is left out.
+ */
 export function stack(rows: Attribution[], measure: (m: Measures) => number): Part[] {
   const parts: (Part & { models: number })[] = [];
   for (const { model, part } of rows) {
     if (measure(model.total) <= 0) continue;
     const values = model.byBucket.map(measure);
     const into = parts[part];
-    if (!into) parts[part] = { name: model.model, backend: model.backend, values, models: 1 };
+    if (!into) parts[part] = { name: model.model, backend: model.backend, part, values, models: 1 };
     else {
       into.values = into.values.map((v, i) => v + values[i]!);
       into.models++;
     }
   }
-  return parts.map(({ models, ...p }) =>
-    models > 1 ? { name: `${models} other models`, values: p.values } : p,
-  );
+  return parts
+    .filter(Boolean)
+    .map(({ models, ...p }) =>
+      models > 1 ? { name: `${models} other models`, part: p.part, values: p.values } : p,
+    );
 }
 
 /** The top of a chart's axis: four even steps of 1, 2, 2.5, or 5 times a power of ten. */
@@ -431,9 +454,7 @@ interface Loaded {
 /** What Cost and Tokens draw: a range's buckets, and the histories in for them so far. */
 interface Frame {
   range: Range;
-  starts: number[];
-  previous: number[];
-  hourly: boolean;
+  span: ReturnType<typeof buckets>;
   histories: HostHistory[];
   loading: boolean;
 }
@@ -450,9 +471,9 @@ function History({
   range: Range;
   now: number;
 }) {
-  const { starts, previous, hourly } = useMemo(() => buckets(range, now), [range, now]);
-  const since = new Date(starts[0]!).toISOString();
-  const before = new Date(previous[0]!).toISOString();
+  const span = useMemo(() => buckets(range, now), [range, now]);
+  const since = new Date(span.starts[0]!).toISOString();
+  const before = new Date(span.previous[0]!).toISOString();
   const [loaded, setLoaded] = useState<Record<string, Loaded | undefined>>({});
   // Here rather than in Breakdown, which unmounts while a new range loads.
   const [by, setBy] = useState<BreakdownBy>("model");
@@ -468,8 +489,8 @@ function History({
       if (state?.history && state.since === since) histories.push(state.history);
       else if (state) loading = true;
     }
-    return { range, starts, previous, hourly, histories, loading };
-  }, [hosts, loaded, since, range, starts, previous, hourly]);
+    return { range, span, histories, loading };
+  }, [hosts, loaded, since, range, span]);
   // The last frame with usage, shown dimmed while another range loads, so nothing jumps.
   const [held, setHeld] = useState<Frame>();
   useEffect(() => {
@@ -494,11 +515,10 @@ function History({
           />
         ))}
       </div>
-      {frame.loading && shown !== frame && (
-        <p role="status" className="sr-only">
-          Loading usage…
-        </p>
-      )}
+      {/* Always there, so a screen reader hears its text change. */}
+      <p role="status" className="sr-only">
+        {frame.loading && shown !== frame ? "Loading usage…" : ""}
+      </p>
       {shown ? (
         <Dashboard frame={shown} stale={shown !== frame} view={view} by={by} onBy={setBy} />
       ) : (
@@ -608,8 +628,13 @@ function Dashboard({
   by: BreakdownBy;
   onBy: (by: BreakdownBy) => void;
 }) {
-  const { range, starts, previous, hourly, histories } = frame;
-  const summary = summarize(histories, starts, hourly, previous);
+  const { range, span, histories } = frame;
+  const { starts, hourly } = span;
+  // Once per answer, not on every render; Cost and Tokens share it.
+  const summary = useMemo(
+    () => summarize(histories, starts, hourly, span.previous, span.until),
+    [histories, starts, hourly, span],
+  );
   const cost = view === "cost";
   const measure = (m: Measures) => (cost ? m.cost : tokensOf(m));
   const format = (n: number) => (cost ? dollars(n) : tokenCount.format(n));
@@ -648,7 +673,9 @@ function Dashboard({
   const rows = attribute(summary.models, measure, unreported);
   const parts = stack(rows, measure);
   const lead = rows[0]?.share ? rows[0] : undefined;
-  const delta = change(whole, summary.previous && measure(summary.previous));
+  // A range with no reported cost has no change to show, rather than −100%.
+  const delta =
+    whole > 0 ? change(whole, summary.previous && measure(summary.previous)) : undefined;
 
   let note = `${summary.threads} ${summary.threads === 1 ? "thread" : "threads"}`;
   if (cost && summary.total.unpriced > 0)
@@ -657,6 +684,7 @@ function Dashboard({
   const DeltaIcon = !delta ? Minus : delta > 0 ? ArrowUpRight : ArrowDownRight;
   const LeadLogo = lead?.model.backend && backends[lead.model.backend].Logo;
   const none = <span className="text-[26px] text-faint-foreground">—</span>;
+  const chartTitle = `${hourly ? "Hourly" : "Daily"} ${cost ? "cost" : "processed tokens"}`;
 
   return (
     <div
@@ -674,11 +702,13 @@ function Dashboard({
         <Stat
           label="Change"
           note={
-            !summary.previous
-              ? "Nothing to compare with"
-              : delta === undefined
-                ? `No ${cost ? "reported cost" : "usage"} in the previous ${rangeWords[range]}`
-                : `From ${format(measure(summary.previous))} in the previous ${rangeWords[range]}`
+            whole === 0
+              ? "No reported cost in this range"
+              : !summary.previous
+                ? "Nothing to compare with"
+                : delta === undefined
+                  ? `No ${cost ? "reported cost" : "usage"} in the previous ${rangeWords[range]}`
+                  : `From ${format(measure(summary.previous))} in the previous ${rangeWords[range]}`
           }
         >
           {delta === undefined ? (
@@ -711,36 +741,33 @@ function Dashboard({
         </Stat>
       </dl>
 
-      <figure className={`${card} min-w-0 px-6 pt-5 pb-5`}>
-        <figcaption className="mb-6 text-[14px] font-medium">
-          {hourly ? "Hourly" : "Daily"} {cost ? "cost" : "processed tokens"}
-        </figcaption>
-        {whole > 0 ? (
-          <>
-            <Bars
-              // Its own per range, so a new range's bars rise together.
-              key={range}
-              title={`${hourly ? "Hourly" : "Daily"} ${cost ? "cost" : "processed tokens"}`}
-              parts={parts}
-              bars={starts.map((start, i) => ({
-                key: start,
-                axis: name(start),
-                name: name(start, true),
-                note: other(summary.byBucket[i]!),
-              }))}
-              format={format}
-              tick={(n, step) =>
-                cost && step >= 1_000_000 ? wholeUsd.format(n / 1_000_000) : format(n)
-              }
-            />
-            {parts.length > 1 && <Split parts={parts} whole={whole} format={format} />}
-          </>
-        ) : (
+      {whole > 0 ? (
+        <Bars
+          // Its own per range, so a new range's bars rise together.
+          key={range}
+          title={chartTitle}
+          parts={parts}
+          bars={starts.map((start, i) => ({
+            key: start,
+            axis: name(start),
+            name: name(start, true),
+            note: other(summary.byBucket[i]!),
+          }))}
+          format={format}
+          tick={(n, step) =>
+            cost && step >= 1_000_000 ? wholeUsd.format(n / 1_000_000) : format(n)
+          }
+        >
+          {parts.length > 1 && <Split parts={parts} whole={whole} format={format} />}
+        </Bars>
+      ) : (
+        <figure className={`${card} min-w-0 px-6 pt-5 pb-5`}>
+          <figcaption className="text-[14px] font-medium">{chartTitle}</figcaption>
           <Empty title="No vendor reported a cost in this range" plain>
             Tokens still count: see them under Tokens.
           </Empty>
-        )}
-      </figure>
+        </figure>
+      )}
 
       <div className="grid items-start gap-5 @3xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <Breakdown
@@ -849,9 +876,10 @@ function Stat({ label, note, children }: { label: string; note: string; children
 }
 
 /**
- * Stacked bars over the buckets on a nice axis, a part per model from the bottom, with a few
- * names under them. Pointing at a bar or focusing it (arrow keys move along) shows its readout;
- * screen readers get the same numbers from each bar's label.
+ * The chart's card: stacked bars over the buckets on a nice axis, a part per model from the
+ * bottom, with a few names under them, then `children`. Pointing at a bar or focusing it (arrow
+ * keys move along) shows its numbers above the plot, over its column, where they never cover a
+ * bar; Escape hides them. Screen readers get the same numbers from each bar's label.
  */
 function Bars({
   title,
@@ -859,6 +887,7 @@ function Bars({
   bars,
   format,
   tick,
+  children,
 }: {
   title: string;
   parts: Part[];
@@ -867,6 +896,7 @@ function Bars({
   format: (n: number) => string;
   /** An axis label, given the axis's step, so whole steps can drop their cents. */
   tick: (n: number, step: number) => string;
+  children?: ReactNode;
 }) {
   const n = bars.length;
   const totals = bars.map((_, i) => parts.reduce((sum, p) => sum + p.values[i]!, 0));
@@ -877,13 +907,23 @@ function Bars({
   const [stop, setStop] = useState(n - 1);
   const plot = useRef<HTMLDivElement>(null);
   // A bar is rounded at its top, barely at the baseline, and its parts barely where they meet.
-  const [bar, part] =
+  const [bar, joint] =
     n > 45
       ? ["rounded-t-[3px] rounded-b-[1px]", ""]
       : n > 12
         ? ["rounded-t-[5px] rounded-b-[2px]", "rounded-[2px]"]
         : ["rounded-t-[8px] rounded-b-[3px]", "rounded-[3px]"];
   const every = Math.ceil(n / 7);
+
+  // Escape hides the numbers, wherever focus is, without moving it or the pointer.
+  useEffect(() => {
+    if (active === undefined) return;
+    const hide = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") setActive(undefined);
+    };
+    window.addEventListener("keydown", hide);
+    return () => window.removeEventListener("keydown", hide);
+  }, [active]);
 
   const move = (e: KeyboardEvent, i: number) => {
     const to = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: n - 1 }[e.key];
@@ -895,135 +935,162 @@ function Bars({
   };
 
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
-      <div className="relative h-56 text-right text-[11px] text-faint-foreground tabular-nums">
-        {/* Sizes the column to the widest label; the real ones sit on their lines. */}
-        <span className="invisible">{tick(top, top / 4)}</span>
-        {ticks.map((t) => (
-          <span
-            key={t}
-            className="absolute right-0 -translate-y-1/2"
-            style={{ top: `${100 - (t / top) * 100}%` }}
-          >
-            {tick(t, top / 4)}
-          </span>
-        ))}
-      </div>
-      <div
-        ref={plot}
-        role="group"
-        aria-label={title}
-        onPointerLeave={() => setActive(undefined)}
-        className="relative flex h-56"
-      >
-        {ticks.map((t) => (
-          <div
-            key={t}
-            aria-hidden
-            className="absolute inset-x-0 border-t border-border"
-            style={{ top: `${100 - (t / top) * 100}%` }}
-          />
-        ))}
-        {bars.map((b, i) => {
-          const total = totals[i]!;
-          const values = parts.map((p) => p.values[i]!);
-          const largest = values.indexOf(Math.max(...values));
-          const label =
-            `${b.name}: ${format(total)}` +
-            (parts.length > 1
-              ? ` (${parts.map((p, k) => `${p.name} ${format(values[k]!)}`).join(", ")})`
-              : "") +
-            `, ${b.note}`;
-          return (
-            <div
-              key={b.key}
-              data-bar
-              role="img"
-              aria-label={label}
-              tabIndex={i === Math.min(stop, n - 1) ? 0 : -1}
-              data-active={active === i || undefined}
-              onPointerEnter={() => setActive(i)}
-              onFocus={() => {
-                setActive(i);
-                setStop(i);
-              }}
-              onBlur={() => setActive(undefined)}
-              onKeyDown={(e) => move(e, i)}
-              className="relative flex h-full min-w-0 flex-1 items-end justify-center rounded-md data-active:bg-hover"
+    // The numbers stay while the pointer is anywhere on the card, so it can move onto them.
+    <figure
+      onPointerLeave={() => setActive(undefined)}
+      className={`${card} min-w-0 px-6 pt-5 pb-5`}
+    >
+      <figcaption className="text-[14px] font-medium">{title}</figcaption>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
+        <div />
+        <div aria-hidden className="relative mt-1 mb-4 h-10">
+          {active !== undefined && active < n && (
+            <Readout
+              at={active}
+              n={n}
+              name={bars[active]!.name}
+              note={bars[active]!.note}
+              total={totals[active]!}
+              parts={parts}
+              format={format}
+            />
+          )}
+        </div>
+        <div
+          aria-hidden
+          className="relative h-56 text-right text-[11px] text-faint-foreground tabular-nums"
+        >
+          {/* Sizes the column to the widest label; the real ones sit on their lines. */}
+          <span className="invisible">{tick(top, top / 4)}</span>
+          {ticks.map((t) => (
+            <span
+              key={t}
+              className="absolute right-0 -translate-y-1/2"
+              style={{ top: `${100 - (t / top) * 100}%` }}
             >
-              {total > 0 && (
-                <div
-                  className={`usage-rise flex w-[min(62%,2.5rem)] flex-col-reverse gap-[2px] overflow-hidden motion-safe:transition-[height] motion-safe:duration-300 ${bar}`}
-                  style={
-                    {
-                      height: `max(3px, ${(total / top) * 100}%)`,
-                      "--delay": `${Math.round((i * 360) / n)}ms`,
-                    } as CSSProperties
-                  }
-                >
-                  {/* Too short to split: one part, the largest. Slivers are left to the readout. */}
-                  {total / top < 0.06 ? (
-                    <div className={`flex-1 ${fills[largest]}`} />
-                  ) : (
-                    values.map(
-                      (v, k) =>
-                        v / top >= 0.02 && (
+              {tick(t, top / 4)}
+            </span>
+          ))}
+        </div>
+        <div ref={plot} role="group" aria-label={title} className="relative flex h-56">
+          {ticks.map((t) => (
+            <div
+              key={t}
+              aria-hidden
+              className="absolute inset-x-0 border-t border-border"
+              style={{ top: `${100 - (t / top) * 100}%` }}
+            />
+          ))}
+          {bars.map((b, i) => {
+            const total = totals[i]!;
+            const values = parts.map((p) => p.values[i]!);
+            const largest = values.indexOf(Math.max(...values));
+            const label =
+              `${b.name}: ${format(total)}` +
+              (parts.length > 1
+                ? ` (${parts.map((p, k) => `${p.name} ${format(values[k]!)}`).join(", ")})`
+                : "") +
+              `, ${b.note}`;
+            // The topmost part takes no gap above it.
+            const last = values.findLastIndex((v) => v > 0);
+            let below = 0;
+            return (
+              <div
+                key={b.key}
+                data-bar
+                role="img"
+                aria-label={label}
+                tabIndex={i === Math.min(stop, n - 1) ? 0 : -1}
+                data-active={active === i || undefined}
+                onPointerEnter={() => setActive(i)}
+                onFocus={() => {
+                  setActive(i);
+                  setStop(i);
+                }}
+                onBlur={() => setActive(undefined)}
+                onKeyDown={(e) => move(e, i)}
+                // Focus shows as the column's wash and a mark under the axis, not as a ring,
+                // which on a narrow column would look like a bar of its own.
+                className="group relative flex h-full min-w-0 flex-1 items-end justify-center rounded-md outline-none data-active:bg-hover focus-visible:bg-selected"
+              >
+                <span
+                  aria-hidden
+                  className="absolute inset-x-1/4 -bottom-2 hidden h-[3px] rounded-full bg-foreground group-focus-visible:block"
+                />
+                {total > 0 && (
+                  <div
+                    className={`usage-rise relative w-[min(62%,2.5rem)] overflow-hidden motion-safe:transition-[height] motion-safe:duration-300 ${bar}`}
+                    style={
+                      {
+                        height: `max(3px, ${(total / top) * 100}%)`,
+                        "--delay": `${Math.round((i * 360) / n)}ms`,
+                      } as CSSProperties
+                    }
+                  >
+                    {/* Each part sits exactly at its share of the bar, a 2px gap cut from its
+                        top; a sliver keeps 1px. A bar too short to split is one part, its
+                        largest, and the readout has the rest. */}
+                    {total / top < 0.035 ? (
+                      <div className={`absolute inset-0 ${fills[parts[largest]!.part]}`} />
+                    ) : (
+                      values.map((v, k) => {
+                        if (v <= 0) return null;
+                        const share = (v / total) * 100;
+                        const style = {
+                          bottom: `${(below / total) * 100}%`,
+                          height:
+                            k === last ? `max(1px, ${share}%)` : `max(1px, calc(${share}% - 2px))`,
+                        };
+                        below += v;
+                        return (
                           <div
                             key={k}
-                            className={`min-h-0 basis-0 ${part} ${fills[k]}`}
-                            style={{ flexGrow: v / total }}
+                            className={`absolute inset-x-0 ${joint} ${fills[parts[k]!.part]}`}
+                            style={style}
                           />
-                        ),
-                    )
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {active !== undefined && active < n && (
-          <Readout
-            at={active}
-            n={n}
-            name={bars[active]!.name}
-            note={bars[active]!.note}
-            total={totals[active]!}
-            parts={parts}
-            format={format}
-          />
-        )}
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div />
+        {/* Names under every few bars, counted back from the latest so it always has one. */}
+        <div aria-hidden className="relative mt-2.5 h-4 text-[11px] text-faint-foreground">
+          {bars.map((b, i) => {
+            if ((n - 1 - i) % every !== 0) return null;
+            const center = ((i + 0.5) / n) * 100;
+            const edge = center < 6 ? "start" : center > 94 ? "end" : "center";
+            return (
+              <span
+                key={b.key}
+                className="absolute whitespace-nowrap"
+                style={
+                  edge === "start"
+                    ? { left: `${(i / n) * 100}%` }
+                    : edge === "end"
+                      ? { right: `${((n - 1 - i) / n) * 100}%` }
+                      : { left: `${center}%`, translate: "-50% 0" }
+                }
+              >
+                {b.axis}
+              </span>
+            );
+          })}
+        </div>
       </div>
-      <div />
-      {/* Names under every few bars, counted back from the latest so it always has one. */}
-      <div aria-hidden className="relative mt-2.5 h-4 text-[11px] text-faint-foreground">
-        {bars.map((b, i) => {
-          if ((n - 1 - i) % every !== 0) return null;
-          const center = ((i + 0.5) / n) * 100;
-          const edge = center < 6 ? "start" : center > 94 ? "end" : "center";
-          return (
-            <span
-              key={b.key}
-              className="absolute whitespace-nowrap"
-              style={
-                edge === "start"
-                  ? { left: `${(i / n) * 100}%` }
-                  : edge === "end"
-                    ? { right: `${((n - 1 - i) / n) * 100}%` }
-                    : { left: `${center}%`, translate: "-50% 0" }
-              }
-            >
-              {b.axis}
-            </span>
-          );
-        })}
-      </div>
-    </div>
+      {children}
+    </figure>
   );
 }
 
 /**
- * A bar's numbers, beside it: its total, each part keyed by a short stroke, and the other
- * measure. Screen readers read the bar's label instead.
+ * A bar's numbers, above the plot over its column: its name and total, then each part keyed by
+ * a short stroke, and the other measure. It leans toward the side its bar is on, so it always
+ * fits. Screen readers read the bar's label instead.
  */
 function Readout({
   at,
@@ -1042,31 +1109,31 @@ function Readout({
   parts: Part[];
   format: (n: number) => string;
 }) {
-  // On the bar's right in the chart's left half, and its left in the right half.
-  const side =
-    at < n / 2
-      ? { left: `calc(${((at + 1) / n) * 100}% + 6px)` }
-      : { right: `calc(${((n - at) / n) * 100}% + 6px)` };
+  // At p% across the plot, its own p% point sits over the bar: flush left at the first bar,
+  // centered in the middle, flush right at the last.
+  const p = ((at + 0.5) / n) * 100;
+  const end = p > 50;
   return (
     <div
-      aria-hidden
-      className="pointer-events-none absolute top-0 z-10 w-max max-w-72 min-w-44 rounded-lg border border-border bg-surface px-3.5 py-3 shadow-composer"
-      style={side}
+      data-readout
+      className={`absolute bottom-0 flex max-w-full flex-col ${end ? "items-end" : "items-start"}`}
+      style={{ left: `${p}%`, translate: `-${p}% 0` }}
     >
-      <p className="text-[11.5px] text-muted-foreground">{name}</p>
-      <p className="mt-1 text-[18px] leading-tight font-semibold">{format(total)}</p>
-      {parts.length > 1 && (
-        <ul className="mt-2.5 flex flex-col gap-1.5 border-t border-border pt-2.5">
-          {parts.map((p, k) => (
-            <li key={k} className="flex items-center gap-2 text-[12px]">
-              <span className={`h-[3px] w-2.5 shrink-0 rounded-full ${fills[k]}`} />
-              <span className="truncate text-muted-foreground">{p.name}</span>
-              <span className="ml-auto pl-4 tabular-nums">{format(p.values[at]!)}</span>
-            </li>
+      <p className="flex items-baseline gap-2 whitespace-nowrap">
+        <span className="text-[12px] text-muted-foreground">{name}</span>
+        <span className="text-[15px] font-semibold tabular-nums">{format(total)}</span>
+      </p>
+      <p className="mt-1 flex max-w-full items-center gap-3 overflow-hidden text-[12px] whitespace-nowrap text-muted-foreground">
+        {parts.length > 1 &&
+          parts.map((part) => (
+            <span key={part.part} className="flex shrink-0 items-center gap-1.5">
+              <span className={`h-[3px] w-2.5 rounded-full ${fills[part.part]}`} />
+              {part.name}
+              <span className="text-foreground tabular-nums">{format(part.values[at]!)}</span>
+            </span>
           ))}
-        </ul>
-      )}
-      <p className="mt-2 text-[11.5px] text-faint-foreground">{note}</p>
+        <span className="min-w-0 truncate text-faint-foreground">{note}</span>
+      </p>
     </div>
   );
 }
@@ -1087,8 +1154,8 @@ function Split({
       <div aria-hidden className="usage-fill flex h-1.5 gap-[2px]">
         {sums.map((s, k) => (
           <div
-            key={k}
-            className={`min-w-[3px] basis-0 rounded-full ${fills[k]}`}
+            key={parts[k]!.part}
+            className={`min-w-[3px] basis-0 rounded-full ${fills[parts[k]!.part]}`}
             style={{ flexGrow: s / whole }}
           />
         ))}
@@ -1097,8 +1164,8 @@ function Split({
         {parts.map((p, k) => {
           const Logo = p.backend && backends[p.backend].Logo;
           return (
-            <li key={k} className="flex min-w-0 items-center gap-2">
-              <span aria-hidden className={`size-2.5 shrink-0 rounded-[3px] ${fills[k]}`} />
+            <li key={p.part} className="flex min-w-0 items-center gap-2">
+              <span aria-hidden className={`size-2.5 shrink-0 rounded-[3px] ${fills[p.part]}`} />
               {Logo && <Logo aria-hidden className="size-3.5 shrink-0" />}
               <span className="truncate text-muted-foreground">{p.name}</span>
               <span className="font-medium whitespace-nowrap tabular-nums">{format(sums[k]!)}</span>
@@ -1150,7 +1217,7 @@ function Breakdown({
           onChange={onBy}
         />
       </div>
-      <div className="flex border-t border-border pt-3 pb-1 text-[12px] text-faint-foreground">
+      <div className="flex gap-2.5 border-t border-border pt-3 pb-1 text-[12px] text-faint-foreground">
         <span>{by === "model" ? "Model" : unit}</span>
         <span className="ml-auto">{what}</span>
         <span className="w-16 text-right">Share</span>
@@ -1277,15 +1344,14 @@ function HostLimits({ host, named, refresh }: { host: Host; named: boolean; refr
   return (
     <section aria-label={host.name} className="mb-10">
       {named && <h2 className="mb-4 text-[13px] font-medium text-muted-foreground">{host.name}</h2>}
+      {/* Always there, so a screen reader hears its text change. */}
+      <p role="status" className="sr-only">
+        {!status && !usage && !error ? "Loading…" : ""}
+      </p>
       {status || (!usage && error) ? (
         <p className="text-[13px] text-muted-foreground">{status ?? usageError(error!)}</p>
       ) : !usage ? (
-        <>
-          <p role="status" className="sr-only">
-            Loading…
-          </p>
-          <LimitsSkeleton />
-        </>
+        <LimitsSkeleton />
       ) : usage.size === 0 ? (
         <Empty title="No usage yet">It shows here once an agent runs.</Empty>
       ) : (
@@ -1326,15 +1392,19 @@ const meterFill: Record<LimitTone, string> = {
   danger: "bg-danger",
 };
 
-/** When a window resets, on the clock: a time today, a weekday and time this week, else a date. */
-function resetTime(at: number, now: number): string {
-  const options: Intl.DateTimeFormatOptions =
-    at - now < 20 * HOUR
-      ? { hour: "numeric", minute: "2-digit" }
-      : at - now < 6 * 24 * HOUR
-        ? { weekday: "short", hour: "numeric", minute: "2-digit" }
-        : { month: "short", day: "numeric" };
-  return new Date(at).toLocaleString(undefined, options);
+/**
+ * When a window resets, on the clock: a time today, "tomorrow" and a time, a weekday and time
+ * within the week, else a date.
+ */
+export function resetTime(at: number, now: number): string {
+  // By local calendar days; rounding absorbs a 23- or 25-hour day.
+  const days = Math.round((dayStart(at) - dayStart(now)) / (24 * HOUR));
+  const when = new Date(at);
+  const time = when.toLocaleString("en", { hour: "numeric", minute: "2-digit" });
+  if (days === 0) return time;
+  if (days === 1) return `tomorrow ${time}`;
+  if (days < 7) return `${when.toLocaleString("en", { weekday: "short" })} ${time}`;
+  return when.toLocaleString("en", { month: "short", day: "numeric" });
 }
 
 /**
