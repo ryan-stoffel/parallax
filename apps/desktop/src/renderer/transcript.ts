@@ -49,7 +49,8 @@ type ItemBody =
       output?: string;
       subagent?: string;
     }
-  | { kind: "todo"; key: string; items: AgentTodoItem[] }
+  /** `active` is the step under way as the agent words it, from Claude Code's task tools. */
+  | { kind: "todo"; key: string; items: AgentTodoItem[]; active?: string }
   /** `turnId` marks a follow-up that never reached the agent. */
   | { kind: "notice"; key: string; tone: "info" | "warning"; text: string; turnId?: string }
   /** How one CLI process of the run ended. */

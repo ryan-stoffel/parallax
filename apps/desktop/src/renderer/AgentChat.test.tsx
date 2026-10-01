@@ -343,6 +343,10 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
         "mcp__wispd__spawn_agent",
         "mcp__wispd__plan_approve",
         "TodoWrite",
+        "TaskCreate",
+        "TaskUpdate",
+        "TaskList",
+        "TaskGet",
         "Frobnicate",
       ].map((name) => [name, icon(name)]),
     ),
@@ -368,6 +372,11 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
     // A wispd tool this app doesn't know is still wispd's.
     mcp__wispd__plan_approve: "lucide-workflow",
     TodoWrite: "lucide-list-checks",
+    // Claude Code's task tools plan as TodoWrite did (RYA-248).
+    TaskCreate: "lucide-list-checks",
+    TaskUpdate: "lucide-list-checks",
+    TaskList: "lucide-list-checks",
+    TaskGet: "lucide-list-checks",
     Frobnicate: "lucide-hammer",
   });
   expect(icon(null)).toBe("lucide-hammer");
@@ -1052,6 +1061,67 @@ test("a turn's plan is one card where it began, its updates lines in the work, i
   ]);
   expect(rowAt(4).querySelectorAll("summary")).toHaveLength(1); // Bash's
   expect(transcriptText()).not.toContain("TodoWrite");
+});
+
+test("Claude Code's task tools make the same card and lines as TodoWrite, and their rows go", () => {
+  // As wispd logs them from Claude Code 2.1.283: each call, with its result's text.
+  const task = (
+    key: string,
+    name: string,
+    input: Record<string, string>,
+    output: string,
+  ): Item => ({
+    kind: "tool",
+    key,
+    callId: key,
+    name,
+    input,
+    status: "ok",
+    output,
+  });
+  const create = (key: string, id: string, subject: string) =>
+    task(
+      key,
+      "TaskCreate",
+      { subject, description: subject },
+      `Task #${id} created successfully: ${subject}`,
+    );
+  const update = (key: string, taskId: string, status: string) =>
+    task(key, "TaskUpdate", { taskId, status }, `Updated task #${taskId} status`);
+  const rows: Item[] = [
+    { kind: "user", key: "u", text: "go" },
+    { kind: "reasoning", key: "r", text: "A plan first." },
+    create("c1", "1", "Read"),
+    create("c2", "2", "Build"),
+    update("p1", "1", "in_progress"),
+    { kind: "tool", key: "b", callId: "b", name: "Bash", input: { command: "ls" }, status: "ok" },
+    update("p2", "1", "completed"),
+    update("p3", "2", "in_progress"),
+    task("l", "TaskList", {}, "#1 [completed] Read\n#2 [in_progress] Build"),
+    update("p4", "2", "completed"),
+    { kind: "assistant", key: "a", text: "Done." },
+  ];
+  render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
+  const rowAt = (i: number) => document.querySelectorAll("[data-index]")[i]!;
+  const text = (r: Element) => r.textContent!.replace(/\s+/g, "");
+  expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
+    "go",
+    "Workedbriefly",
+    "Plan2of2doneDone:ReadDone:Build",
+    "Workedbriefly",
+    "Done.",
+  ]);
+  act(() => rowAt(3).querySelector("button")!.click());
+  const lines = [...rowAt(3).querySelectorAll("p")].map((p) => p.textContent);
+  expect(lines.filter((t) => t?.includes("the plan"))).toEqual([
+    "Updated the planAdded: Build",
+    "Updated the planStarted: Read",
+    "Updated the planFinished: Read",
+    "Updated the planStarted: Build",
+    "Updated the planFinished: Build",
+  ]);
+  expect(rowAt(3).querySelectorAll("summary")).toHaveLength(1); // Bash's
+  expect(transcriptText()).not.toMatch(/Task(Create|Update|List)/);
 });
 
 test("while a run goes, only its latest plan moves, and the work after a plan muses until it starts", () => {
