@@ -115,10 +115,10 @@
 //! Instead of denying a tool call nobody approved, the CLI writes a `can_use_tool` control request
 //! on stdout and waits. The driver reports it as [`Event::ApprovalRequested`] and writes the
 //! answer that [`Run::answer`] gives as a `control_response` on stdin, which stays open while a
-//! request waits. A `control_cancel_request` withdraws one, and any other control request gets an
-//! error response. Accept Edits and Bypass Permissions never ask, a plain no-write run denies
-//! what isn't allowed (`dontAsk`), and a run without `approvals` denies what would prompt, so
-//! their CLIs run as before.
+//! request waits. A `control_cancel_request` withdraws one, as the CLI's exit withdraws every one
+//! left, and any other control request gets an error response. Accept Edits and Bypass
+//! Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`), and a run
+//! without `approvals` denies what would prompt, so their CLIs run as before.
 //!
 //! # Cancel
 //!
@@ -1078,9 +1078,18 @@ impl Driver {
         };
 
         self.drop_undelivered(stdin).await;
+        self.withdraw_left().await;
         self.env_file = None;
         let outcome = self.outcome(exit);
         let _ = self.sink.finish(outcome).await;
+    }
+
+    /// Withdraws every request the CLI still waited on when it exited, so each one ends in this
+    /// attempt's own events, whatever an account fallback (#119) does with its `Finished`.
+    async fn withdraw_left(&mut self) {
+        for approval_id in std::mem::take(&mut self.asks).into_keys() {
+            self.emit(Event::ApprovalWithdrawn { approval_id }).await;
+        }
     }
 
     async fn apply(&mut self, steps: Vec<Step>, stdin: &mut Stdin) {

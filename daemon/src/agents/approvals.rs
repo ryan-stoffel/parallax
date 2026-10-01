@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
+use serde_json::{Map, Value};
 use tokio::time::Instant;
 use wisp_protocol::{AgentApprovalBy, AgentApprovalDecision, AgentApproveResult, ApprovalId};
 
@@ -21,6 +22,11 @@ pub(super) const EXPIRED: &str = "Nobody answered this permission request in tim
 /// What the agent is told when its run is cancelled or wispd stops while a request waits.
 pub(super) const STOPPED: &str = "The run was stopped while this permission request waited.";
 
+/// The input fields that name what a file tool works on: `file_path` (`Read`, `Write`, `Edit`),
+/// `notebook_path` (`NotebookEdit`), and `path` (`Glob`, `Grep`). A worker's edited input must
+/// keep them as the request had them (0031).
+pub(super) const PATH_FIELDS: &[&str] = &["file_path", "notebook_path", "path"];
+
 /// One run's permission requests, as long as its actor lives.
 #[derive(Default)]
 pub(super) struct Approvals {
@@ -33,6 +39,8 @@ struct Pending {
     deadline: Instant,
     /// The request offers rules to always allow, so an answer may give `always`.
     offers_always: bool,
+    /// The request input's [`PATH_FIELDS`].
+    paths: Map<String, Value>,
 }
 
 /// Where a request stands.
@@ -41,6 +49,8 @@ pub(super) enum Lookup {
     Pending {
         /// An answer may give `always`.
         offers_always: bool,
+        /// The request input's [`PATH_FIELDS`].
+        paths: Map<String, Value>,
     },
     /// It ended.
     Resolved(AgentApproveResult),
@@ -49,13 +59,18 @@ pub(super) enum Lookup {
 }
 
 impl Approvals {
-    /// Adds a request that expires at `deadline`.
-    pub fn add(&mut self, id: ApprovalId, deadline: Instant, offers_always: bool) {
+    /// Adds a request for `input` that expires at `deadline`.
+    pub fn add(&mut self, id: ApprovalId, deadline: Instant, offers_always: bool, input: &Value) {
+        let paths = PATH_FIELDS
+            .iter()
+            .filter_map(|&field| Some((field.to_owned(), input.get(field)?.clone())))
+            .collect();
         self.pending.insert(
             id,
             Pending {
                 deadline,
                 offers_always,
+                paths,
             },
         );
     }
@@ -64,6 +79,7 @@ impl Approvals {
         if let Some(pending) = self.pending.get(&id) {
             return Lookup::Pending {
                 offers_always: pending.offers_always,
+                paths: pending.paths.clone(),
             };
         }
         self.resolved
@@ -103,6 +119,14 @@ impl Approvals {
     }
 }
 
+/// Whether `edited` names another file than the request's `paths` did, by any of
+/// [`PATH_FIELDS`], adding or dropping one included.
+pub(super) fn moves_paths(paths: &Map<String, Value>, edited: &Value) -> bool {
+    PATH_FIELDS
+        .iter()
+        .any(|&field| paths.get(field) != edited.get(field))
+}
+
 /// A resolution that isn't the user's.
 pub(super) fn ended(decision: AgentApprovalDecision, by: AgentApprovalBy) -> AgentApproveResult {
     AgentApproveResult {
@@ -117,18 +141,19 @@ pub(super) fn ended(decision: AgentApprovalDecision, by: AgentApprovalBy) -> Age
 mod tests {
     use std::time::Duration;
 
+    use serde_json::json;
     use tokio::time::Instant;
     use wisp_protocol::{AgentApprovalBy, AgentApprovalDecision, ApprovalId};
 
-    use super::{Approvals, Lookup, ended};
+    use super::{Approvals, Lookup, ended, moves_paths};
 
     #[test]
     fn a_request_resolves_once_and_then_answers_with_how_it_ended() {
         let mut approvals = Approvals::default();
         let now = Instant::now();
         let (first, second) = (ApprovalId::generate(), ApprovalId::generate());
-        approvals.add(second, now + Duration::from_mins(1), true);
-        approvals.add(first, now + Duration::from_secs(30), false);
+        approvals.add(second, now + Duration::from_mins(1), true, &json!({}));
+        approvals.add(first, now + Duration::from_secs(30), false, &json!({}));
         assert_eq!(approvals.due(), Some(now + Duration::from_secs(30)));
         assert_eq!(approvals.pending(), [first, second], "oldest first");
         assert!(approvals.expired(now).is_empty());
@@ -136,7 +161,8 @@ mod tests {
         assert!(matches!(
             approvals.lookup(second),
             Lookup::Pending {
-                offers_always: true
+                offers_always: true,
+                ..
             }
         ));
 
@@ -150,5 +176,27 @@ mod tests {
             approvals.lookup(ApprovalId::generate()),
             Lookup::Unknown
         ));
+    }
+
+    /// 0031: a worker's edit may change what a tool does, never which file it does it to.
+    #[test]
+    fn an_edit_that_names_another_file_moves_the_request() {
+        let mut approvals = Approvals::default();
+        let id = ApprovalId::generate();
+        let asked = json!({"file_path": "/w/README.md", "old_string": "a", "new_string": "b"});
+        approvals.add(id, Instant::now() + Duration::from_mins(1), false, &asked);
+        let Lookup::Pending { paths, .. } = approvals.lookup(id) else {
+            panic!("the request waits");
+        };
+        let kept = json!({"file_path": "/w/README.md", "old_string": "a", "new_string": "c"});
+        assert!(!moves_paths(&paths, &kept));
+        for moved in [
+            json!({"file_path": "/etc/hosts", "old_string": "a", "new_string": "b"}),
+            json!({"old_string": "a", "new_string": "b"}),
+            json!({"file_path": "/w/README.md", "path": "/", "old_string": "a"}),
+            json!({"file_path": "/w/README.md", "notebook_path": "/w/n.ipynb"}),
+        ] {
+            assert!(moves_paths(&paths, &moved), "{moved}");
+        }
     }
 }

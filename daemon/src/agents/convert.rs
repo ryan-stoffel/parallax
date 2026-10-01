@@ -14,6 +14,7 @@ use wisp_protocol::{
     RunId,
 };
 
+use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::{
     ApprovalRequest, Event, FailureKind, Outcome, TodoItem, TodoStatus, ToolStatus,
 };
@@ -31,9 +32,6 @@ pub(super) const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;
 /// The largest tool input an `approvalRequested` item carries as JSON, in bytes (RYA-222): more
 /// than a tool call's, since the user has to see what they allow, such as a long plan.
 pub(super) const MAX_APPROVAL_INPUT_BYTES: usize = 256 * 1024;
-
-/// The most "always allow" rules an `approvalRequested` item lists.
-const MAX_ALWAYS_ALLOW_RULES: usize = 16;
 
 /// The longest free text field of any other `agent.output` item — `Text`, `TextDelta`,
 /// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result`, `TurnStarted.text` — in
@@ -125,6 +123,7 @@ pub(crate) fn agent_run(
         model: row.fields.model.clone(),
         effort: row.fields.effort.as_deref().and_then(option_value),
         permission: row.fields.permission.as_deref().and_then(option_value),
+        approvals: row.fields.approvals,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -425,7 +424,7 @@ pub(super) fn approval_requested(
             .always_allow
             .iter()
             .take(MAX_ALWAYS_ALLOW_RULES)
-            .map(|rule| truncate(rule, MAX_ID_BYTES))
+            .map(|rule| truncate(rule, MAX_ALWAYS_ALLOW_RULE_BYTES))
             .collect(),
         interactive: request.interactive,
         expires_at,

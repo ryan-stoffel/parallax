@@ -876,6 +876,31 @@ async fn approvals_need_a_request_and_a_stdin() {
     rest(&mut events).await;
 }
 
+/// RYA-222: as the Claude driver does, a request the CLI still waits on when it exits is
+/// withdrawn before the run's `Finished`.
+#[tokio::test]
+async fn a_request_left_waiting_when_the_cli_exits_is_withdrawn() {
+    let script = Script::from_json(
+        r#"[
+            {"init": {"sessionId": "approval-4"}},
+            {"requestApproval": {"toolName": "Bash", "input": {"command": "pnpm test"}}},
+            {"exit": 1}
+        ]"#,
+    )
+    .unwrap();
+    let backend = FakeBackend::new(launcher(), script);
+    let Started { mut events, .. } = launch(&backend, answering(&root())).await;
+    let request = asked(&mut events).await;
+    let all = rest(&mut events).await;
+    assert_eq!(
+        all[all.len() - 2],
+        Event::ApprovalWithdrawn {
+            approval_id: request.approval_id
+        },
+        "{all:?}"
+    );
+}
+
 /// RYA-222: a run whose client doesn't answer never asks, as Claude Code without its prompt
 /// channel denies instead: the script's requests are skipped, and answers are refused.
 #[tokio::test]

@@ -21,7 +21,7 @@ The shapes below come from reading Claude Code 2.1.286's bundled source, its `--
 
 A run uses the channel only when the client that started it asks for it with `approvals: true` on `agent/start`, `thread/start`, or `project/start` (a coordinator's start-over is `project/start` too). A client sets it only when it can show and answer permission requests. Without it, a run's arguments and behavior are exactly what they were before this record: Manual and Auto deny what would prompt. Without the flag, every Manual run would wait up to 30 minutes on a client that can't answer, such as an app from before RYA-196, or an older app against a newer `wispd` on an SSH host, which updates separately.
 
-- wispd stores the flag with the run, so every launch keeps it: `agent/send` resuming a run whose CLI exited, a coordinator's wake-up (0025), and a resume after a restart. It is part of the start methods' idempotent params, and a retry without it gets `idConflict`.
+- wispd stores the flag with the run, so every launch keeps it: `agent/send` resuming a run whose CLI exited, a coordinator's wake-up (0025), and a resume after a restart. It is part of the start methods' idempotent params, and a retry without it gets `idConflict`. `AgentRun.approvals` reports it, absent when false, so a client can tell whether a run asks, and repeat the flag on a retry.
 - A run a coordinator spawns (`agent/start` with its `coordinatorThread`, as `wispd mcp` sends it) gets its coordinator's flag, as it gets its coordinator's mode (0027). Claude Code's own subagents inside a coordinator's CLI share its channel.
 - `agent/approve` on a run without the flag finds no request, so it fails with `approvalNotFound`, as for any id the run never had.
 
@@ -59,7 +59,7 @@ What wispd answers, as the SDK does:
 - Claude Code fails a request once its stdin closes, so wispd keeps stdin open while one waits, even after the last turn's result.
 - `control_cancel_request {request_id}` from Claude Code means it no longer waits, for example because its turn was interrupted. The request is withdrawn.
 - Any other `control_request` subtype gets an error `control_response`, as the SDK answers one it doesn't serve, so the CLI never waits on wispd.
-- "Always allow": wispd keeps only the `addRules` suggestions that allow, and sends them back with `destination: "session"`. They last as long as the CLI process, and never write the user's or the worktree's settings files. `setMode`, `addDirectories`, and rule removals are dropped: an added directory would let a worker's file tools out of its worktree. A request with `suppress_always_allow_rule` offers none.
+- "Always allow": wispd keeps only the `addRules` suggestions that allow, and sends them back with `destination: "session"`. They last as long as the CLI process, and never write the user's or the worktree's settings files. `setMode`, `addDirectories`, and rule removals are dropped: an added directory would let a worker's file tools out of its worktree. A request with `suppress_always_allow_rule` offers none. Only the rules the `approvalRequested` item shows whole are kept, at most 16 and none longer than 1 KiB, so `always` adds exactly what the user saw.
 - `decision_reason` may hold terminal escapes; wispd strips them.
 
 ### Protocol, behind the `approvals` capability
@@ -88,6 +88,7 @@ What wispd answers, as the SDK does:
 ```
 
 - `input` (a JSON object, at most 1 MiB) and `always` go only with `allow`, and `always` only to a request whose `alwaysAllow` isn't empty. `message` (at most 64 KiB) goes only with `deny`. Anything else is `invalidParams`.
+- In a worker or a normal thread (`workspaceWrite`), an edited `input` must keep the request's `file_path`, `notebook_path`, and `path` as they were, none added or dropped, or the answer is `invalidParams`. No test shows that Claude Code holds an edited input to `--restricted`'s confinement to the worktree, so wispd doesn't rely on it: an edit can change what a file tool does, never which file.
 - The result is the resolution, `{"decision","by","always"?,"message"?}`. It is idempotent: answering a request that already ended changes nothing and returns how it ended, which may be another answer, a timeout, or a cancel.
 - A request this wispd never saw, including one from before it started or any for a run without `approvals`, is the new error kind `approvalNotFound`.
 
@@ -101,11 +102,11 @@ What wispd answers, as the SDK does:
 
 - **A timeout of 30 minutes.** wispd then denies the request, telling the agent that nobody answered in time, to carry on without it if it can, and to say what it needed. The turn goes on, so the agent can finish or ask in its reply. It's `Config::approval_timeout`, which tests shorten.
 - **`agent/cancel`, `thread/delete`, or wispd stopping** deny every waiting request with `interrupt: true` before the CLI is stopped, logged `by: cancel` or `by: stop`.
-- **The CLI exiting** with a request waiting resolves it `withdrawn`, `by: agent`.
+- **The CLI exiting** with a request waiting resolves it `withdrawn`, `by: agent`. The backend withdraws what waits before its run's `Finished`, so after an account fallback (#119) each attempt's requests end before the next attempt runs. An answer that finds the CLI that asked already exited withdraws the request at once.
 
 ### Plan mode and `ExitPlanMode`
 
-Without a prompt host, headless Claude Code doesn't offer `ExitPlanMode` at all. With one, a coordinator in Plan gets it, and its plan arrives as an `interactive` request whose input holds `plan`. Allowing it is "approve the plan": Claude Code leaves plan mode for the mode it was in before, `default` (Manual) when it started in plan mode, and asks through the same channel from then on. A later turn of that CLI process reports `default` in its `system/init`, so wispd stops checking the reported mode once an `ExitPlanMode` is allowed. A denial with a message is "keep planning". The run's stored permission stays `plan`, so a resumed CLI starts planning again. A worker's `--tools` leaves `ExitPlanMode` out, so a plan worker still only plans.
+Without a prompt host, headless Claude Code doesn't offer `ExitPlanMode` at all. With one, a coordinator in Plan gets it, and its plan arrives as an `interactive` request whose input holds `plan`. Allowing it is "approve the plan": Claude Code leaves plan mode for the mode it was in before, `default` (Manual) when it started in plan mode, and asks through the same channel from then on. A later turn of that CLI process reports `default` in its `system/init`, so once an `ExitPlanMode` is allowed, wispd accepts `default` there besides the requested mode, and `acceptEdits` should a newer CLI pick it. Any other mode, or none, still fails the run. A denial with a message is "keep planning". The run's stored permission stays `plan`, so a resumed CLI starts planning again. A worker's `--tools` leaves `ExitPlanMode` out, so a plan worker still only plans.
 
 ### Codex
 
@@ -123,7 +124,7 @@ Out of scope. `codex exec` runs with approval policy `never` (0004, 0013) and ha
 ## Consequences
 
 - Manual, Auto's undecided calls, and Plan's plan approval work in every Claude thread a client starts with `approvals`, coordinators and their subagents included. RYA-196 builds the card from `approvalRequested`, pins it while it is pending, and turns the flag on. Until then, no run asks.
-- A person can now approve what headless Claude Code used to deny for a worker: writes to its own settings, git, and tool-configuration files inside its worktree, which `--restricted` lets only a person or the permission handler approve. Paths outside the worktree stay a hard deny under `--restricted`, and no approval adds a directory. Sandboxed commands still can't reach other hosts' ask: the worker's `strictAllowlist` denies them without asking.
+- A person can now approve what headless Claude Code used to deny for a worker: writes to its own settings, git, and tool-configuration files inside its worktree, which `--restricted` lets only a person or the permission handler approve. Paths outside the worktree stay a hard deny under `--restricted`, no approval adds a directory, and no edited input moves a request to another path. Sandboxed commands still can't reach other hosts' ask: the worker's `strictAllowlist` denies them without asking.
 - A run in Manual waits on the user between tool calls, up to 30 minutes each.
 - After approving a plan, a coordinator's later turns in the same CLI process run in Manual; a resumed one plans again. Moving the run's stored mode on approval is a follow-up for the plan card (RYA-220).
 - A Manual worker asks before it edits a file, but runs Bash without asking: its settings allow `Bash`, which the sandbox confines (0013). A Manual coordinator has no sandbox, so it asks before Bash too.

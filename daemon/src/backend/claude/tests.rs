@@ -15,6 +15,7 @@ use super::{
     ClaudeBackend, NO_WRITE_ARGS, PROMPT_TOOL_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS,
     WORKSPACE_WRITE_ARGS, no_write_settings, write_env_file,
 };
+use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend,
@@ -54,6 +55,7 @@ fn fixture(name: &str) -> &'static str {
         "approval" => include_str!("fixtures/approval.jsonl"),
         "approval-withdrawn" => include_str!("fixtures/approval-withdrawn.jsonl"),
         "exit-plan" => include_str!("fixtures/exit-plan.jsonl"),
+        "approval-exit" => include_str!("fixtures/approval-exit.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -2261,4 +2263,106 @@ fn a_plan_coordinator_may_report_another_mode_only_once_it_left_plan_mode() {
         violation_kind(&translator.line(&coordinator_init("default"))),
         None
     );
+    // Only Claude Code's own modes after plan mode: never one that asks less, or none at all.
+    for (mode, expected) in [
+        ("acceptEdits", None),
+        ("plan", None),
+        ("bypassPermissions", Some(FailureKind::PolicyViolation)),
+        ("auto", Some(FailureKind::PolicyViolation)),
+    ] {
+        let mut translator = plan();
+        translator.line(&coordinator_init("plan"));
+        translator.left_plan_mode();
+        assert_eq!(
+            violation_kind(&translator.line(&coordinator_init(mode))),
+            expected,
+            "{mode}"
+        );
+    }
+    let mut translator = plan();
+    translator.line(&coordinator_init("plan"));
+    translator.left_plan_mode();
+    let modeless = br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","tools":["Read","Bash"]}"#;
+    assert_eq!(
+        violation_kind(&translator.line(modeless)),
+        Some(FailureKind::PolicyViolation)
+    );
+}
+
+/// RYA-222: a request offers to always allow only the rules its `approvalRequested` item shows
+/// whole, at most [`MAX_ALWAYS_ALLOW_RULES`], and an answer with `always` sends exactly those.
+#[test]
+fn always_allow_offers_only_the_rules_the_user_is_shown() {
+    let mut rules: Vec<Value> = (0..20)
+        .map(|n| serde_json::json!({"toolName": "Bash", "ruleContent": format!("make {n}:*")}))
+        .collect();
+    let long = "x".repeat(MAX_ALWAYS_ALLOW_RULE_BYTES);
+    rules.insert(
+        1,
+        serde_json::json!({"toolName": "Bash", "ruleContent": long}),
+    );
+    let request = serde_json::json!({
+        "type": "control_request",
+        "request_id": "r1",
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "Bash",
+            "input": {"command": "make 0"},
+            "permission_suggestions": [{
+                "type": "addRules",
+                "rules": rules,
+                "behavior": "allow",
+                "destination": "localSettings",
+            }],
+        },
+    });
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none")
+        .with_coordinator_tools(true)
+        .with_permission_mode("default")
+        .with_prompts(true);
+    translator.line(&coordinator_init("default"));
+    let steps = translator.line(request.to_string().as_bytes());
+    let [(asked, ask)] = asks(&steps)[..] else {
+        panic!("{steps:?}")
+    };
+    assert_eq!(asked.always_allow.len(), MAX_ALWAYS_ALLOW_RULES);
+    assert_eq!(asked.always_allow[0], "Bash(make 0:*)");
+    assert_eq!(
+        asked.always_allow[1], "Bash(make 1:*)",
+        "a rule too long to show whole isn't offered"
+    );
+    let sent: Vec<&Value> = ask
+        .updates
+        .iter()
+        .flat_map(|update| update["rules"].as_array().unwrap())
+        .collect();
+    let shown: Vec<String> = sent
+        .iter()
+        .map(|rule| format!("Bash({})", rule["ruleContent"].as_str().unwrap()))
+        .collect();
+    assert_eq!(shown, asked.always_allow, "what is sent is what is shown");
+}
+
+/// RYA-222: a request the CLI still waits on when it exits is withdrawn in the run's own events,
+/// before its `Finished`, so it ends even when an account fallback (#119) runs another attempt in
+/// its place.
+#[tokio::test]
+async fn a_request_left_waiting_when_the_cli_exits_is_withdrawn_before_the_run_ends() {
+    let fake = Fake::new("approval-exit");
+    let request = RunRequest {
+        permission: Some(AgentPermission::Manual),
+        approvals: true,
+        ..coordinator(&fake.root())
+    };
+    let Started { mut events, .. } = launch(&fake.backend, request).await;
+    let asked = until_asked(&mut events).await;
+    let all = rest(&mut events).await;
+    assert_eq!(
+        all[all.len() - 2],
+        Event::ApprovalWithdrawn {
+            approval_id: asked.approval_id
+        },
+        "{all:?}"
+    );
+    assert!(matches!(outcome(&all), Outcome::Failed(_)), "{all:?}");
 }

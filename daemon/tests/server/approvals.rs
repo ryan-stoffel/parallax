@@ -362,6 +362,37 @@ async fn an_edited_input_replaces_the_one_asked_with() {
     );
 }
 
+/// 0031: a worker's edit may change what a file tool does, never which file it works on, so an
+/// edit can't take it past its sandbox, whatever Claude Code does with an edited input.
+#[tokio::test]
+async fn a_workers_edit_keeps_the_paths_it_asked_about() {
+    let host = host(asking(edit()), NEVER);
+    let (mut client, run_id, approval_id) = start(&host).await;
+    for moved in [
+        json!({"file_path": "/etc/hosts"}),
+        json!({"old_string": "a", "new_string": "b"}),
+        json!({"file_path": "README.md", "path": "/"}),
+    ] {
+        let allow = AgentApproveParams {
+            input: Some(moved.clone()),
+            ..answer(run_id, approval_id, AgentApprovalAnswer::Allow)
+        };
+        let error = client.call::<AgentApprove>(allow).await.unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{moved}");
+    }
+    let kept = json!({"file_path": "README.md", "old_string": "a", "new_string": "b"});
+    let allow = AgentApproveParams {
+        input: Some(kept.clone()),
+        ..answer(run_id, approval_id, AgentApprovalAnswer::Allow)
+    };
+    client.call::<AgentApprove>(allow).await.unwrap();
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(
+        printed(&events),
+        [json!({"approvalId": approval_id, "decision": "allow", "input": kept})]
+    );
+}
+
 #[tokio::test]
 async fn a_request_nobody_answers_expires_and_the_agent_is_told() {
     let host = host(asking(bash()), Duration::from_millis(300));

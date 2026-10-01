@@ -1337,6 +1337,12 @@ export type AgentRun = {
 	 */
 	permission?: AgentPermission,
 	/**
+	 * True when it forwards its permission requests to the client, as the start method that
+	 * made it asked with `approvals` (RYA-222, decision 0031). It never changes. Absent means
+	 * false: its CLI denies what would prompt.
+	 */
+	approvals?: boolean,
+	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,

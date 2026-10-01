@@ -584,6 +584,10 @@ async fn drive(
     };
 
     stdin.drop_undelivered(&mut control, &mut sink).await;
+    // As the Claude driver does: a request the CLI still waited on ends with it.
+    for approval_id in std::mem::take(&mut state.approvals) {
+        let _ = sink.emit(Event::ApprovalWithdrawn { approval_id }).await;
+    }
     let outcome = state.outcome(exit);
     let _ = sink.finish(outcome).await;
 }

@@ -13,8 +13,9 @@ use super::{
     WORKER_TOOLS,
 };
 use crate::backend::event::{
-    ApprovalRequest, Event, Failure, FailureKind, LimitStatus, LimitWindow, ModelUsage, TodoItem,
-    TodoStatus, ToolStatus, Usage, WarningKind,
+    ApprovalRequest, Event, Failure, FailureKind, LimitStatus, LimitWindow,
+    MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES, ModelUsage, TodoItem, TodoStatus,
+    ToolStatus, Usage, WarningKind,
 };
 use crate::backend::{ApprovalId, ToolPolicy};
 
@@ -61,6 +62,12 @@ const IGNORED_TYPES: &[&str] = &[
 
 /// The longest failure message kept from the CLI's output.
 const MAX_MESSAGE_CHARS: usize = 2000;
+
+/// The modes a `system/init` may report besides the requested one once an `ExitPlanMode` was
+/// approved (0031): `default` (Manual), the mode a CLI that started in plan mode leaves it for,
+/// and [`DEFAULT_PERMISSION_MODE`], should a newer CLI pick Accept Edits. Anything else still
+/// fails the run.
+const LEFT_PLAN_MODES: &[&str] = &["default", DEFAULT_PERMISSION_MODE];
 
 /// What one line of output asks the driver to do.
 #[derive(Debug, PartialEq)]
@@ -191,9 +198,9 @@ impl Translator {
         self
     }
 
-    /// Accepts any permission mode in later `system/init`s: the user approved an `ExitPlanMode`,
-    /// and Claude Code then runs in the mode it was in before plan mode, `default` when it
-    /// started in plan mode.
+    /// Accepts [`LEFT_PLAN_MODES`] as well in later `system/init`s: the user approved an
+    /// `ExitPlanMode`, and Claude Code then runs in the mode it was in before plan mode, `default`
+    /// when it started in plan mode.
     pub fn left_plan_mode(&mut self) {
         self.left_plan = true;
     }
@@ -340,9 +347,10 @@ impl Translator {
         // Claude Code writes init before its first request, so this stops the run before any
         // tool runs.
         let mode = text(message, "permissionMode");
+        let left_plan = self.left_plan && mode.is_some_and(|mode| LEFT_PLAN_MODES.contains(&mode));
         if (self.policy == ToolPolicy::WorkspaceWrite || coordinator)
             && mode != Some(self.permission_mode)
-            && !self.left_plan
+            && !left_plan
         {
             let reported = match mode {
                 Some(mode) => format!("permission mode {mode:?}"),
@@ -693,7 +701,8 @@ fn signed_out(result: &str) -> bool {
 /// last the rest of the CLI process, and as `Tool(content)` for people (RYA-222). Their own
 /// destination, often a settings file, is replaced with `session`. Every other suggestion, such
 /// as a mode or an added directory, is dropped: an added directory would let a worker's file
-/// tools out of its worktree.
+/// tools out of its worktree. Only the rules `approvalRequested` shows whole are kept, at most
+/// [`MAX_ALWAYS_ALLOW_RULES`], so an answer with `always` adds nothing the user didn't see.
 fn allow_rules(suggestions: Option<&Value>) -> (Vec<Value>, Vec<String>) {
     let mut updates = Vec::new();
     let mut names = Vec::new();
@@ -703,22 +712,27 @@ fn allow_rules(suggestions: Option<&Value>) -> (Vec<Value>, Vec<String>) {
         {
             continue;
         }
-        let rules: Vec<&Value> = suggestion
+        let mut rules = Vec::new();
+        for rule in suggestion
             .get("rules")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter(|rule| rule.get("toolName").is_some_and(Value::is_string))
-            .collect();
-        if rules.is_empty() {
-            continue;
-        }
-        for rule in &rules {
-            let tool = rule["toolName"].as_str().unwrap_or_default();
-            names.push(match rule.get("ruleContent").and_then(Value::as_str) {
+        {
+            let Some(tool) = rule.get("toolName").and_then(Value::as_str) else {
+                continue;
+            };
+            let name = match rule.get("ruleContent").and_then(Value::as_str) {
                 Some(content) => format!("{tool}({content})"),
                 None => tool.to_owned(),
-            });
+            };
+            if name.len() <= MAX_ALWAYS_ALLOW_RULE_BYTES && names.len() < MAX_ALWAYS_ALLOW_RULES {
+                names.push(name);
+                rules.push(rule);
+            }
+        }
+        if rules.is_empty() {
+            continue;
         }
         updates.push(serde_json::json!({
             "type": "addRules",

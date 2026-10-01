@@ -778,8 +778,8 @@ async fn a_thread_can_name_its_branch() {
 }
 
 /// RYA-97, RYA-222: a thread's model, effort, permission, and approvals reach its backend when it
-/// starts and when it resumes, and count for `thread/start`'s idempotency. All but approvals come
-/// back on its run. What the backend can't honor is refused before anything is made.
+/// starts and when it resumes, come back on its run, and count for `thread/start`'s idempotency.
+/// What the backend can't honor is refused before anything is made.
 #[tokio::test]
 async fn a_thread_keeps_its_model_effort_permission_and_approvals() {
     let (host, seen) = with_options(editing());
@@ -800,6 +800,7 @@ async fn a_thread_keeps_its_model_effort_permission_and_approvals() {
     assert_eq!(started.run.model.as_deref(), Some("opus"));
     assert_eq!(started.run.effort, Some(AgentEffort::High));
     assert_eq!(started.run.permission, Some(AgentPermission::Plan));
+    assert!(started.run.approvals);
     runs.until(updated_to(AgentStatus::Completed)).await;
 
     // The CLI has exited, so a message resumes the run, with the same options.

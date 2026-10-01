@@ -36,7 +36,9 @@ use wisp_protocol::{
 use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree};
 
 use super::approvals::{self, Approvals, Lookup, ended};
-use super::convert::{self, agent_run, item_bytes, option_name, option_value, output_item};
+use super::convert::{
+    self, WORKSPACE_WRITE, agent_run, item_bytes, option_name, option_value, output_item,
+};
 use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
@@ -616,9 +618,21 @@ impl Actor {
         match self.approvals.lookup(approval_id) {
             Lookup::Resolved(resolution) => return Ok(resolution),
             Lookup::Unknown => return Err(super::approval_not_found(self.id, approval_id)),
-            Lookup::Pending { offers_always } if always && !offers_always => {
+            Lookup::Pending { offers_always, .. } if always && !offers_always => {
                 return Err(ErrorObject::invalid_params(format!(
                     "permission request {approval_id} offers no rules to always allow"
+                )));
+            }
+            // Claude Code may not hold an edited input to its worker's confinement (0031).
+            Lookup::Pending { paths, .. }
+                if self.row.fields.policy == WORKSPACE_WRITE
+                    && input
+                        .as_ref()
+                        .is_some_and(|edited| approvals::moves_paths(&paths, edited)) =>
+            {
+                return Err(ErrorObject::invalid_params(format!(
+                    "an edit to permission request {approval_id} must keep its {}",
+                    approvals::PATH_FIELDS.join(", ")
                 )));
             }
             Lookup::Pending { .. } => {}
@@ -661,11 +675,9 @@ impl Actor {
             self.flush().await;
             return Ok(resolution);
         }
-        // The CLI has exited, and its run's end resolves the request; or nothing can answer it.
-        while sent == Err(AnswerError::Finished) && self.live.is_some() {
-            let event = next_event(&mut self.live).await;
-            self.on_event(event).await;
-        }
+        // The CLI that asked no longer waits: it exited, perhaps with a fallback attempt running
+        // in its place (#119), so the request ends as the CLI's exit ends it. Waiting for the
+        // run's end here would hold up this actor for the fallback attempt's whole run.
         let withdrawn = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
         self.resolve_approval(approval_id, withdrawn).await;
         self.flush().await;
@@ -1180,8 +1192,9 @@ impl Actor {
             Event::ApprovalRequested(request) => {
                 let timeout = self.daemon.agents.approval_timeout();
                 let offers_always = !request.always_allow.is_empty();
+                let deadline = Instant::now() + timeout;
                 self.approvals
-                    .add(request.approval_id, Instant::now() + timeout, offers_always);
+                    .add(request.approval_id, deadline, offers_always, &request.input);
                 let expires_at = jiff::SignedDuration::try_from(timeout)
                     .ok()
                     .and_then(|timeout| jiff::Timestamp::now().checked_add(timeout).ok())
@@ -1485,11 +1498,16 @@ mod tests {
 
     use tokio::sync::{mpsc, oneshot};
     use tokio_util::sync::CancellationToken;
-    use wisp_protocol::{AccountChoice, AccountId, ProjectId, RunId};
+    use wisp_protocol::{
+        AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
+        AgentApproveParams, ApprovalId, ProjectId, RunId,
+    };
     use wisp_store::{Run as RunRow, RunFields, RunState, Worktree};
 
     use super::{Actor, Command, Live, commit_message, session_account};
-    use crate::backend::{Event, EventSink, FollowUp, Run, SendError};
+    use crate::backend::{
+        Answer, AnswerError, ApprovalRequest, Event, EventSink, FollowUp, Run, SendError,
+    };
     use crate::server::Daemon;
 
     #[test]
@@ -1634,5 +1652,73 @@ mod tests {
         drop(sink);
         drop(commands);
         run_task.abort();
+    }
+
+    /// The first attempt of a run whose account fell back (#119): its CLI exited, so it takes no
+    /// more answers.
+    struct ExitedRun;
+
+    impl Run for ExitedRun {
+        fn id(&self) -> RunId {
+            RunId::generate()
+        }
+
+        fn send(&self, _: FollowUp) -> Result<(), SendError> {
+            Err(SendError::Unsupported)
+        }
+
+        fn cancel(&self) {}
+
+        fn answer(&self, _: Answer) -> Result<(), AnswerError> {
+            Err(AnswerError::Finished)
+        }
+    }
+
+    /// RYA-222: a request still pending when its attempt ended, answered while a fallback attempt
+    /// runs in its place, is withdrawn at once. Waiting for the run's end would hold up the actor,
+    /// and every command and expiry with it, for the fallback attempt's whole run.
+    #[tokio::test]
+    async fn an_answer_to_a_request_whose_attempt_ended_resolves_it_while_a_fallback_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        // The fallback attempt's events: open and quiet for as long as the test runs.
+        let (_fallback, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live {
+            run: Arc::new(ExitedRun),
+            events,
+            temp: None,
+        });
+        let approval_id = ApprovalId::generate();
+        let request = ApprovalRequest {
+            approval_id,
+            tool_name: "Bash".to_owned(),
+            input: serde_json::json!({"command": "pnpm test"}),
+            call_id: None,
+            reason: None,
+            blocked_path: None,
+            subagent: None,
+            always_allow: Vec::new(),
+            interactive: false,
+        };
+        actor
+            .on_event(Some(Event::ApprovalRequested(request)))
+            .await;
+
+        let allow = AgentApproveParams {
+            run_id: actor.id,
+            approval_id,
+            decision: AgentApprovalAnswer::Allow,
+            input: None,
+            always: false,
+            message: None,
+        };
+        let resolved = tokio::time::timeout(Duration::from_secs(5), actor.approve(allow))
+            .await
+            .expect("the answer waited for the fallback attempt to end")
+            .unwrap();
+        assert_eq!(resolved.decision, AgentApprovalDecision::Withdrawn);
+        assert_eq!(resolved.by, AgentApprovalBy::Agent);
     }
 }

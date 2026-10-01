@@ -129,7 +129,7 @@ mod tests {
     use serde_json::json;
 
     use super::{AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams};
-    use crate::ThreadStartParams;
+    use crate::{AgentRun, ThreadStartParams};
 
     #[test]
     fn unknown_values_decode_as_unknown() {
@@ -183,5 +183,30 @@ mod tests {
             ..older
         };
         assert_eq!(serde_json::to_value(&newer).unwrap()["approvals"], true);
+    }
+
+    /// A client reads whether a run asks from the run itself, and an older wispd's run, which
+    /// never says, doesn't.
+    #[test]
+    fn a_run_says_whether_it_asks_only_when_it_does() {
+        let older = json!({
+            "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+            "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+            "prompt": "Fix the flaky test.",
+            "policy": "workspaceWrite",
+            "status": "running",
+            "backend": "claude",
+            "accountId": "claude",
+            "createdAt": "2026-10-01T12:00:00Z",
+            "updatedAt": "2026-10-01T12:00:01Z",
+        });
+        let run: AgentRun = serde_json::from_value(older.clone()).unwrap();
+        assert!(!run.approvals);
+        assert_eq!(serde_json::to_value(&run).unwrap(), older);
+        let asking = AgentRun {
+            approvals: true,
+            ..run
+        };
+        assert_eq!(serde_json::to_value(&asking).unwrap()["approvals"], true);
     }
 }

@@ -25,6 +25,7 @@
         "accountId": "claude",
         "coordinatorThread": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
         "permission": "plan",
+        "approvals": true,
         "createdAt": "2026-10-01T11:59:58Z",
         "updatedAt": "2026-10-01T11:59:59Z"
       }

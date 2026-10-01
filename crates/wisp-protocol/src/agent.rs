@@ -249,6 +249,11 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// True when it forwards its permission requests to the client, as the start method that
+    /// made it asked with `approvals` (RYA-222, decision 0031). It never changes. Absent means
+    /// false: its CLI denies what would prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approvals: bool,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.

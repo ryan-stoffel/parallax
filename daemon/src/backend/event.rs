@@ -167,6 +167,14 @@ pub enum Event {
     Unknown,
 }
 
+/// The most rules an [`ApprovalRequest`] offers to always allow: as many as its
+/// `approvalRequested` item shows, so an answer with `always` adds only rules the user saw.
+pub const MAX_ALWAYS_ALLOW_RULES: usize = 16;
+
+/// The longest rule, in bytes, that an [`ApprovalRequest`] offers to always allow, which its
+/// `approvalRequested` item shows whole. A longer one isn't offered.
+pub const MAX_ALWAYS_ALLOW_RULE_BYTES: usize = 1024;
+
 /// What an [`Event::ApprovalRequested`] asks.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -191,7 +199,8 @@ pub struct ApprovalRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<String>,
     /// The rules an answer with `always` adds for the rest of the CLI process, such as
-    /// `Bash(pnpm test:*)`. Empty when the request offers none.
+    /// `Bash(pnpm test:*)`: at most [`MAX_ALWAYS_ALLOW_RULES`], none longer than
+    /// [`MAX_ALWAYS_ALLOW_RULE_BYTES`]. Empty when the request offers none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub always_allow: Vec<String>,
     /// The request is a question for the user, such as `ExitPlanMode`'s plan, rather than one
