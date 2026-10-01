@@ -305,6 +305,27 @@ async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<wisp_store::Repo, ErrorOb
     .await
 }
 
+/// The repo entry a thread starts in: `repo`, or wispd's scratch entry when it names none.
+async fn start_entry(
+    daemon: &Arc<Daemon>,
+    repo: Option<RepoId>,
+) -> Result<wisp_store::Repo, ErrorObject> {
+    let Some(id) = repo else {
+        return scratch_entry(daemon).await;
+    };
+    store(daemon, move |db| {
+        db.get_repo(id.into())
+            .map_err(|e| store_error(&e))?
+            .ok_or_else(|| {
+                ErrorObject::wisp(
+                    ErrorKind::RepoNotFound,
+                    format!("no repo entry has id {id}"),
+                )
+            })
+    })
+    .await
+}
+
 /// `thread/start`: see the module documentation. Idempotent on the run id.
 pub(crate) async fn start(
     daemon: Arc<Daemon>,
@@ -330,22 +351,7 @@ pub(crate) async fn start(
              with no leading or trailing hyphen",
         ));
     }
-    let entry = match repo {
-        Some(id) => {
-            store(&daemon, move |db| {
-                db.get_repo(id.into())
-                    .map_err(|e| store_error(&e))?
-                    .ok_or_else(|| {
-                        ErrorObject::wisp(
-                            ErrorKind::RepoNotFound,
-                            format!("no repo entry has id {id}"),
-                        )
-                    })
-            })
-            .await?
-        }
-        None => scratch_entry(&daemon).await?,
-    };
+    let entry = start_entry(&daemon, repo).await?;
     let scope = ProjectId::try_from(entry.id).map_err(|_| corrupt("repo entry", entry.id))?;
     // A retry, or a run id that is taken, needs no new scratch repository: `agents::create`
     // answers it from the existing run.
