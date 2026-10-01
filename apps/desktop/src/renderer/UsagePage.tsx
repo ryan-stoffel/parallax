@@ -711,7 +711,7 @@ function Dashboard({
                 ? "Nothing to compare with"
                 : delta === undefined
                   ? `No ${cost ? "reported cost" : "usage"} in the previous ${rangeWords[range]}`
-                  : `From ${format(measure(summary.previous))} in the previous ${rangeWords[range]}`
+                  : `From ${format(Math.round(measure(summary.previous)))} in the previous ${rangeWords[range]}`
           }
         >
           {delta === undefined ? (
@@ -924,7 +924,9 @@ function Bars({
   useEffect(() => {
     if (active === undefined) return;
     const hide = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape") setActive(undefined);
+      if (e.key !== "Escape") return;
+      focused.current = undefined;
+      setActive(undefined);
     };
     window.addEventListener("keydown", hide);
     return () => window.removeEventListener("keydown", hide);
@@ -1008,8 +1010,8 @@ function Bars({
                 tabIndex={i === Math.min(stop, n - 1) ? 0 : -1}
                 data-active={active === i || undefined}
                 onPointerEnter={() => setActive(i)}
-                onFocus={() => {
-                  focused.current = i;
+                onFocus={(e) => {
+                  if (e.currentTarget.matches(":focus-visible")) focused.current = i;
                   setActive(i);
                   setStop(i);
                 }}

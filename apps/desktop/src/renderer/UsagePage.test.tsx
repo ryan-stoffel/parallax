@@ -430,14 +430,8 @@ test("Cost leads with the total, its change, and the busiest model, and reads ea
   expect(document.activeElement).toBe(bars.at(-1));
   expect(readout()).toContain(bars.at(-1)!.getAttribute("aria-label")!.split(":")[0]);
 
-  // Escape hides the numbers and leaves focus where it was.
-  press("Escape");
-  expect(readout()).toBeUndefined();
-  expect(document.activeElement).toBe(bars.at(-1));
-
-  // Pointing at a bar shows its numbers instead, while the pointer is on the card. Leaving it
-  // goes back to the focused bar's, and with nothing focused, to none. React makes enter and
-  // leave from `pointerover` and `pointerout`.
+  // Pointing at a bar shows its numbers instead, while the pointer is on the card. React makes
+  // enter and leave from `pointerover` and `pointerout`.
   const figure = document.querySelector("figure")!;
   const enter = (bar: HTMLElement) =>
     act(() => {
@@ -452,11 +446,25 @@ test("Cost leads with the total, its change, and the busiest model, and reads ea
       );
     });
   const nameOf = (bar: HTMLElement) => bar.getAttribute("aria-label")!.split(":")[0]!;
+
+  // Escape hides the numbers and leaves focus where it was, and leaving the card after it
+  // doesn't bring them back.
+  press("Escape");
+  expect(readout()).toBeUndefined();
+  expect(document.activeElement).toBe(bars.at(-1));
   enter(bars[3]!);
   expect(readout()).toContain(nameOf(bars[3]!));
   leave();
-  expect(readout()).toContain(nameOf(bars.at(-1)!));
-  act(() => bars.at(-1)!.blur());
+  expect(readout()).toBeUndefined();
+
+  // Otherwise leaving the card goes back to the focused bar's numbers, and with nothing
+  // focused, to none.
+  press("ArrowLeft");
+  enter(bars[3]!);
+  expect(readout()).toContain(nameOf(bars[3]!));
+  leave();
+  expect(readout()).toContain(nameOf(bars.at(-2)!));
+  act(() => bars.at(-2)!.blur());
   enter(bars[3]!);
   expect(readout()).toContain(nameOf(bars[3]!));
   leave();
