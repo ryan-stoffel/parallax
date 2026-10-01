@@ -41,6 +41,27 @@ test("repo.added, thread.started, and project.created add entries, and repeating
   expect(state.projects).toEqual([project]);
 });
 
+test("project.updated replaces the project with its new name and icon, and repeating it changes nothing", () => {
+  const project = {
+    id: "p-1",
+    name: "wisp",
+    repoPath: "/src/wisp",
+    createdAt: "2026-09-26T12:00:00Z",
+    updatedAt: "2026-09-26T12:00:00Z",
+  };
+  const other = { ...project, id: "p-2", name: "ember" };
+  const state = apply(
+    emptyThreads,
+    { kind: "project.created", project },
+    { kind: "project.created", project: other },
+  );
+  const renamed = { ...project, name: "wisp app", icon: { name: "rocket", color: "green" } };
+  const updated: WispEvent = { kind: "project.updated", project: renamed };
+  const next = apply(state, updated);
+  expect(next.projects).toEqual([renamed, other]);
+  expect(apply(next, updated)).toEqual(next);
+});
+
 test("thread.updated replaces the thread, and thread.deleted removes it", () => {
   const archived = apply(emptyThreads, wispAdded, threadStarted, threadArchived);
   expect(archived.threads).toEqual([{ ...started.thread, archived: true }]);

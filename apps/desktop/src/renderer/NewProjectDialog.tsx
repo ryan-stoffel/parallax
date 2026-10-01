@@ -1,9 +1,16 @@
 import { X } from "lucide-react";
-import { useRef, useState, type Ref } from "react";
+import { useId, useRef, useState, type Ref } from "react";
 
-import type { Project, ProjectCreateParams, Repo } from "../protocol/generated/protocol";
+import type {
+  Project,
+  ProjectCreateParams,
+  ProjectIcon as ProjectIconValue,
+  Repo,
+} from "../protocol/generated/protocol";
+import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, type Host } from "./hosts";
+import { IconPicker } from "./IconPicker";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
 import { IconButton } from "./ui";
@@ -14,7 +21,8 @@ import { WorkspaceMenu, type Workspace } from "./WorkspaceMenu";
  * The Create Project dialog, a native modal <dialog> (focus trap and Escape come free), laid out
  * like Cursor's: the Project's icon and name, then its Workspace, a repository on any host. Open
  * it with `ref.current.showModal()`. Creating closes it and calls `onCreated` with the host it
- * was made on, and wispd's error stays in the dialog.
+ * was made on, and wispd's error stays in the dialog. The icon is a button that opens the icon
+ * picker where the Workspace's host can keep one (`projectEdit`, 0032).
  */
 export function NewProjectDialog({
   ref,
@@ -42,9 +50,17 @@ export function NewProjectDialog({
   // The repository's folder name until one is typed.
   const [typed, setTyped] = useState<string>();
   const name = (typed ?? workspace?.repo.name ?? "").trim();
+  const pickerId = useId();
+  const [chosenIcon, setChosenIcon] = useState<ProjectIconValue>();
+  // The Workspace's host decides, since the Project is made there. Without `projectEdit` its wispd
+  // would drop an icon, so none is shown or sent.
+  const connection = useConnection(workspace?.hostId ?? hostId);
+  const iconable = connection?.status === "connected" && "projectEdit" in connection.capabilities;
+  const icon = iconable ? chosenIcon : undefined;
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
-  // The last try's params, whose id a retry with the same host, name, and path sends again (0007).
+  // The last try's params, whose id a retry with the same host, name, path, and icon sends again
+  // (0007).
   const attempt = useRef<ProjectCreateParams & { hostId: string }>(undefined);
 
   const chooseFolder = async () => {
@@ -63,15 +79,23 @@ export function NewProjectDialog({
     const params =
       last?.hostId === workspace.hostId &&
       last.name === name &&
-      last.repoPath === workspace.repo.path
+      last.repoPath === workspace.repo.path &&
+      last.icon?.name === icon?.name &&
+      last.icon?.color === icon?.color
         ? last
-        : { hostId: workspace.hostId, id: uuidv7(), name, repoPath: workspace.repo.path };
+        : {
+            hostId: workspace.hostId,
+            id: uuidv7(),
+            name,
+            repoPath: workspace.repo.path,
+            ...(icon && { icon }),
+          };
     attempt.current = params;
     setCreating(true);
     setError(undefined);
     const project =
       params.hostId === hostId
-        ? await create(params.id, params.name, params.repoPath)
+        ? await create(params.id, params.name, params.repoPath, params.icon)
         : await createOn(params.hostId, params);
     setCreating(false);
     // Closed while it was creating, as with Escape: drop the late answer.
@@ -87,6 +111,7 @@ export function NewProjectDialog({
       aria-labelledby="new-project-title"
       onClose={() => {
         setChosen(undefined);
+        setChosenIcon(undefined);
         setTyped(undefined);
         setError(undefined);
         attempt.current = undefined;
@@ -114,10 +139,22 @@ export function NewProjectDialog({
           </IconButton>
         </div>
         <div className="flex flex-col items-center gap-3 px-5 pt-3 pb-5">
-          {/* The default icon, for now: RYA-230 makes it a button that picks one. */}
-          <span className="grid size-16 place-items-center rounded-2xl border border-border bg-background">
-            <ProjectIcon className="size-8" />
-          </span>
+          {iconable ? (
+            <button
+              type="button"
+              popoverTarget={pickerId}
+              aria-haspopup="dialog"
+              aria-label="Choose icon"
+              title="Choose icon"
+              className={`${iconTile} hover:bg-hover`}
+            >
+              <ProjectIcon icon={icon} className="size-8" />
+            </button>
+          ) : (
+            <span className={iconTile}>
+              <ProjectIcon className="size-8" />
+            </span>
+          )}
           <input
             aria-label="Name"
             placeholder="New Project"
@@ -157,15 +194,24 @@ export function NewProjectDialog({
           </button>
         </div>
       </form>
+      {/* Outside the form, so Enter in the picker never creates the Project. */}
+      {iconable && <IconPicker id={pickerId} value={icon} onPick={setChosenIcon} align="center" />}
     </dialog>
   );
 }
 
+const iconTile = "grid size-16 place-items-center rounded-2xl border border-border bg-background";
+
 /** `project/create` on a host that isn't open. Its list has the Project once it's opened. */
 async function createOn(
   hostId: string,
-  { id, name, repoPath }: ProjectCreateParams,
+  { id, name, repoPath, icon }: ProjectCreateParams,
 ): Promise<Project | string> {
-  const answer = await window.wisp.request(hostId, "project/create", { id, name, repoPath });
+  const answer = await window.wisp.request(hostId, "project/create", {
+    id,
+    name,
+    repoPath,
+    ...(icon && { icon }),
+  });
   return "error" in answer ? describeError(answer.error) : answer.result.project;
 }

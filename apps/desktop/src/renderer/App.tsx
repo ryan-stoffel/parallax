@@ -107,7 +107,7 @@ export function App() {
       { label: host.name },
       {
         label: project.name,
-        icon: <ProjectIcon />,
+        icon: <ProjectIcon icon={project.icon} />,
         onClick: agentId ? () => openAgent() : undefined,
       },
     ];
