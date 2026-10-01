@@ -2523,6 +2523,36 @@ async fn a_plan_worker_hands_its_plan_over_and_leaves_plan_mode_only_once_allowe
     }
 }
 
+/// RYA-243: the backend lets only a worker that hands over plans list `ExitPlanMode`. The same
+/// transcript stops a Plan worker without `approvals`, and a Manual worker with them, at its
+/// first init, naming the tool, before anything asks.
+#[tokio::test]
+async fn a_worker_that_does_not_hand_over_plans_is_stopped_when_it_lists_exit_plan_mode() {
+    for (permission, approvals) in [
+        (AgentPermission::Plan, false),
+        (AgentPermission::Manual, true),
+    ] {
+        let fake = Fake::new("worker-exit-plan");
+        let request = RunRequest {
+            permission: Some(permission),
+            approvals,
+            ..plan_worker(&fake.root())
+        };
+        let all = run(&fake, request).await;
+        let (kind, message) = failure(&all);
+        assert_eq!(kind, FailureKind::PolicyViolation, "{permission:?}");
+        assert!(
+            message.ends_with("in a worker run: ExitPlanMode"),
+            "{permission:?}: {message}"
+        );
+        assert!(
+            !all.iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_))),
+            "{all:?}"
+        );
+    }
+}
+
 /// RYA-222: a request offers to always allow only the rules its `approvalRequested` item shows
 /// whole, at most [`MAX_ALWAYS_ALLOW_RULES`], and an answer with `always` sends exactly those.
 #[test]

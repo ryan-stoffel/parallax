@@ -631,8 +631,10 @@ impl Actor {
                         .is_some_and(|edited| approvals::moves_paths(&paths, edited)) =>
             {
                 return Err(ErrorObject::invalid_params(format!(
-                    "an edit to permission request {approval_id} must keep its {}",
-                    approvals::PATH_FIELDS.join(", ")
+                    "an edit to permission request {approval_id} must keep its {}, and may \
+                     leave out its {} but not change it",
+                    approvals::PATH_FIELDS.join(", "),
+                    approvals::PLAN_PATH_FIELD,
                 )));
             }
             Lookup::Pending { .. } => {}
