@@ -931,9 +931,10 @@ function PlanApprovalCard({
  * on the body counts, as when the button pressed turned off while its answer went.
  *
  * A card that takes another's place under a still pointer would take a click meant for that one,
- * so it ignores a pointer's clicks until the pointer moves over it or touches it. A card swapped
- * in under a still pointer gets no pointermove. A key's click (`detail` 0) always goes, since a
- * new card's focus starts on its frame, never on a button, and nothing looks turned off meanwhile.
+ * so it ignores a pointer's clicks until the pointer moves over it or a finger touches it. A card
+ * swapped in under a still mouse or a hovering pen gets no pointermove. A key's click (`detail` 0)
+ * always goes, since a new card's focus starts on its frame, never on a button, and nothing looks
+ * turned off meanwhile.
  */
 function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -952,9 +953,10 @@ function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNod
       onPointerMove={() => {
         moved.current = true;
       }}
-      // A touch or a pen's tap is a fresh contact, which can't have been meant for another card.
+      // A touch is a fresh contact, which can't have been meant for another card. A pen can hover
+      // as a mouse does, so like a mouse it moves first.
       onPointerDown={(e) => {
-        if (e.pointerType !== "mouse") moved.current = true;
+        if (e.pointerType === "touch") moved.current = true;
       }}
       onClickCapture={(e) => {
         if (moved.current || e.detail === 0) return;

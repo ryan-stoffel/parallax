@@ -809,12 +809,12 @@ test("the card on screen stays first for as long as it waits: requests that come
   expect(card()!.textContent).toContain("Needs approval · 1 of 2");
 });
 
-test("a new card ignores a pointer's click until the pointer moves over it; a key's click and a touch go at once", () => {
-  const answered = vi.fn();
-  const one = { runId, approval: approval("a1") };
-  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
-  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
-  const show = (asked: Asked[], answers = new Map<string, AnswerState>()) => (
+// --- A new card under a pointer ---
+
+/** A queue whose answers go to `answered`, by approval id and choice. */
+const answeringTo =
+  (answered: (approvalId: string, choice: string) => void) =>
+  (asked: Asked[], answers = new Map<string, AnswerState>()) => (
     <ApprovalQueue
       asked={asked}
       answers={answers}
@@ -824,19 +824,27 @@ test("a new card ignores a pointer's click until the pointer moves over it; a ke
       markdown={(text) => <p>{text}</p>}
     />
   );
-  const done = (...ids: string[]) =>
-    new Map<string, AnswerState>(
-      ids.map((id) => [id, { state: "answered", resolved: { decision: "allowed", by: "user" } }]),
-    );
-  // A mouse's click has a click count; a key's has none.
-  const pointerClick = (el: Element) =>
-    act(() => {
-      el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
-    });
-  const pointer = (type: string, init: PointerEventInit = {}) =>
-    act(() => {
-      inCard("Approve")!.dispatchEvent(new PointerEvent(type, { bubbles: true, ...init }));
-    });
+const done = (...ids: string[]) =>
+  new Map<string, AnswerState>(
+    ids.map((id) => [id, { state: "answered", resolved: { decision: "allowed", by: "user" } }]),
+  );
+// A pointer's click has a click count; a key's has none.
+const pointerClick = (el: Element) =>
+  act(() => {
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+  });
+/** A pointer event on the card's Approve, a mouse's unless `init` says otherwise. */
+const pointer = (type: string, init: PointerEventInit = {}) =>
+  act(() => {
+    inCard("Approve")!.dispatchEvent(new PointerEvent(type, { bubbles: true, ...init }));
+  });
+
+test("a new card ignores a pointer's click until the pointer moves over it; a key's click goes at once", () => {
+  const answered = vi.fn();
+  const show = answeringTo(answered);
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
 
   // The first card appears under a pointer that was already there.
   const rerender = render(show([one, two]));
@@ -858,13 +866,37 @@ test("a new card ignores a pointer's click until the pointer moves over it; a ke
   // A key's click goes at once.
   act(() => inCard("Approve")!.click());
   expect(answered).toHaveBeenLastCalledWith("a2", "allow");
+  expect(answered).toHaveBeenCalledTimes(2);
+});
 
-  // So does a tap, a contact of its own.
-  rerender(show([three], done("a1", "a2")));
+test("a pen hovering as a card is replaced moves first, as a mouse does; a touch goes at once", () => {
+  const answered = vi.fn();
+  const show = answeringTo(answered);
+  const pen = { pointerType: "pen" };
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
+
+  // A pen hovers over the first card's Approve, and the first times out under it.
+  const rerender = render(show([one, two, three]));
+  pointer("pointermove", pen);
+  rerender(show([two, three]));
+  expect(card()!.textContent).toContain("pnpm test a2");
+  // Its tap, with no move since, was aimed at the first.
+  pointer("pointerdown", pen);
+  pointerClick(inCard("Approve")!);
+  expect(answered).not.toHaveBeenCalled();
+  pointer("pointermove", pen);
+  pointer("pointerdown", pen);
+  pointerClick(inCard("Approve")!);
+  expect(answered).toHaveBeenLastCalledWith("a2", "allow");
+
+  // A finger can't hover, so its touch is a contact of its own.
+  rerender(show([three], done("a2")));
   pointer("pointerdown", { pointerType: "touch" });
   pointerClick(inCard("Approve")!);
   expect(answered).toHaveBeenLastCalledWith("a3", "allow");
-  expect(answered).toHaveBeenCalledTimes(3);
+  expect(answered).toHaveBeenCalledTimes(2);
 });
 
 test("a request that queues behind the card is announced by how many wait", () => {
