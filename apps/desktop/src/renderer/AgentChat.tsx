@@ -48,6 +48,16 @@ import type {
   JsonValue,
   PromptImage,
 } from "../protocol/generated/protocol";
+import {
+  ApprovalDetails,
+  ApprovalQueue,
+  ApprovalSummary,
+  queueOf,
+  useAnswers,
+  withAnswers,
+  type Asked,
+  type ToolLook,
+} from "./Approval";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -69,8 +79,10 @@ import {
   failureText,
   groupWork,
   isRunning,
+  waitingApprovals,
   workedFor,
   wispdTools,
+  type Approval,
   type Item,
   type Work,
 } from "./transcript";
@@ -83,6 +95,8 @@ type ViewRow = Row | Work | PlanRow | ProposedPlanRow;
 
 /** Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it. */
 const focusComposer = () => document.getElementById("composer-input")?.focus();
+/** A pinned plan's Markdown, rendered as the transcript renders the agent's. */
+const markdown = (text: string) => <MarkdownText text={text} />;
 
 /**
  * An agent run as a chat: its transcript, the composer, and the run's footer.
@@ -97,6 +111,7 @@ export function AgentChat({
   noRepo,
   tab,
   startOver,
+  others,
 }: {
   hostId: string;
   runId: string;
@@ -122,10 +137,17 @@ export function AgentChat({
     options: RunOptions,
     images: PromptImage[],
   ) => Promise<string | undefined>;
+  /**
+   * Permission requests other runs wait on, pinned here with this run's own, as a Project's other
+   * runs' are in each of its chats (RYA-196).
+   */
+  others?: readonly Asked[];
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
+  // Permission requests (RYA-196): those answered here read as answered at once.
+  const { answers, answer, dismiss } = useAnswers(hostId);
   const [resendError, setResendError] = useState<string>();
   const [prError, setPrError] = useState<string>();
   // Dropped follow-ups already sent again, so their Send again goes away (back on failure).
@@ -149,7 +171,16 @@ export function AgentChat({
     () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
     [sent, resent],
   );
-  const { run, items } = transcript;
+  const { run } = transcript;
+  const items = useMemo(() => withAnswers(transcript.items, answers), [transcript.items, answers]);
+  const asked = useMemo(
+    () =>
+      queueOf(
+        [...waitingApprovals(items).map((approval) => ({ runId, approval })), ...(others ?? [])],
+        answers,
+      ),
+    [items, others, answers, runId],
+  );
   const plan = useMemo(() => latestPlan(items), [items]);
   const showImage = useCallback((id: ImageId) => loadImage(hostId, runId, id), [hostId, runId]);
 
@@ -260,6 +291,17 @@ export function AgentChat({
         </div>
       )}
       <div className="mx-auto w-full max-w-3xl px-6 pb-5">
+        {/* Requests waiting on the user, pinned so they can't scroll away. */}
+        <ApprovalQueue
+          asked={asked}
+          answers={answers}
+          onAnswer={(a, choice, message) => void answer(a, choice, message)}
+          onDismiss={dismiss}
+          describe={describeTool}
+          markdown={markdown}
+          disabledReason={connected ? undefined : (disabledReason ?? "Connecting to wispd…")}
+          returnFocus={focusComposer}
+        />
         {/* A loaded transcript that stopped updating, a failed Send again, or Open PR. */}
         {(error ?? resendError ?? prError) && rows.length > 0 && (
           <p role="alert" className="px-2 pb-2 text-[12.5px] text-danger">
@@ -356,11 +398,14 @@ export function TranscriptView({
   // hasn't answered while the run goes, standing for what the agent is doing before it does
   // anything. It goes before any notices after the message, where the work it stands for will be.
   const view = useMemo(() => {
-    const grouped = groupWork(withPlans(rows));
+    const grouped = groupWork(withPlanApprovals(withPlans(rows)));
     const at = grouped.findLastIndex((r) => r.kind !== "notice");
     const last = grouped[at];
-    // A plan stands apart from the work around it, so work goes on after it as after a message.
-    const waits = ["user", "plan", "proposedPlan"].includes(last?.kind ?? "");
+    // A plan stands apart from the work around it, so work goes on after it as after a message,
+    // and so does an answered request. One still waiting holds the agent until it's answered.
+    const waits =
+      ["user", "plan", "proposedPlan"].includes(last?.kind ?? "") ||
+      (last?.kind === "approval" && !!last.resolved);
     if (!stalled && (last?.kind === "pending" || (live && waits)))
       grouped.splice(at + 1, 0, { kind: "work", key: "work:pending", items: [] });
     return grouped;
@@ -436,6 +481,32 @@ export function TranscriptView({
       </div>
     </div>
   );
+}
+
+// A proposed plan the user sent back, by its row, so the row keeps its object (RowView's memo).
+const sentBack = new WeakMap<ProposedPlanRow, ProposedPlanRow>();
+
+/**
+ * Proposed plans with their `ExitPlanMode` requests (RYA-196): one still waiting is pinned over the
+ * composer instead, so it doesn't show twice, and one the user sent back reads as not approved,
+ * however its call ended.
+ */
+function withPlanApprovals(rows: Exclude<ViewRow, Work>[]): Exclude<ViewRow, Work>[] {
+  const asked = new Map<string, Approval>();
+  for (const row of rows)
+    if (row.kind === "approval" && row.request.toolName === "ExitPlanMode" && row.request.callId)
+      asked.set(row.request.callId, row);
+  if (asked.size === 0) return rows;
+  return rows.flatMap((row): Exclude<ViewRow, Work>[] => {
+    if (row.kind !== "proposedPlan") return [row];
+    const approval = asked.get(row.callId);
+    if (approval && !approval.resolved) return [];
+    const { decision, by } = approval?.resolved ?? {};
+    if (decision !== "denied" || by !== "user" || row.status === "denied") return [row];
+    const denied = sentBack.get(row) ?? { ...row, status: "denied" as const };
+    sentBack.set(row, denied);
+    return [denied];
+  });
 }
 
 interface RowProps {
@@ -555,6 +626,23 @@ export const RowView = memo(function RowView({
         <ProposedPlan id={row.key} status={row.status} open={open} onToggle={onToggle}>
           <MarkdownText text={row.plan} />
         </ProposedPlan>
+      );
+    case "approval":
+      // A permission request's line: waiting, then how it was answered (RYA-196).
+      return (
+        <Disclosure
+          id={row.key}
+          open={open}
+          onToggle={onToggle}
+          summary={
+            <ApprovalSummary
+              approval={row}
+              tool={describeTool(row.request.toolName, row.request.input)}
+            />
+          }
+        >
+          <ApprovalDetails approval={row} />
+        </Disclosure>
       );
     case "notice":
       return (
@@ -1088,6 +1176,21 @@ function mcpTool(name: string | null) {
 
 /** The skill a Skill call runs: `skill`, or `command` from older Claude Code versions. */
 const skillName = (input?: JsonValue) => toolHint(input, ["skill", "command"]);
+
+/**
+ * A tool as a permission request names it (RYA-196): its kind's icon, then its name and what it
+ * acts on, as its row would, or an MCP server's tool by the server, wispd's too. It hasn't run
+ * yet, so a wispd tool isn't named by what it did.
+ */
+export function describeTool(name: string, input?: JsonValue): ToolLook {
+  const item = { kind: "tool", key: "", callId: "", name, input } as const;
+  const named = namedTool(item);
+  return {
+    Icon: icons[toolKind(item)],
+    label: named?.label ?? name,
+    detail: named ? named.detail : toolHint(input),
+  };
+}
 
 /**
  * A tool call its row names readably: an MCP server's tool by the server, including a wispd tool

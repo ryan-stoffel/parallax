@@ -53,8 +53,27 @@ type ItemBody =
   | { kind: "todo"; key: string; items: AgentTodoItem[]; active?: string }
   /** `turnId` marks a follow-up that never reached the agent. */
   | { kind: "notice"; key: string; tone: "info" | "warning"; text: string; turnId?: string }
+  /**
+   * A permission request (RYA-196, 0031): what the agent asks to do, and how it ended, which is
+   * absent while it waits.
+   */
+  | { kind: "approval"; key: string; request: ApprovalRequest; resolved?: ApprovalResolution }
   /** How one CLI process of the run ended. */
   | { kind: "end"; key: string; outcome: AgentOutcome };
+
+/** A permission request as `approvalRequested` carries it. */
+export type ApprovalRequest = Omit<Extract<AgentOutputItem, { kind: "approvalRequested" }>, "kind">;
+
+/**
+ * How a permission request ended, as `approvalResolved` or `agent/approve` says, and when. `gone`
+ * is this app's own: `agent/approve` found no such request, so it ended without saying how here.
+ */
+export type ApprovalResolution = Omit<
+  Extract<AgentOutputItem, { kind: "approvalResolved" }>,
+  "kind" | "approvalId"
+> & { at?: string; gone?: boolean };
+
+export type Approval = Extract<Item, { kind: "approval" }>;
 
 export interface Transcript {
   /** Absent until `agent.started` is in. */
@@ -96,6 +115,11 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
         });
         break;
       case "agent.finished":
+        // A request still waiting ends with the run, as when wispd stopped without resolving it.
+        items.forEach((item, i) => {
+          if (item.kind === "approval" && !item.resolved)
+            items[i] = { ...item, resolved: { decision: "withdrawn", by: "stop", at: time } };
+        });
         push({ kind: "end", key: key(), outcome: event.outcome });
         break;
       case "agent.wakeupsPaused":
@@ -107,7 +131,7 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
         });
         break;
       case "agent.output":
-        event.items.forEach((item, i) => applyOutput(items, item, key(i)));
+        event.items.forEach((item, i) => applyOutput(items, item, key(i), time));
         break;
     }
     for (let i = before; i < items.length; i++) items[i] = { ...items[i]!, at: time };
@@ -132,7 +156,7 @@ export function updateRun(run: AgentRun | undefined, event: WispEvent): AgentRun
 
 // ponytail: copies the item list per event and scans back for matches; fine for
 // thousands of items, since wispd coalesces output every 50 ms.
-function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
+function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: string) {
   const last = items.at(-1);
   // The assistant message a text item continues: same vendor id, or the partial one just before.
   const target = (messageId?: string) => {
@@ -229,8 +253,79 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string) {
         items.push({ kind: "assistant", key, text: item.result });
       break;
     }
+    case "approvalRequested": {
+      const { kind: _, ...request } = item;
+      items.push({ kind: "approval", key, request });
+      // Claude Code fills ExitPlanMode's request from the plan file the model wrote, and the call
+      // itself may carry no plan. The call takes the request's, so its plan card shows it (0031).
+      const plan = isObject(item.input) ? item.input["plan"] : undefined;
+      const i = items.findLastIndex((x) => x.kind === "tool" && x.callId === item.callId);
+      const call = items[i];
+      if (
+        item.toolName === "ExitPlanMode" &&
+        typeof plan === "string" &&
+        call?.kind === "tool" &&
+        call.name === "ExitPlanMode" &&
+        (call.input === undefined || isObject(call.input)) &&
+        typeof call.input?.["plan"] !== "string"
+      )
+        items[i] = { ...call, input: { ...call.input, plan } };
+      break;
+    }
+    case "approvalResolved": {
+      const { kind: _, approvalId, ...resolution } = item;
+      const i = items.findLastIndex(
+        (x) => x.kind === "approval" && x.request.approvalId === approvalId,
+      );
+      const asked = items[i];
+      if (asked?.kind === "approval")
+        items[i] = { ...asked, resolved: { ...resolution, at: time } };
+      break;
+    }
     // sessionStarted and usage aren't shown.
   }
+}
+
+const isObject = (v?: JsonValue): v is Record<string, JsonValue> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
+/** The permission requests still waiting, oldest first. */
+export const waitingApprovals = (items: readonly Item[]): Approval[] =>
+  items.filter((i): i is Approval => i.kind === "approval" && !i.resolved);
+
+/** By run id: a run's permission requests, kept while they wait (`trackApprovals`). */
+export type ApprovalsByRun = Readonly<Record<string, Transcript>>;
+
+/**
+ * Applies a Project's events to each run's waiting permission requests: a request joins, and its
+ * resolution or its run's next `agent.finished` takes it out, as `applyEvents` reads them. Repeats
+ * are skipped by each run's `seq`, so pages of a run's log and the Project's subscription can
+ * overlap.
+ */
+export function trackApprovals(
+  byRun: ApprovalsByRun,
+  events: readonly LoggedEvent[],
+): ApprovalsByRun {
+  let next = byRun;
+  for (const logged of events) {
+    const { event } = logged;
+    let kept: Extract<WispEvent, { kind: "agent.output" | "agent.finished" }>;
+    if (event.kind === "agent.output") {
+      const items = event.items.filter(
+        (i) => i.kind === "approvalRequested" || i.kind === "approvalResolved",
+      );
+      if (items.length === 0) continue;
+      kept = { ...event, items };
+    } else if (event.kind === "agent.finished") kept = event;
+    else continue;
+    const t = applyEvents(
+      next[kept.runId] ?? emptyTranscript,
+      [{ ...logged, event: kept }],
+      kept.runId,
+    );
+    next = { ...next, [kept.runId]: { seq: t.seq, items: waitingApprovals(t.items) } };
+  }
+  return next;
 }
 
 /** The prefix of a coordinator's wispd tools as Claude Code names them (0019), `mcp__wispd__spawn_agent`. */

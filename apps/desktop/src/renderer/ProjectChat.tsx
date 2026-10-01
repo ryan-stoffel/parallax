@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import type { Project, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat } from "./AgentChat";
+import type { Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -23,12 +24,15 @@ export function ProjectChat({
   project,
   prompt,
   startCoordinator,
+  others,
 }: {
   hostId: string;
   project: Project;
   /** The coordinator's first message, shown until its transcript loads. */
   prompt?: string;
   startCoordinator: ThreadsView["startCoordinator"];
+  /** Permission requests the Project's subagents wait on, pinned over the composer (RYA-196). */
+  others?: readonly Asked[];
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -106,6 +110,7 @@ export function ProjectChat({
         tab={tab}
         // A new coordinator replaces one that can't take messages (0024).
         startOver={(text, options, images) => start(uuidv7(), text, options, images)}
+        others={others}
       />
     );
 

@@ -32,7 +32,8 @@ import { backends, models, type Model, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). Every mode but Bypass keeps a
-// worker in its sandbox (0013). wisp can't show Manual's approval requests yet, so they're denied.
+// worker in its sandbox (0013). Manual's requests, and Auto's undecided ones, come to the chat as
+// approval cards (RYA-196); an older wispd denies them instead.
 const accessOptions: Record<AgentPermission, PickerOption> = {
   auto: {
     value: "auto",
@@ -44,7 +45,7 @@ const accessOptions: Record<AgentPermission, PickerOption> = {
     value: "manual",
     label: "Manual",
     icon: <Hand />,
-    description: "Asks before edits and commands. Until wisp shows those requests, they're denied.",
+    description: "Asks you before edits and commands.",
   },
   edit: {
     value: "edit",
