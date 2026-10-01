@@ -5,9 +5,8 @@ import {
   Brain,
   Check,
   ChevronRight,
-  CircleDashed,
-  CircleX,
   Copy,
+  Ellipsis,
   FilePlus,
   FileText,
   FolderGit2,
@@ -26,6 +25,7 @@ import {
   SquareTerminal,
   TriangleAlert,
   Workflow,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -874,7 +874,9 @@ const toolKinds: Partial<Record<string, Kind>> = {
 function toolKind(item: Extract<Item, { kind: "tool" }>): Kind {
   if (item.name?.startsWith(wispdTools)) return "wispd";
   if (mcpTool(item.name)) return "mcp";
-  return toolKinds[item.name ?? ""] ?? "working";
+  // The table's own names only, so "constructor" or "toString" is any other tool.
+  const name = item.name ?? "";
+  return (Object.hasOwn(toolKinds, name) && toolKinds[name]) || "working";
 }
 
 /** What the agent is doing: a label, what it's doing it to, and the loader drawn beside them. */
@@ -925,7 +927,8 @@ function ToolCall({
   const named = wispdCall(item) ?? namedTool(item);
   const kind = toolKind(item);
   const status = item.status ?? (live ? "running" : "none");
-  const look = statuses[status];
+  // A status newer than this app reads as no result.
+  const look = (statuses as Partial<Record<string, Look>>)[status] ?? statuses.none;
   const Icon = icons[kind];
   return (
     <Disclosure
@@ -939,12 +942,12 @@ function ToolCall({
             {status === "running" ? (
               <Loader {...loaders[kind]} size={14} />
             ) : (
-              <Icon className="size-3.5" />
+              <Icon className={`size-3.5 ${look.faded ? "opacity-50" : ""}`} />
             )}
             {look.mark && (
               <look.mark
                 strokeWidth={3}
-                className="absolute -right-1 -bottom-1 size-2 rounded-full bg-background"
+                className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
               />
             )}
           </span>
@@ -968,17 +971,24 @@ function ToolCall({
   );
 }
 
-// How a tool call went, by its icon's color and mark, and in words for screen readers.
-const statuses: Record<
-  "running" | AgentToolStatus | "none",
-  { color: string; mark?: LucideIcon; said: string }
-> = {
+/** How a tool call went: its icon's color, mark, and fading, and in words for screen readers. */
+interface Look {
+  color: string;
+  mark?: LucideIcon;
+  /** Whether the icon fades, as for a call that never finished. */
+  faded?: boolean;
+  said: string;
+}
+
+// An unfinished call's icon is half its faint color, so it stands apart from a finished one's
+// muted icon, and its mark is an ellipsis, which no round icon can swallow as a ring could.
+const statuses = {
   running: { color: "", said: "Running" },
   ok: { color: "text-muted-foreground", said: "Succeeded" },
-  error: { color: "text-danger", mark: CircleX, said: "Failed" },
+  error: { color: "text-danger", mark: X, said: "Failed" },
   denied: { color: "text-danger", mark: Ban, said: "Denied" },
-  none: { color: "text-faint-foreground", mark: CircleDashed, said: "No result" },
-};
+  none: { color: "text-faint-foreground", mark: Ellipsis, faded: true, said: "No result" },
+} satisfies Record<"running" | AgentToolStatus | "none", Look>;
 
 /** A collapsed-by-default row, open state kept by the transcript. */
 function Disclosure({

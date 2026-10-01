@@ -10,6 +10,7 @@ import type {
   AgentRun,
   AgentRunResult,
   AgentTodoItem,
+  AgentToolStatus,
   LoggedEvent,
 } from "../protocol/generated/protocol";
 import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
@@ -326,11 +327,15 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
         "Agent",
         "Bash",
         "Read",
+        "NotebookRead",
+        "LS",
         "Grep",
         "Glob",
         "WebSearch",
+        "ToolSearch",
         "Edit",
         "MultiEdit",
+        "NotebookEdit",
         "Write",
         "WebFetch",
         "mcp__linear__save_issue",
@@ -346,11 +351,15 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
     Agent: "lucide-bot",
     Bash: "lucide-square-terminal",
     Read: "lucide-file-text",
+    NotebookRead: "lucide-file-text",
+    LS: "lucide-file-text",
     Grep: "lucide-search",
     Glob: "lucide-search",
     WebSearch: "lucide-search",
+    ToolSearch: "lucide-search",
     Edit: "lucide-pencil",
     MultiEdit: "lucide-pencil",
+    NotebookEdit: "lucide-pencil",
     Write: "lucide-file-plus",
     WebFetch: "lucide-globe",
     mcp__linear__save_issue: "lucide-plug",
@@ -369,7 +378,7 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
 });
 
 test("a failed, denied, or unfinished tool call marks its icon, and says how it went in words", () => {
-  const tool = (status?: "ok" | "error" | "denied"): Item => ({
+  const tool = (status?: AgentToolStatus): Item => ({
     kind: "tool",
     key: "t",
     callId: "1",
@@ -377,31 +386,62 @@ test("a failed, denied, or unfinished tool call marks its icon, and says how it 
     input: { command: "git push" },
     ...(status && { status }),
   });
-  // The kind's icon, and the mark at its corner.
+  // The kind's icon, whether it fades, and the mark at its corner.
   const slot = () => {
     const icon = document.querySelector("summary .lucide-square-terminal")!;
     return {
       color: icon.parentElement!.className.match(/text-[\w-]+/)?.[0],
+      faded: icon.classList.contains("opacity-50"),
       mark: icon.nextElementSibling?.getAttribute("class")?.split(" ")[1],
       said: said(),
     };
   };
+  const unfinished = {
+    color: "text-faint-foreground",
+    faded: true,
+    mark: "lucide-ellipsis",
+    said: "No result",
+  };
   row(tool("error"));
-  expect(slot()).toEqual({ color: "text-danger", mark: "lucide-circle-x", said: "Failed" });
+  expect(slot()).toEqual({ color: "text-danger", faded: false, mark: "lucide-x", said: "Failed" });
   act(() => unmount());
   row(tool("denied"));
-  expect(slot()).toEqual({ color: "text-danger", mark: "lucide-ban", said: "Denied" });
+  expect(slot()).toEqual({
+    color: "text-danger",
+    faded: false,
+    mark: "lucide-ban",
+    said: "Denied",
+  });
   act(() => unmount());
   // No result, and the run has stopped: unfinished.
   row(tool());
-  expect(slot()).toEqual({
-    color: "text-faint-foreground",
-    mark: "lucide-circle-dashed",
-    said: "No result",
-  });
+  expect(slot()).toEqual(unfinished);
+  act(() => unmount());
+  // A status from a newer wispd reads as no result, rather than breaking the row.
+  row(tool("cancelled" as AgentToolStatus));
+  expect(slot()).toEqual(unfinished);
   act(() => unmount());
   row(tool("ok"));
-  expect(slot()).toEqual({ color: "text-muted-foreground", mark: undefined, said: "Succeeded" });
+  expect(slot()).toEqual({
+    color: "text-muted-foreground",
+    faded: false,
+    mark: undefined,
+    said: "Succeeded",
+  });
+});
+
+test("a tool named like an object's own property is any other tool, running or done", () => {
+  const tool: Item = { kind: "tool", key: "t", callId: "1", name: "constructor", input: {} };
+  expect(activity(tool).loader).toEqual({ kind: "orbit", variant: "chase" });
+  render(<RowView row={tool} live open={false} onToggle={() => {}} />);
+  expect(
+    document.querySelector('summary [data-loader="orbit"][data-variant="chase"]'),
+  ).not.toBeNull();
+  expect(said()).toBe("Running");
+  act(() => unmount());
+  render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
+  expect(document.querySelector("summary svg.lucide-hammer")).not.toBeNull();
+  expect(said()).toBe("Succeeded");
 });
 
 test("a coordinator's no-write stop lists the files it changed", () => {
