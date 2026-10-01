@@ -1,5 +1,6 @@
 // The agent's plan (RYA-220): its checklist as a card with progress, a strip over the composer
-// while the run goes, and Claude Code's proposed plan. Pure helpers first, then the components.
+// while the run goes, and Claude Code's proposed plan. The checklist comes from wispd, as for
+// TodoWrite, or from Claude Code's task tools (RYA-248). Pure helpers first, then the components.
 import { Ban, ChevronDown, ChevronUp, CircleX, ClipboardList, ListChecks } from "lucide-react";
 import {
   memo,
@@ -11,11 +12,17 @@ import {
   type ToggleEvent,
 } from "react";
 
-import type { AgentTodoItem, AgentToolStatus, JsonValue } from "../protocol/generated/protocol";
+import type {
+  AgentTodoItem,
+  AgentTodoStatus,
+  AgentToolStatus,
+  JsonValue,
+} from "../protocol/generated/protocol";
 import { Loader, type LoaderStyle } from "./Loader";
 import type { Item } from "./transcript";
 
 type Todo = Extract<Item, { kind: "todo" }>;
+type Tool = Extract<Item, { kind: "tool" }>;
 
 /**
  * A turn's plan, in place of its first checklist: the turn's latest checklist, so the card
@@ -61,17 +68,129 @@ const updates = new WeakMap<Item, PlanUpdate>();
 const sameList = (a: readonly AgentTodoItem[], b: readonly AgentTodoItem[]) =>
   a.length === b.length && a.every((s, i) => s.text === b[i]!.text && s.status === b[i]!.status);
 
+/** A step of Claude Code's task list: its subject, state, and `activeForm`. */
+interface Task {
+  text: string;
+  status: AgentTodoStatus;
+  active?: string;
+  /** Done with the rest of a finished list, which a later turn puts away. */
+  away?: boolean;
+}
+
+const failed = (item: Tool) => item.status === "error" || item.status === "denied";
+const field = (input: JsonValue | undefined, name: string) => {
+  const value = isObject(input) ? input[name] : undefined;
+  return typeof value === "string" ? value : undefined;
+};
+const taskStates: Partial<Record<string, AgentTodoStatus>> = {
+  pending: "pending",
+  in_progress: "inProgress",
+  completed: "completed",
+};
+
+/**
+ * Applies a call of Claude Code's task tools to `tasks`, and says whether it applied. TaskCreate
+ * adds a step under the id its result names, "Task #3 created successfully: …", or under its call
+ * until that result arrives or if it can't be read, so the step shows either way. TaskUpdate
+ * changes a step's status, subject, or `activeForm`, or removes it, by `taskId`; Claude Code
+ * answers one it couldn't apply in words, such as "Task not found", without failing the call, so
+ * only "Updated task #…" or no result yet counts. TaskList, TaskGet, and failed calls change
+ * nothing.
+ */
+function applyTask(tasks: Map<string, Task>, item: Tool): boolean {
+  if (failed(item)) return false;
+  const { input, output } = item;
+  if (item.name === "TaskCreate") {
+    const subject =
+      field(input, "subject") ?? /created successfully: (.+)/s.exec(output ?? "")?.[1];
+    if (!subject) return false;
+    const id = /^Task #([^\s:]+)/.exec(output ?? "")?.[1] ?? `call:${item.callId}`;
+    // A list Claude Code started afresh, as after an account fallback, reuses ids.
+    tasks.delete(id);
+    tasks.set(id, { text: subject, status: "pending", active: field(input, "activeForm") });
+    return true;
+  }
+  if (item.name !== "TaskUpdate" || (output !== undefined && !output.startsWith("Updated task #")))
+    return false;
+  const id = field(input, "taskId") ?? "";
+  const task = tasks.get(id);
+  if (!task) return false;
+  const status = field(input, "status");
+  if (status === "deleted") {
+    tasks.delete(id);
+    return true;
+  }
+  // Without `away`: a step put away comes back once it's updated, as when it's reopened.
+  tasks.set(id, {
+    text: field(input, "subject") ?? task.text,
+    status: taskStates[status ?? ""] ?? task.status,
+    active: field(input, "activeForm") ?? task.active,
+  });
+  return true;
+}
+
+// A task list's checklist keeps its object while the list is unchanged, so its update line's memo
+// holds as for wispd's own.
+const checklists = new WeakMap<Item, Todo>();
+
+/**
+ * The transcript with Claude Code's task tools as checklists (RYA-248). Claude Code 2.1.283 keeps
+ * its plan with TaskCreate and TaskUpdate in place of TodoWrite, one step per call, in a list that
+ * lasts the session, across turns and resumes. So after each call that changes it, the whole list
+ * goes in as a checklist, as wispd puts one after TodoWrite, and the plan card and strip read it
+ * the same way. A list whose every step is done is put away when the next turn starts, as Claude
+ * Code's own view of it is; a step a later TaskUpdate touches comes back.
+ */
+export function withTaskLists<R extends { kind: string; key: string }>(
+  rows: readonly (Item | R)[],
+): (Item | R)[] {
+  const tasks = new Map<string, Task>();
+  const shown = () => [...tasks.values()].filter((t) => !t.away);
+  const out: (Item | R)[] = [];
+  for (const row of rows) {
+    out.push(row);
+    const item = row as Item;
+    if (item.kind === "user" && shown().every((t) => t.status === "completed"))
+      for (const task of tasks.values()) task.away = true;
+    if (item.kind !== "tool" || !applyTask(tasks, item)) continue;
+    const steps = shown();
+    const items = steps.map(({ text, status }) => ({ text, status }));
+    const active = steps.find((t) => t.status === "inProgress")?.active;
+    const cached = checklists.get(item);
+    if (cached && sameList(cached.items, items) && cached.active === active) {
+      out.push(cached);
+      continue;
+    }
+    const { key, at } = item;
+    const list: Todo = {
+      kind: "todo",
+      key: `${key}:tasks`,
+      items,
+      ...(at && { at }),
+      ...(active && { active }),
+    };
+    checklists.set(item, list);
+    out.push(list);
+  }
+  return out;
+}
+
+/** The task tools that only read the list, whose rows say nothing the plan doesn't. */
+const taskReads = ["TaskList", "TaskGet"];
+
 /**
  * The transcript with its plans: each turn's first non-empty checklist becomes a plan row showing
  * the turn's latest, and later ones stay as updates, except one that changes nothing, as Codex
  * sends its last list again. A `TodoWrite` call followed by its checklist goes, as the checklist
- * stands for it, unless it failed. `ExitPlanMode` becomes a proposed plan row, out of the work
+ * stands for it, unless it failed, and so does a task tool's call (`withTaskLists`); TaskList and
+ * TaskGet go unless they failed. `ExitPlanMode` becomes a proposed plan row, out of the work
  * around it. User rows split turns, and so does a proposed plan: the work that carries it out gets
  * its own card, under it.
  */
 export function withPlans<R extends { kind: string; key: string }>(
-  rows: readonly (Item | R)[],
+  transcript: readonly (Item | R)[],
 ): (Item | R | PlanRow | ProposedPlanRow)[] {
+  const rows = withTaskLists(transcript);
   const out: (Item | R | PlanRow | ProposedPlanRow)[] = [];
   let plan: PlanRow | undefined;
   let last: AgentTodoItem[] | undefined;
@@ -82,8 +201,9 @@ export function withPlans<R extends { kind: string; key: string }>(
       last = undefined;
     } else if (item.kind === "tool") {
       const next = rows[i + 1] as Item | undefined;
-      const failed = item.status === "error" || item.status === "denied";
-      if (item.name === "TodoWrite" && next?.kind === "todo" && !failed) return;
+      if (item.name === "TodoWrite" && next?.kind === "todo" && !failed(item)) return;
+      if (next?.key === `${item.key}:tasks`) return;
+      if (taskReads.includes(item.name ?? "") && !failed(item)) return;
       const proposed = proposedPlan(item);
       if (proposed !== undefined) {
         const { key, at, callId, status } = item;
@@ -133,13 +253,15 @@ export function withPlans<R extends { kind: string; key: string }>(
  * `withPlans`, a proposed plan starts afresh.
  */
 export function latestPlan(
-  items: readonly Item[],
+  transcript: readonly Item[],
 ): { items: AgentTodoItem[]; active?: string } | undefined {
+  const items = withTaskLists(transcript);
   const at = items.findLastIndex(
     (i) => i.kind === "todo" || i.kind === "user" || proposedPlan(i) !== undefined,
   );
   const todo = items[at];
   if (todo?.kind !== "todo" || todo.items.length === 0) return undefined;
+  if (todo.active) return { items: todo.items, active: todo.active };
   // TodoWrite says each step's `activeForm`, "Running the tests"; the checklist keeps only `text`.
   const now = todo.items.find((s) => s.status === "inProgress");
   const call = items[at - 1];

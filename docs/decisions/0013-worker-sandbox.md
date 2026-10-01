@@ -1,6 +1,6 @@
 # 0013: The worker sandbox
 
-- Status: accepted; the Linux sandbox is under [Claude Code on Linux](#claude-code-on-linux) (RYA-20), Codex workers are under [Codex](#codex) (RYA-38), and the refusal of Claude workers on native Windows is in [0023](0023-cross-platform.md); a worker in Bypass Permissions runs without it since [0027](0027-claude-permission-modes.md); a worker in Plan whose client answers permission requests also gets `ExitPlanMode` since [0031](0031-permission-requests.md#plan-mode-and-exitplanmode) (RYA-243)
+- Status: accepted; the Linux sandbox is under [Claude Code on Linux](#claude-code-on-linux) (RYA-20), Codex workers are under [Codex](#codex) (RYA-38), and the refusal of Claude workers on native Windows is in [0023](0023-cross-platform.md); a worker in Bypass Permissions runs without it since [0027](0027-claude-permission-modes.md); a worker in Plan whose client answers permission requests also gets `ExitPlanMode` since [0031](0031-permission-requests.md#plan-mode-and-exitplanmode) (RYA-243); a worker's todo tools include Claude Code's task tools since RYA-248 (under [Claude Code](#claude-code))
 - Date: 2026-09-25
 - Issue: #137
 
@@ -64,7 +64,7 @@ Claude Code sandboxes Bash with Seatbelt on macOS. Its sandbox restricts writes 
 ```sh
 claude -p --output-format stream-json --verbose --input-format stream-json \
   --restricted \
-  --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite[,ExitPlanMode] \
+  --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate[,ExitPlanMode] \
   --strict-mcp-config \
   --permission-mode acceptEdits|plan \
   --settings '<worker_settings>' \
@@ -105,6 +105,9 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
 
 - **`--restricted`** loads only managed settings and `--settings`. It skips the user, project, and local settings files, so a repository can't add allow rules, directories, hooks, or an `env` block. It also confines the file tools to the working directories, and it removes the command tools and WebFetch unless `--tools` names them [2]. It needs Claude Code 2.1.248 or later (`WORKER_MIN_VERSION`). We chose it over `--setting-sources user`, which would still merge the user's own sandbox arrays and allow rules into a worker's [1].
 - **`--tools`** is an explicit list. `Bash` is on it and in `permissions.allow`, so it stays allowed if managed settings force permission mode `default`, where Claude Code 2.1.283 ignores `autoAllowBashIfSandboxed` and would deny Bash before the sandbox runs (RYA-110, RYA-112). The OS boundary holds whatever the command string says [1]. Argument patterns such as `Bash(npm test *)` are fragile by the vendor's own account [3], and the sandbox makes them unnecessary. The list leaves out `Agent`, `Skill`, `Monitor`, and every MCP tool. Leaving out `Skill` and `Agent` also means a repository's skills and subagents can't be invoked. A worker in Plan whose client answers permission requests also gets `ExitPlanMode`, which hands its plan to the app and runs nothing ([0031](0031-permission-requests.md#plan-mode-and-exitplanmode), RYA-243). Every other worker's list is exactly the one above.
+- **The todo tools and the task list (RYA-248).** `TodoWrite` and Claude Code's four task tools, `TaskCreate`, `TaskGet`, `TaskList`, and `TaskUpdate`, keep the agent's plan, which the app shows as its plan card. Claude Code 2.1.283 offers one set or the other, never both: the task tools, unless `CLAUDE_CODE_ENABLE_TASKS` is `false`, which brings `TodoWrite` back. It offers either set only to a built-in list of older models (Claude 3.x, Opus 4.0 to 4.7, Sonnet 4.0 to 4.6, Haiku 4.5), or when `--tools` or `--allowedTools` names one of the tools, or with `CLAUDE_CODE_ENABLE_TODO_TOOLS`. A worker's `--tools` names both sets, so it gets one on any model. Before RYA-248 it named only `TodoWrite`, which 2.1.283 turns off, so a worker had no todo tool at all. A coordinator, and a worker in Bypass Permissions, have no `--tools` list, so on a newer model they get none (RYA-249).
+  - **Where the list lives.** The task tools run in the CLI's own process, not through Bash. They write `<configuration folder>/tasks/<session id>/<id>.json`, with a `.lock` and a `.highwatermark` that keeps ids from being reused, so in `~/.claude` or the account's `CLAUDE_CONFIG_DIR`, outside the worktree. That is where the CLI already keeps the session's transcript, and RYA-244's plan file. The list is the session's, so it lasts across turns and `--resume`. A delete removes the task's file.
+  - **The sandbox holds.** `--restricted` doesn't confine these writes, since they are the CLI's own and not a file tool's, but they reach only the session's own list. The configuration folder is in `denyRead` (`.claude` in `UNREADABLE_IN_HOME`, and the account's `CLAUDE_CONFIG_DIR`) and isn't writable by commands, so a worker's command can neither read the list, its own or another session's, nor forge one. The files hold only what the model passed the tools. `TodoWrite` keeps its list in memory only.
 - **Network.** The sandbox takes its allowlist from `allowedDomains` and from `WebFetch(domain:...)` allow rules, and it honors a bare `*` in those rules [1]. So `WebFetch(domain:*)` opens every host to commands and approves WebFetch; `WebSearch` approves search. `strictAllowlist` makes any host outside the list, which is only `deniedDomains`, fail instead of prompting. `deniedDomains` wins over the allowlist, but it binds sandboxed commands only; WebFetch runs in-process and follows permission rules [4]. So each denied host is also a `WebFetch(domain:...)` deny rule, which beats the `*` allow for the tool [3].
 - **`failIfUnavailable`** makes a run fail when the sandbox can't start, instead of running commands unsandboxed. **`allowUnsandboxedCommands: false`** ignores `dangerouslyDisableSandbox`, the model's escape hatch [1][4].
 - **`--strict-mcp-config`** with no `--mcp-config` connects no MCP servers, including `.mcp.json` [2]. wispd's own MCP tools join in M4.
@@ -296,6 +299,17 @@ The backend's fixtures are those runs.
   - an API key account's key, which the check doesn't get, so an organization's settings tied to that key may not reach it.
 
   So wispd also checks the worker's own process. Claude Code reads the flag once and latches it. That one value both switches on the scrub sandbox and forces the permission mode to `default`, with the stderr warning "Permission mode forced to default". On 2026-09-28, with 2.1.283 against a dead local API, a worker's `system/init` reported `acceptEdits` with the flag off and `default` with it on. That held on macOS 27.0 and in an Ubuntu 24.04 arm64 container, with the flag in the environment, in `/etc/claude-code/managed-settings.json`, and in a `managed-settings.d` drop-in. With the flag in `managed-settings.json`, wispd's own backend killed such a worker at `init` with `policyViolation`. `linux_sandbox`'s tests run a worker through wispd with the pinned Claude Code, with the flag off and with it in Claude Code's own environment.
+
+**The task tools (RYA-248).** On 2026-10-01, Claude Code 2.1.283 for Linux x64, the npm package whose binary has CI's pinned SHA-256, was run by hand as a worker against a fake Messages API, with `--restricted`, `--strict-mcp-config`, a worker's `--settings`, and `--model claude-opus-5-5`, outside the built-in list:
+
+| `--tools` | Result |
+| --- | --- |
+| The list before RYA-248, with `TodoWrite` | `system/init` lists no todo tool; `TaskCreate` fails with "No such tool available" |
+| With the four task tools | `system/init` lists them and not `TodoWrite`; `TaskCreate` answers `Task #1 created successfully: Add tests`, and the CLI writes `~/.claude/tasks/<session id>/1.json` |
+| The same, with `CLAUDE_CODE_ENABLE_TASKS=false` | `system/init` lists `TodoWrite` and not the task tools |
+| The same, resumed with `--resume` | `TaskList` lists the first process's task, and the next `TaskCreate` gets the next id |
+
+Sandboxed Bash couldn't start there, because the container ran as root, which wispd doesn't support (Setup, above). So `daemon/tests/permission_requests.rs` runs a worker through wispd's backend with the pinned Claude Code on CI's Linux legs: its init passes wispd's check, `TaskCreate` and `TaskUpdate` answer as above, the list is in the configuration folder and not the worktree, and a script the worker runs can't read it. `daemon/src/backend/claude/fixtures/worker-tasks.jsonl` is that hand run's transcript.
 
 ## Sources
 

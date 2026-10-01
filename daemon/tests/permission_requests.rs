@@ -1,7 +1,8 @@
 //! Real Claude Code for RYA-222 (0031): in Manual, a run whose client answers permission requests
 //! asks wispd over stdio before a tool call that would prompt, and runs it or not on wispd's
 //! answer, and a run whose client doesn't is denied as before. In Plan, a worker hands its plan
-//! over the same way (RYA-243). Each test starts the CLI through wispd's own Claude backend, so
+//! over the same way (RYA-243). A worker also keeps its plan with Claude Code's task tools, which
+//! ask nothing (RYA-248). Each test starts the CLI through wispd's own Claude backend, so
 //! the arguments, the translator that reads the CLI's `can_use_tool` request, and the driver that
 //! writes the `control_response` are the ones a real run uses. A local fake Messages API asks for
 //! the tool calls, so no account or Anthropic connection is needed. Set `WISP_SANDBOX_CLAUDE` to
@@ -22,7 +23,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use common::{ToolCall, fake_api, worker_request};
-use serde_json::json;
+use serde_json::{Value, json};
 use wisp_protocol::{CoordinatorThreadId, ProjectId};
 use wispd::backend::claude::ClaudeBackend;
 use wispd::backend::process::{Environment, Launcher};
@@ -426,4 +427,82 @@ async fn a_plan_worker_hands_its_plan_to_wispd_and_leaves_plan_mode_on_its_allow
         "only the command after the allow ran"
     );
     assert_eq!(outcome(&events), &done(), "{events:#?}");
+}
+
+/// A worker keeps its plan with Claude Code's task tools (RYA-248). Its `--tools` names them, so
+/// 2.1.283 offers them even on a model it would otherwise give no todo tool, and its init passes
+/// wispd's check. The CLI writes the list itself, in its configuration folder outside the
+/// worktree, which the worker's commands still can't read.
+#[tokio::test]
+async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_read_it() {
+    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        return;
+    };
+    let folders = Folders::new();
+    let (worktree, mut request, _temp) = worker(&folders, AgentPermission::Edit);
+    request.model = Some("claude-opus-5-5".into());
+    // In a script, so only the sandbox, not Claude Code's own checks, can stop the read.
+    fs::write(
+        worktree.join("peek.sh"),
+        "cat \"$HOME\"/.claude/tasks/*/1.json\necho peeked\n",
+    )
+    .unwrap();
+    let task = |name, input| ToolCall { name, input };
+    let api = fake_api(vec![
+        task(
+            "TaskCreate",
+            json!({
+                "subject": "Add tests",
+                "description": "Cover the parser",
+                "activeForm": "Adding tests",
+            }),
+        ),
+        task(
+            "TaskUpdate",
+            json!({"taskId": "1", "status": "in_progress"}),
+        ),
+        ToolCall::bash("sh peek.sh"),
+        task("TaskUpdate", json!({"taskId": "1", "status": "completed"})),
+    ])
+    .await;
+    let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
+
+    let events = drive(&backend, request, |asked| {
+        panic!("an Accept Edits worker asked: {asked:?}")
+    })
+    .await;
+    let results = results(&events);
+    assert_eq!(results.len(), 4, "{events:#?}");
+    assert_eq!(
+        results[0],
+        (
+            "toolu_01WispProbe",
+            ToolStatus::Ok,
+            "Task #1 created successfully: Add tests"
+        ),
+        "{events:#?}"
+    );
+    assert_eq!(results[1].2, "Updated task #1 status", "{events:#?}");
+    assert!(results[2].2.contains("peeked"), "{events:#?}");
+    assert!(!results[2].2.contains("Cover the parser"), "{events:#?}");
+    assert_eq!(results[3].2, "Updated task #1 status", "{events:#?}");
+    assert_eq!(outcome(&events), &done(), "{events:#?}");
+
+    let session = events
+        .iter()
+        .find_map(|event| match event {
+            Event::SessionStarted { session_id, .. } => Some(session_id.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let list = folders.home.join(".claude/tasks").join(session);
+    let saved: Value =
+        serde_json::from_str(&fs::read_to_string(list.join("1.json")).unwrap()).unwrap();
+    assert_eq!(saved["subject"], "Add tests");
+    assert_eq!(saved["status"], "completed");
+    assert!(
+        !worktree.join(".claude").exists(),
+        "nothing in the worktree"
+    );
 }

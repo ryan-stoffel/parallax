@@ -58,6 +58,7 @@ fn fixture(name: &str) -> &'static str {
         "exit-plan" => include_str!("fixtures/exit-plan.jsonl"),
         "approval-exit" => include_str!("fixtures/approval-exit.jsonl"),
         "worker-exit-plan" => include_str!("fixtures/worker-exit-plan.jsonl"),
+        "worker-tasks" => include_str!("fixtures/worker-tasks.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -440,7 +441,7 @@ fn assert_worker_invocation(fake: &Fake) {
     assert_eq!(
         WORKSPACE_WRITE_ARGS.join(" "),
         "--restricted --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
-         TodoWrite --strict-mcp-config",
+         TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate --strict-mcp-config",
         "0013's worker policy, exactly"
     );
     assert_eq!(WORKER_TOOL_LIST, WORKER_TOOLS.join(","));
@@ -1708,17 +1709,31 @@ fn violation_kind(steps: &[Step]) -> Option<FailureKind> {
 
 #[test]
 fn a_worker_run_allows_only_the_worker_tools() {
-    let allowed = init_line(
-        r#"["Read","Edit","Write","Glob","Grep","NotebookEdit","Bash","WebFetch","WebSearch","TodoWrite","EndConversation"]"#,
-    );
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-    assert_eq!(violation_kind(&translator.line(&allowed)), None);
+    // An older Claude Code, or `CLAUDE_CODE_ENABLE_TASKS=false`, lists `TodoWrite`; 2.1.283 lists
+    // the task tools in its place (RYA-248).
+    for todo_tools in [
+        r#""TodoWrite""#,
+        r#""TaskCreate","TaskGet","TaskList","TaskUpdate""#,
+    ] {
+        let allowed = init_line(&format!(
+            r#"["Read","Edit","Write","Glob","Grep","NotebookEdit","Bash","WebFetch","WebSearch",{todo_tools},"EndConversation"]"#
+        ));
+        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+        assert_eq!(
+            violation_kind(&translator.line(&allowed)),
+            None,
+            "{todo_tools}"
+        );
+    }
     for extra in [
         r#"["Bash","Monitor"]"#,
         r#"["Bash","Task"]"#,
         r#"["Bash","Agent"]"#,
         r#"["Bash","Skill"]"#,
         r#"["Bash","mcp__github__create_issue"]"#,
+        // Background tasks' tools, which share the task tools' prefix but not their purpose.
+        r#"["TaskCreate","TaskStop"]"#,
+        r#"["TaskCreate","TaskOutput"]"#,
     ] {
         let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
         assert_eq!(
@@ -1727,6 +1742,92 @@ fn a_worker_run_allows_only_the_worker_tools() {
             "{extra}"
         );
     }
+}
+
+/// RYA-248: a worker on Claude Code 2.1.283 plans with the task tools, which its `--tools` names
+/// and its init lists in place of `TodoWrite`. Each call, and its result's text, which says the
+/// task's id, reach the app as they are; it builds the plan from them, so wispd makes no checklist.
+#[tokio::test]
+async fn a_worker_plans_with_claude_code_s_task_tools() {
+    let fake = Fake::new("worker-tasks");
+    let mut request = request(&fake.root());
+    request.policy = ToolPolicy::WorkspaceWrite;
+    request.sandbox = Some(worker_sandbox(&fake.root()));
+    let all = run(&fake, request).await;
+    let argv = fake.argv();
+    let tools = argv.iter().position(|arg| arg == "--tools").unwrap();
+    assert_eq!(argv[tools + 1], WORKER_TOOL_LIST);
+
+    let calls: Vec<(&str, Value)> = all
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolCall { name, input, .. } => Some((name.as_str(), input.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            (
+                "TaskCreate",
+                serde_json::json!({
+                    "subject": "Add tests",
+                    "description": "Cover the parser",
+                    "activeForm": "Adding tests",
+                })
+            ),
+            (
+                "TaskUpdate",
+                serde_json::json!({"taskId": "1", "status": "in_progress"})
+            ),
+            (
+                "TaskUpdate",
+                serde_json::json!({"taskId": "1", "status": "completed"})
+            ),
+        ]
+    );
+    let results: Vec<(&str, ToolStatus, Option<&str>)> = all
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolResult {
+                call_id,
+                status,
+                output,
+            } => Some((call_id.as_str(), *status, output.as_deref())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            (
+                "toolu_01Task00",
+                ToolStatus::Ok,
+                Some("Task #1 created successfully: Add tests")
+            ),
+            (
+                "toolu_01Task01",
+                ToolStatus::Ok,
+                Some("Updated task #1 status")
+            ),
+            (
+                "toolu_01Task02",
+                ToolStatus::Ok,
+                Some("Updated task #1 status")
+            ),
+        ]
+    );
+    assert!(
+        !all.iter()
+            .any(|event| matches!(event, Event::TodoList { .. })),
+        "{all:?}"
+    );
+    assert_eq!(
+        outcome(&all),
+        &Outcome::Completed {
+            result: Some("done".into())
+        }
+    );
 }
 
 #[test]

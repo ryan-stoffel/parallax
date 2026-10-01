@@ -868,6 +868,11 @@ const toolKinds: Partial<Record<string, Kind>> = {
   Agent: "agent",
   Skill: "skill",
   TodoWrite: "planning",
+  // Claude Code's task tools, which keep its plan in place of TodoWrite (RYA-248).
+  TaskCreate: "planning",
+  TaskUpdate: "planning",
+  TaskList: "planning",
+  TaskGet: "planning",
 };
 
 /** The kind of work a tool call does: a wispd or other MCP server's tool, or by its name. */
