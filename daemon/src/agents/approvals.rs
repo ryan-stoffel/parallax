@@ -27,6 +27,13 @@ pub(super) const STOPPED: &str = "The run was stopped while this permission requ
 /// keep them as the request had them (0031).
 pub(super) const PATH_FIELDS: &[&str] = &["file_path", "notebook_path", "path"];
 
+/// `ExitPlanMode`'s input field naming the plan file Claude Code writes an approved plan to
+/// (RYA-243). A worker's edited input may leave it out, as a client that sends back only the
+/// edited `plan` does, but may not change or add it. Claude Code 2.1.283 ignores it and writes
+/// the file it chose, but that write is the CLI's own, which `--restricted` doesn't confine, so
+/// wispd doesn't rely on that (0031).
+pub(super) const PLAN_PATH_FIELD: &str = "planFilePath";
+
 /// One run's permission requests, as long as its actor lives.
 #[derive(Default)]
 pub(super) struct Approvals {
@@ -39,7 +46,7 @@ struct Pending {
     deadline: Instant,
     /// The request offers rules to always allow, so an answer may give `always`.
     offers_always: bool,
-    /// The request input's [`PATH_FIELDS`].
+    /// The request input's [`PATH_FIELDS`] and [`PLAN_PATH_FIELD`].
     paths: Map<String, Value>,
 }
 
@@ -49,7 +56,7 @@ pub(super) enum Lookup {
     Pending {
         /// An answer may give `always`.
         offers_always: bool,
-        /// The request input's [`PATH_FIELDS`].
+        /// The request input's [`PATH_FIELDS`] and [`PLAN_PATH_FIELD`].
         paths: Map<String, Value>,
     },
     /// It ended.
@@ -63,6 +70,7 @@ impl Approvals {
     pub fn add(&mut self, id: ApprovalId, deadline: Instant, offers_always: bool, input: &Value) {
         let paths = PATH_FIELDS
             .iter()
+            .chain([&PLAN_PATH_FIELD])
             .filter_map(|&field| Some((field.to_owned(), input.get(field)?.clone())))
             .collect();
         self.pending.insert(
@@ -119,12 +127,16 @@ impl Approvals {
     }
 }
 
-/// Whether `edited` names another file than the request's `paths` did, by any of
-/// [`PATH_FIELDS`], adding or dropping one included.
+/// Whether `edited` names another file than the request's `paths` did: by any of
+/// [`PATH_FIELDS`], adding or dropping one included, or by a [`PLAN_PATH_FIELD`] that isn't the
+/// request's. Leaving that one out doesn't move anything.
 pub(super) fn moves_paths(paths: &Map<String, Value>, edited: &Value) -> bool {
     PATH_FIELDS
         .iter()
         .any(|&field| paths.get(field) != edited.get(field))
+        || edited
+            .get(PLAN_PATH_FIELD)
+            .is_some_and(|plan_file| paths.get(PLAN_PATH_FIELD) != Some(plan_file))
 }
 
 /// A resolution that isn't the user's.
@@ -198,5 +210,46 @@ mod tests {
         ] {
             assert!(moves_paths(&paths, &moved), "{moved}");
         }
+    }
+
+    /// RYA-243: an edited plan may leave out `ExitPlanMode`'s `planFilePath`, as a client that
+    /// sends back only the plan does, but may not name another file, whatever Claude Code does
+    /// with it. Nor may an edit add one to a request that had none.
+    #[test]
+    fn an_edited_plan_may_drop_its_plan_file_but_not_move_it() {
+        let mut approvals = Approvals::default();
+        let id = ApprovalId::generate();
+        let plan_file = "/Users/u/.claude/plans/plan-it-cozy-pinwheel.md";
+        let asked = json!({"plan": "1. Add a README.", "planFilePath": plan_file});
+        approvals.add(id, Instant::now() + Duration::from_mins(1), false, &asked);
+        let Lookup::Pending { paths, .. } = approvals.lookup(id) else {
+            panic!("the request waits");
+        };
+        for kept in [
+            json!({"plan": "1. Add a README and a license."}),
+            json!({"plan": "1. Add a README and a license.", "planFilePath": plan_file}),
+        ] {
+            assert!(!moves_paths(&paths, &kept), "{kept}");
+        }
+        for moved in [
+            json!({"plan": "1. Add a README.", "planFilePath": "/Users/u/.zshenv"}),
+            json!({"plan": "1. Add a README.", "planFilePath": null}),
+        ] {
+            assert!(moves_paths(&paths, &moved), "{moved}");
+        }
+
+        let bash = ApprovalId::generate();
+        approvals.add(
+            bash,
+            Instant::now() + Duration::from_mins(1),
+            false,
+            &json!({"command": "ls"}),
+        );
+        let Lookup::Pending { paths, .. } = approvals.lookup(bash) else {
+            panic!("the request waits");
+        };
+        let added = json!({"command": "ls", "planFilePath": "/Users/u/.zshenv"});
+        assert!(moves_paths(&paths, &added));
+        assert!(!moves_paths(&paths, &json!({"command": "ls -a"})));
     }
 }

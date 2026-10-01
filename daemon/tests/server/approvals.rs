@@ -393,6 +393,39 @@ async fn a_workers_edit_keeps_the_paths_it_asked_about() {
     );
 }
 
+/// RYA-243: a worker's edited plan may leave out `ExitPlanMode`'s `planFilePath`, as an app that
+/// sends back only the plan does, but may not point it at another file.
+#[tokio::test]
+async fn a_workers_edited_plan_may_drop_its_plan_file_but_not_move_it() {
+    let plan = AskedApproval {
+        tool_name: "ExitPlanMode".to_owned(),
+        input: json!({"plan": "1. Add a README.", "planFilePath": "/u/.claude/plans/p.md"}),
+        call_id: None,
+        reason: None,
+        always_allow: Vec::new(),
+        interactive: true,
+    };
+    let host = host(asking(plan), NEVER);
+    let (mut client, run_id, approval_id) = start(&host).await;
+    let moved = AgentApproveParams {
+        input: Some(json!({"plan": "1. Add a README.", "planFilePath": "/u/.zshenv"})),
+        ..answer(run_id, approval_id, AgentApprovalAnswer::Allow)
+    };
+    let error = client.call::<AgentApprove>(moved).await.unwrap_err();
+    assert_eq!(error.code, INVALID_PARAMS);
+    let edited = json!({"plan": "1. Add a README and a license."});
+    let allow = AgentApproveParams {
+        input: Some(edited.clone()),
+        ..answer(run_id, approval_id, AgentApprovalAnswer::Allow)
+    };
+    client.call::<AgentApprove>(allow).await.unwrap();
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(
+        printed(&events),
+        [json!({"approvalId": approval_id, "decision": "allow", "input": edited})]
+    );
+}
+
 #[tokio::test]
 async fn a_request_nobody_answers_expires_and_the_agent_is_told() {
     let host = host(asking(bash()), Duration::from_millis(300));
