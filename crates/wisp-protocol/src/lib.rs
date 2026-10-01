@@ -89,8 +89,8 @@ pub use host::{
 };
 pub use id::InvalidId;
 pub use project::{
-    Project, ProjectCreateParams, ProjectCreateResult, ProjectId, ProjectListParams,
-    ProjectListResult, ProjectStartParams,
+    Project, ProjectCreateParams, ProjectCreateResult, ProjectIcon, ProjectId, ProjectListParams,
+    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,
@@ -135,6 +135,7 @@ mod tests {
         Project {
             id: ProjectId::generate(),
             name: "wisp".to_owned(),
+            icon: None,
             repo_path: "/Users/me/src/wisp".to_owned(),
             branch: Some("main".to_owned()),
             coordinator: None,
@@ -199,11 +200,7 @@ mod tests {
             projects: vec![project(), project()],
             seq: (1 << 53) - 1,
         });
-        round_trip(&ProjectCreateParams {
-            id: ProjectId::generate(),
-            name: "wisp".to_owned(),
-            repo_path: "/".to_owned(),
-        });
+        // `project_edit_types_round_trip_and_omit_what_is_absent` covers `ProjectCreateParams`.
         round_trip(&ProjectCreateResult { project: project() });
         for project in [None, Some(ProjectId::generate())] {
             round_trip(&EventsSubscribeParams { after: 7, project });
@@ -253,6 +250,80 @@ mod tests {
             id: AccountId::generate(),
         });
         round_trip(&AccountsKeysRemoveResult {});
+    }
+
+    #[test]
+    fn project_edit_types_round_trip_and_omit_what_is_absent() {
+        let icons = [
+            ProjectIcon {
+                name: "rocket".to_owned(),
+                color: Some("green".to_owned()),
+            },
+            ProjectIcon {
+                name: "folder-kanban".to_owned(),
+                color: None,
+            },
+        ];
+        for icon in [None, Some(icons[0].clone()), Some(icons[1].clone())] {
+            let with_icon = Project {
+                icon: icon.clone(),
+                ..project()
+            };
+            round_trip(&with_icon);
+            round_trip(&ProjectCreateParams {
+                id: ProjectId::generate(),
+                name: "wisp".to_owned(),
+                repo_path: "/".to_owned(),
+                icon: icon.clone(),
+            });
+            round_trip(&ProjectUpdateResult {
+                project: with_icon.clone(),
+            });
+            round_trip(&EventsEventParams {
+                subscription: SubscriptionId::generate(),
+                seq: 9,
+                time: "2026-10-01T12:00:00Z".parse().unwrap(),
+                project: None,
+                event: WispEvent::ProjectUpdated { project: with_icon },
+            });
+            for name in [None, Some("roster".to_owned())] {
+                round_trip(&ProjectUpdateParams {
+                    project: ProjectId::generate(),
+                    name,
+                    icon: icon.clone(),
+                });
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(&icons[1]).unwrap(),
+            json!({"name": "folder-kanban"})
+        );
+        let id = ProjectId::generate();
+        assert_eq!(
+            serde_json::to_value(ProjectUpdateParams {
+                project: id,
+                name: None,
+                icon: None,
+            })
+            .unwrap(),
+            json!({"project": id}),
+            "absent fields are left out, so an older peer reads them as unchanged"
+        );
+        assert!(
+            serde_json::to_value(project())
+                .unwrap()
+                .get("icon")
+                .is_none()
+        );
+        assert!(
+            serde_json::from_value::<ProjectIcon>(json!({"color": "green"})).is_err(),
+            "an icon needs a name"
+        );
+        assert!(
+            serde_json::from_value::<ProjectUpdateParams>(json!({"project": id, "icon": "rocket"}))
+                .is_err(),
+            "an icon is an object"
+        );
     }
 
     #[test]
