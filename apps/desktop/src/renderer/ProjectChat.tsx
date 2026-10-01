@@ -155,6 +155,8 @@ export function ProjectChat({
           disabledReason={disabledReason}
           tab={tab}
           imageCaps={imageCaps(connection)}
+          // The coordinator asks only through a wispd that sends its requests.
+          manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
         />
       </div>
     </>

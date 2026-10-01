@@ -235,6 +235,19 @@ test("Always allow shows only when the request offers rules, and sends always", 
   ]);
 });
 
+test("Always allow names every rule it adds in full, however many or long", async () => {
+  const long = `Bash(${"node scripts/check-every-package-and-workspace.mjs --all ".repeat(6).trim()}:*)`;
+  const rules = ["Bash(pnpm test:*)", "Bash(pnpm lint:*)", long];
+  output(asked("a1", { alwaysAllow: rules }));
+  await renderChat();
+  const named = document.getElementById(inCard("Always allow")!.getAttribute("aria-describedby")!)!;
+  expect([...named.querySelectorAll("code")].map((c) => c.textContent)).toEqual(rules);
+  expect(named.textContent).toBe(`Always allow adds ${rules.join(", ")}`);
+  // Wrapped, never cut off.
+  for (const el of [named, ...named.querySelectorAll("code")])
+    expect(el.className).not.toMatch(/truncate|line-clamp|overflow-hidden/);
+});
+
 test("Deny asks for an optional note, which goes as the message; Escape goes back to Deny", async () => {
   output(asked("a1"), asked("a2"));
   await renderChat();
@@ -451,6 +464,22 @@ test("while a request waits, no loader muses under it; once answered, the work g
   expect(transcript().querySelector(".loader")).toBeNull();
   await click(inCard("Approve"));
   expect(transcript().querySelector(".loader")).not.toBeNull();
+});
+
+test("an open chat's Manual says its requests are denied when its run started without approvals", async () => {
+  const manual = () =>
+    [
+      ...document.querySelectorAll('[role="menu"][aria-label="Access"] [role="menuitemradio"]'),
+    ].find((o) => o.textContent?.startsWith("Manual"))!.textContent;
+  await renderChat();
+  expect(manual()).toBe("ManualAsks you before edits and commands.");
+  act(() => unmount());
+  log = [];
+  append({ kind: "agent.started", runId, run: { ...run, approvals: undefined } });
+  await renderChat();
+  expect(manual()).toBe(
+    "ManualAsks before edits and commands. This chat started before wisp could show those requests, so they're denied.",
+  );
 });
 
 // --- The card's previews ---

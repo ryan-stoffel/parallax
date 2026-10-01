@@ -338,6 +338,23 @@ describe("with wispd's run options", () => {
     answers["thread/start"] = started;
   });
 
+  test("Manual says its requests come to the chat only when wispd advertises approvals (RYA-196)", async () => {
+    const manual = () =>
+      [
+        ...document.querySelectorAll(
+          'main [role="menu"][aria-label="Access"] [role="menuitemradio"]',
+        ),
+      ].find((o) => o.textContent?.startsWith("Manual"))!.textContent;
+    await renderApp();
+    expect(manual()).toBe(
+      "ManualAsks before edits and commands. This host's wispd can't show those requests, so they're denied.",
+    );
+    act(() => unmount());
+    capabilities = { runOptions: {}, approvals: {} };
+    await renderApp();
+    expect(manual()).toBe("ManualAsks you before edits and commands.");
+  });
+
   test("New Thread sends the model, effort, and access it shows, and a changed one is a new start", async () => {
     // Refused at Max, then started at Extra high.
     answers["thread/start"] = (p) =>

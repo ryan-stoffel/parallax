@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  Fragment,
   useCallback,
   useId,
   useLayoutEffect,
@@ -802,9 +803,20 @@ function ApprovalCard({
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 px-4 pt-3 pb-3">
         {rules && state?.state !== "gone" && (
-          <p id={rulesId} className="mr-auto min-w-0 truncate text-[12px] text-faint-foreground">
+          // Every rule whole, wrapping where it must, since Always allow grants all of them.
+          <p
+            id={rulesId}
+            className="mr-auto min-w-0 flex-1 basis-60 text-[12px] leading-relaxed text-faint-foreground"
+          >
             Always allow adds{" "}
-            <span className="font-mono text-muted-foreground">{rules.join(", ")}</span>
+            {rules.map((rule, i) => (
+              <Fragment key={i}>
+                {i > 0 && ", "}
+                <code className="font-mono text-muted-foreground [overflow-wrap:anywhere]">
+                  {rule}
+                </code>
+              </Fragment>
+            ))}
           </p>
         )}
         <Answers

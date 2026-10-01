@@ -273,6 +273,10 @@ export function AgentChat({
     optionsDisabled = "This host's wispd can't change a thread's model, effort, or access";
   else if (isRunning(run?.status))
     optionsDisabled = "The model, effort, and access can change once it finishes";
+  // Manual's requests come here only from a run that asked for them, on a wispd that sends them.
+  let manualDenied: "host" | "run" | undefined;
+  if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
+  else if (run && !run.approvals) manualDenied = "run";
   // A finished run with a commit can go to GitHub (RYA-168), until Accept removes its branch.
   const canOpenPr =
     connected &&
@@ -366,6 +370,7 @@ export function AgentChat({
           started={run}
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}
+          manualDenied={manualDenied}
         />
       </div>
     </>
