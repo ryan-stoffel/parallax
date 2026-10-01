@@ -59,12 +59,18 @@ test("the range before is as long, ends where the range starts, and counts up to
   expect(midnight(month.until)).toBe(month.previous.at(-1));
 });
 
-/** `range`'s summary over a flat `tokens` an hour from well before it to `now`. */
+/**
+ * `range`'s summary over a flat `tokens` an hour from well before it to `now`, the current hour
+ * holding only the part of it so far.
+ */
 function flat(range: Range, now: number, tokens = 10) {
   const span = buckets(range, now);
+  const current = Math.floor(now / HOUR) * HOUR;
   const hours: UsageHour[] = [];
-  for (let at = span.previous[0]! - 24 * HOUR; at <= now; at += HOUR)
-    hours.push(usage(Math.floor(at / HOUR) * HOUR, "claude", "opus", tokens, tokens * 100));
+  for (let at = Math.floor(span.previous[0]! / HOUR) * HOUR - 24 * HOUR; at <= now; at += HOUR) {
+    const n = at === current ? (tokens * (now - current)) / HOUR : tokens;
+    hours.push(usage(at, "claude", "opus", n, n * 100));
+  }
   const history = {
     hours: hours.filter((h) => Date.parse(h.hour) >= span.starts[0]!),
     runs: [],
@@ -77,17 +83,19 @@ function flat(range: Range, now: number, tokens = 10) {
   };
 }
 
-test("a flat rate shows no change at any time of day, though the range's last bucket isn't over", () => {
+test("a flat rate shows no change at any time of day, though the range's last hour isn't over", () => {
   for (const clock of [
     [0, 30],
+    [9, 0, 30],
+    [9, 5],
     [9, 30],
-    [16, 5],
+    [16, 55],
     [23, 50],
   ] as const)
     for (const range of ["24h", "7d", "30d"] as const) {
       const now = new Date(2026, 8, 29, ...clock).getTime();
       const { summary } = flat(range, now);
-      expect(change(summary.total.cost, summary.previous!.cost)).toBe(0);
+      expect(change(summary.total.cost, summary.previous!.cost)).toBeCloseTo(0, 10);
     }
 });
 
@@ -105,7 +113,7 @@ test("days stay local days across a daylight saving change, and the change stays
     expect(new Date(span.until).getHours()).toBe(14);
     expect(new Date(span.until).getDate()).toBe(27);
     // The range really is an hour longer than the range before.
-    expect(tokensOf(summary.total) - tokensOf(summary.previous!)).toBe(10);
+    expect(tokensOf(summary.total) - tokensOf(summary.previous!)).toBeCloseTo(10);
   } finally {
     vi.unstubAllEnvs();
   }
@@ -426,6 +434,33 @@ test("Cost leads with the total, its change, and the busiest model, and reads ea
   press("Escape");
   expect(readout()).toBeUndefined();
   expect(document.activeElement).toBe(bars.at(-1));
+
+  // Pointing at a bar shows its numbers instead, while the pointer is on the card. Leaving it
+  // goes back to the focused bar's, and with nothing focused, to none. React makes enter and
+  // leave from `pointerover` and `pointerout`.
+  const figure = document.querySelector("figure")!;
+  const enter = (bar: HTMLElement) =>
+    act(() => {
+      bar.dispatchEvent(
+        new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+  const leave = () =>
+    act(() => {
+      figure.dispatchEvent(
+        new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+  const nameOf = (bar: HTMLElement) => bar.getAttribute("aria-label")!.split(":")[0]!;
+  enter(bars[3]!);
+  expect(readout()).toContain(nameOf(bars[3]!));
+  leave();
+  expect(readout()).toContain(nameOf(bars.at(-1)!));
+  act(() => bars.at(-1)!.blur());
+  enter(bars[3]!);
+  expect(readout()).toContain(nameOf(bars[3]!));
+  leave();
+  expect(readout()).toBeUndefined();
 });
 
 test("an answer for a range left behind doesn't replace the range shown", async () => {
@@ -512,6 +547,10 @@ test("Limits show each window as a meter, in amber and then red near its cap", a
     ["Weekly", "80"],
     ["Weekly · Opus", "100"],
   ]);
+  // The accent, then amber from 75%, then red from 90%.
+  const fill = (m: Element) =>
+    /\bbg-(accent|warning|danger)\b/.exec(m.firstElementChild!.className)?.[1];
+  expect(meters.map(fill)).toEqual(["accent", "warning", "danger"]);
   const card = document.querySelector('section[aria-label="Claude Code"]')!.textContent;
   expect(card).toContain("Session37%used");
   expect(card).toContain("Near the limit80%used");

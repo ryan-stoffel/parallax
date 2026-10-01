@@ -172,14 +172,15 @@ const zero = (): Measures => ({
 });
 export const tokensOf = (m: Measures) => m.input + m.output + m.cacheRead + m.cacheWrite;
 
-function add(m: Measures, h: UsageHour) {
-  m.input += h.inputTokens;
-  m.output += h.outputTokens;
-  m.cacheRead += h.cacheReadTokens;
-  m.cacheWrite += h.cacheWriteTokens;
+/** Adds `h` to `m`, or the `scale` of it that falls in a span, as if spread over its hour. */
+function add(m: Measures, h: UsageHour, scale = 1) {
+  m.input += h.inputTokens * scale;
+  m.output += h.outputTokens * scale;
+  m.cacheRead += h.cacheReadTokens * scale;
+  m.cacheWrite += h.cacheWriteTokens * scale;
   if (h.costUsdMicros === undefined)
-    m.unpriced += h.inputTokens + h.outputTokens + h.cacheReadTokens + h.cacheWriteTokens;
-  else m.cost += h.costUsdMicros;
+    m.unpriced += (h.inputTokens + h.outputTokens + h.cacheReadTokens + h.cacheWriteTokens) * scale;
+  else m.cost += h.costUsdMicros * scale;
 }
 
 /**
@@ -207,8 +208,9 @@ export interface Summary {
 
 /**
  * Every host's history summed by backend, model, and bucket, and over the `previous` buckets up
- * to `until` (by the hour). An hour outside the buckets, from an answer for a longer range, is
- * left out.
+ * to `until`. The hour that holds `until` counts only for the part of it before, as the range's
+ * own last hour holds only the part so far. An hour outside the buckets, from an answer for a
+ * longer range, is left out.
  */
 export function summarize(
   histories: HostHistory[],
@@ -265,7 +267,8 @@ export function summarize(
     before = zero();
     for (const h of histories.flatMap((h) => h.previous!)) {
       const at = Date.parse(h.hour);
-      if (at < until && earlier.has(hourly ? at : dayStart(at))) add(before, h);
+      if (at < until && earlier.has(hourly ? at : dayStart(at)))
+        add(before, h, Math.min(1, (until - at) / HOUR));
     }
   }
   return {
@@ -905,6 +908,8 @@ function Bars({
   const [active, setActive] = useState<number>();
   // The one bar in the tab order, the latest at first.
   const [stop, setStop] = useState(n - 1);
+  // The bar with keyboard focus, whose numbers come back when the pointer leaves.
+  const focused = useRef<number>(undefined);
   const plot = useRef<HTMLDivElement>(null);
   // A bar is rounded at its top, barely at the baseline, and its parts barely where they meet.
   const [bar, joint] =
@@ -937,7 +942,7 @@ function Bars({
   return (
     // The numbers stay while the pointer is anywhere on the card, so it can move onto them.
     <figure
-      onPointerLeave={() => setActive(undefined)}
+      onPointerLeave={() => setActive(focused.current)}
       className={`${card} min-w-0 px-6 pt-5 pb-5`}
     >
       <figcaption className="text-[14px] font-medium">{title}</figcaption>
@@ -1004,18 +1009,22 @@ function Bars({
                 data-active={active === i || undefined}
                 onPointerEnter={() => setActive(i)}
                 onFocus={() => {
+                  focused.current = i;
                   setActive(i);
                   setStop(i);
                 }}
-                onBlur={() => setActive(undefined)}
+                onBlur={() => {
+                  focused.current = undefined;
+                  setActive(undefined);
+                }}
                 onKeyDown={(e) => move(e, i)}
                 // Focus shows as the column's wash and a mark under the axis, not as a ring,
                 // which on a narrow column would look like a bar of its own.
-                className="group relative flex h-full min-w-0 flex-1 items-end justify-center rounded-md outline-none data-active:bg-hover focus-visible:bg-selected"
+                className="group relative flex h-full min-w-0 flex-1 items-end justify-center rounded-md outline-none focus-visible:bg-selected data-active:not-focus-visible:bg-hover"
               >
                 <span
                   aria-hidden
-                  className="absolute inset-x-1/4 -bottom-2 hidden h-[3px] rounded-full bg-foreground group-focus-visible:block"
+                  className="absolute -bottom-2 left-1/2 hidden h-[3px] w-3 -translate-x-1/2 rounded-full bg-foreground group-focus-visible:block"
                 />
                 {total > 0 && (
                   <div
