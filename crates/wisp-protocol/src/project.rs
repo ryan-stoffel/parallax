@@ -119,7 +119,7 @@ pub struct ProjectUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub name: Option<String>,
-    /// The new icon. Absent keeps the icon.
+    /// The new icon. Absent keeps the icon, and so does `null`: an icon can't be removed (0031).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub icon: Option<ProjectIcon>,

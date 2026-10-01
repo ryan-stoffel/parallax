@@ -9,7 +9,7 @@ use wisp_protocol::jsonrpc::{INTERNAL_ERROR, INVALID_PARAMS, Request};
 use wisp_protocol::methods::{HostHealth, ProjectCreate, ProjectList, ProjectUpdate};
 use wisp_protocol::{
     ErrorKind, HostHealthParams, Project, ProjectCreateParams, ProjectIcon, ProjectId,
-    ProjectListParams, ProjectUpdateParams, StoreState,
+    ProjectListParams, ProjectUpdateParams, ProjectUpdateResult, StoreState,
 };
 
 use crate::support::{Client, Wispd, create_params, kind, temp_dir};
@@ -235,6 +235,16 @@ async fn projects_are_renamed_and_given_icons_without_moving_their_activity() {
             .project;
         assert_eq!(same, recolored);
     }
+    client
+        .send_message(&Request {
+            id: "null-icon".into(),
+            method: "project/update".to_owned(),
+            params: Some(json!({"project": created.id, "icon": null})),
+        })
+        .await;
+    let same: ProjectUpdateResult =
+        serde_json::from_value(client.response().await.result.unwrap()).unwrap();
+    assert_eq!(same.project, recolored, "a null icon reads as absent");
 
     assert_eq!(recolored.updated_at, created.updated_at);
     assert_eq!(recolored.repo_path, created.repo_path);

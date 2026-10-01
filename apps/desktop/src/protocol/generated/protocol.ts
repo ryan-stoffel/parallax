@@ -2437,7 +2437,7 @@ export type ProjectUpdateParams = {
 	 */
 	name?: string,
 	/**
-	 * The new icon. Absent keeps the icon.
+	 * The new icon. Absent keeps the icon, and so does `null`: an icon can't be removed (0031).
 	 */
 	icon?: ProjectIcon,
 };
