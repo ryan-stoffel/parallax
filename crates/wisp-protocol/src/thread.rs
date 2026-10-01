@@ -140,6 +140,9 @@ pub struct ThreadStartParams {
     /// Images for the first message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
+    /// Forward the agent's permission requests to the client, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approvals: bool,
 }
 
 /// Result of `thread/start`.

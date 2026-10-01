@@ -120,6 +120,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         effort: None,
         permission: None,
         images: Vec::new(),
+        approvals: false,
     }
 }
 

@@ -12,7 +12,9 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{AccountChoice, ProjectId, WispEvent};
+use crate::{
+    AccountChoice, AgentApprovalBy, AgentApprovalDecision, ApprovalId, ProjectId, WispEvent,
+};
 
 uuid_v7_id! {
     /// An agent run's id: a version 7 UUID that the client generates once and sends again on every
@@ -247,6 +249,11 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// True when it forwards its permission requests to the client, as the start method that
+    /// made it asked with `approvals` (RYA-222, decision 0031). It never changes. Absent means
+    /// false: its CLI denies what would prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approvals: bool,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -539,6 +546,61 @@ pub enum AgentOutputItem {
         /// A short description.
         detail: String,
     },
+    /// The agent asks to use a tool and waits for `agent/approve` (RYA-222, decision 0031), in a
+    /// run started with `approvals`. It is pending until its `approvalResolved`, or until the
+    /// run's next `agent.finished`.
+    ApprovalRequested {
+        /// The request's id.
+        approval_id: ApprovalId,
+        /// The tool, in the vendor's naming, such as `Bash` or `ExitPlanMode`.
+        tool_name: String,
+        /// The tool's input as the vendor sent it, such as `ExitPlanMode`'s `plan`, or
+        /// `{"truncated": true, "bytes": n}` when it was too large to forward.
+        input: Value,
+        /// The tool call's id, which its `toolCall` and `toolResult` carry, when the vendor
+        /// says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        call_id: Option<String>,
+        /// Why the CLI asks, such as a safety check's warning, with terminal escapes removed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        reason: Option<String>,
+        /// The path that made the CLI ask, when one did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        blocked_path: Option<String>,
+        /// The vendor's id for the subagent asking, when one of the agent's own subagents asks.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        subagent: Option<String>,
+        /// The rules that `always` adds for the rest of the CLI process, such as
+        /// `Bash(pnpm test:*)`. Absent when the request offers none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        always_allow: Vec<String>,
+        /// True when the request is a question for the user rather than one action to allow,
+        /// such as `ExitPlanMode`'s plan: show its input in full.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        interactive: bool,
+        /// When wispd denies it if nobody has answered, in RFC 3339 UTC.
+        expires_at: Timestamp,
+    },
+    /// How a permission request ended (RYA-222, decision 0031).
+    ApprovalResolved {
+        /// The request's id.
+        approval_id: ApprovalId,
+        /// What it came to.
+        decision: AgentApprovalDecision,
+        /// Who or what decided it.
+        by: AgentApprovalBy,
+        /// True when it was allowed for the rest of the CLI process as well.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        always: bool,
+        /// The user's message to the agent with a denial, cut short when it is long.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        message: Option<String>,
+    },
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -591,6 +653,14 @@ pub struct AgentStartParams {
     /// retry must repeat them; wispd doesn't compare them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
+    /// Forward the run's permission requests to the client as `approvalRequested` items, which
+    /// `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
+    /// answers them, and only to a wispd that advertises `approvals`. Absent, a run in Manual,
+    /// Auto, or Plan denies what would prompt, as before. A run with a `coordinatorThread` also
+    /// gets it when its coordinator has it. The run keeps it when it resumes, and a retry must
+    /// repeat it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approvals: bool,
 }
 
 /// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.

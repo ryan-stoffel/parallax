@@ -159,6 +159,7 @@ fn request(cwd: &Path) -> RunRequest {
         effort: None,
         permission: None,
         coordinator_tools: None,
+        approvals: false,
     }
 }
 

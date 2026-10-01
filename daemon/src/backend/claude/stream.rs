@@ -12,11 +12,12 @@ use super::{
     BYPASS_PERMISSION_MODE, DEFAULT_PERMISSION_MODE, NO_WRITE_TOOLS, WORKER_MIN_VERSION,
     WORKER_TOOLS,
 };
-use crate::backend::ToolPolicy;
 use crate::backend::event::{
-    Event, Failure, FailureKind, LimitStatus, LimitWindow, ModelUsage, TodoItem, TodoStatus,
+    ApprovalRequest, Event, Failure, FailureKind, LimitStatus, LimitWindow,
+    MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES, ModelUsage, TodoItem, TodoStatus,
     ToolStatus, Usage, WarningKind,
 };
+use crate::backend::{ApprovalId, ToolPolicy};
 
 /// A `major.minor.patch` version, for comparing. Anything after the patch number, such as a
 /// pre-release tag, is ignored.
@@ -62,6 +63,12 @@ const IGNORED_TYPES: &[&str] = &[
 /// The longest failure message kept from the CLI's output.
 const MAX_MESSAGE_CHARS: usize = 2000;
 
+/// The modes a `system/init` may report besides the requested one once an `ExitPlanMode` was
+/// approved (0031): `default` (Manual), the mode a CLI that started in plan mode leaves it for,
+/// and [`DEFAULT_PERMISSION_MODE`], should a newer CLI pick Accept Edits. Anything else still
+/// fails the run.
+const LEFT_PLAN_MODES: &[&str] = &["default", DEFAULT_PERMISSION_MODE];
+
 /// What one line of output asks the driver to do.
 #[derive(Debug, PartialEq)]
 pub(super) enum Step {
@@ -73,6 +80,34 @@ pub(super) enum Step {
     TurnDone(TurnDone),
     /// The run broke its account or tool policy. The driver stops the CLI at once.
     Violation(Failure),
+    /// A `can_use_tool` control request (RYA-222): the event to report, and what answering it
+    /// needs. The CLI waits for the answer.
+    Ask(ApprovalRequest, Ask),
+    /// A `control_cancel_request`: the CLI no longer waits for the answer to this request id.
+    Withdraw(String),
+    /// A control request wispd doesn't serve, which the driver answers with this error, as the
+    /// Agent SDK does, so the CLI never waits on it.
+    Refuse {
+        /// The request's id.
+        request_id: String,
+        /// Why.
+        error: String,
+    },
+}
+
+/// What answering a `can_use_tool` request needs (RYA-222).
+#[derive(Debug, PartialEq)]
+pub(super) struct Ask {
+    /// The CLI's id for the request, which the answer repeats.
+    pub request_id: String,
+    /// The tool call's id, which the answer repeats as `toolUseID`.
+    pub tool_use_id: Option<String>,
+    /// The tool.
+    pub tool_name: String,
+    /// The tool's input, which an allow sends back as `updatedInput` unless the user edited it.
+    pub input: Value,
+    /// The request's allow rules, as `updatedPermissions` for an answer with `always`.
+    pub updates: Vec<Value>,
 }
 
 /// A `result` message, for the driver's turn bookkeeping.
@@ -88,6 +123,10 @@ pub(super) struct TurnDone {
 
 /// The state that reading one run's output needs.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about one run's output, not states of one thing"
+)]
 pub(super) struct Translator {
     policy: ToolPolicy,
     expected_key_source: &'static str,
@@ -97,6 +136,12 @@ pub(super) struct Translator {
     /// The permission mode a worker or a coordinator asked for, which its `system/init` must
     /// report.
     permission_mode: &'static str,
+    /// The CLI asks wispd before a tool call that would prompt (RYA-222), so its control
+    /// requests are wispd's to answer.
+    prompts: bool,
+    /// The user approved an `ExitPlanMode`, so the CLI left plan mode for the mode it was in
+    /// before, which later `system/init`s report.
+    left_plan: bool,
     verified: bool,
     session_id: Option<String>,
     denied: HashSet<String>,
@@ -119,6 +164,8 @@ impl Translator {
             expected_key_source,
             coordinator_tools: false,
             permission_mode: DEFAULT_PERMISSION_MODE,
+            prompts: false,
+            left_plan: false,
             verified: false,
             session_id: None,
             denied: HashSet::new(),
@@ -144,6 +191,20 @@ impl Translator {
         self
     }
 
+    /// Takes the CLI's permission requests when it was started with `--permission-prompt-tool
+    /// stdio` (RYA-222). Otherwise its control requests are skipped, as before.
+    pub fn with_prompts(mut self, prompts: bool) -> Self {
+        self.prompts = prompts;
+        self
+    }
+
+    /// Accepts [`LEFT_PLAN_MODES`] as well in later `system/init`s: the user approved an
+    /// `ExitPlanMode`, and Claude Code then runs in the mode it was in before plan mode, `default`
+    /// when it started in plan mode.
+    pub fn left_plan_mode(&mut self) {
+        self.left_plan = true;
+    }
+
     /// Reads one line of stdout.
     pub fn line(&mut self, line: &[u8]) -> Vec<Step> {
         if line.iter().all(u8::is_ascii_whitespace) {
@@ -165,6 +226,11 @@ impl Translator {
             Some("user") => self.user(&message),
             Some("result") => self.result(&message),
             Some("rate_limit_event") => self.rate_limit(&message),
+            Some("control_request") if self.prompts => self.control_request(&message),
+            Some("control_cancel_request") if self.prompts => text(&message, "request_id")
+                .map(|id| Step::Withdraw(id.to_owned()))
+                .into_iter()
+                .collect(),
             Some(kind) if IGNORED_TYPES.contains(&kind) => Vec::new(),
             // A newer CLI's unknown message types stay out of the chat, in the spirit of 0004's
             // "ignore unknown fields". Runs still end and fail through `result` and the exit code.
@@ -281,8 +347,10 @@ impl Translator {
         // Claude Code writes init before its first request, so this stops the run before any
         // tool runs.
         let mode = text(message, "permissionMode");
+        let left_plan = self.left_plan && mode.is_some_and(|mode| LEFT_PLAN_MODES.contains(&mode));
         if (self.policy == ToolPolicy::WorkspaceWrite || coordinator)
             && mode != Some(self.permission_mode)
+            && !left_plan
         {
             let reported = match mode {
                 Some(mode) => format!("permission mode {mode:?}"),
@@ -489,6 +557,74 @@ impl Translator {
         steps
     }
 
+    /// A `control_request` from a CLI started with `--permission-prompt-tool stdio`: a
+    /// `can_use_tool` asks whether a tool call may run, and any other subtype is refused.
+    fn control_request(&self, message: &Map<String, Value>) -> Vec<Step> {
+        let Some(request_id) = text(message, "request_id") else {
+            return vec![warning(
+                WarningKind::MalformedLine,
+                "a control request without a request_id".into(),
+            )];
+        };
+        let refuse = |error: String| Step::Refuse {
+            request_id: request_id.to_owned(),
+            error,
+        };
+        let request = message.get("request").and_then(Value::as_object);
+        let subtype = request.and_then(|request| text(request, "subtype"));
+        let (Some(request), Some("can_use_tool")) = (request, subtype) else {
+            let subtype = subtype.unwrap_or("untyped");
+            return vec![refuse(format!(
+                "wispd doesn't answer {subtype} control requests"
+            ))];
+        };
+        // A permission request follows the model's turn, so it can't come before init.
+        if !self.verified {
+            return vec![unverified()];
+        }
+        let Some(tool_name) = text(request, "tool_name") else {
+            return vec![refuse("a can_use_tool request without a tool_name".into())];
+        };
+        let input = request
+            .get("input")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        let suppressed = request
+            .get("suppress_always_allow_rule")
+            .and_then(Value::as_bool)
+            == Some(true);
+        let (updates, rules) = if suppressed {
+            (Vec::new(), Vec::new())
+        } else {
+            allow_rules(request.get("permission_suggestions"))
+        };
+        let tool_use_id = text(request, "tool_use_id").map(str::to_owned);
+        let event = ApprovalRequest {
+            approval_id: ApprovalId::generate(),
+            tool_name: tool_name.to_owned(),
+            input: input.clone(),
+            call_id: tool_use_id.clone(),
+            reason: text(request, "decision_reason")
+                .map(plain)
+                .filter(|reason| !reason.trim().is_empty()),
+            blocked_path: text(request, "blocked_path").map(str::to_owned),
+            subagent: text(request, "agent_id").map(str::to_owned),
+            always_allow: rules,
+            interactive: request
+                .get("requires_user_interaction")
+                .and_then(Value::as_bool)
+                == Some(true),
+        };
+        let ask = Ask {
+            request_id: request_id.to_owned(),
+            tool_use_id,
+            tool_name: tool_name.to_owned(),
+            input,
+            updates,
+        };
+        vec![Step::Ask(event, ask)]
+    }
+
     fn rate_limit(&mut self, message: &Map<String, Value>) -> Vec<Step> {
         let Some(info) = message.get("rate_limit_info").and_then(Value::as_object) else {
             return vec![warning(
@@ -559,6 +695,93 @@ fn api_error_kind(error: &str) -> FailureKind {
 fn signed_out(result: &str) -> bool {
     let result = result.to_ascii_lowercase();
     result.contains("not logged in") || result.contains("/login")
+}
+
+/// The allow rules among a `can_use_tool` request's `permission_suggestions`, as updates that
+/// last the rest of the CLI process, and as `Tool(content)` for people (RYA-222). Their own
+/// destination, often a settings file, is replaced with `session`. Every other suggestion, such
+/// as a mode or an added directory, is dropped: an added directory would let a worker's file
+/// tools out of its worktree. Only the rules `approvalRequested` shows whole are kept, at most
+/// [`MAX_ALWAYS_ALLOW_RULES`], so an answer with `always` adds nothing the user didn't see.
+fn allow_rules(suggestions: Option<&Value>) -> (Vec<Value>, Vec<String>) {
+    let mut updates = Vec::new();
+    let mut names = Vec::new();
+    for suggestion in suggestions.and_then(Value::as_array).into_iter().flatten() {
+        if suggestion.get("type").and_then(Value::as_str) != Some("addRules")
+            || suggestion.get("behavior").and_then(Value::as_str) != Some("allow")
+        {
+            continue;
+        }
+        let mut rules = Vec::new();
+        for rule in suggestion
+            .get("rules")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(tool) = rule.get("toolName").and_then(Value::as_str) else {
+                continue;
+            };
+            let name = match rule.get("ruleContent").and_then(Value::as_str) {
+                Some(content) => format!("{tool}({content})"),
+                None => tool.to_owned(),
+            };
+            if name.len() <= MAX_ALWAYS_ALLOW_RULE_BYTES && names.len() < MAX_ALWAYS_ALLOW_RULES {
+                names.push(name);
+                rules.push(rule);
+            }
+        }
+        if rules.is_empty() {
+            continue;
+        }
+        updates.push(serde_json::json!({
+            "type": "addRules",
+            "rules": rules,
+            "behavior": "allow",
+            "destination": "session",
+        }));
+    }
+    (updates, names)
+}
+
+/// `text` without terminal escape sequences or control characters other than line breaks and
+/// tabs, which a `decision_reason` may carry (the Agent SDK's types).
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            skip_escape(&mut chars);
+        } else if !c.is_control() || c == '\n' || c == '\t' {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Skips the rest of a terminal escape sequence whose ESC `chars` just read.
+fn skip_escape(chars: &mut std::str::Chars<'_>) {
+    match chars.next() {
+        // A CSI sequence ends at its final byte, from `@` to `~`.
+        Some('[') => {
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    return;
+                }
+            }
+        }
+        // An OSC sequence ends at BEL, or at ESC and `\`.
+        Some(']') => {
+            let mut escaped = false;
+            for c in chars.by_ref() {
+                if c == '\u{7}' || (escaped && c == '\\') {
+                    return;
+                }
+                escaped = c == '\u{1b}';
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A `tool_result`'s content: a string, or text blocks.

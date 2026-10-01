@@ -40,7 +40,15 @@
   --primary-foreground: #ffffff;
   --ring: var(--accent);
   --danger: #c42b2b;
+  /* The semantic amber, for marks and icons beside a label (--danger is the red). */
+  --warning: #d97706;
   --working: var(--accent);
+  /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
+     each mixed into the surface so they stay opaque. Both modes compute from their own surface,
+     which leaves the neutral lighter than the tint in light and darker in dark, apart in both. */
+  --chart-1: var(--accent);
+  --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
+  --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
   --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
   /* A Project icon's colors (projectIcons.ts), by the key wispd keeps. Each keeps at least 3:1
      on the sidebar, the dialogs, and a selected row, in both themes. */
@@ -72,6 +80,7 @@
   --primary: #ececec;
   --primary-foreground: #0d0d0d;
   --danger: #ff8f8a;
+  --warning: #f59e0b;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
   --project-red: #f87171;
   --project-orange: #fb923c;
@@ -103,6 +112,10 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-ring: var(--ring);
   --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
   --color-working: var(--working);
   --color-project-red: var(--project-red);
   --color-project-orange: var(--project-orange);
@@ -380,6 +393,37 @@ body {
 }
 .context-preview .markdown > * {
   margin-top: 0.3em;
+}
+
+/* The Usage page (UsagePage.tsx): bars rise from the baseline, --delay apart, and meters fill
+   from the left, as they appear. Under reduced motion they are simply there. */
+.usage-rise {
+  animation: usage-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) var(--delay, 0s) both;
+}
+@keyframes usage-rise {
+  from {
+    clip-path: inset(100% 0 0 0);
+  }
+  to {
+    clip-path: inset(0);
+  }
+}
+.usage-fill {
+  animation: usage-fill 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes usage-fill {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .usage-rise,
+  .usage-fill {
+    animation: none;
+  }
 }
 
 /* The agent's plan (Plan.tsx). The progress bar eases to its new width, a step that finishes

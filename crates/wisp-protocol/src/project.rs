@@ -173,4 +173,8 @@ pub struct ProjectStartParams {
     /// Images for the first message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
+    /// Forward the coordinator's permission requests to the client, as `agent/start` takes it.
+    /// The runs it spawns forward theirs too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approvals: bool,
 }

@@ -86,6 +86,10 @@ pub(crate) fn initialize(
 /// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
 /// older wispd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
 /// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
+/// `approvals` (RYA-222, 0031): `agent/start`, `thread/start`, and `project/start` take
+/// `approvals`, which an older wispd would silently ignore. A run started with it, in Manual,
+/// Auto, or Plan, asks through `approvalRequested` items, which `agent/approve` answers, instead
+/// of denying what would prompt.
 /// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
 /// and `project/create`, which an older wispd would silently drop.
 fn capabilities_advertised() -> Capabilities {
@@ -99,6 +103,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agentClis".to_owned(), serde_json::Map::new()),
         ("agentReview".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
+        ("approvals".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),

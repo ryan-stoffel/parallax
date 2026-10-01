@@ -73,8 +73,13 @@ fn fake(steps: Vec<Step>) -> BackendRegistry {
     backends
 }
 
-/// A run's model, effort, and permission, as its backend got them.
-type Options = (Option<String>, Option<AgentEffort>, Option<AgentPermission>);
+/// A run's model, effort, permission, and approvals, as its backend got them.
+type Options = (
+    Option<String>,
+    Option<AgentEffort>,
+    Option<AgentPermission>,
+    bool,
+);
 
 /// The fake CLI as a backend that maps only `low` and `high` effort and the `plan` permission
 /// (RYA-97), and records each run's options.
@@ -93,7 +98,12 @@ impl Backend for WithOptions {
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
-        let options = (request.model.clone(), request.effort, request.permission);
+        let options = (
+            request.model.clone(),
+            request.effort,
+            request.permission,
+            request.approvals,
+        );
         self.seen.lock().unwrap().push(options);
         self.fake.start(request)
     }
@@ -177,6 +187,7 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
         permission: None,
         branch_slug: None,
         images: Vec::new(),
+        approvals: false,
     }
 }
 
@@ -766,11 +777,11 @@ async fn a_thread_can_name_its_branch() {
     assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
 }
 
-/// RYA-97: a thread's model, effort, and permission reach its backend when it starts and when it
-/// resumes, come back on its run, and count for `thread/start`'s idempotency. What the backend
-/// can't honor is refused before anything is made.
+/// RYA-97, RYA-222: a thread's model, effort, permission, and approvals reach its backend when it
+/// starts and when it resumes, come back on its run, and count for `thread/start`'s idempotency.
+/// What the backend can't honor is refused before anything is made.
 #[tokio::test]
-async fn a_thread_keeps_its_model_effort_and_permission() {
+async fn a_thread_keeps_its_model_effort_permission_and_approvals() {
     let (host, seen) = with_options(editing());
     let path = real_repo(host.work.path(), "app");
     let mut client = host.client().await;
@@ -782,12 +793,14 @@ async fn a_thread_keeps_its_model_effort_and_permission() {
         model: Some("opus".to_owned()),
         effort: Some(AgentEffort::High),
         permission: Some(AgentPermission::Plan),
+        approvals: true,
         ..start_params(Some(repo.id), "Plan the notes")
     };
     let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
     assert_eq!(started.run.model.as_deref(), Some("opus"));
     assert_eq!(started.run.effort, Some(AgentEffort::High));
     assert_eq!(started.run.permission, Some(AgentPermission::Plan));
+    assert!(started.run.approvals);
     runs.until(updated_to(AgentStatus::Completed)).await;
 
     // The CLI has exited, so a message resumes the run, with the same options.
@@ -800,19 +813,25 @@ async fn a_thread_keeps_its_model_effort_and_permission() {
         Some("opus".to_owned()),
         Some(AgentEffort::High),
         Some(AgentPermission::Plan),
+        true,
     );
     assert_eq!(*seen.lock().unwrap(), [options.clone(), options]);
 
     let retry = client.call::<ThreadStart>(params.clone()).await.unwrap();
     assert_eq!(retry.run.id, started.run.id);
-    let conflict = client
-        .call::<ThreadStart>(ThreadStartParams {
+    for changed in [
+        ThreadStartParams {
             effort: None,
+            ..params.clone()
+        },
+        ThreadStartParams {
+            approvals: false,
             ..params
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
+        },
+    ] {
+        let conflict = client.call::<ThreadStart>(changed).await.unwrap_err();
+        assert_eq!(kind(&conflict), ErrorKind::IdConflict);
+    }
 
     for refused in [
         ThreadStartParams {
@@ -906,8 +925,18 @@ async fn a_message_changes_a_finished_threads_model_and_effort() {
     assert_eq!(
         *seen.lock().unwrap(),
         [
-            (opus, Some(AgentEffort::High), Some(AgentPermission::Plan)),
-            (sonnet, Some(AgentEffort::Low), Some(AgentPermission::Plan)),
+            (
+                opus,
+                Some(AgentEffort::High),
+                Some(AgentPermission::Plan),
+                false
+            ),
+            (
+                sonnet,
+                Some(AgentEffort::Low),
+                Some(AgentPermission::Plan),
+                false
+            ),
         ]
     );
     let listed = client

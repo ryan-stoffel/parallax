@@ -416,6 +416,8 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     effort: None,
                     permission: None,
                     images: Vec::new(),
+                    // wispd gives the run its coordinator's (0031).
+                    approvals: false,
                 })
                 .await?
                 .run;
