@@ -112,6 +112,17 @@ test("Enter in an empty search box picks nothing, so opening and pressing Enter 
   press("Enter");
   expect(onPick).not.toHaveBeenCalled();
   expect(selected()).toEqual(["Rocket"]);
+
+  // Nor while an input method composes.
+  type("bug");
+  act(() => {
+    searchBox().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+    );
+  });
+  expect(onPick).not.toHaveBeenCalled();
+  press("Enter");
+  expect(onPick).toHaveBeenCalledWith({ name: "bug", color: "green" });
 });
 
 test("a color or an icon picks both together, from the picker's own last pick, and it stays open", () => {

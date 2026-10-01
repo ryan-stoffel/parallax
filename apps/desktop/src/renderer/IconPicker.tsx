@@ -102,6 +102,8 @@ export function IconPicker({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
+                // Enter belongs to an input method while it composes.
+                if (e.nativeEvent.isComposing) return;
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
                   grid.current?.querySelector<HTMLElement>('[tabindex="0"]')?.focus();
