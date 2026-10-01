@@ -6,7 +6,12 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
 import type { ConnectionState, SubscriptionMessage, WispBridge } from "../preload/bridge";
-import type { AgentRun, AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  AgentRunResult,
+  AgentTodoItem,
+  LoggedEvent,
+} from "../protocol/generated/protocol";
 import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
 import type { Item } from "./transcript";
@@ -314,11 +319,12 @@ test("a coordinator's no-write stop lists the files it changed", () => {
   expect(alert.querySelector("pre")!.textContent).toBe(" M src/settings.tsx\n?? notes.md");
 });
 
-test("reasoning, checklists, and notices render quietly", () => {
+test("reasoning, plan updates, and notices render quietly", () => {
   row({ kind: "reasoning", key: "r", text: "The build uses cargo." });
   expect(document.querySelector("summary")!.textContent).toBe("Thinking");
   act(() => unmount());
 
+  // A checklist in the work is an update to the turn's plan: one line, not the list again.
   row({
     kind: "todo",
     key: "c",
@@ -327,11 +333,8 @@ test("reasoning, checklists, and notices render quietly", () => {
       { text: "Read the scripts", status: "completed" },
     ],
   });
-  expect([...document.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
-    "Write README.md",
-    "Read the scripts",
-  ]);
-  expect(document.querySelector('[aria-label="Done"]')).not.toBeNull();
+  expect(document.body.textContent).toBe("Updated the plan");
+  expect(document.querySelector("li")).toBeNull();
   act(() => unmount());
 
   row({ kind: "notice", key: "n", tone: "warning", text: "skipped a malformed line" });
@@ -855,4 +858,93 @@ test("a chat that couldn't load shows its first message, with no loader", async 
   expect(transcriptText()).toBe("Add a README");
   expect(document.querySelector(".loader")).toBeNull();
   expect(document.querySelector('[role="alert"]')!.textContent).toBe("wispd is gone");
+});
+
+// A two-step checklist with `done` steps finished and the next one under way.
+const checklist = (done: number): AgentTodoItem[] =>
+  ["Read", "Build"].map((text, i) => ({
+    text,
+    status: i < done ? "completed" : i === done ? "inProgress" : "pending",
+  }));
+// TodoWrite as wispd sends it: the call, then the checklist it stands for.
+const todoWrite = (n: number, done: number): Item[] => [
+  { kind: "tool", key: `w${n}`, callId: `w${n}`, name: "TodoWrite", input: {}, status: "ok" },
+  { kind: "todo", key: `t${n}`, items: checklist(done) },
+];
+
+test("a turn's plan is one card where it began, its updates lines in the work, its proposal a card", () => {
+  const rows: Item[] = [
+    { kind: "user", key: "u", text: "go" },
+    { kind: "reasoning", key: "r", text: "A plan first." },
+    {
+      kind: "tool",
+      key: "x",
+      callId: "x",
+      name: "ExitPlanMode",
+      input: { plan: "## Ship it\n\n- Read\n- Build" },
+      status: "ok",
+    },
+    ...todoWrite(1, 0),
+    { kind: "tool", key: "b", callId: "b", name: "Bash", input: { command: "ls" }, status: "ok" },
+    ...todoWrite(2, 1),
+    ...todoWrite(3, 2),
+    { kind: "assistant", key: "a", text: "Done." },
+  ];
+  render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
+  const rowAt = (i: number) => document.querySelectorAll("[data-index]")[i]!;
+  const text = (r: Element) => r.textContent!.replace(/\s+/g, "");
+  expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
+    "go",
+    "Workedbriefly",
+    "ProposedplanShipitReadBuild",
+    "Plan2of2doneDone:ReadDone:Build",
+    "Workedbriefly",
+    "Done.",
+  ]);
+  // The work after the plan holds its updates, one line each, and no TodoWrite calls.
+  act(() => rowAt(4).querySelector("button")!.click());
+  const lines = [...rowAt(4).querySelectorAll("p")].map((p) => p.textContent);
+  expect(lines.filter((t) => t?.includes("the plan"))).toEqual([
+    "Updated the planFinished: Read · Started: Build",
+    "Updated the planFinished: Build",
+  ]);
+  expect(rowAt(4).querySelectorAll("summary")).toHaveLength(1); // Bash's
+  expect(transcriptText()).not.toContain("TodoWrite");
+});
+
+test("while a run goes, only its latest plan moves, and the work after a plan muses until it starts", () => {
+  const rows: Item[] = [
+    { kind: "user", key: "u1", text: "go" },
+    { kind: "todo", key: "t1", items: checklist(0) },
+    { kind: "assistant", key: "a", text: "Stopped there." },
+    { kind: "user", key: "u2", text: "Go on", turnId: "t" },
+    ...todoWrite(2, 1),
+  ];
+  render(<TranscriptView rows={rows} sent={new Map()} live />);
+  const cards = [...document.querySelectorAll('[role="group"]')];
+  expect(cards.map((c) => c.querySelectorAll(".loader").length)).toEqual([0, 1]);
+  // After the plan, a work row for what comes next.
+  const last = [...document.querySelectorAll("[data-index]")].at(-1)!;
+  expect(last.querySelector("button[aria-expanded] .sr-only")!.textContent).toBe("Working");
+});
+
+test("while the run works on a plan, a strip over the composer shows it, until a turn without one or the end", async () => {
+  const strip = () => document.querySelector('section[aria-label="Plan"]');
+  // The sample's first turn: running, with a checklist one of three done.
+  const first = fakeBridge(4);
+  await renderChat();
+  expect(strip()!.querySelector("button")!.textContent).toBe(
+    "In progress: Write README.md1 of 3 done",
+  );
+  // A follow-up starts a turn with no plan of its own (seq 5).
+  first.emit({ type: "event", event: { subscription: "s", ...logged[4]! } });
+  expect(strip()).toBeNull();
+  act(() => unmount());
+
+  const second = fakeBridge(4);
+  await renderChat();
+  expect(strip()).not.toBeNull();
+  // The run finishes (seq 8).
+  second.emit({ type: "event", event: { subscription: "s", ...logged[7]! } });
+  expect(strip()).toBeNull();
 });
