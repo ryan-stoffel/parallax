@@ -166,6 +166,7 @@ pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
         id: ProjectId::generate(),
         name: "app".to_owned(),
         repo_path: real_repo(dir).to_str().unwrap().to_owned(),
+        icon: None,
     }
 }
 

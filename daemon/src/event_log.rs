@@ -232,6 +232,7 @@ pub(crate) fn run_of(event: &WispEvent) -> Option<RunId> {
         | WispEvent::AgentAccepted { run_id, .. }
         | WispEvent::AgentWakeupsPaused { run_id } => Some(*run_id),
         WispEvent::ProjectCreated { .. }
+        | WispEvent::ProjectUpdated { .. }
         | WispEvent::ContextChanged { .. }
         | WispEvent::RepoAdded { .. }
         | WispEvent::ThreadStarted { .. }

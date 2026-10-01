@@ -203,6 +203,12 @@ export type WispRequests = {
 	 * `coordinator` capability.
 	 */
 	"project/start": { params: ProjectStartParams, result: AgentRunResult },
+	/**
+	 * `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
+	 * it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
+	 * `projectEdit` capability, like `Project.icon`.
+	 */
+	"project/update": { params: ProjectUpdateParams, result: ProjectUpdateResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -403,6 +409,11 @@ export type Project = {
 	 */
 	name: string,
 	/**
+	 * The icon the user chose, behind the `projectEdit` capability (RYA-227, 0032). Absent means
+	 * the app's default icon.
+	 */
+	icon?: ProjectIcon,
+	/**
 	 * The absolute path of the repository on this host.
 	 */
 	repoPath: string,
@@ -421,9 +432,27 @@ export type Project = {
 	 */
 	createdAt: string,
 	/**
-	 * When the project last changed, in RFC 3339 UTC.
+	 * When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
+	 * a rename or a new icon is not activity (0032).
 	 */
 	updatedAt: string,
+};
+
+/**
+ * A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
+ * name. wispd stores them as the client sent them and never reads them.
+ */
+export type ProjectIcon = {
+	/**
+	 * The Lucide icon's name in kebab-case, such as `rocket`: 1 to 64 characters of `a-z`, `0-9`,
+	 * and `-`.
+	 */
+	name: string,
+	/**
+	 * The palette key of its color, such as `green`: 1 to 32 characters of `a-z`, `0-9`, and
+	 * `-`. Absent means the app's accent.
+	 */
+	color?: string,
 };
 
 /**
@@ -442,9 +471,9 @@ export type RunId = string;
  * Params of `project/create`.
  *
  * It is idempotent on `id`: if a project with that id exists, wispd returns it instead of
- * creating another, and fails with `idConflict` if `name` or `repoPath` differ. A new project's
- * `repoPath` must be the top folder of a git working tree on this host, or it fails with
- * `notARepository`.
+ * creating another, and fails with `idConflict` if `name`, `repoPath`, or `icon` differ. A new
+ * project's `repoPath` must be the top folder of a git working tree on this host, or it fails
+ * with `notARepository`.
  */
 export type ProjectCreateParams = {
 	/**
@@ -459,6 +488,11 @@ export type ProjectCreateParams = {
 	 * The absolute path of the repository on this host.
 	 */
 	repoPath: string,
+	/**
+	 * The project's icon, sent only to a wispd that advertises `projectEdit`. Absent means the
+	 * app's default icon.
+	 */
+	icon?: ProjectIcon,
 };
 
 /**
@@ -1475,6 +1509,10 @@ export type WispEvent = { "kind": "project.created",
 	/**
 	 * The new project.
 	 */
+	project: Project, } | { "kind": "project.updated",
+	/**
+	 * The project as it stands.
+	 */
 	project: Project, } | { "kind": "context.changed",
 	/**
 	 * The changed file.
@@ -2378,6 +2416,40 @@ export type ProjectStartParams = {
 	 * Images for the first message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+};
+
+/**
+ * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
+ * capability (RYA-227, 0032).
+ *
+ * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
+ * `project/create`'s rules, and the repository can't change. A rename or a new icon is not
+ * activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
+ * A change appends `project.updated`; an update that changes nothing appends no event.
+ */
+export type ProjectUpdateParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
+	/**
+	 * The new name. Absent keeps the name.
+	 */
+	name?: string,
+	/**
+	 * The new icon. Absent keeps the icon, and so does `null`: an icon can't be removed (0032).
+	 */
+	icon?: ProjectIcon,
+};
+
+/**
+ * Result of `project/update`.
+ */
+export type ProjectUpdateResult = {
+	/**
+	 * The project as it stands after the update.
+	 */
+	project: Project,
 };
 
 /**
