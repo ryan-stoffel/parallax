@@ -14,17 +14,19 @@ import { SidePanel } from "./SidePanel";
 import { ProjectIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
 import { groupOf, groupThreads, noRepo, titleOf, useThreads } from "./threads";
+import { isRunning } from "./transcript";
 import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { UsagePage } from "./UsagePage";
 
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
- * thread (its id is its run's), a new thread in a sidebar group (`threads.ts`; with no group,
- * it's the first repository's), or Usage.
+ * thread (its id is its run's; `started` when New Thread just started it, until anything else is
+ * selected), a new thread in a sidebar group (`threads.ts`; with no group, it's the first
+ * repository's), or Usage.
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
-  | { kind: "thread"; threadId: string }
+  | { kind: "thread"; threadId: string; started?: boolean }
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
 
@@ -240,7 +242,8 @@ export function App() {
                 runId={selection.threadId}
                 notice={notice?.threadId === selection.threadId ? notice.text : undefined}
                 prompt={threads.state.runs[selection.threadId]?.prompt}
-                status={threads.state.runs[selection.threadId]?.status}
+                // The list's status goes stale once the run moves on, so only a start says so.
+                going={selection.started}
                 noRepo={group.id === noRepo}
               />
             ) : selection.kind === "new" ? (
@@ -259,7 +262,7 @@ export function App() {
                 }
                 onStarted={(threadId, text) => {
                   setNotice(text ? { threadId, text } : undefined);
-                  setSelection({ kind: "thread", threadId });
+                  setSelection({ kind: "thread", threadId, started: true });
                 }}
                 disabledReason={offline}
               />
@@ -269,7 +272,8 @@ export function App() {
                 hostId={host.id}
                 runId={agentId}
                 prompt={agent?.prompt}
-                status={agent?.status}
+                // A Project's subagents are kept current.
+                going={isRunning(agent?.status)}
               />
             ) : (
               project && (
@@ -278,11 +282,6 @@ export function App() {
                   hostId={host.id}
                   project={project}
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
-                  status={
-                    project.coordinator
-                      ? threads.state.runs[project.coordinator]?.status
-                      : undefined
-                  }
                   startCoordinator={threads.startCoordinator}
                 />
               )

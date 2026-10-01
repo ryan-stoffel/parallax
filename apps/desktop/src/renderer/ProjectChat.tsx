@@ -1,7 +1,7 @@
 import { Folder, GitBranch } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { AgentStatus, Project, PromptImage } from "../protocol/generated/protocol";
+import type { Project, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
@@ -22,15 +22,12 @@ export function ProjectChat({
   hostId,
   project,
   prompt,
-  status,
   startCoordinator,
 }: {
   hostId: string;
   project: Project;
   /** The coordinator's first message, shown until its transcript loads. */
   prompt?: string;
-  /** The coordinator's status as the host's list has it (`AgentChat`'s). */
-  status?: AgentStatus;
   startCoordinator: ThreadsView["startCoordinator"];
 }) {
   const connection = useConnection(hostId);
@@ -38,6 +35,8 @@ export function ProjectChat({
   // The first message's run id, reused when it's sent again after failing (0007).
   const [runId] = useState(uuidv7);
   const [starting, setStarting] = useState(false);
+  // The coordinator run this chat last started, set before it does so its chat opens as starting.
+  const [started, setStarted] = useState<string>();
   // Which account the coordinator got, when the host had no coordinator account.
   const [notice, setNotice] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
@@ -75,6 +74,7 @@ export function ProjectChat({
     { model, effort, permission }: RunOptions,
     images: PromptImage[],
   ) => {
+    setStarted(id);
     let error = await startCoordinator(project.id, id, text, images, { model, effort, permission });
     const kind = error?.data?.kind;
     if (kind === "noDefaultAccount" || kind === "accountNotFound") {
@@ -101,7 +101,7 @@ export function ProjectChat({
         hostId={hostId}
         runId={project.coordinator}
         prompt={prompt}
-        status={status}
+        going={started === project.coordinator}
         notice={notice}
         tab={tab}
         // A new coordinator replaces one that can't take messages (0024).

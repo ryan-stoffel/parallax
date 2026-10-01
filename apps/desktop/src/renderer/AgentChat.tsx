@@ -31,13 +31,7 @@ import {
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import type {
-  AgentRun,
-  AgentStatus,
-  ImageId,
-  JsonValue,
-  PromptImage,
-} from "../protocol/generated/protocol";
+import type { AgentRun, ImageId, JsonValue, PromptImage } from "../protocol/generated/protocol";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -70,7 +64,7 @@ export function AgentChat({
   runId,
   notice,
   prompt,
-  status,
+  going,
   noRepo,
   tab,
   startOver,
@@ -82,10 +76,10 @@ export function AgentChat({
   /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
   prompt?: string;
   /**
-   * The run's status as the host's list has it. Until the transcript loads, `prompt` shows as on
-   * its way to a run that's starting or running, with the loader under it.
+   * Whether the run is known to be starting or running, as one this window just started is. Until
+   * the transcript loads, `prompt` then shows as on its way to it, with the loader under it.
    */
-  status?: AgentStatus;
+  going?: boolean;
   /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
   noRepo?: boolean;
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
@@ -184,11 +178,11 @@ export function AgentChat({
     const all = [...items, ...pending];
     if (all.length > 0 || !prompt) return all;
     return [
-      isRunning(status)
+      going
         ? { kind: "pending", key: "pending:prompt", text: prompt }
         : { kind: "user", key: "prompt", text: prompt },
     ];
-  }, [items, sent, prompt, status]);
+  }, [items, sent, prompt, going]);
 
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from wispd";

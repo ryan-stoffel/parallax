@@ -26,7 +26,11 @@ const logged = (samples as { method?: string; params?: unknown }[])
   .map((m) => m.params as LoggedEvent);
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  act(() => unmount());
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 function render(node: ReactNode) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -798,7 +802,6 @@ test("the musing changes its word on the wall clock, while screen readers keep h
   expect(header().querySelector(".sr-only")!.textContent).toBe("Working");
   act(() => unmount());
   expect(vi.getTimerCount()).toBe(0);
-  vi.useRealTimers();
 });
 
 test("under reduced motion, the musing keeps its word", () => {
@@ -808,8 +811,6 @@ test("under reduced motion, the musing keeps its word", () => {
   expect(vi.getTimerCount()).toBe(0);
   act(() => void vi.advanceTimersByTime(4800));
   expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
 });
 
 test("a running chat that loses wispd shows no loader", async () => {
@@ -828,17 +829,17 @@ test("a running chat that loses wispd shows no loader", async () => {
   expect(transcriptText()).toContain("Add a README");
 });
 
-test("until its transcript loads, a chat shows its first message, with the loader only if it runs", async () => {
+test("until its transcript loads, a chat shows its first message, with the loader only if it goes", async () => {
   fakeBridge(8);
   // The transcript is still on its way.
   window.wisp.request = vi.fn(() => new Promise<never>(() => {}));
-  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" status="completed" />);
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" />);
   await settle();
   expect(transcriptText()).toBe("Add a README");
   expect(document.querySelector(".loader")).toBeNull();
   act(() => unmount());
 
-  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" status="starting" />);
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
   await settle();
   expect(document.querySelector('[role="log"] .bg-selected')!.textContent).toBe("Add a README");
   expect(document.querySelector('[role="log"] button[aria-expanded] .sr-only')!.textContent).toBe(
@@ -849,7 +850,7 @@ test("until its transcript loads, a chat shows its first message, with the loade
 test("a chat that couldn't load shows its first message, with no loader", async () => {
   fakeBridge(8);
   window.wisp.request = vi.fn(async () => ({ error: { code: -32000, message: "wispd is gone" } }));
-  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" status="starting" />);
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
   await settle();
   expect(transcriptText()).toBe("Add a README");
   expect(document.querySelector(".loader")).toBeNull();
