@@ -3,9 +3,9 @@ name: Release
 # The two release channels (0028): a nightly prerelease per push to develop and a standard release
 # per push to main, each with the packaged app for the five targets and the update metadata the
 # app's updater reads attached (0029, 0030). Each build attaches its own files as soon as it's
-# done, so the macOS app, signed, is out in about three minutes; its dmg is notarized after. Only
-# this workflow can write to the repository's releases. It builds and publishes; it runs no tests
-# or lint, because the PR that landed the commit already passed CI.
+# done, so the signed macOS app is out about two minutes after a push; its dmg is notarized
+# after. Only this workflow can write to the repository's releases. It builds and publishes; it
+# runs no tests or lint, because the PR that landed the commit already passed CI.
 on:
   push:
     branches: [develop, main]
