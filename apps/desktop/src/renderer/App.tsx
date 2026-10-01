@@ -240,6 +240,7 @@ export function App() {
                 runId={selection.threadId}
                 notice={notice?.threadId === selection.threadId ? notice.text : undefined}
                 prompt={threads.state.runs[selection.threadId]?.prompt}
+                status={threads.state.runs[selection.threadId]?.status}
                 noRepo={group.id === noRepo}
               />
             ) : selection.kind === "new" ? (
@@ -268,6 +269,7 @@ export function App() {
                 hostId={host.id}
                 runId={agentId}
                 prompt={agent?.prompt}
+                status={agent?.status}
               />
             ) : (
               project && (
@@ -276,6 +278,11 @@ export function App() {
                   hostId={host.id}
                   project={project}
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
+                  status={
+                    project.coordinator
+                      ? threads.state.runs[project.coordinator]?.status
+                      : undefined
+                  }
                   startCoordinator={threads.startCoordinator}
                 />
               )

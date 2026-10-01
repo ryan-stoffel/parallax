@@ -31,7 +31,13 @@ import {
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import type { AgentRun, ImageId, JsonValue, PromptImage } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  AgentStatus,
+  ImageId,
+  JsonValue,
+  PromptImage,
+} from "../protocol/generated/protocol";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -64,6 +70,7 @@ export function AgentChat({
   runId,
   notice,
   prompt,
+  status,
   noRepo,
   tab,
   startOver,
@@ -74,6 +81,11 @@ export function AgentChat({
   notice?: string;
   /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
   prompt?: string;
+  /**
+   * The run's status as the host's list has it. Until the transcript loads, `prompt` shows as on
+   * its way to a run that's starting or running, with the loader under it.
+   */
+  status?: AgentStatus;
   /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
   noRepo?: boolean;
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
@@ -170,10 +182,13 @@ export function AgentChat({
         images,
       }));
     const all = [...items, ...pending];
-    return all.length === 0 && prompt
-      ? [{ kind: "pending", key: "pending:prompt", text: prompt }]
-      : all;
-  }, [items, sent, prompt]);
+    if (all.length > 0 || !prompt) return all;
+    return [
+      isRunning(status)
+        ? { kind: "pending", key: "pending:prompt", text: prompt }
+        : { kind: "user", key: "prompt", text: prompt },
+    ];
+  }, [items, sent, prompt, status]);
 
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from wispd";
@@ -710,10 +725,12 @@ const musingMs = 2400;
  */
 function Musing() {
   // Picked by the wall clock, so a remount (New Thread handing off to the opened thread) keeps the
-  // sequence. A word fades in, and the last one out, only once it changes here.
+  // sequence. A word fades in, and the last one out, only once it changes here. Under reduced
+  // motion it keeps one.
   const [tick, setTick] = useState(() => Math.floor(Date.now() / musingMs));
   const [first] = useState(tick);
   useEffect(() => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const timer = setTimeout(
       () => setTick(Math.max(tick + 1, Math.floor(Date.now() / musingMs))),
       musingMs - (Date.now() % musingMs),
@@ -822,17 +839,20 @@ export function activity(item?: Item): Activity {
     case "tool": {
       const wispd = wispdCall(item);
       if (wispd) return { ...wispd, loader: loaders.wispd };
+      // Including a wispd tool this app doesn't know.
       const mcp = mcpTool(item.name);
-      if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool, loader: loaders.mcp };
+      if (mcp)
+        return {
+          label: `Using ${mcp.server}`,
+          detail: mcp.tool,
+          loader: item.name?.startsWith(wispdTools) ? loaders.wispd : loaders.mcp,
+        };
       if (item.name === "Skill")
         return { label: "Using skill", detail: skillName(item.input), loader: loaders.skill };
       return {
         label: verbs[item.name ?? ""] ?? item.name ?? "Working",
         detail: toolHint(item.input),
-        // A wispd tool this app doesn't know keeps its name, but not the generic loader.
-        loader: item.name?.startsWith(wispdTools)
-          ? loaders.wispd
-          : (toolLoaders[item.name ?? ""] ?? loaders.working),
+        loader: toolLoaders[item.name ?? ""] ?? loaders.working,
       };
     }
     case "todo":
@@ -973,16 +993,15 @@ function wispdCall(item: Extract<Item, { kind: "tool" }>) {
 }
 
 /**
- * Another MCP server's tool as Claude Code names it, `mcp__<server>__<tool>`, readably: the
- * server's name, capitalized, and the tool's. Undefined for any other tool, and for wispd's.
+ * An MCP server's tool as Claude Code names it, `mcp__<server>__<tool>`, readably: the server's
+ * name, capitalized unless it's wispd's, and the tool's. Undefined for any other tool.
  */
 function mcpTool(name: string | null) {
-  if (!name || name.startsWith(wispdTools)) return undefined;
-  const [, server, tool] = /^mcp__(.+?)__(.+)$/.exec(name) ?? [];
+  const [, server, tool] = /^mcp__(.+?)__(.+)$/.exec(name ?? "") ?? [];
   if (!server || !tool) return undefined;
   const words = server.replace(/[_-]/g, " ");
   return {
-    server: words.charAt(0).toUpperCase() + words.slice(1),
+    server: server === "wispd" ? server : words.charAt(0).toUpperCase() + words.slice(1),
     tool: tool.replaceAll("_", " "),
   };
 }
@@ -990,7 +1009,10 @@ function mcpTool(name: string | null) {
 /** The skill a Skill call runs: `skill`, or `command` from older Claude Code versions. */
 const skillName = (input?: JsonValue) => toolHint(input, ["skill", "command"]);
 
-/** A tool call its row names readably: an MCP server's tool by the server, or a skill. */
+/**
+ * A tool call its row names readably: an MCP server's tool by the server, including a wispd tool
+ * this app doesn't know, or a skill.
+ */
 function namedTool(item: Extract<Item, { kind: "tool" }>) {
   const mcp = mcpTool(item.name);
   if (mcp) return { label: mcp.server, detail: mcp.tool };

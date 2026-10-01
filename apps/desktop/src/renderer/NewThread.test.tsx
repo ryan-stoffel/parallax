@@ -25,7 +25,7 @@ const wisp: Repo = {
   createdAt: "2026-09-26T12:00:00Z",
 };
 const thread: Thread = { id: "t-1", repo: wisp.id, createdAt: "2026-09-26T12:00:01Z" };
-const run = (id: string, prompt: string) => ({ id, prompt, status: "running" });
+const run = (id: string, prompt: string, status = "running") => ({ id, prompt, status });
 
 type Answer = (params: Record<string, unknown>) => RpcResponse<unknown>;
 let answers: Record<string, Answer>;
@@ -210,7 +210,7 @@ test("the loader under the prompt carries on as the thread opens and loads", asy
         resolve({
           result: {
             thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
-            run: run(p["runId"] as string, "Tidy the README"),
+            run: run(p["runId"] as string, "Tidy the README", "starting"),
           },
         });
     }) as unknown as RpcResponse<unknown>;
@@ -225,6 +225,22 @@ test("the loader under the prompt carries on as the thread opens and loads", asy
   expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
   expect(bubble()).toBe("Tidy the README");
   expect(musing()).toBe("Working");
+  // Its word carries on rather than fading in again.
+  expect(document.querySelector('[role="log"] .working-in')).toBeNull();
+});
+
+test("a finished thread opens on its prompt with no loader while its transcript loads", async () => {
+  answers["agent/list"] = () => ({
+    result: { runs: [run(thread.id, "Fix the flaky test", "completed")], seq: 7 },
+  });
+  answers["agent/events"] = () => new Promise(() => {}) as unknown as RpcResponse<unknown>;
+  await renderApp();
+  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix the flaky test"]);
+  expect(bubble()).toBe("Fix the flaky test");
+  expect(document.querySelector(".loader")).toBeNull();
+  expect(musing()).toBeUndefined();
 });
 
 test("No Repo starts a thread with no repo", async () => {

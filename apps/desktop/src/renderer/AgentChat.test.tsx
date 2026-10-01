@@ -5,8 +5,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
-import type { SubscriptionMessage, WispBridge } from "../preload/bridge";
-import type { AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
+import type { ConnectionState, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import type { AgentRun, AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
 import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
 import type { Item } from "./transcript";
@@ -190,8 +190,8 @@ test("a coordinator's wispd tool calls read as what they did, and to what", () =
   expect(summary("mcp__wispd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
     "Wrote shared contextplan.md",
   );
-  // A wispd tool this app doesn't know keeps its name.
-  expect(summary("mcp__wispd__plan_approve", {})).toBe("mcp__wispd__plan_approve");
+  // A wispd tool this app doesn't know reads as any MCP server's tool does.
+  expect(summary("mcp__wispd__plan_approve", {})).toBe("wispdplan approve");
 });
 
 test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
@@ -256,9 +256,10 @@ test("each kind of work has its own loader, and MCP tools and skills read by nam
     detail: "Fix the login bug",
     loader: loader("cells", "spread"),
   });
-  // A wispd tool this app doesn't know keeps its name, and still draws wispd's loader.
-  expect(activity(tool("mcp__wispd__plan_approve"))).toMatchObject({
-    label: "mcp__wispd__plan_approve",
+  // A wispd tool this app doesn't know reads as any MCP server's tool does, with wispd's loader.
+  expect(activity(tool("mcp__wispd__plan_approve"))).toEqual({
+    label: "Using wispd",
+    detail: "plan approve",
     loader: loader("cells", "spread"),
   });
   expect(activity({ kind: "todo", key: "c", items: [] })).toEqual({
@@ -347,21 +348,35 @@ test("a failed run shows why; other endings are a divider", () => {
   expect(document.body.textContent).toBe("Stopped");
 });
 
+// The sample's run, as it started.
+const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
+
 /**
  * A bridge serving the sample's events up to `seq`, two per page, that records calls.
  * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as wispd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
- * wispd advertises `capabilities`, and `agent/openPr` answers `prUrl`.
+ * wispd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
+ * default), and `agent/openPr` answers `prUrl`. `connect` changes the connection's state.
  */
 function fakeBridge(
   seq: number,
-  { listSeq = seq, resyncs = 0, cancelError = "", capabilities = {}, prUrl = "" } = {},
+  {
+    listSeq = seq,
+    resyncs = 0,
+    cancelError = "",
+    capabilities = {},
+    sent = {} as Partial<AgentRun>,
+    prUrl = "",
+  } = {},
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
+  let connection: (hostId: string, state: ConnectionState) => void = () => {};
   const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
       return { error: { code: -32000, message: cancelError } };
+    if (method === "agent/send")
+      return { result: { run: { ...sampleRun, status: "running", ...sent } }, logId: "log-1" };
     if (method === "agent/openPr") return { result: { url: prUrl }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
@@ -381,7 +396,10 @@ function fakeBridge(
       protocol: 1,
       capabilities,
     }),
-    onConnectionState: () => () => {},
+    onConnectionState: (l: typeof connection) => {
+      connection = l;
+      return () => {};
+    },
     request,
     subscribe,
   } as Partial<WispBridge> as WispBridge;
@@ -390,6 +408,7 @@ function fakeBridge(
     subscribe,
     unsubscribe,
     emit: (m: SubscriptionMessage) => act(() => listener(m)),
+    connect: (state: ConnectionState) => act(() => connection("local", state)),
   };
 }
 
@@ -496,6 +515,30 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   expect(sends()).toHaveLength(2);
   expect(sends()[1]![2]).toMatchObject({ text: "Also mention the tests." });
   expect(sendAgain()).toBeUndefined();
+});
+
+test("a message a finished run couldn't take goes back in the box, with no loader", async () => {
+  const send = async (text: string) => {
+    type(text);
+    await act(async () => {
+      composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+  };
+  // wispd answers with the run its CLI failed to start again, and no turn follows.
+  fakeBridge(8, { sent: { status: "failed", error: "the CLI didn't start" } });
+  await renderChat();
+  await send("Also mention the tests.");
+  expect(composer().textContent).toBe("Also mention the tests.");
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe("the CLI didn't start");
+  expect(transcriptText()).not.toContain("Also mention the tests.");
+  expect(document.querySelector(".loader")).toBeNull();
+  act(() => unmount());
+
+  fakeBridge(8, { sent: { status: "failed" } });
+  await renderChat();
+  await send("Also mention the tests.");
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe("The agent couldn't start.");
 });
 
 test("a pasted image goes with agent/send beside the text, and shows while it's pending", async () => {
@@ -729,10 +772,84 @@ test("until the agent does anything, a loader muses under the message on its way
   expect(document.querySelector(".loader")).toBeNull();
 });
 
+test("the musing changes its word on the wall clock, while screen readers keep hearing Working", () => {
+  // On a word's boundary: the first word is Picturing.
+  vi.useFakeTimers({ now: 2400 * 8000 });
+  render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
+  const header = () => document.querySelector("button[aria-expanded]")!;
+  // Each word shown, and whether it fades in or out.
+  const words = () =>
+    [...header().querySelectorAll('[aria-hidden="true"]:not(.loader) > span')].map((w) => [
+      w.textContent,
+      w.className.match(/working-(in|out)/)?.[0],
+    ]);
+  // The first word doesn't fade in, so a remount doesn't blink.
+  expect(words()).toEqual([["Picturing", undefined]]);
+  act(() => void vi.advanceTimersByTime(2400));
+  expect(words()).toEqual([
+    ["Picturing", "working-out"],
+    ["Pondering", "working-in"],
+  ]);
+  act(() => void vi.advanceTimersByTime(2400));
+  expect(words()).toEqual([
+    ["Pondering", "working-out"],
+    ["Sketching", "working-in"],
+  ]);
+  expect(header().querySelector(".sr-only")!.textContent).toBe("Working");
+  act(() => unmount());
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
+});
+
+test("under reduced motion, the musing keeps its word", () => {
+  vi.useFakeTimers({ now: 2400 * 8000 });
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduced-motion") }));
+  render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
+  expect(vi.getTimerCount()).toBe(0);
+  act(() => void vi.advanceTimersByTime(4800));
+  expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+test("a running chat that loses wispd shows no loader", async () => {
+  // The run is going, and the agent hasn't done anything yet.
+  const { connect } = fakeBridge(2);
+  await renderChat();
+  expect(document.querySelector('[role="log"] .loader')).not.toBeNull();
+  connect({ status: "connecting" });
+  expect(document.querySelector(".loader")).toBeNull();
+  connect({
+    status: "failed",
+    retrying: true,
+    error: { reason: "exited", message: "wispd exited" },
+  });
+  expect(document.querySelector(".loader")).toBeNull();
+  expect(transcriptText()).toContain("Add a README");
+});
+
+test("until its transcript loads, a chat shows its first message, with the loader only if it runs", async () => {
+  fakeBridge(8);
+  // The transcript is still on its way.
+  window.wisp.request = vi.fn(() => new Promise<never>(() => {}));
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" status="completed" />);
+  await settle();
+  expect(transcriptText()).toBe("Add a README");
+  expect(document.querySelector(".loader")).toBeNull();
+  act(() => unmount());
+
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" status="starting" />);
+  await settle();
+  expect(document.querySelector('[role="log"] .bg-selected')!.textContent).toBe("Add a README");
+  expect(document.querySelector('[role="log"] button[aria-expanded] .sr-only')!.textContent).toBe(
+    "Working",
+  );
+});
+
 test("a chat that couldn't load shows its first message, with no loader", async () => {
   fakeBridge(8);
   window.wisp.request = vi.fn(async () => ({ error: { code: -32000, message: "wispd is gone" } }));
-  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" />);
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" status="starting" />);
   await settle();
   expect(transcriptText()).toBe("Add a README");
   expect(document.querySelector(".loader")).toBeNull();
