@@ -3,7 +3,14 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { AgentTodoItem, AgentToolStatus, JsonValue } from "../protocol/generated/protocol";
+import type {
+  AgentOutputItem,
+  AgentTodoItem,
+  AgentToolStatus,
+  JsonValue,
+  LoggedEvent,
+  WispEvent,
+} from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import type { LoaderStyle } from "./Loader";
 import {
@@ -14,10 +21,11 @@ import {
   PlanUpdateLine,
   ProposedPlan,
   withPlans,
+  withTaskLists,
   type PlanRow,
   type PlanUpdate,
 } from "./Plan";
-import type { Item } from "./transcript";
+import { applyEvents, emptyTranscript, type Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -184,6 +192,265 @@ test("the strip's plan is the latest turn's, with the step under way as TodoWrit
   expect(latestPlan([todo("t1", items), user("u2"), read])).toBeUndefined();
   expect(latestPlan([todo("t1", items), todo("t2", [])])).toBeUndefined();
   expect(latestPlan([])).toBeUndefined();
+});
+
+// Claude Code 2.1.283's task tools as wispd logs them (RYA-248): the call, and its result's text,
+// which is all wispd keeps of it. Without `output`, the result hasn't arrived.
+const taskCall = (
+  key: string,
+  name: string,
+  input: JsonValue,
+  output?: string,
+  status: AgentToolStatus = "ok",
+): Item => ({
+  kind: "tool",
+  key,
+  callId: key,
+  name,
+  input,
+  ...(output !== undefined && { status, output }),
+});
+const create = (key: string, id: string, subject: string, activeForm?: string) =>
+  taskCall(
+    key,
+    "TaskCreate",
+    { subject, description: `${subject}, in full.`, ...(activeForm && { activeForm }) },
+    `Task #${id} created successfully: ${subject}`,
+  );
+/** A TaskUpdate as 2.1.283 answers one it applied: "Updated task #1 status". */
+const update = (key: string, input: Record<string, string>) =>
+  taskCall(
+    key,
+    "TaskUpdate",
+    input,
+    `Updated task #${input["taskId"]} ${Object.keys(input)
+      .filter((k) => k !== "taskId")
+      .join(", ")}`,
+  );
+const plans = (rows: ReturnType<typeof withPlans>) =>
+  rows.filter((r): r is PlanRow => r.kind === "plan");
+const tools = (rows: ReturnType<typeof withPlans>) =>
+  rows.flatMap((r) => (r.kind === "tool" ? [(r as Item & { name: string }).name] : []));
+
+test("Claude Code's task tools build the plan: a step for each TaskCreate, changed by TaskUpdate's id", () => {
+  const rows = withPlans([
+    user("u1"),
+    create("c1", "1", "Add tests", "Adding tests"),
+    create("c2", "2", "Run the checks"),
+    update("p1", { taskId: "1", status: "in_progress" }),
+    read,
+    update("p2", { taskId: "1", status: "completed" }),
+    update("p3", { taskId: "2", subject: "Run all the checks", activeForm: "Running them" }),
+    create("c3", "3", "Drop this"),
+    update("p4", { taskId: "3", status: "deleted" }),
+    update("p5", { taskId: "2", status: "in_progress" }),
+  ]);
+  // Each call goes, as its checklist stands for it, and the card shows the latest.
+  expect(rows.map((r) => r.kind).join(" ")).toBe(
+    "user plan todo todo tool todo todo todo todo todo",
+  );
+  expect(tools(rows)).toEqual(["Read"]);
+  expect(rows[1]).toMatchObject({
+    key: "c1:tasks",
+    items: [step("Add tests", "completed"), step("Run all the checks", "inProgress")],
+    latest: true,
+  });
+  const lines = rows
+    .filter((r): r is PlanUpdate => r.kind === "todo")
+    .map((r) => planChanges(r.previous!, r.items));
+  expect(lines).toEqual([
+    "Added: Run the checks",
+    "Started: Add tests",
+    "Finished: Add tests",
+    "Added: Run all the checks · Removed: Run the checks",
+    "Added: Drop this",
+    "Removed: Drop this",
+    "Started: Run all the checks",
+  ]);
+  // The strip says the step under way as its `activeForm` does, as Claude Code's spinner would.
+  const items = [user("u1"), create("c1", "1", "Add tests", "Adding tests")];
+  expect(latestPlan(items)).toEqual({ items: [step("Add tests", "pending")] });
+  items.push(update("p1", { taskId: "1", status: "in_progress" }));
+  expect(latestPlan(items)).toEqual({
+    items: [step("Add tests", "inProgress")],
+    active: "Adding tests",
+  });
+  expect(latestPlan([...items, create("c2", "2", "Ship")])?.active).toBe("Adding tests");
+  // A step with no `activeForm` is said by its subject, as there.
+  expect(
+    latestPlan([
+      user("u1"),
+      create("c2", "2", "Ship"),
+      update("p2", { taskId: "2", status: "in_progress" }),
+    ]),
+  ).toEqual({ items: [step("Ship", "inProgress")] });
+});
+
+test("TaskList and TaskGet change nothing and go; calls that failed or matched nothing stay", () => {
+  const rows = withPlans([
+    user("u1"),
+    create("c1", "1", "Add tests"),
+    taskCall("l1", "TaskList", {}, "#1 [pending] Add tests"),
+    taskCall("g1", "TaskGet", { taskId: "1" }, "Task #1: Add tests\nStatus: pending"),
+    // Still running: nothing to say yet either.
+    taskCall("l2", "TaskList", {}),
+    taskCall("g2", "TaskGet", { taskId: "1" }, "<tool_use_error>Error</tool_use_error>", "error"),
+    // 2.1.283 answers an update it didn't apply in words, without failing the call: a task it
+    // can't find, or a TaskCompleted hook's refusal.
+    taskCall("p1", "TaskUpdate", { taskId: "9", status: "completed" }, "Task not found"),
+    taskCall("p2", "TaskUpdate", { taskId: "1", status: "completed" }, "Run the tests first."),
+    taskCall("p3", "TaskUpdate", { taskId: "1", status: "bogus" }, "InputValidationError", "error"),
+    taskCall("p4", "TaskUpdate", { taskId: "1", status: "completed" }, "Denied.", "denied"),
+    taskCall("c2", "TaskCreate", { subject: "Hooked", description: "x" }, "Blocked", "error"),
+  ]);
+  expect(rows.map((r) => r.kind)).toEqual(["user", "plan", ...Array(6).fill("tool")]);
+  expect(rows.slice(2).map((r) => r.key)).toEqual(["g2", "p1", "p2", "p3", "p4", "c2"]);
+  expect(plans(rows)[0]!.items).toEqual([step("Add tests", "pending")]);
+  // Only a read: no plan at all.
+  expect(withPlans([user("u1"), taskCall("l1", "TaskList", {}, "No tasks found")])).toEqual([
+    user("u1"),
+  ]);
+});
+
+test("a TaskCreate shows its step before its result, and when its result can't be read", () => {
+  // Before the result: the step shows at once, under its call.
+  expect(
+    plans(withPlans([user("u1"), taskCall("c1", "TaskCreate", { subject: "Add tests" })])),
+  ).toMatchObject([{ items: [step("Add tests", "pending")] }]);
+  // A result in other words keeps the step, but no id to update it by: the update's row stays.
+  const unread = withPlans([
+    user("u1"),
+    taskCall("c1", "TaskCreate", { subject: "Add tests" }, "Made it."),
+    update("p1", { taskId: "1", status: "completed" }),
+  ]);
+  expect(unread.map((r) => r.kind)).toEqual(["user", "plan", "tool"]);
+  expect(plans(unread)[0]!.items).toEqual([step("Add tests", "pending")]);
+  // An input too large to carry still has its subject in the result.
+  const cut = taskCall(
+    "c1",
+    "TaskCreate",
+    { truncated: true, bytes: 40_000 },
+    "Task #1 created successfully: Add tests",
+  );
+  expect(plans(withPlans([user("u1"), cut]))[0]!.items).toEqual([step("Add tests", "pending")]);
+  // An update still waiting on its result counts, as it almost always lands.
+  const waiting = taskCall("p1", "TaskUpdate", { taskId: "1", status: "in_progress" });
+  expect(plans(withPlans([user("u1"), cut, waiting]))[0]!.items).toEqual([
+    step("Add tests", "inProgress"),
+  ]);
+});
+
+test("the task list lasts across turns, and a finished one is put away when the next turn starts", () => {
+  const rows = withPlans([
+    user("u1"),
+    create("c1", "1", "Add tests"),
+    create("c2", "2", "Run the checks"),
+    update("p1", { taskId: "1", status: "in_progress" }),
+    user("u2"),
+    read,
+    // The next turn picks up where the last stopped: its card is the whole list.
+    update("p2", { taskId: "1", status: "completed" }),
+    update("p3", { taskId: "2", status: "completed" }),
+    user("u3"),
+    // All done, so a new turn's plan starts afresh, though ids go on.
+    create("c3", "3", "Ship it"),
+    user("u4"),
+    update("p4", { taskId: "3", status: "completed" }),
+    user("u5"),
+    // A step taken up again comes back, in its place.
+    update("p5", { taskId: "1", status: "in_progress" }),
+  ]);
+  expect(plans(rows).map((p) => [p.key, p.items, p.latest])).toEqual([
+    ["c1:tasks", [step("Add tests", "inProgress"), step("Run the checks", "pending")], undefined],
+    ["p2:tasks", [step("Add tests", "completed"), step("Run the checks", "completed")], undefined],
+    ["c3:tasks", [step("Ship it", "pending")], undefined],
+    ["p4:tasks", [step("Ship it", "completed")], undefined],
+    ["p5:tasks", [step("Add tests", "inProgress")], true],
+  ]);
+  // The strip: a turn whose list hasn't changed yet has none.
+  expect(latestPlan([user("u1"), create("c1", "1", "Add tests"), user("u2")])).toBeUndefined();
+});
+
+test("TodoWrite and the task tools in one run make one plan: whichever wrote last", () => {
+  const rows = withPlans([
+    user("u1"),
+    todoWrite("w1"),
+    todo("t1", steps("completed", "inProgress")),
+    user("u2"),
+    // A resumed CLI with the task tools, as after an update.
+    create("c1", "1", "Add tests", "Adding tests"),
+    update("p1", { taskId: "1", status: "in_progress" }),
+    user("u3"),
+    todoWrite("w2"),
+    todo("t2", steps("completed", "completed")),
+    update("p2", { taskId: "1", status: "completed" }),
+  ]);
+  expect(tools(rows)).toEqual([]);
+  expect(plans(rows).map((p) => [p.key, p.items])).toEqual([
+    ["t1", steps("completed", "inProgress")],
+    ["c1:tasks", [step("Add tests", "inProgress")]],
+    ["t2", [step("Add tests", "completed")]],
+  ]);
+  expect(rows.at(-1)).toMatchObject({ kind: "todo", previous: steps("completed", "completed") });
+  // The strip, too, reads whichever came last.
+  const items = [user("u1"), create("c1", "1", "Add tests", "Adding tests"), todoWrite("w1")];
+  expect(latestPlan([...items, todo("t1", steps("completed", "inProgress"))])).toEqual({
+    items: steps("completed", "inProgress"),
+    active: "Doing step 2",
+  });
+});
+
+test("a task list rebuilt from the logged events, as on opening a thread or resuming it, is the same plan", () => {
+  let seq = 0;
+  const runId = "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01";
+  const at = (event: WispEvent): LoggedEvent => ({ seq: ++seq, time: "", event });
+  const output = (...items: AgentOutputItem[]) => at({ kind: "agent.output", runId, items });
+  const call = (callId: string, name: string, input: JsonValue, result: string) => [
+    output({ kind: "toolCall", callId, name, input }),
+    output({ kind: "toolResult", callId, status: "ok", output: result }),
+  ];
+  const events = [
+    output({ kind: "turnStarted", turnId: "t1", text: "Add tests" }),
+    ...call("c1", "TaskCreate", { subject: "Add tests", description: "d" }, "Task #1 created"),
+    ...call("c2", "TaskCreate", { subject: "Run the checks", description: "d" }, "Task #2 created"),
+    ...call("p1", "TaskUpdate", { taskId: "1", status: "in_progress" }, "Updated task #1 status"),
+    at({ kind: "agent.finished", runId, outcome: { status: "interrupted" } }),
+    // The thread resumed: a new CLI, the same session, so the same list.
+    output({ kind: "turnStarted", turnId: "t2", text: "Go on" }),
+    ...call("p2", "TaskUpdate", { taskId: "1", status: "completed" }, "Updated task #1 status"),
+  ];
+  const whole = applyEvents(emptyTranscript, events, runId);
+  // A page at a time, as useAgentRun loads them, then live events.
+  const paged = [events.slice(0, 3), events.slice(3, 8), events.slice(8)].reduce(
+    (t, page) => applyEvents(t, page, runId),
+    emptyTranscript,
+  );
+  expect(paged.items).toEqual(whole.items);
+  const rows = withPlans(whole.items);
+  expect(plans(rows).map((p) => p.items)).toEqual([
+    [step("Add tests", "inProgress"), step("Run the checks", "pending")],
+    [step("Add tests", "completed"), step("Run the checks", "pending")],
+  ]);
+  expect(tools(rows)).toEqual([]);
+  expect(latestPlan(whole.items)).toEqual({
+    items: [step("Add tests", "completed"), step("Run the checks", "pending")],
+  });
+});
+
+test("a task list's checklists, and their update lines, keep their objects while unchanged", () => {
+  const items = [
+    user("u1"),
+    create("c1", "1", "Add tests"),
+    update("p1", { taskId: "1", status: "in_progress" }),
+  ];
+  const lists = withTaskLists(items);
+  expect(withTaskLists(items)).toEqual(lists);
+  expect(withTaskLists(items)[2]).toBe(lists[2]);
+  const [, , update1] = withPlans(items);
+  expect(withPlans(items)[2]).toBe(update1);
+  // Rows of other kinds pass through.
+  const pending = { kind: "pending" as const, key: "p" };
+  expect(withTaskLists([pending])).toEqual([pending]);
 });
 
 test("an update says what changed", () => {

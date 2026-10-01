@@ -213,9 +213,15 @@ pub fn no_write_settings() -> Value {
 pub const NO_WRITE_TOOLS: &[&str] = &["Read", "Glob", "Grep", "EndConversation"];
 
 /// The built-in tools a worker gets (0013): the file tools, `Bash`, which Claude Code's sandbox
-/// confines, the web tools (Ryan, #137), and `TodoWrite`. No subagents, skills, or MCP tools.
+/// confines, the web tools (Ryan, #137), and the todo tools. No subagents, skills, or MCP tools.
 /// `EndConversation` may appear in `system/init` as well, as for a no-write run. A worker that
 /// [`hands_over_plans`] gets `ExitPlanMode` too ([`PLAN_WORKER_TOOL_LIST`]).
+///
+/// The todo tools are `TodoWrite` and the four task tools that replace it in Claude Code 2.1.283,
+/// which offers one set or the other, never both: the task tools unless `CLAUDE_CODE_ENABLE_TASKS`
+/// is `false` (RYA-248). Naming either set in `--tools` also turns them on for models Claude Code
+/// would otherwise give none. The task tools keep the session's list in the CLI's configuration
+/// folder, which the CLI writes itself and the worker's commands can't read (0013).
 pub const WORKER_TOOLS: &[&str] = &[
     "Read",
     "Edit",
@@ -227,15 +233,19 @@ pub const WORKER_TOOLS: &[&str] = &[
     "WebFetch",
     "WebSearch",
     "TodoWrite",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskUpdate",
 ];
 
 /// [`WORKER_TOOLS`] as `--tools` takes them.
-pub const WORKER_TOOL_LIST: &str =
-    "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite";
+pub const WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
+     TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate";
 
 /// [`WORKER_TOOL_LIST`] and `ExitPlanMode`, for a worker that [`hands_over_plans`] (RYA-243).
-pub const PLAN_WORKER_TOOL_LIST: &str =
-    "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite,ExitPlanMode";
+pub const PLAN_WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,\
+     WebSearch,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate,ExitPlanMode";
 
 /// The names for this Mac that no worker command or `WebFetch` may reach, even with network
 /// access: this Mac's own services wait on #168. The sandbox's proxy canonicalizes other
