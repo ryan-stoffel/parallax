@@ -2,8 +2,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Check,
   ChevronRight,
-  Circle,
-  CircleCheck,
   CircleDashed,
   CircleX,
   Copy,
@@ -13,7 +11,6 @@ import {
   GitPullRequestArrow,
   ImageOff,
   Info,
-  LoaderCircle,
   Ban,
   TriangleAlert,
   Workflow,
@@ -38,6 +35,16 @@ import { describeError } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import type { RunOptions } from "./models";
+import {
+  latestPlan,
+  PlanCard,
+  PlanStrip,
+  PlanUpdateLine,
+  ProposedPlan,
+  withPlans,
+  type PlanRow,
+  type ProposedPlanRow,
+} from "./Plan";
 import { titleOf } from "./threads";
 import {
   failureText,
@@ -52,8 +59,11 @@ import { useAgentRun, type SentMessage } from "./useAgentRun";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
 type Row = Item | { kind: "pending"; key: string; text: string; images?: PromptImage[] };
-/** What the list shows: a turn's activity is folded into one `Work` row. */
-type ViewRow = Row | Work;
+/** What the list shows: a turn's activity is folded into one `Work` row, its plan apart. */
+type ViewRow = Row | Work | PlanRow | ProposedPlanRow;
+
+/** Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it. */
+const focusComposer = () => document.getElementById("composer-input")?.focus();
 
 /**
  * An agent run as a chat: its transcript, the composer, and the run's footer.
@@ -121,6 +131,7 @@ export function AgentChat({
     [sent, resent],
   );
   const { run, items } = transcript;
+  const plan = useMemo(() => latestPlan(items), [items]);
   const showImage = useCallback((id: ImageId) => loadImage(hostId, runId, id), [hostId, runId]);
 
   // A message wispd wouldn't send because the run can't be resumed, which `startOver` can take.
@@ -203,6 +214,9 @@ export function AgentChat({
     !isRunning(run.status) &&
     run.status !== "accepted";
 
+  // One that couldn't load, stopped updating, or lost wispd shows nothing in progress.
+  const stalled = error !== undefined || (connection !== undefined && !connected);
+
   return (
     <>
       {rows.length > 0 ? (
@@ -210,8 +224,7 @@ export function AgentChat({
           rows={rows}
           sent={unsent}
           live={isRunning(run?.status)}
-          // One that couldn't load, stopped updating, or lost wispd shows nothing in progress.
-          stalled={error !== undefined || (connection !== undefined && !connected)}
+          stalled={stalled}
           onResend={resend}
           loadImage={showImage}
         />
@@ -251,6 +264,15 @@ export function AgentChat({
               Start over
             </button>
           </p>
+        )}
+        {/* The latest turn's plan, while the run works on it. */}
+        {plan && isRunning(run?.status) && !stalled && (
+          <PlanStrip
+            items={plan.items}
+            active={plan.active}
+            loader={loaders.planning}
+            returnFocus={focusComposer}
+          />
         )}
         <Composer
           onSend={sendText}
@@ -315,10 +337,12 @@ export function TranscriptView({
   // hasn't answered while the run goes, standing for what the agent is doing before it does
   // anything. It goes before any notices after the message, where the work it stands for will be.
   const view = useMemo(() => {
-    const grouped = groupWork(rows);
+    const grouped = groupWork(withPlans(rows));
     const at = grouped.findLastIndex((r) => r.kind !== "notice");
     const last = grouped[at];
-    if (!stalled && (last?.kind === "pending" || (live && last?.kind === "user")))
+    // A plan stands apart from the work around it, so work goes on after it as after a message.
+    const waits = ["user", "plan", "proposedPlan"].includes(last?.kind ?? "");
+    if (!stalled && (last?.kind === "pending" || (live && waits)))
       grouped.splice(at + 1, 0, { kind: "work", key: "work:pending", items: [] });
     return grouped;
   }, [rows, live, stalled]);
@@ -498,31 +522,15 @@ export const RowView = memo(function RowView({
     case "tool":
       return <ToolCall item={row} live={live} open={open} onToggle={onToggle} />;
     case "todo":
+      // A later update to the turn's plan, whose card shows the whole list.
+      return <PlanUpdateLine item={row} />;
+    case "plan":
+      return <PlanCard items={row.items} live={live && !!row.latest} loader={loaders.planning} />;
+    case "proposedPlan":
       return (
-        <ul aria-label="Checklist" className="space-y-1 text-[13px]">
-          {row.items.map((todo, i) => (
-            <li key={i} className="flex items-start gap-2">
-              {todo.status === "completed" ? (
-                <CircleCheck
-                  aria-label="Done"
-                  className="mt-0.5 size-3.5 shrink-0 text-faint-foreground"
-                />
-              ) : todo.status === "inProgress" ? (
-                <LoaderCircle aria-label="In progress" className="mt-0.5 size-3.5 shrink-0" />
-              ) : (
-                <Circle
-                  aria-label="To do"
-                  className="mt-0.5 size-3.5 shrink-0 text-faint-foreground"
-                />
-              )}
-              <span
-                className={todo.status === "completed" ? "text-muted-foreground line-through" : ""}
-              >
-                {todo.text}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <ProposedPlan id={row.key} status={row.status} open={open} onToggle={onToggle}>
+          <MarkdownText text={row.plan} />
+        </ProposedPlan>
       );
     case "notice":
       return (
