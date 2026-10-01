@@ -9,8 +9,8 @@ use jiff::Timestamp;
 use serde_json::{Map, Value};
 
 use super::{
-    BYPASS_PERMISSION_MODE, DEFAULT_PERMISSION_MODE, NO_WRITE_TOOLS, WORKER_MIN_VERSION,
-    WORKER_TOOLS,
+    BYPASS_PERMISSION_MODE, DEFAULT_PERMISSION_MODE, EXIT_PLAN_MODE, NO_WRITE_TOOLS,
+    WORKER_MIN_VERSION, WORKER_TOOLS,
 };
 use crate::backend::event::{
     ApprovalRequest, Event, Failure, FailureKind, LimitStatus, LimitWindow,
@@ -139,6 +139,8 @@ pub(super) struct Translator {
     /// The CLI asks wispd before a tool call that would prompt (RYA-222), so its control
     /// requests are wispd's to answer.
     prompts: bool,
+    /// A worker's `--tools` named `ExitPlanMode` too (RYA-243), so its `system/init` may list it.
+    plan_exit: bool,
     /// The user approved an `ExitPlanMode`, so the CLI left plan mode for the mode it was in
     /// before, which later `system/init`s report.
     left_plan: bool,
@@ -165,6 +167,7 @@ impl Translator {
             coordinator_tools: false,
             permission_mode: DEFAULT_PERMISSION_MODE,
             prompts: false,
+            plan_exit: false,
             left_plan: false,
             verified: false,
             session_id: None,
@@ -195,6 +198,13 @@ impl Translator {
     /// stdio` (RYA-222). Otherwise its control requests are skipped, as before.
     pub fn with_prompts(mut self, prompts: bool) -> Self {
         self.prompts = prompts;
+        self
+    }
+
+    /// Lets a worker's `system/init` list `ExitPlanMode` besides [`WORKER_TOOLS`], when its
+    /// `--tools` named it (`hands_over_plans`, RYA-243).
+    pub fn with_plan_exit(mut self, plan_exit: bool) -> Self {
+        self.plan_exit = plan_exit;
         self
     }
 
@@ -322,7 +332,7 @@ impl Translator {
         let offered: Vec<&str> = tools
             .iter()
             .map(|tool| tool.as_str().unwrap_or("<not a string>"))
-            .filter(|tool| !allowed.contains(tool) && *tool != END_CONVERSATION)
+            .filter(|tool| !allowed.contains(tool) && !self.also_allowed(tool))
             .collect();
         if !coordinator && !bypass && !offered.is_empty() {
             let message = format!(
@@ -373,6 +383,12 @@ impl Translator {
         }
         self.verified = true;
         steps
+    }
+
+    /// Whether `system/init` may list `tool` whatever the run's policy allows: `EndConversation`,
+    /// which `--tools` leaves in place, and `ExitPlanMode` when a worker's `--tools` named it.
+    fn also_allowed(&self, tool: &str) -> bool {
+        tool == END_CONVERSATION || (self.plan_exit && tool == EXIT_PLAN_MODE)
     }
 
     fn assistant(&mut self, message: &Map<String, Value>) -> Vec<Step> {
