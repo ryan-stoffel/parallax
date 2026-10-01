@@ -1,6 +1,6 @@
 //! `project/list`, `project/create`, `project/start`, which starts a project's coordinator behind
 //! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
-//! icon behind the `projectEdit` capability (RYA-227, 0031).
+//! icon behind the `projectEdit` capability (RYA-227, 0032).
 
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -116,7 +116,7 @@ pub(crate) async fn start(
 /// Renames a project or sets its icon, and appends `project.updated` when that changed anything.
 ///
 /// The event is appended in the job that writes the row, as `project/create`'s is, so a
-/// `project/list` snapshot and its `seq` always agree. `updatedAt` stays as it is (0031).
+/// `project/list` snapshot and its `seq` always agree. `updatedAt` stays as it is (0032).
 pub(crate) async fn update(
     context: &Context,
     params: ProjectUpdateParams,
@@ -159,10 +159,10 @@ const MAX_NAME_BYTES: usize = 256;
 /// The longest `repoPath` wispd accepts, in bytes: macOS's `PATH_MAX`.
 const MAX_REPO_PATH_BYTES: usize = 1024;
 
-/// The longest icon name wispd accepts, in characters (0031).
+/// The longest icon name wispd accepts, in characters (0032).
 const MAX_ICON_NAME_CHARS: usize = 64;
 
-/// The longest icon color wispd accepts, in characters (0031).
+/// The longest icon color wispd accepts, in characters (0032).
 const MAX_ICON_COLOR_CHARS: usize = 32;
 
 // The limits also bound every `project.created` and `project.updated` event, and with it the
@@ -223,7 +223,7 @@ fn check_name(name: &str) -> Result<(), ErrorObject> {
     Ok(())
 }
 
-/// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0031). wispd never reads them, so
+/// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0032). wispd never reads them, so
 /// that is all it checks.
 fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
     check_key("icon.name", &icon.name, MAX_ICON_NAME_CHARS)?;

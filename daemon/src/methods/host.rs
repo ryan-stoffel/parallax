@@ -86,7 +86,7 @@ pub(crate) fn initialize(
 /// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
 /// older wispd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
 /// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
-/// `projectEdit` (RYA-227, 0031): `project/update`, `project.updated`, and `icon` on `Project`
+/// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
 /// and `project/create`, which an older wispd would silently drop.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([

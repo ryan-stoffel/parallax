@@ -1,4 +1,4 @@
-# 0031: A project's name and icon live on its host
+# 0032: A project's name and icon live on its host
 
 - Status: accepted
 - Date: 2026-10-01

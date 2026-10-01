@@ -18,7 +18,7 @@ pub struct ProjectFields {
 }
 
 /// A project's icon, stored as the client sent it and never read
-/// (RYA-227, decision record 0031).
+/// (RYA-227, decision record 0032).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectIcon {
     pub name: String,
@@ -210,7 +210,7 @@ impl Store {
     /// change, it writes nothing.
     ///
     /// `repo_path` never changes, and `updated_at` stays as it is: a rename
-    /// or a new icon is not activity (decision record 0031).
+    /// or a new icon is not activity (decision record 0032).
     ///
     /// # Errors
     ///

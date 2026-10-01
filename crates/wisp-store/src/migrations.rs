@@ -264,7 +264,7 @@ const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (run_id, id)
         );",
     },
-    // A project's icon (RYA-227, decision 0031), as the client sent it: a Lucide icon's name and
+    // A project's icon (RYA-227, decision 0032), as the client sent it: a Lucide icon's name and
     // an optional palette key. A NULL `icon_name` means no icon, so existing projects have none.
     Migration {
         version: 16,

@@ -205,7 +205,7 @@ export type WispRequests = {
 	"project/start": { params: ProjectStartParams, result: AgentRunResult },
 	/**
 	 * `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
-	 * it is (0031). Fails with `projectNotFound` for an unknown project. Gated on the
+	 * it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
 	 * `projectEdit` capability, like `Project.icon`.
 	 */
 	"project/update": { params: ProjectUpdateParams, result: ProjectUpdateResult },
@@ -409,7 +409,7 @@ export type Project = {
 	 */
 	name: string,
 	/**
-	 * The icon the user chose, behind the `projectEdit` capability (RYA-227, 0031). Absent means
+	 * The icon the user chose, behind the `projectEdit` capability (RYA-227, 0032). Absent means
 	 * the app's default icon.
 	 */
 	icon?: ProjectIcon,
@@ -433,13 +433,13 @@ export type Project = {
 	createdAt: string,
 	/**
 	 * When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
-	 * a rename or a new icon is not activity (0031).
+	 * a rename or a new icon is not activity (0032).
 	 */
 	updatedAt: string,
 };
 
 /**
- * A project's icon (RYA-227, 0031): a Lucide icon and a color from the app's palette, both by
+ * A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
  * name. wispd stores them as the client sent them and never reads them.
  */
 export type ProjectIcon = {
@@ -2420,7 +2420,7 @@ export type ProjectStartParams = {
 
 /**
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
- * capability (RYA-227, 0031).
+ * capability (RYA-227, 0032).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
  * `project/create`'s rules, and the repository can't change. A rename or a new icon is not
@@ -2437,7 +2437,7 @@ export type ProjectUpdateParams = {
 	 */
 	name?: string,
 	/**
-	 * The new icon. Absent keeps the icon, and so does `null`: an icon can't be removed (0031).
+	 * The new icon. Absent keeps the icon, and so does `null`: an icon can't be removed (0032).
 	 */
 	icon?: ProjectIcon,
 };

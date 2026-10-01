@@ -224,7 +224,7 @@ method_table! {
         /// `coordinator` capability.
         ProjectStart = "project/start": ProjectStartParams => AgentRunResult;
         /// `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
-        /// it is (0031). Fails with `projectNotFound` for an unknown project. Gated on the
+        /// it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
         /// `projectEdit` capability, like `Project.icon`.
         ProjectUpdate = "project/update": ProjectUpdateParams => ProjectUpdateResult;
     }
