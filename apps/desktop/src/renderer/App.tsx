@@ -43,6 +43,9 @@ export function App() {
   // The open host, or this computer once the open one is removed.
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const [selection, setSelection] = useState<Selection>({ kind: "new" });
+  // A Project just created on another host, opened once that host is open and lists it: the
+  // check below drops a Project selection the open host's list doesn't have.
+  const [opening, setOpening] = useState<{ hostId: string; projectId: string }>();
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   // Set by the sidebar's "Add host", so Hosts opens on its form; any other way in clears it.
   const [addingHost, setAddingHost] = useState(false);
@@ -72,6 +75,13 @@ export function App() {
   } else if (selection.kind === "new")
     group = groups.find((g) => g.id === selection.groupId) ?? group;
 
+  if (
+    opening?.hostId === host.id &&
+    threads.state.projects.some((p) => p.id === opening.projectId)
+  ) {
+    setOpening(undefined);
+    setSelection({ kind: "project", projectId: opening.projectId });
+  }
   // The open Project. Once its host is removed, the next host's list doesn't have it.
   const project =
     selection.kind === "project"
@@ -110,6 +120,15 @@ export function App() {
         : "New thread";
     crumbs = [{ label: host.name }, repo, { label: page }];
   }
+
+  // A Project created on the open host is in its list already. Another host's list loads once
+  // that host is open.
+  const openProject = (hostId: string, projectId: string) => {
+    if (hostId === host.id) return setSelection({ kind: "project", projectId });
+    setHostId(hostId);
+    setSelection({ kind: "new" });
+    setOpening({ hostId, projectId });
+  };
 
   const newThread = () => {
     setSettings(null);
@@ -187,9 +206,14 @@ export function App() {
             onHostChange={(id) => {
               setHostId(id);
               setSelection({ kind: "new" });
+              setOpening(undefined);
             }}
             selection={selection}
-            onSelect={setSelection}
+            onSelect={(next) => {
+              setSelection(next);
+              setOpening(undefined);
+            }}
+            onOpenProject={openProject}
             onOpenSettings={openSettings}
             threads={threads}
             onDelete={deleteThread}

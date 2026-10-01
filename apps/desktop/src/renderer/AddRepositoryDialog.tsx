@@ -2,6 +2,7 @@ import { ArrowDown, ArrowLeft, ArrowUp, FolderPlus, Search } from "lucide-react"
 import { useId, useState, type ReactNode, type Ref } from "react";
 
 import { GitHubLogo } from "./logos";
+import { unavailableBadge } from "./ui";
 
 interface Source {
   id: string;
@@ -138,11 +139,7 @@ export function AddRepositoryDialog({
                   <span className="block text-[14px]">{s.name}</span>
                   <span className="block text-[12.5px] text-muted-foreground">{s.description}</span>
                 </span>
-                {s.unavailable && (
-                  <span className="shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-[12px] text-amber-500">
-                    {s.unavailable}
-                  </span>
-                )}
+                {s.unavailable && <span className={unavailableBadge}>{s.unavailable}</span>}
               </button>
             ))}
           </div>
