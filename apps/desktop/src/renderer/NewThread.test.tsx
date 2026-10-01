@@ -306,6 +306,25 @@ test("No Repo starts a thread with no repo", async () => {
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
 });
 
+test("a new thread asks wispd to forward its permission requests only when wispd advertises approvals (RYA-196)", async () => {
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Hi"),
+    },
+  });
+  // An older wispd never gets the flag.
+  await renderApp();
+  await send("Hi");
+  act(() => unmount());
+  capabilities = { approvals: {} };
+  await renderApp();
+  await send("Hi");
+  const [older, newer] = calls("thread/start");
+  expect(older).not.toHaveProperty("approvals");
+  expect(newer).toMatchObject({ prompt: "Hi", approvals: true });
+});
+
 describe("with wispd's run options", () => {
   const started = (p: Record<string, unknown>) => ({
     result: {
@@ -317,6 +336,23 @@ describe("with wispd's run options", () => {
     capabilities = { runOptions: {} };
     answers["accounts/defaults/get"] = () => ({ result: {} });
     answers["thread/start"] = started;
+  });
+
+  test("Manual says its requests come to the chat only when wispd advertises approvals (RYA-196)", async () => {
+    const manual = () =>
+      [
+        ...document.querySelectorAll(
+          'main [role="menu"][aria-label="Access"] [role="menuitemradio"]',
+        ),
+      ].find((o) => o.textContent?.startsWith("Manual"))!.textContent;
+    await renderApp();
+    expect(manual()).toBe(
+      "ManualAsks before edits and commands. This host's wispd can't show those requests, so they're denied.",
+    );
+    act(() => unmount());
+    capabilities = { runOptions: {}, approvals: {} };
+    await renderApp();
+    expect(manual()).toBe("ManualAsks you before edits and commands.");
   });
 
   test("New Thread sends the model, effort, and access it shows, and a changed one is a new start", async () => {

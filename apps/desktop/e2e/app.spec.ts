@@ -1,47 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { _electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
+import { close, launch, printFailure, servePids, type Launched } from "./launch";
 
 // The built app against a real wispd whose workers are the fake backend playing agent.json
-// (RYA-16). WISPD_PATH defaults to the repo's debug build, which must have the fake backend:
-// `cargo build -p wispd --features fake-backend`, then `pnpm build` and `pnpm e2e`.
-// Never point it at an installed wispd: without the feature, serve refuses to start.
-
-const desktop = path.join(import.meta.dirname, "..");
-const wispd = process.env["WISPD_PATH"] ?? path.join(desktop, "../../target/debug/wispd");
+// (RYA-16). See launch.ts for the wispd it needs.
 
 test.describe.configure({ mode: "serial" });
 
+let launched: Launched;
 let app: ElectronApplication;
 let page: Page;
-let dataDir: string;
 
 test.beforeAll(async () => {
-  if (!existsSync(wispd)) throw new Error(`no wispd at ${wispd}; see the top of app.spec.ts`);
-  dataDir = mkdtempSync(path.join(tmpdir(), "wisp-e2e-"));
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    WISP_NO_NAMER: "1",
-    WISPD_PATH: wispd,
-    WISPD_DATA_DIR: dataDir,
-    WISPD_FAKE_BACKEND: path.join(import.meta.dirname, "agent.json"),
-  };
-  // Windows spells it Path, and a second PATH key would leave which one wins to chance.
-  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
-  env[pathKey] = `${fakeCodex()}${path.delimiter}${env[pathKey] ?? ""}`;
-  // As in scripts/ci/launch-app: these would run Electron as Node, or load the dev server.
-  delete env["ELECTRON_RUN_AS_NODE"];
-  delete env["WISP_DEV_SERVER_URL"];
-  // Unset variables are undefined in `process.env`, and launch skips them.
-  // Its own userData too, so a local run never shares the developer's app profile or hosts.
-  const userData = `--user-data-dir=${mkdtempSync(path.join(tmpdir(), "wisp-e2e-app-"))}`;
-  app = await _electron.launch({ args: [desktop, userData], env: env as Record<string, string> });
-  page = await app.firstWindow();
+  launched = await launch("agent.json", fakeCodex());
+  ({ app, page } = launched);
 });
 
 /**
@@ -75,29 +53,10 @@ function fakeCodex(): string {
 
 test.afterEach(async () => {
   const { status, expectedStatus } = test.info();
-  if (status === expectedStatus) return;
-  const log = path.join(dataDir, "logs/wispd.log");
-  if (existsSync(log)) console.log(`--- ${log}\n${readFileSync(log, "utf8")}`);
-  console.log(`--- the window's text\n${await page.locator("body").innerText()}`);
+  if (status !== expectedStatus) await printFailure(launched);
 });
 
-/**
- * The pid of each `serve` that `wispd attach` started, oldest first. They come from the log, since
- * Windows won't read wispd.lock while serve holds it locked.
- */
-function servePids(): number[] {
-  const log = path.join(dataDir, "logs/wispd.log");
-  const text = existsSync(log) ? readFileSync(log, "utf8") : "";
-  return [...text.matchAll(/listening.* pid=(\d+)/g)].map((m) => Number.parseInt(m[1]!, 10));
-}
-
-test.afterAll(async () => {
-  await app?.close();
-  // `wispd attach` started a detached `serve`, which outlives the app.
-  const pid = servePids().at(-1) ?? 0;
-  // Never pid 0 or below, which process.kill reads as a whole process group.
-  if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
-});
+test.afterAll(() => close(launched));
 
 test("connects to wispd", async () => {
   await expect(page.getByRole("status").filter({ hasText: "Connected · wispd" })).toBeVisible();
@@ -307,13 +266,13 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
 
   // Stop wispd with the coordinator running. The app reconnects through a new `serve`, which
   // marks the run interrupted, and the transcript loads again.
-  const [pid] = servePids();
+  const [pid] = servePids(launched.dataDir);
   expect(pid).toBeGreaterThan(1);
   process.kill(pid!, "SIGTERM");
   await expect(transcript.getByText(/^Interrupted when wispd stopped/)).toBeVisible({
     timeout: 45_000,
   });
-  expect(servePids().length).toBeGreaterThan(1);
+  expect(servePids(launched.dataDir).length).toBeGreaterThan(1);
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 });
