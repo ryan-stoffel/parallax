@@ -8,6 +8,7 @@
 #![cfg(unix)]
 
 mod agents;
+mod approvals;
 mod context;
 mod coordinator;
 mod events;

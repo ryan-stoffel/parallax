@@ -271,6 +271,14 @@ const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE projects ADD COLUMN icon_name TEXT;
         ALTER TABLE projects ADD COLUMN icon_color TEXT;",
     },
+    // Whether a run forwards its CLI's permission requests to the client (RYA-222, decision
+    // 0031), which only a client that answers them asks for. 0 for every run before, which keeps
+    // denying what would prompt. Part of the start methods' idempotent params, and passed again
+    // when a run resumes.
+    Migration {
+        version: 17,
+        sql: "ALTER TABLE runs ADD COLUMN approvals INTEGER NOT NULL DEFAULT 0;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

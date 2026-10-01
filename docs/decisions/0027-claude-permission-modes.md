@@ -1,6 +1,6 @@
 # 0027: Every Claude thread uses Claude Code's permission modes
 
-- Status: accepted; supersedes in part [0004](0004-subscription-providers.md) (the coordinator's no-write flags), [0013](0013-worker-sandbox.md) (a worker in Bypass Permissions runs without the sandbox), [0019](0019-coordinator-mcp-tools.md) (the coordinator's flags), and [0024](0024-coordinator-chat.md) (where the coordinator runs, its per-turn check, and its fixed permission)
+- Status: accepted; supersedes in part [0004](0004-subscription-providers.md) (the coordinator's no-write flags), [0013](0013-worker-sandbox.md) (a worker in Bypass Permissions runs without the sandbox), [0019](0019-coordinator-mcp-tools.md) (the coordinator's flags), and [0024](0024-coordinator-chat.md) (where the coordinator runs, its per-turn check, and its fixed permission); Manual, Auto, and Plan ask the app instead of denying what would prompt when the app asks for that ([0031](0031-permission-requests.md))
 - Date: 2026-09-29
 - Issue: RYA-188
 
@@ -26,7 +26,7 @@ Ryan's decision: every wisp thread works the way Claude Code does with permissio
 
 Each backend reports its own list (`Backend::permissions`), and Codex's stays `edit` only. The composer's Access picker shows the thread's backend's list in every chat, coordinator chats included. A mode changes between turns, as model and effort do (RYA-161), and applies from the next CLI process.
 
-Headless Claude Code can't ask anyone, so in Manual it denies every request that would prompt. Relaying those requests to the app is a follow-up.
+Headless Claude Code can't ask anyone, so in Manual it denies every request that would prompt. Relaying those requests to the app is a follow-up, which [0031](0031-permission-requests.md) settles.
 
 ### The coordinator
 

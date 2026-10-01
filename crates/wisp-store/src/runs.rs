@@ -24,6 +24,9 @@ pub struct RunFields {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub permission: Option<String>,
+    /// Whether the run forwards its CLI's permission requests to the client (RYA-222, decision
+    /// 0031). Fixed when the run is created.
+    pub approvals: bool,
 }
 
 /// A run's state, which changes as it runs.
@@ -71,7 +74,8 @@ pub struct Run {
 const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backend, account_id, \
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
-                       merge_into, merge_how, coordinator_thread, model, effort, permission";
+                       merge_into, merge_how, coordinator_thread, model, effort, permission, \
+                       approvals";
 
 struct RawRun {
     id: String,
@@ -98,6 +102,7 @@ struct RawRun {
     model: Option<String>,
     effort: Option<String>,
     permission: Option<String>,
+    approvals: bool,
 }
 
 impl RawRun {
@@ -127,6 +132,7 @@ impl RawRun {
             model: row.get(21)?,
             effort: row.get(22)?,
             permission: row.get(23)?,
+            approvals: row.get(24)?,
         })
     }
 
@@ -161,6 +167,7 @@ impl RawRun {
                 model: self.model,
                 effort: self.effort,
                 permission: self.permission,
+                approvals: self.approvals,
             },
             state: RunState {
                 status: self.status,
@@ -355,9 +362,9 @@ pub(crate) fn insert_run(
         "INSERT INTO runs (id, project_id, prompt, requested_account, policy, backend,
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
-                           coordinator_thread, model, effort, permission)
+                           coordinator_thread, model, effort, permission, approvals)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
-                 ?17, ?18, ?19)
+                 ?17, ?18, ?19, ?20)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -379,6 +386,7 @@ pub(crate) fn insert_run(
             fields.model,
             fields.effort,
             fields.permission,
+            fields.approvals,
         ],
     )?;
     if inserted == 0 {

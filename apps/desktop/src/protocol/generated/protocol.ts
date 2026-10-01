@@ -172,6 +172,12 @@ export type WispRequests = {
 	 */
 	"agent/openPr": { params: AgentOpenPrParams, result: AgentOpenPrResult },
 	/**
+	 * `agent/approve`: answers a run's permission request, from its `approvalRequested`
+	 * item, by allowing or denying the tool call (RYA-222, decision 0031). Idempotent on the
+	 * request. Gated on the `approvals` capability.
+	 */
+	"agent/approve": { params: AgentApproveParams, result: AgentApproveResult },
+	/**
 	 * `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
 	 * (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
 	 */
@@ -1178,6 +1184,15 @@ export type AgentStartParams = {
 	 * retry must repeat them; wispd doesn't compare them.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Forward the run's permission requests to the client as `approvalRequested` items, which
+	 * `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
+	 * answers them, and only to a wispd that advertises `approvals`. Absent, a run in Manual,
+	 * Auto, or Plan denies what would prompt, as before. A run with a `coordinatorThread` also
+	 * gets it when its coordinator has it. The run keeps it when it resumes, and a retry must
+	 * repeat it.
+	 */
+	approvals?: boolean,
 };
 
 /**
@@ -1321,6 +1336,12 @@ export type AgentRun = {
 	 * Its permission, as `model`. Absent means `edit`.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * True when it forwards its permission requests to the client, as the start method that
+	 * made it asked with `approvals` (RYA-222, decision 0031). It never changes. Absent means
+	 * false: its CLI denies what would prompt.
+	 */
+	approvals?: boolean,
 	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
@@ -1791,8 +1812,86 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * A short description.
 	 */
-	detail: string,
+	detail: string, } | { "kind": "approvalRequested",
+	/**
+	 * The request's id.
+	 */
+	approvalId: ApprovalId,
+	/**
+	 * The tool, in the vendor's naming, such as `Bash` or `ExitPlanMode`.
+	 */
+	toolName: string,
+	/**
+	 * The tool's input as the vendor sent it, such as `ExitPlanMode`'s `plan`, or
+	 * `{"truncated": true, "bytes": n}` when it was too large to forward.
+	 */
+	input: JsonValue,
+	/**
+	 * The tool call's id, which its `toolCall` and `toolResult` carry, when the vendor
+	 * says.
+	 */
+	callId?: string,
+	/**
+	 * Why the CLI asks, such as a safety check's warning, with terminal escapes removed.
+	 */
+	reason?: string,
+	/**
+	 * The path that made the CLI ask, when one did.
+	 */
+	blockedPath?: string,
+	/**
+	 * The vendor's id for the subagent asking, when one of the agent's own subagents asks.
+	 */
+	subagent?: string,
+	/**
+	 * The rules that `always` adds for the rest of the CLI process, such as
+	 * `Bash(pnpm test:*)`. Absent when the request offers none.
+	 */
+	alwaysAllow?: Array<string>,
+	/**
+	 * True when the request is a question for the user rather than one action to allow,
+	 * such as `ExitPlanMode`'s plan: show its input in full.
+	 */
+	interactive?: boolean,
+	/**
+	 * When wispd denies it if nobody has answered, in RFC 3339 UTC.
+	 */
+	expiresAt: string, } | { "kind": "approvalResolved",
+	/**
+	 * The request's id.
+	 */
+	approvalId: ApprovalId,
+	/**
+	 * What it came to.
+	 */
+	decision: AgentApprovalDecision,
+	/**
+	 * Who or what decided it.
+	 */
+	by: AgentApprovalBy,
+	/**
+	 * True when it was allowed for the rest of the CLI process as well.
+	 */
+	always?: boolean,
+	/**
+	 * The user's message to the agent with a denial, cut short when it is long.
+	 */
+	message?: string,
 };
+
+/**
+ * Who or what decided a permission request.
+ *
+ * A newer wispd may send a value this version does not know; treat it as unknown.
+ */
+export type AgentApprovalBy = "user" | "timeout" | "cancel" | "stop" | "agent";
+
+/**
+ * What a permission request came to.
+ *
+ * A newer wispd may send a value this version does not know; treat it as unknown.
+ */
+export type AgentApprovalDecision = "allowed" | "denied" | "expired" | "withdrawn";
 
 /**
  * One item of an agent's checklist.
@@ -1821,6 +1920,12 @@ export type AgentTodoStatus = "pending" | "inProgress" | "completed";
  * A newer wispd may send a status this version does not know; treat it as unknown.
  */
 export type AgentToolStatus = "ok" | "error" | "denied";
+
+/**
+ * A permission request's id: a version 7 UUID that wispd generates when a run's CLI asks.
+ * `approvalRequested` carries it, and `agent/approve` and `approvalResolved` name it.
+ */
+export type ApprovalId = string;
 
 /**
  * A stored image's id (RYA-191, decision 0026): a version 7 UUID that wispd generates once a
@@ -2210,6 +2315,72 @@ export type AgentOpenPrResult = {
 };
 
 /**
+ * Params of `agent/approve`: the user's answer to a run's permission request, from its
+ * `approvalRequested`.
+ *
+ * Idempotent: answering a request that is already resolved changes nothing, and returns how it
+ * was resolved, which may be another answer, a timeout, or a cancel. A run started without
+ * `approvals` has no requests, so any answer for it fails with `approvalNotFound`.
+ */
+export type AgentApproveParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The request.
+	 */
+	approvalId: ApprovalId,
+	/**
+	 * Allow or deny.
+	 */
+	decision: AgentApprovalAnswer,
+	/**
+	 * With `allow`: the tool's input to run with instead of the one it asked with, a JSON
+	 * object of the same shape, at most 1 MiB. Absent runs it as asked.
+	 */
+	input?: JsonValue,
+	/**
+	 * With `allow`: also allow what the request's `alwaysAllow` lists, for the rest of the CLI
+	 * process. Only for a request whose `alwaysAllow` isn't empty.
+	 */
+	always?: boolean,
+	/**
+	 * With `deny`: what to tell the agent, at most 64 KiB. Absent says that the user denied it.
+	 */
+	message?: string,
+};
+
+/**
+ * The user's answer to a permission request.
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentApprovalAnswer = "allow" | "deny";
+
+/**
+ * Result of `agent/approve`: how the request was resolved, as its `approvalResolved` says.
+ */
+export type AgentApproveResult = {
+	/**
+	 * What it came to.
+	 */
+	decision: AgentApprovalDecision,
+	/**
+	 * Who or what decided it: `user` when this answer, or an earlier one, did.
+	 */
+	by: AgentApprovalBy,
+	/**
+	 * True when it was allowed for the rest of the CLI process as well.
+	 */
+	always?: boolean,
+	/**
+	 * The user's message to the agent with a denial.
+	 */
+	message?: string,
+};
+
+/**
  * Params of `thread/list`.
  */
 export type ThreadListParams = Record<symbol, never>;
@@ -2310,6 +2481,10 @@ export type ThreadStartParams = {
 	 * Images for the first message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Forward the agent's permission requests to the client, as `agent/start` takes it.
+	 */
+	approvals?: boolean,
 };
 
 /**
@@ -2416,6 +2591,11 @@ export type ProjectStartParams = {
 	 * Images for the first message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Forward the coordinator's permission requests to the client, as `agent/start` takes it.
+	 * The runs it spawns forward theirs too.
+	 */
+	approvals?: boolean,
 };
 
 /**
@@ -2514,7 +2694,7 @@ export type ErrorData = {
  * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

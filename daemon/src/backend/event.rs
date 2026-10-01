@@ -8,7 +8,7 @@ use std::ops::{Add, AddAssign};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use wisp_protocol::TurnId;
+use wisp_protocol::{ApprovalId, TurnId};
 
 /// One thing that happened in a run.
 ///
@@ -134,6 +134,16 @@ pub enum Event {
         /// Why that attempt failed.
         reason: FailureKind,
     },
+    /// The CLI asks whether a tool call may run, and waits for
+    /// [`Run::answer`](super::Run::answer) (RYA-222): Claude Code's `can_use_tool` control
+    /// request.
+    ApprovalRequested(ApprovalRequest),
+    /// The CLI no longer waits for an answer to a request, because its turn was interrupted:
+    /// Claude Code's `control_cancel_request`.
+    ApprovalWithdrawn {
+        /// The request's id from its [`Event::ApprovalRequested`].
+        approval_id: ApprovalId,
+    },
     /// Something in the CLI's output that the backend skipped. It never ends a run.
     Warning {
         /// What was wrong.
@@ -155,6 +165,48 @@ pub enum Event {
     /// A kind this version does not know, read back from a newer wispd's records.
     #[serde(other)]
     Unknown,
+}
+
+/// The most rules an [`ApprovalRequest`] offers to always allow: as many as its
+/// `approvalRequested` item shows, so an answer with `always` adds only rules the user saw.
+pub const MAX_ALWAYS_ALLOW_RULES: usize = 16;
+
+/// The longest rule, in bytes, that an [`ApprovalRequest`] offers to always allow, which its
+/// `approvalRequested` item shows whole. A longer one isn't offered.
+pub const MAX_ALWAYS_ALLOW_RULE_BYTES: usize = 1024;
+
+/// What an [`Event::ApprovalRequested`] asks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRequest {
+    /// The backend's id for the request, which [`Run::answer`](super::Run::answer) names.
+    pub approval_id: ApprovalId,
+    /// The tool, in the vendor's naming, such as `Bash` or `ExitPlanMode`.
+    pub tool_name: String,
+    /// The tool's input, as the vendor sent it.
+    #[serde(default)]
+    pub input: serde_json::Value,
+    /// The tool call's id, which its [`Event::ToolCall`] carries, when the vendor says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    /// Why the CLI asks, for people.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The path that made the CLI ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_path: Option<String>,
+    /// The vendor's id for the agent's own subagent that asks, when one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
+    /// The rules an answer with `always` adds for the rest of the CLI process, such as
+    /// `Bash(pnpm test:*)`: at most [`MAX_ALWAYS_ALLOW_RULES`], none longer than
+    /// [`MAX_ALWAYS_ALLOW_RULE_BYTES`]. Empty when the request offers none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub always_allow: Vec<String>,
+    /// The request is a question for the user, such as `ExitPlanMode`'s plan, rather than one
+    /// action to allow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interactive: bool,
 }
 
 /// One item of an [`Event::TodoList`].

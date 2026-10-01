@@ -42,6 +42,7 @@ pub(crate) async fn start(
         effort,
         permission,
         images,
+        approvals,
     } = params;
     let _starting = daemon.agents.start_guard(run_id).await;
     let options = RunOptions {
@@ -59,6 +60,7 @@ pub(crate) async fn start(
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
+        approvals,
     };
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
         return Ok(run);
