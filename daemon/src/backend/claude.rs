@@ -31,13 +31,14 @@
 //!     paths, and no writes to git metadata. `failIfUnavailable` and
 //!     `allowUnsandboxedCommands: false` keep a command from ever running outside it. Commands,
 //!     `WebFetch`, and `WebSearch` reach any host but [`WORKER_DENIED_HOSTS`] (Ryan, #137), so
-//!     the unreadable paths are what keep secrets in.
+//!     the unreadable paths are what keep secrets in. A worker in Plan that asks wispd also gets
+//!     `ExitPlanMode`, to hand its plan over ([`hands_over_plans`]).
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
 //!
-//!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`],
-//!   reports a Claude Code older than [`WORKER_MIN_VERSION`], or reports a permission mode
-//!   other than the one it asked for ([`permission_mode`]), fails with
-//!   [`FailureKind::PolicyViolation`].
+//!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`]
+//!   (and `ExitPlanMode` for one that hands over plans), reports a Claude Code older than
+//!   [`WORKER_MIN_VERSION`], or reports a permission mode other than the one it asked for
+//!   ([`permission_mode`]), fails with [`FailureKind::PolicyViolation`].
 //!
 //!   Only macOS and Linux run workers, with the same settings. On Linux,
 //!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
@@ -118,7 +119,9 @@
 //! request waits. A `control_cancel_request` withdraws one, as the CLI's exit withdraws every one
 //! left, and any other control request gets an error response. Accept Edits and Bypass
 //! Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`), and a run
-//! without `approvals` denies what would prompt, so their CLIs run as before.
+//! without `approvals` denies what would prompt, so their CLIs run as before. In Plan, the plan
+//! itself is a request: `ExitPlanMode`'s, which a coordinator always has with the channel and a
+//! worker gets with it (RYA-243).
 //!
 //! # Cancel
 //!
@@ -211,7 +214,8 @@ pub const NO_WRITE_TOOLS: &[&str] = &["Read", "Glob", "Grep", "EndConversation"]
 
 /// The built-in tools a worker gets (0013): the file tools, `Bash`, which Claude Code's sandbox
 /// confines, the web tools (Ryan, #137), and `TodoWrite`. No subagents, skills, or MCP tools.
-/// `EndConversation` may appear in `system/init` as well, as for a no-write run.
+/// `EndConversation` may appear in `system/init` as well, as for a no-write run. A worker that
+/// [`hands_over_plans`] gets `ExitPlanMode` too ([`PLAN_WORKER_TOOL_LIST`]).
 pub const WORKER_TOOLS: &[&str] = &[
     "Read",
     "Edit",
@@ -228,6 +232,10 @@ pub const WORKER_TOOLS: &[&str] = &[
 /// [`WORKER_TOOLS`] as `--tools` takes them.
 pub const WORKER_TOOL_LIST: &str =
     "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite";
+
+/// [`WORKER_TOOL_LIST`] and `ExitPlanMode`, for a worker that [`hands_over_plans`] (RYA-243).
+pub const PLAN_WORKER_TOOL_LIST: &str =
+    "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite,ExitPlanMode";
 
 /// The names for this Mac that no worker command or `WebFetch` may reach, even with network
 /// access: this Mac's own services wait on #168. The sandbox's proxy canonicalizes other
@@ -261,6 +269,15 @@ pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
     "--restricted",
     "--tools",
     WORKER_TOOL_LIST,
+    "--strict-mcp-config",
+];
+
+/// [`WORKSPACE_WRITE_ARGS`] with [`PLAN_WORKER_TOOL_LIST`] as `--tools`, for a worker that
+/// [`hands_over_plans`] (RYA-243). Nothing else differs.
+pub const PLAN_WORKSPACE_WRITE_ARGS: &[&str] = &[
+    "--restricted",
+    "--tools",
+    PLAN_WORKER_TOOL_LIST,
     "--strict-mcp-config",
 ];
 
@@ -478,6 +495,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         ToolPolicy::NoWrite if coordinator => &[],
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite if bypass => &[],
+        ToolPolicy::WorkspaceWrite if hands_over_plans(request) => PLAN_WORKSPACE_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
@@ -620,6 +638,21 @@ pub fn prompts(request: &RunRequest) -> bool {
         )
 }
 
+/// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], RYA-243):
+/// a worker or a thread in Plan whose CLI asks wispd ([`prompts`]). Headless Claude Code offers
+/// the tool only to a run that asks a host, and asking with it is how the plan reaches the user
+/// (0031). The tool runs nothing and writes nothing in the worktree. Allowing it only moves the
+/// CLI to `default` (Manual), a mode a worker can start in, under the same `--restricted`,
+/// `--tools`, and `--settings`, which no mode change drops. After it, the `system/init` check
+/// accepts only `default` and `acceptEdits` besides `plan`. Every other worker keeps
+/// [`WORKSPACE_WRITE_ARGS`].
+#[must_use]
+pub fn hands_over_plans(request: &RunRequest) -> bool {
+    request.policy == ToolPolicy::WorkspaceWrite
+        && request.permission == Some(AgentPermission::Plan)
+        && prompts(request)
+}
+
 /// A worker's or a coordinator's `--permission-mode` for `permission`: Claude Code's own mode of
 /// the same name (RYA-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
 ///
@@ -733,6 +766,7 @@ impl Backend for ClaudeBackend {
         let mut spec = ProcessSpec::new(self.program.clone(), &request.cwd);
         spec.args = arguments(&request)?;
         let asks = prompts(&request);
+        let plan_exit = hands_over_plans(&request);
         if let Some(sandbox) = worker_sandbox(&request)? {
             spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
         }
@@ -777,7 +811,8 @@ impl Backend for ClaudeBackend {
             translator: Translator::new(request.policy, expected_key_source)
                 .with_coordinator_tools(request.coordinator_tools.is_some())
                 .with_permission_mode(permission_mode(request.permission)?)
-                .with_prompts(asks),
+                .with_prompts(asks)
+                .with_plan_exit(plan_exit),
             turns: VecDeque::new(),
             asks: HashMap::new(),
             violation: None,

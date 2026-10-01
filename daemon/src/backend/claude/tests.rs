@@ -12,8 +12,9 @@ use wisp_protocol::{CoordinatorThreadId, ProjectId};
 
 use super::stream::{Ask, Step, Translator};
 use super::{
-    ClaudeBackend, NO_WRITE_ARGS, PROMPT_TOOL_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS,
-    WORKSPACE_WRITE_ARGS, no_write_settings, write_env_file,
+    ClaudeBackend, EXIT_PLAN_MODE, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST, PLAN_WORKSPACE_WRITE_ARGS,
+    PROMPT_TOOL_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS, no_write_settings,
+    write_env_file,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
@@ -56,6 +57,7 @@ fn fixture(name: &str) -> &'static str {
         "approval-withdrawn" => include_str!("fixtures/approval-withdrawn.jsonl"),
         "exit-plan" => include_str!("fixtures/exit-plan.jsonl"),
         "approval-exit" => include_str!("fixtures/approval-exit.jsonl"),
+        "worker-exit-plan" => include_str!("fixtures/worker-exit-plan.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -1886,7 +1888,8 @@ fn only_the_modes_that_prompt_ask_wispd_over_stdio_and_only_with_approvals() {
             } else {
                 assert_eq!(prompt_tool, None, "{args:?}");
             }
-            // The prompt channel is the only argument `approvals` changes.
+            // The prompt channel, and a plan worker's `ExitPlanMode` (RYA-243), are the only
+            // arguments `approvals` changes.
             if !approvals {
                 let mut asking: Vec<String> = super::arguments(&RunRequest {
                     approvals: true,
@@ -1898,6 +1901,12 @@ fn only_the_modes_that_prompt_ask_wispd_over_stdio_and_only_with_approvals() {
                 .collect();
                 if let Some(at) = asking.iter().position(|arg| arg == PROMPT_TOOL_ARGS[0]) {
                     asking.drain(at..at + PROMPT_TOOL_ARGS.len());
+                }
+                if let Some(tools) = asking
+                    .iter_mut()
+                    .find(|arg| arg.as_str() == PLAN_WORKER_TOOL_LIST)
+                {
+                    WORKER_TOOL_LIST.clone_into(tools);
                 }
                 assert_eq!(args, asking, "{permission:?}");
             }
@@ -1913,6 +1922,75 @@ fn only_the_modes_that_prompt_ask_wispd_over_stdio_and_only_with_approvals() {
             .unwrap()
             .contains(&PROMPT_TOOL_ARGS[0].into())
     );
+}
+
+/// RYA-243: a worker or a thread in Plan whose client answers gets `ExitPlanMode` in `--tools`,
+/// so it can hand its plan over. Every other mode, and Plan without `approvals`, keeps 0013's
+/// tools exactly; a bypass worker names none, and a coordinator never has the list.
+#[test]
+fn only_a_plan_worker_that_asks_wispd_gets_exit_plan_mode() {
+    let mut plan_tools = WORKER_TOOLS.to_vec();
+    plan_tools.push(EXIT_PLAN_MODE);
+    assert_eq!(PLAN_WORKER_TOOL_LIST, plan_tools.join(","));
+    let mut plan_args = WORKSPACE_WRITE_ARGS.to_vec();
+    plan_args[2] = PLAN_WORKER_TOOL_LIST;
+    assert_eq!(
+        PLAN_WORKSPACE_WRITE_ARGS, plan_args,
+        "only the tools differ"
+    );
+
+    let cwd = Path::new("/Users/u/wt");
+    let mut worker = request(cwd);
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(cwd));
+    let tools = |request: &RunRequest| {
+        let args: Vec<String> = super::arguments(request)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        let at = args.iter().position(|arg| arg == "--tools");
+        at.map(|at| args[at + 1].clone())
+    };
+    for approvals in [false, true] {
+        for permission in [
+            None,
+            Some(AgentPermission::Edit),
+            Some(AgentPermission::Auto),
+            Some(AgentPermission::Manual),
+            Some(AgentPermission::Plan),
+            Some(AgentPermission::Bypass),
+        ] {
+            let request = RunRequest {
+                permission,
+                approvals,
+                ..worker.clone()
+            };
+            let hands_over = approvals && permission == Some(AgentPermission::Plan);
+            let expected = match permission {
+                Some(AgentPermission::Bypass) => None,
+                _ if hands_over => Some(PLAN_WORKER_TOOL_LIST),
+                _ => Some(WORKER_TOOL_LIST),
+            };
+            let context = format!("{permission:?}, approvals {approvals}");
+            assert_eq!(super::hands_over_plans(&request), hands_over, "{context}");
+            assert_eq!(tools(&request).as_deref(), expected, "{context}");
+
+            let coordinator_run = RunRequest {
+                permission,
+                approvals,
+                ..coordinator(cwd)
+            };
+            assert!(!super::hands_over_plans(&coordinator_run), "{context}");
+            assert_eq!(tools(&coordinator_run), None, "{context}");
+        }
+    }
+    let plain = RunRequest {
+        approvals: true,
+        ..request(cwd)
+    };
+    assert!(!super::hands_over_plans(&plain));
+    assert_eq!(tools(&plain).as_deref(), Some(NO_WRITE_ARGS[1]));
 }
 
 /// RYA-222: in Manual, Claude Code's `can_use_tool` becomes a permission request, and an allow
@@ -2287,6 +2365,162 @@ fn a_plan_coordinator_may_report_another_mode_only_once_it_left_plan_mode() {
         violation_kind(&translator.line(modeless)),
         Some(FailureKind::PolicyViolation)
     );
+}
+
+/// An init line of a worker on Claude Code 2.1.283 in `mode`, listing `tools`.
+fn worker_init(mode: &str, tools: &str) -> Vec<u8> {
+    format!(
+        r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"2.1.283","permissionMode":"{mode}","tools":{tools}}}"#
+    )
+    .into_bytes()
+}
+
+/// RYA-243: a worker's init may list `ExitPlanMode` only when its `--tools` named it, and still
+/// nothing else beyond the worker's tools. After the plan's approval, Claude Code still lists it
+/// and reports Manual, which the check then accepts, but never a mode that asks less.
+#[test]
+fn a_worker_s_init_may_list_exit_plan_mode_only_when_it_hands_over_plans() {
+    // What 2.1.283 lists for a plan worker that asks wispd.
+    let planning = r#"["Bash","Edit","ExitPlanMode","Glob","Grep","NotebookEdit","Read","WebFetch","WebSearch","Write"]"#;
+    let worker = |mode: &'static str, plan_exit: bool| {
+        Translator::new(ToolPolicy::WorkspaceWrite, "none")
+            .with_permission_mode(mode)
+            .with_prompts(true)
+            .with_plan_exit(plan_exit)
+    };
+    let mut translator = worker("plan", true);
+    assert_eq!(
+        violation_kind(&translator.line(&worker_init("plan", planning))),
+        None
+    );
+    for mode in ["plan", "default", "auto", "acceptEdits"] {
+        let mut translator = worker(mode, false);
+        assert_eq!(
+            violation_kind(&translator.line(&worker_init(mode, planning))),
+            Some(FailureKind::PolicyViolation),
+            "{mode}"
+        );
+    }
+    for extra in [
+        "AskUserQuestion",
+        "EnterPlanMode",
+        "Agent",
+        "mcp__wispd__spawn_agent",
+    ] {
+        let tools = format!(r#"["Bash","ExitPlanMode","{extra}"]"#);
+        let mut translator = worker("plan", true);
+        assert_eq!(
+            violation_kind(&translator.line(&worker_init("plan", &tools))),
+            Some(FailureKind::PolicyViolation),
+            "{extra}"
+        );
+    }
+    for (mode, expected) in [
+        ("default", None),
+        ("acceptEdits", None),
+        ("bypassPermissions", Some(FailureKind::PolicyViolation)),
+        ("auto", Some(FailureKind::PolicyViolation)),
+    ] {
+        let mut translator = worker("plan", true);
+        translator.line(&worker_init("plan", planning));
+        translator.left_plan_mode();
+        assert_eq!(
+            violation_kind(&translator.line(&worker_init(mode, planning))),
+            expected,
+            "{mode}"
+        );
+    }
+}
+
+/// A worker in Plan at `cwd` whose client answers, so it hands its plan over (RYA-243).
+fn plan_worker(cwd: &Path) -> RunRequest {
+    RunRequest {
+        policy: ToolPolicy::WorkspaceWrite,
+        sandbox: Some(worker_sandbox(cwd)),
+        permission: Some(AgentPermission::Plan),
+        approvals: true,
+        ..request(cwd)
+    }
+}
+
+/// RYA-243: a plan worker hands its plan over with `ExitPlanMode`, as a coordinator does (0031).
+/// The request is a question for the user that holds the plan, and wispd's answer goes back on
+/// stdin. Once allowed, a later turn's init may report Manual. Once denied, the worker still
+/// plans, so an init that reports Manual fails it.
+#[tokio::test]
+async fn a_plan_worker_hands_its_plan_over_and_leaves_plan_mode_only_once_allowed() {
+    let plan = serde_json::json!({
+        "plan": "# Plan\n1. Add a README.\n",
+        "planFilePath": "/Users/dev/.claude/plans/plan-it-cozy-pinwheel.md",
+    });
+    let keep_planning = "Keep planning: add tests.";
+    for (decision, response) in [
+        (
+            Decision::Allow {
+                input: None,
+                always: false,
+            },
+            serde_json::json!({"behavior": "allow", "updatedInput": plan, "toolUseID": "toolu_01Pw1"}),
+        ),
+        (
+            Decision::Deny {
+                message: keep_planning.into(),
+                interrupt: false,
+            },
+            serde_json::json!({
+                "behavior": "deny",
+                "message": keep_planning,
+                "interrupt": false,
+                "toolUseID": "toolu_01Pw1",
+            }),
+        ),
+    ] {
+        let allowed = matches!(decision, Decision::Allow { .. });
+        let fake = Fake::new("worker-exit-plan");
+        let request = plan_worker(&fake.root());
+        let expected: Vec<String> = super::arguments(&request)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        assert!(expected.iter().any(|arg| arg == PLAN_WORKER_TOOL_LIST));
+        let Started { run, mut events } = launch(&fake.backend, request).await;
+        let asked = until_asked(&mut events).await;
+        assert_eq!(asked.tool_name, "ExitPlanMode");
+        assert!(asked.interactive);
+        assert_eq!(asked.input, plan);
+        assert_eq!(asked.call_id.as_deref(), Some("toolu_01Pw1"));
+        assert!(asked.always_allow.is_empty());
+        run.answer(Answer {
+            approval_id: asked.approval_id,
+            decision,
+        })
+        .unwrap();
+        run.send(FollowUp {
+            turn_id: turn(TURN_2),
+            text: "Go ahead.".into(),
+            images: Vec::new(),
+        })
+        .unwrap();
+        let all = rest(&mut events).await;
+        assert_eq!(fake.argv(), expected);
+        assert_eq!(fake.stdin()[1]["response"]["response"], response);
+        if allowed {
+            assert_eq!(
+                outcome(&all),
+                &Outcome::Completed {
+                    result: Some("Done.".into())
+                }
+            );
+        } else {
+            let (kind, message) = failure(&all);
+            assert_eq!(kind, FailureKind::PolicyViolation);
+            assert!(
+                message.contains(r#"permission mode "default" in a worker run instead of "plan""#),
+                "{message}"
+            );
+        }
+    }
 }
 
 /// RYA-222: a request offers to always allow only the rules its `approvalRequested` item shows

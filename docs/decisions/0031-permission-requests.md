@@ -1,8 +1,8 @@
 # 0031: Claude Code's permission requests reach the app over stdio
 
-- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel
+- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), RYA-243)
 - Date: 2026-10-01
-- Issue: RYA-222
+- Issue: RYA-222; RYA-243 for a worker's `ExitPlanMode`
 
 ## Context
 
@@ -106,7 +106,19 @@ What wispd answers, as the SDK does:
 
 ### Plan mode and `ExitPlanMode`
 
-Without a prompt host, headless Claude Code doesn't offer `ExitPlanMode` at all. With one, a coordinator in Plan gets it, and its plan arrives as an `interactive` request whose input holds `plan`. Allowing it is "approve the plan": Claude Code leaves plan mode for the mode it was in before, `default` (Manual) when it started in plan mode, and asks through the same channel from then on. A later turn of that CLI process reports `default` in its `system/init`, so once an `ExitPlanMode` is allowed, wispd accepts `default` there besides the requested mode, and `acceptEdits` should a newer CLI pick it. Any other mode, or none, still fails the run. A denial with a message is "keep planning". The run's stored permission stays `plan`, so a resumed CLI starts planning again. A worker's `--tools` leaves `ExitPlanMode` out, so a plan worker still only plans.
+Without a prompt host, headless Claude Code doesn't offer `ExitPlanMode` at all, even when `--tools` names it. With one, a coordinator in Plan gets it, since it has no `--tools` list. A worker or a normal thread in Plan with `approvals` gets it too (RYA-243): its `--tools` is 0013's list with `ExitPlanMode` added, and only then may its `system/init` list the tool. A worker in any other mode, or in Plan without `approvals`, keeps 0013's list and check exactly.
+
+The plan arrives as an `interactive` request. Claude Code 2.1.283's `ExitPlanMode` takes no plan from the model. The model writes the plan to Claude Code's plan file, `plans/<name>.md` in its configuration folder, and the CLI fills the request's input with the file's text as `plan` and its path as `planFilePath`. Allowing it is "approve the plan": Claude Code leaves plan mode for the mode it was in before, `default` (Manual) when it started in plan mode, and asks through the same channel from then on. A later turn of that CLI process reports `default` in its `system/init`, so once an `ExitPlanMode` is allowed, wispd accepts `default` there besides the requested mode, and `acceptEdits` should a newer CLI pick it. Any other mode, or none, still fails the run. A denial with a message is "keep planning": the model gets the message as the tool's result, and the CLI stays in plan mode. The run's stored permission stays `plan`, so a resumed CLI starts planning again.
+
+Why a worker may have `ExitPlanMode`:
+
+- The tool runs nothing and writes nothing in the worktree. It hands the plan to wispd, and allowing it changes only the CLI's permission mode.
+- That mode is `default` (Manual), which a worker can already start in. `--restricted`, `--tools`, `--strict-mcp-config`, and `--settings` are arguments of the process, which a mode change doesn't drop, so the worker keeps its sandbox, its tools, and its file tools' confinement to the worktree. In Manual it asks before it edits a file and runs sandboxed Bash without asking, as a worker started in Manual does. After the allow, `bypassPermissions`, which `--restricted` refuses anyway, and `auto` still fail the `system/init` check.
+- The process's first `system/init` reported `plan`. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` forces `default` from the start (0013), so accepting `default` once the plan is approved doesn't hide the flag.
+- wispd's answer drops the request's other suggestions, as for any request, and an edited input keeps the path check above. An edited `plan` is the user's own text, which 2.1.283 saves to its own plan file. It ignores an edited `planFilePath` and writes the file it chose.
+- The plan file sits in Claude Code's configuration folder, outside the worktree, and a plan worker's `Write` to it succeeds under `--restricted` without asking. Whether that should stay is RYA-244.
+
+The tool stays listed after the plan is approved, and a later call answers "You are not in plan mode" without asking. A worker gets no `AskUserQuestion` (RYA-245).
 
 ### Codex
 
@@ -126,7 +138,7 @@ Out of scope. `codex exec` runs with approval policy `never` (0004, 0013) and ha
 - Manual, Auto's undecided calls, and Plan's plan approval work in every Claude thread a client starts with `approvals`, coordinators and their subagents included. RYA-196 builds the card from `approvalRequested`, pins it while it is pending, and turns the flag on. Until then, no run asks.
 - A person can now approve what headless Claude Code used to deny for a worker: writes to its own settings, git, and tool-configuration files inside its worktree, which `--restricted` lets only a person or the permission handler approve. Paths outside the worktree stay a hard deny under `--restricted`, no approval adds a directory, and no edited input moves a request to another path. Sandboxed commands still can't reach other hosts' ask: the worker's `strictAllowlist` denies them without asking.
 - A run in Manual waits on the user between tool calls, up to 30 minutes each.
-- After approving a plan, a coordinator's later turns in the same CLI process run in Manual; a resumed one plans again. Moving the run's stored mode on approval is a follow-up for the plan card (RYA-220).
+- After approving a plan, a coordinator's or a worker's later turns in the same CLI process run in Manual; a resumed one plans again. Moving the run's stored mode on approval is a follow-up for the plan card (RYA-220).
 - A Manual worker asks before it edits a file, but runs Bash without asking: its settings allow `Bash`, which the sandbox confines (0013). A Manual coordinator has no sandbox, so it asks before Bash too.
 
 ## Evidence
@@ -137,5 +149,19 @@ Out of scope. `codex exec` runs with approval policy `never` (0004, 0013) and ha
 - wispd's denial skips the call, the tool result the model gets carries the user's message, and the turn goes on.
 - The same coordinator without `approvals` gets no prompt channel, and Claude Code denies its Bash without asking, as before this record.
 - A Manual worker's sandboxed Bash runs without asking, and its `Write` in its worktree asks; wispd's allow writes the file.
+- A Plan worker's Bash is denied without asking, since plan mode sends it to the auto-mode classifier, which the fake API can't answer. Its `ExitPlanMode` arrives as an `interactive` request holding the plan, and after wispd's allow the same Bash runs in the sandbox without asking (RYA-243).
 
-The other cases (withdrawn requests, other control requests, `ExitPlanMode`) replay synthetic transcripts in `daemon/src/backend/claude/tests.rs`.
+The other cases (withdrawn requests, other control requests, a denied plan, and a later init after an approved one) replay synthetic transcripts in `daemon/src/backend/claude/tests.rs`.
+
+On 2026-10-01, Claude Code 2.1.283 for Linux x64, the npm package whose binary has CI's pinned SHA-256, was run by hand as a plan worker with `--restricted`, a fixed `--tools`, and `--permission-prompt-tool stdio`, against a fake Messages API, with answers written on stdin as wispd writes them (RYA-243):
+
+| Run | Result |
+| --- | --- |
+| `--tools` without `ExitPlanMode` | `system/init` doesn't list it; a call fails with "No such tool available: ExitPlanMode" without asking |
+| `--tools` with `ExitPlanMode`, no prompt host | Same: the tool isn't offered |
+| `--tools` with `ExitPlanMode`, prompt host | Listed; a call is a `can_use_tool` request with `requires_user_interaction: true` and no suggestions |
+| The model writes the plan file, then calls `ExitPlanMode` with `{}` | The request's input holds `plan` (the file's text) and `planFilePath` |
+| Allow | A `system/status` line reports `permissionMode: "default"`, and the next turn's `system/init` reports `default` |
+| Deny with a message | The tool result is the message, and the next turn's `system/init` still reports `plan` |
+| Allow with an edited `plan` and `planFilePath` | The edited text goes to the CLI's own plan file; nothing is written at the edited path |
+| `ExitPlanMode` called outside plan mode | Fails with "You are not in plan mode", without asking |

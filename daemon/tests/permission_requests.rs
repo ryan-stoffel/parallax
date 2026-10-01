@@ -1,10 +1,11 @@
 //! Real Claude Code for RYA-222 (0031): in Manual, a run whose client answers permission requests
 //! asks wispd over stdio before a tool call that would prompt, and runs it or not on wispd's
-//! answer, and a run whose client doesn't is denied as before. Each test starts the CLI through
-//! wispd's own Claude backend, so the arguments, the translator that reads the CLI's
-//! `can_use_tool` request, and the driver that writes the `control_response` are the ones a real
-//! run uses. A local fake Messages API asks for the tool calls, so no account or Anthropic
-//! connection is needed. Set `WISP_SANDBOX_CLAUDE` to the CLI under test, as CI's Linux legs do.
+//! answer, and a run whose client doesn't is denied as before. In Plan, a worker hands its plan
+//! over the same way (RYA-243). Each test starts the CLI through wispd's own Claude backend, so
+//! the arguments, the translator that reads the CLI's `can_use_tool` request, and the driver that
+//! writes the `control_response` are the ones a real run uses. A local fake Messages API asks for
+//! the tool calls, so no account or Anthropic connection is needed. Set `WISP_SANDBOX_CLAUDE` to
+//! the CLI under test, as CI's Linux legs do.
 #![cfg(unix)]
 
 #[expect(
@@ -25,6 +26,7 @@ use serde_json::json;
 use wisp_protocol::{CoordinatorThreadId, ProjectId};
 use wispd::backend::claude::ClaudeBackend;
 use wispd::backend::process::{Environment, Launcher};
+use wispd::backend::run_temp::RunTemp;
 use wispd::backend::{
     AccountRef, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, CoordinatorTools,
     Credential, Decision, Event, Outcome, RunId, RunRequest, Started, ToolPolicy, ToolStatus,
@@ -305,15 +307,10 @@ async fn a_manual_coordinator_without_approvals_is_denied_without_asking() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A worker in Manual, in its sandbox: its Bash runs without asking, since its settings allow
-/// Bash (0013), and its `Write` asks. wispd allows it, and the file is written.
-#[tokio::test]
-async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
-        return;
-    };
-    let folders = Folders::new();
+/// A worker's worktree in `folders`' data folder, laid out as wispd lays one out and holding
+/// [`PROBE`], and a request for a worker there in `permission`, on an API key, whose client
+/// answers permission requests. Keep the [`RunTemp`] until the run is over.
+fn worker(folders: &Folders, permission: AgentPermission) -> (PathBuf, RunRequest, RunTemp) {
     let worktree = folders.data.join("worktrees/run");
     let context = folders.data.join("context/p");
     let git_dir = folders.root.join("repo/.git");
@@ -326,6 +323,24 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
     )
     .unwrap();
     fs::write(worktree.join("probe.sh"), PROBE).unwrap();
+    let (mut request, temp) =
+        worker_request(&folders.home, &folders.data, &worktree, &git_dir, &context);
+    request.permission = Some(permission);
+    request.approvals = true;
+    request.account.credential = Credential::ApiKey(ApiKey::new(KEY.into()));
+    (worktree, request, temp)
+}
+
+/// A worker in Manual, in its sandbox: its Bash runs without asking, since its settings allow
+/// Bash (0013), and its `Write` asks. wispd allows it, and the file is written.
+#[tokio::test]
+async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
+    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        return;
+    };
+    let folders = Folders::new();
+    let (worktree, request, _temp) = worker(&folders, AgentPermission::Manual);
     let file = worktree.join("approved.txt");
     let write = ToolCall {
         name: "Write",
@@ -333,11 +348,6 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
     };
     let api = fake_api(vec![ToolCall::bash("sh probe.sh"), write]).await;
     let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
-    let (mut request, _temp) =
-        worker_request(&folders.home, &folders.data, &worktree, &git_dir, &context);
-    request.permission = Some(AgentPermission::Manual);
-    request.approvals = true;
-    request.account.credential = Credential::ApiKey(ApiKey::new(KEY.into()));
 
     let events = drive(&backend, request, |_| Decision::Allow {
         input: None,
@@ -355,5 +365,65 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
     assert!(results[0].2.contains("probe-ran"), "{events:#?}");
     assert_eq!(results[1].1, ToolStatus::Ok, "{events:#?}");
     assert_eq!(fs::read_to_string(&file).unwrap(), "approved\n");
+    assert_eq!(outcome(&events), &done(), "{events:#?}");
+}
+
+/// A worker in Plan whose client answers hands its plan to wispd with `ExitPlanMode` (RYA-243),
+/// and wispd's allow takes it out of plan mode. In plan mode, Claude Code 2.1.283 sends each
+/// command to its auto-mode classifier, which the fake API can't answer, so the worker's first
+/// Bash is denied without asking. Once the plan is allowed, the CLI runs in Manual, where the
+/// worker's settings allow sandboxed Bash (0013), so the same command runs without asking.
+#[tokio::test]
+async fn a_plan_worker_hands_its_plan_to_wispd_and_leaves_plan_mode_on_its_allow() {
+    const PLAN: &str = "1. Add a README.\n2. Link it from the docs.\n";
+    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        return;
+    };
+    let folders = Folders::new();
+    let (worktree, request, _temp) = worker(&folders, AgentPermission::Plan);
+    let probe = ToolCall::bash("sh probe.sh");
+    let exit_plan = ToolCall {
+        name: "ExitPlanMode",
+        input: json!({"plan": PLAN}),
+    };
+    let api = fake_api(vec![probe.clone(), exit_plan, probe]).await;
+    let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
+
+    let events = drive(&backend, request, |asked| {
+        if asked.tool_name == "ExitPlanMode" {
+            Decision::Allow {
+                input: None,
+                always: false,
+            }
+        } else {
+            Decision::Deny {
+                message: "Only the plan is approved.".into(),
+                interrupt: false,
+            }
+        }
+    })
+    .await;
+    let asked = requests(&events);
+    assert_eq!(asked.len(), 1, "only the plan asks: {events:#?}");
+    assert_eq!(asked[0].tool_name, "ExitPlanMode");
+    assert!(asked[0].interactive, "{events:#?}");
+    assert_eq!(asked[0].input["plan"], PLAN);
+    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01WispProbe1"));
+    let results = results(&events);
+    assert_eq!(results.len(), 3, "{events:#?}");
+    assert_ne!(
+        results[0].1,
+        ToolStatus::Ok,
+        "plan mode ran it: {events:#?}"
+    );
+    assert_eq!(results[1].1, ToolStatus::Ok, "{events:#?}");
+    assert_eq!(results[2].1, ToolStatus::Ok, "{events:#?}");
+    assert!(results[2].2.contains("probe-ran"), "{events:#?}");
+    assert_eq!(
+        fs::read_to_string(worktree.join("ran")).unwrap(),
+        "x\n",
+        "only the command after the allow ran"
+    );
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
