@@ -236,17 +236,17 @@ async fn projects_are_renamed_and_given_icons_without_moving_their_activity() {
         assert_eq!(same, recolored);
     }
 
+    assert_eq!(recolored.updated_at, created.updated_at);
+    assert_eq!(recolored.repo_path, created.repo_path);
     let listed = client
         .call::<ProjectList>(ProjectListParams {})
         .await
         .unwrap();
-    assert_eq!(listed.projects, [recolored.clone()]);
+    assert_eq!(listed.projects, [recolored]);
     assert_eq!(
         listed.seq, 4,
         "project.created and one project.updated per change, none for an update that changes nothing"
     );
-    assert_eq!(recolored.updated_at, created.updated_at);
-    assert_eq!(recolored.repo_path, created.repo_path);
 }
 
 #[tokio::test]
