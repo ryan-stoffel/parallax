@@ -40,8 +40,10 @@ export function updateError(error: Error & { code?: string; statusCode?: number 
  * `updaterSettings`) through the `app-update.yml` electron-builder packs, downloads what it finds
  * in the background, and installs it when Update is clicked or wisp quits. `publish` gets what the
  * Update button shows on every change. Nothing is checked until `follow` names a channel; then it
- * checks every minute, and on `checkSoon` at most every 10 s, while nothing is downloaded yet. A
- * channel change checks at once, and the button keeps offering a download already waiting.
+ * checks every 20 s, and on `checkSoon` at most every 10 s, while nothing is downloaded yet. A
+ * channel change checks at once, and the button keeps offering a download already waiting. The
+ * checks read github.com's releases feed and download URLs, not the REST API, so they spend no
+ * API quota (RYA-211).
  */
 export function startUpdater(publish: (state: UpdateState) => void) {
   // Updates replace the AppImage file; an unpacked Linux build has nothing to replace.
@@ -89,7 +91,7 @@ export function startUpdater(publish: (state: UpdateState) => void) {
   });
   if (unsupported) publish({ note: unsupported });
   // A downloaded update waits for a click or quit; checking again would fetch it again.
-  setInterval(() => downloaded ?? check(), 60_000);
+  setInterval(() => downloaded ?? check(), 20_000);
 
   return {
     /** Takes the channel's settings and checks at once, also at start. */

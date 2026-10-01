@@ -6,7 +6,6 @@ use std::time::Duration;
 use clap::{Args, Parser, Subcommand};
 use tracing::{error, info, warn};
 use wisp_protocol::{CoordinatorThreadId, ProjectId};
-use wispd::VERSION;
 use wispd::attach::{
     self, DEFAULT_CONNECT_TIMEOUT, EXIT_UNAVAILABLE, MAX_CONNECT_TIMEOUT, Options, report,
 };
@@ -18,7 +17,7 @@ use wispd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartE
 use wispd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
 
 #[derive(Debug, Parser)]
-#[command(name = "wispd", version = VERSION, about = "The wisp host daemon.")]
+#[command(name = "wispd", version = wispd::version(), about = "The wisp host daemon.")]
 #[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
@@ -127,6 +126,8 @@ struct ServiceOptions {
 }
 
 fn main() -> ExitCode {
+    // Before anything else, so the version is the one this process started as (see `version`).
+    wispd::version();
     let cli = Cli::parse();
     match cli.command {
         Command::Serve(args) => serve(&args),
@@ -458,7 +459,7 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{AttachArgs, Cli, Command, VERSION};
+    use super::{AttachArgs, Cli, Command};
 
     #[test]
     fn the_command_line_definition_is_valid() {
@@ -468,8 +469,8 @@ mod tests {
     #[test]
     fn version_is_wired_to_wispds_own_version() {
         // daemon/tests/cli.rs checks what `wispd --version` actually prints; this just checks
-        // the command is wired to the crate's VERSION (0006, #44), not a hardcoded string.
-        assert_eq!(Cli::command().get_version(), Some(VERSION));
+        // the command is wired to `wispd::version` (0006, #44), not a hardcoded string.
+        assert_eq!(Cli::command().get_version(), Some(wispd::version()));
     }
 
     #[test]

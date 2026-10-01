@@ -34,7 +34,6 @@ use wisp_protocol::{
     ProjectListParams, ProtocolRange, RunId, TurnId, WispEvent,
 };
 
-use crate::VERSION;
 use crate::transport::{self, Stream};
 
 /// The server's name in the coordinator's `--mcp-config`, which prefixes its tools' names there.
@@ -169,7 +168,7 @@ async fn answer(binding: &Binding, request: &Request) -> Result<Value, ErrorObje
             Ok(json!({
                 "protocolVersion": version,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": SERVER, "version": VERSION},
+                "serverInfo": {"name": SERVER, "version": crate::version()},
             }))
         }
         "ping" => Ok(json!({})),
@@ -673,7 +672,7 @@ impl Wispd {
                 protocol: ProtocolRange::SUPPORTED,
                 client: ClientInfo {
                     name: "wispd mcp".to_owned(),
-                    version: VERSION.to_owned(),
+                    version: crate::version().to_owned(),
                     machine_id: None,
                 },
                 capabilities: Capabilities::default(),
