@@ -1,10 +1,11 @@
-//! What the real-CLI worker tests share: a fake Messages API on 127.0.0.1 that asks for one Bash
-//! call, a way to run Claude Code as wispd runs a worker against it, and the Bash call's output.
+//! What the real-CLI tests share: a fake Messages API on 127.0.0.1 that asks for tool calls, a way
+//! to run Claude Code as wispd runs a worker against it, and the Bash call's output.
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -64,9 +65,7 @@ pub async fn run_worker(
     home: &Path,
     env: &[(&str, &str)],
 ) -> (String, String) {
-    let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", api.local_addr().unwrap());
-    tokio::spawn(serve(api, "sh probe.sh".to_owned()));
+    let base_url = fake_api(vec![ToolCall::bash("sh probe.sh")]).await;
     let temp = worker_temp(&request.sandbox.as_ref().unwrap().temp).unwrap();
     // The CLI's own `TMPDIR`, wispd's in a real run.
     std::fs::create_dir_all(root.join("tmp")).unwrap();
@@ -126,15 +125,43 @@ pub fn tool_result(stdout: &str) -> Option<String> {
         })
 }
 
-/// A fake Messages API: the first turn asks for a Bash call running `command`, and the turn that
-/// carries its result ends the conversation. Everything else is a 404.
-async fn serve(listener: TcpListener, command: String) {
-    while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(answer(stream, command.clone()));
+/// A tool call the fake Messages API asks for.
+#[derive(Clone, Debug)]
+pub struct ToolCall {
+    /// The tool, such as `Bash`.
+    pub name: &'static str,
+    /// Its input.
+    pub input: Value,
+}
+
+impl ToolCall {
+    /// A Bash call that runs `command`.
+    pub fn bash(command: &str) -> Self {
+        Self {
+            name: "Bash",
+            input: json!({"command": command, "description": "Probe the sandbox"}),
+        }
     }
 }
 
-async fn answer(mut stream: TcpStream, command: String) -> std::io::Result<()> {
+/// Starts a fake Messages API on 127.0.0.1 and returns its base URL. Each turn asks for the next
+/// of `calls`, in order, and the turn that carries the last one's result ends the conversation.
+/// The first call's id is `toolu_01WispProbe`, the next `toolu_01WispProbe1`, and so on.
+pub async fn fake_api(calls: Vec<ToolCall>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(serve(listener, calls.into()));
+    base_url
+}
+
+/// Answers `POST /v1/messages` with the next of `calls`. Everything else is a 404.
+async fn serve(listener: TcpListener, calls: Arc<[ToolCall]>) {
+    while let Ok((stream, _)) = listener.accept().await {
+        tokio::spawn(answer(stream, Arc::clone(&calls)));
+    }
+}
+
+async fn answer(mut stream: TcpStream, calls: Arc<[ToolCall]>) -> std::io::Result<()> {
     let mut request = Vec::new();
     let mut chunk = [0; 16 * 1024];
     let body_start = loop {
@@ -164,7 +191,7 @@ async fn answer(mut stream: TcpStream, command: String) -> std::io::Result<()> {
     let messages_api = target == "/v1/messages" || target.starts_with("/v1/messages?");
     let response = if head.starts_with("post ") && messages_api {
         let body: Value = serde_json::from_slice(&request[body_start..body_start + length])?;
-        let events = messages(&body, &command);
+        let events = messages(&body, &calls);
         format!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\
              connection: close\r\n\r\n{events}",
@@ -177,26 +204,34 @@ async fn answer(mut stream: TcpStream, command: String) -> std::io::Result<()> {
     stream.shutdown().await
 }
 
-/// The streamed reply to a Messages request, as server-sent events.
-fn messages(request: &Value, command: &str) -> String {
+/// The streamed reply to a Messages request, as server-sent events: the call after the ones the
+/// conversation already has results for, or the end.
+fn messages(request: &Value, calls: &[ToolCall]) -> String {
     let answered = request["messages"]
         .as_array()
-        .and_then(|messages| messages.last())
-        .and_then(|last| last["content"].as_array())
-        .is_some_and(|content| content.iter().any(|block| block["type"] == "tool_result"));
-    let (block, delta, stop) = if answered {
-        (
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "tool_result")
+        .count();
+    let (block, delta, stop) = match calls.get(answered) {
+        Some(call) => {
+            let id = match answered {
+                0 => "toolu_01WispProbe".to_owned(),
+                n => format!("toolu_01WispProbe{n}"),
+            };
+            (
+                json!({"type": "tool_use", "id": id, "name": call.name, "input": {}}),
+                json!({"type": "input_json_delta", "partial_json": call.input.to_string()}),
+                "tool_use",
+            )
+        }
+        None => (
             json!({"type": "text", "text": ""}),
             json!({"type": "text_delta", "text": "done"}),
             "end_turn",
-        )
-    } else {
-        let input = json!({"command": command, "description": "Probe the sandbox"});
-        (
-            json!({"type": "tool_use", "id": "toolu_01WispProbe", "name": "Bash", "input": {}}),
-            json!({"type": "input_json_delta", "partial_json": input.to_string()}),
-            "tool_use",
-        )
+        ),
     };
     let usage = json!({"input_tokens": 1, "output_tokens": 1});
     let message = json!({

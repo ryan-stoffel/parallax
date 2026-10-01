@@ -13,7 +13,7 @@ Headless Claude Code has two ways to ask a host, both behind the hidden `--permi
 - `stdio`, which the Agent SDK passes for its `canUseTool` callback. Claude Code writes a `control_request` with `subtype: "can_use_tool"` on stdout and waits for a `control_response` on stdin.
 - `mcp__<server>__<tool>`, an MCP tool that Claude Code calls with the tool's name and input, and whose text result is the answer.
 
-Everything below comes from reading Claude Code 2.1.286's bundled source, its `--help`, and the Agent SDK 0.3.286's `sdk.d.ts` and `sdk.mjs`. No real CLI ran a turn.
+The shapes below come from reading Claude Code 2.1.286's bundled source, its `--help`, and the Agent SDK 0.3.286's `sdk.d.ts` and `sdk.mjs`. Claude Code 2.1.283, CI's pin, sends and takes the same ones ([Evidence](#evidence)).
 
 ## Decision
 
@@ -112,4 +112,14 @@ Out of scope. `codex exec` runs with approval policy `never` (0004, 0013) and ha
 - A person can now approve what headless Claude Code used to deny for a worker: writes to its own settings, git, and tool-configuration files inside its worktree, which `--restricted` lets only a person or the permission handler approve. Paths outside the worktree stay a hard deny under `--restricted`, and no approval adds a directory. Sandboxed commands still can't reach other hosts' ask: the worker's `strictAllowlist` denies them without asking.
 - A run in Manual waits on the user between tool calls, up to 30 minutes each.
 - After approving a plan, a coordinator's later turns in the same CLI process run in Manual; a resumed one plans again. Moving the run's stored mode on approval is a follow-up for the plan card (RYA-220).
-- Not tested with a real CLI: the shapes come from Claude Code's source and the SDK's types, and the tests replay synthetic transcripts.
+- A Manual worker asks before it edits a file, but runs Bash without asking: its settings allow `Bash`, which the sandbox confines (0013). A Manual coordinator has no sandbox, so it asks before Bash too.
+
+## Evidence
+
+`daemon/tests/permission_requests.rs` runs a real Claude Code, 2.1.283 on CI's Linux legs, through wispd's own Claude backend, with the arguments, the translator, and the driver a real run uses, against a fake Messages API on 127.0.0.1 that asks for tool calls:
+
+- A Manual coordinator's Bash arrives as a `can_use_tool` request with its `tool_use_id` and an `addRules` suggestion. wispd's allow with `always` runs it, and the same command then runs again without asking, so the session rule took.
+- wispd's denial skips the call, the tool result the model gets carries the user's message, and the turn goes on.
+- A Manual worker's sandboxed Bash runs without asking, and its `Write` in its worktree asks; wispd's allow writes the file.
+
+The other cases (withdrawn requests, other control requests, `ExitPlanMode`) replay synthetic transcripts in `daemon/src/backend/claude/tests.rs`.
