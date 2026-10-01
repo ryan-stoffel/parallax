@@ -20,7 +20,7 @@
   --primary-foreground: #ffffff;
   --ring: #2563eb;
   --danger: #c42b2b;
-  --working: #c96442;
+  --working: #2563eb;
   --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
 }
 
@@ -41,7 +41,7 @@
   --primary-foreground: #0d0d0d;
   --ring: #3b82f6;
   --danger: #ff8f8a;
-  --working: #d97757;
+  --working: #3b82f6;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
 }
 
