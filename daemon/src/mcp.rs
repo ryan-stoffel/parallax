@@ -51,8 +51,9 @@ pub const TOOLS: &[&str] = &[
     "write_context",
 ];
 
-/// [`TOOLS`] as Claude Code names them, `mcp__<server>__<tool>`: a coordinator's
-/// `--allowedTools`, so they run without asking in every permission mode (0027).
+/// [`TOOLS`] as Claude Code names them, `mcp__<server>__<tool>`: the start of a coordinator's
+/// `--allowedTools`, so they run without asking in every permission mode (0027). Claude Code's
+/// todo tools follow them there (`backend::claude::TODO_TOOLS`, RYA-249).
 pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__wispd__spawn_agent",
     "mcp__wispd__list_agents",
