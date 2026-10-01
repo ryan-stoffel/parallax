@@ -180,15 +180,18 @@ export function limitDetails(limit: UsageLimitWindow): string {
   return `${resets}Reported ${at(limit.capturedAt)}.`;
 }
 
+/** How close a limit window is to its cap: amber from 75% used, red from 90%. */
+export type LimitTone = "normal" | "warning" | "danger";
+
 /**
- * A limit window for its Usage card: a short name ("Session", "Weekly · Opus"), how much is left
- * (0 to 100) when the vendor says, a line on what comes back when, and the bar's reset badge.
- * Once the reset time has passed, the last percent is stale and the whole window is back.
+ * A limit window for its meter on the Usage page: a short name ("Session", "Weekly · Opus"), how
+ * much is used (0 to 100, rounded down) when the vendor says, its tone, and when it resets. Once
+ * the reset time has passed, the last percent is stale and none of the window is used.
  */
-export function limitCard(
+export function limitMeter(
   limit: UsageLimitWindow,
   now: number,
-): { name: string; left?: number; line: string; badge?: string } {
+): { name: string; used?: number; tone: LimitTone; resets: string } {
   const weekly = /^seven_day(?:_(.+))?$/.exec(limit.window);
   const name =
     limit.window === "five_hour"
@@ -200,14 +203,16 @@ export function limitCard(
         : capitalize(limit.window);
   const resets = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt);
   if (resets !== undefined && resets <= now)
-    return { name, left: 100, line: "Has reset", badge: "reset" };
-  const left =
+    return { name, used: 0, tone: "normal", resets: "Has reset" };
+  const used =
     limit.usedPercent === undefined
       ? undefined
-      : 100 - Math.min(100, Math.max(0, Math.floor(limit.usedPercent)));
-  if (resets === undefined) return { name, left, line: "Reset time unknown" };
-  const resetsIn = duration(resets - now);
-  const line =
-    left !== undefined && left < 100 ? `+${100 - left}% in ${resetsIn}` : `Resets in ${resetsIn}`;
-  return { name, left, line, badge: resetsIn };
+      : Math.min(100, Math.max(0, Math.floor(limit.usedPercent)));
+  const tone = used === undefined || used < 75 ? "normal" : used < 90 ? "warning" : "danger";
+  return {
+    name,
+    used,
+    tone,
+    resets: resets === undefined ? "Reset time unknown" : `Resets in ${duration(resets - now)}`,
+  };
 }
