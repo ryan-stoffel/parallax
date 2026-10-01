@@ -38,10 +38,10 @@ use crate::{
     EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
     HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams,
     InitializeResult, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, PromptImage, RepoAddParams, RepoAddResult,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
+    RepoAddParams, RepoAddResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -223,6 +223,10 @@ method_table! {
         /// replaces the project's last coordinator unless that one is running. Gated on the
         /// `coordinator` capability.
         ProjectStart = "project/start": ProjectStartParams => AgentRunResult;
+        /// `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
+        /// it is (0031). Fails with `projectNotFound` for an unknown project. Gated on the
+        /// `projectEdit` capability, like `Project.icon`.
+        ProjectUpdate = "project/update": ProjectUpdateParams => ProjectUpdateResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -297,6 +301,7 @@ mod tests {
                 "thread/archive",
                 "thread/delete",
                 "project/start",
+                "project/update",
                 "$/cancelRequest",
                 "events/event",
             ]

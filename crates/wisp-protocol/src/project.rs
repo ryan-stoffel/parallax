@@ -19,6 +19,11 @@ pub struct Project {
     pub id: ProjectId,
     /// The name shown in the app.
     pub name: String,
+    /// The icon the user chose, behind the `projectEdit` capability (RYA-227, 0031). Absent means
+    /// the app's default icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icon: Option<ProjectIcon>,
     /// The absolute path of the repository on this host.
     pub repo_path: String,
     /// The branch checked out in the repository, or the first 7 digits of the commit when `HEAD`
@@ -33,8 +38,24 @@ pub struct Project {
     pub coordinator: Option<RunId>,
     /// When the project was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
-    /// When the project last changed, in RFC 3339 UTC.
+    /// When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
+    /// a rename or a new icon is not activity (0031).
     pub updated_at: Timestamp,
+}
+
+/// A project's icon (RYA-227, 0031): a Lucide icon and a color from the app's palette, both by
+/// name. wispd stores them as the client sent them and never reads them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectIcon {
+    /// The Lucide icon's name in kebab-case, such as `rocket`: 1 to 64 characters of `a-z`, `0-9`,
+    /// and `-`.
+    pub name: String,
+    /// The palette key of its color, such as `green`: 1 to 32 characters of `a-z`, `0-9`, and
+    /// `-`. Absent means the app's accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub color: Option<String>,
 }
 
 /// Params of `project/list`.
@@ -55,9 +76,9 @@ pub struct ProjectListResult {
 /// Params of `project/create`.
 ///
 /// It is idempotent on `id`: if a project with that id exists, wispd returns it instead of
-/// creating another, and fails with `idConflict` if `name` or `repoPath` differ. A new project's
-/// `repoPath` must be the top folder of a git working tree on this host, or it fails with
-/// `notARepository`.
+/// creating another, and fails with `idConflict` if `name`, `repoPath`, or `icon` differ. A new
+/// project's `repoPath` must be the top folder of a git working tree on this host, or it fails
+/// with `notARepository`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectCreateParams {
@@ -67,6 +88,11 @@ pub struct ProjectCreateParams {
     pub name: String,
     /// The absolute path of the repository on this host.
     pub repo_path: String,
+    /// The project's icon, sent only to a wispd that advertises `projectEdit`. Absent means the
+    /// app's default icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icon: Option<ProjectIcon>,
 }
 
 /// Result of `project/create`.
@@ -74,6 +100,36 @@ pub struct ProjectCreateParams {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectCreateResult {
     /// The project, new or existing.
+    pub project: Project,
+}
+
+/// Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
+/// capability (RYA-227, 0031).
+///
+/// A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
+/// `project/create`'s rules, and the repository can't change. A rename or a new icon is not
+/// activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
+/// A change appends `project.updated`; an update that changes nothing appends no event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectUpdateParams {
+    /// The project.
+    pub project: ProjectId,
+    /// The new name. Absent keeps the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    /// The new icon. Absent keeps the icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icon: Option<ProjectIcon>,
+}
+
+/// Result of `project/update`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectUpdateResult {
+    /// The project as it stands after the update.
     pub project: Project,
 }
 

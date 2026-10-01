@@ -2,8 +2,9 @@
 //! table so every params and result type is the protocol's own.
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
-//! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`), and `host.rs`
-//! advertises the capability in `initialize`.
+//! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
+//! `projectEdit`: `project/update` in `project.rs`), and `host.rs` advertises the capability in
+//! `initialize`.
 
 mod accounts;
 mod agent;
@@ -27,8 +28,8 @@ use wisp_protocol::methods::{
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
     AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges, AgentSend,
     AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe,
-    HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList, ProjectStart, RequestMethod,
-    UsageGet, UsageHistory,
+    HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList, ProjectStart, ProjectUpdate,
+    RequestMethod, UsageGet, UsageHistory,
 };
 use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
@@ -82,6 +83,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         }
         ProjectStart::NAME => {
             handle::<ProjectStart, _, _>(&request, |p| project::start(&context, p)).await
+        }
+        ProjectUpdate::NAME => {
+            handle::<ProjectUpdate, _, _>(&request, |p| project::update(&context, p)).await
         }
         AccountsList::NAME => {
             handle::<AccountsList, _, _>(&request, |p| accounts::list(&context, p)).await

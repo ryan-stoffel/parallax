@@ -728,6 +728,7 @@ mod tests {
             id: "01997c3a-5b2c-7d4e-9f10-2a3b4c5d6e7f".parse().unwrap(),
             name: "wisp".to_owned(),
             repo_path: "/Users/ryan/wisp".to_owned(),
+            icon: None,
         };
         let frame =
             serde_json::to_vec(&Request::new::<ProjectCreate>("r1", params.clone())).unwrap();
