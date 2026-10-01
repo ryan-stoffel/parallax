@@ -37,12 +37,14 @@ use std::task::{Context, Poll};
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-pub use wisp_protocol::{AgentEffort, AgentPermission, ImageMediaType, PromptImage, RunId, TurnId};
+pub use wisp_protocol::{
+    AgentEffort, AgentPermission, ApprovalId, ImageMediaType, PromptImage, RunId, TurnId,
+};
 use zeroize::Zeroize;
 
 pub use self::event::{
-    CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus, LimitWindow, ModelUsage,
-    Outcome, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
+    ApprovalRequest, CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus,
+    LimitWindow, ModelUsage, Outcome, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
 };
 use self::process::{CancelPolicy, Signals, SpawnError};
 pub use self::sandbox::WorkerSandbox;
@@ -122,6 +124,18 @@ pub trait Run: Send + Sync {
     /// it hasn't exited after a grace period. Returns at once, and calling it again does nothing.
     /// The run ends with [`Outcome::Cancelled`], unless it had already finished.
     fn cancel(&self);
+
+    /// Answers a permission request the run reported as [`Event::ApprovalRequested`] (RYA-222).
+    /// Returns at once. An answer to a request the CLI no longer waits for, or has already had
+    /// one, is dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`AnswerError::Unsupported`] if the backend never asks, the default, and
+    /// [`AnswerError::Finished`] once the run has ended.
+    fn answer(&self, _answer: Answer) -> Result<(), AnswerError> {
+        Err(AnswerError::Unsupported)
+    }
 }
 
 /// A task for a backend.
@@ -276,6 +290,46 @@ pub struct FollowUp {
     pub text: String,
     /// Images the CLI gets beside the message, as [`RunRequest::images`].
     pub images: Vec<PromptImage>,
+}
+
+/// The answer to a permission request (RYA-222).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Answer {
+    /// The request, from its [`Event::ApprovalRequested`].
+    pub approval_id: ApprovalId,
+    /// Whether the tool call may run.
+    pub decision: Decision,
+}
+
+/// Whether a tool call the CLI asked about may run.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Decision {
+    /// It may.
+    Allow {
+        /// The input to run it with instead of the one it asked with, a JSON object.
+        input: Option<serde_json::Value>,
+        /// Also allow the request's [`ApprovalRequest::always_allow`] rules for the rest of the
+        /// CLI process.
+        always: bool,
+    },
+    /// It may not.
+    Deny {
+        /// What the agent is told.
+        message: String,
+        /// Also end the CLI's turn.
+        interrupt: bool,
+    },
+}
+
+/// Why [`Run::answer`] refused an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AnswerError {
+    /// The backend's CLI never asks.
+    #[error("this backend takes no answers to permission requests")]
+    Unsupported,
+    /// The run has ended.
+    #[error("the run has finished")]
+    Finished,
 }
 
 /// What an agent's tools may do (0004's policies).
@@ -470,6 +524,8 @@ pub struct RunHandle {
     control: mpsc::UnboundedSender<FollowUp>,
     turns: Mutex<HashMap<TurnId, String>>,
     cancel: CancelSwitch,
+    /// Where [`Run::answer`] sends answers, for a driver that takes them.
+    answers: Option<mpsc::UnboundedSender<Answer>>,
 }
 
 impl RunHandle {
@@ -488,8 +544,18 @@ impl RunHandle {
             control,
             turns: Mutex::new(HashMap::new()),
             cancel,
+            answers: None,
         };
         (handle, receiver)
+    }
+
+    /// Takes answers to permission requests (RYA-222), and returns the receiver its driver reads
+    /// them from. The driver drops it once it can deliver no more.
+    #[must_use]
+    pub fn with_answers(mut self) -> (Self, mpsc::UnboundedReceiver<Answer>) {
+        let (answers, receiver) = mpsc::unbounded_channel();
+        self.answers = Some(answers);
+        (self, receiver)
     }
 }
 
@@ -523,6 +589,13 @@ impl Run for RunHandle {
 
     fn cancel(&self) {
         self.cancel.cancel();
+    }
+
+    fn answer(&self, answer: Answer) -> Result<(), AnswerError> {
+        let Some(answers) = &self.answers else {
+            return Err(AnswerError::Unsupported);
+        };
+        answers.send(answer).map_err(|_| AnswerError::Finished)
     }
 }
 

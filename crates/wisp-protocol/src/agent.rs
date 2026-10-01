@@ -12,7 +12,9 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{AccountChoice, ProjectId, WispEvent};
+use crate::{
+    AccountChoice, AgentApprovalBy, AgentApprovalDecision, ApprovalId, ProjectId, WispEvent,
+};
 
 uuid_v7_id! {
     /// An agent run's id: a version 7 UUID that the client generates once and sends again on every
@@ -538,6 +540,60 @@ pub enum AgentOutputItem {
     Warning {
         /// A short description.
         detail: String,
+    },
+    /// The agent asks to use a tool and waits for `agent/approve` (RYA-222, decision 0031). It
+    /// is pending until its `approvalResolved`, or until the run's next `agent.finished`.
+    ApprovalRequested {
+        /// The request's id.
+        approval_id: ApprovalId,
+        /// The tool, in the vendor's naming, such as `Bash` or `ExitPlanMode`.
+        tool_name: String,
+        /// The tool's input as the vendor sent it, such as `ExitPlanMode`'s `plan`, or
+        /// `{"truncated": true, "bytes": n}` when it was too large to forward.
+        input: Value,
+        /// The tool call's id, which its `toolCall` and `toolResult` carry, when the vendor
+        /// says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        call_id: Option<String>,
+        /// Why the CLI asks, such as a safety check's warning, with terminal escapes removed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        reason: Option<String>,
+        /// The path that made the CLI ask, when one did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        blocked_path: Option<String>,
+        /// The vendor's id for the subagent asking, when one of the agent's own subagents asks.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        subagent: Option<String>,
+        /// The rules that `always` adds for the rest of the CLI process, such as
+        /// `Bash(pnpm test:*)`. Absent when the request offers none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        always_allow: Vec<String>,
+        /// True when the request is a question for the user rather than one action to allow,
+        /// such as `ExitPlanMode`'s plan: show its input in full.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        interactive: bool,
+        /// When wispd denies it if nobody has answered, in RFC 3339 UTC.
+        expires_at: Timestamp,
+    },
+    /// How a permission request ended (RYA-222, decision 0031).
+    ApprovalResolved {
+        /// The request's id.
+        approval_id: ApprovalId,
+        /// What it came to.
+        decision: AgentApprovalDecision,
+        /// Who or what decided it.
+        by: AgentApprovalBy,
+        /// True when it was allowed for the rest of the CLI process as well.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        always: bool,
+        /// The user's message to the agent with a denial, cut short when it is long.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        message: Option<String>,
     },
     /// A kind this version does not know yet.
     #[serde(other)]

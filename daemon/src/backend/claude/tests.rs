@@ -10,17 +10,18 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wisp_protocol::{CoordinatorThreadId, ProjectId};
 
-use super::stream::{Step, Translator};
+use super::stream::{Ask, Step, Translator};
 use super::{
-    ClaudeBackend, NO_WRITE_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS,
-    no_write_settings, write_env_file,
+    ClaudeBackend, NO_WRITE_ARGS, PROMPT_TOOL_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS,
+    WORKSPACE_WRITE_ARGS, no_write_settings, write_env_file,
 };
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
-    AccountRef, AgentEffort, AgentPermission, ApiKey, Backend, CoordinatorTools, Credential, Event,
-    EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow, ModelUsage,
-    Outcome, PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started, TodoItem,
-    TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
+    AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend,
+    CoordinatorTools, Credential, Decision, Event, EventStream, FailureKind, FollowUp,
+    ImageMediaType, LimitStatus, LimitWindow, ModelUsage, Outcome, PromptImage, Resume, RunId,
+    RunRequest, SendError, StartError, Started, TodoItem, TodoStatus, ToolPolicy, ToolStatus,
+    TurnId, Usage, WarningKind, WorkerSandbox,
 };
 use crate::paths::DataDir;
 
@@ -50,6 +51,9 @@ fn fixture(name: &str) -> &'static str {
         "provider" => include_str!("fixtures/provider.jsonl"),
         "subprocess-env" => include_str!("fixtures/subprocess-env.jsonl"),
         "scrub-mode" => include_str!("fixtures/scrub-mode.jsonl"),
+        "approval" => include_str!("fixtures/approval.jsonl"),
+        "approval-withdrawn" => include_str!("fixtures/approval-withdrawn.jsonl"),
+        "exit-plan" => include_str!("fixtures/exit-plan.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -1820,5 +1824,411 @@ fn retries_and_rejected_limits_name_a_failed_turn_s_kind_until_it_ends() {
         last_failure(&translator),
         FailureKind::VendorError,
         "a limit the run set says nothing about the account"
+    );
+}
+
+/// A coordinator's request at `cwd`, whose wispd tools make it full Claude Code (0027).
+fn coordinator(cwd: &Path) -> RunRequest {
+    RunRequest {
+        coordinator_tools: Some(CoordinatorTools {
+            program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
+            data_dir: cwd.join("data"),
+            project: ProjectId::generate(),
+            thread: CoordinatorThreadId::generate(),
+        }),
+        ..request(cwd)
+    }
+}
+
+/// RYA-222: Manual, Auto, and Plan ask wispd over stdio, right after the mode, for a worker and a
+/// coordinator alike. Accept Edits and Bypass Permissions run as before, and a plain no-write run
+/// never asks.
+#[test]
+fn only_the_modes_that_prompt_ask_wispd_over_stdio() {
+    let cwd = Path::new("/Users/u/wt");
+    let mut worker = request(cwd);
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(cwd));
+    for base in [worker, coordinator(cwd)] {
+        for (permission, expected) in [
+            (None, false),
+            (Some(AgentPermission::Edit), false),
+            (Some(AgentPermission::Bypass), false),
+            (Some(AgentPermission::Manual), true),
+            (Some(AgentPermission::Auto), true),
+            (Some(AgentPermission::Plan), true),
+        ] {
+            let request = RunRequest {
+                permission,
+                ..base.clone()
+            };
+            let args: Vec<String> = super::arguments(&request)
+                .unwrap()
+                .into_iter()
+                .map(|arg| arg.into_string().unwrap())
+                .collect();
+            let mode = args.iter().position(|arg| arg == "--permission-mode");
+            let prompt_tool = args.iter().position(|arg| arg == PROMPT_TOOL_ARGS[0]);
+            assert_eq!(super::prompts(&request), expected, "{permission:?}");
+            if expected {
+                assert_eq!(prompt_tool, mode.map(|mode| mode + 2), "{args:?}");
+                assert_eq!(args[prompt_tool.unwrap() + 1], PROMPT_TOOL_ARGS[1]);
+            } else {
+                assert_eq!(prompt_tool, None, "{args:?}");
+            }
+        }
+    }
+    let plain = request(cwd);
+    assert!(!super::prompts(&plain));
+    assert!(
+        !super::arguments(&plain)
+            .unwrap()
+            .contains(&PROMPT_TOOL_ARGS[0].into())
+    );
+}
+
+/// RYA-222: in Manual, Claude Code's `can_use_tool` becomes a permission request, and an allow
+/// goes back on stdin as the Agent SDK writes it: the input it asked with, and with `always`, only
+/// its allow rules, for the session. Its other suggestions are dropped.
+#[tokio::test]
+async fn an_allowed_permission_request_answers_the_cli_on_stdin() {
+    let fake = Fake::new("approval");
+    let request = RunRequest {
+        permission: Some(AgentPermission::Manual),
+        ..coordinator(&fake.root())
+    };
+    let Started { run, mut events } = launch(&fake.backend, request).await;
+    let asked = until_asked(&mut events).await;
+    assert_eq!(asked.tool_name, "Bash");
+    assert_eq!(
+        asked.input,
+        serde_json::json!({"command": "pnpm test", "description": "Run the tests"})
+    );
+    assert_eq!(asked.call_id.as_deref(), Some("toolu_01Ap1"));
+    assert_eq!(asked.always_allow, ["Bash(pnpm test:*)"]);
+    assert_eq!(
+        asked.reason.as_deref(),
+        Some("Current permission mode (Default) requires approval for this Bash command"),
+        "terminal escapes are removed"
+    );
+    assert!(!asked.interactive);
+    run.answer(Answer {
+        approval_id: asked.approval_id,
+        decision: Decision::Allow {
+            input: None,
+            always: true,
+        },
+    })
+    .unwrap();
+    let all = rest(&mut events).await;
+    assert_eq!(
+        outcome(&all),
+        &Outcome::Completed {
+            result: Some("Ran the tests.".into())
+        }
+    );
+    let argv = fake.argv();
+    let mode = argv
+        .iter()
+        .position(|arg| arg == "--permission-mode")
+        .unwrap();
+    assert_eq!(
+        argv[mode..mode + 4],
+        [
+            "--permission-mode",
+            "default",
+            "--permission-prompt-tool",
+            "stdio"
+        ]
+    );
+    assert_eq!(
+        fake.stdin()[1],
+        serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "req-ap-1",
+                "response": {
+                    "behavior": "allow",
+                    "updatedInput": {"command": "pnpm test", "description": "Run the tests"},
+                    "updatedPermissions": [{
+                        "type": "addRules",
+                        "rules": [{"toolName": "Bash", "ruleContent": "pnpm test:*"}],
+                        "behavior": "allow",
+                        "destination": "session",
+                    }],
+                    "toolUseID": "toolu_01Ap1",
+                },
+            },
+        })
+    );
+}
+
+/// RYA-222: a denial goes back with its message, and an edited input replaces the one asked with.
+#[tokio::test]
+async fn a_denied_or_edited_request_answers_with_what_the_user_said() {
+    for (decision, expected) in [
+        (
+            Decision::Deny {
+                message: "Not the whole suite.".into(),
+                interrupt: false,
+            },
+            serde_json::json!({
+                "behavior": "deny",
+                "message": "Not the whole suite.",
+                "interrupt": false,
+                "toolUseID": "toolu_01Ap1",
+            }),
+        ),
+        (
+            Decision::Allow {
+                input: Some(serde_json::json!({"command": "pnpm test parser"})),
+                always: false,
+            },
+            serde_json::json!({
+                "behavior": "allow",
+                "updatedInput": {"command": "pnpm test parser"},
+                "toolUseID": "toolu_01Ap1",
+            }),
+        ),
+    ] {
+        let fake = Fake::new("approval");
+        let request = RunRequest {
+            permission: Some(AgentPermission::Manual),
+            ..coordinator(&fake.root())
+        };
+        let Started { run, mut events } = launch(&fake.backend, request).await;
+        let asked = until_asked(&mut events).await;
+        run.answer(Answer {
+            approval_id: asked.approval_id,
+            decision,
+        })
+        .unwrap();
+        rest(&mut events).await;
+        assert_eq!(fake.stdin()[1]["response"]["response"], expected);
+    }
+}
+
+/// RYA-222: a `control_cancel_request` withdraws a request, whose late answer then never reaches
+/// the CLI; a request that suppresses "always allow" offers none; and a control request wispd
+/// doesn't serve gets an error, so the CLI doesn't wait on it.
+#[tokio::test]
+async fn a_withdrawn_request_takes_no_answer_and_other_control_requests_get_an_error() {
+    let fake = Fake::new("approval-withdrawn");
+    let request = RunRequest {
+        permission: Some(AgentPermission::Auto),
+        ..coordinator(&fake.root())
+    };
+    let Started { run, mut events } = launch(&fake.backend, request).await;
+    let asked = until_asked(&mut events).await;
+    assert_eq!(asked.tool_name, "Edit");
+    assert_eq!(asked.always_allow, Vec::<String>::new());
+    assert_eq!(
+        asked.blocked_path.as_deref(),
+        Some("/Users/dev/repo/.claude/settings.json")
+    );
+    assert_eq!(asked.subagent.as_deref(), Some("a7f3c2e1"));
+    assert_eq!(
+        next(&mut events).await,
+        Event::ApprovalWithdrawn {
+            approval_id: asked.approval_id
+        }
+    );
+    run.answer(Answer {
+        approval_id: asked.approval_id,
+        decision: Decision::Allow {
+            input: None,
+            always: false,
+        },
+    })
+    .unwrap();
+    let all = rest(&mut events).await;
+    assert_eq!(
+        outcome(&all),
+        &Outcome::Completed {
+            result: Some("Stopped.".into())
+        }
+    );
+    let stdin = fake.stdin();
+    assert_eq!(
+        stdin.len(),
+        2,
+        "the prompt and the hook's error, not the answer: {stdin:?}"
+    );
+    assert_eq!(
+        stdin[1],
+        serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "error",
+                "request_id": "req-hook",
+                "error": "wispd doesn't answer hook_callback control requests",
+            },
+        })
+    );
+}
+
+/// RYA-222: a coordinator in Plan asks to leave plan mode with `ExitPlanMode`, a question for the
+/// user. Once it is approved, Claude Code runs in its pre-plan mode, which a later turn's init
+/// reports, and the run goes on.
+#[tokio::test]
+async fn an_approved_plan_lets_a_coordinator_leave_plan_mode() {
+    let fake = Fake::new("exit-plan");
+    let request = RunRequest {
+        permission: Some(AgentPermission::Plan),
+        ..coordinator(&fake.root())
+    };
+    let Started { run, mut events } = launch(&fake.backend, request).await;
+    let asked = until_asked(&mut events).await;
+    assert_eq!(asked.tool_name, "ExitPlanMode");
+    assert!(asked.interactive);
+    assert_eq!(
+        asked.input["plan"],
+        "1. Add a README.\n2. Link it from the docs."
+    );
+    run.answer(Answer {
+        approval_id: asked.approval_id,
+        decision: Decision::Allow {
+            input: None,
+            always: false,
+        },
+    })
+    .unwrap();
+    run.send(FollowUp {
+        turn_id: turn(TURN_2),
+        text: "Go ahead.".into(),
+        images: Vec::new(),
+    })
+    .unwrap();
+    let all = rest(&mut events).await;
+    assert_eq!(
+        outcome(&all),
+        &Outcome::Completed {
+            result: Some("Done.".into())
+        }
+    );
+    assert_eq!(
+        fake.stdin()[1]["response"]["response"],
+        serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": {"plan": "1. Add a README.\n2. Link it from the docs."},
+            "toolUseID": "toolu_01Pl1",
+        })
+    );
+}
+
+/// Events until the run's first permission request, which it returns.
+async fn until_asked(events: &mut EventStream) -> ApprovalRequest {
+    loop {
+        match next(events).await {
+            Event::ApprovalRequested(request) => return request,
+            Event::Finished { outcome, .. } => panic!("the run ended first: {outcome:?}"),
+            _ => {}
+        }
+    }
+}
+
+/// An init line of a coordinator in `mode`.
+fn coordinator_init(mode: &str) -> Vec<u8> {
+    format!(
+        r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","permissionMode":"{mode}","tools":["Read","Bash"]}}"#
+    )
+    .into_bytes()
+}
+
+fn asks(steps: &[Step]) -> Vec<(&ApprovalRequest, &Ask)> {
+    steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Ask(request, ask) => Some((request, ask)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// RYA-222: control requests are the driver's only when the CLI was started with the prompt
+/// channel; otherwise they're skipped, as before. One before the init is refused, since the CLI
+/// may be on credentials nobody checked.
+#[test]
+fn control_requests_are_answered_only_with_the_prompt_channel() {
+    let request = br#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}"#;
+    let cancel = br#"{"type":"control_cancel_request","request_id":"r1"}"#;
+    let mut without = Translator::new(ToolPolicy::NoWrite, "none")
+        .with_coordinator_tools(true)
+        .with_permission_mode("default");
+    without.line(&coordinator_init("default"));
+    assert_eq!(without.line(request), []);
+    assert_eq!(without.line(cancel), []);
+
+    let mut early = Translator::new(ToolPolicy::NoWrite, "none")
+        .with_coordinator_tools(true)
+        .with_permission_mode("default")
+        .with_prompts(true);
+    assert_eq!(
+        violation_kind(&early.line(request)),
+        Some(FailureKind::UnexpectedApiKey)
+    );
+
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none")
+        .with_coordinator_tools(true)
+        .with_permission_mode("default")
+        .with_prompts(true);
+    assert_eq!(
+        violation_kind(&translator.line(&coordinator_init("default"))),
+        None
+    );
+    let steps = translator.line(request);
+    let [(asked, ask)] = asks(&steps)[..] else {
+        panic!("{steps:?}")
+    };
+    assert_eq!(asked.tool_name, "Bash");
+    assert_eq!(asked.input, serde_json::json!({"command": "ls"}));
+    assert!(asked.always_allow.is_empty());
+    assert_eq!(ask.request_id, "r1");
+    assert_eq!(ask.tool_use_id, None);
+    assert_eq!(translator.line(cancel), [Step::Withdraw("r1".into())]);
+    let elicit = br#"{"type":"control_request","request_id":"r2","request":{"subtype":"elicitation","mcp_server_name":"x"}}"#;
+    assert_eq!(
+        translator.line(elicit),
+        [Step::Refuse {
+            request_id: "r2".into(),
+            error: "wispd doesn't answer elicitation control requests".into(),
+        }]
+    );
+    let nameless = br#"{"type":"control_request","request_id":"r3","request":{"subtype":"can_use_tool","input":{}}}"#;
+    assert!(matches!(
+        translator.line(nameless).as_slice(),
+        [Step::Refuse { request_id, .. }] if request_id == "r3"
+    ));
+}
+
+/// RYA-222: approving `ExitPlanMode` takes Claude Code to its pre-plan mode, so later inits may
+/// report another mode than the one the run asked for; until then they may not.
+#[test]
+fn a_plan_coordinator_may_report_another_mode_only_once_it_left_plan_mode() {
+    let plan = || {
+        Translator::new(ToolPolicy::NoWrite, "none")
+            .with_coordinator_tools(true)
+            .with_permission_mode("plan")
+            .with_prompts(true)
+    };
+    let mut translator = plan();
+    assert_eq!(
+        violation_kind(&translator.line(&coordinator_init("plan"))),
+        None
+    );
+    assert_eq!(
+        violation_kind(&translator.line(&coordinator_init("default"))),
+        Some(FailureKind::PolicyViolation)
+    );
+    let mut translator = plan();
+    assert_eq!(
+        violation_kind(&translator.line(&coordinator_init("plan"))),
+        None
+    );
+    translator.left_plan_mode();
+    assert_eq!(
+        violation_kind(&translator.line(&coordinator_init("default"))),
+        None
     );
 }

@@ -27,9 +27,9 @@ use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
 
 use crate::backend::key_account::{self, KeyAccountError};
 use crate::backend::{
-    AccountRef, Backend, Credential, EVENT_BUFFER, Event, EventSink, EventStream, Failure,
-    FailureKind, FollowUp, ModelUsage, Outcome, Run, RunId, RunRequest, SendError, StartError,
-    Started, ToolPolicy,
+    AccountRef, Answer, AnswerError, Backend, Credential, EVENT_BUFFER, Event, EventSink,
+    EventStream, Failure, FailureKind, FollowUp, ModelUsage, Outcome, Run, RunId, RunRequest,
+    SendError, StartError, Started, ToolPolicy,
 };
 use crate::keystore::KeyStore;
 
@@ -422,6 +422,10 @@ impl Run for FallbackRun {
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
         self.current().cancel();
+    }
+
+    fn answer(&self, answer: Answer) -> Result<(), AnswerError> {
+        self.current().answer(answer)
     }
 }
 

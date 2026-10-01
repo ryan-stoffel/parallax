@@ -30,18 +30,18 @@ use crate::{
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
-    AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult,
-    AgentFileParams, AgentFileResult, AgentImageParams, AgentListParams, AgentListResult,
-    AgentOpenPrParams, AgentOpenPrResult, AgentRequestChangesParams, AgentRunResult,
-    AgentSendParams, AgentStartParams, ContextListParams, ContextListResult, ContextReadParams,
-    ContextReadResult, ContextWriteParams, ContextWriteResult, EventsEventParams,
-    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
-    HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams,
-    InitializeResult, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, PromptImage, RepoAddParams, RepoAddResult,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentDiffParams, AgentDiffResult,
+    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams,
+    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult,
+    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams,
+    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, HostHealthParams, HostHealthResult,
+    HostVersionParams, HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
+    ProjectCreateResult, ProjectListParams, ProjectListResult, ProjectStartParams, PromptImage,
+    RepoAddParams, RepoAddResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -203,6 +203,10 @@ method_table! {
         /// a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
         /// `openPr` capability.
         AgentOpenPr = "agent/openPr": AgentOpenPrParams => AgentOpenPrResult;
+        /// `agent/approve`: answers a run's permission request, from its `approvalRequested`
+        /// item, by allowing or denying the tool call (RYA-222, decision 0031). Idempotent on the
+        /// request. Gated on the `approvals` capability.
+        AgentApprove = "agent/approve": AgentApproveParams => AgentApproveResult;
         /// `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
         /// (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
         ThreadList = "thread/list": ThreadListParams => ThreadListResult;
@@ -291,6 +295,7 @@ mod tests {
                 "agent/accept",
                 "agent/requestChanges",
                 "agent/openPr",
+                "agent/approve",
                 "thread/list",
                 "repo/add",
                 "thread/start",

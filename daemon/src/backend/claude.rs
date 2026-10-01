@@ -107,6 +107,17 @@
 //! a `result` whose `modelUsage` names a provider other than `firstParty`, kill the CLI's process
 //! group at once and fail the run with [`FailureKind::UnexpectedApiKey`].
 //!
+//! # Permission requests
+//!
+//! In Manual, Auto, and Plan, a worker's, a thread's, or a coordinator's CLI gets
+//! [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its `canUseTool` (RYA-222, 0031).
+//! Instead of denying a tool call nobody approved, the CLI writes a `can_use_tool` control request
+//! on stdout and waits. The driver reports it as [`Event::ApprovalRequested`] and writes the
+//! answer that [`Run::answer`] gives as a `control_response` on stdin, which stays open while a
+//! request waits. A `control_cancel_request` withdraws one, and any other control request gets an
+//! error response. Accept Edits and Bypass Permissions never ask, and a plain no-write run denies
+//! what isn't allowed (`dontAsk`), so their CLIs run as before.
+//!
 //! # Cancel
 //!
 //! `SIGINT` ends Claude's turn, while `SIGTERM` leaves it unfinished (0004 [11]), so cancel sends
@@ -119,7 +130,7 @@ mod stream;
 #[cfg(all(test, unix))]
 mod tests;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -132,7 +143,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 
 pub(crate) use self::stream::version as parse_version;
-use self::stream::{Step, Translator, TurnDone};
+use self::stream::{Ask, Step, Translator, TurnDone};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
@@ -140,9 +151,10 @@ use super::process::{
 };
 use super::sandbox::worker_sandbox;
 use super::{
-    AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
-    EventSink, FollowUp, PromptImage, Run, RunHandle, RunId, RunRequest, SendError, StartError,
-    Started, ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
+    AgentEffort, AgentPermission, Answer, AnswerError, ApprovalId, Backend, CancelSwitch,
+    Capabilities, Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, PromptImage, Run,
+    RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
+    WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::mcp;
 
@@ -231,6 +243,14 @@ pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
 /// [`AgentPermission::Bypass`]'s mode. Claude Code refuses it under `--restricted`, so a worker
 /// in it runs without the worker sandbox (0027).
 pub const BYPASS_PERMISSION_MODE: &str = "bypassPermissions";
+
+/// The arguments, after `--permission-mode`, that make a run's CLI ask wispd over stdio before a
+/// tool call that would prompt, instead of denying it (RYA-222, 0031). Only runs that
+/// [`prompts`] get them.
+pub const PROMPT_TOOL_ARGS: &[&str] = &["--permission-prompt-tool", "stdio"];
+
+/// The tool whose approval takes Claude Code out of plan mode.
+const EXIT_PLAN_MODE: &str = "ExitPlanMode";
 
 /// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013), in every mode but
 /// [`AgentPermission::Bypass`]. [`arguments`] adds the run's `--permission-mode`
@@ -469,6 +489,9 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     } else {
         let mode = permission_mode(request.permission)?;
         args.extend(["--permission-mode".into(), mode.into()]);
+        if prompts(request) {
+            args.extend(PROMPT_TOOL_ARGS.iter().map(Into::into));
+        }
     }
     if let Some(tools) = &request.coordinator_tools {
         args.extend([
@@ -576,6 +599,21 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
     paths
         .map(|path| path.to_string_lossy().into_owned())
         .collect()
+}
+
+/// Whether `request`'s CLI asks wispd before a tool call that would prompt (RYA-222, 0031): a
+/// worker, a thread, or a coordinator in Manual, Auto, or Plan. Accept Edits and Bypass
+/// Permissions don't ask about what they run, and a plain no-write run denies anything not
+/// allowed (`dontAsk`).
+#[must_use]
+pub fn prompts(request: &RunRequest) -> bool {
+    let plain_no_write =
+        request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none();
+    !plain_no_write
+        && matches!(
+            request.permission,
+            Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)
+        )
 }
 
 /// A worker's or a coordinator's `--permission-mode` for `permission`: Claude Code's own mode of
@@ -690,6 +728,7 @@ impl Backend for ClaudeBackend {
         }
         let mut spec = ProcessSpec::new(self.program.clone(), &request.cwd);
         spec.args = arguments(&request)?;
+        let asks = prompts(&request);
         if let Some(sandbox) = worker_sandbox(&request)? {
             spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
         }
@@ -717,6 +756,7 @@ impl Backend for ClaudeBackend {
         let switch = CancelSwitch::new();
         switch.arm(process.signals().clone(), self.cancel);
         let (handle, control) = RunHandle::new(request.run_id, true, switch.clone());
+        let (handle, answers) = handle.with_answers();
         let stop = Arc::new(Notify::new());
         let baseline = request
             .resume
@@ -726,13 +766,16 @@ impl Backend for ClaudeBackend {
         let driver = Driver {
             process,
             control,
+            answers,
             sink,
             switch,
             stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
                 .with_coordinator_tools(request.coordinator_tools.is_some())
-                .with_permission_mode(permission_mode(request.permission)?),
+                .with_permission_mode(permission_mode(request.permission)?)
+                .with_prompts(asks),
             turns: VecDeque::new(),
+            asks: HashMap::new(),
             violation: None,
             env_file,
         };
@@ -764,6 +807,10 @@ impl Run for ClaudeRun {
     fn cancel(&self) {
         self.handle.cancel();
         self.stop.notify_one();
+    }
+
+    fn answer(&self, answer: Answer) -> Result<(), AnswerError> {
+        self.handle.answer(answer)
     }
 }
 
@@ -810,6 +857,41 @@ impl Message {
             follow_up,
         }
     }
+
+    /// A `control_response` to one of the CLI's control requests (RYA-222).
+    fn control(response: &Value) -> Self {
+        let mut line =
+            serde_json::json!({"type": "control_response", "response": response}).to_string();
+        line.push('\n');
+        Self {
+            turn_id: None,
+            uuid: String::new(),
+            line,
+            follow_up: false,
+        }
+    }
+}
+
+/// The `control_response` payload that answers `ask` with `decision`, as the Agent SDK writes it.
+/// An allow always carries `updatedInput`, which older CLIs require.
+fn answer_response(ask: &Ask, decision: Decision) -> Value {
+    let mut response = match decision {
+        Decision::Allow { input, always } => {
+            let input = input.unwrap_or_else(|| ask.input.clone());
+            let mut allow = serde_json::json!({"behavior": "allow", "updatedInput": input});
+            if always && !ask.updates.is_empty() {
+                allow["updatedPermissions"] = Value::from(ask.updates.clone());
+            }
+            allow
+        }
+        Decision::Deny { message, interrupt } => {
+            serde_json::json!({"behavior": "deny", "message": message, "interrupt": interrupt})
+        }
+    };
+    if let Some(id) = &ask.tool_use_id {
+        response["toolUseID"] = Value::from(id.as_str());
+    }
+    serde_json::json!({"subtype": "success", "request_id": ask.request_id, "response": response})
 }
 
 /// The result of writing one message to stdin.
@@ -891,12 +973,15 @@ impl Stdin {
 struct Driver {
     process: Process,
     control: mpsc::UnboundedReceiver<FollowUp>,
+    answers: mpsc::UnboundedReceiver<Answer>,
     sink: EventSink,
     switch: CancelSwitch,
     stop: Arc<Notify>,
     translator: Translator,
     /// Turns the CLI has been sent but hasn't finished, oldest first: their ids and `uuid`s.
     turns: VecDeque<(Option<TurnId>, String)>,
+    /// Permission requests the CLI waits on (RYA-222).
+    asks: HashMap<ApprovalId, Ask>,
     violation: Option<Failure>,
     /// A worker's [`ENV_FILE_ENV`] script, deleted once the CLI has exited.
     env_file: Option<TempPath>,
@@ -916,6 +1001,7 @@ impl Driver {
             self.control.close();
         }
         let mut control_open = true;
+        let mut answers_open = true;
 
         let exit = loop {
             tokio::select! {
@@ -954,6 +1040,11 @@ impl Driver {
                     }
                     Some(Output::Exited(exit)) => break Some(exit),
                     None => break None,
+                },
+                // Answers before follow-ups: the CLI is waiting on them.
+                answer = self.answers.recv(), if answers_open => match answer {
+                    Some(answer) => self.answer(answer, &mut stdin),
+                    None => answers_open = false,
                 },
                 follow_up = self.control.recv(), if control_open => match follow_up {
                     Some(follow_up) => {
@@ -1015,8 +1106,43 @@ impl Driver {
                     self.control.close();
                     return;
                 }
+                Step::Ask(request, ask) => {
+                    self.asks.insert(request.approval_id, ask);
+                    self.emit(Event::ApprovalRequested(request)).await;
+                }
+                Step::Withdraw(request_id) => {
+                    let withdrawn = self
+                        .asks
+                        .iter()
+                        .find(|(_, ask)| ask.request_id == request_id)
+                        .map(|(&approval_id, _)| approval_id);
+                    if let Some(approval_id) = withdrawn {
+                        self.asks.remove(&approval_id);
+                        self.emit(Event::ApprovalWithdrawn { approval_id }).await;
+                    }
+                }
+                Step::Refuse { request_id, error } => {
+                    let response = serde_json::json!({
+                        "subtype": "error",
+                        "request_id": request_id,
+                        "error": error,
+                    });
+                    let _ = stdin.send(Message::control(&response));
+                }
             }
         }
+    }
+
+    /// Writes `answer` to the CLI, if it still waits on the request.
+    fn answer(&mut self, answer: Answer, stdin: &mut Stdin) {
+        let Some(ask) = self.asks.remove(&answer.approval_id) else {
+            return;
+        };
+        if ask.tool_name == EXIT_PLAN_MODE && matches!(answer.decision, Decision::Allow { .. }) {
+            self.translator.left_plan_mode();
+        }
+        let response = answer_response(&ask, answer.decision);
+        let _ = stdin.send(Message::control(&response));
     }
 
     /// The turns a `result` ended, oldest first. Turns finish in the order they started, so a
@@ -1041,9 +1167,10 @@ impl Driver {
             .collect()
     }
 
-    /// Closes stdin once no turn is outstanding, so the CLI exits after its last result.
+    /// Closes stdin once no turn is outstanding and no permission request waits, so the CLI exits
+    /// after its last result. Claude Code fails a request whose stdin has closed.
     fn close_when_idle(&mut self, stdin: &mut Stdin) {
-        if stdin.is_open() && self.turns.is_empty() && stdin.pending == 0 {
+        if stdin.is_open() && self.turns.is_empty() && self.asks.is_empty() && stdin.pending == 0 {
             stdin.close();
             self.control.close();
         }

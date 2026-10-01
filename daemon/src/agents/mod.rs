@@ -9,6 +9,9 @@
 //! `agent/send` and `agent/cancel`, and when a CLI process ends, commits the worktree through
 //! #166's hardened `commit_all` and reports `agent.diffReady`.
 //!
+//! A run whose CLI asks before a tool call (RYA-222, decision 0031) logs the request, takes
+//! `agent/approve`'s answer, and denies it itself when nobody answers in time ([`approvals`]).
+//!
 //! A run outlives its CLI processes: `agent/send` to a run whose CLI has ended resumes the
 //! vendor session in the same worktree. When wispd stops, running CLIs are cancelled and their
 //! runs recorded `interrupted`; a run still `starting` or `running` in the store when wispd
@@ -20,6 +23,7 @@
 //! ([`wake`]).
 
 mod actor;
+mod approvals;
 mod convert;
 pub(crate) mod coordinator;
 pub(crate) mod review;
@@ -39,14 +43,15 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentEffort, AgentImageParams,
-    AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun, AgentRunState, AgentSendParams,
-    AgentStartParams, CoordinatorThreadId, ErrorKind, ImageMediaType, ProjectId, PromptImage, Role,
-    RunId, TurnId, WispEvent,
+    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
+    AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun,
+    AgentRunState, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind,
+    ImageMediaType, ProjectId, PromptImage, Role, RunId, TurnId, WispEvent,
 };
 use wisp_store::{RunFields, RunState, StoreError, WorktreeFields};
 
 use self::actor::{Actor, Command};
+pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
 use self::convert::{STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
 use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
@@ -71,6 +76,8 @@ pub(crate) struct Agents {
     running: AtomicU32,
     tracker: TaskTracker,
     shutdown: CancellationToken,
+    /// How long a run's permission request waits for an answer (RYA-222).
+    approval_timeout: Duration,
 }
 
 /// Per-run-id locks for [`Agents::starting`] (#190).
@@ -173,7 +180,21 @@ impl Agents {
             running: AtomicU32::new(0),
             tracker: TaskTracker::new(),
             shutdown: CancellationToken::new(),
+            approval_timeout: APPROVAL_TIMEOUT,
         }
+    }
+
+    /// Denies a permission request nobody answered after `timeout` instead of
+    /// [`APPROVAL_TIMEOUT`].
+    #[must_use]
+    pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
+        self.approval_timeout = timeout;
+        self
+    }
+
+    /// How long a permission request waits for an answer.
+    pub(super) fn approval_timeout(&self) -> Duration {
+        self.approval_timeout
     }
 
     /// Locks `run_id`'s per-run start lock, waiting only on another call for the same run id
@@ -895,6 +916,23 @@ pub(crate) async fn image(
 /// `agent/cancel`.
 pub(crate) async fn cancel(daemon: Arc<Daemon>, id: RunId) -> Result<AgentRun, ErrorObject> {
     ask(&daemon, id, |reply| Command::Cancel { reply }).await
+}
+
+/// `agent/approve` (RYA-222): through the run's actor, which keeps its permission requests. The
+/// caller has checked `params`.
+pub(crate) async fn approve(
+    daemon: Arc<Daemon>,
+    params: AgentApproveParams,
+) -> Result<AgentApproveResult, ErrorObject> {
+    let run_id = params.run_id;
+    ask(&daemon, run_id, |reply| Command::Approve { params, reply }).await
+}
+
+pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObject {
+    ErrorObject::wisp(
+        ErrorKind::ApprovalNotFound,
+        format!("run {run} has no permission request {approval}"),
+    )
 }
 
 /// `thread/delete`'s part in the runner: through the run's actor, which stops a running CLI

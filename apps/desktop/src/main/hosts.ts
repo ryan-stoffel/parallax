@@ -58,6 +58,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "agent/accept": true,
   "agent/requestChanges": true,
   "agent/openPr": true,
+  "agent/approve": true,
   "thread/list": true,
   "repo/add": true,
   "thread/start": true,

@@ -1,8 +1,13 @@
 //! One run's actor: the task that owns a run for as long as wispd runs.
 //!
-//! It takes commands (`agent/send`, `agent/cancel`, `agent/accept`, `agent/openPr`,
-//! `thread/delete`) and the run's backend events in one loop, so nothing about a run needs a lock,
-//! and events are logged in the order they happened.
+//! It takes commands (`agent/send`, `agent/cancel`, `agent/approve`, `agent/accept`,
+//! `agent/openPr`, `thread/delete`) and the run's backend events in one loop, so nothing about a
+//! run needs a lock, and events are logged in the order they happened.
+//!
+//! It also keeps the permission requests its CLI waits on (RYA-222, decision 0031): it logs each
+//! one with when it expires, passes `agent/approve`'s answer to the CLI, denies one nobody
+//! answered in time, and logs how each one ended, including when a cancel, a stop, or the CLI's
+//! exit ends it first.
 //!
 //! A project's coordinator (0024) differs in four places: it starts in a detached worktree of
 //! the project's repository (RYA-171) with wispd's tools and no sandbox, that worktree is checked
@@ -23,19 +28,21 @@ use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{AcceptId, AgentMerge};
 use wisp_protocol::{
-    AccountChoice, AccountId, AgentFailureKind, AgentOutcome, AgentOutputItem, AgentRun,
-    CoordinatorThreadId, DiffSummary, ErrorKind, ImageId, ProjectId, PromptImage, Role, RunId,
-    TurnId, WispEvent,
+    AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
+    AgentApproveParams, AgentApproveResult, AgentFailureKind, AgentOutcome, AgentOutputItem,
+    AgentRun, ApprovalId, CoordinatorThreadId, DiffSummary, ErrorKind, ImageId, ProjectId,
+    PromptImage, Role, RunId, TurnId, WispEvent,
 };
 use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree};
 
+use super::approvals::{self, Approvals, Lookup, ended};
 use super::convert::{self, agent_run, item_bytes, option_name, option_value, output_item};
 use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, CoordinatorTools, Credential, Event, EventStream, FollowUp, ModelUsage, Outcome,
-    Resume, Run, RunRequest, SendError, Usage, WorkerSandbox,
+    AccountRef, Answer, AnswerError, CoordinatorTools, Credential, Decision, Event, EventStream,
+    FollowUp, ModelUsage, Outcome, Resume, Run, RunRequest, SendError, Usage, WorkerSandbox,
     run_temp::{self, RunTemp},
 };
 use crate::routing;
@@ -63,6 +70,11 @@ pub(super) enum Command {
     /// `agent/cancel`.
     Cancel {
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
+    /// `agent/approve` (RYA-222), with its params checked.
+    Approve {
+        params: AgentApproveParams,
+        reply: oneshot::Sender<Result<AgentApproveResult, ErrorObject>>,
     },
     /// `agent/accept`.
     Accept {
@@ -92,6 +104,9 @@ impl Command {
                 let _ = reply.send(Err(error));
             }
             Self::Accept { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::Approve { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::OpenPr { reply, .. } => {
@@ -150,6 +165,8 @@ pub(super) struct Actor {
     deleted: bool,
     /// A coordinator's wake-ups (RYA-42).
     wakes: Wakes,
+    /// The permission requests its CLIs asked (RYA-222).
+    approvals: Approvals,
 }
 
 impl Actor {
@@ -182,6 +199,7 @@ impl Actor {
             stopping: false,
             deleted: false,
             wakes: Wakes::default(),
+            approvals: Approvals::default(),
         }
     }
 
@@ -210,6 +228,7 @@ impl Actor {
             let deadline = self.batch.since.map(|since| since + COALESCE);
             // A coordinator's turn in progress gets its wake-ups next, once its CLI has exited.
             let wake_at = self.wakes.due().filter(|_| self.live.is_none());
+            let expire_at = self.approvals.due();
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
                 // event (#190 N6): while a CLI keeps its stream busy, that event branch is
@@ -223,6 +242,7 @@ impl Actor {
                 biased;
                 () = shutdown.cancelled(), if !self.stopping => {
                     self.stopping = true;
+                    self.stop_approvals(AgentApprovalBy::Stop).await;
                     if let Some(live) = &self.live {
                         live.run.cancel();
                     }
@@ -236,6 +256,9 @@ impl Actor {
                 }
                 () = sleep_until(wake_at.unwrap_or_else(Instant::now)), if wake_at.is_some() => {
                     self.wake().await;
+                }
+                () = sleep_until(expire_at.unwrap_or_else(Instant::now)), if expire_at.is_some() => {
+                    self.expire_approvals().await;
                 }
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
@@ -268,8 +291,11 @@ impl Actor {
                 let _ = reply.send(answer);
             }
             Command::Cancel { reply } => {
-                if let Some(live) = &self.live {
+                if self.live.is_some() {
                     info!(run = %self.id, "cancelling an agent run");
+                    self.stop_approvals(AgentApprovalBy::Cancel).await;
+                }
+                if let Some(live) = &self.live {
                     live.run.cancel();
                 }
                 // Stop means stop: a run finishing a moment later doesn't start the coordinator
@@ -278,6 +304,10 @@ impl Actor {
                     self.pause_wakes().await;
                 }
                 let _ = reply.send(self.snapshot());
+            }
+            Command::Approve { params, reply } => {
+                let answer = self.approve(params).await;
+                let _ = reply.send(answer);
             }
             Command::Accept {
                 id,
@@ -395,6 +425,9 @@ impl Actor {
     /// drops this actor from the map. Running here, between commands, it never races a resume
     /// or an accept.
     async fn delete(&mut self) -> Result<(), ErrorObject> {
+        if self.live.is_some() {
+            self.stop_approvals(AgentApprovalBy::Cancel).await;
+        }
         if let Some(live) = &self.live {
             info!(run = %self.id, "cancelling an agent run to delete its thread");
             live.run.cancel();
@@ -564,6 +597,131 @@ impl Actor {
             })?;
         info!(run = %self.id, %url, "opened a pull request for an agent run");
         Ok(url)
+    }
+
+    /// `agent/approve` (RYA-222): passes the user's answer to the CLI and logs it as the
+    /// request's resolution. A request that already ended answers with how it ended.
+    async fn approve(
+        &mut self,
+        params: AgentApproveParams,
+    ) -> Result<AgentApproveResult, ErrorObject> {
+        let AgentApproveParams {
+            approval_id,
+            decision,
+            input,
+            always,
+            message,
+            ..
+        } = params;
+        match self.approvals.lookup(approval_id) {
+            Lookup::Resolved(resolution) => return Ok(resolution),
+            Lookup::Unknown => return Err(super::approval_not_found(self.id, approval_id)),
+            Lookup::Pending { offers_always } if always && !offers_always => {
+                return Err(ErrorObject::invalid_params(format!(
+                    "permission request {approval_id} offers no rules to always allow"
+                )));
+            }
+            Lookup::Pending { .. } => {}
+        }
+        let allow = decision == AgentApprovalAnswer::Allow;
+        let answer = Answer {
+            approval_id,
+            decision: if allow {
+                Decision::Allow { input, always }
+            } else {
+                Decision::Deny {
+                    message: message
+                        .clone()
+                        .unwrap_or_else(|| approvals::DENIED.to_owned()),
+                    interrupt: false,
+                }
+            },
+        };
+        let sent = match &self.live {
+            Some(live) => live.run.answer(answer),
+            None => Err(AnswerError::Finished),
+        };
+        if sent.is_ok() {
+            let resolution = if allow {
+                AgentApproveResult {
+                    decision: AgentApprovalDecision::Allowed,
+                    by: AgentApprovalBy::User,
+                    always,
+                    message: None,
+                }
+            } else {
+                AgentApproveResult {
+                    decision: AgentApprovalDecision::Denied,
+                    by: AgentApprovalBy::User,
+                    always: false,
+                    message,
+                }
+            };
+            self.resolve_approval(approval_id, resolution.clone()).await;
+            self.flush().await;
+            return Ok(resolution);
+        }
+        // The CLI has exited, and its run's end resolves the request; or nothing can answer it.
+        while sent == Err(AnswerError::Finished) && self.live.is_some() {
+            let event = next_event(&mut self.live).await;
+            self.on_event(event).await;
+        }
+        let withdrawn = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
+        self.resolve_approval(approval_id, withdrawn).await;
+        self.flush().await;
+        match self.approvals.lookup(approval_id) {
+            Lookup::Resolved(resolution) => Ok(resolution),
+            Lookup::Pending { .. } | Lookup::Unknown => Err(ErrorObject::internal_error(format!(
+                "permission request {approval_id} was left unresolved"
+            ))),
+        }
+    }
+
+    /// Denies every permission request nobody answered in time (RYA-222).
+    async fn expire_approvals(&mut self) {
+        for approval_id in self.approvals.expired(Instant::now()) {
+            info!(run = %self.id, approval = %approval_id, "a permission request expired");
+            if let Some(live) = &self.live {
+                let decision = Decision::Deny {
+                    message: approvals::EXPIRED.to_owned(),
+                    interrupt: false,
+                };
+                let _ = live.run.answer(Answer {
+                    approval_id,
+                    decision,
+                });
+            }
+            let expired = ended(AgentApprovalDecision::Expired, AgentApprovalBy::Timeout);
+            self.resolve_approval(approval_id, expired).await;
+        }
+    }
+
+    /// Denies every waiting permission request, ending the CLI's turn as well, because `by` is
+    /// stopping the run.
+    async fn stop_approvals(&mut self, by: AgentApprovalBy) {
+        for approval_id in self.approvals.pending() {
+            if let Some(live) = &self.live {
+                let decision = Decision::Deny {
+                    message: approvals::STOPPED.to_owned(),
+                    interrupt: true,
+                };
+                let _ = live.run.answer(Answer {
+                    approval_id,
+                    decision,
+                });
+            }
+            let stopped = ended(AgentApprovalDecision::Denied, by);
+            self.resolve_approval(approval_id, stopped).await;
+        }
+    }
+
+    /// Records how a waiting permission request ended, and logs it as `approvalResolved`. Does
+    /// nothing to one that already ended.
+    async fn resolve_approval(&mut self, approval_id: ApprovalId, resolution: AgentApproveResult) {
+        let item = convert::approval_resolved(approval_id, &resolution);
+        if self.approvals.resolve(approval_id, resolution) {
+            self.push(item).await;
+        }
     }
 
     async fn send(
@@ -1018,10 +1176,31 @@ impl Actor {
                     self.push(item).await;
                 }
             }
+            Event::ApprovalRequested(request) => {
+                let timeout = self.daemon.agents.approval_timeout();
+                let offers_always = !request.always_allow.is_empty();
+                self.approvals
+                    .add(request.approval_id, Instant::now() + timeout, offers_always);
+                let expires_at = jiff::SignedDuration::try_from(timeout)
+                    .ok()
+                    .and_then(|timeout| jiff::Timestamp::now().checked_add(timeout).ok())
+                    .unwrap_or(jiff::Timestamp::MAX);
+                self.push(convert::approval_requested(request, expires_at))
+                    .await;
+            }
+            Event::ApprovalWithdrawn { approval_id } => {
+                let withdrawn = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
+                self.resolve_approval(*approval_id, withdrawn).await;
+            }
             Event::Finished { outcome, .. } => {
                 let outcome = outcome.clone();
                 self.record_usage(event).await;
                 self.clear_live();
+                // The CLI exited while they waited, so nothing can answer them now.
+                for approval_id in self.approvals.pending() {
+                    let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
+                    self.resolve_approval(approval_id, gone).await;
+                }
                 self.finish(&outcome).await;
             }
             _ => {

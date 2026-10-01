@@ -31,6 +31,7 @@
 
 mod account;
 mod agent;
+mod approval;
 mod cli_account;
 mod context;
 mod defaults;
@@ -63,6 +64,10 @@ pub use agent::{
     AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus, AgentToolStatus,
     CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId,
     TurnId,
+};
+pub use approval::{
+    AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
+    AgentApproveResult, ApprovalId,
 };
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,

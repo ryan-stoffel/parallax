@@ -9,9 +9,10 @@ use serde_json::json;
 use super::{FakeBackend, Script, Step};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, OutputLimits};
 use crate::backend::{
-    AccountRef, ApiKey, Backend, Credential, Event, EventStream, FailureKind, FollowUp,
-    LimitStatus, ModelUsage, Outcome, Resume, RunId, RunRequest, SendError, StartError, Started,
-    ToolPolicy, ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
+    AccountRef, Answer, AnswerError, ApiKey, ApprovalId, ApprovalRequest, Backend, Credential,
+    Decision, Event, EventStream, FailureKind, FollowUp, LimitStatus, ModelUsage, Outcome, Resume,
+    RunId, RunRequest, SendError, StartError, Started, ToolPolicy, ToolStatus, TurnId, Usage,
+    WarningKind, WorkerSandbox,
 };
 use crate::paths::DataDir;
 
@@ -740,6 +741,130 @@ async fn backends_work_behind_trait_objects() {
         let all = rest(&mut events).await;
         assert!(matches!(outcome(&all), Outcome::Completed { .. }));
     }
+}
+
+/// The script's permission request, the first one the run reports after its session.
+async fn asked(events: &mut EventStream) -> ApprovalRequest {
+    assert!(matches!(next(events).await, Event::SessionStarted { .. }));
+    let Event::ApprovalRequested(request) = next(events).await else {
+        panic!("expected a permission request");
+    };
+    request
+}
+
+/// RYA-222: a scripted permission request reaches the run with a new id, and its first answer
+/// reaches the CLI as JSON, once; an answer to it after that is dropped.
+#[tokio::test]
+async fn a_permission_request_takes_its_first_answer() {
+    let script = Script::from_json(
+        r#"[
+            {"init": {"sessionId": "approval-1"}},
+            {"requestApproval": {
+                "toolName": "Bash",
+                "input": {"command": "pnpm test"},
+                "callId": "toolu_1",
+                "alwaysAllow": ["Bash(pnpm test:*)"]
+            }},
+            "awaitApproval",
+            {"endTurn": {"result": "Ran the tests."}}
+        ]"#,
+    )
+    .unwrap();
+    let backend = FakeBackend::new(launcher(), script);
+    let Started { run, mut events } = launch(&backend, request(&root())).await;
+    let request = asked(&mut events).await;
+    assert_eq!(request.tool_name, "Bash");
+    assert_eq!(request.input, json!({"command": "pnpm test"}));
+    assert_eq!(request.call_id.as_deref(), Some("toolu_1"));
+    assert_eq!(request.always_allow, ["Bash(pnpm test:*)"]);
+    assert!(!request.interactive);
+    let allow = Answer {
+        approval_id: request.approval_id,
+        decision: Decision::Allow {
+            input: None,
+            always: true,
+        },
+    };
+    run.answer(allow.clone()).unwrap();
+    run.answer(allow).unwrap();
+    let all = rest(&mut events).await;
+    let printed: Vec<serde_json::Value> = texts(&all)
+        .into_iter()
+        .map(|text| serde_json::from_str(text).unwrap())
+        .collect();
+    assert_eq!(
+        printed,
+        [json!({"approvalId": request.approval_id, "decision": "allow", "always": true})]
+    );
+    assert_eq!(
+        outcome(&all),
+        &Outcome::Completed {
+            result: Some("Ran the tests.".into())
+        }
+    );
+}
+
+/// RYA-222: a withdrawn request takes no answer, so the CLI's next read gets what follows it.
+#[tokio::test]
+async fn a_withdrawn_request_takes_no_answer() {
+    let script = Script::from_json(
+        r#"[
+            {"init": {"sessionId": "approval-2"}},
+            {"requestApproval": {"toolName": "ExitPlanMode", "input": {"plan": "1. Plan."}, "interactive": true}},
+            "withdrawApproval",
+            "awaitFollowUp"
+        ]"#,
+    )
+    .unwrap();
+    let backend = FakeBackend::new(launcher(), script);
+    let Started { run, mut events } = launch(&backend, request(&root())).await;
+    let request = asked(&mut events).await;
+    assert!(request.interactive);
+    assert_eq!(
+        next(&mut events).await,
+        Event::ApprovalWithdrawn {
+            approval_id: request.approval_id
+        }
+    );
+    run.answer(Answer {
+        approval_id: request.approval_id,
+        decision: Decision::Deny {
+            message: "Too late.".into(),
+            interrupt: false,
+        },
+    })
+    .unwrap();
+    let turn_id = TurnId::generate();
+    run.send(FollowUp {
+        turn_id,
+        text: "Next.".into(),
+        images: Vec::new(),
+    })
+    .unwrap();
+    let all = rest(&mut events).await;
+    assert_eq!(texts(&all), ["Next."]);
+}
+
+/// RYA-222: a request before any is made can't be withdrawn, and a fake without stdin takes no
+/// answers.
+#[tokio::test]
+async fn approvals_need_a_request_and_a_stdin() {
+    let script = Script::from_json(r#"["withdrawApproval"]"#).unwrap();
+    assert!(matches!(
+        FakeBackend::new(launcher(), script).start(request(&root())),
+        Err(StartError::Invalid(_))
+    ));
+    let backend = backend("follow-up").without_follow_ups();
+    let Started { run, mut events } = launch(&backend, request(&root())).await;
+    let answer = Answer {
+        approval_id: ApprovalId::generate(),
+        decision: Decision::Allow {
+            input: None,
+            always: false,
+        },
+    };
+    assert_eq!(run.answer(answer), Err(AnswerError::Unsupported));
+    rest(&mut events).await;
 }
 
 #[cfg(not(feature = "fake-backend"))]

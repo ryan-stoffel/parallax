@@ -24,11 +24,11 @@ use tokio_util::sync::CancellationToken;
 use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
 use wisp_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
-    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
-    AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges, AgentSend,
-    AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe,
-    HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList, ProjectStart, RequestMethod,
-    UsageGet, UsageHistory,
+    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
+    AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges,
+    AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
+    EventsUnsubscribe, HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList,
+    ProjectStart, RequestMethod, UsageGet, UsageHistory,
 };
 use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
@@ -161,7 +161,8 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     })
 }
 
-/// Answers an `agent/*` method (#156, #157, RYA-191), or `None` if there is no such method.
+/// Answers an `agent/*` method (#156, #157, RYA-191, RYA-222), or `None` if there is no such
+/// method.
 async fn agent_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
     Some(match request.method.as_str() {
         AgentStart::NAME => handle::<AgentStart, _, _>(request, |p| agent::start(context, p)).await,
@@ -185,6 +186,9 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         }
         AgentOpenPr::NAME => {
             handle::<AgentOpenPr, _, _>(request, |p| agent::open_pr(context, p)).await
+        }
+        AgentApprove::NAME => {
+            handle::<AgentApprove, _, _>(request, |p| agent::approve(context, p)).await
         }
         _ => return None,
     })

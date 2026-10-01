@@ -1,17 +1,17 @@
 //! `agent/start`, `agent/send`, `agent/cancel`, `agent/list`, and `agent/events` (#156), behind
 //! the `agents` capability; the review methods (#157) behind `agentReview`; `agent/openPr`
-//! (RYA-168) behind `openPr`; and `agent/image` (RYA-191) behind `promptImages`. The runner itself
-//! is [`crate::agents`].
+//! (RYA-168) behind `openPr`; `agent/image` (RYA-191) behind `promptImages`; and `agent/approve`
+//! (RYA-222) behind `approvals`. The runner itself is [`crate::agents`].
 
 use std::sync::Arc;
 
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    AgentAcceptParams, AgentAcceptResult, AgentCancelParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams,
-    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy,
-    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind,
-    LoggedEvent, PromptImage,
+    AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
+    AgentApproveResult, AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
+    AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams, AgentListParams,
+    AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy, AgentRequestChangesParams,
+    AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind, LoggedEvent, PromptImage,
 };
 
 use super::Context;
@@ -20,6 +20,9 @@ use crate::{agents, images};
 /// The longest prompt or message wispd takes, in bytes. It goes on the CLI's stdin, never in
 /// argv, and into the event log.
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
+
+/// The longest message a denial tells the agent, in bytes (RYA-222).
+const MAX_DENIAL_BYTES: usize = 64 * 1024;
 
 /// The longest pull request title GitHub takes, in characters.
 const MAX_PR_TITLE_CHARS: usize = 256;
@@ -101,6 +104,65 @@ pub(crate) async fn cancel(
         .detached(agents::cancel(daemon, params.run_id))
         .await?;
     Ok(AgentRunResult { run })
+}
+
+/// `agent/approve` (RYA-222): an edited input and `always` go only with `allow`, a message only
+/// with `deny`; the run's actor does the rest.
+pub(crate) async fn approve(
+    context: &Context,
+    params: AgentApproveParams,
+) -> Result<AgentApproveResult, ErrorObject> {
+    match params.decision {
+        AgentApprovalAnswer::Allow => {
+            if params.message.is_some() {
+                return Err(ErrorObject::invalid_params(
+                    "message goes only with decision deny",
+                ));
+            }
+            if let Some(input) = &params.input {
+                if !input.is_object() {
+                    return Err(ErrorObject::invalid_params("input must be a JSON object"));
+                }
+                if json_len(input) > MAX_TEXT_BYTES {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "input must be at most {MAX_TEXT_BYTES} bytes of JSON"
+                    )));
+                }
+            }
+        }
+        AgentApprovalAnswer::Deny => {
+            if params.input.is_some() || params.always {
+                return Err(ErrorObject::invalid_params(
+                    "input and always go only with decision allow",
+                ));
+            }
+            if params
+                .message
+                .as_ref()
+                .is_some_and(|message| message.len() > MAX_DENIAL_BYTES)
+            {
+                return Err(ErrorObject::invalid_params(format!(
+                    "message must be at most {MAX_DENIAL_BYTES} bytes"
+                )));
+            }
+        }
+        AgentApprovalAnswer::Unknown => {
+            return Err(ErrorObject::invalid_params(
+                "decision must be allow or deny",
+            ));
+        }
+    }
+    let daemon = Arc::clone(&context.daemon);
+    context
+        .daemon
+        .agents
+        .detached(agents::approve(daemon, params))
+        .await
+}
+
+/// The size of `value` as JSON.
+fn json_len(value: &serde_json::Value) -> usize {
+    serde_json::to_string(value).map_or(usize::MAX, |json| json.len())
 }
 
 pub(crate) async fn list(

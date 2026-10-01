@@ -29,6 +29,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("agentClis".to_owned(), serde_json::Map::new()),
             ("agentReview".to_owned(), serde_json::Map::new()),
             ("agents".to_owned(), serde_json::Map::new()),
+            ("approvals".to_owned(), serde_json::Map::new()),
             ("coordinator".to_owned(), serde_json::Map::new()),
             ("openPr".to_owned(), serde_json::Map::new()),
             (

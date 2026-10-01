@@ -86,6 +86,8 @@ pub(crate) fn initialize(
 /// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
 /// older wispd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
 /// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
+/// `approvals` (RYA-222, 0031): runs in Manual, Auto, and Plan ask through `approvalRequested`
+/// items, which `agent/approve` answers, instead of denying what would prompt.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -97,6 +99,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agentClis".to_owned(), serde_json::Map::new()),
         ("agentReview".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
+        ("approvals".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),

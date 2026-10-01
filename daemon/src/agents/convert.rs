@@ -1,18 +1,22 @@
 //! Mapping between the runner's inputs and outputs: backend events to the protocol's transcript
 //! items, and store rows to the protocol's runs.
 
+use jiff::Timestamp;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::error;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy,
-    AgentRun, AgentRunState, AgentStatus, AgentTodoItem, AgentTodoStatus, AgentToolStatus,
-    CoordinatorThreadId, DiffSummary, ProjectId, RunId,
+    AgentApproveResult, AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome,
+    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, AgentTodoItem,
+    AgentTodoStatus, AgentToolStatus, ApprovalId, CoordinatorThreadId, DiffSummary, ProjectId,
+    RunId,
 };
 
-use crate::backend::{Event, FailureKind, Outcome, TodoItem, TodoStatus, ToolStatus};
+use crate::backend::{
+    ApprovalRequest, Event, FailureKind, Outcome, TodoItem, TodoStatus, ToolStatus,
+};
 use crate::json::escaped_len;
 use crate::worktree::MergeHow;
 
@@ -23,6 +27,13 @@ pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 /// The largest tool input an `agent.output` item carries as JSON, in bytes. A larger one, such as
 /// a `Write` of a big file, becomes `{"truncated": true, "bytes": n}`.
 pub(super) const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;
+
+/// The largest tool input an `approvalRequested` item carries as JSON, in bytes (RYA-222): more
+/// than a tool call's, since the user has to see what they allow, such as a long plan.
+pub(super) const MAX_APPROVAL_INPUT_BYTES: usize = 256 * 1024;
+
+/// The most "always allow" rules an `approvalRequested` item lists.
+const MAX_ALWAYS_ALLOW_RULES: usize = 16;
 
 /// The longest free text field of any other `agent.output` item — `Text`, `TextDelta`,
 /// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result`, `TurnStarted.text` — in
@@ -271,8 +282,13 @@ fn id(message_id: Option<&str>) -> Option<String> {
 }
 
 fn tool_input(input: &Value) -> Value {
+    capped_input(input, MAX_TOOL_INPUT_BYTES)
+}
+
+/// `input`, or `{"truncated": true, "bytes": n}` when its JSON is over `max` bytes.
+fn capped_input(input: &Value, max: usize) -> Value {
     let bytes = serde_json::to_string(input).map_or(0, |json| json.len());
-    if bytes > MAX_TOOL_INPUT_BYTES {
+    if bytes > max {
         json!({"truncated": true, "bytes": bytes})
     } else {
         input.clone()
@@ -380,11 +396,57 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         Event::Warning { detail, .. } => AgentOutputItem::Warning {
             detail: truncate(detail, MAX_TEXT_ITEM_BYTES),
         },
-        Event::RateLimit(_)
+        // The run's actor reports permission requests, with when they expire and how they end.
+        Event::ApprovalRequested(_)
+        | Event::ApprovalWithdrawn { .. }
+        | Event::RateLimit(_)
         | Event::AccountFallback { .. }
         | Event::Finished { .. }
         | Event::Unknown => return None,
     })
+}
+
+/// The transcript item for a permission request that wispd denies at `expires_at` if nobody
+/// answers it (RYA-222).
+pub(super) fn approval_requested(
+    request: &ApprovalRequest,
+    expires_at: Timestamp,
+) -> AgentOutputItem {
+    let capped = |text: Option<&str>| text.map(|text| truncate(text, MAX_TEXT_ITEM_BYTES));
+    AgentOutputItem::ApprovalRequested {
+        approval_id: request.approval_id,
+        tool_name: truncate(&request.tool_name, MAX_ID_BYTES),
+        input: capped_input(&request.input, MAX_APPROVAL_INPUT_BYTES),
+        call_id: id(request.call_id.as_deref()),
+        reason: capped(request.reason.as_deref()),
+        blocked_path: capped(request.blocked_path.as_deref()),
+        subagent: id(request.subagent.as_deref()),
+        always_allow: request
+            .always_allow
+            .iter()
+            .take(MAX_ALWAYS_ALLOW_RULES)
+            .map(|rule| truncate(rule, MAX_ID_BYTES))
+            .collect(),
+        interactive: request.interactive,
+        expires_at,
+    }
+}
+
+/// The transcript item for how a permission request ended (RYA-222).
+pub(super) fn approval_resolved(
+    approval_id: ApprovalId,
+    resolution: &AgentApproveResult,
+) -> AgentOutputItem {
+    AgentOutputItem::ApprovalResolved {
+        approval_id,
+        decision: resolution.decision,
+        by: resolution.by,
+        always: resolution.always,
+        message: resolution
+            .message
+            .as_deref()
+            .map(|message| truncate(message, MAX_TEXT_ITEM_BYTES)),
+    }
 }
 
 /// About how many bytes `item` adds to an `agent.output` event.
@@ -398,12 +460,57 @@ mod tests {
     use wisp_protocol::{AgentOutputItem, AgentToolStatus};
 
     use super::{
-        MAX_ID_BYTES, MAX_TEXT_ITEM_BYTES, MAX_TODO_LIST_BYTES, MAX_TODO_TEXT_BYTES,
-        MAX_TOOL_INPUT_BYTES, MAX_TOOL_OUTPUT_BYTES, output_item, truncate,
+        MAX_APPROVAL_INPUT_BYTES, MAX_ID_BYTES, MAX_TEXT_ITEM_BYTES, MAX_TODO_LIST_BYTES,
+        MAX_TODO_TEXT_BYTES, MAX_TOOL_INPUT_BYTES, MAX_TOOL_OUTPUT_BYTES, approval_requested,
+        output_item, truncate,
     };
     use crate::backend::{
-        Event, LimitStatus, LimitWindow, ModelUsage, TodoItem, TodoStatus, ToolStatus, Usage,
+        ApprovalId, ApprovalRequest, Event, LimitStatus, LimitWindow, ModelUsage, TodoItem,
+        TodoStatus, ToolStatus, Usage,
     };
+
+    /// RYA-222: a permission request carries a larger input than a tool call, so the user sees a
+    /// long plan whole, and is cut like every other item past that. The actor logs requests
+    /// itself, with when they expire, so they're no plain transcript item.
+    #[test]
+    fn a_permission_request_carries_more_input_than_a_tool_call() {
+        let plan = "p".repeat(MAX_TOOL_INPUT_BYTES * 2);
+        let request = ApprovalRequest {
+            approval_id: ApprovalId::generate(),
+            tool_name: "ExitPlanMode".into(),
+            input: json!({"plan": plan}),
+            call_id: None,
+            reason: Some("r".repeat(MAX_TEXT_ITEM_BYTES + 1)),
+            blocked_path: None,
+            subagent: None,
+            always_allow: (0..100).map(|n| format!("Bash(make {n}:*)")).collect(),
+            interactive: true,
+        };
+        let expires_at = jiff::Timestamp::now();
+        let AgentOutputItem::ApprovalRequested {
+            input,
+            reason,
+            always_allow,
+            ..
+        } = approval_requested(&request, expires_at)
+        else {
+            panic!("a permission request");
+        };
+        assert_eq!(input["plan"], plan.as_str());
+        assert!(reason.unwrap().ends_with("bytes cut)"));
+        assert_eq!(always_allow.len(), 16);
+        let huge = ApprovalRequest {
+            input: json!({"plan": "p".repeat(MAX_APPROVAL_INPUT_BYTES)}),
+            ..request.clone()
+        };
+        let AgentOutputItem::ApprovalRequested { input, .. } =
+            approval_requested(&huge, expires_at)
+        else {
+            panic!("a permission request");
+        };
+        assert_eq!(input["truncated"], true);
+        assert_eq!(output_item(&Event::ApprovalRequested(request)), None);
+    }
 
     #[test]
     fn transcript_events_map_and_bookkeeping_events_do_not() {
