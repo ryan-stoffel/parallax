@@ -97,11 +97,13 @@ export const menuPanel = (align: "start" | "end" = "start") =>
 export const menuItem =
   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
 
-/** Up and Down move focus between a menu's items, wrapping at the ends. */
+/** Up and Down move focus between a menu's items, wrapping at the ends and passing disabled ones. */
 export function moveFocus(e: KeyboardEvent<HTMLElement>) {
   if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   e.preventDefault();
-  const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]')];
+  const items = [
+    ...e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)'),
+  ];
   const step = e.key === "ArrowDown" ? 1 : -1;
   const i = items.indexOf(document.activeElement as HTMLElement);
   // From outside the items (a search box), Down starts at the top and Up at the bottom.
@@ -161,6 +163,10 @@ export function MenuOption({
 
 /** A small heading over a group of a menu's options. */
 export const menuHeading = "px-2 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-foreground";
+
+/** The badge on a choice that can't be picked yet, saying why, such as "Not available yet". */
+export const unavailableBadge =
+  "shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-[12px] text-amber-500";
 
 /**
  * A dropdown showing the chosen option, with a check beside it in the menu. The chosen option's

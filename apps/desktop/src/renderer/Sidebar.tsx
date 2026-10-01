@@ -105,6 +105,8 @@ interface ThreadListProps {
   onHostChange: (hostId: string) => void;
   selection: Selection;
   onSelect: (selection: Selection) => void;
+  /** Opens a Project, on another host by opening that host first. */
+  onOpenProject: (hostId: string, projectId: string) => void;
   onOpenSettings: (section: SettingsSection, addHost?: boolean) => void;
   threads: ThreadsView;
   /** Deletes a thread. Resolves to an error message, or undefined. */
@@ -131,6 +133,7 @@ export function ThreadList({
   onHostChange,
   selection,
   onSelect,
+  onOpenProject,
   onOpenSettings,
   threads,
   onDelete,
@@ -410,11 +413,11 @@ export function ThreadList({
       )}
       <NewProjectDialog
         ref={newProject}
+        hosts={hosts}
+        hostId={host.id}
         repos={threads.state.repos}
-        local={host.id === localId}
-        addRepo={threads.addRepo}
         create={threads.createProject}
-        onCreated={(project) => onSelect({ kind: "project", projectId: project.id })}
+        onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
       <AddRepositoryDialog
         ref={addRepositoryDialog}

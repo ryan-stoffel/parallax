@@ -19,7 +19,8 @@ const workspaces: PickerOption[] = [
   },
 ];
 
-const hostIcon = (host: Host) => (host.destination ? <Server /> : <Laptop />);
+/** A host's icon: a laptop for this computer, a server for an SSH host. */
+export const hostIcon = (host: Host) => (host.destination ? <Server /> : <Laptop />);
 
 /**
  * Where a thread runs: which of wisp's computers, and in a new worktree or the current checkout.

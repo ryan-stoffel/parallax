@@ -261,8 +261,9 @@ test("creates a project on a repository it adds, and opens it (RYA-166)", async 
   await page.getByRole("button", { name: "Back to app" }).click();
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog", { name: "Create Project" });
-  await dialog.getByRole("button", { name: /^Repository/ }).click();
-  await page.getByRole("menuitemradio", { name: "Add repository…" }).click();
+  await dialog.getByRole("button", { name: /^Workspace/ }).click();
+  await page.getByRole("menuitem", { name: "Choose folder…" }).click();
+  await expect(dialog.getByRole("button", { name: /^Workspace: ember on / })).toBeVisible();
   await expect(dialog.getByRole("textbox", { name: "Name" })).toHaveValue("ember");
   await dialog.getByRole("button", { name: "Create Project" }).click();
 
