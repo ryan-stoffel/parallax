@@ -511,7 +511,7 @@ function Footer({
                   <Download />
                   <span
                     aria-hidden
-                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-ring"
+                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-accent"
                   />
                 </span>
               ) : (

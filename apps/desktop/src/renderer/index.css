@@ -2,7 +2,12 @@
 
 /* Wisp Light and Wisp Dark. The `dark` class on <html> switches them
    (theme.ts). Components use only these tokens, never raw colors. Every
-   *-foreground keeps at least 4.5:1 contrast on the background and sidebar. */
+   *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
+
+   --accent is the one color a setting will change: the send button, focus
+   rings (--ring), selected states, highlights, links, and the working loaders
+   (--working) all derive from it. Text and icons on it are black or white,
+   whichever reads better, so they keep at least 4.5:1 on any accent. */
 :root {
   color-scheme: light;
   --background: #ffffff;
@@ -14,13 +19,28 @@
   --border: rgb(0 0 0 / 9%);
   --hover: rgb(0 0 0 / 4.5%);
   --selected: rgb(0 0 0 / 7%);
-  --send: #2563eb;
-  --send-foreground: #ffffff;
+  --accent: #2563eb;
+  /* Black or white, whichever reads better on a fill, as a channel of
+     color(from <fill> srgb-linear ...): white while the fill's WCAG luminance (from its linear
+     r, g, and b, clipped as the screen clips them) is under 0.1791, where the two tie at 4.58:1. */
+  --black-or-white: clamp(
+    0,
+    (0.1791 - 0.2126 * clamp(0, r, 1) - 0.7152 * clamp(0, g, 1) - 0.0722 * clamp(0, b, 1)) *
+      infinity,
+    1
+  );
+  --accent-foreground: color(
+    from var(--accent) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
+  );
+  --send: var(--accent);
+  --send-foreground: color(
+    from var(--send) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
+  );
   --primary: #181818;
   --primary-foreground: #ffffff;
-  --ring: #2563eb;
+  --ring: var(--accent);
   --danger: #c42b2b;
-  --working: #2563eb;
+  --working: var(--accent);
   --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
 }
 
@@ -35,13 +55,12 @@
   --border: rgb(255 255 255 / 8%);
   --hover: rgb(255 255 255 / 4.5%);
   --selected: rgb(255 255 255 / 8%);
-  --send: #1e40af;
-  --send-foreground: #ececec;
+  --accent: #3b82f6;
+  /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
+  --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
   --primary: #ececec;
   --primary-foreground: #0d0d0d;
-  --ring: #3b82f6;
   --danger: #ff8f8a;
-  --working: #3b82f6;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
 }
 
@@ -56,6 +75,8 @@
   --color-border: var(--border);
   --color-hover: var(--hover);
   --color-selected: var(--selected);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
   --color-send: var(--send);
   --color-send-foreground: var(--send-foreground);
   --color-primary: var(--primary);
@@ -153,7 +174,7 @@ body {
   margin-top: 0.25em;
 }
 .markdown a {
-  color: var(--ring);
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -261,10 +282,10 @@ body {
 @keyframes effort-glow {
   0%,
   100% {
-    box-shadow: 0 0 6px 0 color-mix(in srgb, var(--ring) 40%, transparent);
+    box-shadow: 0 0 6px 0 color-mix(in srgb, var(--accent) 40%, transparent);
   }
   50% {
-    box-shadow: 0 0 22px 5px color-mix(in srgb, var(--ring) 70%, transparent);
+    box-shadow: 0 0 22px 5px color-mix(in srgb, var(--accent) 70%, transparent);
   }
 }
 @keyframes effort-pop {
@@ -287,9 +308,9 @@ body {
 .effort-full .effort-fill {
   background-image: linear-gradient(
     90deg,
-    var(--ring),
-    color-mix(in srgb, var(--ring) 45%, white),
-    var(--ring)
+    var(--accent),
+    color-mix(in srgb, var(--accent) 45%, white),
+    var(--accent)
   );
   background-size: 200% 100%;
   animation: effort-shimmer 1.8s linear infinite;
