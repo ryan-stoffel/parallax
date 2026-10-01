@@ -3,11 +3,12 @@
 //! answer, and a run whose client doesn't is denied as before. In Plan, a worker hands its plan
 //! over the same way (RYA-243). A worker also keeps its plan with Claude Code's task tools, which
 //! ask nothing (RYA-248), and so do a coordinator and a bypass worker, whose `--allowedTools`
-//! turns them on (RYA-249). Each test starts the CLI through wispd's own Claude backend, so
-//! the arguments, the translator that reads the CLI's `can_use_tool` request, and the driver that
-//! writes the `control_response` are the ones a real run uses. A local fake Messages API asks for
-//! the tool calls, so no account or Anthropic connection is needed. Set `WISP_SANDBOX_CLAUDE` to
-//! the CLI under test, as CI's Linux legs do.
+//! turns them on (RYA-249). Each keeps its session's own list, whatever the settings it reads
+//! name in `CLAUDE_CODE_TASK_LIST_ID` (RYA-251). Each test starts the CLI through wispd's own
+//! Claude backend, so the arguments, the translator that reads the CLI's `can_use_tool` request,
+//! and the driver that writes the `control_response` are the ones a real run uses. A local fake
+//! Messages API asks for the tool calls, so no account or Anthropic connection is needed. Set
+//! `WISP_SANDBOX_CLAUDE` to the CLI under test, as CI's Linux legs do.
 #![cfg(unix)]
 
 #[expect(
@@ -39,6 +40,9 @@ const KEY: &str = "sk-ant-wisp-test-key-never-send";
 
 /// What the fake API's Bash calls run: it says so, and leaves a line in `ran` for each run.
 const PROBE: &str = "echo probe-ran\necho x >> ran\n";
+
+/// The task list [`share_the_task_list`] names, which no run may use (RYA-251).
+const SHARED_LIST: &str = "wisp-shared-list";
 
 /// Where [`WRAPPER`] finds the fake API's base URL.
 const API_ENV: &str = "WISP_TEST_API_URL";
@@ -433,7 +437,8 @@ async fn a_plan_worker_hands_its_plan_to_wispd_and_leaves_plan_mode_on_its_allow
 /// A worker keeps its plan with Claude Code's task tools (RYA-248). Its `--tools` names them, so
 /// 2.1.283 offers them even on a model it would otherwise give no todo tool, and its init passes
 /// wispd's check. The CLI writes the list itself, in its configuration folder outside the
-/// worktree, which the worker's commands still can't read.
+/// worktree, which the worker's commands still can't read. The list is the session's own, though
+/// the global config, which even `--restricted` reads, names a shared one (RYA-251).
 #[tokio::test]
 async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_read_it() {
     let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
@@ -443,10 +448,12 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
     let folders = Folders::new();
     let (worktree, mut request, _temp) = worker(&folders, AgentPermission::Edit);
     request.model = Some("claude-opus-5-5".into());
-    // In a script, so only the sandbox, not Claude Code's own checks, can stop the read.
+    share_the_task_list(&folders.home, &[]);
+    // In a script, so only the sandbox, not Claude Code's own checks, can stop the read. It names
+    // its `HOME`, so a read that fails only because `HOME` is wrong can't pass.
     fs::write(
         worktree.join("peek.sh"),
-        "cat \"$HOME\"/.claude/tasks/*/1.json\necho peeked\n",
+        "echo \"home=$HOME\"\ncat \"$HOME\"/.claude/tasks/*/1.json\necho peeked\n",
     )
     .unwrap();
     let task = |name, input| ToolCall { name, input };
@@ -485,6 +492,8 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
         "{events:#?}"
     );
     assert_eq!(results[1].2, "Updated task #1 status", "{events:#?}");
+    let home = format!("home={}", folders.home.display());
+    assert!(results[2].2.lines().any(|line| line == home), "{events:#?}");
     assert!(results[2].2.contains("peeked"), "{events:#?}");
     assert!(!results[2].2.contains("Cover the parser"), "{events:#?}");
     assert_eq!(results[3].2, "Updated task #1 status", "{events:#?}");
@@ -497,11 +506,13 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
             _ => None,
         })
         .unwrap();
-    let list = folders.home.join(".claude/tasks").join(session);
+    let tasks = folders.home.join(".claude/tasks");
+    let list = tasks.join(session);
     let saved: Value =
         serde_json::from_str(&fs::read_to_string(list.join("1.json")).unwrap()).unwrap();
     assert_eq!(saved["subject"], "Add tests");
     assert_eq!(saved["status"], "completed");
+    assert!(!tasks.join(SHARED_LIST).exists());
     // Nothing of it in the worktree. On Linux, the sandbox leaves an empty `.claude` there: the
     // mount point that keeps commands from creating Claude Code's settings files, which git
     // doesn't track.
@@ -540,8 +551,10 @@ async fn a_bypass_worker_keeps_its_plan_with_the_task_tools_on_any_model() {
 
 /// Runs `request` against a fake API that asks for `TaskCreate`, `TaskUpdate`, and `TaskList`.
 /// Each answers as 2.1.283's task tools do, none asks wispd, and the CLI keeps the session's list
-/// in its configuration folder, `.claude` in `HOME`.
+/// in its configuration folder, `.claude` in `HOME`, though the global config and the user's, the
+/// project's, and the local settings all name a shared one (RYA-251).
 async fn plans_with_the_task_tools(claude: &OsStr, folders: &Folders, request: RunRequest) {
+    share_the_task_list(&folders.home, &[&request.cwd]);
     let task = |name, input| ToolCall { name, input };
     let api = fake_api(vec![
         task(
@@ -595,11 +608,33 @@ async fn plans_with_the_task_tools(claude: &OsStr, folders: &Folders, request: R
             _ => None,
         })
         .unwrap();
-    let list = folders.home.join(".claude/tasks").join(session);
+    let tasks = folders.home.join(".claude/tasks");
+    let list = tasks.join(session);
     let saved: Value =
         serde_json::from_str(&fs::read_to_string(list.join("1.json")).unwrap()).unwrap();
     assert_eq!(saved["subject"], "Add tests");
     assert_eq!(saved["status"], "in_progress");
+    assert!(!tasks.join(SHARED_LIST).exists());
+}
+
+/// Names [`SHARED_LIST`] in `CLAUDE_CODE_TASK_LIST_ID` in the `env` of the global config and the
+/// user's settings in `home`, and of the project's and the local settings in each of `projects`.
+/// Claude Code 2.1.283 copies each of those it reads into its own process, and then a run would
+/// share one list with every session that does (RYA-251).
+fn share_the_task_list(home: &Path, projects: &[&Path]) {
+    let settings = json!({"env": {"CLAUDE_CODE_TASK_LIST_ID": SHARED_LIST}}).to_string();
+    let mut files = vec![
+        home.join(".claude.json"),
+        home.join(".claude/settings.json"),
+    ];
+    for project in projects {
+        files.push(project.join(".claude/settings.json"));
+        files.push(project.join(".claude/settings.local.json"));
+    }
+    for file in files {
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, &settings).unwrap();
+    }
 }
 
 /// Every file under `folder`, which may not exist.
