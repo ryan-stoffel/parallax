@@ -538,7 +538,8 @@ test("a Project's Agents view lists its subagents newest first, without its coor
 });
 
 test("opening a subagent shows its chat, with Open PR, and the Project crumb goes back to the coordinator", async () => {
-  answers["agent/send"] = () => ({ result: { run: login } });
+  // The finished subagent picks up the message.
+  answers["agent/send"] = () => ({ result: { run: { ...login, status: "running" } } });
   await openEmberAgents(login, docs);
   await click(agentRow("Fix the login bug"));
   expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);
