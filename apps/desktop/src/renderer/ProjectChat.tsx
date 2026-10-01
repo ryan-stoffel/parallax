@@ -140,7 +140,8 @@ export function ProjectChat({
           Agents working on {project.name} report back and coordinate here.
         </p>
       </div>
-      <div className="mx-auto w-full max-w-3xl px-6 pb-5">
+      {/* As in AgentChat: bounded, so a pinned card's preview gives way to a grown composer. */}
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
         <PinnedApprovals
           asked={asked}
           answers={answers}
