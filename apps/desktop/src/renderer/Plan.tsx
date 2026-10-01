@@ -170,6 +170,7 @@ export function planChanges(
   const changes = {
     Finished: [] as string[],
     Started: [] as string[],
+    Paused: [] as string[],
     Reopened: [] as string[],
     Added: [] as string[],
     Removed: before.filter((s) => !kept.has(s.text)).map((s) => s.text),
@@ -180,6 +181,7 @@ export function planChanges(
     else if (old === "completed" && status !== "completed") changes.Reopened.push(text);
     else if (status === "completed" && old !== "completed") changes.Finished.push(text);
     else if (status === "inProgress" && old !== "inProgress") changes.Started.push(text);
+    else if (old === "inProgress" && status !== "inProgress") changes.Paused.push(text);
   }
   const said = Object.entries(changes)
     .filter(([, steps]) => steps.length > 0)
@@ -494,6 +496,7 @@ export function ProposedPlan({
         ? { label: "Failed", icon: <CircleX aria-hidden className="size-3.5" /> }
         : undefined;
   const headingId = useId();
+  const verdictId = useId();
   const content = useRef<HTMLDivElement>(null);
   const [long, setLong] = useState(false);
   useLayoutEffect(() => {
@@ -508,7 +511,7 @@ export function ProposedPlan({
   return (
     <div
       role="group"
-      aria-labelledby={headingId}
+      aria-labelledby={verdict ? `${headingId} ${verdictId}` : headingId}
       className="overflow-hidden rounded-xl border border-border bg-surface"
     >
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-[13px]">
@@ -517,7 +520,10 @@ export function ProposedPlan({
           Proposed plan
         </span>
         {verdict && (
-          <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-danger">
+          <span
+            id={verdictId}
+            className="flex shrink-0 items-center gap-1.5 text-[12px] text-danger"
+          >
             {verdict.icon}
             {verdict.label}
           </span>
@@ -526,8 +532,9 @@ export function ProposedPlan({
       <div
         className="relative overflow-hidden px-4 pt-3 pb-3.5"
         style={folded ? { maxHeight: collapsedHeight } : undefined}
-        // Tabbing into the fold, as to a code block's Copy, opens it rather than scroll within it.
-        onFocus={() => folded && onToggle(id, true)}
+        // Tabbing into the fold, as to a code block's Copy, opens it rather than scroll within it;
+        // a click doesn't.
+        onFocus={(e) => folded && e.target.matches(":focus-visible") && onToggle(id, true)}
       >
         <div ref={content} className="proposed-plan">
           {children}

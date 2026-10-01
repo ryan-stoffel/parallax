@@ -214,6 +214,10 @@ test("an update says what changed", () => {
   expect(planChanges([step("Old", "completed")], [step("New", "completed")])).toBe(
     "Added: New · Removed: Old",
   );
+  // A step set aside, back to to do.
+  expect(planChanges([step("Build", "inProgress")], [step("Build", "pending")])).toBe(
+    "Paused: Build",
+  );
   // The same steps in a new order.
   expect(planChanges(before, [before[2]!, before[0]!, before[1]!, before[3]!])).toBe(
     "Reordered the steps",
@@ -387,9 +391,16 @@ test("a proposed plan renders its Markdown safely, folds when long, and keeps ro
   ).toBe("368px");
   act(() => more.click());
   expect(onToggle).toHaveBeenLastCalledWith("x", true);
-  // Tabbing to a control under the fold, as a code block's Copy, opens it.
+  // Tabbing to a control under the fold, as a code block's Copy, opens it. A click doesn't, as
+  // mouse focus isn't :focus-visible (which happy-dom doesn't tell apart, so it's stubbed).
+  const copy = document.querySelector<HTMLButtonElement>('[aria-label="Copy code"]')!;
+  const byMouse = vi.spyOn(copy, "matches").mockReturnValue(false);
   onToggle.mockClear();
-  act(() => document.querySelector<HTMLButtonElement>('[aria-label="Copy code"]')!.focus());
+  act(() => copy.focus());
+  expect(onToggle).not.toHaveBeenCalled();
+  act(() => copy.blur());
+  byMouse.mockRestore();
+  act(() => copy.focus());
   expect(onToggle).toHaveBeenCalledWith("x", true);
 
   proposed(true, <button type="button">Approve</button>);
@@ -407,11 +418,22 @@ test("a proposed plan that was denied or failed says so", () => {
         <MarkdownText text="## Plan" />
       </ProposedPlan>,
     );
-    const heading = document.querySelector('[role="group"] > div')!;
-    return [heading.textContent, heading.querySelector(".text-danger svg") !== null];
+    const card = document.querySelector('[role="group"]')!;
+    const heading = card.querySelector(":scope > div")!;
+    // The card's accessible name, from what labels it.
+    const name = card
+      .getAttribute("aria-labelledby")!
+      .split(" ")
+      .map((id) => document.getElementById(id)!.textContent)
+      .join(" ");
+    return [heading.textContent, name, heading.querySelector(".text-danger svg") !== null];
   };
-  expect(header("denied")).toEqual(["Proposed planNot approved", true]);
-  expect(header("error")).toEqual(["Proposed planFailed", true]);
-  expect(header("ok")).toEqual(["Proposed plan", false]);
-  expect(header()).toEqual(["Proposed plan", false]);
+  expect(header("denied")).toEqual([
+    "Proposed planNot approved",
+    "Proposed plan Not approved",
+    true,
+  ]);
+  expect(header("error")).toEqual(["Proposed planFailed", "Proposed plan Failed", true]);
+  expect(header("ok")).toEqual(["Proposed plan", "Proposed plan", false]);
+  expect(header()).toEqual(["Proposed plan", "Proposed plan", false]);
 });
