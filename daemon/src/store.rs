@@ -22,10 +22,10 @@ use tracing::{error, info};
 use uuid::Uuid;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{
-    AccountChoice, AccountId, ErrorKind, KeyAccount, Project, ProjectCreateParams, ProjectId,
-    Provider, Role, RunId, StoreState,
+    AccountChoice, AccountId, ErrorKind, KeyAccount, Project, ProjectCreateParams, ProjectIcon,
+    ProjectId, ProjectUpdateParams, Provider, Role, RunId, StoreState,
 };
-use wisp_store::{AccountFields, ProjectFields, RoleDefault, Store, StoreError};
+use wisp_store::{AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError};
 
 use crate::repo;
 
@@ -185,7 +185,7 @@ pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
     match error {
         StoreError::IdConflict { id } => ErrorObject::wisp(
             ErrorKind::IdConflict,
-            format!("project {id} exists with a different name or repository"),
+            format!("project {id} exists with a different name, repository, or icon"),
         ),
         StoreError::NotFound { id } => ErrorObject::wisp(
             ErrorKind::ProjectNotFound,
@@ -205,8 +205,27 @@ pub(crate) fn fields(params: ProjectCreateParams) -> (Uuid, ProjectFields) {
         ProjectFields {
             name: params.name,
             repo_path: params.repo_path,
+            icon: params.icon.map(stored_icon),
         },
     )
+}
+
+/// The store's id and edit for a `project/update` (RYA-227).
+pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
+    (
+        params.project.into(),
+        ProjectEdit {
+            name: params.name,
+            icon: params.icon.map(stored_icon),
+        },
+    )
+}
+
+fn stored_icon(icon: ProjectIcon) -> wisp_store::ProjectIcon {
+    wisp_store::ProjectIcon {
+        name: icon.name,
+        color: icon.color,
+    }
 }
 
 /// A store row as the protocol's project, with the branch its repository has checked out now and
@@ -225,6 +244,10 @@ pub(crate) fn project(
     Ok(Project {
         id,
         name: row.name,
+        icon: row.icon.map(|icon| ProjectIcon {
+            name: icon.name,
+            color: icon.color,
+        }),
         branch: repo::branch(Path::new(&row.repo_path)),
         repo_path: row.repo_path,
         coordinator,
@@ -401,12 +424,14 @@ mod tests {
     use uuid::Uuid;
     use wisp_protocol::jsonrpc::{INTERNAL_ERROR, REQUEST_CANCELLED, WISP_ERROR};
     use wisp_protocol::{
-        AccountId, ErrorKind, ProjectCreateParams, ProjectId, Provider, StoreState,
+        AccountId, ErrorKind, ProjectCreateParams, ProjectIcon, ProjectId, ProjectUpdateParams,
+        Provider, StoreState,
     };
     use wisp_store::StoreError;
 
     use super::{
-        StoreHandle, account_fields, account_store_error, fields, key_account, project, store_error,
+        StoreHandle, account_fields, account_store_error, edit, fields, key_account, project,
+        store_error,
     };
 
     fn row(id: Uuid) -> wisp_store::Project {
@@ -414,6 +439,10 @@ mod tests {
             id,
             name: "wisp".to_owned(),
             repo_path: "/src/wisp".to_owned(),
+            icon: Some(wisp_store::ProjectIcon {
+                name: "rocket".to_owned(),
+                color: Some("green".to_owned()),
+            }),
             created_at: "2026-09-24T12:00:00.5Z".parse().unwrap(),
             updated_at: "2026-09-24T12:00:01Z".parse().unwrap(),
         }
@@ -426,13 +455,25 @@ mod tests {
         assert_eq!(mapped.id, id);
         assert_eq!(mapped.name, "wisp");
         assert_eq!(mapped.repo_path, "/src/wisp");
+        assert_eq!(
+            mapped.icon,
+            Some(ProjectIcon {
+                name: "rocket".to_owned(),
+                color: Some("green".to_owned()),
+            })
+        );
         assert_eq!(mapped.created_at, row(id.into()).created_at);
         assert_eq!(mapped.updated_at, row(id.into()).updated_at);
 
+        let icon = ProjectIcon {
+            name: "star".to_owned(),
+            color: None,
+        };
         let params = ProjectCreateParams {
             id,
             name: "n".to_owned(),
             repo_path: "/r".to_owned(),
+            icon: Some(icon.clone()),
         };
         let (uuid, fields) = fields(params);
         assert_eq!(uuid, Uuid::from(id));
@@ -440,6 +481,20 @@ mod tests {
             (fields.name.as_str(), fields.repo_path.as_str()),
             ("n", "/r")
         );
+        let stored = wisp_store::ProjectIcon {
+            name: "star".to_owned(),
+            color: None,
+        };
+        assert_eq!(fields.icon.as_ref(), Some(&stored));
+
+        let (uuid, edit) = edit(ProjectUpdateParams {
+            project: id,
+            name: None,
+            icon: Some(icon),
+        });
+        assert_eq!(uuid, Uuid::from(id));
+        assert_eq!(edit.name, None);
+        assert_eq!(edit.icon, Some(stored));
     }
 
     #[test]

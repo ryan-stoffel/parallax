@@ -6,6 +6,8 @@ import type {
   EventsEventParams,
   ProjectCreateParams,
   ProjectListResult,
+  ProjectUpdateParams,
+  ProjectUpdateResult,
   WispNotifications,
   WispRequests,
 } from "./generated/protocol";
@@ -18,6 +20,8 @@ type Result<M extends keyof WispRequests> = WispRequests[M]["result"];
 test("each method maps to its params and result types", () => {
   expectTypeOf<Params<"project/create">>().toEqualTypeOf<ProjectCreateParams>();
   expectTypeOf<Result<"project/list">>().toEqualTypeOf<ProjectListResult>();
+  expectTypeOf<Params<"project/update">>().toEqualTypeOf<ProjectUpdateParams>();
+  expectTypeOf<Result<"project/update">>().toEqualTypeOf<ProjectUpdateResult>();
   expectTypeOf<Params<"accounts/defaults/set">>().toEqualTypeOf<AccountsDefaultsSetParams>();
   expectTypeOf<Result<"accounts/defaults/set">>().toEqualTypeOf<AccountsDefaultsGetResult>();
   expectTypeOf<WispNotifications["events/event"]>().toEqualTypeOf<EventsEventParams>();

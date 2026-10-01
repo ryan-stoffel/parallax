@@ -3,13 +3,16 @@
 use std::path::Path;
 use std::time::Duration;
 
+use rustix::process::Signal;
 use wisp_protocol::jsonrpc::{Message, Notification};
 use wisp_protocol::methods::{
     EventsSubscribe, EventsUnsubscribe, HostHealth, NotificationMethod, ProjectCreate, ProjectList,
+    ProjectUpdate,
 };
 use wisp_protocol::{
     ErrorKind, EventsEventParams, EventsSubscribeParams, EventsUnsubscribeParams, HostHealthParams,
-    Project, ProjectId, ProjectListParams, SubscriptionId, WispEvent,
+    Project, ProjectIcon, ProjectId, ProjectListParams, ProjectUpdateParams, SubscriptionId,
+    WispEvent,
 };
 
 use crate::support::{Client, InProcess, Wispd, create_params, kind, temp_dir};
@@ -83,6 +86,61 @@ async fn subscribers_get_the_replay_then_live_events_on_every_connection() {
         assert_eq!(delivered.seq, 2);
         assert_eq!(created(&delivered), &second);
     }
+}
+
+#[tokio::test]
+async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
+    let dir = temp_dir();
+    let wispd = Wispd::start(dir.path()).await;
+    let mut editor = Client::ready(&wispd.socket).await;
+    let project = create(&mut editor, dir.path(), "wisp").await;
+    let mut live = Client::ready(&wispd.socket).await;
+    let live_subscription = subscribe(&mut live, 1).await;
+
+    let edit = ProjectUpdateParams {
+        project: project.id,
+        name: Some("roster".to_owned()),
+        icon: Some(ProjectIcon {
+            name: "rocket".to_owned(),
+            color: Some("green".to_owned()),
+        }),
+    };
+    let updated = editor
+        .call::<ProjectUpdate>(edit.clone())
+        .await
+        .unwrap()
+        .project;
+    let delivered = event(&mut live).await;
+    assert_eq!(delivered.subscription, live_subscription);
+    assert_eq!(delivered.seq, 2);
+    assert_eq!(delivered.project, None, "project.updated is host-level");
+    assert_eq!(
+        delivered.event,
+        WispEvent::ProjectUpdated {
+            project: updated.clone()
+        }
+    );
+
+    editor.call::<ProjectUpdate>(edit).await.unwrap();
+    live.stays_quiet(Duration::from_millis(200)).await;
+
+    drop(editor);
+    drop(live);
+    wispd.signal(Signal::TERM);
+    assert!(wispd.exit().await.0.success());
+
+    let wispd = Wispd::start(dir.path()).await;
+    let mut replaying = Client::ready(&wispd.socket).await;
+    subscribe(&mut replaying, 0).await;
+    assert_eq!(created(&event(&mut replaying).await), &project);
+    let replayed = event(&mut replaying).await;
+    assert_eq!(replayed.seq, 2);
+    assert_eq!(
+        replayed.event,
+        WispEvent::ProjectUpdated { project: updated },
+        "the stored log replays it like project.created"
+    );
+    replaying.stays_quiet(Duration::from_millis(200)).await;
 }
 
 #[tokio::test]
