@@ -13,15 +13,16 @@
 //! - **A coordinator**, a no-write run with wispd's own MCP tools attached (0019), is full Claude
 //!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `wispd mcp`
 //!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
-//!   with [`crate::mcp::ALLOWED_TOOLS`], so wispd's tools work in every mode. Its user and
-//!   project settings, hooks, skills, plugins, and subagents all load, as in a terminal. As a
-//!   second check, a coordinator whose `system/init` reports another permission mode fails with
-//!   [`FailureKind::PolicyViolation`].
+//!   with [`crate::mcp::ALLOWED_TOOLS`], so wispd's tools work in every mode, and [`TODO_TOOLS`],
+//!   so it keeps a plan on every model (RYA-249). Its user and project settings, hooks, skills,
+//!   plugins, and subagents all load, as in a terminal. As a second check, a coordinator whose
+//!   `system/init` reports another permission mode fails with [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
 //!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
 //!   each writable folder. In [`AgentPermission::Bypass`] a worker is full Claude Code instead,
-//!   as on the user's own machine (0027): only its permission mode and `--add-dir`, with no
-//!   sandbox, and its `system/init` may list any tool. Otherwise:
+//!   as on the user's own machine (0027): only its permission mode, `--allowedTools` with
+//!   [`TODO_TOOLS`], and `--add-dir`, with no sandbox, and its `system/init` may list any tool.
+//!   Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
@@ -208,8 +209,8 @@ pub fn no_write_settings() -> Value {
 }
 
 /// The only built-in tools a no-write run's `system/init` may list. `EndConversation` stays
-/// whatever `--tools` says (the CLI reference), and only ends the session. A coordinator run
-/// may also list exactly [`mcp::ALLOWED_TOOLS`], wispd's own MCP tools (0019).
+/// whatever `--tools` says (the CLI reference), and only ends the session. A coordinator's
+/// `system/init` may list any tool: it is full Claude Code (0027).
 pub const NO_WRITE_TOOLS: &[&str] = &["Read", "Glob", "Grep", "EndConversation"];
 
 /// The built-in tools a worker gets (0013): the file tools, `Bash`, which Claude Code's sandbox
@@ -232,6 +233,21 @@ pub const WORKER_TOOLS: &[&str] = &[
     "Bash",
     "WebFetch",
     "WebSearch",
+    "TodoWrite",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskUpdate",
+];
+
+/// The todo tools, the end of [`WORKER_TOOLS`]: `TodoWrite` and Claude Code's four task tools. A
+/// coordinator and a worker in [`AgentPermission::Bypass`] have no `--tools`, so they name these
+/// in `--allowedTools` instead, which turns them on in the same way (RYA-249). Whichever set
+/// `CLAUDE_CODE_ENABLE_TASKS` picks is then on, so a user who turned the task tools off in their
+/// settings' `env` gets `TodoWrite` back, as in their terminal. An allow rule also pre-approves a
+/// tool, which changes nothing for these: Claude Code 2.1.283 runs them without asking in every
+/// mode. A deny rule in the user's settings still wins (0027).
+pub const TODO_TOOLS: &[&str] = &[
     "TodoWrite",
     "TaskCreate",
     "TaskGet",
@@ -524,12 +540,19 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         }
     }
     if let Some(tools) = &request.coordinator_tools {
+        let allowed: Vec<&str> = mcp::ALLOWED_TOOLS
+            .iter()
+            .chain(TODO_TOOLS)
+            .copied()
+            .collect();
         args.extend([
             "--mcp-config".into(),
             tools.mcp_config()?.to_string().into(),
             "--allowedTools".into(),
-            mcp::ALLOWED_TOOLS.join(",").into(),
+            allowed.join(",").into(),
         ]);
+    } else if bypass {
+        args.extend(["--allowedTools".into(), TODO_TOOLS.join(",").into()]);
     }
     if let Some(sandbox) = worker_sandbox(request)? {
         if !bypass {
