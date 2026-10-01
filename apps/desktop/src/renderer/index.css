@@ -805,6 +805,24 @@ body {
   }
 }
 
+/* The activity timeline (Activity.tsx): an opened card's body fades in, and the node of what
+   runs now breathes a halo in the accent. */
+.activity-in {
+  animation: working-in 0.16s ease-out both;
+}
+.activity-pulse {
+  animation: activity-pulse 1.6s ease-in-out infinite;
+}
+@keyframes activity-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+}
+
 /* Under reduced motion, loaders stand still and words just change. */
 @media (prefers-reduced-motion: reduce) {
   .loader-part {
@@ -812,6 +830,13 @@ body {
     opacity: 0.65 !important;
     scale: 1 !important;
     translate: none !important;
+  }
+  .activity-in {
+    animation: none;
+  }
+  .activity-pulse {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
   }
   .working-shimmer {
     animation: none;

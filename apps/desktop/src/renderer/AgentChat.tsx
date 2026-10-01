@@ -4,8 +4,6 @@ import {
   ChevronRight,
   Circle,
   CircleCheck,
-  CircleDashed,
-  CircleX,
   Copy,
   FolderGit2,
   GitBranch,
@@ -14,7 +12,6 @@ import {
   ImageOff,
   Info,
   LoaderCircle,
-  Ban,
   TriangleAlert,
   Workflow,
 } from "lucide-react";
@@ -31,23 +28,16 @@ import {
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import type { AgentRun, ImageId, JsonValue, PromptImage } from "../protocol/generated/protocol";
+import type { AgentRun, ImageId, PromptImage } from "../protocol/generated/protocol";
+import { activity, loaders, ThinkingRow, Timeline, ToolCall } from "./Activity";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
-import { Loader, type LoaderStyle } from "./Loader";
+import { Loader } from "./Loader";
 import type { RunOptions } from "./models";
 import { titleOf } from "./threads";
-import {
-  failureText,
-  groupWork,
-  isRunning,
-  workedFor,
-  wispdTools,
-  type Item,
-  type Work,
-} from "./transcript";
+import { failureText, groupWork, isRunning, workedFor, type Item, type Work } from "./transcript";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
@@ -483,18 +473,7 @@ export const RowView = memo(function RowView({
     case "assistant":
       return <MarkdownText text={row.text} />;
     case "reasoning":
-      return (
-        <Disclosure
-          id={row.key}
-          open={open}
-          onToggle={onToggle}
-          summary={<span className="text-muted-foreground">Thinking</span>}
-        >
-          <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
-            {row.text}
-          </p>
-        </Disclosure>
-      );
+      return <ThinkingRow item={row} open={open} onToggle={onToggle} />;
     case "tool":
       return <ToolCall item={row} live={live} open={open} onToggle={onToggle} />;
     case "todo":
@@ -684,16 +663,17 @@ function WorkGroup({
         )}
       </button>
       {open && (
-        <div className="mt-2 ml-1 space-y-2.5 border-l border-border pl-4">
-          {work.items.map((item) => (
-            <RowView
-              key={item.key}
-              row={item}
-              live={live}
-              open={openKeys.has(item.key)}
-              onToggle={onToggle}
-            />
-          ))}
+        <div className="mt-2">
+          <Timeline
+            items={work.items}
+            live={live}
+            active={active}
+            openKeys={openKeys}
+            onToggle={onToggle}
+            renderItem={(item) => (
+              <RowView row={item} live={live} open={openKeys.has(item.key)} onToggle={onToggle} />
+            )}
+          />
         </div>
       )}
     </div>
@@ -766,149 +746,6 @@ function Shimmer({ children }: { children: string }) {
   );
 }
 
-// What a tool is doing, in a word, by the names common tools use.
-const verbs: Partial<Record<string, string>> = {
-  Bash: "Running",
-  Read: "Reading",
-  Grep: "Searching",
-  Glob: "Searching",
-  WebSearch: "Searching",
-  WebFetch: "Fetching",
-  Edit: "Editing",
-  MultiEdit: "Editing",
-  Write: "Writing",
-  Task: "Running agent",
-  Agent: "Running agent",
-};
-
-/** The loader for each kind of work. */
-const loaders = {
-  thinking: { kind: "matrix", variant: "ripple" },
-  shell: { kind: "register", variant: "shift" },
-  reading: { kind: "bands", variant: "descend" },
-  searching: { kind: "matrix", variant: "scan" },
-  editing: { kind: "cells", variant: "merge" },
-  fetching: { kind: "beacon", variant: "rise" },
-  agent: { kind: "orbit", variant: "oppose" },
-  skill: { kind: "lift", variant: "rise" },
-  mcp: { kind: "beacon", variant: "balance" },
-  wispd: { kind: "cells", variant: "spread" },
-  planning: { kind: "lift", variant: "breathe" },
-  working: { kind: "orbit", variant: "chase" },
-} as const satisfies Record<string, LoaderStyle>;
-
-// The kind of work a tool does, by the names common tools use.
-const toolLoaders: Partial<Record<string, LoaderStyle>> = {
-  Bash: loaders.shell,
-  Read: loaders.reading,
-  NotebookRead: loaders.reading,
-  LS: loaders.reading,
-  Grep: loaders.searching,
-  Glob: loaders.searching,
-  WebSearch: loaders.searching,
-  ToolSearch: loaders.searching,
-  Edit: loaders.editing,
-  MultiEdit: loaders.editing,
-  Write: loaders.editing,
-  NotebookEdit: loaders.editing,
-  WebFetch: loaders.fetching,
-  Task: loaders.agent,
-  Agent: loaders.agent,
-  Skill: loaders.skill,
-  TodoWrite: loaders.planning,
-};
-
-/** What the agent is doing: a label, what it's doing it to, and the loader drawn beside them. */
-export interface Activity {
-  label: string;
-  detail?: string;
-  loader: LoaderStyle;
-}
-
-/** The header of the work in progress: what its latest item is doing. */
-export function activity(item?: Item): Activity {
-  switch (item?.kind) {
-    case "reasoning":
-      return { label: "Thinking", loader: loaders.thinking };
-    case "tool": {
-      const wispd = wispdCall(item);
-      if (wispd) return { ...wispd, loader: loaders.wispd };
-      // Including a wispd tool this app doesn't know.
-      const mcp = mcpTool(item.name);
-      if (mcp)
-        return {
-          label: `Using ${mcp.server}`,
-          detail: mcp.tool,
-          loader: item.name?.startsWith(wispdTools) ? loaders.wispd : loaders.mcp,
-        };
-      if (item.name === "Skill")
-        return { label: "Using skill", detail: skillName(item.input), loader: loaders.skill };
-      return {
-        label: verbs[item.name ?? ""] ?? item.name ?? "Working",
-        detail: toolHint(item.input),
-        loader: toolLoaders[item.name ?? ""] ?? loaders.working,
-      };
-    }
-    case "todo":
-      return { label: "Planning", loader: loaders.planning };
-    default:
-      return { label: "Working", loader: loaders.working };
-  }
-}
-
-function ToolCall({
-  item,
-  live,
-  open,
-  onToggle,
-}: {
-  item: Extract<Item, { kind: "tool" }>;
-  live: boolean;
-  open: boolean;
-  onToggle: (key: string, open: boolean) => void;
-}) {
-  const icons: Partial<Record<string, ReactNode>> = {
-    ok: <Check aria-label="Succeeded" />,
-    error: <CircleX aria-label="Failed" className="text-danger" />,
-    denied: <Ban aria-label="Denied" className="text-danger" />,
-  };
-  const named = wispdCall(item) ?? namedTool(item);
-  let icon = item.status ? icons[item.status] : undefined;
-  icon ??=
-    live && !item.status ? (
-      <span role="img" aria-label="Running" className="block">
-        <Loader {...activity(item).loader} size={14} />
-      </span>
-    ) : (
-      <CircleDashed aria-label="No result" />
-    );
-  return (
-    <Disclosure
-      id={item.key}
-      open={open}
-      onToggle={onToggle}
-      summary={
-        <>
-          <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{icon}</span>
-          <span className="shrink-0 font-medium">{named?.label ?? item.name ?? "Tool"}</span>
-          {named ? (
-            <span className="truncate text-muted-foreground">{named.detail}</span>
-          ) : (
-            <span className="truncate font-mono text-[12px] text-muted-foreground">
-              {toolHint(item.input)}
-            </span>
-          )}
-        </>
-      }
-    >
-      <div className="space-y-2 text-[12px]">
-        {item.input !== undefined && <Block label="Input">{inputText(item.input)}</Block>}
-        {item.output !== undefined && <Block label="Output">{item.output}</Block>}
-      </div>
-    </Disclosure>
-  );
-}
-
 /** A collapsed-by-default row, open state kept by the transcript. */
 function Disclosure({
   id,
@@ -939,87 +776,6 @@ function Disclosure({
       <div className="mt-1.5 ml-5.5">{children}</div>
     </details>
   );
-}
-
-function Block({ label, children }: { label: string; children: string }) {
-  return (
-    <div>
-      <p className="mb-1 text-[11.5px] text-faint-foreground">{label}</p>
-      <pre className="max-h-80 overflow-auto rounded-lg border border-border bg-sidebar p-2.5 font-mono whitespace-pre-wrap">
-        {children}
-      </pre>
-    </div>
-  );
-}
-
-// The input field that says what a call does, by the names common tools use.
-const hintFields = ["command", "file_path", "path", "pattern", "url", "query", "description"];
-
-function toolHint(input?: JsonValue, fields = hintFields): string {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return "";
-  const value = fields.map((f) => input[f]).find((v) => typeof v === "string");
-  return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
-}
-
-// A coordinator's wispd tools (0019), by what they did.
-const wispdLabels: Partial<Record<string, string>> = {
-  spawn_agent: "Started a subagent",
-  list_agents: "Listed subagents",
-  agent_status: "Checked on a subagent",
-  message_agent: "Messaged a subagent",
-  cancel_agent: "Stopped a subagent",
-  agent_diff: "Read a subagent's diff",
-  read_context: "Read shared context",
-  write_context: "Wrote shared context",
-};
-
-/**
- * A wispd tool call as a short line: what it did, and what it did it to (the new subagent's task,
- * the subagent it named, or the context file). Undefined for any other tool.
- */
-function wispdCall(item: Extract<Item, { kind: "tool" }>) {
-  const label = item.name?.startsWith(wispdTools)
-    ? wispdLabels[item.name.slice(wispdTools.length)]
-    : undefined;
-  return label
-    ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path"]) }
-    : undefined;
-}
-
-/**
- * An MCP server's tool as Claude Code names it, `mcp__<server>__<tool>`, readably: the server's
- * name, capitalized unless it's wispd's, and the tool's. Undefined for any other tool.
- */
-function mcpTool(name: string | null) {
-  const [, server, tool] = /^mcp__(.+?)__(.+)$/.exec(name ?? "") ?? [];
-  if (!server || !tool) return undefined;
-  const words = server.replace(/[_-]/g, " ");
-  return {
-    server: server === "wispd" ? server : words.charAt(0).toUpperCase() + words.slice(1),
-    tool: tool.replaceAll("_", " "),
-  };
-}
-
-/** The skill a Skill call runs: `skill`, or `command` from older Claude Code versions. */
-const skillName = (input?: JsonValue) => toolHint(input, ["skill", "command"]);
-
-/**
- * A tool call its row names readably: an MCP server's tool by the server, including a wispd tool
- * this app doesn't know, or a skill.
- */
-function namedTool(item: Extract<Item, { kind: "tool" }>) {
-  const mcp = mcpTool(item.name);
-  if (mcp) return { label: mcp.server, detail: mcp.tool };
-  if (item.name === "Skill") return { label: "Skill", detail: skillName(item.input) };
-  return undefined;
-}
-
-function inputText(input: JsonValue): string {
-  if (input && typeof input === "object" && !Array.isArray(input) && input["truncated"] === true) {
-    const bytes = typeof input["bytes"] === "number" ? input["bytes"] : 0;
-    return `Too large to show (${Math.ceil(bytes / 1024)} KB)`;
-  }
-  return typeof input === "string" ? input : JSON.stringify(input, null, 2);
 }
 
 // Agent output is untrusted: no raw HTML (no rehype-raw), and react-markdown's

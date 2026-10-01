@@ -7,7 +7,8 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
 import type { ConnectionState, SubscriptionMessage, WispBridge } from "../preload/bridge";
 import type { AgentRun, AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
-import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
+import { activity } from "./Activity";
+import { AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
 import type { Item } from "./transcript";
 
@@ -47,8 +48,11 @@ const composer = () =>
   document.querySelector<TiptapEditorHTMLElement>('[role="textbox"][aria-label="Message"]')!;
 const type = (text: string) => act(() => void composer().editor!.commands.setContent(text));
 
-const row = (item: Item) =>
-  render(<RowView row={item} live={false} open={false} onToggle={() => {}} />);
+const row = (item: Item, open = false) =>
+  render(<RowView row={item} live={false} open={open} onToggle={() => {}} />);
+// A row's toggle, and its words as people read them.
+const toggle = () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+const words = (el: Element) => el.textContent!.replace(/\s+/g, " ").trim();
 
 test("a message on its way to the agent shows at full strength", () => {
   render(
@@ -141,75 +145,80 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   expect(links[1]!.hasAttribute("href")).toBe(false);
 });
 
-test("a tool call collapses its input and output under its name", () => {
+test("a tool call this app doesn't know folds its input and output, as they are, under its name", () => {
   const toggled = vi.fn();
   const tool: Item = {
     kind: "tool",
     key: "t",
     callId: "toolu_1",
-    name: "Bash",
-    input: { command: "cargo test\n--quiet" },
+    name: "Frobnicate",
+    input: { path: "a.txt\nb.txt", level: 3 },
     status: "error",
     output: "1 failed",
   };
   render(<RowView row={tool} live={false} open={false} onToggle={toggled} />);
-  const details = document.querySelector("details")!;
-  expect(details.open).toBe(false);
-  expect(document.querySelector("summary")!.textContent).toBe("Bashcargo test");
-  expect(document.querySelector('[aria-label="Failed"]')).not.toBeNull();
-
-  act(() => {
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
-  });
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(words(toggle())).toBe("Frobnicate a.txt Failed");
+  act(() => toggle().click());
   expect(toggled).toHaveBeenCalledWith("t", true);
-  expect(details.textContent).toContain("1 failed");
+  act(() => unmount());
+
+  row(tool, true);
+  expect(document.body.textContent).toContain('"level": 3');
+  expect(document.body.textContent).toContain("1 failed");
 });
 
 test("a tool call with an oversized input says so", () => {
-  row({
-    kind: "tool",
-    key: "t",
-    callId: "toolu_2",
-    name: "Bash",
-    input: { truncated: true, bytes: 90210 },
-    status: "denied",
-  });
-  expect(document.querySelector("details")!.textContent).toContain("Too large to show (89 KB)");
+  row(
+    {
+      kind: "tool",
+      key: "t",
+      callId: "toolu_2",
+      name: "Bash",
+      input: { truncated: true, bytes: 90210 },
+      status: "denied",
+    },
+    true,
+  );
+  expect(document.body.textContent).toContain("Too large to show (89 KB)");
 });
 
 test("a coordinator's wispd tool calls read as what they did, and to what", () => {
   const summary = (name: string, input: Record<string, string>, subagent?: string) => {
     row({ kind: "tool", key: "t", callId: "1", name, input, ...(subagent && { subagent }) });
-    const text = document.querySelector("summary")!.textContent;
+    const text = words(toggle());
     act(() => unmount());
     return text;
   };
   expect(summary("mcp__wispd__spawn_agent", { prompt: "Fix the login bug\nwith a test" })).toBe(
-    "Started a subagentFix the login bug",
+    "Started a subagent Fix the login bug No result",
   );
   expect(summary("mcp__wispd__agent_status", { runId: "r-1" }, "Fix the login bug")).toBe(
-    "Checked on a subagentFix the login bug",
+    "Checked on a subagent Fix the login bug No result",
   );
   expect(summary("mcp__wispd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
-    "Wrote shared contextplan.md",
+    "Wrote shared context plan.md No result",
   );
   // A wispd tool this app doesn't know reads as any MCP server's tool does.
-  expect(summary("mcp__wispd__plan_approve", {})).toBe("wispdplan approve");
+  expect(summary("mcp__wispd__plan_approve", {})).toBe("Plan approve wispd No result");
 });
 
-test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
+test("another MCP server's tool reads as the tool, what it acts on, and the server, and a skill by its name", () => {
   const summary = (name: string, input: Record<string, string>) => {
     row({ kind: "tool", key: "t", callId: "1", name, input });
-    const text = document.querySelector("summary")!.textContent;
+    const text = words(toggle());
     act(() => unmount());
     return text;
   };
-  expect(summary("mcp__linear__save_issue", { title: "Fix it" })).toBe("Linearsave issue");
-  expect(summary("mcp__claude-code-remote__list_repos", {})).toBe("Claude code remotelist repos");
-  expect(summary("Skill", { skill: "code-review" })).toBe("Skillcode-review");
+  expect(summary("mcp__linear__save_issue", { title: "Fix it" })).toBe(
+    "Save issue Fix it Linear No result",
+  );
+  expect(summary("mcp__claude-code-remote__list_repos", {})).toBe(
+    "List repos Claude code remote No result",
+  );
+  expect(summary("Skill", { skill: "code-review" })).toBe("Used skill code-review No result");
   // Older Claude Code versions name it `command`.
-  expect(summary("Skill", { command: "simplify" })).toBe("Skillsimplify");
+  expect(summary("Skill", { command: "simplify" })).toBe("Used skill simplify No result");
 });
 
 test("each kind of work has its own loader, and MCP tools and skills read by name", () => {
@@ -240,6 +249,13 @@ test("each kind of work has its own loader, and MCP tools and skills read by nam
   expect(activity(tool("Edit")).loader).toEqual(loader("cells", "merge"));
   expect(activity(tool("Write")).loader).toEqual(loader("cells", "merge"));
   expect(activity(tool("WebFetch")).loader).toEqual(loader("beacon", "rise"));
+  // Codex's tools, by their kinds.
+  expect(activity(tool("command_execution", { command: "ls" }))).toEqual({
+    label: "Running",
+    detail: "ls",
+    loader: loader("register", "shift"),
+  });
+  expect(activity(tool("file_change")).loader).toEqual(loader("cells", "merge"));
   expect(activity(tool("Task", { description: "Find the bug" }))).toEqual({
     label: "Running agent",
     detail: "Find the bug",
@@ -286,14 +302,14 @@ test("each kind of work has its own loader, and MCP tools and skills read by nam
 test("a running tool call draws its work's loader, and a finished one its status", () => {
   const tool: Item = { kind: "tool", key: "t", callId: "1", name: "Read", input: {} };
   render(<RowView row={tool} live open={false} onToggle={() => {}} />);
-  const running = document.querySelector('[aria-label="Running"]')!;
-  expect(running.querySelector('[data-loader="bands"][data-variant="descend"]')).not.toBeNull();
-  // Screen readers hear the label, not the loader.
-  expect(running.querySelector(".loader")!.getAttribute("aria-hidden")).toBe("true");
+  expect(toggle().querySelector('[data-loader="bands"][data-variant="descend"]')).not.toBeNull();
+  // Screen readers hear the word, not the loader.
+  expect(toggle().querySelector(".loader")!.getAttribute("aria-hidden")).toBe("true");
+  expect(toggle().querySelector(".sr-only")!.textContent).toBe("Running");
   act(() => unmount());
 
   render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
-  expect(document.querySelector('[aria-label="Succeeded"]')).not.toBeNull();
+  expect(toggle().querySelector(".sr-only")!.textContent).toBe("Succeeded");
   expect(document.querySelector(".loader")).toBeNull();
 });
 
@@ -315,8 +331,9 @@ test("a coordinator's no-write stop lists the files it changed", () => {
 });
 
 test("reasoning, checklists, and notices render quietly", () => {
-  row({ kind: "reasoning", key: "r", text: "The build uses cargo." });
-  expect(document.querySelector("summary")!.textContent).toBe("Thinking");
+  row({ kind: "reasoning", key: "r", text: "The build uses cargo.\nSo cargo test." });
+  expect(words(toggle())).toBe("Thinking The build uses cargo.");
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
   act(() => unmount());
 
   row({
@@ -717,6 +734,39 @@ test("while a run goes, only the last work row shows what the agent is doing", (
   transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, reply]);
   expect(header()!.textContent).toBe("Worked briefly");
   expect(document.querySelector(".loader")).toBeNull();
+});
+
+test("a work group opens on a timeline of its items, whose cards open in place", () => {
+  const rows: Item[] = [
+    { kind: "user", key: "u", text: "go" },
+    { kind: "reasoning", key: "r", text: "Look first." },
+    { kind: "tool", key: "t1", callId: "1", name: "Bash", input: { command: "ls" }, status: "ok" },
+    {
+      kind: "tool",
+      key: "t2",
+      callId: "2",
+      name: "Read",
+      input: { file_path: "/a/README.md" },
+      status: "ok",
+      output: "     1→# wisp",
+    },
+    { kind: "assistant", key: "a", text: "Done." },
+  ];
+  render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
+  const header = document.querySelector("button[aria-expanded]")!;
+  expect(header.textContent).toBe("Worked briefly");
+  act(() => (header as HTMLButtonElement).click());
+  const entries = () => [...document.querySelectorAll('ol[aria-label="Activity"] > li')];
+  expect(entries().map(words)).toEqual([
+    "Thinking Look first.",
+    "Ran ls Succeeded",
+    "Read README.md line 1 Succeeded",
+  ]);
+  const card = () => entries()[2]!.querySelector("button")!;
+  act(() => card().click());
+  expect(card().getAttribute("aria-expanded")).toBe("true");
+  expect(entries()[2]!.textContent).toContain("/a/README.md");
+  expect(entries()[2]!.textContent).toContain("# wisp");
 });
 
 test("until the agent does anything, a loader muses under the message on its way to it", () => {
