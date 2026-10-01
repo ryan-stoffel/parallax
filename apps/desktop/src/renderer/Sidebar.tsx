@@ -105,15 +105,17 @@ interface ThreadListProps {
   onHostChange: (hostId: string) => void;
   selection: Selection;
   onSelect: (selection: Selection) => void;
+  /** Opens a Project, on another host by opening that host first. */
+  onOpenProject: (hostId: string, projectId: string) => void;
   onOpenSettings: (section: SettingsSection, addHost?: boolean) => void;
   threads: ThreadsView;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (thread: Thread) => Promise<string | undefined>;
 }
 
-/** Every Project's icon, in the sidebar, the breadcrumb, and its chat. -500 reads on both themes. */
+/** Every Project's icon, in the sidebar, the breadcrumb, and its chat, in the accent. */
 export function ProjectIcon({ className = "" }: { className?: string }) {
-  return <FolderKanban aria-hidden className={`text-violet-500 ${className}`} />;
+  return <FolderKanban aria-hidden className={`text-accent ${className}`} />;
 }
 
 // How long a pointer rests on a thread before its card shows. Moving to another thread while
@@ -131,6 +133,7 @@ export function ThreadList({
   onHostChange,
   selection,
   onSelect,
+  onOpenProject,
   onOpenSettings,
   threads,
   onDelete,
@@ -410,11 +413,11 @@ export function ThreadList({
       )}
       <NewProjectDialog
         ref={newProject}
+        hosts={hosts}
+        hostId={host.id}
         repos={threads.state.repos}
-        local={host.id === localId}
-        addRepo={threads.addRepo}
         create={threads.createProject}
-        onCreated={(project) => onSelect({ kind: "project", projectId: project.id })}
+        onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
       <AddRepositoryDialog
         ref={addRepositoryDialog}
@@ -511,7 +514,7 @@ function Footer({
                   <Download />
                   <span
                     aria-hidden
-                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-ring"
+                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-accent"
                   />
                 </span>
               ) : (

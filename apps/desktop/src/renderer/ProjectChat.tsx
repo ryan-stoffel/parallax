@@ -35,6 +35,8 @@ export function ProjectChat({
   // The first message's run id, reused when it's sent again after failing (0007).
   const [runId] = useState(uuidv7);
   const [starting, setStarting] = useState(false);
+  // The coordinator run this chat last started, set before it does so its chat opens as starting.
+  const [started, setStarted] = useState<string>();
   // Which account the coordinator got, when the host had no coordinator account.
   const [notice, setNotice] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
@@ -72,6 +74,7 @@ export function ProjectChat({
     { model, effort, permission }: RunOptions,
     images: PromptImage[],
   ) => {
+    setStarted(id);
     let error = await startCoordinator(project.id, id, text, images, { model, effort, permission });
     const kind = error?.data?.kind;
     if (kind === "noDefaultAccount" || kind === "accountNotFound") {
@@ -98,6 +101,7 @@ export function ProjectChat({
         hostId={hostId}
         runId={project.coordinator}
         prompt={prompt}
+        going={started === project.coordinator}
         notice={notice}
         tab={tab}
         // A new coordinator replaces one that can't take messages (0024).

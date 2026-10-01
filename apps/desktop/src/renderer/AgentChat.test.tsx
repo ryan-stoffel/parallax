@@ -5,9 +5,14 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
-import type { SubscriptionMessage, WispBridge } from "../preload/bridge";
-import type { AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
-import { AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
+import type { ConnectionState, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import type {
+  AgentRun,
+  AgentRunResult,
+  AgentTodoItem,
+  LoggedEvent,
+} from "../protocol/generated/protocol";
+import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
 import type { Item } from "./transcript";
 
@@ -26,7 +31,11 @@ const logged = (samples as { method?: string; params?: unknown }[])
   .map((m) => m.params as LoggedEvent);
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  act(() => unmount());
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 function render(node: ReactNode) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -45,6 +54,19 @@ const type = (text: string) => act(() => void composer().editor!.commands.setCon
 
 const row = (item: Item) =>
   render(<RowView row={item} live={false} open={false} onToggle={() => {}} />);
+
+test("a message on its way to the agent shows at full strength", () => {
+  render(
+    <RowView
+      row={{ kind: "pending", key: "p", text: "And this?" }}
+      live={false}
+      open={false}
+      onToggle={() => {}}
+    />,
+  );
+  expect(document.body.textContent).toBe("And this?");
+  expect(document.querySelector('[class*="opacity"]')).toBeNull();
+});
 
 test("a user message shows its text, or a neutral label when the log has none", () => {
   row({ kind: "user", key: "a", text: "Fix the build" });
@@ -177,8 +199,107 @@ test("a coordinator's wispd tool calls read as what they did, and to what", () =
   expect(summary("mcp__wispd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
     "Wrote shared contextplan.md",
   );
-  // A wispd tool this app doesn't know keeps its name.
-  expect(summary("mcp__wispd__plan_approve", {})).toBe("mcp__wispd__plan_approve");
+  // A wispd tool this app doesn't know reads as any MCP server's tool does.
+  expect(summary("mcp__wispd__plan_approve", {})).toBe("wispdplan approve");
+});
+
+test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
+  const summary = (name: string, input: Record<string, string>) => {
+    row({ kind: "tool", key: "t", callId: "1", name, input });
+    const text = document.querySelector("summary")!.textContent;
+    act(() => unmount());
+    return text;
+  };
+  expect(summary("mcp__linear__save_issue", { title: "Fix it" })).toBe("Linearsave issue");
+  expect(summary("mcp__claude-code-remote__list_repos", {})).toBe("Claude code remotelist repos");
+  expect(summary("Skill", { skill: "code-review" })).toBe("Skillcode-review");
+  // Older Claude Code versions name it `command`.
+  expect(summary("Skill", { command: "simplify" })).toBe("Skillsimplify");
+});
+
+test("each kind of work has its own loader, and MCP tools and skills read by name", () => {
+  const tool = (name: string | null, input: Record<string, string> = {}): Item => ({
+    kind: "tool",
+    key: "t",
+    callId: "1",
+    name,
+    input,
+  });
+  const loader = (kind: string, variant: string) => ({ kind, variant });
+  expect(activity({ kind: "reasoning", key: "r", text: "Hm" })).toEqual({
+    label: "Thinking",
+    loader: loader("matrix", "ripple"),
+  });
+  expect(activity(tool("Bash", { command: "cargo test\n--quiet" }))).toEqual({
+    label: "Running",
+    detail: "cargo test",
+    loader: loader("register", "shift"),
+  });
+  expect(activity(tool("Read", { file_path: "src/main.rs" }))).toEqual({
+    label: "Reading",
+    detail: "src/main.rs",
+    loader: loader("bands", "descend"),
+  });
+  expect(activity(tool("Grep", { pattern: "TODO" })).loader).toEqual(loader("matrix", "scan"));
+  expect(activity(tool("WebSearch")).loader).toEqual(loader("matrix", "scan"));
+  expect(activity(tool("Edit")).loader).toEqual(loader("cells", "merge"));
+  expect(activity(tool("Write")).loader).toEqual(loader("cells", "merge"));
+  expect(activity(tool("WebFetch")).loader).toEqual(loader("beacon", "rise"));
+  expect(activity(tool("Task", { description: "Find the bug" }))).toEqual({
+    label: "Running agent",
+    detail: "Find the bug",
+    loader: loader("orbit", "oppose"),
+  });
+  expect(activity(tool("Skill", { skill: "code-review" }))).toEqual({
+    label: "Using skill",
+    detail: "code-review",
+    loader: loader("lift", "rise"),
+  });
+  expect(activity(tool("mcp__linear__save_issue", { title: "Fix it" }))).toEqual({
+    label: "Using Linear",
+    detail: "save issue",
+    loader: loader("beacon", "balance"),
+  });
+  expect(activity(tool("mcp__wispd__spawn_agent", { prompt: "Fix the login bug" }))).toEqual({
+    label: "Started a subagent",
+    detail: "Fix the login bug",
+    loader: loader("cells", "spread"),
+  });
+  // A wispd tool this app doesn't know reads as any MCP server's tool does, with wispd's loader.
+  expect(activity(tool("mcp__wispd__plan_approve"))).toEqual({
+    label: "Using wispd",
+    detail: "plan approve",
+    loader: loader("cells", "spread"),
+  });
+  expect(activity({ kind: "todo", key: "c", items: [] })).toEqual({
+    label: "Planning",
+    loader: loader("lift", "breathe"),
+  });
+  // Anything else.
+  expect(activity(tool("Frobnicate", { path: "a.txt" }))).toEqual({
+    label: "Frobnicate",
+    detail: "a.txt",
+    loader: loader("orbit", "chase"),
+  });
+  expect(activity(tool(null))).toMatchObject({
+    label: "Working",
+    loader: loader("orbit", "chase"),
+  });
+  expect(activity()).toEqual({ label: "Working", loader: loader("orbit", "chase") });
+});
+
+test("a running tool call draws its work's loader, and a finished one its status", () => {
+  const tool: Item = { kind: "tool", key: "t", callId: "1", name: "Read", input: {} };
+  render(<RowView row={tool} live open={false} onToggle={() => {}} />);
+  const running = document.querySelector('[aria-label="Running"]')!;
+  expect(running.querySelector('[data-loader="bands"][data-variant="descend"]')).not.toBeNull();
+  // Screen readers hear the label, not the loader.
+  expect(running.querySelector(".loader")!.getAttribute("aria-hidden")).toBe("true");
+  act(() => unmount());
+
+  render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
+  expect(document.querySelector('[aria-label="Succeeded"]')).not.toBeNull();
+  expect(document.querySelector(".loader")).toBeNull();
 });
 
 test("a coordinator's no-write stop lists the files it changed", () => {
@@ -198,11 +319,12 @@ test("a coordinator's no-write stop lists the files it changed", () => {
   expect(alert.querySelector("pre")!.textContent).toBe(" M src/settings.tsx\n?? notes.md");
 });
 
-test("reasoning, checklists, and notices render quietly", () => {
+test("reasoning, plan updates, and notices render quietly", () => {
   row({ kind: "reasoning", key: "r", text: "The build uses cargo." });
   expect(document.querySelector("summary")!.textContent).toBe("Thinking");
   act(() => unmount());
 
+  // A checklist in the work is an update to the turn's plan: one line, not the list again.
   row({
     kind: "todo",
     key: "c",
@@ -211,11 +333,8 @@ test("reasoning, checklists, and notices render quietly", () => {
       { text: "Read the scripts", status: "completed" },
     ],
   });
-  expect([...document.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
-    "Write README.md",
-    "Read the scripts",
-  ]);
-  expect(document.querySelector('[aria-label="Done"]')).not.toBeNull();
+  expect(document.body.textContent).toBe("Updated the plan");
+  expect(document.querySelector("li")).toBeNull();
   act(() => unmount());
 
   row({ kind: "notice", key: "n", tone: "warning", text: "skipped a malformed line" });
@@ -236,21 +355,35 @@ test("a failed run shows why; other endings are a divider", () => {
   expect(document.body.textContent).toBe("Stopped");
 });
 
+// The sample's run, as it started.
+const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
+
 /**
  * A bridge serving the sample's events up to `seq`, two per page, that records calls.
  * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as wispd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
- * wispd advertises `capabilities`, and `agent/openPr` answers `prUrl`.
+ * wispd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
+ * default), and `agent/openPr` answers `prUrl`. `connect` changes the connection's state.
  */
 function fakeBridge(
   seq: number,
-  { listSeq = seq, resyncs = 0, cancelError = "", capabilities = {}, prUrl = "" } = {},
+  {
+    listSeq = seq,
+    resyncs = 0,
+    cancelError = "",
+    capabilities = {},
+    sent = {} as Partial<AgentRun>,
+    prUrl = "",
+  } = {},
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
+  let connection: (hostId: string, state: ConnectionState) => void = () => {};
   const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
       return { error: { code: -32000, message: cancelError } };
+    if (method === "agent/send")
+      return { result: { run: { ...sampleRun, status: "running", ...sent } }, logId: "log-1" };
     if (method === "agent/openPr") return { result: { url: prUrl }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
@@ -270,7 +403,10 @@ function fakeBridge(
       protocol: 1,
       capabilities,
     }),
-    onConnectionState: () => () => {},
+    onConnectionState: (l: typeof connection) => {
+      connection = l;
+      return () => {};
+    },
     request,
     subscribe,
   } as Partial<WispBridge> as WispBridge;
@@ -279,6 +415,7 @@ function fakeBridge(
     subscribe,
     unsubscribe,
     emit: (m: SubscriptionMessage) => act(() => listener(m)),
+    connect: (state: ConnectionState) => act(() => connection("local", state)),
   };
 }
 
@@ -385,6 +522,30 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   expect(sends()).toHaveLength(2);
   expect(sends()[1]![2]).toMatchObject({ text: "Also mention the tests." });
   expect(sendAgain()).toBeUndefined();
+});
+
+test("a message a finished run couldn't take goes back in the box, with no loader", async () => {
+  const send = async (text: string) => {
+    type(text);
+    await act(async () => {
+      composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+  };
+  // wispd answers with the run its CLI failed to start again, and no turn follows.
+  fakeBridge(8, { sent: { status: "failed", error: "the CLI didn't start" } });
+  await renderChat();
+  await send("Also mention the tests.");
+  expect(composer().textContent).toBe("Also mention the tests.");
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe("the CLI didn't start");
+  expect(transcriptText()).not.toContain("Also mention the tests.");
+  expect(document.querySelector(".loader")).toBeNull();
+  act(() => unmount());
+
+  fakeBridge(8, { sent: { status: "failed" } });
+  await renderChat();
+  await send("Also mention the tests.");
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe("The agent couldn't start.");
 });
 
 test("a pasted image goes with agent/send beside the text, and shows while it's pending", async () => {
@@ -542,23 +703,260 @@ test("while a run goes, only the last work row shows what the agent is doing", (
     input: { command: "ls" },
   };
   const reply: Item = { kind: "assistant", key: "a", text: "Hi", partial: true };
-  const header = () => document.querySelector("button[aria-expanded]")?.textContent;
-
-  // Before the agent does anything, a placeholder says it is working.
-  transcript([user]);
-  expect(header()).toBe("Working");
-  act(() => unmount());
+  const header = () => document.querySelector("button[aria-expanded]");
 
   // A reply with no tools needs no placeholder above it.
   transcript([user, reply]);
-  expect(header()).toBeUndefined();
+  expect(header()).toBeNull();
   act(() => unmount());
 
+  // The loader for what it's doing, its label, and what it's doing it to.
   transcript([user, tool]);
-  expect(header()).toBe("Runningls");
+  expect(header()!.textContent).toBe("Runningls");
+  expect(header()!.querySelector('[data-loader="register"][data-variant="shift"]')).not.toBeNull();
   act(() => unmount());
 
   // Once its text streams, the work before it is done.
   transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, reply]);
-  expect(header()).toBe("Worked briefly");
+  expect(header()!.textContent).toBe("Worked briefly");
+  expect(document.querySelector(".loader")).toBeNull();
+});
+
+test("until the agent does anything, a loader muses under the message on its way to it", () => {
+  const user: Item = { kind: "user", key: "u", text: "go" };
+  const reply: Item = { kind: "assistant", key: "a", text: "Done." };
+  const end: Item = { kind: "end", key: "e", outcome: { status: "completed" } };
+  const pending = { kind: "pending" as const, key: "pending:t", text: "And the tests?" };
+  const fallback: Item = { kind: "notice", key: "n", tone: "info", text: "Switched accounts." };
+  const transcript = (rows: Parameters<typeof TranscriptView>[0]["rows"], live: boolean) =>
+    render(<TranscriptView rows={rows} sent={new Map()} live={live} />);
+  // The empty work row's header: the loader and a word, which screen readers hear as Working.
+  const musing = () => {
+    const header = document.querySelector<HTMLButtonElement>("button[aria-expanded]");
+    if (!header) return undefined;
+    expect(header.disabled).toBe(true);
+    expect(header.querySelector('[data-loader="orbit"][data-variant="chase"]')).not.toBeNull();
+    expect(header.querySelector('[aria-hidden="true"]:not(.loader)')!.textContent).toMatch(
+      /^[A-Z][a-z]+$/,
+    );
+    return header.querySelector(".sr-only")?.textContent;
+  };
+  // What follows the message, by row: a musing is a work row with nothing in it.
+  const after = (text: string) => {
+    const rows = [...document.querySelectorAll("[data-index]")];
+    const i = rows.findIndex((r) => r.textContent === text);
+    return rows.slice(i + 1).map((r) => r.textContent);
+  };
+
+  // A message the run has, but hasn't answered yet.
+  transcript([user], true);
+  expect(musing()).toBe("Working");
+  act(() => unmount());
+
+  // A message on its way to the agent, even before the run goes again, as a finished one resumes.
+  transcript([user, reply, end, pending], false);
+  expect(musing()).toBe("Working");
+  expect(after("And the tests?")).toHaveLength(1);
+  act(() => unmount());
+
+  // The musing goes where the work will be, before a notice after the message.
+  transcript([user, fallback], true);
+  expect(musing()).toBe("Working");
+  expect(after("go").at(-1)).toBe("Switched accounts.");
+  act(() => unmount());
+
+  // Not once the agent answered, nor for a message of a run that has stopped.
+  transcript([user, reply], true);
+  expect(musing()).toBeUndefined();
+  act(() => unmount());
+  transcript([user], false);
+  expect(musing()).toBeUndefined();
+  act(() => unmount());
+
+  // Nor in a transcript that's out of date: no loader at all.
+  render(<TranscriptView rows={[user, pending]} sent={new Map()} live stalled />);
+  expect(musing()).toBeUndefined();
+  expect(document.querySelector(".loader")).toBeNull();
+});
+
+test("the musing changes its word on the wall clock, while screen readers keep hearing Working", () => {
+  // On a word's boundary: the first word is Picturing.
+  vi.useFakeTimers({ now: 2400 * 8000 });
+  render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
+  const header = () => document.querySelector("button[aria-expanded]")!;
+  // Each word shown, and whether it fades in or out.
+  const words = () =>
+    [...header().querySelectorAll('[aria-hidden="true"]:not(.loader) > span')].map((w) => [
+      w.textContent,
+      w.className.match(/working-(in|out)/)?.[0],
+    ]);
+  // The first word doesn't fade in, so a remount doesn't blink.
+  expect(words()).toEqual([["Picturing", undefined]]);
+  act(() => void vi.advanceTimersByTime(2400));
+  expect(words()).toEqual([
+    ["Picturing", "working-out"],
+    ["Pondering", "working-in"],
+  ]);
+  act(() => void vi.advanceTimersByTime(2400));
+  expect(words()).toEqual([
+    ["Pondering", "working-out"],
+    ["Sketching", "working-in"],
+  ]);
+  expect(header().querySelector(".sr-only")!.textContent).toBe("Working");
+  act(() => unmount());
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("under reduced motion, the musing keeps its word", () => {
+  vi.useFakeTimers({ now: 2400 * 8000 });
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduced-motion") }));
+  render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
+  expect(vi.getTimerCount()).toBe(0);
+  act(() => void vi.advanceTimersByTime(4800));
+  expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
+});
+
+test("a running chat that loses wispd shows no loader", async () => {
+  // The run is going, and the agent hasn't done anything yet.
+  const { connect } = fakeBridge(2);
+  await renderChat();
+  expect(document.querySelector('[role="log"] .loader')).not.toBeNull();
+  connect({ status: "connecting" });
+  expect(document.querySelector(".loader")).toBeNull();
+  connect({
+    status: "failed",
+    retrying: true,
+    error: { reason: "exited", message: "wispd exited" },
+  });
+  expect(document.querySelector(".loader")).toBeNull();
+  expect(transcriptText()).toContain("Add a README");
+});
+
+test("until its transcript loads, a chat shows its first message, with the loader only if it goes", async () => {
+  fakeBridge(8);
+  // The transcript is still on its way.
+  window.wisp.request = vi.fn(() => new Promise<never>(() => {}));
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" />);
+  await settle();
+  expect(transcriptText()).toBe("Add a README");
+  expect(document.querySelector(".loader")).toBeNull();
+  act(() => unmount());
+
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
+  await settle();
+  expect(document.querySelector('[role="log"] .bg-selected')!.textContent).toBe("Add a README");
+  expect(document.querySelector('[role="log"] button[aria-expanded] .sr-only')!.textContent).toBe(
+    "Working",
+  );
+});
+
+test("a chat that couldn't load shows its first message, with no loader", async () => {
+  fakeBridge(8);
+  window.wisp.request = vi.fn(async () => ({ error: { code: -32000, message: "wispd is gone" } }));
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
+  await settle();
+  expect(transcriptText()).toBe("Add a README");
+  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe("wispd is gone");
+});
+
+// A two-step checklist with `done` steps finished and the next one under way.
+const checklist = (done: number): AgentTodoItem[] =>
+  ["Read", "Build"].map((text, i) => ({
+    text,
+    status: i < done ? "completed" : i === done ? "inProgress" : "pending",
+  }));
+// TodoWrite as wispd sends it: the call, then the checklist it stands for.
+const todoWrite = (n: number, done: number): Item[] => [
+  { kind: "tool", key: `w${n}`, callId: `w${n}`, name: "TodoWrite", input: {}, status: "ok" },
+  { kind: "todo", key: `t${n}`, items: checklist(done) },
+];
+
+test("a turn's plan is one card where it began, its updates lines in the work, its proposal a card", () => {
+  const rows: Item[] = [
+    { kind: "user", key: "u", text: "go" },
+    { kind: "reasoning", key: "r", text: "A plan first." },
+    {
+      kind: "tool",
+      key: "x",
+      callId: "x",
+      name: "ExitPlanMode",
+      input: { plan: "## Ship it\n\n- Read\n- Build" },
+      status: "ok",
+    },
+    ...todoWrite(1, 0),
+    { kind: "tool", key: "b", callId: "b", name: "Bash", input: { command: "ls" }, status: "ok" },
+    ...todoWrite(2, 1),
+    ...todoWrite(3, 2),
+    { kind: "assistant", key: "a", text: "Done." },
+  ];
+  render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
+  const rowAt = (i: number) => document.querySelectorAll("[data-index]")[i]!;
+  const text = (r: Element) => r.textContent!.replace(/\s+/g, "");
+  expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
+    "go",
+    "Workedbriefly",
+    "ProposedplanShipitReadBuild",
+    "Plan2of2doneDone:ReadDone:Build",
+    "Workedbriefly",
+    "Done.",
+  ]);
+  // The work after the plan holds its updates, one line each, and no TodoWrite calls.
+  act(() => rowAt(4).querySelector("button")!.click());
+  const lines = [...rowAt(4).querySelectorAll("p")].map((p) => p.textContent);
+  expect(lines.filter((t) => t?.includes("the plan"))).toEqual([
+    "Updated the planFinished: Read · Started: Build",
+    "Updated the planFinished: Build",
+  ]);
+  expect(rowAt(4).querySelectorAll("summary")).toHaveLength(1); // Bash's
+  expect(transcriptText()).not.toContain("TodoWrite");
+});
+
+test("while a run goes, only its latest plan moves, and the work after a plan muses until it starts", () => {
+  const rows: Item[] = [
+    { kind: "user", key: "u1", text: "go" },
+    { kind: "todo", key: "t1", items: checklist(0) },
+    { kind: "assistant", key: "a", text: "Stopped there." },
+    { kind: "user", key: "u2", text: "Go on", turnId: "t" },
+    ...todoWrite(2, 1),
+  ];
+  render(<TranscriptView rows={rows} sent={new Map()} live />);
+  const cards = [...document.querySelectorAll('[role="group"]')];
+  expect(cards.map((c) => c.querySelectorAll(".loader").length)).toEqual([0, 1]);
+  // After the plan, a work row for what comes next.
+  const last = [...document.querySelectorAll("[data-index]")].at(-1)!;
+  expect(last.querySelector("button[aria-expanded] .sr-only")!.textContent).toBe("Working");
+});
+
+test("while the run works on a plan, a strip over the composer shows it, until a turn without one or the end", async () => {
+  const strip = () => document.querySelector('section[aria-label="Plan"]');
+  // The sample's first turn: running, with a checklist one of three done.
+  const first = fakeBridge(4);
+  await renderChat();
+  expect(strip()!.querySelector("button")!.textContent).toBe(
+    "In progress: Write README.md1 of 3 done",
+  );
+  // A follow-up starts a turn with no plan of its own (seq 5). Focus in the strip goes to the box.
+  act(() => strip()!.querySelector("button")!.focus());
+  first.emit({ type: "event", event: { subscription: "s", ...logged[4]! } });
+  expect(strip()).toBeNull();
+  expect(document.activeElement).toBe(composer());
+  act(() => unmount());
+
+  const second = fakeBridge(4);
+  await renderChat();
+  expect(strip()).not.toBeNull();
+  // The run finishes (seq 8).
+  second.emit({ type: "event", event: { subscription: "s", ...logged[7]! } });
+  expect(strip()).toBeNull();
+  act(() => unmount());
+
+  // Losing wispd stalls it: no strip, and nothing moves in the card.
+  const card = () => document.querySelector('[role="log"] [role="group"]')!;
+  const third = fakeBridge(4);
+  await renderChat();
+  expect(card().querySelector(".loader")).not.toBeNull();
+  third.connect({ status: "connecting" });
+  expect(strip()).toBeNull();
+  expect(card().querySelector(".loader")).toBeNull();
 });

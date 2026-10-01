@@ -4,7 +4,13 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { RpcResponse, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import type {
+  ConnectionState,
+  RpcResponse,
+  SshHost,
+  SubscriptionMessage,
+  WispBridge,
+} from "../preload/bridge";
 import type {
   AgentRun,
   LoggedEvent,
@@ -15,7 +21,7 @@ import type {
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-// happy-dom has no popovers. The Repository menu's options are in the DOM either way.
+// happy-dom has no popovers. The Workspace menu's items are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
 // happy-dom lays nothing out: a tall transcript and short rows, so the virtualized list renders all.
 Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
@@ -42,25 +48,37 @@ const now = Date.parse("2026-09-29T12:00:00Z");
 
 type Answer = (
   params: Record<string, unknown>,
+  host: string,
 ) => RpcResponse<unknown> | Promise<RpcResponse<unknown>>;
 let answers: Record<string, Answer>;
 let capabilities: Record<string, object>;
-const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
+const request = vi.fn(async (host: string, method: string, params: Record<string, unknown>) => {
   const answer = answers[method];
   return answer
-    ? { logId: "log-1", ...(await answer(params)) }
+    ? { logId: "log-1", ...(await answer(params, host)) }
     : { error: { code: -32601, message: `${method} isn't faked` } };
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
 // Every subscription gets every event; each keeps what's its own.
 let listeners: Set<(message: SubscriptionMessage) => void>;
 const deliver = (message: SubscriptionMessage) => listeners.forEach((l) => l(message));
+// The saved SSH hosts, and each host's connection state: connected unless set here.
+let sshHosts: SshHost[];
+let states: Record<string, ConnectionState>;
+let stateListeners: Set<(hostId: string, state: ConnectionState) => void>;
+const setState = (hostId: string, state: ConnectionState) => {
+  states[hostId] = state;
+  stateListeners.forEach((l) => l(hostId, state));
+};
 
 beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
   listeners = new Set();
   capabilities = {};
+  sshHosts = [];
+  states = {};
+  stateListeners = new Set();
   answers = {
     "thread/list": () => ({ result: { repos: [wisp], threads: [], seq: 7 } }),
     "agent/list": () => ({ result: { runs: [], seq: 7 } }),
@@ -77,20 +95,19 @@ beforeEach(() => {
   window.wisp = {
     platform: "darwin",
     setThemeSource: vi.fn(),
-    connectionState: async () => ({
-      status: "connected",
-      wispd: "0.1.0",
-      protocol: 1,
-      capabilities,
-    }),
-    onConnectionState: () => () => {},
+    connectionState: async (hostId) =>
+      states[hostId] ?? { status: "connected", wispd: "0.1.0", protocol: 1, capabilities },
+    onConnectionState: (listener) => {
+      stateListeners.add(listener);
+      return () => stateListeners.delete(listener);
+    },
     subscribe: (_host, _params, listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     request,
     pickFolder,
-    hosts: async () => [],
+    hosts: async () => sshHosts,
     onHosts: () => () => {},
   } as Partial<WispBridge> as WispBridge;
 });
@@ -130,12 +147,79 @@ const inDialog = (name: string) =>
   [...dialog().querySelectorAll("button")].find(
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
   );
-const nameBox = () => dialog().querySelector("input")!;
+const nameBox = () => dialog().querySelector<HTMLInputElement>('input[aria-label="Name"]')!;
 // The main pane's composer, whose editor Tiptap keeps on its element for tests.
 const composer = () =>
   document.querySelector<TiptapEditorHTMLElement>('main [role="textbox"][aria-label="Message"]');
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
+/** The host each `method` call went to, in order. */
+const hostsOf = (method: string) =>
+  request.mock.calls.filter(([, m]) => m === method).map(([host]) => host);
+const typeInto = (box: HTMLInputElement, text: string) =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, text);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+const press = (key: string) =>
+  act(() => {
+    document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  });
+
+const openNewProject = () =>
+  click(document.querySelector('#sidebar button[aria-label="New project"]'));
+const workspaceButton = () =>
+  dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");
+const workspaceMenu = () =>
+  dialog().querySelector<HTMLElement>('[role="menu"][aria-label="Workspace"]')!;
+// happy-dom has no popovers, so the menu gets the toggle event a browser sends when it opens.
+const openWorkspaces = async () => {
+  await act(async () => {
+    workspaceMenu().dispatchEvent(
+      Object.assign(new Event("toggle"), { oldState: "closed", newState: "open" }),
+    );
+  });
+  await settle();
+};
+/** Each of the Workspace menu's groups: its host, then its items' text. */
+const workspaceGroups = () =>
+  [...workspaceMenu().querySelectorAll('[role="group"]')].map((g) => [
+    g.getAttribute("aria-label"),
+    ...[...g.querySelectorAll('[role^="menuitem"]')].map((b) => b.textContent),
+  ]);
+const workspaceItem = (text: string) =>
+  [...workspaceMenu().querySelectorAll<HTMLButtonElement>('[role^="menuitem"]')].find(
+    (b) => b.textContent === text,
+  );
+/** What a host's group says about it, such as that it's connecting. */
+const hostNote = (host: string) =>
+  workspaceMenu().querySelector(`[role="group"][aria-label="${host}"] p:not([aria-hidden])`)
+    ?.textContent;
+const searchBox = () =>
+  workspaceMenu().querySelector<HTMLInputElement>('input[aria-label="Search repositories"]')!;
+const hostRow = (name: string) =>
+  [...document.querySelectorAll('#sidebar [aria-labelledby="hosts-heading"] > li > button')].find(
+    (b) => b.textContent?.startsWith(name),
+  );
+
+const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
+const repo = (name: string, path = `/srv/${name}`): Repo => ({
+  id: `r-${name}`,
+  name,
+  path,
+  createdAt: "2026-09-29T09:00:00Z",
+});
+const scratch: Repo = { ...repo("scratch"), scratch: true };
+/** `thread/list` answering each host with its own repositories, this computer's by default. */
+const reposOn =
+  (byHost: Record<string, Repo[]>): Answer =>
+  (_params, host) => ({ result: { repos: byHost[host] ?? [wisp], threads: [], seq: 7 } });
+const connected: ConnectionState = {
+  status: "connected",
+  wispd: "0.1.0",
+  protocol: 1,
+  capabilities: {},
+};
 
 test("lists wispd's projects, most recently active first, and adds one from project.created", async () => {
   await renderApp();
@@ -182,11 +266,17 @@ test("Create Project names it after its repository, shows wispd's error, retries
     },
   });
   await renderApp();
-  await click(document.querySelector('#sidebar button[aria-label="New project"]'));
+  await openNewProject();
   expect(dialog().open).toBe(true);
+  // A large name under the Project's icon, then the Workspace: the open host's first repository.
   expect(nameBox().value).toBe("wisp");
+  expect(nameBox().placeholder).toBe("New Project");
+  expect(workspaceButton()).toBe("Workspace: wisp on This Mac");
   // The coordinator's model is picked per message (RYA-46), not here.
   expect(dialog().querySelector('[aria-label^="Model"]')).toBeNull();
+  typeInto(nameBox(), "");
+  expect(inDialog("Create Project")!.disabled).toBe(true);
+  typeInto(nameBox(), "wisp");
 
   await click(inDialog("Create Project"));
   expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
@@ -205,12 +295,13 @@ test("Create Project names it after its repository, shows wispd's error, retries
     repoPath: "/src/wisp",
   });
   expect(retry).toEqual(first);
+  expect(hostsOf("project/create")).toEqual(["local", "local"]);
   expect(dialog().open).toBe(false);
   expect(crumbs()).toEqual(["This Mac", "wisp"]);
   expect(projectRows()[0]).toBe("wispnow");
 });
 
-test("Add repository… in Create Project adds a folder and names the project after it until one is typed", async () => {
+test("Choose folder… in the Workspace menu adds a folder on this computer and names the project after it until one is typed", async () => {
   pickFolder.mockResolvedValue("/src/other");
   answers["repo/add"] = (p) => ({
     result: { repo: { ...wisp, id: p["id"], name: "other", path: "/src/other" } },
@@ -219,27 +310,145 @@ test("Add repository… in Create Project adds a folder and names the project af
     result: { project: { ...project("Other work", "2026-09-29T12:00:00Z"), id: p["id"] } },
   });
   await renderApp();
-  await click(document.querySelector('#sidebar button[aria-label="New project"]'));
-  await click(
-    [...dialog().querySelectorAll('[role="menuitemradio"]')].find(
-      (b) => b.textContent === "Add repository…",
-    ),
-  );
+  await openNewProject();
+  await openWorkspaces();
+  await click(workspaceItem("Choose folder…"));
   expect(calls("repo/add")).toEqual([{ id: expect.any(String), path: "/src/other" }]);
-  expect(inDialog("Repository: other")).toBeDefined();
+  expect(hostsOf("repo/add")).toEqual(["local"]);
+  expect(workspaceButton()).toBe("Workspace: other on This Mac");
   expect(nameBox().value).toBe("other");
 
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      nameBox(),
-      "Other work",
-    );
-    nameBox().dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  typeInto(nameBox(), "Other work");
   await click(inDialog("Create Project"));
   expect(calls("project/create")).toEqual([
     { id: expect.any(String), name: "Other work", repoPath: "/src/other" },
   ]);
+});
+
+test("a repository on another host creates the Project there, then opens that host and the Project", async () => {
+  sshHosts = [mini];
+  const api = repo("api");
+  answers["thread/list"] = reposOn({ [mini.id]: [api, scratch] });
+  const created: Project[] = [];
+  const projectsHere = answers["project/list"]!;
+  answers["project/list"] = (p, host) =>
+    host === mini.id ? { result: { projects: created, seq: 7 } } : projectsHere(p, host);
+  let fail = true;
+  answers["project/create"] = (p) => {
+    if (fail)
+      return {
+        error: {
+          code: -32000,
+          message: "/srv/api is not the top folder of a git repository: it has no .git.",
+          data: { kind: "notARepository" },
+        },
+      };
+    created.push({ ...project("api", "2026-09-29T12:00:00Z"), id: p["id"] as string });
+    return { result: { project: created[0] } };
+  };
+  await renderApp();
+  await openNewProject();
+  await openWorkspaces();
+  // This computer, then each SSH host, then GitHub, each host listing its own repositories with
+  // no scratch entry. Browsing a host and cloning aren't available yet (RYA-32, RYA-33).
+  expect(workspaceGroups()).toEqual([
+    ["This Mac", "wisp", "Choose folder…"],
+    ["Mac mini", "api", "Browse foldersNot available yet"],
+    ["GitHub", "Clone a repositoryNot available yet"],
+  ]);
+  expect(hostsOf("thread/list")).toContain(mini.id);
+  expect(workspaceItem("wisp")!.getAttribute("aria-checked")).toBe("true");
+  expect(workspaceItem("Browse foldersNot available yet")!.disabled).toBe(true);
+  expect(workspaceItem("Clone a repositoryNot available yet")!.disabled).toBe(true);
+
+  await click(workspaceItem("api"));
+  expect(workspaceButton()).toBe("Workspace: api on Mac mini");
+  expect(workspaceItem("api")!.getAttribute("aria-checked")).toBe("true");
+  expect(nameBox().value).toBe("api");
+  await click(inDialog("Create Project"));
+  expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
+    "/srv/api is not the top folder of a git repository: it has no .git.",
+  );
+  expect(dialog().open).toBe(true);
+
+  fail = false;
+  await click(inDialog("Create Project"));
+  const [first, retry] = calls("project/create");
+  expect(first).toEqual({ id: expect.any(String), name: "api", repoPath: "/srv/api" });
+  expect(retry).toEqual(first);
+  expect(hostsOf("project/create")).toEqual([mini.id, mini.id]);
+  expect(dialog().open).toBe(false);
+  // The sidebar opened Mac mini, then the Project once Mac mini listed it.
+  expect(hostRow("Mac mini")!.getAttribute("aria-expanded")).toBe("true");
+  expect(crumbs()).toEqual(["Mac mini", "api"]);
+  expect(projectRows()).toEqual(["apinow"]);
+});
+
+test("a host that is connecting or can't be reached says so in its group, and lists once it connects", async () => {
+  const studio: SshHost = { id: "h-studio", name: "Studio", destination: "studio" };
+  sshHosts = [mini, studio];
+  states[mini.id] = {
+    status: "failed",
+    retrying: false,
+    error: { reason: "sshSetup", message: "ssh couldn't reach mini: no route to host." },
+  };
+  states[studio.id] = { status: "connecting" };
+  answers["thread/list"] = reposOn({ [studio.id]: [repo("ember")] });
+  await renderApp();
+  await openNewProject();
+  await openWorkspaces();
+  expect(workspaceGroups()).toEqual([
+    ["This Mac", "wisp", "Choose folder…"],
+    ["Mac mini", "Browse foldersNot available yet"],
+    ["Studio", "Browse foldersNot available yet"],
+    ["GitHub", "Clone a repositoryNot available yet"],
+  ]);
+  expect(hostNote("Mac mini")).toBe("Can't connect: ssh couldn't reach mini: no route to host.");
+  expect(hostNote("Studio")).toBe("Connecting…");
+  expect(hostNote("This Mac")).toBeUndefined();
+  expect(hostsOf("thread/list")).not.toContain(mini.id);
+
+  await act(async () => setState(studio.id, connected));
+  await settle();
+  expect(workspaceGroups()[2]).toEqual(["Studio", "ember", "Browse foldersNot available yet"]);
+  expect(hostNote("Studio")).toBeUndefined();
+});
+
+test("the Workspace menu searches every host's repositories, Enter picks the first match, and Up and Down pass unavailable entries", async () => {
+  sshHosts = [mini];
+  answers["thread/list"] = reposOn({
+    local: [wisp, repo("api-docs", "/src/api-docs")],
+    [mini.id]: [repo("api"), repo("web")],
+  });
+  await renderApp();
+  await openNewProject();
+  await openWorkspaces();
+  expect(document.activeElement).toBe(searchBox());
+
+  typeInto(searchBox(), "API");
+  expect(workspaceGroups()).toEqual([
+    ["This Mac", "api-docs"],
+    ["Mac mini", "api"],
+  ]);
+  typeInto(searchBox(), "we");
+  expect(workspaceGroups()).toEqual([["Mac mini", "web"]]);
+  press("Enter");
+  expect(workspaceButton()).toBe("Workspace: web on Mac mini");
+  expect(nameBox().value).toBe("web");
+  expect(calls("project/create")).toEqual([]);
+
+  typeInto(searchBox(), "zzz");
+  expect(workspaceGroups()).toEqual([]);
+  expect(workspaceMenu().textContent).toContain("No matches");
+
+  typeInto(searchBox(), "");
+  press("ArrowDown");
+  expect(document.activeElement?.textContent).toBe("wisp");
+  // From the top, Up wraps past GitHub's and Mac mini's unavailable entries to Mac mini's last.
+  press("ArrowUp");
+  expect(document.activeElement?.textContent).toBe("web");
+  press("ArrowDown");
+  expect(document.activeElement?.textContent).toBe("wisp");
 });
 
 /** A Project's coordinator run, as `project/start` answers it (0024). */
@@ -538,7 +747,8 @@ test("a Project's Agents view lists its subagents newest first, without its coor
 });
 
 test("opening a subagent shows its chat, with Open PR, and the Project crumb goes back to the coordinator", async () => {
-  answers["agent/send"] = () => ({ result: { run: login } });
+  // The finished subagent picks up the message.
+  answers["agent/send"] = () => ({ result: { run: { ...login, status: "running" } } });
   await openEmberAgents(login, docs);
   await click(agentRow("Fix the login bug"));
   expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);

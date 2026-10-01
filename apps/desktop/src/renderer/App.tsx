@@ -14,17 +14,19 @@ import { SidePanel } from "./SidePanel";
 import { ProjectIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
 import { groupOf, groupThreads, noRepo, titleOf, useThreads } from "./threads";
+import { isRunning } from "./transcript";
 import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { UsagePage } from "./UsagePage";
 
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
- * thread (its id is its run's), a new thread in a sidebar group (`threads.ts`; with no group,
- * it's the first repository's), or Usage.
+ * thread (its id is its run's; `started` when New Thread just started it, until anything else is
+ * selected), a new thread in a sidebar group (`threads.ts`; with no group, it's the first
+ * repository's), or Usage.
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
-  | { kind: "thread"; threadId: string }
+  | { kind: "thread"; threadId: string; started?: boolean }
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
 
@@ -41,6 +43,9 @@ export function App() {
   // The open host, or this computer once the open one is removed.
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const [selection, setSelection] = useState<Selection>({ kind: "new" });
+  // A Project just created on another host, opened once that host is open and lists it: the
+  // check below drops a Project selection the open host's list doesn't have.
+  const [opening, setOpening] = useState<{ hostId: string; projectId: string }>();
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   // Set by the sidebar's "Add host", so Hosts opens on its form; any other way in clears it.
   const [addingHost, setAddingHost] = useState(false);
@@ -70,6 +75,13 @@ export function App() {
   } else if (selection.kind === "new")
     group = groups.find((g) => g.id === selection.groupId) ?? group;
 
+  if (
+    opening?.hostId === host.id &&
+    threads.state.projects.some((p) => p.id === opening.projectId)
+  ) {
+    setOpening(undefined);
+    setSelection({ kind: "project", projectId: opening.projectId });
+  }
   // The open Project. Once its host is removed, the next host's list doesn't have it.
   const project =
     selection.kind === "project"
@@ -108,6 +120,15 @@ export function App() {
         : "New thread";
     crumbs = [{ label: host.name }, repo, { label: page }];
   }
+
+  // A Project created on the open host is in its list already. Another host's list loads once
+  // that host is open.
+  const openProject = (hostId: string, projectId: string) => {
+    if (hostId === host.id) return setSelection({ kind: "project", projectId });
+    setHostId(hostId);
+    setSelection({ kind: "new" });
+    setOpening({ hostId, projectId });
+  };
 
   const newThread = () => {
     setSettings(null);
@@ -185,9 +206,14 @@ export function App() {
             onHostChange={(id) => {
               setHostId(id);
               setSelection({ kind: "new" });
+              setOpening(undefined);
             }}
             selection={selection}
-            onSelect={setSelection}
+            onSelect={(next) => {
+              setSelection(next);
+              setOpening(undefined);
+            }}
+            onOpenProject={openProject}
             onOpenSettings={openSettings}
             threads={threads}
             onDelete={deleteThread}
@@ -240,6 +266,8 @@ export function App() {
                 runId={selection.threadId}
                 notice={notice?.threadId === selection.threadId ? notice.text : undefined}
                 prompt={threads.state.runs[selection.threadId]?.prompt}
+                // The list's status goes stale once the run moves on, so only a start says so.
+                going={selection.started}
                 noRepo={group.id === noRepo}
               />
             ) : selection.kind === "new" ? (
@@ -258,7 +286,7 @@ export function App() {
                 }
                 onStarted={(threadId, text) => {
                   setNotice(text ? { threadId, text } : undefined);
-                  setSelection({ kind: "thread", threadId });
+                  setSelection({ kind: "thread", threadId, started: true });
                 }}
                 disabledReason={offline}
               />
@@ -268,6 +296,8 @@ export function App() {
                 hostId={host.id}
                 runId={agentId}
                 prompt={agent?.prompt}
+                // A Project's subagents are kept current.
+                going={isRunning(agent?.status)}
               />
             ) : (
               project && (

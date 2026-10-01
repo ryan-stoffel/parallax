@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentSendParams, PromptImage } from "../protocol/generated/protocol";
-import { applyEvents, emptyTranscript, type Transcript } from "./transcript";
+import { applyEvents, emptyTranscript, isRunning, type Transcript } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
 export interface AgentRunView {
@@ -13,7 +13,7 @@ export interface AgentRunView {
   sent: ReadonlyMap<string, SentMessage>;
   /**
    * Sends a message and its images as the run's next turn, with a new model, effort, or access for
-   * the run if given. Resolves to wispd's error, or undefined.
+   * the run if given. Resolves to wispd's error, or why the run couldn't take it, or undefined.
    */
   send: (
     text: string,
@@ -113,13 +113,17 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         ...options,
         ...(images.length > 0 && { images }),
       });
-      if (!("error" in answer)) return undefined;
+      if ("result" in answer && isRunning(answer.result.run.status)) return undefined;
       setSent((prev) => {
         const next = new Map(prev);
         next.delete(turnId);
         return next;
       });
-      return answer.error;
+      // A finished run whose CLI didn't start again answers with the failed run, and no turn
+      // follows for the message.
+      return "error" in answer
+        ? answer.error
+        : { code: -32000, message: answer.result.run.error ?? "The agent couldn't start." };
     },
     [hostId, runId],
   );
