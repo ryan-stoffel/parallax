@@ -216,6 +216,25 @@ test("Approve answers with agent/approve, shows the answer on its way, then coll
   expect(time.getAttribute("dateTime")).toMatch(/^2026-10-01T12:00:03Z$/);
 });
 
+test("a request that ends while its answer is on the way leaves, and the answer's reply changes nothing", async () => {
+  output(asked("a1"));
+  let release: (answer: RpcResponse<unknown>) => void = () => {};
+  approve = () => new Promise((resolve) => (release = resolve));
+  await renderChat();
+  await click(inCard("Approve"));
+  expect(inCard("Approving…")).toBeDefined();
+  // It timed out just before the answer reached wispd.
+  await emit(resolved("a1", { decision: "expired", by: "timeout" }));
+  expect(pinned()).toBeNull();
+  expect(lines()).toEqual([expect.stringMatching(/^Timed outBash/)]);
+  // wispd's reply is how it ended, as `agent/approve` is idempotent.
+  await act(async () => release({ result: { decision: "expired", by: "timeout" } }));
+  await settle();
+  expect(pinned()).toBeNull();
+  expect(lines()).toEqual([expect.stringMatching(/^Timed outBash/)]);
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+});
+
 test("Always allow shows only when the request offers rules, and sends always", async () => {
   output(asked("a1", { alwaysAllow: [] }));
   await renderChat();
@@ -482,6 +501,48 @@ test("an open chat's Manual says its requests are denied when its run started wi
   );
 });
 
+test("a long preview scrolls inside its bound, with the header, a problem, and the buttons outside it", async () => {
+  const content = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
+  output(asked("a1", { toolName: "Write", input: { file_path: "/repo/notes.txt", content } }));
+  approve = () => ({ error: { code: -32000, message: "wispd is busy" } });
+  await renderChat();
+  const bounded = card()!.querySelector<HTMLElement>('[style*="max-height"]')!;
+  expect(bounded.style.maxHeight).toBe("45vh");
+  expect(bounded.className).toContain("overflow-y-auto");
+  expect(bounded.querySelector('[aria-label^="Diff"]')).not.toBeNull();
+  // Show all keeps the whole file inside it.
+  await click(
+    [...bounded.querySelectorAll("button")].find((b) => b.textContent === "Show all 300 lines"),
+  );
+  expect(bounded.querySelector('[aria-label^="Diff"]')!.children).toHaveLength(300);
+  await click(inCard("Approve"));
+  const title = document.getElementById(card()!.getAttribute("aria-labelledby")!)!;
+  for (const outside of [title, pinned()!.querySelector('[role="alert"]')!, inCard("Approve")!])
+    expect(bounded.contains(outside)).toBe(false);
+});
+
+test("a pinned plan opened in full scrolls inside the same bound", async () => {
+  // happy-dom lays nothing out: the plan measures as long.
+  const own = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get: () => 2000,
+  });
+  try {
+    output(asked("p1", { toolName: "ExitPlanMode", input: { plan }, interactive: true }));
+    await renderChat();
+    const body = pinned()!.querySelector<HTMLElement>(".proposed-plan")!.parentElement!;
+    expect(body.style.maxHeight).toBe("184px");
+    await click(inCard("Show full plan"));
+    expect(body.style.maxHeight).toBe("45vh");
+    expect(body.style.overflowY).toBe("auto");
+    expect(body.contains(inCard("Approve plan")!)).toBe(false);
+  } finally {
+    if (own) Object.defineProperty(HTMLElement.prototype, "scrollHeight", own);
+    else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+  }
+});
+
 // --- The card's previews ---
 
 const previewOf = (request: Partial<ApprovalRequest>) => {
@@ -533,6 +594,8 @@ test("a Write shows its content as added; an MCP call its server, tool, and argu
   expect(el.querySelector('[aria-label^="Diff"]')!.getAttribute("aria-label")).toBe(
     "Diff: 2 lines added, 0 removed",
   );
+  // It may replace a file that's there, so it says it writes all of it.
+  expect(el.textContent).toContain("Writes the whole file.");
   act(() => unmount());
 
   el = previewOf({
@@ -643,6 +706,53 @@ test("a card never takes focus from someone typing", () => {
   rerender(queue([{ runId, approval: approval("a1") }]));
   expect(document.activeElement).toBe(other);
   expect(said()).toBe("Approval needed: Bash: pnpm test a1.");
+});
+
+test("the card stays while its Deny note is open or its answer is on the way, though an older request arrives", async () => {
+  const older = { runId: "other", approval: approval("a1", "2026-10-01T12:00:00Z") };
+  const shownNow = { runId, approval: approval("b1", "2026-10-01T12:00:05Z") };
+  const rerender = render(queue([shownNow]));
+  await act(async () => inCard("Deny")!.click());
+  const note = pinned()!.querySelector("input")!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(note, "Not t");
+    note.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  // A Project's subagent request, older, loads late.
+  rerender(queue([older, shownNow]));
+  expect(card()!.textContent).toContain("pnpm test b1");
+  expect(card()!.textContent).toContain("Needs approval · 1 of 2");
+  expect(pinned()!.querySelector("input")).toBe(note);
+  expect(note.value).toBe("Not t");
+  expect(document.activeElement).toBe(note);
+
+  // Closing the note lets the queue take its order again.
+  await act(async () => inCard("Cancel")!.click());
+  expect(card()!.textContent).toContain("pnpm test a1");
+
+  // So does an answer on its way, until it's back.
+  act(() => unmount());
+  const answering = new Map<string, AnswerState>([["b1", { state: "answering", choice: "allow" }]]);
+  const again = render(queue([shownNow], answering));
+  again(queue([older, shownNow], answering));
+  expect(card()!.textContent).toContain("pnpm test b1");
+  expect(inCard("Approving…")).toBeDefined();
+});
+
+test("a request that queues behind the card is announced by how many wait", () => {
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
+  const rerender = render(queue([one]));
+  expect(said()).toBe("Approval needed: Bash: pnpm test a1.");
+  rerender(queue([one, two]));
+  expect(said()).toBe("2 requests waiting.");
+  expect(card()!.textContent).toContain("Needs approval · 1 of 2");
+  rerender(queue([one, two, three]));
+  expect(said()).toBe("3 requests waiting.");
+  // Fewer waiting behind it says nothing new.
+  rerender(queue([one, three]));
+  expect(said()).toBe("3 requests waiting.");
 });
 
 test("another run's request names it, with a way to its chat", async () => {

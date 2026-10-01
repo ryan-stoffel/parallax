@@ -514,7 +514,13 @@ export function RequestPreview({ request }: { request: ApprovalRequest }) {
       );
     }
     case "Write":
-      return <Diff before="" after={text("content") ?? ""} />;
+      // Its content as added lines, though it may replace a file that's there.
+      return (
+        <div className="space-y-1.5">
+          <Diff before="" after={text("content") ?? ""} />
+          <p className="text-[12px] text-muted-foreground">Writes the whole file.</p>
+        </div>
+      );
     case "NotebookEdit":
       return text("edit_mode") === "delete" ? (
         <p className="text-[12.5px] text-muted-foreground">Deletes a cell.</p>
@@ -566,6 +572,10 @@ function Context({ request }: { request: ApprovalRequest }) {
   );
 }
 
+// The most of the window a pinned card's preview, or a pinned plan opened in full, takes before it
+// scrolls, so the card's buttons and the composer stay in view.
+const pinnedMaxHeight = "45vh";
+
 const quietButton =
   "h-7 shrink-0 rounded-md px-2.5 text-[12.5px] text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50";
 const outlineButton =
@@ -592,6 +602,8 @@ interface CardProps {
   state?: AnswerState;
   onAnswer: (choice: Choice, message?: string) => void;
   onDismiss: () => void;
+  /** Says when its Deny note opens or closes, so the queue keeps it in place meanwhile. */
+  onNoting: (open: boolean) => void;
   /** Why answering is off right now, such as a lost connection. */
   disabledReason?: string;
   /** Renders a plan's Markdown, as the transcript does. */
@@ -608,6 +620,7 @@ function Answers({
   rulesId,
   onAnswer,
   onDismiss,
+  onNoting,
   disabledReason,
 }: {
   plan: boolean;
@@ -616,9 +629,14 @@ function Answers({
   rulesId: string;
   onAnswer: (choice: Choice, message?: string) => void;
   onDismiss: () => void;
+  onNoting: (open: boolean) => void;
   disabledReason?: string;
 }) {
   const [denying, setDenying] = useState(false);
+  const noting = (open: boolean) => {
+    setDenying(open);
+    onNoting(open);
+  };
   const [note, setNote] = useState("");
   const noteRef = useRef<HTMLInputElement>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
@@ -658,7 +676,7 @@ function Answers({
           onKeyDown={(e) => {
             if (e.key !== "Escape" || busy) return;
             e.preventDefault();
-            setDenying(false);
+            noting(false);
             requestAnimationFrame(() => denyRef.current?.focus());
           }}
           className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
@@ -667,7 +685,7 @@ function Answers({
           type="button"
           disabled={busy}
           onClick={() => {
-            setDenying(false);
+            noting(false);
             requestAnimationFrame(() => denyRef.current?.focus());
           }}
           className={quietButton}
@@ -686,7 +704,7 @@ function Answers({
         type="button"
         disabled={off}
         title={disabledReason}
-        onClick={() => setDenying(true)}
+        onClick={() => noting(true)}
         className={quietButton}
       >
         {label("deny", deny)}
@@ -754,6 +772,7 @@ function ApprovalCard({
   state,
   onAnswer,
   onDismiss,
+  onNoting,
   disabledReason,
   focusRef,
 }: CardProps) {
@@ -796,9 +815,12 @@ function ApprovalCard({
           {statusText(state, position, count)}
         </span>
       </div>
-      <div className="space-y-2 px-4 pt-2.5">
+      {/* The preview scrolls past its bound; the header, a problem, and the buttons stay put. */}
+      <div className="space-y-2 overflow-y-auto px-4 pt-2.5" style={{ maxHeight: pinnedMaxHeight }}>
         <RequestPreview request={request} />
         <Context request={request} />
+      </div>
+      <div className="px-4 pt-2 empty:hidden">
         <Problem state={state} />
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 px-4 pt-3 pb-3">
@@ -826,6 +848,7 @@ function ApprovalCard({
           rulesId={rulesId}
           onAnswer={onAnswer}
           onDismiss={onDismiss}
+          onNoting={onNoting}
           disabledReason={disabledReason}
         />
       </div>
@@ -847,6 +870,7 @@ function PlanApprovalCard({
   state,
   onAnswer,
   onDismiss,
+  onNoting,
   disabledReason,
   markdown,
   focusRef,
@@ -869,7 +893,7 @@ function PlanApprovalCard({
         open={open}
         onToggle={(_, next) => setOpen(next)}
         foldAt={pinnedPlanHeight}
-        openHeight="45vh"
+        openHeight={pinnedMaxHeight}
         actions={
           <>
             {/* At the foot, by the buttons, where the fold can't hide it. */}
@@ -890,6 +914,7 @@ function PlanApprovalCard({
               rulesId=""
               onAnswer={onAnswer}
               onDismiss={onDismiss}
+              onNoting={onNoting}
               disabledReason={disabledReason}
             />
           </>
@@ -934,10 +959,12 @@ function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNod
 
 /**
  * The requests waiting on the user, pinned over the composer so they can't scroll away: the oldest
- * as a card, with its place in the queue, and the next in its place once it's answered. Another
- * run's names the run. A new card takes focus only from nothing, or from the card just answered,
- * never from someone typing; once the last goes, focus that was in it returns by `returnFocus`. A
- * polite status says what came and how it was answered.
+ * as a card, with its place in the queue, and the next in its place once it's answered. The card
+ * stays while its answer is on the way or its Deny note is open, even if an older request arrives,
+ * as a Project's other runs' can once their logs are read. Another run's names the run. A new card
+ * takes focus only from nothing, or from the card just answered, never from someone typing; once
+ * the last goes, focus that was in it returns by `returnFocus`. A polite status says what came,
+ * how it was answered, and when more wait.
  */
 export function ApprovalQueue({
   asked,
@@ -958,8 +985,16 @@ export function ApprovalQueue({
   disabledReason?: string;
   returnFocus?: () => void;
 }) {
-  const head = asked[0];
-  const key = head?.approval.key;
+  // The card on screen, and whether its Deny note is open.
+  const [shown, setShown] = useState<{ id?: string; noting: boolean }>({ noting: false });
+  const held =
+    shown.id !== undefined && (shown.noting || answers.get(shown.id)?.state === "answering")
+      ? asked.find((a) => a.approval.request.approvalId === shown.id)
+      : undefined;
+  const queue = held ? [held, ...asked.filter((a) => a !== held)] : asked;
+  const head = queue[0];
+  const key = head?.approval.request.approvalId;
+  if (key !== shown.id) setShown({ id: key, noting: false });
   const card = useRef<HTMLDivElement>(null);
   // Whether focus was in the card that just went (`Pinned`), so the next one or the composer
   // takes it.
@@ -976,8 +1011,12 @@ export function ApprovalQueue({
     hadFocus.current = false;
   }, [key, returnFocus]);
 
-  // What the status says: how the last card was answered, then what the next one asks.
-  const [said, setSaid] = useState<{ key?: string; head?: Asked; text: string }>({ text: "" });
+  // What the status says: how the last card was answered, then what the next one asks, or how
+  // many wait once more do.
+  const [said, setSaid] = useState<{ key?: string; head?: Asked; count: number; text: string }>({
+    count: 0,
+    text: "",
+  });
   if (said.key !== key) {
     const parts: string[] = [];
     const answered = said.head && answers.get(said.head.approval.request.approvalId);
@@ -989,21 +1028,28 @@ export function ApprovalQueue({
         ? "the plan"
         : [tool.label, tool.detail].filter(Boolean).join(": ");
       const from = head.from ? ` from ${head.from.label}` : "";
-      const place = asked.length > 1 ? `, 1 of ${asked.length}` : "";
+      const place = queue.length > 1 ? `, 1 of ${queue.length}` : "";
       parts.push(`Approval needed${from}${place}: ${what}.`);
     }
-    setSaid({ key, head, text: parts.join(" ") });
-  }
+    setSaid({ key, head, count: queue.length, text: parts.join(" ") });
+  } else if (said.count !== queue.length)
+    setSaid({
+      ...said,
+      count: queue.length,
+      ...(queue.length > said.count && { text: `${queue.length} requests waiting.` }),
+    });
 
   const state = head && answers.get(head.approval.request.approvalId);
   const props = head && {
     asked: head,
     tool: describe(head.approval.request.toolName, head.approval.request.input),
     position: 1,
-    count: asked.length,
+    count: queue.length,
     state,
     onAnswer: (choice: Choice, message?: string) => onAnswer(head, choice, message),
     onDismiss: () => onDismiss(head),
+    onNoting: (noting: boolean) =>
+      setShown((prev) => (prev.id === key ? { ...prev, noting } : prev)),
     disabledReason,
     markdown,
     focusRef: card,
