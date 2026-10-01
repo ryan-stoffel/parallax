@@ -936,9 +936,11 @@ test("while the run works on a plan, a strip over the composer shows it, until a
   expect(strip()!.querySelector("button")!.textContent).toBe(
     "In progress: Write README.md1 of 3 done",
   );
-  // A follow-up starts a turn with no plan of its own (seq 5).
+  // A follow-up starts a turn with no plan of its own (seq 5). Focus in the strip goes to the box.
+  act(() => strip()!.querySelector("button")!.focus());
   first.emit({ type: "event", event: { subscription: "s", ...logged[4]! } });
   expect(strip()).toBeNull();
+  expect(document.activeElement).toBe(composer());
   act(() => unmount());
 
   const second = fakeBridge(4);
@@ -947,4 +949,14 @@ test("while the run works on a plan, a strip over the composer shows it, until a
   // The run finishes (seq 8).
   second.emit({ type: "event", event: { subscription: "s", ...logged[7]! } });
   expect(strip()).toBeNull();
+  act(() => unmount());
+
+  // Losing wispd stalls it: no strip, and nothing moves in the card.
+  const card = () => document.querySelector('[role="log"] [role="group"]')!;
+  const third = fakeBridge(4);
+  await renderChat();
+  expect(card().querySelector(".loader")).not.toBeNull();
+  third.connect({ status: "connecting" });
+  expect(strip()).toBeNull();
+  expect(card().querySelector(".loader")).toBeNull();
 });

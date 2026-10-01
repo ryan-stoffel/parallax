@@ -62,6 +62,9 @@ type Row = Item | { kind: "pending"; key: string; text: string; images?: PromptI
 /** What the list shows: a turn's activity is folded into one `Work` row, its plan apart. */
 type ViewRow = Row | Work | PlanRow | ProposedPlanRow;
 
+/** Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it. */
+const focusComposer = () => document.getElementById("composer-input")?.focus();
+
 /**
  * An agent run as a chat: its transcript, the composer, and the run's footer.
  * The same view serves normal threads, subagents, and a Project's coordinator.
@@ -264,7 +267,12 @@ export function AgentChat({
         )}
         {/* The latest turn's plan, while the run works on it. */}
         {plan && isRunning(run?.status) && !stalled && (
-          <PlanStrip items={plan.items} active={plan.active} loader={loaders.planning} />
+          <PlanStrip
+            items={plan.items}
+            active={plan.active}
+            loader={loaders.planning}
+            returnFocus={focusComposer}
+          />
         )}
         <Composer
           onSend={sendText}
@@ -520,7 +528,7 @@ export const RowView = memo(function RowView({
       return <PlanCard items={row.items} live={live && !!row.latest} loader={loaders.planning} />;
     case "proposedPlan":
       return (
-        <ProposedPlan id={row.key} open={open} onToggle={onToggle}>
+        <ProposedPlan id={row.key} status={row.status} open={open} onToggle={onToggle}>
           <MarkdownText text={row.plan} />
         </ProposedPlan>
       );

@@ -1,6 +1,6 @@
 // The agent's plan (RYA-220): its checklist as a card with progress, a strip over the composer
 // while the run goes, and Claude Code's proposed plan. Pure helpers first, then the components.
-import { ChevronDown, ChevronUp, ClipboardList, ListChecks } from "lucide-react";
+import { Ban, ChevronDown, ChevronUp, CircleX, ClipboardList, ListChecks } from "lucide-react";
 import {
   memo,
   useId,
@@ -57,11 +57,17 @@ function proposedPlan(item: Item): string | undefined {
 const proposals = new WeakMap<Item, ProposedPlanRow>();
 const updates = new WeakMap<Item, PlanUpdate>();
 
+/** Whether two checklists have the same steps, in the same order and states. */
+const sameList = (a: readonly AgentTodoItem[], b: readonly AgentTodoItem[]) =>
+  a.length === b.length && a.every((s, i) => s.text === b[i]!.text && s.status === b[i]!.status);
+
 /**
  * The transcript with its plans: each turn's first non-empty checklist becomes a plan row showing
- * the turn's latest, and later ones stay as updates. A `TodoWrite` call followed by its checklist
- * goes, as the checklist stands for it, unless it failed. `ExitPlanMode` becomes a proposed plan
- * row, out of the work around it. User rows split turns.
+ * the turn's latest, and later ones stay as updates, except one that changes nothing, as Codex
+ * sends its last list again. A `TodoWrite` call followed by its checklist goes, as the checklist
+ * stands for it, unless it failed. `ExitPlanMode` becomes a proposed plan row, out of the work
+ * around it. User rows split turns, and so does a proposed plan: the work that carries it out gets
+ * its own card, under it.
  */
 export function withPlans<R extends { kind: string; key: string }>(
   rows: readonly (Item | R)[],
@@ -91,9 +97,15 @@ export function withPlans<R extends { kind: string; key: string }>(
         };
         proposals.set(item, row);
         out.push(row);
+        plan = undefined;
+        last = undefined;
         return;
       }
     } else if (item.kind === "todo") {
+      if (last && sameList(last, item.items)) {
+        last = item.items;
+        return;
+      }
       if (!plan) {
         // An empty checklist before any plan has nothing to show.
         if (item.items.length === 0) return;
@@ -116,11 +128,16 @@ export function withPlans<R extends { kind: string; key: string }>(
   return out;
 }
 
-/** The latest turn's plan, for the strip: its checklist, and the step under way as it's said. */
+/**
+ * The latest turn's plan, for the strip: its checklist, and the step under way as it's said. As in
+ * `withPlans`, a proposed plan starts afresh.
+ */
 export function latestPlan(
   items: readonly Item[],
 ): { items: AgentTodoItem[]; active?: string } | undefined {
-  const at = items.findLastIndex((i) => i.kind === "todo" || i.kind === "user");
+  const at = items.findLastIndex(
+    (i) => i.kind === "todo" || i.kind === "user" || proposedPlan(i) !== undefined,
+  );
   const todo = items[at];
   if (todo?.kind !== "todo" || todo.items.length === 0) return undefined;
   // TodoWrite says each step's `activeForm`, "Running the tests"; the checklist keeps only `text`.
@@ -140,8 +157,9 @@ export function latestPlan(
 }
 
 /**
- * What an update changed, for its line: "Finished: Add tests · Started: Run the checks". More than
- * two steps in a change read as a count. Empty when nothing did, as for a reordering.
+ * What an update changed, for its line: "Finished: Add tests · Started: Run the checks". A step by
+ * new text, as a renamed one, is added whatever its state, so it never claims to have just
+ * finished. More than two steps in a change read as a count. Empty when nothing changed.
  */
 export function planChanges(
   before: readonly AgentTodoItem[],
@@ -158,17 +176,19 @@ export function planChanges(
   };
   for (const { text, status } of after) {
     const old = was.get(text);
-    if (status === "completed" && old !== "completed") changes.Finished.push(text);
-    else if (status === "inProgress" && old !== "inProgress") changes.Started.push(text);
-    else if (old === undefined) changes.Added.push(text);
+    if (old === undefined) changes.Added.push(text);
     else if (old === "completed" && status !== "completed") changes.Reopened.push(text);
+    else if (status === "completed" && old !== "completed") changes.Finished.push(text);
+    else if (status === "inProgress" && old !== "inProgress") changes.Started.push(text);
   }
-  return Object.entries(changes)
+  const said = Object.entries(changes)
     .filter(([, steps]) => steps.length > 0)
     .map(([verb, steps]) =>
       steps.length > 2 ? `${verb} ${steps.length} steps` : `${verb}: ${steps.join(", ")}`,
     )
     .join(" · ");
+  const order = (list: readonly AgentTodoItem[]) => list.map((s) => s.text).join("\n");
+  return said || (order(before) !== order(after) ? "Reordered the steps" : "");
 }
 
 /** A step's state. A status newer than this app counts as to do. */
@@ -177,7 +197,15 @@ const stateOf = (status: string) =>
 const stateLabels = { done: "Done", now: "In progress", todo: "To do" };
 const doneCount = (items: readonly AgentTodoItem[]) =>
   items.filter((s) => s.status === "completed").length;
-const stepKey = (step: AgentTodoItem, i: number) => `${i}:${step.text}`;
+/** Each step's key: its text, counted when repeated, so it keeps its key as steps come and go. */
+function stepKeys(items: readonly AgentTodoItem[]) {
+  const seen = new Map<string, number>();
+  return items.map(({ text }) => {
+    const n = (seen.get(text) ?? 0) + 1;
+    seen.set(text, n);
+    return n > 1 ? `${text}#${n}` : text;
+  });
+}
 
 /** The plan's progress as a slim bar in the accent, easing to its new width. */
 function ProgressBar({
@@ -201,8 +229,9 @@ function ProgressBar({
 
 /**
  * A checklist as a plan: "Plan", how many steps are done, a progress bar, and each step in its
- * state. A step under way shows `loader` while the run goes (`live`). A step finished while the
- * card is on screen draws its check; one done before then, as on scrolling back, just shows it.
+ * state. A step under way shows `loader` while the run goes (`live`). A step the card showed
+ * unfinished draws its check as it finishes; one done before then, as on scrolling back, or that
+ * comes done, as a renamed one, just shows it.
  */
 export const PlanCard = memo(function PlanCard({
   items,
@@ -214,9 +243,11 @@ export const PlanCard = memo(function PlanCard({
   loader: LoaderStyle;
 }) {
   const id = useId();
-  const [doneAtMount] = useState(
-    () => new Set(items.flatMap((s, i) => (s.status === "completed" ? [stepKey(s, i)] : []))),
-  );
+  const keys = stepKeys(items);
+  const unfinished = keys.filter((_, i) => items[i]!.status !== "completed");
+  // The steps this card has shown unfinished, by key.
+  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set(unfinished));
+  if (unfinished.some((k) => !shown.has(k))) setShown(new Set([...shown, ...unfinished]));
   const done = doneCount(items);
   return (
     <div
@@ -236,13 +267,7 @@ export const PlanCard = memo(function PlanCard({
       <ProgressBar done={done} total={items.length} className="mt-2.5 h-[3px]" />
       <ol className="mt-2.5">
         {items.map((step, i) => (
-          <Step
-            key={i}
-            step={step}
-            live={live}
-            loader={loader}
-            draw={!doneAtMount.has(stepKey(step, i))}
-          />
+          <Step key={keys[i]} step={step} live={live} loader={loader} draw={shown.has(keys[i]!)} />
         ))}
       </ol>
     </div>
@@ -364,18 +389,31 @@ export function PlanStrip({
   items,
   active,
   loader,
+  returnFocus,
 }: {
   items: readonly AgentTodoItem[];
   active?: string;
   loader: LoaderStyle;
+  /** Moves focus on, such as to the composer, when the strip goes with focus in it. Read once. */
+  returnFocus?: () => void;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
+  const section = useRef<HTMLElement>(null);
+  const [onGone] = useState(() => returnFocus);
+  // Before it leaves the page, so focus doesn't fall to the body.
+  useLayoutEffect(() => {
+    const el = section.current!;
+    return () => {
+      if (el.contains(document.activeElement)) onGone?.();
+    };
+  }, [onGone]);
   const done = doneCount(items);
   const now = items.find((s) => s.status === "inProgress");
   const next = now ?? items.find((s) => s.status !== "completed");
   return (
     <section
+      ref={section}
       aria-label="Plan"
       className="plan-strip mx-5 -mb-4 rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
     >
@@ -412,7 +450,8 @@ export function PlanStrip({
       <div
         id={id}
         popover="auto"
-        onToggle={(e: ToggleEvent<HTMLDivElement>) => setOpen(e.newState === "open")}
+        // Before it shows, so it never shows empty.
+        onBeforeToggle={(e: ToggleEvent<HTMLDivElement>) => setOpen(e.newState === "open")}
         className="inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] w-[anchor-size(width)] overflow-y-auto rounded-xl border-0 bg-transparent p-0 text-foreground shadow-composer [position-area:top_span-right] [position-try-fallbacks:flip-block]"
       >
         {/* Only while open, so it mounts with the steps done so far drawn, not drawing. */}
@@ -429,22 +468,31 @@ const slack = 46;
 
 /**
  * Claude Code's proposed plan as a card: `children` is the plan, rendered. Past about 16 lines it
- * folds behind a fade, with Show full plan; the transcript keeps whether it's open, by `id`.
- * `actions` go at its foot, such as approving it (RYA-196).
+ * folds behind a fade, with Show full plan, and opens when focus moves into it; the transcript
+ * keeps whether it's open, by `id`. `actions` go at its foot, such as approving it (RYA-196).
  */
 export function ProposedPlan({
   id,
+  status,
   open,
   onToggle,
   actions,
   children,
 }: {
   id: string;
+  /** How its call ended: one that was denied or failed says so. */
+  status?: AgentToolStatus;
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
   actions?: ReactNode;
   children: ReactNode;
 }) {
+  const verdict =
+    status === "denied"
+      ? { label: "Not approved", icon: <Ban aria-hidden className="size-3.5" /> }
+      : status === "error"
+        ? { label: "Failed", icon: <CircleX aria-hidden className="size-3.5" /> }
+        : undefined;
   const headingId = useId();
   const content = useRef<HTMLDivElement>(null);
   const [long, setLong] = useState(false);
@@ -465,13 +513,21 @@ export function ProposedPlan({
     >
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-[13px]">
         <ClipboardList aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
-        <span id={headingId} className="font-medium">
+        <span id={headingId} className="flex-1 font-medium">
           Proposed plan
         </span>
+        {verdict && (
+          <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-danger">
+            {verdict.icon}
+            {verdict.label}
+          </span>
+        )}
       </div>
       <div
         className="relative overflow-hidden px-4 pt-3 pb-3.5"
         style={folded ? { maxHeight: collapsedHeight } : undefined}
+        // Tabbing into the fold, as to a code block's Copy, opens it rather than scroll within it.
+        onFocus={() => folded && onToggle(id, true)}
       >
         <div ref={content} className="proposed-plan">
           {children}

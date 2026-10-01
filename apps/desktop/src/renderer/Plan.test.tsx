@@ -3,7 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { AgentTodoItem, JsonValue } from "../protocol/generated/protocol";
+import type { AgentTodoItem, AgentToolStatus, JsonValue } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import type { LoaderStyle } from "./Loader";
 import {
@@ -67,6 +67,9 @@ test("a turn's first checklist becomes its plan, showing the turn's latest; late
     todo("t2", second),
     todoWrite("w3", "ok"),
     todo("t3", third),
+    // The same list again, as Codex sends its last one when the turn ends: nothing to say.
+    todoWrite("w4", "ok"),
+    todo("t4", steps("completed", "completed")),
   ]);
   // Each TodoWrite call goes, as its checklist stands for it.
   expect(rows.map((r) => r.kind)).toEqual(["user", "plan", "tool", "todo", "todo"]);
@@ -74,6 +77,42 @@ test("a turn's first checklist becomes its plan, showing the turn's latest; late
   expect(rows[1]).toMatchObject({ kind: "plan", key: "t1", items: third, latest: true });
   expect((rows[3] as PlanUpdate).previous).toBe(first);
   expect((rows[4] as PlanUpdate).previous).toBe(second);
+});
+
+test("a proposed plan starts afresh, so the work that carries it out gets its own card under it", () => {
+  const exit: Item = {
+    kind: "tool",
+    key: "x",
+    callId: "x",
+    name: "ExitPlanMode",
+    input: { plan: "## Plan" },
+  };
+  const during = steps("inProgress", "pending");
+  const after = steps("completed", "inProgress");
+  const rows = withPlans([
+    user("u1"),
+    todo("t1", during),
+    exit,
+    todo("t2", during),
+    todo("t3", after),
+  ]);
+  expect(rows.map((r) => [r.kind, r.key])).toEqual([
+    ["user", "u1"],
+    ["plan", "t1"],
+    ["proposedPlan", "x"],
+    // Not an unchanged list: the card before the proposal doesn't count.
+    ["plan", "t2"],
+    ["todo", "t3"],
+  ]);
+  expect(rows.filter((r): r is PlanRow => r.kind === "plan").map((p) => p.latest)).toEqual([
+    undefined,
+    true,
+  ]);
+  // The strip, too: nothing until the work after it writes a list.
+  expect(latestPlan([user("u1"), todo("t1", during), exit])).toBeUndefined();
+  expect(latestPlan([user("u1"), todo("t1", during), exit, todo("t2", after)])).toEqual({
+    items: after,
+  });
 });
 
 test("user rows split turns: each turn has its own plan, and only the last can be in progress", () => {
@@ -167,7 +206,19 @@ test("an update says what changed", () => {
     "Finished: Step 1, Step 2",
   );
   expect(planChanges([], steps("pending", "pending", "pending"))).toBe("Added 3 steps");
-  expect(planChanges(before, before)).toBe("");
+  // A done step taken up again reopens it, rather than starting it.
+  expect(planChanges([step("Read", "completed")], [step("Read", "inProgress")])).toBe(
+    "Reopened: Read",
+  );
+  // A renamed done step is new, not just finished.
+  expect(planChanges([step("Old", "completed")], [step("New", "completed")])).toBe(
+    "Added: New · Removed: Old",
+  );
+  // The same steps in a new order.
+  expect(planChanges(before, [before[2]!, before[0]!, before[1]!, before[3]!])).toBe(
+    "Reordered the steps",
+  );
+  expect(planChanges(before, [...before])).toBe("");
 });
 
 test("an update is one line: Updated the plan, and what changed", () => {
@@ -230,6 +281,27 @@ test("a step that finishes while the card shows draws its check; one done before
   expect(drawn()).toBe(0);
 });
 
+test("a done step keeps its check as steps come and go around it, or as it's renamed", () => {
+  const checks = () => [...document.querySelectorAll(".plan-check")];
+  const card = (...items: AgentTodoItem[]) =>
+    render(<PlanCard items={items} live loader={planning} />);
+  card(step("Read", "completed"), step("Build", "inProgress"));
+  const read = checks()[0];
+  // A step inserted above it: the same check, not drawn again.
+  card(step("Plan", "pending"), step("Read", "completed"), step("Build", "inProgress"));
+  expect(checks()[0]).toBe(read);
+  expect(document.querySelector(".plan-check-draw")).toBeNull();
+  // Removed again, and Build finishes: only Build's draws.
+  card(step("Read", "completed"), step("Build", "completed"));
+  expect(checks()[0]).toBe(read);
+  expect(document.querySelectorAll(".plan-check-draw")).toHaveLength(1);
+  // Renamed, a done step doesn't draw either; repeated text keeps one key each.
+  card(step("Read it", "completed"), step("Build", "completed"), step("Build", "pending"));
+  expect(document.querySelectorAll(".plan-check-draw")).toHaveLength(1);
+  card(step("Read it", "completed"), step("Build", "completed"), step("Build", "completed"));
+  expect(document.querySelectorAll(".plan-check-draw")).toHaveLength(2);
+});
+
 test("the strip is a labeled region: the step under way, progress, and a toggle for the whole plan", () => {
   const items = steps("completed", "completed", "inProgress", "pending", "pending");
   render(<PlanStrip items={items} active="Doing step 3" loader={planning} />);
@@ -240,13 +312,25 @@ test("the strip is a labeled region: the step under way, progress, and a toggle 
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   const popover = document.getElementById(toggle.getAttribute("popovertarget")!)!;
   expect(popover.getAttribute("popover")).toBe("auto");
-  // The card mounts only while it's open.
+  // The card mounts only while it's open, from just before it shows.
+  const toggling = (newState: string) =>
+    act(() => void popover.dispatchEvent(Object.assign(new Event("beforetoggle"), { newState })));
   expect(popover.childElementCount).toBe(0);
-  act(() => void popover.dispatchEvent(Object.assign(new Event("toggle"), { newState: "open" })));
+  toggling("open");
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
   expect(popover.querySelector('[role="group"]')!.textContent).toContain("2 of 5 done");
-  act(() => void popover.dispatchEvent(Object.assign(new Event("toggle"), { newState: "closed" })));
+  toggling("closed");
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+  // Going with focus in it, it hands focus on.
+  const returnFocus = vi.fn();
+  render(<PlanStrip items={items} loader={planning} returnFocus={returnFocus} />);
+  render(<p />);
+  expect(returnFocus).not.toHaveBeenCalled();
+  render(<PlanStrip items={items} loader={planning} returnFocus={returnFocus} />);
+  act(() => document.querySelector("button")!.focus());
+  render(<p />);
+  expect(returnFocus).toHaveBeenCalledOnce();
 
   // With nothing under way, the next step; with everything done, says so.
   render(<PlanStrip items={steps("completed", "pending")} loader={planning} />);
@@ -267,7 +351,7 @@ Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
 
 test("a proposed plan renders its Markdown safely, folds when long, and keeps room for actions", () => {
   const onToggle = vi.fn();
-  const plan = "## Plan\n\n1. Read <b>it</b>\n2. ![x](https://example.com/x.png)";
+  const plan = "## Plan\n\n1. Read <b>it</b>\n2. ![x](https://example.com/x.png)\n\n```\nls\n```";
   const proposed = (open: boolean, actions?: ReactNode) =>
     render(
       <ProposedPlan id="x" open={open} onToggle={onToggle} actions={actions}>
@@ -286,7 +370,10 @@ test("a proposed plan renders its Markdown safely, folds when long, and keeps ro
   expect(card.querySelector("b")).toBeNull();
   expect(card.querySelector("img")).toBeNull();
   // Short: no fold.
-  expect(card.querySelector("button")).toBeNull();
+  expect(card.querySelector("button[aria-expanded]")).toBeNull();
+  // Focus within doesn't open what isn't folded.
+  act(() => card.querySelector<HTMLButtonElement>('[aria-label="Copy code"]')!.focus());
+  expect(onToggle).not.toHaveBeenCalled();
 
   act(() => root!.unmount());
   root = undefined;
@@ -299,6 +386,10 @@ test("a proposed plan renders its Markdown safely, folds when long, and keeps ro
     document.querySelector<HTMLElement>(".proposed-plan")!.parentElement!.style.maxHeight,
   ).toBe("368px");
   act(() => more.click());
+  expect(onToggle).toHaveBeenLastCalledWith("x", true);
+  // Tabbing to a control under the fold, as a code block's Copy, opens it.
+  onToggle.mockClear();
+  act(() => document.querySelector<HTMLButtonElement>('[aria-label="Copy code"]')!.focus());
   expect(onToggle).toHaveBeenCalledWith("x", true);
 
   proposed(true, <button type="button">Approve</button>);
@@ -307,4 +398,20 @@ test("a proposed plan renders its Markdown safely, folds when long, and keeps ro
     document.querySelector<HTMLElement>(".proposed-plan")!.parentElement!.style.maxHeight,
   ).toBe("");
   expect([...document.querySelectorAll("button")].at(-1)!.textContent).toBe("Approve");
+});
+
+test("a proposed plan that was denied or failed says so", () => {
+  const header = (status?: AgentToolStatus) => {
+    render(
+      <ProposedPlan id="x" status={status} open={false} onToggle={() => {}}>
+        <MarkdownText text="## Plan" />
+      </ProposedPlan>,
+    );
+    const heading = document.querySelector('[role="group"] > div')!;
+    return [heading.textContent, heading.querySelector(".text-danger svg") !== null];
+  };
+  expect(header("denied")).toEqual(["Proposed planNot approved", true]);
+  expect(header("error")).toEqual(["Proposed planFailed", true]);
+  expect(header("ok")).toEqual(["Proposed plan", false]);
+  expect(header()).toEqual(["Proposed plan", false]);
 });
