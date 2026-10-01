@@ -26,7 +26,6 @@ pub use launchd::{install, status, uninstall};
 #[cfg(target_os = "linux")]
 pub use systemd::{install, status, uninstall};
 
-use crate::VERSION;
 use crate::paths::DataDir;
 
 /// wispd's service label: wisp's bundle id (`io.github.ryan-stoffel.wisp`, 0006) plus `.wispd`.
@@ -263,7 +262,7 @@ fn probe_initialize(data_dir: &DataDir) -> bool {
             protocol: ProtocolRange::SUPPORTED,
             client: ClientInfo {
                 name: "wispd-service".to_owned(),
-                version: VERSION.to_owned(),
+                version: crate::version().to_owned(),
                 machine_id: None,
             },
             capabilities: Capabilities::default(),

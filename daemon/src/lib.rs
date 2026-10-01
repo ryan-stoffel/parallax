@@ -71,12 +71,53 @@ pub mod usage;
 pub mod windows;
 pub mod worktree;
 
+/// The file next to a packaged `wispd` that holds its release version (0030). The app's package
+/// step writes it, so one `wispd` build can ship in many app versions.
+pub const VERSION_FILE: &str = "wispd.version";
+
 /// wispd's release version, reported by `wispd --version`, the protocol handshake
 /// (`initialize` and `host/version`), and the `LaunchAgent`'s probe.
 ///
-/// A build can set `WISP_VERSION` at compile time; without it, this falls back to the crate's own
-/// placeholder in `Cargo.toml`.
-pub const VERSION: &str = match option_env!("WISP_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+/// It is the first line of [`VERSION_FILE`] next to the running executable, or the crate's own
+/// placeholder in `Cargo.toml` when there is none (a cargo build). Read once, on first use, which
+/// `main` makes the start of the process: a `serve` that outlives an app update keeps reporting the
+/// version it started as, which is how the app knows to replace it (RYA-68).
+pub fn version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            // Through any symlink to the real file; the path as given if that fails.
+            .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe))
+            .and_then(|exe| stamped_version(&exe))
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned())
+    })
+}
+
+/// The version in [`VERSION_FILE`] beside `exe`, if the file is there and not blank.
+fn stamped_version(exe: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(exe.with_file_name(VERSION_FILE)).ok()?;
+    let version = text.lines().next()?.trim();
+    (!version.is_empty()).then(|| version.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{VERSION_FILE, stamped_version};
+
+    #[test]
+    fn the_version_file_beside_the_executable_wins_when_it_has_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("wispd");
+        assert_eq!(stamped_version(&exe), None, "no file");
+
+        std::fs::write(dir.path().join(VERSION_FILE), " \n").unwrap();
+        assert_eq!(stamped_version(&exe), None, "a blank file");
+
+        std::fs::write(dir.path().join(VERSION_FILE), "2609.13017.14512-nightly\n").unwrap();
+        assert_eq!(
+            stamped_version(&exe).as_deref(),
+            Some("2609.13017.14512-nightly")
+        );
+    }
+}

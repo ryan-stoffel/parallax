@@ -25,6 +25,34 @@ fn version_prints_name_and_version() {
     assert!(output.stderr.is_empty(), "{output:?}");
 }
 
+/// A packaged wispd reports the version the app's package step wrote beside it (0030).
+#[test]
+fn version_prints_the_version_file_beside_the_executable() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let exe = dir.path().join(
+        std::path::Path::new(env!("CARGO_BIN_EXE_wispd"))
+            .file_name()
+            .unwrap(),
+    );
+    std::fs::copy(env!("CARGO_BIN_EXE_wispd"), &exe).expect("copy wispd");
+    std::fs::write(
+        dir.path().join(wispd::VERSION_FILE),
+        "2609.13017.14512-nightly\n",
+    )
+    .unwrap();
+
+    let output = Command::new(&exe)
+        .arg("--version")
+        .output()
+        .expect("wispd should run");
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "wispd 2609.13017.14512-nightly\n"
+    );
+}
+
 #[test]
 fn unknown_argument_prints_usage_and_exits_2() {
     let output = wispd(&["--bogus"]);

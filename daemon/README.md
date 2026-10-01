@@ -2,7 +2,7 @@
 
 wisp's host daemon. Each user on a macOS, Linux, or Windows host runs their own, and it keeps projects and agents running in the background. Clients reach it through `wispd attach`, either on the same machine or on a host over SSH.
 
-Build it with `cargo build --release -p wispd`. On Linux that needs a C compiler for the bundled SQLite, such as Debian's `build-essential`, and on Windows the Visual Studio C++ build tools. `WISP_VERSION`, if set at compile time, is what `wispd --version` prints (`daemon/src/lib.rs` reads it with `option_env!`); otherwise it prints `Cargo.toml`'s placeholder.
+Build it with `cargo build --release -p wispd`. On Linux that needs a C compiler for the bundled SQLite, such as Debian's `build-essential`, and on Windows the Visual Studio C++ build tools. `wispd --version` prints the first line of `wispd.version` beside the executable, which the app's package step writes (0030), or `Cargo.toml`'s placeholder when there is none.
 
 The decisions behind it:
 
