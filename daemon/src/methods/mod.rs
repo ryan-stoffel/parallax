@@ -2,7 +2,8 @@
 //! table so every params and result type is the protocol's own.
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
-//! `coordinator`; #110 `threads`: `thread.rs`), and `host.rs` advertises the capability in
+//! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
+//! `projectEdit`: `project/update` in `project.rs`), and `host.rs` advertises the capability in
 //! `initialize`.
 
 mod accounts;
@@ -25,9 +26,10 @@ use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, R
 use wisp_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
-    AgentEvents, AgentFile, AgentList, AgentRequestChanges, AgentSend, AgentStart, ContextList,
-    ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
-    Initialize, ProjectCreate, ProjectList, RequestMethod, UsageGet,
+    AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges, AgentSend,
+    AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe,
+    HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList, ProjectStart, ProjectUpdate,
+    RequestMethod, UsageGet, UsageHistory,
 };
 use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
@@ -73,12 +75,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         HostVersion::NAME => {
             handle::<HostVersion, _, _>(&request, |p| ready(Ok(host::version(&context, p)))).await
         }
-        ProjectList::NAME => {
-            handle::<ProjectList, _, _>(&request, |p| project::list(&context, p)).await
-        }
-        ProjectCreate::NAME => {
-            handle::<ProjectCreate, _, _>(&request, |p| project::create(&context, p)).await
-        }
+        name if name.starts_with("project/") => project_method(&context, &request)
+            .await
+            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         AccountsList::NAME => {
             handle::<AccountsList, _, _>(&request, |p| accounts::list(&context, p)).await
         }
@@ -96,6 +95,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
                 .await
         }
         UsageGet::NAME => handle::<UsageGet, _, _>(&request, |p| usage::get(&context, p)).await,
+        UsageHistory::NAME => {
+            handle::<UsageHistory, _, _>(&request, |p| usage::history(&context, p)).await
+        }
         AccountsDefaultsGet::NAME => {
             handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
         }
@@ -154,7 +156,29 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     })
 }
 
-/// Answers an `agent/*` method (#156, #157), or `None` if there is no such method.
+/// Answers a `project/*` method (RYA-227), or `None` if there is no such method.
+async fn project_method(
+    context: &Context,
+    request: &Request,
+) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        ProjectList::NAME => {
+            handle::<ProjectList, _, _>(request, |p| project::list(context, p)).await
+        }
+        ProjectCreate::NAME => {
+            handle::<ProjectCreate, _, _>(request, |p| project::create(context, p)).await
+        }
+        ProjectStart::NAME => {
+            handle::<ProjectStart, _, _>(request, |p| project::start(context, p)).await
+        }
+        ProjectUpdate::NAME => {
+            handle::<ProjectUpdate, _, _>(request, |p| project::update(context, p)).await
+        }
+        _ => return None,
+    })
+}
+
+/// Answers an `agent/*` method (#156, #157, RYA-191), or `None` if there is no such method.
 async fn agent_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
     Some(match request.method.as_str() {
         AgentStart::NAME => handle::<AgentStart, _, _>(request, |p| agent::start(context, p)).await,
@@ -166,6 +190,7 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentEvents::NAME => {
             handle::<AgentEvents, _, _>(request, |p| agent::events(context, p)).await
         }
+        AgentImage::NAME => handle::<AgentImage, _, _>(request, |p| agent::image(context, p)).await,
         AgentDiff::NAME => handle::<AgentDiff, _, _>(request, |p| agent::diff(context, p)).await,
         AgentFile::NAME => handle::<AgentFile, _, _>(request, |p| agent::file(context, p)).await,
         AgentAccept::NAME => {
@@ -174,6 +199,9 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentRequestChanges::NAME => {
             handle::<AgentRequestChanges, _, _>(request, |p| agent::request_changes(context, p))
                 .await
+        }
+        AgentOpenPr::NAME => {
+            handle::<AgentOpenPr, _, _>(request, |p| agent::open_pr(context, p)).await
         }
         _ => return None,
     })

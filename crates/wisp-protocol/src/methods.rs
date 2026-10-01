@@ -1,7 +1,8 @@
 //! The method table: every method, with its params and result types.
 //!
 //! Each method is a marker type that implements [`RequestMethod`] or [`NotificationMethod`].
-//! Later milestones add methods here, each gated on a capability.
+//! The same table produces the generated TypeScript's method maps, so a method cannot exist on
+//! one side only. Later milestones add methods here, each gated on a capability.
 //!
 //! ```
 //! use wisp_protocol::HostHealthParams;
@@ -30,16 +31,17 @@ use crate::{
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
     AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult,
-    AgentFileParams, AgentFileResult, AgentListParams, AgentListResult, AgentRequestChangesParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams, ContextListResult,
-    ContextReadParams, ContextReadResult, ContextWriteParams, ContextWriteResult,
-    EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
-    EventsUnsubscribeResult, HostHealthParams, HostHealthResult, HostVersionParams,
-    HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
-    ProjectCreateResult, ProjectListParams, ProjectListResult, RepoAddParams, RepoAddResult,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
-    UsageGetResult,
+    AgentFileParams, AgentFileResult, AgentImageParams, AgentListParams, AgentListResult,
+    AgentOpenPrParams, AgentOpenPrResult, AgentRequestChangesParams, AgentRunResult,
+    AgentSendParams, AgentStartParams, ContextListParams, ContextListResult, ContextReadParams,
+    ContextReadResult, ContextWriteParams, ContextWriteResult, EventsEventParams,
+    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
+    HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams,
+    InitializeResult, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
+    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
+    RepoAddParams, RepoAddResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -60,7 +62,6 @@ pub trait NotificationMethod {
     type Params: Serialize + DeserializeOwned + TS + 'static;
 }
 
-#[cfg(test)]
 pub(crate) trait Visitor {
     fn request<M: RequestMethod>(&mut self, docs: &[&str]);
     fn notification<N: NotificationMethod>(&mut self, docs: &[&str]);
@@ -104,7 +105,6 @@ macro_rules! method_table {
             }
         )*
 
-        #[cfg(test)]
         pub(crate) fn visit(visitor: &mut impl Visitor) {
             $(visitor.request::<$request>(&[$($request_doc),*]);)*
             $(visitor.notification::<$notification>(&[$($notification_doc),*]);)*
@@ -117,7 +117,7 @@ method_table! {
         /// `initialize`: the handshake. It must be the first request on a connection; wispd
         /// answers anything before it with `notInitialized`.
         Initialize = "initialize": InitializeParams => InitializeResult;
-        /// `host/health`: uptime, store state, and running agents. The editor sends it every
+        /// `host/health`: uptime, store state, and running agents. The app sends it every
         /// 30 seconds and on wake, as a heartbeat.
         HostHealth = "host/health": HostHealthParams => HostHealthResult;
         /// `host/version`: wispd's release and protocol versions, operating system, and CPU
@@ -150,6 +150,9 @@ method_table! {
         /// `usage/get`: per-account tokens and cost for today and this week (local time on this
         /// host), and the latest limit windows.
         UsageGet = "usage/get": UsageGetParams => UsageGetResult;
+        /// `usage/history`: tokens and cost since a time, summed per UTC hour, account, and
+        /// model, and each account's run count over the same range.
+        UsageHistory = "usage/history": UsageHistoryParams => UsageHistoryResult;
         /// `accounts/defaults/get`: this host's default account for the coordinator role and for
         /// a worker role, absent where none is set (#119).
         AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
@@ -179,6 +182,9 @@ method_table! {
         AgentList = "agent/list": AgentListParams => AgentListResult;
         /// `agent/events`: one run's events from wispd's log, a page at a time.
         AgentEvents = "agent/events": AgentEventsParams => AgentEventsResult;
+        /// `agent/image`: an image sent with one of a run's messages, by an id from its
+        /// `turnStarted`. Gated on the `promptImages` capability.
+        AgentImage = "agent/image": AgentImageParams => PromptImage;
         /// `agent/diff`: the files that differ between a run's base and its latest commit, each
         /// with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
         /// capability, like every review method.
@@ -193,6 +199,10 @@ method_table! {
         /// `agent/requestChanges`: the reviewer's follow-up to a run, sent as `agent/send` sends
         /// a message. Idempotent on its client-generated turn id.
         AgentRequestChanges = "agent/requestChanges": AgentRequestChangesParams => AgentRunResult;
+        /// `agent/openPr`: pushes a finished run's branch to the repository's `origin` and opens
+        /// a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
+        /// `openPr` capability.
+        AgentOpenPr = "agent/openPr": AgentOpenPrParams => AgentOpenPrResult;
         /// `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
         /// (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
         ThreadList = "thread/list": ThreadListParams => ThreadListResult;
@@ -208,6 +218,15 @@ method_table! {
         /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;
+        /// `project/start`: starts a project's coordinator chat, a no-write run in its repository
+        /// with wispd's coordinator tools (0024), idempotent on its client-generated run id. It
+        /// replaces the project's last coordinator unless that one is running. Gated on the
+        /// `coordinator` capability.
+        ProjectStart = "project/start": ProjectStartParams => AgentRunResult;
+        /// `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
+        /// it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
+        /// `projectEdit` capability, like `Project.icon`.
+        ProjectUpdate = "project/update": ProjectUpdateParams => ProjectUpdateResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -259,6 +278,7 @@ mod tests {
                 "accounts/list",
                 "accounts/refresh",
                 "usage/get",
+                "usage/history",
                 "accounts/defaults/get",
                 "accounts/defaults/set",
                 "context/list",
@@ -269,15 +289,19 @@ mod tests {
                 "agent/cancel",
                 "agent/list",
                 "agent/events",
+                "agent/image",
                 "agent/diff",
                 "agent/file",
                 "agent/accept",
                 "agent/requestChanges",
+                "agent/openPr",
                 "thread/list",
                 "repo/add",
                 "thread/start",
                 "thread/archive",
                 "thread/delete",
+                "project/start",
+                "project/update",
                 "$/cancelRequest",
                 "events/event",
             ]

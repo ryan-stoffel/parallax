@@ -1,0 +1,11 @@
+# A real `codex exec --json` worker run: codex-cli 0.157.1, macOS, ChatGPT login, 2026-09-28.
+# Only the worktree path is changed.
+{"type":"thread.started","thread_id":"01a0eaf8-7c27-7762-a05e-9eae0197d57c"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"1. Run `echo hello` in the shell.\n2. Create `hello.txt` containing `hi` using `apply_patch`.\n\nA plan tool isn’t available in this session, so I’ve stated the plan here.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo hello'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo hello'","aggregated_output":"hello\n","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"file_change","changes":[{"path":"/Users/u/Library/Application Support/wisp/worktrees/app-1a2b/run/hello.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/Users/u/Library/Application Support/wisp/worktrees/app-1a2b/run/hello.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":55274,"cached_input_tokens":36352,"cache_write_input_tokens":0,"output_tokens":184,"reasoning_output_tokens":31}}

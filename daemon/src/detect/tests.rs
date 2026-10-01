@@ -230,6 +230,8 @@ async fn codexs_plan_comes_from_the_app_server_only_when_signed_in() {
     assert_eq!(codex.signed_in, Some(true));
     assert_eq!(codex.auth_kind, Some(AuthKind::Subscription));
     assert_eq!(codex.plan.as_deref(), Some("plus"));
+    // A worker's version check reads it (0013).
+    assert_eq!(codex.version.as_deref(), Some("0.157.1"));
 }
 
 #[tokio::test]
@@ -270,6 +272,60 @@ async fn a_cached_list_is_reused_until_a_refresh_or_the_ttl() {
         find(&refreshed.clis, CliKind::Claude).signed_in,
         Some(false)
     );
+}
+
+#[tokio::test]
+async fn get_probes_only_the_cli_asked_for() {
+    let fixture = Fixture::new();
+    // Each fake CLI logs what it's asked to a file of its own.
+    let log = |name: &str| fixture.root().join(format!("{name}.log"));
+    let fake = |name: &str, answer: &str| {
+        let script = format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\n{answer}\n",
+            log(name).display()
+        );
+        fixture.install(name, &script);
+    };
+    fake(
+        "claude",
+        r#"case "$*" in "auth status") echo '{"loggedIn":true}';; esac"#,
+    );
+    fake("agent", "exit 0");
+    let status_runs = |name: &str| {
+        std::fs::read_to_string(log(name))
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.starts_with("auth status") || line.starts_with("status"))
+            .count()
+    };
+    let detector = CliDetector::new(fixture.launcher(fixture.env()), Duration::from_secs(2));
+
+    let claude = detector.get(CliKind::Claude).await;
+    assert_eq!(claude.signed_in, Some(true));
+    assert_eq!(status_runs("claude"), 1);
+    assert_eq!(
+        status_runs("agent"),
+        0,
+        "asking for Claude ran Cursor's status"
+    );
+
+    // A second ask is served from the first probe.
+    assert_eq!(detector.get(CliKind::Claude).await, claude);
+    assert_eq!(status_runs("claude"), 1);
+
+    // The full list probes Cursor, so the check above could have failed, and the list serves what
+    // `refresh_one` just probed rather than the older entry.
+    detector.list().await;
+    assert_eq!(status_runs("agent"), 1);
+    detector.refresh_one(CliKind::Claude).await;
+    assert_eq!(
+        status_runs("claude"),
+        3,
+        "list and refresh_one each probed Claude"
+    );
+    detector.list().await;
+    detector.get(CliKind::Claude).await;
+    assert_eq!(status_runs("claude"), 3, "both were served from the cache");
 }
 
 /// Proves detection never opens a vendor's credential files: with sentinel files under fake

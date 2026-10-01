@@ -1,0 +1,346 @@
+name: Release
+
+# The two release channels (0028): a nightly prerelease per push to develop and a standard release
+# per push to main, each with the packaged app for the five targets and the update metadata the
+# app's updater reads attached (0029, 0030). Each build attaches its own files as soon as it's
+# done, so the signed macOS app is out about two minutes after a push; its dmg is notarized
+# after. Only this workflow can write to the repository's releases. It builds and publishes; it
+# runs no tests or lint, because the PR that landed the commit already passed CI.
+on:
+  push:
+    branches: [develop, main]
+  # Runs everything on any branch, signing and notarizing included, and never publishes: the
+  # publish steps print what they would do. Proves the pipeline before merge.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time per branch, so each release's notes start at the one before it. If pushes
+# queue up, the newest waits and the ones between are skipped; their PRs still land in its notes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The version, tag, and channel for this commit, and whether a build is needed at all. On push
+  # it creates the release as a draft, with its notes, for the builds to attach to.
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      channel: ${{ steps.plan.outputs.channel }}
+      build: ${{ steps.draft.outputs.build }}
+    steps:
+      - name: Plan the release
+        id: plan
+        run: |
+          # The version is the commit's committer time in UTC as YYMM.1DDHH.1MMSS (0030): the same
+          # on a re-run, rising with every commit, and each part at most 65535 for Windows. The
+          # leading 1s keep every tag the same length, because GitHub orders releases from the
+          # same day by tag name as text, and the updater takes the first one it finds.
+          t=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" --jq .commit.committer.date)
+          [[ $t =~ ^20([0-9]{2})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$ ]]
+          m=("${BASH_REMATCH[@]}")
+          version="${m[1]}${m[2]}.1${m[3]}${m[4]}.1${m[5]}${m[6]}"
+          # Only main is the standard channel: electron-updater's `latest`. Any other branch, from
+          # workflow_dispatch, builds as a nightly, a prerelease of the same time, so the standard
+          # release of a commit is newer than its nightly.
+          channel=nightly
+          if [ "$GITHUB_REF" = refs/heads/main ]; then channel=latest; else version+=-nightly; fi
+          {
+            echo "tag=v$version"
+            echo "version=$version"
+            echo "channel=$channel"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+
+      # A dry run on workflow_dispatch, which never publishes.
+      - name: Create the draft release
+        id: draft
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          CHANNEL: ${{ steps.plan.outputs.channel }}
+          DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
+        run: scripts/ci/draft-release >> "$GITHUB_OUTPUT"
+
+  # The installer on each target's own runner (0023, 0029), the same five as ci.yml's rust job,
+  # attached to the release as soon as it's built (0028).
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    # For the publish step. Of the run steps, only it has the token in its environment: in the
+    # others it made electron-builder try to publish. checkout and setup-node still get it through
+    # their default `token` input.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      WISP_VERSION: ${{ needs.plan.outputs.version }}
+      # Where package-app keeps the release wispd between runs (see "Restore wispd").
+      WISPD_BIN: target/release-wispd/wispd${{ startsWith(matrix.os, 'windows') && '.exe' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # wispd reads its version from a file the package step writes beside it (0030), so a commit
+      # that changes no Rust reuses the last release wispd and skips the Rust build. The key covers
+      # everything that goes into the binary.
+      - name: Restore wispd
+        id: wispd
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.WISPD_BIN }}
+          key: wispd-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'daemon/**', 'crates/**', 'scripts/ci/package-app') }}
+
+      # package-app still needs rustc for the target, cached or not.
+      - name: Cache Rust toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/*
+            !~/.rustup/toolchains/stable-*
+          key: rustup-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      # The Windows arm64 image may not ship rustup.
+      - name: Install rustup
+        if: runner.os == 'Windows'
+        run: |
+          if ! command -v rustup > /dev/null; then
+            arch=$([ "$RUNNER_ARCH" = ARM64 ] && echo aarch64 || echo x86_64)
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/rustup-init.exe" \
+              "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe"
+            "$RUNNER_TEMP/rustup-init.exe" -y --default-toolchain none --profile minimal --no-modify-path
+            printf '%s\\.cargo\\bin\n' "$USERPROFILE" >> "$GITHUB_PATH"
+          fi
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.wispd.outputs.cache-hit != 'true'
+        with:
+          key: release-${{ runner.os }}-${{ runner.arch }}
+
+      # The static musl wispd (0023) compiles bundled SQLite with musl-gcc.
+      - name: Install musl-tools
+        if: runner.os == 'Linux' && steps.wispd.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      # corepack provides the pnpm pinned in package.json's packageManager.
+      - name: Install pnpm
+        id: pnpm
+        working-directory: apps/desktop
+        run: |
+          corepack enable
+          echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Package the app
+        if: runner.os != 'macOS'
+        run: scripts/ci/package-app
+
+      # The signing secrets reach only this step. electron-builder signs everything in the bundle
+      # with the Developer ID certificate and the hardened runtime, then builds the dmg and zip. It
+      # doesn't notarize, with no APPLE_API_* here: notarize does, after publishing (0030). The
+      # certificate goes into a keychain made here and named by CSC_KEYCHAIN: electron-builder
+      # 26.15.3's own CSC_LINK import unlocks its keychain with the certificate's password, which
+      # fails.
+      - name: Package and sign the app
+        if: runner.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          CSC_KEYCHAIN=$RUNNER_TEMP/signing.keychain-db
+          password=$(openssl rand -base64 32)
+          security create-keychain -p "$password" "$CSC_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$CSC_KEYCHAIN"
+          security unlock-keychain -p "$password" "$CSC_KEYCHAIN"
+          (umask 077 && printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/certificate.p12")
+          security import "$RUNNER_TEMP/certificate.p12" -k "$CSC_KEYCHAIN" -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$CSC_KEYCHAIN" > /dev/null
+          # shellcheck disable=SC2046 # one keychain path per word
+          security list-keychains -d user -s "$CSC_KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          export CSC_KEYCHAIN
+          unset CSC_LINK CSC_KEY_PASSWORD
+          scripts/ci/package-app
+
+      # Before anything is published. Gatekeeper's own check (spctl) needs the notarization, so
+      # notarize runs it.
+      - name: Verify the app's signature
+        if: runner.os == 'macOS'
+        run: codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/Wisp.app
+
+      # Straight from the runner to plan's draft, then publishes it: the first build done makes the
+      # release visible. A dry run on workflow_dispatch.
+      - name: Publish this build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
+        run: scripts/ci/publish-build
+
+      # On workflow_dispatch the installers stay in the run's artifacts, which notarize reads. They
+      # are compressed already.
+      - name: Upload the installer
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            apps/desktop/release/wisp-*
+            apps/desktop/release/latest*.yml
+            apps/desktop/release/nightly*.yml
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: true
+
+      # On workflow_dispatch, what finish's dry run joins. On push it reads the release instead.
+      - name: Upload the Windows update metadata
+        if: github.event_name != 'push' && runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-update-${{ matrix.os }}
+          path: apps/desktop/release/${{ needs.plan.outputs.channel }}-win-*.yml
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # After every build, off the path to the update: joins the Windows builds' update metadata, as
+  # attached to the release, and when all five succeeded writes SHA256SUMS. A dry run on
+  # workflow_dispatch, from the builds' artifacts.
+  finish:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.outputs.build == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: github.event_name != 'push'
+        with:
+          pattern: windows-update-*
+          path: windows
+          merge-multiple: true
+
+      - name: Finish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          ALL_BUILT: ${{ needs.build.result == 'success' }}
+          DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
+        run: scripts/ci/finish-release windows
+
+  # Notarizes the published dmg, which also notarizes the app inside it, off the path to the
+  # update: Squirrel.Mac needs the update signed, not notarized (0030). Until it's done, a dmg
+  # downloaded by hand may get a Gatekeeper prompt. Without a staple, Gatekeeper finds the ticket
+  # online. A failure fails this job and leaves the release published. With no dmg, because the
+  # macOS build failed, it skips: that build's own failure is the alert.
+  notarize:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.outputs.build == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Download the published dmg
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          mkdir dmg
+          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          if grep -q '^wisp-.*\.dmg$' <<< "$assets"; then
+            gh release download "$TAG" --pattern 'wisp-*.dmg' --dir dmg
+          fi
+
+      - name: Download the built dmg
+        if: github.event_name != 'push'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: installer-macos-26
+          path: dmg
+          merge-multiple: true
+
+      # The API key reaches only this step.
+      - name: Notarize the dmg and verify the app
+        working-directory: dmg
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          shopt -s nullglob
+          dmg=(wisp-*.dmg)
+          if [ ${#dmg[@]} = 0 ]; then
+            echo "::notice::No dmg to notarize: the macOS build didn't produce one."
+            exit 0
+          fi
+          key=$RUNNER_TEMP/apple-api-key.p8
+          (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
+          unset APPLE_API_KEY_P8
+          result=$(xcrun notarytool submit "${dmg[0]}" --key "$key" --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" --wait --output-format json) || true
+          echo "$result"
+          if [ "$(jq -r .status <<< "$result")" != Accepted ]; then
+            xcrun notarytool log "$(jq -r .id <<< "$result")" --key "$key" \
+              --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" || true
+            rm -f "$key"
+            exit 1
+          fi
+          rm -f "$key"
+          # What a fresh download meets: Gatekeeper on the dmg, then on the app inside.
+          spctl --assess --type open --context context:primary-signature --verbose "${dmg[0]}"
+          hdiutil attach "${dmg[0]}" -nobrowse -readonly -mountpoint "$RUNNER_TEMP/wisp"
+          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/wisp/Wisp.app"
+          spctl --assess --type execute --verbose "$RUNNER_TEMP/wisp/Wisp.app"
+          hdiutil detach "$RUNNER_TEMP/wisp"

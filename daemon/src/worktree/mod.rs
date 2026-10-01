@@ -13,13 +13,15 @@
 //! and stores its row, including [`CreatedWorktree::git_dir`], in `wisp-store`'s `worktrees`
 //! table, and a finished run is committed with [`WorktreeManager::commit_all`] and measured with
 //! [`WorktreeManager::diff_stat`]. A client reviews the commit through
-//! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157).
+//! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
+//! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (RYA-168).
 //!
 //! # Layout and naming
 //!
 //! A worktree lives at `<data dir>/worktrees/<repo slug>/<run id>`, where `<repo slug>` is the
 //! repo's directory name plus a short hash of its canonical path (so two repos named the same
-//! thing never collide, and the folder stays readable). Its branch is `wisp/<short run id>`,
+//! thing never collide, and the folder stays readable). Its branch is `wisp/<short run id>`
+//! (or `wisp/<slug>` for a named one, see [`WorktreeManager::create_named`]),
 //! `<short run id>` being the first 8 hex digits of the SHA-256 of the run id — the same
 //! short-hash idea [`crate::paths::DataDir`] uses for its socket fallback, and collision-free in
 //! the way a prefix of the run id's own (time-ordered) `UUIDv7` bytes would not be.
@@ -61,8 +63,10 @@
 //! still read is the pinned repository's own local config, which the worker cannot write.
 //!
 //! [`WorktreeManager::create`] and [`WorktreeManager::remove`] are not scoped this way: their git
-//! commands run against `repo_root`, the user's own checkout, which a worker never writes, so
-//! there is no `.git` file or repo-local config of the worker's to distrust there. They still run
+//! commands run against `repo_root`, the user's own checkout, which a sandboxed worker never
+//! writes, so there is no `.git` file or repo-local config of the worker's to distrust there. A
+//! coordinator or a worker in Bypass Permissions can write it, but either can already run any
+//! command as the user (0027). They still run
 //! with hooks off, like every git call wispd makes (#157, #191): once a run is accepted, the
 //! checkout's hooks can include files the worker wrote.
 //!
@@ -88,11 +92,15 @@
 //! repository's git folder — so this needs an unusual repository configuration to matter; #175
 //! tracks closing it.
 
+mod pull_request;
 mod review;
 mod scratch;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
+#[cfg(all(test, windows))]
+mod windows_tests;
 
+pub use pull_request::PrError;
 pub use review::{
     AcceptError, Accepted, Blob, CommitDiff, FileDiff, MAX_BLOB_BYTES, MergeHow, validate_repo_path,
 };
@@ -122,6 +130,12 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The most bytes of unified diff [`WorktreeManager::diff`] returns before truncating. Diffs,
 /// like everything else, come through paged or capped methods (decision record 0007).
 pub const DEFAULT_MAX_DIFF_BYTES: usize = 1024 * 1024;
+
+/// The longest line a git call whose whole output is read may write (RYA-143). A `-z` output has
+/// no newline, so it is one line: 64 MiB holds about 800k paths. A longer line fails the call.
+// ponytail: past this, Accept and `agent/diff` fail loudly; read `-z` output split on NUL, with a
+// total cap, if a real repository gets there.
+const DEFAULT_MAX_GIT_LINE_BYTES: usize = 64 * 1024 * 1024;
 
 const WORKTREES_DIR: &str = "worktrees";
 
@@ -185,12 +199,25 @@ fn indexed_git_config_vars(base: &Environment) -> Vec<OsString> {
 /// through.
 const GIT_SAFE_HOME_DIR: &str = "git-safe-home";
 
+/// The null device as git is given it, for `core.hooksPath` and `GIT_CONFIG_GLOBAL` (0023).
+/// Git for Windows reads `/dev/null` in `core.hooksPath` as `C:\dev\null`, a folder any user of
+/// the machine may create, so Windows uses `NUL`, a reserved name no checkout can create.
+pub(crate) const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+
+/// `-c` with [`NULL_DEVICE`] as `core.hooksPath`: no hooks run.
+pub(crate) const NO_HOOKS: &str = if cfg!(windows) {
+    "core.hooksPath=NUL"
+} else {
+    "core.hooksPath=/dev/null"
+};
+
 /// `-c` overrides applied to every git command scoped to a worker's worktree (#166), neutralizing
 /// what repo-local config and tracked files can otherwise make git execute:
 ///
-/// - `core.hooksPath=/dev/null` — no hooks run, wherever `core.hooksPath` points, including a
-///   tracked folder such as husky's `.husky/_`. `--no-verify` alone only skips `pre-commit` and
-///   `commit-msg`; `post-commit` and (on `git add`) `post-index-change` still run without this.
+/// - `core.hooksPath=/dev/null` ([`NO_HOOKS`], `NUL` on Windows) — no hooks run, wherever
+///   `core.hooksPath` points, including a tracked folder such as husky's `.husky/_`.
+///   `--no-verify` alone only skips `pre-commit` and `commit-msg`; `post-commit` and (on
+///   `git add`) `post-index-change` still run without this.
 /// - `core.fsmonitor=false` — no filesystem monitor hook.
 /// - `core.pager=cat`, `diff.external=` — no pager or external diff tool.
 /// - `core.sshCommand=false` — if anything ever triggered a transport, no attacker-chosen SSH
@@ -204,7 +231,7 @@ const GIT_SAFE_HOME_DIR: &str = "git-safe-home";
 /// worker-writable — is the only place left a filter, or a diff or merge driver, could be
 /// configured.
 const WORKTREE_GIT_CONFIG: &[(&str, &str)] = &[
-    ("core.hooksPath", "/dev/null"),
+    ("core.hooksPath", NULL_DEVICE),
     ("core.fsmonitor", "false"),
     ("core.pager", "cat"),
     ("core.sshCommand", "false"),
@@ -249,7 +276,7 @@ pub enum WorktreeError {
         /// The repository (or worktree) that lacks an identity.
         repo: PathBuf,
     },
-    /// A git command exited with a non-zero status.
+    /// A git command exited with a non-zero status, or wrote a line too long to read (RYA-143).
     #[error("`git {}` in {} failed: {detail}", .args.join(" "), .cwd.display())]
     GitFailed {
         /// Where it ran.
@@ -383,6 +410,7 @@ pub struct WorktreeManager {
     git_safe_home: PathBuf,
     timeout: Duration,
     max_diff_bytes: usize,
+    max_git_line_bytes: usize,
     merge_timeout: Duration,
     repo_locks: Arc<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>>,
 }
@@ -398,6 +426,7 @@ impl WorktreeManager {
             git_safe_home: data_dir_root.join(GIT_SAFE_HOME_DIR),
             timeout: DEFAULT_TIMEOUT,
             max_diff_bytes: DEFAULT_MAX_DIFF_BYTES,
+            max_git_line_bytes: DEFAULT_MAX_GIT_LINE_BYTES,
             merge_timeout: review::MERGE_TIMEOUT,
             repo_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
@@ -424,6 +453,13 @@ impl WorktreeManager {
         self
     }
 
+    /// Overrides the longest line a git call read whole may write, 64 MiB by default.
+    #[must_use]
+    pub fn with_max_git_line_bytes(mut self, max_git_line_bytes: usize) -> Self {
+        self.max_git_line_bytes = max_git_line_bytes;
+        self
+    }
+
     /// The wisp-owned folder every worktree lives under.
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -446,6 +482,23 @@ impl WorktreeManager {
         run_id: RunId,
         base: Option<&str>,
     ) -> Result<CreatedWorktree, WorktreeError> {
+        self.create_named(repo_path, run_id, base, None).await
+    }
+
+    /// [`WorktreeManager::create`] with the branch `wisp/<slug>` instead of `wisp/<short run id>`
+    /// when `slug` is given ([`valid_branch_slug`]). A branch that already has the name gets the
+    /// short run id after it.
+    ///
+    /// # Errors
+    ///
+    /// As [`WorktreeManager::create`], plus [`WorktreeError::GitFailed`] for an invalid `slug`.
+    pub async fn create_named(
+        &self,
+        repo_path: &Path,
+        run_id: RunId,
+        base: Option<&str>,
+        slug: Option<&str>,
+    ) -> Result<CreatedWorktree, WorktreeError> {
         let repo_root = self.repo_root(repo_path).await?;
         let _guard = self.lock_repo(&repo_root).await;
 
@@ -456,7 +509,30 @@ impl WorktreeManager {
             (self.resolve_commit(&repo_root, "HEAD").await?, dirty)
         };
 
-        let branch = format!("wisp/{}", short_hash(&run_id.to_string()));
+        let short = short_hash(&run_id.to_string());
+        let branch = match slug {
+            Some(slug) if valid_branch_slug(slug) => {
+                let named = format!("wisp/{slug}");
+                let taken = self
+                    .run_git(
+                        &repo_root,
+                        &[
+                            "rev-parse",
+                            "--verify",
+                            "--quiet",
+                            &format!("refs/heads/{named}"),
+                        ],
+                    )
+                    .await?
+                    .success();
+                if taken {
+                    format!("{named}-{short}")
+                } else {
+                    named
+                }
+            }
+            _ => format!("wisp/{short}"),
+        };
         let path = self
             .root
             .join(project_dir_name(&repo_root))
@@ -908,8 +984,9 @@ impl WorktreeManager {
     }
 
     /// Runs `git args` in `cwd` and returns its output, whatever its exit status. Only
-    /// [`WorktreeError::Spawn`] and [`WorktreeError::Timeout`] are possible failures here; callers
-    /// that want a non-zero exit turned into an error use [`WorktreeManager::run_git_ok`].
+    /// [`WorktreeError::Spawn`], [`WorktreeError::Timeout`], and [`WorktreeError::GitFailed`] for
+    /// a line too long to read (see [`collect`]) are possible failures here; callers that want a
+    /// non-zero exit turned into an error use [`WorktreeManager::run_git_ok`].
     ///
     /// Every call runs with `core.hooksPath=/dev/null` (#157, #191): no git command wispd runs
     /// in the user's checkout ever runs a repository hook. Once a run is accepted, the
@@ -928,7 +1005,7 @@ impl WorktreeManager {
         limit: Duration,
     ) -> Result<GitOutput, WorktreeError> {
         let mut spec = ProcessSpec::new("git", cwd);
-        spec.args = ["-c", "core.hooksPath=/dev/null"]
+        spec.args = ["-c", NO_HOOKS]
             .iter()
             .chain(args)
             .map(|arg| OsString::from(*arg))
@@ -939,19 +1016,21 @@ impl WorktreeManager {
             .collect();
         spec.inject.set("GIT_TERMINAL_PROMPT", "0");
         spec.stdin = StdinMode::Null;
+        spec.limits.max_line_bytes = self.max_git_line_bytes;
 
         let process = self.launcher.spawn(&spec)?;
-        match timeout(limit, collect(process)).await {
-            Ok((stdout, exit)) => Ok(GitOutput {
-                stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                exit,
-            }),
-            Err(_) => Err(WorktreeError::Timeout {
+        let Ok(collected) = timeout(limit, collect(process, cwd, args)).await else {
+            return Err(WorktreeError::Timeout {
                 cwd: cwd.to_owned(),
                 args: owned_args(args),
                 timeout: limit,
-            }),
-        }
+            });
+        };
+        let (stdout, exit) = collected?;
+        Ok(GitOutput {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            exit,
+        })
     }
 
     /// Like [`WorktreeManager::run_git`], but a non-zero exit becomes [`WorktreeError::GitFailed`]
@@ -970,29 +1049,30 @@ impl WorktreeManager {
 
     /// Runs `git args` against `work_tree`, with the git directory pinned to `git_dir` and every
     /// execution vector `work_tree`'s tracked files or repo-local config could reach neutralized
-    /// (#166): see the module documentation and [`WORKTREE_GIT_CONFIG`]. Like [`Self::run_git`],
-    /// only [`WorktreeError::Spawn`], [`WorktreeError::Timeout`], and now [`WorktreeError::Io`]
-    /// (preparing the dedicated `HOME`) are possible failures; [`Self::run_worktree_git_ok`] also
-    /// turns a non-zero exit into an error.
+    /// (#166): see the module documentation and [`WORKTREE_GIT_CONFIG`]. It fails like
+    /// [`Self::run_git`], and with [`WorktreeError::Io`] when preparing the dedicated `HOME`
+    /// fails; [`Self::run_worktree_git_ok`] also turns a non-zero exit into an error.
     async fn run_worktree_git(
         &self,
         work_tree: &Path,
         git_dir: &Path,
         args: &[&str],
     ) -> Result<GitOutput, WorktreeError> {
-        let spec = self.worktree_spec(work_tree, git_dir, args).await?;
+        let mut spec = self.worktree_spec(work_tree, git_dir, args).await?;
+        spec.limits.max_line_bytes = self.max_git_line_bytes;
         let process = self.launcher.spawn(&spec)?;
-        match timeout(self.timeout, collect(process)).await {
-            Ok((stdout, exit)) => Ok(GitOutput {
-                stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                exit,
-            }),
-            Err(_) => Err(WorktreeError::Timeout {
+        let Ok(collected) = timeout(self.timeout, collect(process, work_tree, args)).await else {
+            return Err(WorktreeError::Timeout {
                 cwd: work_tree.to_owned(),
                 args: owned_args(args),
                 timeout: self.timeout,
-            }),
-        }
+            });
+        };
+        let (stdout, exit) = collected?;
+        Ok(GitOutput {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            exit,
+        })
     }
 
     /// The process spec for `git args` scoped to a worker's worktree: see
@@ -1020,7 +1100,7 @@ impl WorktreeManager {
             .collect();
         spec.inject.set("GIT_TERMINAL_PROMPT", "0");
         spec.inject.set("GIT_CONFIG_NOSYSTEM", "1");
-        spec.inject.set("GIT_CONFIG_GLOBAL", "/dev/null");
+        spec.inject.set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
         spec.inject
             .set("HOME", self.git_safe_home.to_string_lossy().into_owned());
         spec.stdin = StdinMode::Null;
@@ -1092,7 +1172,15 @@ fn owned_args(args: &[&str]) -> Vec<String> {
 /// Reads every line of `process`'s stdout until it exits, joining lines back with `\n`. The exact
 /// framing of the original bytes doesn't matter here: every caller either parses the result line
 /// by line or trims it as one block of text.
-async fn collect(mut process: Process) -> (Vec<u8>, Exit) {
+///
+/// A line over the process's limit fails `git args` in `cwd` with [`WorktreeError::GitFailed`]
+/// rather than being skipped (RYA-143): a `-z` output is one line, so skipping it would read as
+/// no output at all, such as a commit with no changed files.
+async fn collect(
+    mut process: Process,
+    cwd: &Path,
+    args: &[&str],
+) -> Result<(Vec<u8>, Exit), WorktreeError> {
     let mut stdout = Vec::new();
     loop {
         match process.next().await {
@@ -1100,11 +1188,29 @@ async fn collect(mut process: Process) -> (Vec<u8>, Exit) {
                 stdout.extend_from_slice(&line);
                 stdout.push(b'\n');
             }
-            Some(Output::Oversized { .. }) => {}
-            Some(Output::Exited(exit)) => return (stdout, exit),
+            Some(Output::Oversized { bytes }) => {
+                return Err(WorktreeError::GitFailed {
+                    cwd: cwd.to_owned(),
+                    args: owned_args(args),
+                    detail: format!("it wrote a {bytes}-byte line, too long for wispd to read"),
+                });
+            }
+            Some(Output::Exited(exit)) => return Ok((stdout, exit)),
             None => unreachable!("Output::Exited always comes last"),
         }
     }
+}
+
+/// Whether `slug` can follow `wisp/` in a branch name: 1 to 40 lowercase letters, digits, and
+/// hyphens, none leading or trailing.
+#[must_use]
+pub fn valid_branch_slug(slug: &str) -> bool {
+    (1..=40).contains(&slug.len())
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// The first 8 hex digits of the SHA-256 of `text`. Used for both the short run id in a branch

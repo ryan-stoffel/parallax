@@ -13,30 +13,29 @@ use tempfile::TempDir;
 use tokio::time::Instant;
 use wisp_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification};
 use wisp_protocol::methods::{
-    AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentList, AgentRequestChanges,
-    AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth, NotificationMethod,
-    ProjectCreate, RequestMethod, UsageGet,
+    AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
+    AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
+    NotificationMethod, ProjectCreate, RequestMethod, UsageGet,
 };
 use wisp_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
     AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFailureKind,
-    AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentListParams, AgentMerge,
-    AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRequestChangesParams,
-    AgentRun, AgentSendParams, AgentStartParams, AgentStatus, CoordinatorThreadId, DiffSummary,
-    ErrorKind, EventsEventParams, EventsSubscribeParams, HostHealthParams, InitializeResult,
-    Project, ProjectCreateParams, ProjectId, Provider, RunId, TurnId, UsageGetParams, WispEvent,
+    AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentImageParams,
+    AgentListParams, AgentMerge, AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy,
+    AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
+    CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
+    HostHealthParams, ImageId, ImageMediaType, InitializeResult, Project, ProjectCreateParams,
+    ProjectId, PromptImage, Provider, RunId, TurnId, UsageGetParams, WispEvent,
 };
 use wispd::backend::fake::{FakeBackend, Script, Step};
 use wispd::backend::process::{CancelPolicy, Environment, Launcher};
-use wispd::backend::{
-    Backend, Capabilities, Event, FailureKind, ModelUsage, RunRequest, StartError, Started, Usage,
-};
+use wispd::backend::{Event, FailureKind, ModelUsage, Usage};
 use wispd::paths::DataDir;
 use wispd::routing::BackendRegistry;
 
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
-fn git(dir: &Path, args: &[&str]) -> String {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -61,25 +60,25 @@ pub(crate) fn real_repo(dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn fake(steps: Vec<Step>) -> BackendRegistry {
+    let mut backends = BackendRegistry::new();
+    backends.register(Provider::Anthropic, Arc::new(fake_backend(steps)));
+    backends
+}
+
+/// The fake CLI playing `steps`, as the `fake` account's backend.
+pub(crate) fn fake_backend(steps: Vec<Step>) -> FakeBackend {
     let scratch = tempfile::tempdir().unwrap();
     let launcher = Launcher::new(
         DataDir::new(scratch.path()).unwrap(),
         Environment::inherited(),
     );
-    let mut backends = BackendRegistry::new();
-    backends.register(
-        Provider::Anthropic,
-        Arc::new(
-            FakeBackend::new(launcher, Script { steps }).with_cancel_policy(CancelPolicy {
-                signal: Signal::INT,
-                group: false,
-                // The fake's shell can lose a SIGINT that lands while it forks (#188), so
-                // `SIGKILL` follows soon.
-                grace: Duration::from_millis(500),
-            }),
-        ),
-    );
-    backends
+    FakeBackend::new(launcher, Script { steps }).with_cancel_policy(CancelPolicy {
+        signal: Signal::INT,
+        group: false,
+        // The fake's shell can lose a SIGINT that lands while it forks (#188), so `SIGKILL`
+        // follows soon.
+        grace: Duration::from_millis(500),
+    })
 }
 
 pub(crate) fn init(session_id: &str) -> Step {
@@ -117,14 +116,22 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
             backend: "fake".to_owned(),
         }),
         coordinator_thread: None,
+        model: None,
+        effort: None,
+        permission: None,
+        images: Vec::new(),
     }
 }
 
-fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSendParams {
+pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSendParams {
     AgentSendParams {
         run_id,
         turn_id,
         text: text.to_owned(),
+        model: None,
+        effort: None,
+        permission: None,
+        images: Vec::new(),
     }
 }
 
@@ -142,7 +149,7 @@ impl Host {
         Self { dir, server }
     }
 
-    async fn restart(self, backends: BackendRegistry) -> Self {
+    pub(crate) async fn restart(self, backends: BackendRegistry) -> Self {
         let Self { dir, server } = self;
         server.stop().await;
         Self::start(dir, backends)
@@ -159,6 +166,7 @@ pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
         id: ProjectId::generate(),
         name: "app".to_owned(),
         repo_path: real_repo(dir).to_str().unwrap().to_owned(),
+        icon: None,
     }
 }
 
@@ -166,7 +174,7 @@ pub(crate) async fn create(client: &mut Conn, params: ProjectCreateParams) -> Pr
     client.call::<ProjectCreate>(params).await.unwrap().project
 }
 
-async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
+pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
     client
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
@@ -245,7 +253,7 @@ impl Conn {
 }
 
 /// Events until one matches `done`, which is included.
-async fn until(
+pub(crate) async fn until(
     client: &mut Conn,
     mut done: impl FnMut(&EventsEventParams) -> bool,
 ) -> Vec<EventsEventParams> {
@@ -265,7 +273,7 @@ async fn until(
     }
 }
 
-fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) -> bool {
+pub(crate) fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) -> bool {
     move |event| matches!(&event.event, WispEvent::AgentUpdated { state, .. } if state.status == status)
 }
 
@@ -273,7 +281,7 @@ fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) -> bool {
     move |event| matches!(&event.event, WispEvent::AgentOutput { items, .. } if items.contains(&item))
 }
 
-fn items(events: &[EventsEventParams]) -> Vec<AgentOutputItem> {
+pub(crate) fn items(events: &[EventsEventParams]) -> Vec<AgentOutputItem> {
     events
         .iter()
         .filter_map(|event| match &event.event {
@@ -296,7 +304,7 @@ fn kinds(events: &[EventsEventParams]) -> Vec<String> {
         .collect()
 }
 
-fn outcomes(events: &[EventsEventParams]) -> Vec<AgentOutcome> {
+pub(crate) fn outcomes(events: &[EventsEventParams]) -> Vec<AgentOutcome> {
     events
         .iter()
         .filter_map(|event| match &event.event {
@@ -567,7 +575,10 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
     let transcript = items(&events);
     assert!(transcript.contains(&AgentOutputItem::TurnStarted {
-        turn_id: Some(first)
+        turn_id: Some(first),
+        text: Some("and the tests".to_owned()),
+        wake: false,
+        images: Vec::new(),
     }));
     assert!(transcript.contains(&AgentOutputItem::Text {
         message_id: None,
@@ -606,7 +617,10 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         "the resumed process continues the session: {transcript:?}"
     );
     assert!(transcript.contains(&AgentOutputItem::TurnStarted {
-        turn_id: Some(second)
+        turn_id: Some(second),
+        text: Some("one more thing".to_owned()),
+        wake: false,
+        images: Vec::new(),
     }));
     let third = TurnId::generate();
     client
@@ -614,6 +628,135 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Completed)).await;
+    host.server.stop().await;
+}
+
+/// The ids of the images a transcript's `turnStarted` for `turn` lists (RYA-191).
+fn turn_images(transcript: &[AgentOutputItem], turn: Option<TurnId>) -> Vec<ImageId> {
+    transcript
+        .iter()
+        .find_map(|item| match item {
+            AgentOutputItem::TurnStarted {
+                turn_id, images, ..
+            } if *turn_id == turn => Some(images.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no turnStarted for {turn:?} in {transcript:?}"))
+}
+
+#[tokio::test]
+async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_and_served() {
+    let dir = temp_dir();
+    let host = Host::start(
+        dir,
+        fake(vec![
+            init("images-1"),
+            end_turn("First answer."),
+            Step::AwaitFollowUp,
+            end_turn("Second answer."),
+        ]),
+    );
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let png = PromptImage {
+        media_type: ImageMediaType::Png,
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+    };
+    let gif = PromptImage {
+        media_type: ImageMediaType::Gif,
+        data: "R0lGODlhAQABAAAAACw=".to_owned(),
+    };
+    let params = AgentStartParams {
+        images: vec![png.clone()],
+        ..start_params(project.id, "What is in this picture?")
+    };
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    let events = until(
+        &mut client,
+        has_item(AgentOutputItem::TurnFinished {
+            turn_id: None,
+            result: Some("First answer.".to_owned()),
+        }),
+    )
+    .await;
+    let [prompt_image] = turn_images(&items(&events), None)[..] else {
+        panic!("the prompt's turn lists its one image");
+    };
+
+    let too_many = AgentSendParams {
+        images: vec![gif.clone(); 11],
+        ..send_params(run_id, TurnId::generate(), "all of these")
+    };
+    let error = client.call::<AgentSend>(too_many).await.unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::ImageTooLarge);
+    let blank = send_params(run_id, TurnId::generate(), " ");
+    let error = client.call::<AgentSend>(blank).await.unwrap_err();
+    assert_eq!(
+        error.code, INVALID_PARAMS,
+        "no text and no images: {error:?}"
+    );
+
+    let turn = TurnId::generate();
+    let follow_up = AgentSendParams {
+        images: vec![gif.clone(), png.clone()],
+        // Images alone, with no text (RYA-193).
+        ..send_params(run_id, turn, "")
+    };
+    client.call::<AgentSend>(follow_up).await.unwrap();
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let follow_up_images = turn_images(&items(&events), Some(turn));
+
+    let image = |image_id| AgentImageParams { run_id, image_id };
+    let mut served = Vec::new();
+    for id in [prompt_image].iter().chain(&follow_up_images) {
+        served.push(client.call::<AgentImage>(image(*id)).await.unwrap());
+    }
+    assert_eq!(served, [png.clone(), gif, png]);
+    let missing = client
+        .call::<AgentImage>(image(ImageId::generate()))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&missing), ErrorKind::ImageNotFound);
+    host.server.stop().await;
+}
+
+#[tokio::test]
+async fn an_image_sent_alone_after_the_cli_exits_resumes_the_run() {
+    let dir = temp_dir();
+    let host = Host::start(dir, fake(vec![init("images-2"), end_turn("Done.")]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let params = start_params(project.id, "Tidy the README");
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // The CLI has exited, so this starts a new process on the same session (RYA-202).
+    let png = PromptImage {
+        media_type: ImageMediaType::Png,
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+    };
+    let turn = TurnId::generate();
+    let resumed = client
+        .call::<AgentSend>(AgentSendParams {
+            images: vec![png.clone()],
+            ..send_params(run_id, turn, "")
+        })
+        .await
+        .unwrap();
+    assert_eq!(resumed.run.status, AgentStatus::Running);
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let [image_id] = turn_images(&items(&events), Some(turn))[..] else {
+        panic!("the resumed turn lists its one image");
+    };
+    let served = client
+        .call::<AgentImage>(AgentImageParams { run_id, image_id })
+        .await
+        .unwrap();
+    assert_eq!(served, png);
     host.server.stop().await;
 }
 
@@ -730,7 +873,7 @@ async fn agent_start_is_idempotent_on_its_run_id() {
         })
         .await
         .unwrap_err();
-    assert_eq!(no_account.code, INVALID_PARAMS);
+    assert_eq!(kind(&no_account), ErrorKind::NoDefaultAccount);
     host.server.stop().await;
 }
 
@@ -774,17 +917,27 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         .await
         .unwrap();
     assert_eq!(resumed.run.status, AgentStatus::Running);
-    let events = until(
-        &mut client,
-        has_item(AgentOutputItem::TurnStarted {
+    // The resumed CLI reports its session after the turn has started, so the two can land in
+    // separate 50 ms `agent.output` batches (RYA-132): wait for both.
+    let mut wanted = vec![
+        AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
-        }),
-    )
+            text: Some("carry on".to_owned()),
+            wake: false,
+            images: Vec::new(),
+        },
+        AgentOutputItem::SessionStarted {
+            session_id: "hang-1".to_owned(),
+            model: None,
+        },
+    ];
+    until(&mut client, |event| {
+        if let WispEvent::AgentOutput { items, .. } = &event.event {
+            wanted.retain(|item| !items.contains(item));
+        }
+        wanted.is_empty()
+    })
     .await;
-    assert!(items(&events).contains(&AgentOutputItem::SessionStarted {
-        session_id: "hang-1".to_owned(),
-        model: None,
-    }));
     drop(client);
 
     // A crash: the store still says `running` when wispd starts.
@@ -842,6 +995,9 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
         &mut client,
         has_item(AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
+            text: Some("carry on".to_owned()),
+            wake: false,
+            images: Vec::new(),
         }),
     )
     .await;
@@ -959,23 +1115,6 @@ async fn a_worker_learns_its_limits_and_a_fallback_moves_its_usage_to_the_new_ac
     host.server.stop().await;
 }
 
-/// A backend that doesn't implement the worker sandbox, as Codex doesn't until #122.
-struct Unsandboxed;
-
-impl Backend for Unsandboxed {
-    fn name(&self) -> &'static str {
-        "codex"
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::default()
-    }
-
-    fn start(&self, _: RunRequest) -> Result<Started, StartError> {
-        panic!("a worker must never start on a backend without the sandbox")
-    }
-}
-
 #[tokio::test]
 async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
     let dir = temp_dir();
@@ -997,14 +1136,15 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
     let mut config = InProcess::config(dir.path());
     config.agent_environment = Some(environment.clone());
     let mut backends = BackendRegistry::new();
+    let launcher = Launcher::new(DataDir::new(dir.path()).unwrap(), environment);
     backends.register(
         Provider::Anthropic,
-        Arc::new(wispd::backend::claude::ClaudeBackend::new(Launcher::new(
-            DataDir::new(dir.path()).unwrap(),
-            environment,
-        ))),
+        Arc::new(wispd::backend::claude::ClaudeBackend::new(launcher.clone())),
     );
-    backends.register(Provider::Openai, Arc::new(Unsandboxed));
+    backends.register(
+        Provider::Openai,
+        Arc::new(wispd::backend::codex::CodexBackend::new(launcher)),
+    );
     config.backends = Some(backends);
     let server = InProcess::start(config);
     let mut client = Conn::ready(&server.socket).await;
@@ -1023,7 +1163,8 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
     assert!(old.message.contains("2.1.100"), "{}", old.message);
     assert!(old.message.contains("2.1.248"), "{}", old.message);
 
-    let unsandboxed = client
+    // Codex workers are off until RYA-145 isolates their temp folder (RYA-153).
+    let codex = client
         .call::<AgentStart>(AgentStartParams {
             account: Some(AccountChoice::Subscription {
                 backend: "codex".to_owned(),
@@ -1032,12 +1173,8 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
         })
         .await
         .unwrap_err();
-    assert_eq!(kind(&unsandboxed), ErrorKind::WorkerUnavailable);
-    assert!(
-        unsandboxed.message.contains("codex"),
-        "{}",
-        unsandboxed.message
-    );
+    assert_eq!(kind(&codex), ErrorKind::WorkerUnavailable);
+    assert!(codex.message.contains("RYA-145"), "{}", codex.message);
 
     server.stop().await;
 }

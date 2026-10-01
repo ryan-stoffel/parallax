@@ -1,0 +1,63 @@
+#!/bin/sh
+# Builds the app's installer and its update metadata for this OS and arch into
+# apps/desktop/release/ (0029, 0030): a release `wispd` for the target, the app's dist/, then
+# electron-builder. WISP_VERSION is the version to stamp into the build (default 0.0.0-local); it
+# is never committed. WISPD_BIN, if set, is where a release `wispd` for this target is kept
+# between builds (release.yml caches it): packaged as is when the file exists, else built and
+# copied there. Unsigned unless CSC_KEYCHAIN (or CSC_LINK) names a certificate, which on macOS
+# signs with it (and notarizes if APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER are set
+# too).
+set -eu
+
+cd "$(dirname "$0")/../.."
+
+# Without a certificate, don't pick up a Developer ID from the login keychain. With one,
+# electron-builder finds its identity by auto-discovery, which must stay on. Checked before
+# `set -x`, so the certificate never reaches the log.
+if [ -z "${CSC_KEYCHAIN:-}" ] && [ -z "${CSC_LINK:-}" ]; then
+  export CSC_IDENTITY_AUTO_DISCOVERY=${CSC_IDENTITY_AUTO_DISCOVERY:-false}
+fi
+set -x
+
+version=${WISP_VERSION:-0.0.0-local}
+
+# wispd is built for the runner's own arch. Linux ships the static musl build (0023).
+host=$(rustc -vV | sed -n 's/^host: //p')
+arch=${host%%-*}
+case $arch in
+  aarch64) builder_arch=--arm64 ;;
+  x86_64) builder_arch=--x64 ;;
+  *) echo "package-app: no installer for $arch" >&2; exit 1 ;;
+esac
+exe=
+case $host in *-windows-*) exe=.exe ;; esac
+
+if [ -n "${WISPD_BIN:-}" ] && [ -f "$WISPD_BIN" ]; then
+  wispd=$WISPD_BIN
+else
+  triple=$host
+  if [ "$(uname -s)" = Linux ]; then
+    triple=$arch-unknown-linux-musl
+    rustup target add "$triple"
+  fi
+  cargo build --release --locked -p wispd --target "$triple"
+  wispd=target/$triple/release/wispd$exe
+  if [ -n "${WISPD_BIN:-}" ]; then
+    mkdir -p "$(dirname "$WISPD_BIN")"
+    cp "$wispd" "$WISPD_BIN"
+  fi
+fi
+
+# electron-builder.yml copies this folder into the app's resources: wispd, and the version file it
+# reports (0030), so one wispd build serves any app version. Written before electron-builder signs.
+rm -rf target/package-resources
+mkdir -p target/package-resources
+cp "$wispd" "target/package-resources/wispd$exe"
+printf '%s\n' "$version" > target/package-resources/wispd.version
+
+cd apps/desktop
+node --version
+pnpm --version
+pnpm install --frozen-lockfile
+pnpm build
+pnpm exec electron-builder --publish never "$builder_arch" -c.extraMetadata.version="$version"

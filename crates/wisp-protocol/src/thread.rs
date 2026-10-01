@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{AccountChoice, AgentRun, RunId};
+use crate::{AccountChoice, AgentEffort, AgentPermission, AgentRun, PromptImage, RunId};
 
 uuid_v7_id! {
     /// A repo entry's id: a version 7 UUID that the client generates once and sends again on
@@ -29,7 +29,7 @@ uuid_v7_id! {
 pub struct Repo {
     /// The entry's id.
     pub id: RepoId,
-    /// The name shown in the editor: the repository folder's name.
+    /// The name shown in the app: the repository folder's name.
     pub name: String,
     /// The absolute, canonical path of the repository on the host.
     pub path: String,
@@ -118,6 +118,28 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<AccountChoice>,
+    /// The model, as `agent/start` takes it. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// How hard the model thinks, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// How the agent may act inside its sandbox, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
+    /// Names the worktree's branch `wisp/<branchSlug>`: lowercase letters, digits, and hyphens,
+    /// no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
+    /// the run's short id after it. Absent names it `wisp/<short run id>`. Not part of what makes
+    /// a retry with the same run id conflict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch_slug: Option<String>,
+    /// Images for the first message, as `agent/start`'s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PromptImage>,
 }
 
 /// Result of `thread/start`.

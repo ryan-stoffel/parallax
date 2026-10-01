@@ -35,7 +35,6 @@ pub const WISP_ERROR: i64 = -32000;
 /// A request cancelled by `$/cancelRequest`.
 pub const REQUEST_CANCELLED: i64 = -32800;
 
-#[cfg(test)]
 pub(crate) const CODES: [(&str, i64); 7] = [
     ("ParseError", PARSE_ERROR),
     ("InvalidRequest", INVALID_REQUEST),
@@ -729,6 +728,7 @@ mod tests {
             id: "01997c3a-5b2c-7d4e-9f10-2a3b4c5d6e7f".parse().unwrap(),
             name: "wisp".to_owned(),
             repo_path: "/Users/ryan/wisp".to_owned(),
+            icon: None,
         };
         let frame =
             serde_json::to_vec(&Request::new::<ProjectCreate>("r1", params.clone())).unwrap();

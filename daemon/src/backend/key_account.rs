@@ -8,10 +8,8 @@
 //! (`backend::process::Environment`'s entries, and `spawn_session`'s own buffers) zeroize
 //! themselves the same way once each is done with its copy.
 //!
-//! Only Anthropic has a backend today (Claude Code, #116), so [`resolve`] only has that one arm.
-//! `OpenAI` (#122) and Cursor (#123) are wired the same way once their backends exist; until then
-//! this is the seam: add a `Provider::Openai` or `Provider::Cursor` arm here, the same shape as
-//! Anthropic's.
+//! Anthropic's keys run on Claude Code (#116) and `OpenAI`'s on Codex (RYA-38), and both are the
+//! same arm. Cursor (RYA-40) joins it once its backend exists.
 
 use wisp_protocol::{AccountId, Provider};
 
@@ -33,7 +31,7 @@ pub fn resolve(
     account: AccountId,
 ) -> Result<Credential, KeyAccountError> {
     match provider {
-        Provider::Anthropic => {
+        Provider::Anthropic | Provider::Openai => {
             let key = match store.get(account) {
                 Ok(Some(key)) => key,
                 Ok(None) => return Err(KeyAccountError::KeychainUnavailable),
@@ -44,9 +42,7 @@ pub fn resolve(
             };
             Ok(Credential::ApiKey(ApiKey::new(key.to_string())))
         }
-        Provider::Openai | Provider::Cursor | Provider::Unknown => {
-            Err(KeyAccountError::NoBackend(provider))
-        }
+        Provider::Cursor | Provider::Unknown => Err(KeyAccountError::NoBackend(provider)),
     }
 }
 
@@ -75,12 +71,14 @@ mod tests {
     #[test]
     fn a_stored_key_resolves_to_an_api_key_credential() {
         let store = MemoryKeyStore::new();
-        let account = AccountId::generate();
-        store.set(account, "sk-ant-secret").unwrap();
-        let Credential::ApiKey(key) = resolve(&store, Provider::Anthropic, account).unwrap() else {
-            panic!("expected an API key credential");
-        };
-        assert_eq!(key.expose(), "sk-ant-secret");
+        for provider in [Provider::Anthropic, Provider::Openai] {
+            let account = AccountId::generate();
+            store.set(account, "sk-secret").unwrap();
+            let Credential::ApiKey(key) = resolve(&store, provider, account).unwrap() else {
+                panic!("expected an API key credential");
+            };
+            assert_eq!(key.expose(), "sk-secret");
+        }
     }
 
     #[test]
@@ -92,10 +90,8 @@ mod tests {
 
     #[test]
     fn a_locked_keychain_is_keychain_unavailable() {
-        // security_framework_sys::base::errSecInteractionNotAllowed: nothing can unlock the
-        // Keychain to answer, such as a headless session (0004, 0007, #91).
-        const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
-
+        // Nothing can unlock the Keychain to answer, such as a headless session (0004, 0007,
+        // #91).
         struct LockedStore;
         impl KeyStore for LockedStore {
             fn set(&self, _account: AccountId, _key: &str) -> Result<(), KeyStoreError> {
@@ -106,9 +102,7 @@ mod tests {
                 &self,
                 _account: AccountId,
             ) -> Result<Option<zeroize::Zeroizing<String>>, KeyStoreError> {
-                Err(KeyStoreError::from(security_framework::base::Error::from(
-                    ERR_SEC_INTERACTION_NOT_ALLOWED,
-                )))
+                Err(KeyStoreError::unavailable("locked"))
             }
 
             fn delete(&self, _account: AccountId) -> Result<(), KeyStoreError> {
@@ -123,7 +117,7 @@ mod tests {
     #[test]
     fn providers_with_no_backend_yet_are_refused() {
         let store = MemoryKeyStore::new();
-        for provider in [Provider::Openai, Provider::Cursor, Provider::Unknown] {
+        for provider in [Provider::Cursor, Provider::Unknown] {
             let error = resolve(&store, provider, AccountId::generate()).unwrap_err();
             assert!(
                 matches!(error, KeyAccountError::NoBackend(_)),

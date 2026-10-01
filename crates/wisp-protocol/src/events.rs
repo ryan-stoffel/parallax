@@ -89,6 +89,13 @@ pub enum WispEvent {
         /// The new project.
         project: Project,
     },
+    /// `project/update` renamed a project or changed its icon (RYA-227). Host-level, like
+    /// `project.created`.
+    #[serde(rename = "project.updated")]
+    ProjectUpdated {
+        /// The project as it stands.
+        project: Project,
+    },
     /// A shared context file was created or changed (0005, #155): from `context/write`, or from
     /// an agent's own write, detected on disk. Project-scoped.
     #[serde(rename = "context.changed")]
@@ -162,6 +169,15 @@ pub enum WispEvent {
         run_id: RunId,
         /// What happened to the project's repository.
         merge: AgentMerge,
+    },
+    /// wispd stopped waking a project's coordinator on its own (RYA-42, decision 0025): it took
+    /// 10 wake-up turns in a row without a message from the user, the user stopped it with
+    /// `agent/cancel`, or a wake-up couldn't start it. Runs that finish meanwhile are kept, and
+    /// the user's next `agent/send` to the coordinator lets them through.
+    #[serde(rename = "agent.wakeupsPaused")]
+    AgentWakeupsPaused {
+        /// The coordinator's run id.
+        run_id: RunId,
     },
     /// `repo/add` registered a repository for normal threads, or wispd made its scratch entry
     /// (#110). Host-level.

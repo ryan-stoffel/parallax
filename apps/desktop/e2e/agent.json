@@ -1,0 +1,5 @@
+[
+  { "init": { "sessionId": "e2e-1", "model": "fake-model" } },
+  { "emit": { "kind": "text", "text": "The fake agent is on it." } },
+  "hang"
+]

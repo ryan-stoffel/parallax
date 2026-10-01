@@ -1,24 +1,25 @@
 # wispd
 
-wisp's host daemon. Each macOS user runs their own, and it keeps projects, and later agents, running in the background. Clients reach it through `wispd attach`, either on the same Mac or on a host over SSH.
+wisp's host daemon. Each user on a macOS, Linux, or Windows host runs their own, and it keeps projects and agents running in the background. Clients reach it through `wispd attach`, either on the same machine or on a host over SSH.
 
-Build it with `cargo build --release -p wispd`. `WISP_VERSION`, if set at compile time, is what `wispd --version` prints (`daemon/src/lib.rs` reads it with `option_env!`); otherwise it prints `Cargo.toml`'s placeholder.
+Build it with `cargo build --release -p wispd`. On Linux that needs a C compiler for the bundled SQLite, such as Debian's `build-essential`, and on Windows the Visual Studio C++ build tools. `wispd --version` prints the first line of `wispd.version` beside the executable, which the app's package step writes (0030), or `Cargo.toml`'s placeholder when there is none.
 
 The decisions behind it:
 
 - [0007](../docs/decisions/0007-editor-wispd-protocol.md): the protocol and transport.
 - [0009](../docs/decisions/0009-wispd-data-folder-and-project-host.md): the data folder and `serve`.
 - [0010](../docs/decisions/0010-wispd-attach.md): `attach`.
+- [0023](../docs/decisions/0023-cross-platform.md): what differs on each OS.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `wispd serve` | Serves the protocol on this user's Unix socket until SIGTERM or SIGINT |
-| `wispd attach` | Connects stdin and stdout to that socket, and starts wispd first if nothing is listening |
-| `wispd service install`, `uninstall`, `status` | Manage the LaunchAgent that keeps `serve` running (#61) |
+| `wispd serve` | Serves the protocol on this user's Unix socket, or named pipe on Windows, until SIGTERM or SIGINT (Ctrl-C or Ctrl-Break on Windows) |
+| `wispd attach` | Connects stdin and stdout to that socket or pipe, and starts wispd first if nothing is listening |
+| `wispd service install`, `uninstall`, `status` | macOS and Linux: manage the service that keeps `serve` running, a LaunchAgent (#61) or a systemd user unit (RYA-18) |
 
-Both commands take `--data-dir` (or `WISPD_DATA_DIR`) to use a data folder other than `~/Library/Application Support/wisp`. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
+Both commands take `--data-dir` (or `WISPD_DATA_DIR`) to use a data folder other than the default: `~/Library/Application Support/wisp` on macOS, `$XDG_DATA_HOME/wisp` on Linux, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset, and `%LOCALAPPDATA%\wisp` on Windows. The socket is `wispd.sock` in that folder. When that path is too long for a Unix socket, it moves to a per-user folder: the one `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. On Windows, `serve` listens on the named pipe `\\.\pipe\wispd-<hash>` instead, where `<hash>` is the first 16 hex digits of the SHA-256 of the data folder's path. Its ACL admits only your user, and each end checks that the other runs as your user. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
 
 `attach` passes bytes through unchanged and prints nothing else on stdout. You can send a request by hand:
 
@@ -29,7 +30,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 When its input ends, `attach` keeps printing until wispd has answered everything it was sent, and then exits. The same command works through `ssh <host> wispd attach`.
 
-If wispd isn't running, `attach` starts it through the LaunchAgent when one is installed and serves the same data folder. The LaunchAgent under the default label serves only the default data folder, so `wispd service install --data-dir <other>` needs `--label` as well. Otherwise it starts `wispd serve` in the background, in its own session. That `serve` keeps running after `attach` exits or the SSH connection drops, and `attach` never stops it.
+If wispd isn't running, `attach` starts it through the service (the LaunchAgent on macOS, the systemd user unit on Linux) when one is installed and serves the same data folder. The service under the default label serves only the default data folder, so `wispd service install --data-dir <other>` needs `--label` as well. Otherwise it starts `wispd serve` in the background, in its own session. That `serve` keeps running after `attach` exits or the SSH connection drops, and `attach` never stops it.
 
 ### Exit codes
 
@@ -72,13 +73,61 @@ It uses your own ssh config, keys, and agent (0007). For that command to work, t
    - A process started from SSH may not reach the Keychain, which the subscription CLIs use (0004).
    - The LaunchAgent runs wispd in your GUI session instead, and `attach` starts it with `launchctl kickstart` whenever it's installed.
 
-wispd listens only on its Unix socket, never on a network port. SSH, with your own keys and config, is the only way in from another machine.
+## Using a Linux host over SSH
 
-## Testing `attach` over ssh on your Mac
+The client runs the same `ssh ... <host> wispd attach` command, and the host needs the same things as a Mac, apart from Homebrew and the LaunchAgent:
+
+1. **`wispd` on the `PATH` of a non-interactive SSH command.** sshd runs `wispd attach` with the `PATH` from `/etc/environment` or its built-in default, which on Debian and Ubuntu includes `/usr/local/bin` but not `~/.local/bin`. `~/.profile` adds `~/.local/bin` only for login shells, which a command over SSH isn't.
+   - Simplest: install `wispd` into `/usr/local/bin`.
+   - Or keep it in `~/.local/bin` and add it in the file your shell reads for SSH commands. bash reads `~/.bashrc`, but Debian's and Ubuntu's default one returns early for non-interactive shells, so put the line above that check. zsh reads `~/.zshenv`.
+
+     ```sh
+     export PATH="$HOME/.local/bin:$PATH"
+     ```
+
+   To check, run `ssh <host> 'command -v wispd'`.
+2. **Quiet shell startup files and a key that logs in without prompts**, as on a Mac.
+3. **The systemd user unit, which is recommended** (RYA-18). `wispd service install` writes `~/.config/systemd/user/io.github.ryan-stoffel.wisp.wispd.service`, enables it, and starts it. `uninstall` and `status` work as on a Mac, and `attach` starts wispd with `systemctl --user start` whenever the unit is installed.
+   - **Turn on linger**, once. Without it, systemd stops your user services when your last session ends and starts them again at your next login. With it, the unit starts at boot and keeps running while nobody is logged in:
+
+     ```sh
+     loginctl enable-linger
+     ```
+
+     Some distros only let root do that, with `sudo loginctl enable-linger $USER`. To check, run `loginctl show-user $USER --property=Linger`.
+   - `systemctl --user` needs your user manager, which `pam_systemd` starts for an SSH login. Where it can't be reached, such as on a host without systemd, `attach` says so on stderr and starts `serve` itself.
+   - The unit's `serve` appends its output to `logs/wispd.log` in the data folder, as on a Mac. That needs systemd 240 or later; an older one sends it to the journal, `journalctl --user --unit io.github.ryan-stoffel.wisp.wispd`.
+   - The unit's `serve` gets the user manager's environment, not your shell's. If agent CLIs live on npm or nvm paths, add them to `PATH` in a `.conf` file in `~/.config/environment.d/`.
+
+Without the unit, `attach` starts `serve` itself, in its own session, and it keeps running after the SSH session ends. Where logind sets `KillUserProcesses=yes`, it stops when you log out. Subscriptions and no-write runs work.
+
+### API keys on Linux
+
+Key accounts go in the Secret Service, the D-Bus API that GNOME Keyring and KeePassXC provide, as one item per account labeled "wisp API key" in the default collection. `serve` needs an unlocked Secret Service on your session bus:
+
+- On a desktop, the keyring your login unlocks works, including for a `serve` started over SSH while you're logged in.
+- A headless host has none. Install one, such as `gnome-keyring`, and unlock it, or key accounts fail with `keychainUnavailable` and a message that says so. wispd never falls back to storing keys in a file. Subscriptions don't need it, because the vendor CLIs keep their own logins.
+
+To check a host by hand, run `cargo test -p wispd --test secret_service_manual -- --ignored` on it. The test uses a throwaway service name and cleans up after itself.
+
+Workers on Linux need `bubblewrap` and `socat`, and on Ubuntu 24.04 and later an AppArmor profile that lets `bwrap` create user namespaces ([0013](../docs/decisions/0013-worker-sandbox.md#claude-code-on-linux)). wispd checks for them before each worker starts, including Claude Code's seccomp filter, and `agent/start` fails with `workerUnavailable` naming whatever is missing.
+
+## Using a Windows host over SSH
+
+The client runs the same `ssh ... <host> wispd attach` command against Windows' own OpenSSH server (Settings > System > Optional features > OpenSSH Server). The host needs:
+
+1. **`wispd.exe` on the `PATH`** of an SSH command, which runs through `cmd.exe`. The user or system `PATH` in Settings works; to check, run `ssh <host> where wispd`.
+2. **A key that logs in without prompts.** For an administrator, Windows' sshd reads keys from `C:\ProgramData\ssh\administrators_authorized_keys`, not `~/.ssh/authorized_keys`.
+
+Windows has no service yet (a scheduled task is RYA-22), so `attach` always starts `serve` itself, with no console and broken away from the SSH session's job, which Windows' sshd kills when the session ends. If the job doesn't allow that, `attach` warns that `serve` will stop with the session. `wispd.lock` stays in the data folder after `serve` stops, and a second `serve`'s exit-3 error can't name the running one's pid, because Windows' lock keeps other processes from reading the file. A Windows host can't store API keys yet (RYA-23), and Claude Code has no sandbox on native Windows, so workers are refused with `workerUnavailable`; run `wispd` in WSL2 for those (RYA-24). Subscriptions and no-write runs work. Agent CLIs run in a job object, so cancelling one closes its stdin and, after a grace period, ends everything it started.
+
+wispd listens only on its Unix socket or named pipe, never on a network port. SSH, with your own keys and config, is the only way in from another machine.
+
+## Testing `attach` over ssh on your machine
 
 `cargo test -p wispd` tests `attach` through pipes, which are what ssh hands it. #95 adds a CI test through a real `ssh localhost`. To run one locally, you need these first:
 
-- Remote Login turned on in System Settings > General > Sharing.
+- An sshd: on a Mac, Remote Login turned on in System Settings > General > Sharing; on Linux, `openssh-server`.
 - A key authorized for your own account.
 - localhost's host key accepted once.
 

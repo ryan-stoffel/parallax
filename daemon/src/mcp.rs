@@ -19,7 +19,6 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use wisp_protocol::framing::{FrameCodec, FrameError};
 use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Message, Request, RequestId, Response};
@@ -35,7 +34,7 @@ use wisp_protocol::{
     ProjectListParams, ProtocolRange, RunId, TurnId, WispEvent,
 };
 
-use crate::VERSION;
+use crate::transport::{self, Stream};
 
 /// The server's name in the coordinator's `--mcp-config`, which prefixes its tools' names there.
 pub const SERVER: &str = "wispd";
@@ -52,8 +51,8 @@ pub const TOOLS: &[&str] = &[
     "write_context",
 ];
 
-/// [`TOOLS`] as Claude Code names them, `mcp__<server>__<tool>`: exactly what a coordinator's
-/// `--allowedTools` admits beyond its read-only built-in tools.
+/// [`TOOLS`] as Claude Code names them, `mcp__<server>__<tool>`: a coordinator's
+/// `--allowedTools`, so they run without asking in every permission mode (0027).
 pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__wispd__spawn_agent",
     "mcp__wispd__list_agents",
@@ -169,7 +168,7 @@ async fn answer(binding: &Binding, request: &Request) -> Result<Value, ErrorObje
             Ok(json!({
                 "protocolVersion": version,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": SERVER, "version": VERSION},
+                "serverInfo": {"name": SERVER, "version": crate::version()},
             }))
         }
         "ping" => Ok(json!({})),
@@ -413,6 +412,10 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     policy: AgentPolicy::WorkspaceWrite,
                     account: args.account,
                     coordinator_thread: Some(binding.thread),
+                    model: None,
+                    effort: None,
+                    permission: None,
+                    images: Vec::new(),
                 })
                 .await?
                 .run;
@@ -445,6 +448,10 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     run_id,
                     turn_id: TurnId::generate(),
                     text,
+                    model: None,
+                    effort: None,
+                    permission: None,
+                    images: Vec::new(),
                 })
                 .await?
                 .run;
@@ -537,14 +544,17 @@ fn summary(binding: &Binding, run: &AgentRun) -> Value {
     })
 }
 
-/// The bound project's runs.
+/// The bound project's runs, without its coordinator (0024): the model never sees or steers its
+/// own run, which would message itself.
 async fn project_runs(binding: &Binding, wispd: &mut Wispd) -> Result<Vec<AgentRun>, String> {
-    Ok(wispd
+    let mut runs = wispd
         .call::<AgentList>(AgentListParams {
             project: Some(binding.project),
         })
         .await?
-        .runs)
+        .runs;
+    runs.retain(|run| run.policy != AgentPolicy::NoWrite);
+    Ok(runs)
 }
 
 /// Run `run_id`, if it belongs to the bound project: the binding check every tool that takes a
@@ -643,14 +653,14 @@ fn render_diff(diff: &AgentDiffResult) -> String {
 
 /// One connection to wispd: `initialize`d, then calls in order.
 struct Wispd {
-    framed: Framed<UnixStream, FrameCodec>,
+    framed: Framed<Stream, FrameCodec>,
     next_id: i64,
 }
 
 /// Errors from wispd are its message: the model reads them, and nothing matches on them.
 impl Wispd {
     async fn open(socket: &Path) -> Result<Self, String> {
-        let stream = UnixStream::connect(socket)
+        let stream = transport::connect(socket)
             .await
             .map_err(|error| format!("could not reach wispd at {}: {error}", socket.display()))?;
         let mut wispd = Self {
@@ -662,7 +672,7 @@ impl Wispd {
                 protocol: ProtocolRange::SUPPORTED,
                 client: ClientInfo {
                     name: "wispd mcp".to_owned(),
-                    version: VERSION.to_owned(),
+                    version: crate::version().to_owned(),
                     machine_id: None,
                 },
                 capabilities: Capabilities::default(),
@@ -716,6 +726,20 @@ mod tests {
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
         assert_eq!(listed, TOOLS);
+    }
+
+    #[test]
+    fn the_coordinators_instructions_name_only_real_tools() {
+        let instructions = include_str!("agents/coordinator.md");
+        // Every `snake_case` span between backticks.
+        for name in instructions.split('`').skip(1).step_by(2) {
+            if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                assert!(
+                    TOOLS.contains(&name),
+                    "coordinator.md names `{name}`, not a tool"
+                );
+            }
+        }
     }
 
     #[test]

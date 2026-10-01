@@ -13,7 +13,7 @@ use wisp_protocol::{
 };
 
 use super::Context;
-use crate::VERSION;
+use crate::images;
 use crate::logging::untrusted;
 use crate::server::Daemon;
 
@@ -40,7 +40,7 @@ pub(crate) fn initialize(
             &IncompatibleProtocolDetail {
                 requested: protocol,
                 supported: ProtocolRange::SUPPORTED,
-                wispd: VERSION.to_owned(),
+                wispd: crate::version().to_owned(),
             },
         ));
     };
@@ -59,7 +59,7 @@ pub(crate) fn initialize(
     );
     let result = InitializeResult {
         protocol: version,
-        wispd: VERSION.to_owned(),
+        wispd: crate::version().to_owned(),
         log_id: daemon.log.id(),
         capabilities: capabilities_advertised(),
         max_frame_bytes: u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX),
@@ -76,14 +76,36 @@ pub(crate) fn initialize(
 /// independently; M3 adds `agents` (#156): the `agent/*` methods and `agent.*` events,
 /// `agentReview` (#157): `agent/diff`, `agent/file`, `agent/accept`, `agent/requestChanges`, and
 /// `agent.accepted`, so an editor can tell a host that reviews runs from one that only runs them,
-/// and `threads` (#110): normal threads, with the `thread/*` and `repo/*` methods and the `repo.*`
-/// and `thread.*` events.
+/// `threads` (#110): normal threads, with the `thread/*` and `repo/*` methods and the `repo.*`
+/// and `thread.*` events, `runOptions` (RYA-97): `agent/start` and `thread/start` take
+/// `model`, `effort`, and `permission`, which an older wispd would silently ignore (0007), and
+/// `sendOptions` (RYA-161): `agent/send` takes `effort` and `permission`, likewise, and its
+/// successor `sendModel` (RYA-163): `agent/send` also takes `model`, which a `sendOptions`-only
+/// wispd would silently ignore. M4 adds `coordinator` (RYA-41, 0024): `project/start` and
+/// `Project.coordinator`, and `openPr` (RYA-168): `agent/openPr`. `promptImages` (RYA-191, 0026):
+/// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
+/// older wispd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
+/// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
+/// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
+/// and `project/create`, which an older wispd would silently drop.
 fn capabilities_advertised() -> Capabilities {
+    let prompt_images = serde_json::Map::from_iter([
+        ("maxImages".to_owned(), images::MAX_IMAGES.into()),
+        ("maxImageBytes".to_owned(), images::MAX_IMAGE_BYTES.into()),
+        ("maxTotalBytes".to_owned(), images::MAX_TOTAL_BYTES.into()),
+    ]);
     Capabilities(BTreeMap::from([
         ("accounts".to_owned(), serde_json::Map::new()),
         ("agentClis".to_owned(), serde_json::Map::new()),
         ("agentReview".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
+        ("coordinator".to_owned(), serde_json::Map::new()),
+        ("openPr".to_owned(), serde_json::Map::new()),
+        ("projectEdit".to_owned(), serde_json::Map::new()),
+        ("promptImages".to_owned(), prompt_images),
+        ("runOptions".to_owned(), serde_json::Map::new()),
+        ("sendModel".to_owned(), serde_json::Map::new()),
+        ("sendOptions".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
     ]))
 }
@@ -99,7 +121,7 @@ pub(crate) fn health(context: &Context, _: HostHealthParams) -> HostHealthResult
 
 pub(crate) fn version(context: &Context, _: HostVersionParams) -> HostVersionResult {
     HostVersionResult {
-        wispd: VERSION.to_owned(),
+        wispd: crate::version().to_owned(),
         protocol: ProtocolRange::SUPPORTED,
         os: context.daemon.os.clone(),
         arch: std::env::consts::ARCH.to_owned(),
@@ -128,7 +150,7 @@ fn plist_string<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{os_version, plist_string};
+    use super::plist_string;
 
     #[test]
     fn reads_strings_from_a_property_list() {
@@ -143,6 +165,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn the_os_version_names_macos() {
-        assert!(os_version().starts_with("macOS "), "{}", os_version());
+        let version = super::os_version();
+        assert!(version.starts_with("macOS "), "{version}");
     }
 }

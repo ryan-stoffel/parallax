@@ -4,8 +4,7 @@ use std::fmt::Write as _;
 use std::fs::{self, Permissions};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 use std::os::unix::net::UnixDatagram;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::time::Duration;
 
 use rustix::process::Signal;
@@ -122,17 +121,61 @@ async fn the_data_folder_socket_lock_and_log_are_private() {
     assert_eq!(mode(&data.join("logs")), 0o700);
 }
 
-fn darwin_user_temp_dir() -> PathBuf {
-    let output = Command::new("/usr/bin/getconf")
+#[cfg(target_os = "macos")]
+fn darwin_user_temp_dir() -> std::path::PathBuf {
+    let output = std::process::Command::new("/usr/bin/getconf")
         .arg("DARWIN_USER_TEMP_DIR")
         .output()
         .unwrap();
     assert!(output.status.success());
-    PathBuf::from(String::from_utf8(output.stdout).unwrap().trim_end())
+    std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim_end())
+}
+
+/// With no `--data-dir`, Linux's data folder is `$XDG_DATA_HOME/wisp` when that is absolute, and
+/// `~/.local/share/wisp` otherwise (0023).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_default_linux_data_folder_follows_xdg_data_home() {
+    use rustix::process::{Pid, kill_process};
+
+    let home = temp_dir();
+    let data_home = temp_dir();
+    let in_home = home.path().join(".local/share/wisp");
+    let cases = [
+        (
+            Some(data_home.path().to_str().unwrap()),
+            data_home.path().join("wisp"),
+        ),
+        (Some("relative/data"), in_home.clone()),
+        (Some(""), in_home.clone()),
+        (None, in_home),
+    ];
+    for (xdg_data_home, expected) in cases {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_wispd"));
+        command
+            .arg("serve")
+            .env("HOME", home.path())
+            .env_remove("WISPD_DATA_DIR")
+            .env_remove("WISPD_LOG")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        match xdg_data_home {
+            Some(value) => command.env("XDG_DATA_HOME", value),
+            None => command.env_remove("XDG_DATA_HOME"),
+        };
+        let mut child = command.spawn().unwrap();
+        let socket = expected.join("wispd.sock");
+        eventually(&format!("{} exists", socket.display()), || socket.exists()).await;
+        let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+        kill_process(pid, Signal::TERM).unwrap();
+        assert!(child.wait().unwrap().success(), "{xdg_data_home:?}");
+        fs::remove_dir_all(&expected).unwrap();
+    }
 }
 
 #[tokio::test]
-async fn a_long_data_folder_puts_the_socket_in_the_user_temp_dir() {
+async fn a_long_data_folder_puts_the_socket_in_the_per_user_fallback_folder() {
     let dir = temp_dir();
     let data = dir.path().join("d".repeat(100));
     let hash = Sha256::digest(data.as_os_str().as_encoded_bytes())[..4]
@@ -141,10 +184,18 @@ async fn a_long_data_folder_puts_the_socket_in_the_user_temp_dir() {
             let _ = write!(hex, "{byte:02x}");
             hex
         });
-    let expected = darwin_user_temp_dir().join(format!("wispd-{hash}.sock"));
-    assert!(data.join("wispd.sock").as_os_str().len() > 103);
+    // Linux's fallback is XDG_RUNTIME_DIR (0023), which this test points at a folder of its own.
+    // macOS ignores it.
+    let runtime = temp_dir();
+    #[cfg(target_os = "macos")]
+    let fallback = darwin_user_temp_dir();
+    #[cfg(target_os = "linux")]
+    let fallback = runtime.path().to_owned();
+    let expected = fallback.join(format!("wispd-{hash}.sock"));
+    assert!(data.join("wispd.sock").as_os_str().len() > 107);
 
-    let wispd = Wispd::start(&data).await;
+    let env = [("XDG_RUNTIME_DIR", runtime.path().to_str().unwrap())];
+    let wispd = Wispd::start_at(&data, expected.clone(), &[], &env).await;
     assert_eq!(wispd.socket, expected);
     assert_eq!(mode(&expected), 0o600);
     assert!(!data.join("wispd.sock").exists());

@@ -26,9 +26,10 @@ use wisp_protocol::{
 };
 use wisp_store::RepoFields;
 
-use crate::agents::{self, NewRun, NewThread};
+use crate::agents::{self, NewRun, NewThread, RunOptions};
 use crate::repo;
 use crate::server::Daemon;
+use crate::worktree::valid_branch_slug;
 
 /// The folder under wispd's data folder that holds threads' scratch repositories.
 const SCRATCH_DIR: &str = "scratch";
@@ -96,6 +97,14 @@ pub(crate) fn scope_path(db: &wisp_store::Store, scope: ProjectId) -> Result<Str
     ))
 }
 
+/// Whether `scope` is wispd's scratch entry, whose threads have no repository of the user's.
+pub(crate) fn is_scratch(db: &wisp_store::Store, scope: ProjectId) -> Result<bool, ErrorObject> {
+    Ok(db
+        .get_repo(scope.into())
+        .map_err(|e| store_error(&e))?
+        .is_some_and(|repo| repo.fields.scratch))
+}
+
 /// The scope whose context folder run `run` of `scope` writes notes to: the run's own id for a
 /// thread with no repo, so one quick chat never reads another's notes, and `scope` otherwise.
 pub(crate) fn context_scope(
@@ -103,11 +112,7 @@ pub(crate) fn context_scope(
     scope: ProjectId,
     run: RunId,
 ) -> Result<ProjectId, ErrorObject> {
-    let scratch = db
-        .get_repo(scope.into())
-        .map_err(|e| store_error(&e))?
-        .is_some_and(|repo| repo.fields.scratch);
-    if scratch {
+    if is_scratch(db, scope)? {
         ProjectId::try_from(Uuid::from(run)).map_err(|_| corrupt("run", run.into()))
     } else {
         Ok(scope)
@@ -310,7 +315,20 @@ pub(crate) async fn start(
         repo,
         prompt,
         account,
+        model,
+        effort,
+        permission,
+        branch_slug,
+        images,
     } = params;
+    if let Some(slug) = &branch_slug
+        && !valid_branch_slug(slug)
+    {
+        return Err(ErrorObject::invalid_params(
+            "branchSlug must be 1 to 40 lowercase letters, digits, and hyphens, \
+             with no leading or trailing hyphen",
+        ));
+    }
     let entry = match repo {
         Some(id) => {
             store(&daemon, move |db| {
@@ -359,10 +377,17 @@ pub(crate) async fn start(
         run_id,
         scope,
         prompt,
+        images,
         account,
         coordinator_thread: None,
+        options: RunOptions {
+            model,
+            effort,
+            permission,
+        },
         thread: Some(NewThread {
             scratch: scratch.clone(),
+            branch_slug,
         }),
     };
     let created = match agents::create(Arc::clone(&daemon), new).await {
@@ -550,7 +575,7 @@ fn remove_context(daemon: &Daemon, run_id: RunId) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use wisp_protocol::jsonrpc::INVALID_PARAMS;
 

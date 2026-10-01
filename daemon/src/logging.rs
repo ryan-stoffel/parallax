@@ -3,6 +3,7 @@
 use std::fmt;
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, IsTerminal};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
 use std::str::FromStr;
@@ -112,20 +113,24 @@ fn parse_level(level: &str) -> Result<LevelFilter, String> {
 }
 
 /// Opens the log file at `path` for appending. The file (0600) and its folder (0700) are created
-/// if they are missing.
+/// if they are missing. On Windows, both inherit the data folder's ACL.
 ///
 /// # Errors
 ///
 /// If the folder or the file can't be created or opened.
 pub fn open_log_file(path: &Path) -> io::Result<File> {
     if let Some(dir) = path.parent() {
-        DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        let mut builder = DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(dir)?;
     }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(path)
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path)
 }
 
 /// Sends log lines to the file at `path`, appending, and to stderr as well when stderr is a

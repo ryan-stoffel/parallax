@@ -8,7 +8,8 @@ use wisp_protocol::RunId;
 use super::{git, git_output, init_repo, manager, rev_parse, write_sentinel_script};
 use crate::worktree::review::Target;
 use crate::worktree::{
-    AcceptError, ChangeStatus, CreatedWorktree, MAX_BLOB_BYTES, MergeHow, WorktreeManager,
+    AcceptError, ChangeStatus, CreatedWorktree, MAX_BLOB_BYTES, MergeHow, WorktreeError,
+    WorktreeManager,
 };
 
 struct Fixture {
@@ -206,6 +207,44 @@ async fn diff_caps_count_json_escapes() {
         diff.files.iter().any(|file| file.diff.is_none()),
         "past the total cap, files have no diff"
     );
+}
+
+#[tokio::test]
+async fn a_file_list_too_long_to_read_fails_the_diff_and_accept() {
+    let f = fixture().await;
+    for n in 0..100 {
+        std::fs::write(f.worktree().join(format!("file-{n:03}.txt")), "x\n").unwrap();
+    }
+    let head = f.commit().await;
+    let (worktree, git_dir, base) = (f.worktree(), &f.created.git_dir, &f.created.base);
+    let files = |diff: crate::worktree::CommitDiff| diff.files.len();
+    assert_eq!(
+        f.mgr
+            .diff_commits(worktree, git_dir, base, &head)
+            .await
+            .map(files)
+            .unwrap(),
+        100
+    );
+
+    // Every `-z` list is one line; 100 paths make it longer than this.
+    let small = f.mgr.clone().with_max_git_line_bytes(1024);
+    let too_long = |error: &WorktreeError| matches!(error, WorktreeError::GitFailed { detail, .. } if detail.contains("too long"));
+    let error = small
+        .diff_commits(worktree, git_dir, base, &head)
+        .await
+        .unwrap_err();
+    assert!(too_long(&error), "{error}");
+    let refused = small
+        .accept(&f.repo, &head, "Merge wisp run: test\n")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, AcceptError::Git(error) if too_long(error)),
+        "{refused}"
+    );
+    assert_eq!(rev_parse(&f.repo, "HEAD"), *base);
+    assert!(!f.repo.join("file-000.txt").exists());
 }
 
 #[tokio::test]

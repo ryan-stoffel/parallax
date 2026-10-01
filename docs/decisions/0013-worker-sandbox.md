@@ -1,6 +1,6 @@
 # 0013: The worker sandbox
 
-- Status: accepted
+- Status: accepted; the Linux sandbox is under [Claude Code on Linux](#claude-code-on-linux) (RYA-20), Codex workers are under [Codex](#codex) (RYA-38), and the refusal of Claude workers on native Windows is in [0023](0023-cross-platform.md); a worker in Bypass Permissions runs without it since [0027](0027-claude-permission-modes.md)
 - Date: 2026-09-25
 - Issue: #137
 
@@ -23,9 +23,9 @@ A worker is a vendor CLI running headless in its own worktree (#154). The same l
 
 | | A worker may | A worker may not |
 | --- | --- | --- |
-| Write | Its worktree; the project's shared context folder (0005); its temp folder | Anything else. This includes the worktree's `.git` file and the repository's git folder, so wispd makes every commit (0004) |
-| Read | The whole disk | wispd's data folder, except its own worktree and context folder, and every path in `UNREADABLE_IN_HOME` (`daemon/src/backend/sandbox.rs`). That list covers keys and the Keychain folder; cloud, container, and infrastructure credentials; git and git-host credentials, including Copilot's token; package-registry and database credentials; password managers (`pass`, 1Password, Bitwarden); shell and REPL histories, including `~/.zsh_sessions`; browser profiles and cookies (Safari, Chrome, Firefox, Arc, Brave, Edge); and the agent CLIs' own folders |
-| Execute | Any command, inside the vendor's OS sandbox (Seatbelt on macOS) | Anything outside it: no unsandboxed retries, no hooks, no MCP servers, no repository-supplied settings |
+| Write | Its worktree; the project's shared context folder (0005); its own temp folder, which wispd makes for each CLI and removes when it exits ([below](#the-runs-temp-folder)) | Anything else. This includes the worktree's `.git` file and the repository's git folder, so wispd makes every commit (0004); another run's temp folder and the `/tmp/claude-<uid>` every Claude Code session shares; and the paths Claude Code's sandbox would always allow (`/tmp/claude`, `~/.npm/_logs`, `~/.claude/debug`) |
+| Read | The whole disk | wispd's data folder, except its own worktree and context folder; every other run's temp folder; `/tmp/claude-<uid>`; every path in `UNREADABLE_IN_HOME` and this OS's `UNREADABLE_IN_HOME_ON_THIS_OS` (`daemon/src/backend/sandbox.rs`); and on Linux, the user's runtime folder. Those lists cover keys and the Keychain folder; cloud, container, and infrastructure credentials; git and git-host credentials, including Copilot's token; package-registry and database credentials; password managers (`pass`, 1Password, Bitwarden); shell and REPL histories, including `~/.zsh_sessions`; browser profiles and cookies (Safari, Chrome, Firefox, Arc, Brave, Edge); and the agent CLIs' own folders |
+| Execute | Any command, inside the vendor's OS sandbox (Seatbelt on macOS, bubblewrap and seccomp on Linux) | Anything outside it: no unsandboxed retries, no hooks, no MCP servers, no repository-supplied settings |
 | Network | Any public host, from commands and from the web search and fetch tools (Ryan, #137) | This Mac's loopback and unspecified addresses (`localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0`, `[::]`), until #168. Not this Mac's interface addresses: see the threat model |
 
 `WorkerSandbox` (`daemon/src/backend/sandbox.rs`) carries the paths. Every backend refuses a `workspace-write` run in any of these cases, with an error that names the problem:
@@ -34,15 +34,28 @@ A worker is a vendor CLI running headless in its own worktree (#154). The same l
 - a sandbox path, its cwd, or its account's configuration folder is relative or not UTF-8;
 - any of those paths holds `*`, `?`, `[`, or `]`. The vendors read those as wildcards, so a deny rule for a folder such as `~/src/app[old]/.git` would not match it and would fail open [4][13].
 
+### The run's temp folder
+
+A vendor CLI's default temp is shared. Claude Code's is `/tmp/claude-<uid>`, the same folder for every wisp run and every interactive session of the user, and its sandbox let a worker read and write it (RYA-122): background task output of other sessions sat there, and pnpm quietly made a 249 MB package store there that every later worker reused. So each worker's CLI gets its own folder (RYA-130):
+
+- **Where.** `/tmp/wisp-<hash>/<6 random characters>`, 0700. `<hash>` is the socket fallback's (0023), so every wispd has its own root, and a sweep can't reach another wispd's live runs. `/tmp` is shared, so the root must be a real folder that this user owns with mode 0700; anything else there refuses the worker and names the folder. When `/tmp` can't be written at all, as inside a worker's sandbox running wispd's own tests, the root is `wisp-<hash>` in `$TMPDIR` instead.
+- **Why so short.** Claude Code 2.1.283 gives a command `$CLAUDE_CODE_TMPDIR/claude-<uid>` as its `TMPDIR` only when that path fits in 44 bytes, and the shared `/tmp/claude-<uid>` otherwise. The data folder, and macOS's per-user `DARWIN_USER_TEMP_DIR` (49 bytes on its own), are too long. `/tmp/wisp-xxxxxxxx/xxxxxx/claude-<uid>` is at most 43 bytes for any 32-bit uid. It also keeps RYA-128's socket tests under `$TMPDIR` when they run in a worker. Linux's `$XDG_RUNTIME_DIR` was rejected: it is in memory, and RYA-107 wants it unreadable.
+- **When.** The runner makes the folder before the CLI starts, a resumed run's too, and removes it when the run's CLI has exited, however it ended: done, failed, cancelled, deleted, or wispd stopping. A failed start removes it at once. A root goes with the last folder in it. `serve` removes every run's folder and its roots at startup, under its instance lock, along with what a crash left in the data folder's `tmp/` (RYA-126's `CLAUDE_ENV_FILE`).
+- **The sandbox.** `WorkerSandbox::temp` carries the folder, and its root and `/tmp/claude-<uid>` are in `unreadable`. A backend points the vendor's temp setting at the folder, so its commands' `TMPDIR` is the folder or one inside it. The CLI keeps files of its own there too, such as Claude Code's messaging socket, so commands may use only their `TMPDIR`.
+- **Claude Code.** The CLI gets `CLAUDE_CODE_TMPDIR` set to the folder, spelled `/tmp/...` on macOS, 8 bytes shorter than its canonical `/private/tmp/...`; the settings use the canonical path. Commands get `<folder>/claude-<uid>`, which Claude Code's sandbox lets them write, and which the settings add to `allowRead`; the rest of the folder stays hidden. (Allowing reads of the whole folder instead made bubblewrap mount `claude-<uid>` read-only on Linux.) `denyWrite` takes back the paths the sandbox always allows, which a deny rule beats. A folder whose `…/claude-<uid>` would pass 44 bytes refuses the worker, so Claude Code never falls back to the shared one.
+- **The CLI's own `TMPDIR` stays wispd's.** Claude Code keeps its sandbox's Linux proxy bridges (`claude-http-*.sock`, `claude-socks-*.sock`) there, and Node's compile cache. With `TMPDIR` in the run's folder, the bridges were hidden, and a command's `curl` failed with `Proxy CONNECT aborted` (RYA-107). Opening the folder to commands instead would let them write a compile cache that an unsandboxed process loads later.
+- **`CLAUDE_ENV_FILE` stays in the data folder's `tmp/`.** Claude Code runs it before every command, so it must stay where no command can read or write it. Commands write `<folder>/claude-<uid>`.
+- **Package caches.** A package manager whose cache folder a worker can't write may fall back to `$TMPDIR`, as pnpm did. That now lands in the run's folder and goes with it. Per-run caches on purpose are RYA-129's.
+
 ### Threat model
 
 With network on, anything a worker's commands can read, they can send anywhere. So the read denylist, not the network, is what keeps secrets on the machine:
 
-- **What stays in.** The paths in the list, and wispd's data folder, which holds other projects' context, the store, and the log. Credentials in the environment stay in too: a worker's CLI inherits only an allowlist of wispd's environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG` and `LC_*`, `TERM`, and the proxy and CA variables; 0014), so tokens such as `GITHUB_TOKEN` or `AWS_SECRET_ACCESS_KEY` that wispd was started with never reach it, and Claude Code also scrubs its own credentials from Bash (0004, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`).
+- **What stays in.** The paths in the list; wispd's data folder, which holds other projects' context, the store, and the log; and what other runs and other Claude Code sessions leave in their temp folders. Credentials in the environment stay in too: a worker's CLI inherits only an allowlist of wispd's environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG` and `LC_*`, `TERM`, and the proxy and CA variables; 0014), so tokens such as `GITHUB_TOKEN` or `AWS_SECRET_ACCESS_KEY` that wispd was started with never reach it, and the sandbox unsets the two credentials Claude Code itself holds, an API key account's `ANTHROPIC_API_KEY` and `CLAUDE_CODE_MESSAGING_TOKEN`, for every command (`sandbox.credentials`, below).
 - **What can leave.** The worktree's own source, which the vendor's model sees anyway, and any secret the list doesn't name. That includes `.env` files in other projects and credentials a tool keeps somewhere we didn't list. It also includes another account's configuration folder, if one lives outside the data folder: only the run's own account's is denied. The vendors have no built-in list [1], so new entries go in `UNREADABLE_IN_HOME`.
 - **What comes in.** Fetched pages, search results, and downloaded packages can carry prompt injection or malicious code. They run inside the same sandbox as everything else, so their reach is the same as the agent's own.
 - **This Mac's own services** (databases, Docker's published ports, dev servers) are a larger target than any one remote host, so its loopback and unspecified addresses are denied to commands and to WebFetch alike. The sandbox's proxy canonicalizes other spellings of loopback (`127.1`, `[::ffff:127.0.0.1]`) and refuses names that resolve to this Mac, but it doesn't check IP literals [13]. So `0.0.0.0` and `[::]` are listed explicitly.
-- **Gap: this Mac's interface addresses.** A service bound to `0.0.0.0` also listens on the Mac's LAN address, such as its Wi-Fi IP, and a worker that uses that literal address reaches it. wisp doesn't list those addresses, because they change with the network during a run. Other machines on the LAN are reachable too, since network access is on. #168 decides whether to enumerate the Mac's addresses at run start or to accept the gap.
+- **Gap: this Mac's interface addresses (Claude workers).** A service bound to `0.0.0.0` also listens on the Mac's LAN address, such as its Wi-Fi IP, and a worker that uses that literal address reaches it. wisp doesn't list those addresses, because they change with the network during a run. Other machines on the LAN are reachable too, since network access is on. #168 decides whether to enumerate the Mac's addresses at run start or to accept the gap. Codex workers don't have it: Codex's proxy refuses private addresses, this Mac's and the LAN's alike (see [Codex](#codex)).
 
 ### Claude Code
 
@@ -53,10 +66,10 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
   --restricted \
   --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite \
   --strict-mcp-config \
-  --permission-mode acceptEdits \
+  --permission-mode acceptEdits|plan \
   --settings '<worker_settings>' \
   --add-dir <shared context folder> \
-  [--model <m>] [--resume <id>]
+  [--model <m>] [--effort <e>] [--resume <id>]
 ```
 
 `worker_settings` (`daemon/src/backend/claude.rs`) is:
@@ -65,7 +78,7 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
 {
   "disableAllHooks": true,
   "permissions": {
-    "allow": ["WebFetch(domain:*)", "WebSearch"],
+    "allow": ["Bash", "WebFetch(domain:*)", "WebSearch"],
     "deny": ["WebFetch(domain:localhost)", "WebFetch(domain:127.0.0.1)", "WebFetch(domain:[::1])",
              "WebFetch(domain:0.0.0.0)", "WebFetch(domain:[::])"]
   },
@@ -82,52 +95,99 @@ claude -p --output-format stream-json --verbose --input-format stream-json \
     },
     "filesystem": {
       "denyRead": ["<unreadable paths>", "<the account's CLAUDE_CONFIG_DIR, if any>"],
-      "allowRead": ["<worktree>", "<shared context folder>"],
-      "denyWrite": ["<worktree>/.git", "<repository git folder>"]
+      "allowRead": ["<worktree>", "<shared context folder>", "<git paths>", "<run's temp folder>/claude-<uid>"],
+      "denyWrite": ["<worktree>/.git", "<repository git folder>",
+                    "/tmp/claude", "/private/tmp/claude", "~/.npm/_logs", "~/.claude/debug"]
     }
   }
 }
 ```
 
 - **`--restricted`** loads only managed settings and `--settings`. It skips the user, project, and local settings files, so a repository can't add allow rules, directories, hooks, or an `env` block. It also confines the file tools to the working directories, and it removes the command tools and WebFetch unless `--tools` names them [2]. It needs Claude Code 2.1.248 or later (`WORKER_MIN_VERSION`). We chose it over `--setting-sources user`, which would still merge the user's own sandbox arrays and allow rules into a worker's [1].
-- **`--tools`** is an explicit list. `Bash` is on it without an allowlist, because the OS boundary holds whatever the command string says [1]. Argument patterns such as `Bash(npm test *)` are fragile by the vendor's own account [3], and the sandbox makes them unnecessary. The list leaves out `Agent`, `Skill`, `Monitor`, and every MCP tool. Leaving out `Skill` and `Agent` also means a repository's skills and subagents can't be invoked.
+- **`--tools`** is an explicit list. `Bash` is on it and in `permissions.allow`, so it stays allowed if managed settings force permission mode `default`, where Claude Code 2.1.283 ignores `autoAllowBashIfSandboxed` and would deny Bash before the sandbox runs (RYA-110, RYA-112). The OS boundary holds whatever the command string says [1]. Argument patterns such as `Bash(npm test *)` are fragile by the vendor's own account [3], and the sandbox makes them unnecessary. The list leaves out `Agent`, `Skill`, `Monitor`, and every MCP tool. Leaving out `Skill` and `Agent` also means a repository's skills and subagents can't be invoked.
 - **Network.** The sandbox takes its allowlist from `allowedDomains` and from `WebFetch(domain:...)` allow rules, and it honors a bare `*` in those rules [1]. So `WebFetch(domain:*)` opens every host to commands and approves WebFetch; `WebSearch` approves search. `strictAllowlist` makes any host outside the list, which is only `deniedDomains`, fail instead of prompting. `deniedDomains` wins over the allowlist, but it binds sandboxed commands only; WebFetch runs in-process and follows permission rules [4]. So each denied host is also a `WebFetch(domain:...)` deny rule, which beats the `*` allow for the tool [3].
 - **`failIfUnavailable`** makes a run fail when the sandbox can't start, instead of running commands unsandboxed. **`allowUnsandboxedCommands: false`** ignores `dangerouslyDisableSandbox`, the model's escape hatch [1][4].
 - **`--strict-mcp-config`** with no `--mcp-config` connects no MCP servers, including `.mcp.json` [2]. wispd's own MCP tools join in M4.
-- **`acceptEdits`** approves the file tools inside the working directories. Writes to the permission system's protected paths (`.git`, `.claude`, `.vscode`, `.husky`, `.mcp.json`, shell startup files, ...) still prompt, and `-p` denies them [5]. That covers the Edit and Write tools only. The sandbox's own protected paths are a shorter list, and `.husky` isn't on it [1]. So a Claude worker's Bash can write `.husky/_/post-commit`, which git would run, outside any sandbox, when wispd commits. #166 is needed for Claude workers too.
+- **`acceptEdits`**, or **`plan`** when a run asks for the `plan` permission (RYA-97). [0027](0027-claude-permission-modes.md) adds `auto` and `default` (Manual), in the same sandbox, and `bypassPermissions`, which Claude Code refuses under `--restricted`, so a worker in it runs without this sandbox. Plan mode is narrower: its file tools refuse to write, and it still runs commands in the same sandbox, with the same `--settings`. Claude Code 2.1.283 has plan mode check each command with its auto-mode classifier, a model call on the run's account, instead of `autoAllowBashIfSandboxed`. That is not a read-only boundary, only the sandbox is. `acceptEdits` approves the file tools inside the working directories. Writes to the permission system's protected paths (`.git`, `.claude`, `.vscode`, `.husky`, `.mcp.json`, shell startup files, ...) still prompt, and `-p` denies them [5]. That covers the Edit and Write tools only. The sandbox's own protected paths are a shorter list, and `.husky` isn't on it [1]. So a Claude worker's Bash can write `.husky/_/post-commit`, which git would run, outside any sandbox, when wispd commits. #166 is needed for Claude workers too.
+- **Temp.** The CLI runs with `CLAUDE_CODE_TMPDIR` set to the run's own folder, so its commands' `TMPDIR` is `<folder>/claude-<uid>`. The paths Claude Code 2.1.283's sandbox lets every command write whatever the settings say (`/tmp/claude` in both spellings, `~/.npm/_logs`, `~/.claude/debug`) are in `denyWrite`, which beats them. See [The run's temp folder](#the-runs-temp-folder).
 - **`denyWrite` on git metadata.** In a linked worktree the sandbox would otherwise let commands write the repository's shared git folder, for `git commit` [1]. That would let a worker move any branch, including the user's. wispd commits for every backend instead.
-- **Second checks on `system/init`.** A worker whose `system/init` lists a tool outside `WORKER_TOOLS` fails with `policyViolation`, as a no-write run does with anything outside its read tools. So does one whose `claude_code_version` is missing or below `WORKER_MIN_VERSION`.
-- **`CLAUDE_CONFIG_DIR` in Bash.** `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` removes it from Bash's environment only from 2.1.251 on [14]. That is harmless, because the folder is in `denyRead` either way.
+- **Second checks on `system/init`.** A worker whose `system/init` lists a tool outside `WORKER_TOOLS` fails with `policyViolation`, as a no-write run does with anything outside its read tools. So does one whose `claude_code_version` is missing or below `WORKER_MIN_VERSION`, and one whose `permissionMode` is missing or isn't the mode it asked for: `acceptEdits` (`DEFAULT_PERMISSION_MODE`, RYA-118), or the run's other mode (RYA-97, 0027). Claude Code writes `init` at the start of each turn, before its first API request, so wispd kills the CLI before any tool runs.
+- **No `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` for workers.** On Linux, Claude Code 2.1.283 answers the flag by merging its CI hardening profile into each command's sandbox: writes open to all of `/home`, `/root`, `/tmp`, `/var`, `/opt`, `/run`, and `/mnt`, and `denyWrite` entries outside those folders are dropped (RYA-20). So wispd sets the flag only for no-write runs other than a coordinator, which have no Bash to widen [14], and drops it from what every run inherits (`SCRUBBED_VARS`), so wispd's own environment can't pass it to a worker. For a worker, `sandbox.credentials.envVars` unsets `ANTHROPIC_API_KEY` and `CLAUDE_CODE_MESSAGING_TOKEN` before each command instead [1]. Managed settings still load under `--restricted`, and their `env` block overrides both wispd's environment and `--settings`. So on Linux, wispd refuses a worker when managed settings set the flag (step 2 of the check under [Claude Code on Linux](#claude-code-on-linux), RYA-112). With the flag on, Claude Code 2.1.283 also forces the permission mode to `default`, whatever `--permission-mode` says. So on every OS, a worker whose own `system/init` reports another mode fails with `policyViolation` (RYA-118). That backs up step 2 from inside the worker's own process, and it covers macOS, where nothing else checks the flag. Those no-write runs aren't checked this way: wispd sets the flag for them, so they always report `default` (RYA-121). A coordinator runs without it and is checked like a worker ([0027](0027-claude-permission-modes.md)).
+- **`CLAUDE_CONFIG_DIR` in Bash.** A worker's commands see it. That is harmless, because the folder is in `denyRead`.
 
 **#134, the project `env` gap.** For workers it is closed: `--restricted` reads no project or user settings file, so no repository `env` block reaches the CLI. The existing checks (`apiKeySource` in `system/init`, `modelUsage[*].provider` in `result`) stay as a second line. Managed settings and wispd's scrubbed environment are the only remaining sources.
 
 **What a repository can still change for a Claude worker.** Only its `CLAUDE.md`, which is instructions and not configuration: it still loads. Everything else a repository supplies is either not loaded or is used only through a tool the worker doesn't have.
 
-### Codex (for #122)
+### Claude Code on Linux
 
-Codex sandboxes commands with Seatbelt. Its `:workspace` permission profile writes the workspace roots and the temp folders, and it protects `.git` (including the folder a `.git` file points to) and `.codex` [6][7]. Permission profiles, which are in beta, can also deny reads and turn the network on [7]. A worker runs:
+On Linux and WSL2, Claude Code sandboxes Bash with bubblewrap and relays its proxy traffic with `socat` [1]. A Linux worker runs the same command with the same `worker_settings` as on macOS. wispd never sets `enableWeakerNestedSandbox`, which bind-mounts the host's `/proc` instead of a fresh one. It never sets `allowAllUnixSockets` either, which would drop the filter below.
+
+- **Reads.** `UNREADABLE_IN_HOME` holds the paths every OS shares, and `UNREADABLE_IN_HOME_ON_THIS_OS` adds Linux's:
+  - GNOME Keyring, KWallet, and NSS's `~/.pki`
+  - 1Password and Bitwarden
+  - Chrome, Chromium, Brave, Edge, and Firefox, with their snap and flatpak folders, since Ubuntu ships Firefox as a snap. Firefox 147 and later, and Thunderbird, keep new profiles in `~/.config/mozilla` instead of `~/.mozilla`, so both are listed
+  - the Cursor and Claude apps under `~/.config`
+
+  wispd's data folder, `~/.local/share/wisp` (0023), is denied as on macOS. So is the user's runtime folder, which is outside the home folder (RYA-107). It can hold credentials: rootless Podman, Buildah, and Skopeo keep registry logins in `$XDG_RUNTIME_DIR/containers/auth.json` by default. The seccomp filter below blocks the sockets there, but not the files.
+  - **The whole folder, not named files in it.** A list of files would miss the next tool. Claude Code 2.1.283's sandbox keeps nothing a command needs there, as long as the temp folder is outside it. Its proxy bridges (`claude-http-*.sock`, `claude-socks-*.sock`) and its session temp folder are in the temp folder. Its cross-session messaging socket goes in `$XDG_RUNTIME_DIR/cc-socks` when the variable is set, but Claude Code binds it in its own process, outside bwrap. Its own hardened profiles deny `/run/user` to commands too [13].
+  - **Which folders.** `WorkerSandbox::for_worktree` denies wispd's `$XDG_RUNTIME_DIR`, and `/run/user/<uid>` and `/run/containers/<uid>` whether or not the variable is set. A worker doesn't inherit the variable (0014), so its tools use their own fallbacks. Most use `/run/user/<uid>`. Podman, Buildah, and Skopeo keep registry logins in `/run/containers/<uid>/auth.json` [16]. A value that isn't absolute is ignored, as the XDG Base Directory spec says. An absolute one that isn't UTF-8 is kept, so the run is refused, as with any other unusable path. Claude Code's sandbox skips a denied path that doesn't exist.
+  - **A temp folder inside a denied path is refused.** If the worker's `TMPDIR` (or `/tmp`, when it is unset) is inside any unreadable path, the deny hides the proxy bridges, and commands silently lose the network. So wispd refuses the run and names `TMPDIR`. Allowing the temp folder instead is no fix: when `TMPDIR` is the runtime folder itself, the sandbox drops the deny.
+- **The seccomp filter is required.** Without it, a sandboxed command can connect to any Unix socket. That includes the D-Bus session bus that serves the Secret Service, `ssh-agent`, and `docker.sock`. On macOS, Seatbelt blocks them. `failIfUnavailable` doesn't cover the filter, because Claude Code treats it as optional, so wispd checks it itself.
+- **Where the filter comes from.** Since 2.1.92, Claude Code ships the filter's helper, `apply-seccomp`, itself [15].
+  - The native build compiles the helper into the `claude` binary, and the npm package now installs the native build too.
+  - It runs every sandboxed command inside bwrap as `ARGV0=apply-seccomp /proc/self/fd/3 <shell> -c <command>`, where fd 3 is its own binary. That is what the 2.1.283 linux-x64 build does: `seccomp: {applyPath: "/proc/self/fd/3", argv0: "apply-seccomp"}` whenever it runs as a standalone executable [13].
+  - `npm install -g @anthropic-ai/sandbox-runtime`, which Claude's docs still suggest, is only a fallback for a build without the helper. So wispd doesn't look for that package: a native Claude never reads it.
+- **How wispd checks** (`backend::claude::linux_sandbox::check_host`). Before each Claude worker starts or resumes, after the version check, with no cache:
+  1. `bwrap` and `socat` must resolve on the agents' `PATH`, where Claude Code looks for them.
+  2. `claude --restricted sandbox status` must show that `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is off (RYA-112).
+     - Its `autoAllowBashIfSandboxedSource` is `"unsupported"` on Linux exactly when the flag is on. The other values in 2.1.283 are `default`, `settings`, and `policy`.
+     - The check fails closed. It accepts only a run that exits 0 and prints `statusVersion` 3 with one of those three values. It refuses everything else: the flag, a non-zero exit, unreadable output, another `statusVersion`, or an unknown value.
+     - The command runs with the environment a worker gets, scrubbed the same way (`SCRUBBED_PREFIXES`, `SCRUBBED_VARS`). `--restricted` makes it load the settings a worker loads.
+     - Tested: the flag in `/etc/claude-code/managed-settings.json` and in a `/etc/claude-code/managed-settings.d/` drop-in. Assumed, not tested: server-managed settings, a `policyHelper`, and, on WSL, the Windows machine's managed settings. They need an organization or a Windows host. Claude Code's schema says they make up the same managed tier.
+     - The command is hidden, but its output is versioned. Version 3, with this field, arrived in 2.1.275, so a Linux worker needs Claude Code 2.1.275 or later.
+     - It runs in a separate process from the worker, and can disagree with it (Evidence). The worker's own `permissionMode` check on `system/init` backs it up (RYA-118).
+  3. wispd listens on a Unix socket in a temp folder. bwrap runs `socat` to connect to it, with the namespaces Claude's sandbox uses: `--unshare-user --unshare-pid --proc /proc --cap-drop ALL`. The connect must succeed. If bwrap fails and `kernel.apparmor_restrict_unprivileged_userns` is 1, the error names AppArmor.
+  4. The same bwrap runs the detected `claude` as `ARGV0=apply-seccomp`, which runs the same connect. The connect must be refused.
+
+  Each failure is `workerUnavailable` and names what is wrong: bubblewrap, socat, the scrub flag, the AppArmor profile, or the filter. The check runs the same binary and helper the worker will use, so it can't pass on a file Claude Code doesn't load. It can't catch a later Claude Code that stops running its helper. `WORKER_MIN_VERSION` and `daemon/tests/sandbox.rs` cover that. CI runs the test against a pinned Claude Code on Linux.
+- **Setup.** Install Claude Code 2.1.275 or later, `bubblewrap`, and `socat`. On Ubuntu 24.04 and later, also add the AppArmor profile for `/usr/bin/bwrap` from Claude's docs [1]. WSL1 isn't supported. Nor is wispd running as root: Claude's sandbox adds `CAP_SETFCAP` for uid 0 and the check doesn't, so the check refuses.
+
+### Codex
+
+Codex sandboxes commands with Seatbelt on macOS. Its `:workspace` permission profile writes the workspace roots and the temp folders (`$TMPDIR` and `/tmp`), and it protects `.git` (including the folder a `.git` file points to) and `.codex` [6][7]. Permission profiles, which are in beta, can also deny reads and turn the network on [7]. A worker runs (RYA-38, `daemon/src/backend/codex.rs`), in its worktree, with the prompt on stdin:
 
 ```sh
-codex exec --json -C <worktree> \
-  --ignore-user-config --ignore-rules \
+codex exec [resume] --json --ignore-user-config --ignore-rules \
   -c 'default_permissions="wisp_worker"' \
-  -c 'permissions.wisp_worker.extends=":workspace"' \
-  -c 'permissions.wisp_worker.workspace_roots={"<shared context folder>"=true}' \
-  -c 'permissions.wisp_worker.filesystem={"<unreadable path>"="deny", ...}' \
-  -c 'permissions.wisp_worker.network.enabled=true' \
-  -c 'permissions.wisp_worker.network.domains={"*"="allow"}' \
-  -c 'features.network_proxy=true' \
-  -c 'approval_policy="never"' \
-  -c 'web_search="live"' \
-  -c 'projects."<worktree>".trust_level="untrusted"' \
-  -c 'shell_environment_policy.ignore_default_excludes=false'
+  -c 'permissions={wisp_worker={extends=":workspace", workspace_roots={"<context>"=true},
+        filesystem={"<unreadable path>"="deny", ..., "<worktree>/.git"="read", "<git folder>"="read",
+          "<zdotdir>"="read"},
+        network={enabled=true, domains={"*"="allow"}}}}' \
+  -c 'features={network_proxy=true, hooks=false, apps=false, plugins=false, remote_plugin=false,
+        multi_agent=false, skill_mcp_dependency_install=false, shell_snapshot=false}' \
+  -c 'projects={"<worktree>"={trust_level="untrusted"}}' \
+  -c 'approval_policy="never"' -c 'web_search="live"' -c 'allow_login_shell=false' \
+  -c 'shell_environment_policy={ignore_default_excludes=false, set={ZDOTDIR="<zdotdir>"}}' \
+  [-c 'model_reasoning_effort="<effort>"'] [-m <model>] [<thread id>] -
 ```
 
-- Profiles and `sandbox_mode` don't compose: passing `-s` or loading a `sandbox_mode` from any config disables the profile [7]. So #122 passes no `-s`, and `--ignore-user-config` keeps the user's `sandbox_mode` out. Auth still comes from `CODEX_HOME` [8].
-- **Network.** `network.enabled` gives commands network access. `network_proxy` with a global `*` allow reaches every public host, and its default `allow_local_binding = false` keeps loopback and private addresses out. That matches Claude's localhost denial [6]. Without the proxy, access would be direct and unrestricted, localhost included. `web_search="live"` is Codex's search-and-browse [6].
-- An untrusted project skips the repository's `.codex/` config, hooks, and rules [9]. `approval_policy="never"` is explicit, because an untrusted project otherwise asks for approval, and exec denies approval requests (0004). #122 must confirm that a `-c projects."<worktree>".trust_level` override still applies under `--ignore-user-config`.
+- **Each `-c` sets one top-level key** to an inline TOML table, so no path is part of a dotted key, where a `.` or `=` in it would split wrong. A value that doesn't parse as TOML is taken as a string, and Codex then refuses to start, so a mistake fails closed.
+- **The profile wins over `sandbox_mode`.** `default_permissions` on the command line selects permission profiles even if a system or managed config sets `sandbox_mode` (`resolve_permission_config_syntax` at `rust-v0.157.1`). wispd passes no `-s`. More specific entries win over broader ones, so the worktree (a workspace root, write) and the git paths (`read`) reopen inside the denied data folder.
+- **Network.** `network.enabled` with `network_proxy` sends commands through Codex's proxy, and Seatbelt allows nothing else. The `*` rule reaches every public host. The proxy's local-network guard (`allow_local_binding = false`) refuses loopback and private addresses, and names that resolve to them. That includes this Mac's own LAN address, so the interface-address gap in the threat model doesn't apply to Codex workers. `web_search="live"` is Codex's hosted search, which runs outside the proxy on OpenAI's side [6].
+- **No hooks, MCP servers, or repository settings.** `--ignore-user-config` skips the user's `config.toml`. User hooks then count as untrusted, because their trust hashes live there. The untrusted worktree skips the repository's `.codex/` config, hooks, and rules. `--ignore-rules` skips execpolicy rules. `hooks=false` turns the hooks engine off anyway, and `apps=false` and `plugins=false` keep ChatGPT's connectors and plugins, which are MCP servers, out. `multi_agent=false` removes subagents, as Claude's `Agent` tool is left out. Managed configuration (`/etc/codex`, MDM, cloud requirements) still applies: it is the administrator's. `approval_policy="never"` makes exec deny every escalation, so nothing runs outside the sandbox.
+- **Fallback (0012).** Exec reports a failed turn only as a message, so wispd reads it: a 401 or an expired login is `notSignedIn`; a usage limit, a quota, or a plain 429 that outlasted Codex's retries is `rateLimited`. A plan that doesn't include Codex ("upgrade to Plus") stays `vendorError`, so the user sees it rather than the run moving to a paid key.
+- **Second check.** Exec reports no tool list, so a worker whose output shows an `mcp_tool_call` or `collab_tool_call` item is killed at once and fails with `policyViolation`.
+- **The environment.** `shell_environment_policy.ignore_default_excludes=false` keeps variables named `*KEY*`, `*SECRET*`, or `*TOKEN*` out of commands, including an API key account's `CODEX_API_KEY`. Shell snapshots are off, because a snapshot restored a `*KEY*` variable that the policy had removed (Evidence). Inherited `OPENAI_*` and `CODEX_*` variables never reach the CLI. A second account's `CODEX_HOME` is denied, as `~/.codex` is.
+- **Version.** Codex older than `codex::WORKER_MIN_VERSION` (0.157.1, the version checked here) is refused before a worker starts, since one that doesn't know permission profiles would ignore them rather than fail. Detection reads it from `codex --version`.
+- **Gap: threads with no repo.** A scratch repository's git folder is inside the data folder. Reading its files works, but git `lstat`s every parent folder, and a profile can't grant metadata alone, so `git status` fails in those threads. The worker still edits files, and wispd commits (RYA-134).
+- **`PATH` (RYA-141).** Codex runs each command with the user's shell from the password database, as `-lc` unless `allow_login_shell` is off, and a zsh startup file that sets `PATH` outright, such as nix-darwin's `/etc/zshenv`, replaces wispd's. The shell snapshot that would restore it is off (above), and without one Codex adds nothing to the command. So each worker gets a `ZDOTDIR` folder in the data folder's `tmp/`. zsh reads its `.zshenv` right after `/etc/zshenv`, and it unsets `ZDOTDIR`, runs the user's `~/.zshenv`, and puts wispd's `PATH` back in front, as Claude's env file does (0014). `allow_login_shell=false` makes every command `-c`, so no `.zprofile` or `.zlogin` runs after it; Claude workers get the same startup files. The folder is `read` in the profile, because the sandboxed zsh reads it, so a worker's commands can read it: it holds only the `PATH` they already have. They can't write it or read another run's. wispd deletes it when the run ends, or at the next `serve` start after a crash (RYA-130). bash reads no startup files for `-c`.
+- **Gap: temp.** A Codex worker gets the denies of [the run's temp folder](#the-runs-temp-folder): every other run's folder and `/tmp/claude-<uid>`, whose `deny` entries win over `:workspace`'s `/tmp` (checked with `codex sandbox` 0.157.1). But its commands still write the shared `$TMPDIR` and `/tmp`, not their run's folder (RYA-145).
+- **Gap: the Keychain.** With network on, Codex's Seatbelt profile allows `mach-lookup` of `com.apple.SecurityServer` for TLS, as Claude's runtime does. The login keychain file is unreadable, which is the same open item as Claude's.
+- **Gap: the credential source.** Exec doesn't say which credentials it used, unlike Claude's `apiKeySource`. A subscription run bills whatever `codex login` stored; if that is an API key, wisp can't tell yet (RYA-136).
+- **Other OSes.** Only macOS was checked, so the backend reports `worker_sandbox: false` on Linux (RYA-133) and Windows (RYA-24), and those workers fail with `workerUnavailable`.
+- **Refused until RYA-145 (RYA-153).** Because of the temp gap, the backend reports `worker_sandbox: false` on macOS too, so wispd refuses every Codex worker with `workerUnavailable`, naming RYA-145, before creating anything. Detection, sign-in, and usage are unchanged, and RYA-145 turns workers back on.
 - `.git` is read-only, so wispd commits (0004).
-- If #122 finds that permission profiles misbehave on the version it pins, the fallback is `-s workspace-write --add-dir <context>` with `sandbox_workspace_write.network_access=true`. That fallback loses the read denials and the localhost denial, and #122 records the gap.
 
 ### Cursor (for #123, still gated on #35)
 
@@ -165,8 +225,8 @@ wisp's own profile does have one use: commands wispd runs itself, such as a setu
 
 #156's comment spells out the exact values:
 
-1. Starts a worker only on a backend that implements this record: Claude now, Codex and Cursor once #122 and #123 do.
-2. Before starting a Claude worker, checks the detected version (#114) against `WORKER_MIN_VERSION`, and refuses with an error that names both versions. The `system/init` check backs this up.
+1. Starts a worker only on a backend that implements this record: Claude, Codex on macOS once RYA-145 lands (RYA-38, RYA-153), and Cursor once #123 does.
+2. Before starting a Claude or Codex worker, checks the detected version (#114) against its backend's `WORKER_MIN_VERSION`, and refuses with an error that names both versions. For Claude, the `system/init` check backs this up.
 3. Passes `sandbox: Some(WorkerSandbox::for_worktree(home, data_dir, worktree, git_common_dir, context_dir))`, with every path canonical. Seatbelt matches real paths, and `/var` and `/tmp` are symlinks on macOS.
 4. Commits the worktree's changes itself, with the git folder pinned and hooks off (#166), for every backend including Claude. `--no-verify` skips only `pre-commit` and `commit-msg` [12]. A worker can write files that git hooks run, such as `.husky/*` under `core.hooksPath`: Claude through Bash, and Codex and Cursor through any command. Cursor's sandbox also leaves the worktree's `.git` file writable, and that file says which repository git uses.
 
@@ -185,7 +245,7 @@ wisp's own profile does have one use: commands wispd runs itself, such as a setu
 
 ## Evidence
 
-Local experiments on macOS 27.0 with Codex CLI 0.154.0 (`codex sandbox -P <profile>`), Cursor CLI 2026.09.10 (`agent sandbox run`), and `sandbox-exec`. None needs a vendor login. A probe script tried each operation from a simulated linked worktree whose `.git` file points to a separate git folder, with the context folder, the git folder, and a "secret" all outside the worktree and outside `/tmp`. The experiments ran with each vendor's default network setting (off), before Ryan chose network access, so the HTTPS row shows those defaults, not v1. Claude Code's sandbox needs a signed-in session, so it has no column here: its behavior comes from the docs [1] and is left for #124 to confirm.
+Local experiments on macOS 27.0 with Codex CLI 0.154.0 (`codex sandbox -P <profile>`), Cursor CLI 2026.09.10 (`agent sandbox run`), and `sandbox-exec`. None needs a vendor login. A probe script tried each operation from a simulated linked worktree whose `.git` file points to a separate git folder, with the context folder, the git folder, and a "secret" all outside the worktree and outside `/tmp`. The experiments ran with each vendor's default network setting (off), before Ryan chose network access, so the HTTPS row shows those defaults, not v1. Claude Code has no column here, because its sandbox runs only inside a session. The fake-API test after the table covers it.
 
 | Operation | Codex `:workspace` | Codex `wisp_worker` profile | Cursor sandbox | wisp `sandbox-exec` profile |
 | --- | --- | --- | --- | --- |
@@ -204,6 +264,39 @@ Local experiments on macOS 27.0 with Codex CLI 0.154.0 (`codex sandbox -P <profi
 
 Nesting: `sandbox-exec` inside `sandbox-exec` works only when the outer profile is `(allow default)` with nothing denied. With a single `deny` of writes, reads, or network, the inner `sandbox_apply` fails with `Operation not permitted` (exit 71). `codex sandbox` inside wisp's profile failed the same way.
 
+**Codex (RYA-38).** On 2026-09-28, with codex-cli 0.157.1 on macOS 27.0, `codex sandbox -P wisp_worker` ran a probe with a worker's exact profile from a linked worktree. The worktree and context folder were inside a denied "data folder", and the tree was outside `/tmp` and `$TMPDIR`:
+
+- **Allowed:** writing the worktree, the context folder, `$TMPDIR`, and `/tmp`; reading the worktree and context folder; `git status` and `git log` in a worktree of a repository outside the data folder; HTTPS to a public host.
+- **Refused:** writing anywhere else, through a symlink in the worktree, to the `.git` file or the git folder, and `git commit`; reading a denied `.ssh`, `.codex`, and another project's context, and listing the data folder; hard-linking a denied file into the worktree; HTTP to `127.0.0.1`, `localhost`, `127.1`, `[::1]`, `0.0.0.0`, `[::ffff:127.0.0.1]`, and the Mac's LAN address, through the proxy or around it; connecting to a Unix socket; opening the login keychain.
+
+Real `codex exec --json` runs on a ChatGPT login with the backend's flags then confirmed the rest:
+
+- A repository `.codex/config.toml` naming an MCP server and a `notify` program, and a `.codex/hooks.json`, each writing a marker file outside the sandbox: no marker appeared.
+- A `curl` to `127.0.0.1` got the proxy's 403. Asked to read a denied file, write outside the worktree, and `apply_patch` outside it, the model declined all three, citing the permission profile Codex describes to it, and nothing was written.
+- A `WISP_PROBE_API_KEY` variable reached commands through the shell snapshot, and not once snapshots were off.
+- `PATH` (RYA-141, on a nix-darwin Mac whose `/etc/zshenv` sets it outright): through a `wispd` built with the `ZDOTDIR` folder, a worker's command ran as `/bin/zsh -c`, found a tool that only wispd's `PATH` had, found `cargo` in `~/.cargo/bin`, and had wispd's entries first with nix-darwin's after. `*KEY*`, `*TOKEN*`, and `*SECRET*` variables still didn't reach it. Under `codex sandbox -P`, the command could read its own folder but not write it, create files in it, read another run's, or list the data folder's `tmp/`.
+- A worker ran through `wispd` end to end: wispd committed its file, and `agent/send` resumed the thread.
+
+The backend's fixtures are those runs.
+
+**Claude Code, against a fake API (RYA-20).** `daemon/tests/sandbox.rs` runs Claude Code with a worker's exact arguments against a fake Messages API on 127.0.0.1. So it needs no login and sends nothing to Anthropic. The fake asks for one Bash call that runs a script in the worktree, and Claude's permission checks can't see into a script.
+
+- **macOS.** On 2026-09-28, with Claude Code 2.1.283 on macOS 27.0, Seatbelt refused:
+  - reads of `~/.ssh`, and of another project's context folder;
+  - writes to the home folder, to a folder outside the data folder, and to the worktree's `.git` file.
+
+  Writes to the worktree and the context folder went through. With `.ssh` dropped from the denylist, the test failed.
+- **Linux.** CI runs the same test on x86_64 and arm64, and on 2026-09-28 it also passed in an Ubuntu 24.04 arm64 container with Claude Code 2.1.283. There it also checks that a Unix-socket connect is refused, and that a registry login in a runtime folder that the sandbox denies can't be read. The unit tests in `sandbox.rs` cover which folders `for_worktree` denies (RYA-107). The same day, in the container, the read was also refused in the real `/run/user/<uid>`, with Claude Code given `XDG_RUNTIME_DIR` too: it made its `cc-socks` folder there and still ran the command. With the runtime folder dropped from the denylist, the test failed.
+- **The run's temp folder (RYA-130).** Before it, a worker's `TMPDIR` on macOS was `/tmp/claude-501`, and a probe read and wrote a file another session had left there, and wrote `~/.npm/_logs` and `~/.claude/debug`. On 2026-09-28, with Claude Code 2.1.283, `a_worker_s_temp_is_its_own` passed on macOS 27.0 and in an Ubuntu 24.04 arm64 container. The probe's `$TMPDIR` was `<run folder>/claude-<uid>`, and writable. It couldn't read another run's folder or a file in `/tmp/claude-<uid>`, and nothing it wrote reached the run folder itself, another run's folder, `/tmp/claude-<uid>`, `/tmp/claude`, `~/.npm/_logs`, or `~/.claude/debug`. On Linux, a write under a hidden folder lands in the tmpfs that hides it, which only that one command sees, so the test checks the disk. With the `denyWrite` rules dropped, the last three were written. With a `…/claude-<uid>` of 49 bytes, Claude Code gave commands `/tmp/claude-501` instead.
+- **The environment.** The test gives Claude Code a worker's environment as wispd does, without `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`. With the flag set, the Linux run failed: the probe wrote to the home folder, to `/tmp`, and to `/var/tmp` (RYA-20). With the flag set only in `/etc/claude-code/managed-settings.json`, the probe also wrote to the home folder. Setting the flag to `0` in the worker's `--settings` `env` changed nothing (RYA-112). `daemon/tests/worker_permission.rs` checks, against the same fake API, that a worker's Bash runs and doesn't see `ANTHROPIC_API_KEY` (RYA-110).
+- **Managed settings.** Claude Code 2.1.283 reads the flag from its own environment only, after it applies every settings `env` block, with managed settings applied last. `claude --restricted sandbox status` reported scrub mode for the flag in `managed-settings.json` and in a drop-in file, but not in the user's own settings. `linux_sandbox`'s tests run a real Claude Code and check three things: the host check accepts it with the flag off; it accepts it with the flag only in wispd's own environment, which the check drops; and the status is refused with the flag in Claude Code's own environment. That last case is where a managed `env` block puts the flag. CI runs as a normal user, so it can't write `/etc/claude-code`. 2.1.283 also ignores `CLAUDE_CODE_MANAGED_SETTINGS_PATH` and `CLAUDE_CODE_REMOTE_SETTINGS_PATH` there. So the managed-file runs were manual, in the container (RYA-112). Server-managed settings, `policyHelper`, and WSL's inherited settings were not tried, because they need an organization or a Windows host. That they reach the check the same way is an assumption.
+- **The check's process and the worker's (RYA-118).** The RYA-112 review suspected that `sandbox status` could miss server-managed settings, because Claude Code sets `startupAwaited` only when the command is the root one. In the 2.1.283 binary, that root-command test sets `startupAwaited` only for the policy-limits load. Whether start-up waits for server-managed settings doesn't depend on the command, so that disagreement is ruled out. Start-up waits only when a policy forces a refresh, behind a cloud gateway, and in some `policyHelper` and cached-remote cases. Otherwise both commands start from the copy cached on disk and fetch in the background. Other disagreements remain possible, untested for want of an organization:
+  - a background fetch that lands after the short check has exited but before the worker reads the flag;
+  - a second account's configuration folder, which holds its own cache (RYA-117);
+  - an API key account's key, which the check doesn't get, so an organization's settings tied to that key may not reach it.
+
+  So wispd also checks the worker's own process. Claude Code reads the flag once and latches it. That one value both switches on the scrub sandbox and forces the permission mode to `default`, with the stderr warning "Permission mode forced to default". On 2026-09-28, with 2.1.283 against a dead local API, a worker's `system/init` reported `acceptEdits` with the flag off and `default` with it on. That held on macOS 27.0 and in an Ubuntu 24.04 arm64 container, with the flag in the environment, in `/etc/claude-code/managed-settings.json`, and in a `managed-settings.d` drop-in. With the flag in `managed-settings.json`, wispd's own backend killed such a worker at `init` with `policyViolation`. `linux_sandbox`'s tests run a worker through wispd with the pinned Claude Code, with the flag off and with it in Claude Code's own environment.
+
 ## Sources
 
 Read on 2026-09-25, as raw Markdown (`.md` appended to each page URL).
@@ -220,5 +313,7 @@ Read on 2026-09-25, as raw Markdown (`.md` appended to each page URL).
 10. Cursor CLI parameters (`--sandbox`, `agent sandbox run`): https://cursor.com/docs/cli/reference/parameters
 11. Cursor CLI configuration (`sandbox.mode`, `sandbox.networkAccess`, project `.cursor/cli.json`): https://cursor.com/docs/cli/reference/configuration
 12. Git, `git commit --no-verify` and githooks: https://git-scm.com/docs/git-commit, https://git-scm.com/docs/githooks
-13. sandbox-runtime, the engine behind Claude Code's sandbox: its macOS profile (Mach lookups it allows), host canonicalization and the resolved-address guard (which skips IP literals), and glob characters in paths: https://github.com/anthropic-experimental/sandbox-runtime (`src/sandbox/macos-sandbox-utils.ts`, `parent-proxy.ts`, `resolved-address-guard.ts`, `sandbox-utils.ts`)
+13. sandbox-runtime, the engine behind Claude Code's sandbox: its macOS profile (Mach lookups it allows), host canonicalization and the resolved-address guard (which skips IP literals), and glob characters in paths: https://github.com/anthropic-experimental/sandbox-runtime (`src/sandbox/macos-sandbox-utils.ts`, `parent-proxy.ts`, `resolved-address-guard.ts`, `sandbox-utils.ts`). For Linux, read on 2026-09-28 at `ddbeb74`: its bubblewrap arguments, its dependency checks, and the `argv0` mode of its seccomp config (`linux-sandbox-utils.ts`, `generate-seccomp-filter.ts`, `sandbox-config.ts`, `vendor/seccomp-src/`). How Claude Code 2.1.283 sets that config was read from the strings in its linux-x64 binary.
 14. Claude Code environment variables (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`): https://code.claude.com/docs/en/env-vars
+15. Claude Code changelog, 2.1.92: "Linux sandbox now ships the `apply-seccomp` helper in both npm and native builds": https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md
+16. containers/image, the library behind Podman, Buildah, and Skopeo: `getPathToAuthWithOS` uses `$XDG_RUNTIME_DIR/containers/auth.json`, or `/run/containers/<uid>/auth.json` (`defaultPerUIDPathFormat`) when the variable is empty. Read on 2026-09-28 at `551121d`: https://github.com/containers/container-libs/blob/551121da77392eb93f4324563b8e67c0678831b2/image/pkg/docker/config/config.go

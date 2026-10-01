@@ -1,6 +1,6 @@
 # 0004: Subscriptions run through each vendor's official CLI
 
-- Status: accepted
+- Status: accepted; where API keys are kept on Linux and Windows is in [0023](0023-cross-platform.md), and the no-write run's `--settings` deny of reads under Claude Code's shared temp folder is in [0024](0024-coordinator-chat.md); the coordinator runs as full Claude Code in its permission mode instead of the no-write flags since [0027](0027-claude-permission-modes.md)
 - Date: 2026-09-23
 - Issue: #15
 
@@ -84,7 +84,7 @@ What it smooths over, beyond the table's differences:
 
 ## Consequences
 
-- Keys in the environment would reach the agent's shell, so `wispd` sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` [16] and Codex's `shell_environment_policy.ignore_default_excludes=false` [26].
+- Keys in the environment would reach the agent's shell, so `wispd` sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` for no-write runs [16], has the sandbox unset the key for a worker's commands instead (0013), and sets Codex's `shell_environment_policy.ignore_default_excludes=false` [26].
 - On a remote Mac, SSH sessions may not reach the Keychain [12][46]. Running `wispd` as a LaunchAgent in the user's GUI session should avoid this, but that is unverified and requires the user to be logged in.
 
 ## Open risks

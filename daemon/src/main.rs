@@ -4,11 +4,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use tokio::net::UnixStream;
-use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
 use wisp_protocol::{CoordinatorThreadId, ProjectId};
-use wispd::VERSION;
 use wispd::attach::{
     self, DEFAULT_CONNECT_TIMEOUT, EXIT_UNAVAILABLE, MAX_CONNECT_TIMEOUT, Options, report,
 };
@@ -16,10 +13,11 @@ use wispd::launch_agent::LaunchAgent;
 use wispd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
 use wispd::paths::{DATA_DIR_ENV, DataDir};
 use wispd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartError};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use wispd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
 
 #[derive(Debug, Parser)]
-#[command(name = "wispd", version = VERSION, about = "The wisp host daemon.")]
+#[command(name = "wispd", version = wispd::version(), about = "The wisp host daemon.")]
 #[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
@@ -28,11 +26,14 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Serve the editor on this user's socket until SIGTERM or SIGINT.
+    /// Serve the editor on this user's socket or pipe until SIGTERM or SIGINT (Ctrl-C or
+    /// Ctrl-Break on Windows).
     Serve(ServeArgs),
-    /// Connect stdin and stdout to wispd's socket, starting wispd if it isn't running.
+    /// Connect stdin and stdout to wispd's socket or pipe, starting wispd if it isn't running.
     Attach(AttachArgs),
-    /// Manage wispd's per-user `LaunchAgent`.
+    /// Manage the per-user service that keeps wispd running: a `LaunchAgent` on macOS, a systemd
+    /// user unit on Linux.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     Service(ServiceArgs),
     /// Serve a coordinator's wisp tools over MCP on stdin and stdout. wispd starts it.
     #[command(hide = true)]
@@ -41,7 +42,8 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct McpArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp]
+    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
+    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -56,7 +58,8 @@ struct McpArgs {
 
 #[derive(Debug, Args)]
 struct ServeArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp]
+    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
+    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -67,7 +70,8 @@ struct ServeArgs {
 
 #[derive(Debug, Args)]
 struct AttachArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp]
+    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
+    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -90,38 +94,45 @@ fn parse_seconds(text: &str) -> Result<Duration, String> {
         })
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Args)]
 struct ServiceArgs {
     #[command(subcommand)]
     command: ServiceCommand,
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
-    /// Install or update the `LaunchAgent`, then start or restart it.
+    /// Install or update the service, then start or restart it.
     Install(ServiceOptions),
-    /// Stop the `LaunchAgent` if it is running, and remove it.
+    /// Stop the service if it is running, and remove it.
     Uninstall(ServiceOptions),
-    /// Report whether the `LaunchAgent` is installed, loaded, and running.
+    /// Report whether the service is installed, loaded, and running.
     Status(ServiceOptions),
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Args)]
 struct ServiceOptions {
-    /// The data folder [default: ~/Library/Application Support/wisp]
+    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
+    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
-    /// Override the `LaunchAgent`'s label. For tests: a real install never needs this.
+    /// Override the service's label. For tests: a real install never needs this.
     #[arg(long, value_name = "LABEL", env = SERVICE_LABEL_ENV, default_value = DEFAULT_LABEL, hide = true)]
     label: String,
 }
 
 fn main() -> ExitCode {
+    // Before anything else, so the version is the one this process started as (see `version`).
+    wispd::version();
     let cli = Cli::parse();
     match cli.command {
         Command::Serve(args) => serve(&args),
         Command::Attach(args) => attach(&args),
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Service(args) => service_command(args.command),
         Command::Mcp(args) => mcp(&args),
     }
@@ -170,6 +181,8 @@ fn mcp(args: &McpArgs) -> ! {
 /// Runs `attach` and exits, with `std::process::exit`: the thread that reads stdin blocks until
 /// input arrives, and would keep the runtime from shutting down (0007).
 fn attach(args: &AttachArgs) -> ! {
+    #[cfg(windows)]
+    wispd::windows::stop_inheriting_handles();
     let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
         Ok(data_dir) => data_dir,
         Err(error) => unavailable(&format!("could not find the data folder: {error}")),
@@ -183,44 +196,63 @@ fn attach(args: &AttachArgs) -> ! {
         connect_timeout: args.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
         launch_agent: LaunchAgent::installed_for(&data_dir),
     };
-    // Starting wispd happens here, before the runtime exists.
-    let stream = match attach::connect(&data_dir, &options) {
-        Ok(stream) => stream,
-        Err(error) => unavailable(&error),
-    };
-    let runtime = match tokio::runtime::Builder::new_current_thread()
+    let runtime = || match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => runtime,
         Err(error) => failed(&format!("could not start the runtime: {error}")),
     };
+    // On Unix, starting wispd happens here, before the runtime exists (0023). Windows' pipe
+    // client needs the runtime to connect.
+    #[cfg(windows)]
+    let runtime = runtime();
+    #[cfg(windows)]
+    let entered = runtime.enter();
+    let stream = match attach::connect(&data_dir, &options) {
+        Ok(stream) => stream,
+        Err(error) => unavailable(&error),
+    };
+    #[cfg(windows)]
+    drop(entered);
+    #[cfg(unix)]
+    let runtime = runtime();
     let code = runtime.block_on(async {
-        let stream = match stream
-            .set_nonblocking(true)
-            .and_then(|()| UnixStream::from_std(stream))
-        {
-            Ok(stream) => stream,
-            Err(error) => failed(&format!("could not use the connection: {error}")),
+        let bridged = async {
+            #[cfg(unix)]
+            let stream = match stream
+                .set_nonblocking(true)
+                .and_then(|()| tokio::net::UnixStream::from_std(stream))
+            {
+                Ok(stream) => stream,
+                Err(error) => failed(&format!("could not use the connection: {error}")),
+            };
+            match attach::bridge(tokio::io::stdin(), tokio::io::stdout(), stream).await {
+                Ok(()) => 0,
+                Err(error) => {
+                    report(format_args!("the connection failed: {error}"));
+                    1
+                }
+            }
         };
         // Handling SIGHUP, rather than leaving its default, also overrides an ignored SIGHUP
         // inherited from a parent such as nohup, so a dropped SSH session always ends attach.
-        let mut hangup = match signal(SignalKind::hangup()) {
-            Ok(hangup) => hangup,
-            Err(error) => failed(&format!("could not catch SIGHUP: {error}")),
-        };
-        tokio::select! {
-            bridged = attach::bridge(tokio::io::stdin(), tokio::io::stdout(), stream) => {
-                match bridged {
-                    Ok(()) => 0,
-                    Err(error) => {
-                        report(format_args!("the connection failed: {error}"));
-                        1
-                    }
-                }
+        // On Windows, the session's end closes stdin and stdout, or kills attach with its job.
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+
+            let mut hangup = match signal(SignalKind::hangup()) {
+                Ok(hangup) => hangup,
+                Err(error) => failed(&format!("could not catch SIGHUP: {error}")),
+            };
+            tokio::select! {
+                code = bridged => code,
+                _ = hangup.recv() => 0,
             }
-            _ = hangup.recv() => 0,
         }
+        #[cfg(windows)]
+        bridged.await
     });
     std::process::exit(code)
 }
@@ -236,6 +268,9 @@ fn failed(message: &str) -> ! {
 }
 
 fn serve(args: &ServeArgs) -> ExitCode {
+    // So agent CLIs don't inherit the log, or whatever else started `serve` (0023).
+    #[cfg(windows)]
+    wispd::windows::stop_inheriting_handles();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -291,6 +326,7 @@ fn serve(args: &ServeArgs) -> ExitCode {
     })
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_command(command: ServiceCommand) -> ExitCode {
     match command {
         ServiceCommand::Install(options) => service_install(&options),
@@ -299,6 +335,7 @@ fn service_command(command: ServiceCommand) -> ExitCode {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_install(options: &ServiceOptions) -> ExitCode {
     let data_dir = match resolve_data_dir(options) {
         Ok(data_dir) => data_dir,
@@ -310,13 +347,14 @@ fn service_install(options: &ServiceOptions) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(service::InstallOutcome::Reinstalled) => {
-            println!("updated the plist and restarted {}", options.label);
+            println!("updated and restarted {}", options.label);
             ExitCode::SUCCESS
         }
         Err(error) => fail(&error.to_string()),
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_uninstall(options: &ServiceOptions) -> ExitCode {
     match service::uninstall(&options.label) {
         Ok(service::UninstallOutcome::Removed) => {
@@ -331,6 +369,7 @@ fn service_uninstall(options: &ServiceOptions) -> ExitCode {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_status(options: &ServiceOptions) -> ExitCode {
     let data_dir = match resolve_data_dir(options) {
         Ok(data_dir) => data_dir,
@@ -339,14 +378,14 @@ fn service_status(options: &ServiceOptions) -> ExitCode {
     match service::status(&options.label, &data_dir) {
         Ok(status) => {
             println!("label: {}", status.label);
-            println!("plist: {}", status.plist_path.display());
+            println!("file: {}", status.path.display());
             println!("installed: {}", status.installed);
-            println!("loaded: {}", status.launchd.loaded());
-            println!("running: {}", status.launchd.running());
+            println!("loaded: {}", status.state.loaded());
+            println!("running: {}", status.state.running());
             println!(
                 "pid: {}",
                 status
-                    .launchd
+                    .state
                     .pid()
                     .map_or_else(|| "-".to_owned(), |pid| pid.to_string())
             );
@@ -357,12 +396,16 @@ fn service_status(options: &ServiceOptions) -> ExitCode {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn resolve_data_dir(options: &ServiceOptions) -> Result<DataDir, ExitCode> {
     DataDir::resolve(options.data_dir.as_deref())
         .map_err(|error| fail(&format!("could not find the data folder: {error}")))
 }
 
+#[cfg(unix)]
 fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     tokio::spawn(async move {
@@ -370,6 +413,33 @@ fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
             let name = tokio::select! {
                 _ = terminate.recv() => "SIGTERM",
                 _ = interrupt.recv() => "SIGINT",
+            };
+            info!(signal = name, "received a signal to stop");
+            shutdown.trigger();
+        }
+    });
+    Ok(())
+}
+
+/// Windows' equivalents of SIGTERM and SIGINT (0023). A detached `serve` has no console, so
+/// only a `serve` run in one receives them.
+#[cfg(windows)]
+fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
+
+    let mut c = ctrl_c()?;
+    let mut r#break = ctrl_break()?;
+    let mut close = ctrl_close()?;
+    let mut logoff = ctrl_logoff()?;
+    let mut shutdown_event = ctrl_shutdown()?;
+    tokio::spawn(async move {
+        loop {
+            let name = tokio::select! {
+                _ = c.recv() => "Ctrl-C",
+                _ = r#break.recv() => "Ctrl-Break",
+                _ = close.recv() => "console close",
+                _ = logoff.recv() => "logoff",
+                _ = shutdown_event.recv() => "shutdown",
             };
             info!(signal = name, "received a signal to stop");
             shutdown.trigger();
@@ -389,7 +459,7 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{AttachArgs, Cli, Command, ServiceCommand, VERSION};
+    use super::{AttachArgs, Cli, Command};
 
     #[test]
     fn the_command_line_definition_is_valid() {
@@ -399,8 +469,8 @@ mod tests {
     #[test]
     fn version_is_wired_to_wispds_own_version() {
         // daemon/tests/cli.rs checks what `wispd --version` actually prints; this just checks
-        // the command is wired to the crate's VERSION (0006, #44), not a hardcoded string.
-        assert_eq!(Cli::command().get_version(), Some(VERSION));
+        // the command is wired to `wispd::version` (0006, #44), not a hardcoded string.
+        assert_eq!(Cli::command().get_version(), Some(wispd::version()));
     }
 
     #[test]
@@ -460,6 +530,7 @@ mod tests {
         assert!(attach_args(&["extra"]).is_err());
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn service_install_takes_a_data_folder_and_a_label() {
         let cli = Cli::try_parse_from([
@@ -475,7 +546,7 @@ mod tests {
         let Command::Service(service) = cli.command else {
             panic!("expected service, got {:?}", cli.command);
         };
-        let ServiceCommand::Install(options) = service.command else {
+        let super::ServiceCommand::Install(options) = service.command else {
             panic!("expected install, got {:?}", service.command);
         };
         assert_eq!(
@@ -485,13 +556,14 @@ mod tests {
         assert_eq!(options.label, "io.example.test");
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn service_status_defaults_to_the_wisp_label_with_no_data_dir_override() {
         let cli = Cli::try_parse_from(["wispd", "service", "status"]).unwrap();
         let Command::Service(service) = cli.command else {
             panic!("expected service, got {:?}", cli.command);
         };
-        let ServiceCommand::Status(options) = service.command else {
+        let super::ServiceCommand::Status(options) = service.command else {
             panic!("expected status, got {:?}", service.command);
         };
         assert_eq!(options.label, super::DEFAULT_LABEL);
@@ -530,15 +602,20 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn service_uninstall_parses_with_no_options() {
         let cli = Cli::try_parse_from(["wispd", "service", "uninstall"]).unwrap();
         let Command::Service(service) = cli.command else {
             panic!("expected service, got {:?}", cli.command);
         };
-        assert!(matches!(service.command, ServiceCommand::Uninstall(_)));
+        assert!(matches!(
+            service.command,
+            super::ServiceCommand::Uninstall(_)
+        ));
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn service_without_a_subcommand_is_a_usage_error() {
         assert!(Cli::try_parse_from(["wispd", "service"]).is_err());

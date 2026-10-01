@@ -6,8 +6,9 @@ use crate::error::StoreError;
 use crate::worktree::insert_worktree;
 use crate::{Store, Worktree, WorktreeFields, timestamp};
 
-/// What an `agent/start` asked for, plus the backend routing resolved it to (#156). None of it
-/// changes after the run is created.
+/// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only model,
+/// effort, and permission change after the run is created, through `agent/send` (RYA-161,
+/// RYA-163).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFields {
     pub project_id: Uuid,
@@ -18,6 +19,11 @@ pub struct RunFields {
     pub backend: String,
     /// The coordinator thread that started the run (#195), or `None` for a client's own run.
     pub coordinator_thread: Option<Uuid>,
+    /// The model, effort, and permission the run asked for (RYA-97), each `None` for the CLI's
+    /// default. Effort and permission are their protocol names, such as `high` and `plan`.
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub permission: Option<String>,
 }
 
 /// A run's state, which changes as it runs.
@@ -65,7 +71,7 @@ pub struct Run {
 const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backend, account_id, \
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
-                       merge_into, merge_how, coordinator_thread";
+                       merge_into, merge_how, coordinator_thread, model, effort, permission";
 
 struct RawRun {
     id: String,
@@ -89,6 +95,9 @@ struct RawRun {
     merge_into: Option<String>,
     merge_how: Option<String>,
     coordinator_thread: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    permission: Option<String>,
 }
 
 impl RawRun {
@@ -115,6 +124,9 @@ impl RawRun {
             merge_into: row.get(18)?,
             merge_how: row.get(19)?,
             coordinator_thread: row.get(20)?,
+            model: row.get(21)?,
+            effort: row.get(22)?,
+            permission: row.get(23)?,
         })
     }
 
@@ -146,6 +158,9 @@ impl RawRun {
                     .as_deref()
                     .map(Uuid::parse_str)
                     .transpose()?,
+                model: self.model,
+                effort: self.effort,
+                permission: self.permission,
             },
             state: RunState {
                 status: self.status,
@@ -253,6 +268,30 @@ impl Store {
         update(&self.conn, id, state)
     }
 
+    /// Replaces run `id`'s model, effort, and permission (RYA-161, RYA-163), and returns the
+    /// updated row.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no run has `id`, or a database error.
+    pub fn set_run_options(
+        &self,
+        id: Uuid,
+        model: Option<&str>,
+        effort: Option<&str>,
+        permission: Option<&str>,
+    ) -> Result<Run, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE runs SET model = ?2, effort = ?3, permission = ?4, updated_at = ?5
+             WHERE id = ?1",
+            params![id.to_string(), model, effort, permission, timestamp::now()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound { id });
+        }
+        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
+    }
+
     /// Replaces accepted run `id`'s state and deletes its worktree's row, in one transaction:
     /// `agent/accept` removed the worktree and its branch (#157).
     ///
@@ -316,8 +355,9 @@ pub(crate) fn insert_run(
         "INSERT INTO runs (id, project_id, prompt, requested_account, policy, backend,
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
-                           coordinator_thread)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16)
+                           coordinator_thread, model, effort, permission)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
+                 ?17, ?18, ?19)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -336,6 +376,9 @@ pub(crate) fn insert_run(
             state.deletions,
             now,
             fields.coordinator_thread.map(|id| id.to_string()),
+            fields.model,
+            fields.effort,
+            fields.permission,
         ],
     )?;
     if inserted == 0 {

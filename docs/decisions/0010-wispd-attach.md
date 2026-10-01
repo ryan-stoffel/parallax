@@ -1,6 +1,6 @@
 # 0010: How `wispd attach` starts wispd, and its exit codes
 
-- Status: accepted
+- Status: accepted; how attach starts `serve` on Linux and Windows, and the service it uses there (a systemd user unit, a logon task), are in [0023](0023-cross-platform.md)
 - Date: 2026-09-24
 - Issue: #60
 

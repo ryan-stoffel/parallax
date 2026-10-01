@@ -440,13 +440,15 @@ impl WorktreeManager {
         let args = ["cat-file", "blob", object.as_str()];
         let spec = self.worktree_spec(worktree_path, git_dir, &args).await?;
         let process = self.launcher.spawn(&spec)?;
-        let Ok((mut bytes, exit)) = timeout(self.timeout, collect(process)).await else {
+        let Ok(collected) = timeout(self.timeout, collect(process, worktree_path, &args)).await
+        else {
             return Err(WorktreeError::Timeout {
                 cwd: worktree_path.to_owned(),
                 args: owned_args(&args),
                 timeout: self.timeout,
             });
         };
+        let (mut bytes, exit) = collected?;
         if !exit.info.success() {
             return Err(WorktreeError::GitFailed {
                 cwd: worktree_path.to_owned(),
@@ -854,6 +856,7 @@ impl WorktreeManager {
         for path in paths {
             match tokio::fs::symlink_metadata(repo_root.join(path)).await {
                 Ok(meta) if meta.is_file() => {
+                    #[cfg(unix)]
                     let mode = if std::os::unix::fs::PermissionsExt::mode(&meta.permissions())
                         & 0o111
                         != 0
@@ -862,6 +865,11 @@ impl WorktreeManager {
                     } else {
                         "100644"
                     };
+                    // ponytail: Windows files have no executable bit, so a tracked 100755 file
+                    // never matches and a rollback leaves it alone and names it. Read the
+                    // index's mode if that matters.
+                    #[cfg(windows)]
+                    let mode = "100644";
                     files.push((path, mode));
                 }
                 Ok(_) => {

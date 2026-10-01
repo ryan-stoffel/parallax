@@ -17,6 +17,7 @@
 //! thing: one request, one response, then the process is killed. A real Codex backend (#122)
 //! will want a proper client with its own handshake; this is not it.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -51,6 +52,8 @@ pub struct CliDetector {
     launcher: Launcher,
     timeout: Duration,
     cache: Mutex<Option<(Instant, Probe)>>,
+    /// CLIs probed alone by [`Self::get`], while the full `cache` is empty or stale.
+    single: Mutex<HashMap<CliKind, (Instant, DetectedCli)>>,
 }
 
 impl CliDetector {
@@ -62,6 +65,7 @@ impl CliDetector {
             launcher,
             timeout,
             cache: Mutex::new(None),
+            single: Mutex::new(HashMap::new()),
         }
     }
 
@@ -78,6 +82,44 @@ impl CliDetector {
         self.refresh().await
     }
 
+    /// One CLI's status, from the cache while it's fresh, else a probe of that CLI alone. For a run
+    /// that starts on `cli`: [`Self::list`] would also wait on the other two, and Cursor's status
+    /// command takes seconds.
+    pub async fn get(&self, cli: CliKind) -> DetectedCli {
+        if let Some((checked, probe)) = &*self.cache.lock().await
+            && checked.elapsed() < CACHE_TTL
+            && let Some(found) = probe.clis.iter().find(|found| found.cli == cli)
+        {
+            return found.clone();
+        }
+        if let Some((checked, found)) = self.single.lock().await.get(&cli)
+            && checked.elapsed() < CACHE_TTL
+        {
+            return found.clone();
+        }
+        self.refresh_one(cli).await
+    }
+
+    /// A fresh probe of `cli` alone. Updates what [`Self::get`] and [`Self::list`] serve for it.
+    pub async fn refresh_one(&self, cli: CliKind) -> DetectedCli {
+        let found = match cli {
+            CliKind::Claude => probe_claude(&self.launcher, self.timeout).await,
+            CliKind::Codex => probe_codex(&self.launcher, self.timeout).await,
+            CliKind::Cursor => probe_cursor(&self.launcher, self.timeout).await,
+            CliKind::Unknown => return not_installed(cli),
+        };
+        if let Some((_, probe)) = &mut *self.cache.lock().await
+            && let Some(entry) = probe.clis.iter_mut().find(|entry| entry.cli == cli)
+        {
+            entry.clone_from(&found);
+        }
+        self.single
+            .lock()
+            .await
+            .insert(cli, (Instant::now(), found.clone()));
+        found
+    }
+
     /// A fresh probe of every CLI. Updates the cache [`Self::list`] reads from.
     pub async fn refresh(&self) -> Probe {
         let (claude, codex, cursor) = tokio::join!(
@@ -92,18 +134,24 @@ impl CliDetector {
         *self.cache.lock().await = Some((Instant::now(), probe.clone()));
         probe
     }
+
+    /// The launcher probes run through, whose environment agents' CLIs start from.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn launcher(&self) -> &Launcher {
+        &self.launcher
+    }
 }
 
 /// The result of running a status command to completion within the timeout.
-struct Ran {
-    stdout: String,
-    stderr_tail: String,
-    exit_code: Option<i32>,
+pub(crate) struct Ran {
+    pub(crate) stdout: String,
+    pub(crate) stderr_tail: String,
+    pub(crate) exit_code: Option<i32>,
 }
 
 /// Resolves `program` on `launcher`'s effective `PATH` (#96), without running it.
-fn resolve(launcher: &Launcher, program: &str) -> Option<PathBuf> {
-    let spec = ProcessSpec::new(program, "/");
+pub(crate) fn resolve(launcher: &Launcher, program: &str) -> Option<PathBuf> {
+    let spec = probe_spec(program);
     let env = launcher.environment(&spec);
     find_program(program.as_ref(), env.get("PATH")).ok()
 }
@@ -134,20 +182,41 @@ fn installed(cli: CliKind, path: &Path) -> DetectedCli {
     }
 }
 
-/// Runs `program args` in `/`, with `launcher`'s scrubbing, stdin closed, and no output beyond
-/// wispd's usual limits. Waits at most `timeout`; on a timeout, the process's group is killed
-/// (dropping it does that) and `Err` explains why.
-async fn run(
+/// A spec for probing `program` in the user's home, which is absolute on every OS, unlike `/` on
+/// Windows (RYA-144), and which only they can write to. `/` if the home folder is unknown or
+/// missing.
+fn probe_spec(program: &str) -> ProcessSpec {
+    let home = std::env::home_dir().filter(|home| home.is_absolute() && home.is_dir());
+    ProcessSpec::new(program, home.unwrap_or_else(|| PathBuf::from("/")))
+}
+
+/// Runs `program args` in [`probe_spec`]'s folder, with `launcher`'s scrubbing, stdin closed, and
+/// no output beyond wispd's usual limits. Waits at most `timeout`; on a timeout, the process's
+/// group is killed (dropping it does that) and `Err` explains why.
+pub(crate) async fn run(
     launcher: &Launcher,
     program: &str,
     args: &[&str],
     timeout: Duration,
 ) -> Result<Ran, String> {
-    let mut spec = ProcessSpec::new(program, "/");
+    let mut spec = probe_spec(program);
     spec.args = args.iter().map(|arg| (*arg).into()).collect();
-    let mut process = match launcher.spawn(&spec) {
+    run_spec(launcher, &spec, timeout).await
+}
+
+/// [`run`] for a caller that builds its own `spec`, such as one that scrubs more of the
+/// environment.
+pub(crate) async fn run_spec(
+    launcher: &Launcher,
+    spec: &ProcessSpec,
+    timeout: Duration,
+) -> Result<Ran, String> {
+    let mut process = match launcher.spawn(spec) {
         Ok(process) => process,
-        Err(error) => return Err(format!("could not start {program}: {error}")),
+        Err(error) => {
+            let program = spec.program.to_string_lossy();
+            return Err(format!("could not start {program}: {error}"));
+        }
     };
     let mut stdout = String::new();
     let mut exit_code = None;
@@ -284,6 +353,17 @@ async fn probe_codex(launcher: &Launcher, timeout: Duration) -> DetectedCli {
         return not_installed(CliKind::Codex);
     };
     let mut detected = installed(CliKind::Codex, &path);
+    // A worker needs a Codex that knows its sandbox's settings (0013): `codex-cli 0.157.1`.
+    if let Ok(ran) = run(launcher, "codex", &["--version"], timeout).await
+        && ran.exit_code == Some(0)
+    {
+        detected.version = ran
+            .stdout
+            .split_whitespace()
+            .last()
+            .filter(|word| crate::backend::claude::parse_version(word).is_some())
+            .map(str::to_owned);
+    }
     match run(launcher, "codex", &["login", "status"], timeout).await {
         Ok(ran) => {
             detected.signed_in = exit_code_signed_in(ran.exit_code);
@@ -314,7 +394,7 @@ async fn probe_codex(launcher: &Launcher, timeout: Duration) -> DetectedCli {
 /// rather than an error, since a subscription's plan is metadata, not a fact wispd depends on.
 /// The process is killed once this returns, whether or not it answered in time.
 async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<String> {
-    let mut spec = ProcessSpec::new("codex", "/");
+    let mut spec = probe_spec("codex");
     spec.args = vec!["app-server".into()];
     spec.stdin = StdinMode::Piped;
     let mut process = launcher.spawn(&spec).ok()?;
@@ -374,5 +454,37 @@ fn extract_subscription_tier(text: &str) -> Option<String> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::time::Duration;
+
+    use wisp_protocol::CliKind;
+
+    use super::CliDetector;
+    use crate::backend::process::{Environment, Launcher};
+    use crate::paths::DataDir;
+
+    /// A probe starts on Windows, where `/` isn't absolute (RYA-144): a fake `codex.cmd` that
+    /// exits 0 to `codex login status` reads as signed in.
+    #[tokio::test]
+    async fn a_cmd_cli_is_probed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("codex.cmd"), "@exit 0\r\n").unwrap();
+        let mut env = Environment::inherited();
+        env.set("PATH", dir.path());
+        let launcher = Launcher::new(DataDir::new(dir.path().join("data")).unwrap(), env);
+        let probe = CliDetector::new(launcher, Duration::from_secs(10))
+            .refresh()
+            .await;
+        let codex = probe
+            .clis
+            .iter()
+            .find(|cli| cli.cli == CliKind::Codex)
+            .unwrap();
+        assert_eq!(codex.signed_in, Some(true), "{codex:?}");
+        assert_eq!(codex.note, None, "{codex:?}");
+    }
+}

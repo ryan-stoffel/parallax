@@ -1,8 +1,12 @@
-## Summary
+## Problem
 
-<!-- What changed and why. -->
+<!-- What was wrong or missing, in a sentence or two. -->
 
-Closes #
+## Fix
+
+<!-- What this PR does about it. -->
+
+Linear: https://linear.app/ryanstoffel/issue/RYA-
 
 ## Acceptance criteria
 
@@ -10,7 +14,8 @@ Closes #
 
 - [ ]
 
-## How it was tested
+## Testing
 
 <!-- Commands run, and what they showed. -->
 
+<!-- One line: the model and harness that made the changes, e.g. "Changes made by Claude Opus 5.5 in Claude Code." -->

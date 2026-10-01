@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Makes sure the release TAG exists as a draft for the builds to attach to (release.yml's plan
+# job), and prints `build=true` or `build=false` for GITHUB_OUTPUT. A release with SHA256SUMS is
+# complete (finish-release writes it last): nothing to build. One that exists without it, from an
+# earlier attempt, is reused, so each build attaches only what's missing. Otherwise the draft is
+# created with its notes and flags, and the first build to finish publishes it (publish-build).
+# Only this job creates releases, so builds never race to, and a tag never gets a second one.
+#
+# Environment: TAG, CHANNEL (nightly or latest), GITHUB_SHA (the tag's commit), GH_TOKEN, and
+# GH_REPO. DRY_RUN=1 prints the create instead of making it (workflow_dispatch).
+set -euo pipefail
+
+write() {
+  if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*" >&2; else gh "$@"; fi
+}
+
+err=$(mktemp)
+if assets=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2> "$err"); then
+  if grep -qxF SHA256SUMS <<< "$assets"; then
+    echo "$TAG is already published." >&2
+    echo build=false
+  else
+    echo "$TAG exists without SHA256SUMS: building again to attach what's missing." >&2
+    echo build=true
+  fi
+  exit 0
+fi
+# Anything but "not found" (a rate limit, an outage) must not lead to a second release.
+if ! grep -q "release not found" "$err"; then cat "$err" >&2; exit 1; fi
+
+# Notes start at the channel's previous published release, including the date-sha tags from
+# before 0030 (nightly-*, release-*). Nightly is a prerelease; standard is marked Latest when a
+# build publishes it (0028).
+args=(--draft --target "$GITHUB_SHA" --generate-notes)
+if [ "$CHANNEL" = nightly ]; then
+  pattern='^v[0-9]+\.[0-9]+\.[0-9]+-nightly$|^nightly-'
+  args+=(--prerelease)
+else
+  pattern='^v[0-9]+\.[0-9]+\.[0-9]+$|^release-'
+fi
+releases=$(gh release list --limit 1000 --json tagName,isDraft)
+# gh looks a draft up separately, and can report "not found" when only that lookup failed. The
+# list includes drafts, so check it too before creating.
+if jq -e --arg tag "$TAG" 'any(.[]; .tagName == $tag)' <<< "$releases" > /dev/null; then
+  echo "draft-release: $TAG is listed but couldn't be read; not creating another." >&2
+  exit 1
+fi
+previous=$(jq -r --arg tag "$TAG" --arg pattern "$pattern" \
+  '[.[] | select((.isDraft | not) and (.tagName | test($pattern)) and .tagName != $tag) | .tagName][0] // empty' <<< "$releases")
+if [ -n "$previous" ]; then args+=(--notes-start-tag "$previous"); fi
+write release create "$TAG" "${args[@]}" >&2
+echo build=true

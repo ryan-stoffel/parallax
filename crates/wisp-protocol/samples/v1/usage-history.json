@@ -1,0 +1,46 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "usage/history",
+    "params": {
+      "since": "2026-09-28T20:00:00Z"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "hours": [
+        {
+          "hour": "2026-09-29T18:00:00Z",
+          "accountId": "claude-max",
+          "model": "claude-opus-4-1",
+          "inputTokens": 1200,
+          "outputTokens": 340,
+          "cacheReadTokens": 500,
+          "cacheWriteTokens": 0,
+          "costUsdMicros": 45000
+        },
+        {
+          "hour": "2026-09-29T19:00:00Z",
+          "accountId": "codex-work",
+          "inputTokens": 500,
+          "outputTokens": 120,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0
+        }
+      ],
+      "runs": [
+        {
+          "accountId": "claude-max",
+          "runs": 2
+        },
+        {
+          "accountId": "codex-work",
+          "runs": 1
+        }
+      ]
+    }
+  }
+]

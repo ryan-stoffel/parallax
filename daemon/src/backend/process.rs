@@ -1,52 +1,83 @@
 //! Supervising a vendor CLI's process, which every backend shares.
 //!
-//! - **Spawning** goes through `posix_spawn` with `POSIX_SPAWN_CLOEXEC_DEFAULT`, so the child
-//!   holds its three pipes and nothing else of wispd's, such as client sockets or the listener
-//!   (#86). It leads a new session and process group, so a terminal that started wispd can't
-//!   signal it, and cancelling can reach everything it started.
+//! - **Spawning** goes through `posix_spawn` in `crate::spawn`, so the child holds its three
+//!   pipes and nothing else of wispd's, such as client sockets or the listener (#86). It leads a
+//!   new session and process group, so a terminal that started wispd can't signal it, and
+//!   cancelling can reach everything it started. On Windows (0023), it goes through tokio's
+//!   `Command` into a new process group and a job object of its own, which stands in for the
+//!   process group below; `serve` cleared the inherit flag on all its handles at startup, so the
+//!   child gets only its three pipes.
 //! - **The environment is explicit**: a base (wispd's own with the usual install folders on
-//!   `PATH`, decision 0014; #96 may capture the login shell's instead), minus [`ALWAYS_SCRUBBED`] and the
-//!   backend's scrub list, plus [`DATA_DIR_ENV`](crate::paths::DATA_DIR_ENV) from
-//!   [`DataDir::command`], plus the backend's injected variables, such as an API key.
+//!   `PATH`, decision 0014; #96 may capture the login shell's instead), minus
+//!   [`ALWAYS_SCRUBBED`] and the backend's scrub list, plus
+//!   [`DATA_DIR_ENV`](crate::paths::DATA_DIR_ENV) from [`DataDir::command`], plus the backend's
+//!   injected variables, such as an API key.
 //! - **Output**: stdout as lines with a size cap, stderr into a ring buffer whose tail goes into
 //!   failures, and one [`Output::Exited`] last.
 //! - **Cancelling**: a signal to the CLI, then `SIGKILL` to its whole process group after a grace
-//!   period. See [`CancelPolicy`].
+//!   period. See [`CancelPolicy`]. Windows has no signals: the backend closes stdin (Claude's
+//!   does on cancel), and the job is terminated after the grace period.
 //! - **Reaping**: a thread per child waits for it to exit, kills whatever it left running in its
 //!   process group, then reaps it. Signals are never sent after the reap, so they can't reach a
-//!   process that reused the pid.
+//!   process that reused the pid. On Windows, a task waits for it and terminates its job.
 //!
-//! **Limit:** a process that leaves the group, with `setsid` or `setpgid`, escapes all of this,
-//! since macOS has no way to follow it short of scanning the process table. It is reparented
-//! to launchd, which reaps it; wispd never waits for it. It can't hold a run open either: stdout
-//! gets [`OutputLimits::drain_after_exit`] after the CLI exits, and stdin writes stop at a
-//! timeout. Daemons an agent starts on purpose, such as a dev server, therefore outlive the run.
+//! **Limit:** a process that leaves the group, with `setsid` or `setpgid`, escapes all of this.
+//! macOS has no way to follow it short of scanning the process table, and wispd doesn't use
+//! Linux's ways (a child subreaper or a cgroup). It is reparented to launchd or init, which reaps
+//! it; wispd never waits for it. It can't hold a run open either: once the CLI exits, stdout is
+//! cut off after [`OutputLimits::drain_after_exit`], though never before what the CLI itself wrote
+//! has been read, and stdin writes stop at a timeout.
+//! Daemons an agent starts on purpose, such as a dev server, therefore outlive the run.
 
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::fs::{self, File};
+use std::fs;
 use std::io;
-use std::os::fd::{AsFd, OwnedFd};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use rustix::process::{
-    Pid, Signal, WaitId, WaitIdOptions, WaitOptions, kill_process, kill_process_group, waitid,
-    waitpid,
-};
+#[cfg(unix)]
+pub use rustix::process::Signal;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::net::unix::pipe;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until, timeout};
 use zeroize::Zeroize;
 
 use super::event::ExitInfo;
 use crate::paths::DataDir;
-use crate::spawn::{self, Stdio};
+
+/// The write end of a process's stdin.
+#[cfg(unix)]
+pub type StdinPipe = tokio::net::unix::pipe::Sender;
+/// The write end of a process's stdin.
+#[cfg(windows)]
+pub type StdinPipe = tokio::process::ChildStdin;
+
+/// What [`Signals`] can send. Windows has no signals, so there `INT` and `TERM` send nothing (the
+/// backend closes stdin instead) and `KILL` terminates the process's job (0023). The numbers are
+/// POSIX's, for [`ExitInfo`].
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Signal(i32);
+
+#[cfg(windows)]
+impl Signal {
+    /// Asks the CLI to stop: nothing is sent on Windows.
+    pub const INT: Self = Self(2);
+    /// Asks the CLI to stop: nothing is sent on Windows.
+    pub const TERM: Self = Self(15);
+    /// Kills the process's job.
+    pub const KILL: Self = Self(9);
+
+    /// The POSIX number.
+    #[must_use]
+    pub const fn as_raw(self) -> i32 {
+        self.0
+    }
+}
 
 /// Variables no process wispd starts inherits: the SSH session that may have started it (#96).
 /// That includes its `SSH_AUTH_SOCK`, which stops working when the session ends and which no
@@ -61,11 +92,25 @@ pub const DEFAULT_MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 pub const DEFAULT_STDERR_TAIL_BYTES: usize = 64 * 1024;
 
 /// How long stdout may stay open after the process exited, by default. Something the CLI started
-/// can hold the pipe open; this keeps it from delaying the end of the run.
+/// can hold the pipe open; this keeps it from delaying the end of the run. A stdout that is still
+/// busy is cut only once the drain has passed and more than `READ_BEFORE_CUT` has been read since
+/// the exit.
 pub const DEFAULT_DRAIN_AFTER_EXIT: Duration = Duration::from_millis(500);
 
+/// How much stdout [`LineReader`] asks for at a time.
+const READ_CHUNK: usize = 64 * 1024;
+
+/// How much stdout is read after the exit before the drain may cut off a stdout that is still
+/// ready. What the process wrote before it exited is unread then: at most a pipe's worth (64 KiB
+/// by default on macOS and Linux, and up to Linux's default `pipe-max-size`, 1 MiB, if the
+/// process grows its pipe; Windows adds tokio's 64 KiB read-ahead) plus one read. A slow reader
+/// can take longer than the drain to get through it (RYA-140).
+const READ_BEFORE_CUT: u64 = 1024 * 1024 + READ_CHUNK as u64;
+
 // Sets the working directory, which the safe posix_spawn wrappers can't, then runs the program.
+#[cfg(unix)]
 const TRAMPOLINE: &str = "cd -- \"$1\" && shift && exec \"$@\"";
+#[cfg(unix)]
 const SHELL: &str = "/bin/sh";
 
 /// A set of environment variables. Its `Debug` shows names only, since values can be secrets, and
@@ -83,10 +128,20 @@ impl Environment {
         Self::default()
     }
 
-    /// wispd's own environment.
+    /// wispd's own environment. Windows' variable names are case-insensitive, and some come
+    /// spelled like `Path`, so there every name is upper-cased.
     #[must_use]
     pub fn inherited() -> Self {
-        std::env::vars_os().collect()
+        std::env::vars_os()
+            .map(|(name, value)| {
+                let name = if cfg!(windows) {
+                    name.to_ascii_uppercase()
+                } else {
+                    name
+                };
+                (name, value)
+            })
+            .collect()
     }
 
     /// The value of `name`.
@@ -154,7 +209,7 @@ impl fmt::Debug for Environment {
 /// What a backend's process gets on stdin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StdinMode {
-    /// `/dev/null`, for CLIs that must see stdin closed, such as `codex exec`.
+    /// `/dev/null` (`NUL` on Windows), for CLIs that must see stdin closed, such as `codex exec`.
     Null,
     /// A pipe the backend writes to with [`Process::take_stdin`], for follow-up messages.
     Piped,
@@ -167,7 +222,8 @@ pub struct OutputLimits {
     pub max_line_bytes: usize,
     /// How much of the end of stderr to keep.
     pub stderr_tail_bytes: usize,
-    /// How long stdout may stay open after the process exited.
+    /// How long stdout may stay open after the process exited. A stdout that is still busy is cut
+    /// only once this has passed and more than `READ_BEFORE_CUT` has been read since the exit.
     pub drain_after_exit: Duration,
 }
 
@@ -228,6 +284,20 @@ pub enum SpawnError {
         /// Every place that was checked.
         searched: Vec<PathBuf>,
     },
+    /// On Windows, the program is a batch file, such as an npm `.cmd` shim, and std refused an
+    /// argument it can't pass to one safely (0023).
+    #[error(
+        "{} is a batch file, which can't be given one of wispd's arguments safely ({source}); \
+         install the CLI's native build instead of its npm package",
+        program.display()
+    )]
+    BatchFile {
+        /// The batch file.
+        program: PathBuf,
+        /// std's refusal.
+        #[source]
+        source: io::Error,
+    },
     /// The working directory isn't an absolute path to a directory.
     #[error("the working directory {} is not usable: {reason}", cwd.display())]
     BadWorkingDirectory {
@@ -271,6 +341,12 @@ impl Launcher {
         &self.base
     }
 
+    /// wispd's data folder.
+    #[must_use]
+    pub fn data_dir(&self) -> &DataDir {
+        &self.data_dir
+    }
+
     /// The environment `spec`'s process gets.
     #[must_use]
     pub fn environment(&self, spec: &ProcessSpec) -> Environment {
@@ -303,60 +379,13 @@ impl Launcher {
         let env = self.environment(spec);
         check_working_directory(&spec.cwd)?;
         let program = find_program(&spec.program, env.get("PATH"))?;
-
-        let (stdin_child, stdin_parent) = match spec.stdin {
-            StdinMode::Null => (OwnedFd::from(File::open("/dev/null")?), None),
-            StdinMode::Piped => {
-                let (reader, writer) = io::pipe()?;
-                (OwnedFd::from(reader), Some(OwnedFd::from(writer)))
-            }
-        };
-        let (stdout_parent, stdout_child) = io::pipe()?;
-        let (stderr_parent, stderr_child) = io::pipe()?;
-
-        let argv: Vec<&OsStr> = [
-            OsStr::new("sh"),
-            OsStr::new("-c"),
-            OsStr::new(TRAMPOLINE),
-            OsStr::new("wispd-spawn"),
-            spec.cwd.as_os_str(),
-            program.as_os_str(),
-        ]
-        .into_iter()
-        .chain(spec.args.iter().map(OsString::as_os_str))
-        .collect();
-        let pid = spawn::spawn_session(
-            OsStr::new(SHELL),
-            &argv,
-            &env.vars,
-            Stdio {
-                stdin: stdin_child.as_fd(),
-                stdout: stdout_child.as_fd(),
-                stderr: stderr_child.as_fd(),
-            },
-        )?;
-        drop((stdin_child, stdout_child, stderr_child));
-
-        let shared = Arc::new(Shared {
-            pid,
-            reaped: Mutex::new(false),
-        });
-        let exited = reap_in_background(Arc::clone(&shared));
-        let signals = Signals { shared };
-
-        let pipes = (|| {
-            let stdin = stdin_parent.map(pipe::Sender::from_owned_fd).transpose()?;
-            let stdout = pipe::Receiver::from_owned_fd(OwnedFd::from(stdout_parent))?;
-            let stderr = pipe::Receiver::from_owned_fd(OwnedFd::from(stderr_parent))?;
-            io::Result::Ok((stdin, stdout, stderr))
-        })();
-        let (stdin, stdout, stderr) = match pipes {
-            Ok(pipes) => pipes,
-            Err(error) => {
-                let _ = signals.signal_group(Signal::KILL);
-                return Err(error.into());
-            }
-        };
+        let Started {
+            signals,
+            exited,
+            stdin,
+            stdout,
+            stderr,
+        } = start(spec, &program, &env)?;
 
         let tail = Arc::new(Mutex::new(Tail::new(spec.limits.stderr_tail_bytes)));
         let stderr_task = tokio::spawn(read_stderr(stderr, Arc::clone(&tail)));
@@ -380,6 +409,158 @@ impl Launcher {
     }
 }
 
+/// A process [`start`] started, and its pipes.
+struct Started<O, E> {
+    signals: Signals,
+    exited: oneshot::Receiver<ExitInfo>,
+    stdin: Option<StdinPipe>,
+    stdout: O,
+    stderr: E,
+}
+
+/// Starts `program` for `spec` with exactly `env`, through `posix_spawn` and the `sh` trampoline
+/// that sets its working directory.
+#[cfg(unix)]
+fn start(
+    spec: &ProcessSpec,
+    program: &Path,
+    env: &Environment,
+) -> Result<Started<tokio::net::unix::pipe::Receiver, tokio::net::unix::pipe::Receiver>, SpawnError>
+{
+    use std::os::fd::{AsFd as _, OwnedFd};
+
+    use tokio::net::unix::pipe;
+
+    let (stdin_child, stdin_parent) = match spec.stdin {
+        StdinMode::Null => (OwnedFd::from(fs::File::open("/dev/null")?), None),
+        StdinMode::Piped => {
+            let (reader, writer) = io::pipe()?;
+            (OwnedFd::from(reader), Some(OwnedFd::from(writer)))
+        }
+    };
+    let (stdout_parent, stdout_child) = io::pipe()?;
+    let (stderr_parent, stderr_child) = io::pipe()?;
+
+    let argv: Vec<&OsStr> = [
+        OsStr::new("sh"),
+        OsStr::new("-c"),
+        OsStr::new(TRAMPOLINE),
+        OsStr::new("wispd-spawn"),
+        spec.cwd.as_os_str(),
+        program.as_os_str(),
+    ]
+    .into_iter()
+    .chain(spec.args.iter().map(OsString::as_os_str))
+    .collect();
+    let pid = crate::spawn::spawn_session(
+        OsStr::new(SHELL),
+        &argv,
+        &env.vars,
+        crate::spawn::Stdio {
+            stdin: stdin_child.as_fd(),
+            stdout: stdout_child.as_fd(),
+            stderr: stderr_child.as_fd(),
+        },
+    )?;
+    drop((stdin_child, stdout_child, stderr_child));
+
+    let shared = Arc::new(Shared {
+        pid,
+        reaped: Mutex::new(false),
+    });
+    let exited = reap_in_background(Arc::clone(&shared));
+    let signals = Signals { shared };
+
+    let pipes = (|| {
+        let stdin = stdin_parent.map(pipe::Sender::from_owned_fd).transpose()?;
+        let stdout = pipe::Receiver::from_owned_fd(OwnedFd::from(stdout_parent))?;
+        let stderr = pipe::Receiver::from_owned_fd(OwnedFd::from(stderr_parent))?;
+        io::Result::Ok((stdin, stdout, stderr))
+    })();
+    match pipes {
+        Ok((stdin, stdout, stderr)) => Ok(Started {
+            signals,
+            exited,
+            stdin,
+            stdout,
+            stderr,
+        }),
+        Err(error) => {
+            let _ = signals.signal_group(Signal::KILL);
+            Err(error.into())
+        }
+    }
+}
+
+/// Starts `program` for `spec` with exactly `env`, in a new process group with no window, and
+/// puts it in a job of its own (0023). A batch file, such as an npm `.cmd` shim, runs through
+/// std's escaping for `cmd.exe`, which refuses an argument it can't pass safely.
+///
+/// std's `Command` keeps its own copy of `env` until it drops, which isn't zeroized the way
+/// Unix's copies are.
+#[cfg(windows)]
+fn start(
+    spec: &ProcessSpec,
+    program: &Path,
+    env: &Environment,
+) -> Result<Started<tokio::process::ChildStdout, tokio::process::ChildStderr>, SpawnError> {
+    use std::process::Stdio;
+
+    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+
+    let job = crate::windows::Job::new()?;
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(&spec.args)
+        .current_dir(&spec.cwd)
+        .env_clear()
+        .envs(&env.vars)
+        .stdin(match spec.stdin {
+            StdinMode::Null => Stdio::null(),
+            StdinMode::Piped => Stdio::piped(),
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    let mut child = command.spawn().map_err(|source| {
+        let batch = program.extension().is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        });
+        if batch && source.kind() == io::ErrorKind::InvalidInput {
+            SpawnError::BatchFile {
+                program: program.to_owned(),
+                source,
+            }
+        } else {
+            SpawnError::Io(source)
+        }
+    })?;
+    drop(command);
+    // ponytail: a process the CLI starts before it joins the job escapes it. That window is the
+    // few microseconds before this call; CREATE_SUSPENDED and resuming its thread would close it.
+    if let Err(error) = job.assign(&child) {
+        let _ = child.start_kill();
+        return Err(error.into());
+    }
+    let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    let shared = Arc::new(Shared {
+        pid: child.id().unwrap_or(0),
+        job,
+        reaped: Mutex::new(false),
+    });
+    let exited = reap_in_background(Arc::clone(&shared), child);
+    match (stdout, stderr) {
+        (Some(stdout), Some(stderr)) => Ok(Started {
+            signals: Signals { shared },
+            exited,
+            stdin,
+            stdout,
+            stderr,
+        }),
+        _ => Err(io::Error::other("the process's pipes are missing").into()),
+    }
+}
+
 fn check_working_directory(cwd: &Path) -> Result<(), SpawnError> {
     let bad = |reason: &str| SpawnError::BadWorkingDirectory {
         cwd: cwd.to_owned(),
@@ -395,8 +576,10 @@ fn check_working_directory(cwd: &Path) -> Result<(), SpawnError> {
     }
 }
 
-/// Finds `program`: itself if it contains a `/`, which must then be absolute, or else the first
-/// executable file of that name in the absolute directories of `path`.
+/// Finds `program`: itself if it contains a `/` (or on Windows a `\\`), which must then be
+/// absolute, or else the first executable file of that name in the absolute directories of
+/// `path`. On Windows, a name without an extension is tried with each of `PATHEXT`'s, such as
+/// `.exe` and `.cmd`, as Windows' own lookup does (0023).
 ///
 /// # Errors
 ///
@@ -407,9 +590,12 @@ pub fn find_program(program: &OsStr, path: Option<&OsStr>) -> Result<PathBuf, Sp
         searched,
     };
     let as_path = Path::new(program);
-    if program.as_encoded_bytes().contains(&b'/') {
-        if as_path.is_absolute() && is_executable(as_path) {
-            return Ok(as_path.to_owned());
+    let bytes = program.as_encoded_bytes();
+    if bytes.contains(&b'/') || (cfg!(windows) && bytes.contains(&b'\\')) {
+        if as_path.is_absolute()
+            && let Some(found) = executable(as_path)
+        {
+            return Ok(found);
         }
         return Err(not_found(vec![as_path.to_owned()]));
     }
@@ -421,16 +607,42 @@ pub fn find_program(program: &OsStr, path: Option<&OsStr>) -> Result<PathBuf, Sp
             }
             let candidate = dir.join(program);
             searched.push(dir);
-            if is_executable(&candidate) {
-                return Ok(candidate);
+            if let Some(found) = executable(&candidate) {
+                return Ok(found);
             }
         }
     }
     Err(not_found(searched))
 }
 
-fn is_executable(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+/// `path`, if it is an executable file.
+#[cfg(unix)]
+fn executable(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fs::metadata(path)
+        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .then(|| path.to_owned())
+}
+
+/// `path` if it names a file with an extension, or else the first of `path` plus each of
+/// `PATHEXT`'s extensions that is a file.
+#[cfg(windows)]
+fn executable(path: &Path) -> Option<PathBuf> {
+    if path.extension().is_some() {
+        return path.is_file().then(|| path.to_owned());
+    }
+    let extensions = std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+    extensions
+        .to_string_lossy()
+        .split(';')
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| {
+            let mut candidate = path.as_os_str().to_owned();
+            candidate.push(extension);
+            PathBuf::from(candidate)
+        })
+        .find(|candidate| candidate.is_file())
 }
 
 /// How to stop a process when its run is cancelled.
@@ -457,11 +669,12 @@ impl Default for CancelPolicy {
 
 /// A running process: its stdin, its output, and its signals.
 ///
-/// Dropping it kills the process's group, so a backend that goes away leaves nothing running.
+/// Dropping it kills the process's group (on Windows, its job), so a backend that goes away
+/// leaves nothing running.
 #[derive(Debug)]
 pub struct Process {
     signals: Signals,
-    stdin: Option<pipe::Sender>,
+    stdin: Option<StdinPipe>,
     output: mpsc::Receiver<Output>,
 }
 
@@ -473,8 +686,16 @@ impl Drop for Process {
 
 impl Process {
     /// The process's id, which is also its process group's.
+    #[cfg(unix)]
     #[must_use]
-    pub fn pid(&self) -> Pid {
+    pub fn pid(&self) -> rustix::process::Pid {
+        self.signals.shared.pid
+    }
+
+    /// The process's id.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn pid(&self) -> u32 {
         self.signals.shared.pid
     }
 
@@ -485,7 +706,7 @@ impl Process {
     }
 
     /// The write end of stdin, if it is a pipe and hasn't been taken. Dropping it closes stdin.
-    pub fn take_stdin(&mut self) -> Option<pipe::Sender> {
+    pub fn take_stdin(&mut self) -> Option<StdinPipe> {
         self.stdin.take()
     }
 
@@ -526,13 +747,37 @@ pub struct Signals {
 
 #[derive(Debug)]
 struct Shared {
-    pid: Pid,
+    #[cfg(unix)]
+    pid: rustix::process::Pid,
+    #[cfg(windows)]
+    pid: u32,
+    /// The job the process runs in, which stands in for its process group.
+    #[cfg(windows)]
+    job: crate::windows::Job,
     reaped: Mutex<bool>,
 }
 
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, bool> {
         self.reaped.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Sends `signal` to the process, or its whole group. The caller holds the lock and has
+    /// checked that the process hasn't been reaped.
+    #[cfg(unix)]
+    fn send(&self, signal: Signal, group: bool) -> bool {
+        if group {
+            rustix::process::kill_process_group(self.pid, signal).is_ok()
+        } else {
+            rustix::process::kill_process(self.pid, signal).is_ok()
+        }
+    }
+
+    /// `KILL` terminates the job, to the process alone or its group alike; `INT` and `TERM`
+    /// have nothing to send on Windows, and count as sent.
+    #[cfg(windows)]
+    fn send(&self, signal: Signal, _group: bool) -> bool {
+        signal != Signal::KILL || self.job.terminate().is_ok()
     }
 }
 
@@ -542,7 +787,7 @@ impl Signals {
     #[must_use = "a signal is not sent once the process has been reaped"]
     pub fn signal(&self, signal: Signal) -> bool {
         let reaped = self.shared.lock();
-        !*reaped && kill_process(self.shared.pid, signal).is_ok()
+        !*reaped && self.shared.send(signal, false)
     }
 
     /// Sends `signal` to every process in the process's group, as long as the process hasn't been
@@ -550,7 +795,7 @@ impl Signals {
     #[must_use = "a signal is not sent once the process has been reaped"]
     pub fn signal_group(&self, signal: Signal) -> bool {
         let reaped = self.shared.lock();
-        !*reaped && kill_process_group(self.shared.pid, signal).is_ok()
+        !*reaped && self.shared.send(signal, true)
     }
 
     /// Whether the process has exited and been reaped.
@@ -587,10 +832,37 @@ impl Signals {
     }
 }
 
+/// Waits for the process on a task, then terminates its job, which kills whatever it left
+/// running, before it counts as reaped.
+#[cfg(windows)]
+fn reap_in_background(
+    shared: Arc<Shared>,
+    mut child: tokio::process::Child,
+) -> oneshot::Receiver<ExitInfo> {
+    let (tx, rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let status = child.wait().await;
+        let mut reaped = shared.lock();
+        let _ = shared.job.terminate();
+        *reaped = true;
+        drop(reaped);
+        let _ = tx.send(ExitInfo {
+            code: status.ok().and_then(|status| status.code()),
+            signal: None,
+        });
+    });
+    rx
+}
+
 /// Waits for the process on a thread of its own, which also works outside tokio and never holds
 /// up a runtime's shutdown. Once the process has exited, and while its zombie still holds the
 /// process group's id, whatever it left in its group is killed. Then it is reaped.
+#[cfg(unix)]
 fn reap_in_background(shared: Arc<Shared>) -> oneshot::Receiver<ExitInfo> {
+    use rustix::process::{
+        WaitId, WaitIdOptions, WaitOptions, kill_process_group, waitid, waitpid,
+    };
+
     let (tx, rx) = oneshot::channel();
     let spawned = std::thread::Builder::new()
         .name("wispd-reaper".into())
@@ -641,8 +913,9 @@ struct StderrTail {
     tail: Arc<Mutex<Tail>>,
 }
 
-/// Forwards stdout's lines until it ends, or until `drain` after the process exited, then sends
-/// the exit last.
+/// Forwards stdout's lines until it ends, then sends the exit last. After the process exits,
+/// stdout is cut off once `drain` has passed and it either has nothing ready or has had more than
+/// [`READ_BEFORE_CUT`] read since the exit.
 async fn pump<R: AsyncRead + Unpin>(
     mut lines: LineReader<R>,
     mut exited: oneshot::Receiver<ExitInfo>,
@@ -656,6 +929,8 @@ async fn pump<R: AsyncRead + Unpin>(
     };
     let mut exit = None;
     let mut deadline = None;
+    // How much stdout had been read when the exit was seen.
+    let mut read_at_exit = 0;
     loop {
         tokio::select! {
             biased;
@@ -666,14 +941,18 @@ async fn pump<R: AsyncRead + Unpin>(
                     }
                     // Something outside the process group may keep writing after the exit. With
                     // `biased`, a stdout that is always ready would keep the other arms from
-                    // ever seeing the exit or the deadline, so check both here too.
+                    // ever seeing the exit or the deadline, so check both here too, once the
+                    // process's own output has been read.
                     if exit.is_none()
                         && let Ok(info) = exited.try_recv()
                     {
                         exit = Some(info);
                         deadline = Some(Instant::now() + drain);
+                        read_at_exit = lines.read;
                     }
-                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    if deadline.is_some_and(|deadline| Instant::now() >= deadline)
+                        && lines.read - read_at_exit > READ_BEFORE_CUT
+                    {
                         break;
                     }
                 }
@@ -682,6 +961,7 @@ async fn pump<R: AsyncRead + Unpin>(
             info = &mut exited, if exit.is_none() => {
                 exit = Some(info.unwrap_or(unknown));
                 deadline = Some(Instant::now() + drain);
+                read_at_exit = lines.read;
             }
             () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => break,
         }
@@ -698,7 +978,7 @@ async fn pump<R: AsyncRead + Unpin>(
         .await;
 }
 
-async fn read_stderr(mut stderr: pipe::Receiver, tail: Arc<Mutex<Tail>>) {
+async fn read_stderr<R: AsyncRead + Unpin>(mut stderr: R, tail: Arc<Mutex<Tail>>) {
     let mut chunk = vec![0; 8192];
     loop {
         match stderr.read(&mut chunk).await {
@@ -757,6 +1037,8 @@ struct LineReader<R> {
     scanned: usize,
     skipping: Option<usize>,
     eof: bool,
+    /// Bytes read from `inner` so far.
+    read: u64,
 }
 
 impl<R: AsyncRead + Unpin> LineReader<R> {
@@ -764,12 +1046,13 @@ impl<R: AsyncRead + Unpin> LineReader<R> {
         Self {
             inner,
             max,
-            chunk: vec![0; 64 * 1024],
+            chunk: vec![0; READ_CHUNK],
             buf: Vec::new(),
             start: 0,
             scanned: 0,
             skipping: None,
             eof: false,
+            read: 0,
         }
     }
 
@@ -832,6 +1115,7 @@ impl<R: AsyncRead + Unpin> LineReader<R> {
             if n == 0 {
                 self.eof = true;
             }
+            self.read += n as u64;
             self.buf.extend_from_slice(&self.chunk[..n]);
         }
     }
@@ -839,35 +1123,48 @@ impl<R: AsyncRead + Unpin> LineReader<R> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::collections::BTreeSet;
     use std::ffi::OsString;
+    #[cfg(unix)]
     use std::os::fd::AsRawFd;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+    #[cfg(unix)]
+    use std::time::Instant;
 
+    #[cfg(unix)]
     use rustix::process::{Pid, Signal};
+    #[cfg(unix)]
     use tokio::io::AsyncWriteExt;
 
+    #[cfg(unix)]
     use super::{
-        CancelPolicy, Environment, Launcher, LineReader, Output, OutputLimits, Process,
-        ProcessSpec, SpawnError, StdinMode, Tail, find_program,
+        CancelPolicy, Launcher, OutputLimits, Process, ProcessSpec, SpawnError, StdinMode,
+        find_program,
     };
+    use super::{Environment, LineReader, Output, Tail};
     use crate::backend::event::ExitInfo;
+    #[cfg(unix)]
     use crate::paths::DataDir;
 
+    #[cfg(unix)]
     fn launcher(base: Environment) -> Launcher {
         Launcher::new(DataDir::new("/tmp/wispd-test-data").unwrap(), base)
     }
 
+    #[cfg(unix)]
     fn base() -> Environment {
         [("PATH", "/usr/bin:/bin")].into_iter().collect()
     }
 
+    #[cfg(unix)]
     fn sh(script: &str) -> ProcessSpec {
         let mut spec = ProcessSpec::new("sh", "/");
         spec.args = vec!["-c".into(), script.into()];
         spec
     }
 
+    #[cfg(unix)]
     async fn collect(process: &mut Process) -> (Vec<Output>, super::Exit) {
         let mut lines = Vec::new();
         while let Some(output) = process.next().await {
@@ -880,6 +1177,7 @@ mod tests {
         panic!("the output ended without Exited");
     }
 
+    #[cfg(unix)]
     fn text(line: &Output) -> &str {
         match line {
             Output::Line(bytes) => std::str::from_utf8(bytes).unwrap(),
@@ -887,6 +1185,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_child_gets_an_explicit_environment() {
         let mut base = base();
@@ -927,6 +1226,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_child_runs_in_its_working_directory_with_its_arguments() {
         let dir = tempfile::tempdir().unwrap();
@@ -946,11 +1246,16 @@ mod tests {
         assert_eq!(lines, [cwd.to_str().unwrap(), "two words", "--flag"]);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_child_inherits_no_descriptor_but_its_stdio() {
         // A descriptor without close-on-exec, which a child started with std's Command would
         // inherit.
         let (_reader, writer) = std::io::pipe().unwrap();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test needs a leaked descriptor"
+        )]
         let leaked = rustix::io::dup(&writer).unwrap();
         assert!(leaked.as_raw_fd() < 1024);
         // Testing /dev/fd/N opens nothing, unlike ls, which opens descriptors of its own.
@@ -965,6 +1270,7 @@ mod tests {
         assert_eq!(fds, ["0", "1", "2"], "{exit:?}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_missing_program_names_where_it_was_looked_for() {
         let mut base = base();
@@ -990,6 +1296,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_bad_working_directory_is_refused() {
         for cwd in ["relative", "/nonexistent-wisp-dir", "/bin/sh"] {
@@ -1003,6 +1310,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stdout_lines_are_capped_and_stderr_keeps_its_tail() {
         let mut spec = sh(concat!(
@@ -1039,6 +1347,7 @@ mod tests {
         assert!(exit.stderr_tail.len() <= 100);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stdin_is_a_pipe_when_asked_for() {
         let mut spec = sh("read line; echo \"got $line\"");
@@ -1059,6 +1368,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn cancel_asks_first() {
         // A trap shows which signal arrived. Without one, bash 3.2's exit status after a SIGINT
@@ -1087,6 +1397,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn cancel_kills_the_group_after_the_grace_period() {
         let mut process = launcher(base())
@@ -1109,10 +1420,12 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     fn alive(pid: i32) -> bool {
         rustix::process::test_kill_process(Pid::from_raw(pid).unwrap()).is_ok()
     }
 
+    #[cfg(unix)]
     async fn wait_until_gone(pid: i32) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while alive(pid) {
@@ -1121,6 +1434,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn nothing_the_child_started_outlives_it() {
         // The background sleep holds stdout open, so the exit must not wait for stdout to end.
@@ -1134,6 +1448,7 @@ mod tests {
         wait_until_gone(text(&lines[0]).parse().unwrap()).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn dropping_the_process_kills_it() {
         let mut process = launcher(base())
@@ -1181,10 +1496,11 @@ mod tests {
         assert_eq!(reader.next().await.unwrap(), None);
     }
 
-    #[tokio::test]
-    async fn stdout_that_never_ends_cannot_hold_the_exit_back() {
-        // Like a process outside the group that keeps writing after the CLI exited.
-        let endless = LineReader::new(tokio::io::repeat(b'\n'), 1024);
+    /// Pumps `stdout` for a process that has already exited, with a drain of `drain`.
+    fn pump_exited(
+        stdout: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+        drain: Duration,
+    ) -> tokio::sync::mpsc::Receiver<Output> {
         let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
         exit_tx
             .send(ExitInfo {
@@ -1196,15 +1512,43 @@ mod tests {
             task: tokio::spawn(async {}),
             tail: std::sync::Arc::new(std::sync::Mutex::new(Tail::new(16))),
         };
-        let (output_tx, mut output) = tokio::sync::mpsc::channel(64);
+        let (output_tx, output) = tokio::sync::mpsc::channel(64);
         tokio::spawn(super::pump(
-            endless,
+            LineReader::new(stdout, 1024),
             exit_rx,
             stderr,
             output_tx,
-            Duration::from_millis(100),
+            drain,
         ));
-        let exit = tokio::time::timeout(Duration::from_secs(5), async {
+        output
+    }
+
+    #[tokio::test]
+    async fn the_drain_never_drops_what_the_process_wrote() {
+        // More than one read's worth, left unread at the exit, in a pipe something else keeps
+        // open. However long the reader takes, all of it comes through (RYA-140).
+        let (mut writer, reader) = tokio::io::duplex(1024 * 1024);
+        let written: Vec<String> = (0..20_000).map(|n| format!("line {n}")).collect();
+        let text = format!("{}\n", written.join("\n"));
+        tokio::io::AsyncWriteExt::write_all(&mut writer, text.as_bytes())
+            .await
+            .unwrap();
+        let mut output = pump_exited(reader, Duration::ZERO);
+        let mut lines = Vec::new();
+        while let Some(Output::Line(line)) = output.recv().await {
+            lines.push(String::from_utf8(line).unwrap());
+        }
+        assert_eq!(lines, written);
+        drop(writer);
+    }
+
+    #[tokio::test]
+    async fn stdout_that_never_ends_cannot_hold_the_exit_back() {
+        // Like a process outside the group that keeps writing after the CLI exited. It is cut
+        // off after `READ_BEFORE_CUT`, a million empty lines, which takes a second in a debug
+        // build; the timeout only catches it never ending.
+        let mut output = pump_exited(tokio::io::repeat(b'\n'), Duration::from_millis(100));
+        let exit = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if let Some(Output::Exited(exit)) = output.recv().await {
                     return exit;
@@ -1233,5 +1577,105 @@ mod tests {
             .collect();
         assert_eq!(env.get("A"), Some("1".as_ref()));
         assert_eq!(format!("{env:?}"), "{\"A\"}");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::time::Duration;
+
+    use tokio::time::timeout;
+
+    use super::{
+        CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, Signal,
+        SpawnError, find_program,
+    };
+    use crate::paths::DataDir;
+
+    const PATIENCE: Duration = Duration::from_secs(10);
+
+    fn launcher(base: Environment) -> Launcher {
+        let data = std::env::temp_dir().join("wispd-test-data");
+        Launcher::new(DataDir::new(data).unwrap(), base)
+    }
+
+    fn cmd(script: &str) -> ProcessSpec {
+        let mut spec = ProcessSpec::new("cmd", std::env::temp_dir());
+        spec.args = vec!["/c".into(), script.into()];
+        spec
+    }
+
+    async fn collect(process: &mut Process) -> (Vec<String>, Exit) {
+        let mut lines = Vec::new();
+        loop {
+            match timeout(PATIENCE, process.next()).await.expect("output") {
+                Some(Output::Line(line)) => {
+                    lines.push(String::from_utf8(line).unwrap().trim_end().to_owned());
+                }
+                Some(Output::Exited(exit)) => return (lines, exit),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_child_gets_its_environment_working_directory_and_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spec = cmd("echo %WISP_TEST%& cd& exit 3");
+        spec.cwd = dir.path().to_owned();
+        spec.inject.set("WISP_TEST", "set");
+        let mut process = launcher(Environment::inherited()).spawn(&spec).unwrap();
+        let (lines, exit) = collect(&mut process).await;
+        assert_eq!(exit.info.code, Some(3), "{exit:?}");
+        assert_eq!(lines[0], "set");
+        assert!(
+            lines[1].eq_ignore_ascii_case(&dir.path().display().to_string()),
+            "{lines:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_terminates_the_job() {
+        let spec = cmd("ping -n 30 127.0.0.1");
+        let mut process = launcher(Environment::inherited()).spawn(&spec).unwrap();
+        process.signals().cancel(CancelPolicy {
+            signal: Signal::INT,
+            group: false,
+            grace: Duration::ZERO,
+        });
+        let (_, exit) = collect(&mut process).await;
+        assert_ne!(exit.info.code, Some(0), "{exit:?}");
+        assert!(process.signals().reaped());
+    }
+
+    #[tokio::test]
+    async fn a_cmd_shim_is_found_and_an_argument_it_cant_take_names_the_native_build() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tool.cmd"), "@echo %~1\r\n").unwrap();
+        let found = find_program("tool".as_ref(), Some(dir.path().as_os_str())).unwrap();
+        assert!(
+            found
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd")),
+            "{found:?}"
+        );
+
+        let mut base = Environment::inherited();
+        base.set("PATH", dir.path());
+        let launcher = launcher(base);
+        let mut spec = ProcessSpec::new("tool", dir.path());
+        spec.args = vec!["hello".into()];
+        let mut process = launcher.spawn(&spec).unwrap();
+        let (lines, exit) = collect(&mut process).await;
+        assert_eq!(exit.info.code, Some(0), "{exit:?}");
+        assert_eq!(lines, ["hello"]);
+
+        spec.args = vec!["two\nlines".into()];
+        match launcher.spawn(&spec) {
+            Err(error @ SpawnError::BatchFile { .. }) => {
+                assert!(error.to_string().contains("native build"), "{error}");
+            }
+            other => panic!("expected BatchFile, got {other:?}"),
+        }
     }
 }

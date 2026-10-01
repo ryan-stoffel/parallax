@@ -1,8 +1,13 @@
 //! One run's actor: the task that owns a run for as long as wispd runs.
 //!
-//! It takes commands (`agent/send`, `agent/cancel`, `agent/accept`, `thread/delete`) and the run's
-//! backend events in one loop, so nothing about a run needs a lock, and events are logged in the
-//! order they happened.
+//! It takes commands (`agent/send`, `agent/cancel`, `agent/accept`, `agent/openPr`,
+//! `thread/delete`) and the run's backend events in one loop, so nothing about a run needs a lock,
+//! and events are logged in the order they happened.
+//!
+//! A project's coordinator (0024) differs in four places: it starts in a detached worktree of
+//! the project's repository (RYA-171) with wispd's tools and no sandbox, that worktree is checked
+//! after every turn (0004), it is never committed, and runs it started wake it when they finish
+//! (RYA-42, [`super::wake`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,19 +24,23 @@ use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{AcceptId, AgentMerge};
 use wisp_protocol::{
     AccountChoice, AccountId, AgentFailureKind, AgentOutcome, AgentOutputItem, AgentRun,
-    DiffSummary, ErrorKind, ProjectId, RunId, TurnId, WispEvent,
+    CoordinatorThreadId, DiffSummary, ErrorKind, ImageId, ProjectId, PromptImage, Role, RunId,
+    TurnId, WispEvent,
 };
-use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, Worktree};
+use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree};
 
-use super::convert::{self, agent_run, item_bytes, output_item};
-use super::worker::sandbox_path;
-use super::{Prepared, prepare, store, store_error};
+use super::convert::{self, agent_run, item_bytes, option_name, option_value, output_item};
+use super::wake::{self, Wakes};
+use super::worker::{sandbox_path, worker_unavailable};
+use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, Credential, Event, EventStream, FollowUp, ModelUsage, Outcome, Resume, Run,
-    RunRequest, SendError, ToolPolicy, Usage, WorkerSandbox,
+    AccountRef, CoordinatorTools, Credential, Event, EventStream, FollowUp, ModelUsage, Outcome,
+    Resume, Run, RunRequest, SendError, Usage, WorkerSandbox,
+    run_temp::{self, RunTemp},
 };
 use crate::routing;
 use crate::server::Daemon;
+use crate::worktree::PrError;
 
 /// How long transcript items wait to be sent together as one `agent.output` (0007).
 const COALESCE: Duration = Duration::from_millis(50);
@@ -45,6 +54,10 @@ pub(super) enum Command {
     Send {
         turn_id: TurnId,
         text: String,
+        /// The message's images, already checked (RYA-191).
+        images: Vec<PromptImage>,
+        /// A new model, effort, or permission for the run (RYA-161, RYA-163).
+        options: RunOptions,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
     /// `agent/cancel`.
@@ -57,10 +70,18 @@ pub(super) enum Command {
         reviewed: Option<String>,
         reply: oneshot::Sender<Result<(AgentRun, AgentMerge), ErrorObject>>,
     },
+    /// `agent/openPr` (RYA-168).
+    OpenPr {
+        title: String,
+        body: String,
+        reply: oneshot::Sender<Result<String, ErrorObject>>,
+    },
     /// `thread/delete` (#110): stops the run's CLI, waits for it to exit, and deletes the thread.
     Delete {
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
+    /// A run this coordinator started finished, as [`wake::summary`] tells it (RYA-42).
+    Wake(String),
 }
 
 impl Command {
@@ -73,9 +94,13 @@ impl Command {
             Self::Accept { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
+            Self::OpenPr { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
             Self::Delete { reply } => {
                 let _ = reply.send(Err(error));
             }
+            Self::Wake(_) => {}
         }
     }
 }
@@ -83,6 +108,17 @@ impl Command {
 struct Live {
     run: Arc<dyn Run>,
     events: EventStream,
+    /// A worker's temp folder (RYA-130), removed once the CLI has exited: `events` ends only
+    /// then.
+    temp: Option<RunTemp>,
+}
+
+/// What a run's CLI starts with besides its account and prompt, from [`Actor::launch`].
+struct Setup {
+    cwd: PathBuf,
+    sandbox: Option<WorkerSandbox>,
+    temp: Option<RunTemp>,
+    tools: Option<CoordinatorTools>,
 }
 
 #[derive(Default)]
@@ -101,14 +137,19 @@ pub(super) struct Actor {
     worktree: Option<Worktree>,
     live: Option<Live>,
     batch: Batch,
-    /// Messages sent to the run while this wispd runs, by turn id, for `agent/send`'s
-    /// idempotency across CLI processes.
+    /// Messages sent to the run, by turn id, reloaded from the store after a restart. They make
+    /// `agent/send` idempotent across CLI processes and fill in the logged `TurnStarted.text`.
     turns: HashMap<TurnId, String>,
+    /// The stored images of messages a CLI took, by turn id (`None` for the prompt's), until
+    /// their `TurnStarted` lists them (RYA-191, decision 0026).
+    images: HashMap<Option<TurnId>, Vec<ImageId>>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
     stopping: bool,
     /// Set once `thread/delete` removed the run: the actor stops, refusing what is still queued.
     deleted: bool,
+    /// A coordinator's wake-ups (RYA-42).
+    wakes: Wakes,
 }
 
 impl Actor {
@@ -136,9 +177,11 @@ impl Actor {
             live: None,
             batch: Batch::default(),
             turns,
+            images: HashMap::new(),
             last_message,
             stopping: false,
             deleted: false,
+            wakes: Wakes::default(),
         }
     }
 
@@ -154,9 +197,19 @@ impl Actor {
         self.row.state.status == convert::ACCEPTED
     }
 
+    /// Whether this is a project's coordinator (0024) rather than a worker or a thread.
+    fn is_coordinator(&self) -> bool {
+        self.row.fields.policy == convert::NO_WRITE
+    }
+
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, shutdown: CancellationToken) {
+        if self.is_coordinator() {
+            self.load_wakes().await;
+        }
         loop {
             let deadline = self.batch.since.map(|since| since + COALESCE);
+            // A coordinator's turn in progress gets its wake-ups next, once its CLI has exited.
+            let wake_at = self.wakes.due().filter(|_| self.live.is_none());
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
                 // event (#190 N6): while a CLI keeps its stream busy, that event branch is
@@ -181,6 +234,9 @@ impl Actor {
                 () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
                     self.flush().await;
                 }
+                () = sleep_until(wake_at.unwrap_or_else(Instant::now)), if wake_at.is_some() => {
+                    self.wake().await;
+                }
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
             if self.stopping && self.live.is_none() {
@@ -201,15 +257,25 @@ impl Actor {
             Command::Send {
                 turn_id,
                 text,
+                images,
+                options,
                 reply,
             } => {
-                let answer = self.send(turn_id, text).await;
+                let answer = self.send(turn_id, text, images, options).await;
+                if answer.is_ok() && self.wakes.attended() {
+                    self.save_wakes().await;
+                }
                 let _ = reply.send(answer);
             }
             Command::Cancel { reply } => {
                 if let Some(live) = &self.live {
                     info!(run = %self.id, "cancelling an agent run");
                     live.run.cancel();
+                }
+                // Stop means stop: a run finishing a moment later doesn't start the coordinator
+                // again before the user writes.
+                if self.is_coordinator() {
+                    self.pause_wakes().await;
                 }
                 let _ = reply.send(self.snapshot());
             }
@@ -221,6 +287,10 @@ impl Actor {
                 let answer = self.accept(id, reviewed).await;
                 let _ = reply.send(answer);
             }
+            Command::OpenPr { title, body, reply } => {
+                let answer = self.open_pr(&title, &body).await;
+                let _ = reply.send(answer);
+            }
             Command::Delete { reply } => {
                 let answer = self.delete().await;
                 if answer.is_ok() {
@@ -229,6 +299,94 @@ impl Actor {
                 }
                 let _ = reply.send(answer);
             }
+            Command::Wake(summary) => {
+                if self.is_coordinator() {
+                    self.wakes.push(summary, Instant::now());
+                }
+            }
+        }
+    }
+
+    /// Sends what is waiting as the coordinator's next turn, through the same resume as
+    /// `agent/send` (RYA-42). Pauses wake-ups at the cap, or when this fails, keeping what is
+    /// waiting. Only the project's current coordinator wakes: a replaced one drops them, so a
+    /// project never has two live (0024).
+    async fn wake(&mut self) {
+        let project = self.project.into();
+        let current = store(&self.daemon, move |db| {
+            super::coordinator::coordinator_of(db, project)
+        })
+        .await;
+        match current {
+            Ok(Some(current)) if current == self.id => {}
+            Ok(_) => {
+                self.wakes.clear();
+                return;
+            }
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not check a coordinator before waking it");
+                self.pause_wakes().await;
+                return;
+            }
+        }
+        let Some((turn_id, text)) = self.wakes.next() else {
+            self.pause_wakes().await;
+            return;
+        };
+        info!(run = %self.id, "waking a coordinator: runs it started finished");
+        match self
+            .resume(turn_id, text, Vec::new(), RunOptions::default())
+            .await
+        {
+            Ok(_) if self.live.is_some() => {
+                self.wakes.delivered();
+                self.save_wakes().await;
+            }
+            Ok(_) => self.pause_wakes().await,
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not wake a coordinator");
+                self.pause_wakes().await;
+            }
+        }
+    }
+
+    /// Stops waking the coordinator until the user writes, and says so once (RYA-42).
+    async fn pause_wakes(&mut self) {
+        if self.wakes.pause() {
+            info!(run = %self.id, "pausing a coordinator's wake-ups until the user writes");
+            self.save_wakes().await;
+            self.append(WispEvent::AgentWakeupsPaused { run_id: self.id })
+                .await;
+        }
+    }
+
+    /// Takes up the coordinator's wake-up count and pause where the last wispd left them
+    /// (RYA-178). If they can't be read, pauses wake-ups, as a failed check does.
+    async fn load_wakes(&mut self) {
+        let id = self.row.id;
+        let stored = store(&self.daemon, move |db| {
+            db.wake_state(id).map_err(|error| store_error(&error))
+        })
+        .await;
+        match stored {
+            Ok(state) => self.wakes.restore(state),
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not read a coordinator's wake-ups");
+                self.pause_wakes().await;
+            }
+        }
+    }
+
+    /// Stores the coordinator's wake-up count and pause, so a restart keeps them (RYA-178).
+    async fn save_wakes(&self) {
+        let (id, state) = (self.row.id, self.wakes.state());
+        let saved = store(&self.daemon, move |db| {
+            db.set_wake_state(id, state)
+                .map_err(|error| store_error(&error))
+        })
+        .await;
+        if let Err(error) = saved {
+            warn!(run = %self.id, error = %error.message, "could not store a coordinator's wake-ups");
         }
     }
 
@@ -348,8 +506,74 @@ impl Actor {
         Ok((self.snapshot()?, merge))
     }
 
-    async fn send(&mut self, turn_id: TurnId, text: String) -> Result<AgentRun, ErrorObject> {
-        if text.trim().is_empty() {
+    /// `agent/openPr`: pushes the run's branch to its repository's `origin` and returns the URL
+    /// of its pull request, opening one if none is open (RYA-168). Running here, between commands,
+    /// it never races a turn or its commit.
+    async fn open_pr(&self, title: &str, body: &str) -> Result<String, ErrorObject> {
+        if self.accepted() {
+            return Err(super::run_accepted(self.id));
+        }
+        let refused = |why: String| ErrorObject::wisp(ErrorKind::PrRefused, why);
+        if self.live.is_some() {
+            return Err(refused(format!(
+                "run {} is still running; open a pull request once it has finished",
+                self.id
+            )));
+        }
+        if self.row.state.commit_sha.is_none() {
+            return Err(refused(format!(
+                "run {} has no committed changes to open a pull request for",
+                self.id
+            )));
+        }
+        let project = self.project;
+        if store(&self.daemon, move |db| {
+            crate::threads::is_scratch(db, project)
+        })
+        .await?
+        {
+            return Err(refused(format!(
+                "run {} is a thread with no repository, so it has no origin to push to",
+                self.id
+            )));
+        }
+        let Some(worktree) = &self.worktree else {
+            return Err(ErrorObject::internal_error(format!(
+                "run {} has no recorded worktree",
+                self.id
+            )));
+        };
+        let url = self
+            .daemon
+            .agents
+            .worktrees
+            .open_pr(
+                Path::new(&worktree.repo_path),
+                &worktree.branch,
+                title,
+                body,
+            )
+            .await
+            .map_err(|error| {
+                let kind = match &error {
+                    PrError::Push(_) => ErrorKind::PushFailed,
+                    PrError::GhUnavailable(_) => ErrorKind::GhUnavailable,
+                    PrError::Gh(_) => ErrorKind::PrFailed,
+                };
+                ErrorObject::wisp(kind, error.to_string())
+            })?;
+        info!(run = %self.id, %url, "opened a pull request for an agent run");
+        Ok(url)
+    }
+
+    async fn send(
+        &mut self,
+        turn_id: TurnId,
+        text: String,
+        images: Vec<PromptImage>,
+        options: RunOptions,
+    ) -> Result<AgentRun, ErrorObject> {
+        if text.trim().is_empty() && images.is_empty() {
             return Err(ErrorObject::invalid_params("text must not be empty"));
         }
         if self.accepted() {
@@ -365,14 +589,33 @@ impl Actor {
                 ))
             };
         }
+        // Only a model, effort, or permission that differs from the run's changes anything.
+        let fields = &self.row.fields;
+        let changes = RunOptions {
+            model: options.model.filter(|m| Some(m) != fields.model.as_ref()),
+            effort: options.effort.filter(|&e| option_name(e) != fields.effort),
+            permission: options
+                .permission
+                .filter(|&p| option_name(p) != fields.permission),
+        };
+        let changing = changes != RunOptions::default();
+        if changing && self.live.is_some() {
+            return Err(ErrorObject::wisp(
+                ErrorKind::UnsupportedOption,
+                "the model, effort, and access can't change while the run is working; send the \
+                 message again once it has finished",
+            ));
+        }
         if let Some(live) = &self.live {
             let follow_up = FollowUp {
                 turn_id,
                 text: text.clone(),
+                images: images.clone(),
             };
             match live.run.send(follow_up) {
                 Ok(()) => {
                     self.record_turn(turn_id, text.clone()).await;
+                    self.keep_images(Some(turn_id), images).await;
                     self.last_message = text;
                     return self.snapshot();
                 }
@@ -398,11 +641,19 @@ impl Actor {
                 }
             }
         }
-        self.resume(turn_id, text).await
+        self.resume(turn_id, text, images, changes).await
     }
 
-    /// Starts a new CLI process for the run, resuming its vendor session with `text`.
-    async fn resume(&mut self, turn_id: TurnId, text: String) -> Result<AgentRun, ErrorObject> {
+    /// Starts a new CLI process for the run, resuming its vendor session with `text` and
+    /// `images`, after storing `changes` to its model, effort, and permission, which the new
+    /// process runs with.
+    async fn resume(
+        &mut self,
+        turn_id: TurnId,
+        text: String,
+        images: Vec<PromptImage>,
+        changes: RunOptions,
+    ) -> Result<AgentRun, ErrorObject> {
         let Some(session_id) = self.row.state.session_id.clone() else {
             return Err(ErrorObject::wisp(
                 ErrorKind::RunNotResumable,
@@ -421,27 +672,67 @@ impl Actor {
                 format!("run {} can't be resumed: {why}", self.id),
             )
         };
-        let (prepared, _) = match prepare(&self.daemon, self.project, self.id, Some(account)).await
-        {
-            Ok(prepared) => prepared,
-            Err(error)
-                if error
-                    .wisp_data()
-                    .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
-            {
+        let role = if self.is_coordinator() {
+            // A replaced coordinator stays stopped: a project has one live coordinator (0024).
+            let project = self.project;
+            let current = store(&self.daemon, move |db| {
+                super::coordinator::coordinator_of(db, project.into())
+            })
+            .await?;
+            if let Some(current) = current.filter(|current| *current != self.id) {
                 return Err(not_resumable(format!(
-                    "its session's account {} no longer exists",
-                    self.row.state.account_id
+                    "project {project}'s coordinator is now run {current}"
                 )));
             }
-            Err(error) => return Err(error),
+            Role::Coordinator
+        } else {
+            Role::Worker
         };
+        let (prepared, _) =
+            match prepare(&self.daemon, self.project, self.id, Some(account), role).await {
+                Ok(prepared) => prepared,
+                Err(error)
+                    if error
+                        .wisp_data()
+                        .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
+                {
+                    return Err(not_resumable(format!(
+                        "its session's account {} no longer exists",
+                        self.row.state.account_id
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
         let backend = prepared.resolved.backend().name();
         if backend != self.row.fields.backend {
             return Err(not_resumable(format!(
                 "its session ran on {}, but its account now runs on {backend}",
                 self.row.fields.backend
             )));
+        }
+        if changes != RunOptions::default() {
+            changes.check(prepared.resolved.backend())?;
+            let (id, fields) = (self.row.id, &self.row.fields);
+            let model = changes.model.clone().or(fields.model.clone());
+            let effort = changes
+                .effort
+                .and_then(option_name)
+                .or(fields.effort.clone());
+            let permission = changes
+                .permission
+                .and_then(option_name)
+                .or(fields.permission.clone());
+            let row = store(&self.daemon, move |db| {
+                db.set_run_options(
+                    id,
+                    model.as_deref(),
+                    effort.as_deref(),
+                    permission.as_deref(),
+                )
+                .map_err(|error| store_error(&error))
+            })
+            .await?;
+            self.row.fields = row.fields;
         }
         let session = session_id.clone();
         let totals = store(&self.daemon, move |db| {
@@ -456,7 +747,7 @@ impl Actor {
         info!(run = %self.id, "resuming an agent run's session");
         let message = text.clone();
         if self
-            .launch(prepared, text, Some(turn_id), Some(resume), None)
+            .launch(prepared, text, images, Some(turn_id), Some(resume), None)
             .await
         {
             // Only a turn that reached a CLI counts as sent: a retry after a failed start
@@ -489,64 +780,110 @@ impl Actor {
         }
     }
 
-    /// Starts the run's CLI with `prompt` and records the result: `running`, or `failed` with
-    /// why. `paths` are the worktree's and the repository git folder's canonical paths, when the
-    /// caller already has them. Returns whether the CLI started.
+    /// Stores the images of `turn_id`'s message, which its CLI has now taken, for its
+    /// `TurnStarted` to list (RYA-191, decision 0026). If they can't be stored, the CLI still has
+    /// them, and the transcript shows the message without them.
+    async fn keep_images(&mut self, turn_id: Option<TurnId>, images: Vec<PromptImage>) {
+        if images.is_empty() {
+            return;
+        }
+        let ids: Vec<ImageId> = images.iter().map(|_| ImageId::generate()).collect();
+        let rows: Vec<_> = ids
+            .iter()
+            .zip(images)
+            .map(|(&id, image)| {
+                let stored = StoredImage {
+                    media_type: option_name(image.media_type).unwrap_or_default(),
+                    data: image.data,
+                };
+                (Uuid::from(id), stored)
+            })
+            .collect();
+        let run = self.row.id;
+        let stored = store(&self.daemon, move |db| {
+            db.add_images(run, &rows)
+                .map_err(|error| store_error(&error))
+        })
+        .await;
+        match stored {
+            Ok(()) => {
+                self.images.insert(turn_id, ids);
+            }
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not store a message's images");
+            }
+        }
+    }
+
+    /// Starts the run's CLI with `prompt` and `images` and records the result: `running`, or
+    /// `failed` with why. `paths` are a worker's worktree's and repository git folder's canonical
+    /// paths, when the caller already has them. Returns whether the CLI started.
     pub async fn launch(
         &mut self,
         prepared: Prepared,
         prompt: String,
+        images: Vec<PromptImage>,
         turn_id: Option<TurnId>,
         resume: Option<Resume>,
         paths: Option<(PathBuf, PathBuf)>,
     ) -> bool {
-        let paths = match paths {
-            Some(paths) => Ok(paths),
-            None => self.worker_paths().await,
-        };
-        let (cwd, git_common_dir) = match paths {
-            Ok(paths) => paths,
-            Err(error) => {
-                self.failed_to_start(error.message).await;
-                return false;
-            }
-        };
         let Prepared {
             resolved,
             accounts,
-            home,
-            data_dir,
-            context,
+            place,
         } = prepared;
-        let sandbox =
-            WorkerSandbox::for_worktree(&home, &data_dir, &cwd, &git_common_dir, &context);
+        let setup = match place {
+            Place::Worker {
+                home,
+                data_dir,
+                context,
+            } => self.worker_setup(&home, &data_dir, &context, paths).await,
+            Place::Coordinator { repo } => self.coordinator_setup(repo),
+        };
+        let Setup {
+            cwd,
+            sandbox,
+            temp,
+            tools,
+        } = match setup {
+            Ok(setup) => setup,
+            Err(message) => {
+                self.failed_to_start(message).await;
+                return false;
+            }
+        };
         let account_id = resolved.account_id();
         let request = RunRequest {
             run_id: self.id,
             turn_id,
             cwd,
             prompt,
-            policy: ToolPolicy::WorkspaceWrite,
-            sandbox: Some(sandbox),
+            images: images.clone(),
+            policy: resolved.policy(),
+            sandbox,
             account: AccountRef {
                 id: account_id.clone(),
                 credential: Credential::Subscription { config_home: None },
             },
             resume,
-            model: None,
-            coordinator_tools: None,
+            model: self.row.fields.model.clone(),
+            effort: self.row.fields.effort.as_deref().and_then(option_value),
+            permission: self.row.fields.permission.as_deref().and_then(option_value),
+            coordinator_tools: tools,
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
             Ok(started) => {
                 self.live = Some(Live {
                     run: started.run,
                     events: started.events,
+                    temp,
                 });
                 self.daemon.agents.running.fetch_add(1, Ordering::Relaxed);
                 convert::RUNNING.clone_into(&mut self.row.state.status);
                 self.row.state.account_id = account_id;
                 self.row.state.error = None;
                 self.save().await;
+                self.keep_images(turn_id, images).await;
                 true
             }
             Err(error) => {
@@ -554,6 +891,64 @@ impl Actor {
                 false
             }
         }
+    }
+
+    /// A worker's worktree and sandbox, with a new temp folder for its CLI.
+    async fn worker_setup(
+        &self,
+        home: &Path,
+        data_dir: &Path,
+        context: &Path,
+        paths: Option<(PathBuf, PathBuf)>,
+    ) -> Result<Setup, String> {
+        let (cwd, git_common_dir) = match paths {
+            Some(paths) => paths,
+            None => self.worker_paths().await.map_err(|error| error.message)?,
+        };
+        let (temp, temp_path) = self.run_temp().map_err(|error| error.message)?;
+        let sandbox =
+            WorkerSandbox::for_worktree(home, data_dir, &cwd, &git_common_dir, context, &temp_path);
+        Ok(Setup {
+            cwd,
+            sandbox: Some(sandbox),
+            temp: Some(temp),
+            tools: None,
+        })
+    }
+
+    /// A coordinator runs in the project's repository (0027), with its wisp tools, bound to its
+    /// project and to its own thread (0019).
+    fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
+        let program = std::env::current_exe()
+            .map_err(|error| format!("could not find wispd's own executable: {error}"))?;
+        let thread = self
+            .row
+            .fields
+            .coordinator_thread
+            .and_then(|id| CoordinatorThreadId::try_from(id).ok())
+            .ok_or_else(|| format!("coordinator run {} has no thread id", self.id))?;
+        let tools = CoordinatorTools {
+            program,
+            data_dir: self.daemon.data_dir.root().to_owned(),
+            project: self.project,
+            thread,
+        };
+        Ok(Setup {
+            cwd: repo,
+            sandbox: None,
+            temp: None,
+            tools: Some(tools),
+        })
+    }
+
+    /// A new temp folder for the run's CLI (RYA-130), a resumed run's too, and its canonical
+    /// path for the sandbox.
+    fn run_temp(&self) -> Result<(RunTemp, PathBuf), ErrorObject> {
+        let temp = run_temp::create(&self.daemon.data_dir).map_err(|error| {
+            worker_unavailable(format!("could not make the run's temp folder: {error}"))
+        })?;
+        let path = sandbox_path(temp.path(), "the run's temp folder")?;
+        Ok((temp, path))
     }
 
     async fn worker_paths(&self) -> Result<(PathBuf, PathBuf), ErrorObject> {
@@ -630,7 +1025,26 @@ impl Actor {
                 self.finish(&outcome).await;
             }
             _ => {
-                if let Some(item) = output_item(&event) {
+                if let Some(mut item) = output_item(&event) {
+                    // A follow-up's text, which `send` recorded before its CLI could report the
+                    // turn, so a transcript rebuilt from the log shows it (RYA-92), capped like
+                    // every other text item, and the ids of any message's images (RYA-191).
+                    if let AgentOutputItem::TurnStarted {
+                        turn_id,
+                        text,
+                        wake,
+                        images,
+                    } = &mut item
+                    {
+                        *images = self.images.remove(turn_id).unwrap_or_default();
+                        if let Some(turn_id) = turn_id {
+                            *wake = self.wakes.was_sent(*turn_id);
+                            *text = self
+                                .turns
+                                .get(turn_id)
+                                .map(|sent| convert::truncate(sent, convert::MAX_TEXT_ITEM_BYTES));
+                        }
+                    }
                     self.push(item).await;
                 }
             }
@@ -638,8 +1052,10 @@ impl Actor {
     }
 
     fn clear_live(&mut self) {
-        if self.live.take().is_some() {
+        if let Some(live) = self.live.take() {
             self.daemon.agents.running.fetch_sub(1, Ordering::Relaxed);
+            // A worker's temp can hold a whole package store, so it goes off this task's thread.
+            tokio::task::spawn_blocking(move || drop(live.temp));
         }
     }
 
@@ -659,8 +1075,9 @@ impl Actor {
         }
     }
 
-    /// Records how a CLI process ended. Unless wispd stopped it, commits the worktree's changes
-    /// first, through #166's hardened commit, and reports the commit.
+    /// Records how a CLI process ended. Unless wispd stopped it, commits a worker's changes first,
+    /// through #166's hardened commit, and reports the commit, then wakes the coordinator that
+    /// started the run.
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
         if self.stopping && matches!(outcome, Outcome::Cancelled) {
@@ -675,7 +1092,11 @@ impl Actor {
             return;
         }
         let (mut outcome, mut status, mut error) = convert::outcome(outcome);
-        let committed = self.commit().await;
+        let committed = if self.is_coordinator() {
+            Ok(None)
+        } else {
+            self.commit().await
+        };
         let diff = match committed {
             Ok(diff) => diff,
             Err(message) => {
@@ -693,7 +1114,7 @@ impl Actor {
         };
         self.append(WispEvent::AgentFinished {
             run_id: self.id,
-            outcome,
+            outcome: outcome.clone(),
         })
         .await;
         if let Some(diff) = diff {
@@ -711,6 +1132,12 @@ impl Actor {
         self.row.state.error = error;
         info!(run = %self.id, status, "an agent run's CLI finished");
         self.save().await;
+        if let Some(thread) = self.row.fields.coordinator_thread
+            && !self.is_coordinator()
+            && let Ok(run) = self.snapshot()
+        {
+            wake::notify(&self.daemon, thread, wake::summary(&run, &outcome));
+        }
     }
 
     /// Commits whatever the run changed in its worktree, on its branch, and measures the branch
@@ -940,6 +1367,9 @@ mod tests {
                 policy: "workspaceWrite".to_owned(),
                 backend: "fake".to_owned(),
                 coordinator_thread: None,
+                model: None,
+                effort: None,
+                permission: None,
             },
             state: RunState {
                 status: "running".to_owned(),
@@ -993,6 +1423,7 @@ mod tests {
         actor.live = Some(Live {
             run: Arc::new(NoopRun),
             events,
+            temp: Some(crate::backend::run_temp::create(&daemon.data_dir).unwrap()),
         });
 
         let (commands, receiver) = mpsc::channel(4);

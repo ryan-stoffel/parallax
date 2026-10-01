@@ -10,7 +10,6 @@ use wisp_protocol::{
     Capabilities, ErrorKind, HostHealthParams, HostVersionParams, IncompatibleProtocolDetail,
     ProjectListParams, ProtocolRange, StoreState,
 };
-use wispd::VERSION;
 
 use crate::support::{Client, Wispd, kind, temp_dir};
 
@@ -22,7 +21,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
 
     let init = client.initialize().await.unwrap();
     assert_eq!(init.protocol, 1);
-    assert_eq!(init.wispd, VERSION);
+    assert_eq!(init.wispd, wispd::version());
     assert_eq!(
         init.capabilities,
         Capabilities(BTreeMap::from([
@@ -30,6 +29,21 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("agentClis".to_owned(), serde_json::Map::new()),
             ("agentReview".to_owned(), serde_json::Map::new()),
             ("agents".to_owned(), serde_json::Map::new()),
+            ("coordinator".to_owned(), serde_json::Map::new()),
+            ("openPr".to_owned(), serde_json::Map::new()),
+            ("projectEdit".to_owned(), serde_json::Map::new()),
+            (
+                "promptImages".to_owned(),
+                serde_json::from_value(json!({
+                    "maxImages": 10,
+                    "maxImageBytes": 5 * 1024 * 1024,
+                    "maxTotalBytes": 6 * 1024 * 1024,
+                }))
+                .unwrap()
+            ),
+            ("runOptions".to_owned(), serde_json::Map::new()),
+            ("sendModel".to_owned(), serde_json::Map::new()),
+            ("sendOptions".to_owned(), serde_json::Map::new()),
             ("threads".to_owned(), serde_json::Map::new()),
         ]))
     );
@@ -47,10 +61,13 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
         .call::<HostVersion>(HostVersionParams {})
         .await
         .unwrap();
-    assert_eq!(version.wispd, VERSION);
+    assert_eq!(version.wispd, wispd::version());
     assert_eq!(version.protocol, ProtocolRange::SUPPORTED);
     assert_eq!(version.arch, std::env::consts::ARCH);
+    #[cfg(target_os = "macos")]
     assert!(version.os.starts_with("macOS "), "{}", version.os);
+    #[cfg(target_os = "linux")]
+    assert_eq!(version.os, "linux");
 }
 
 #[tokio::test]
@@ -92,7 +109,7 @@ async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_
         IncompatibleProtocolDetail {
             requested: ProtocolRange { min: 2, max: 3 },
             supported: ProtocolRange::SUPPORTED,
-            wispd: VERSION.to_owned(),
+            wispd: wispd::version().to_owned(),
         }
     );
 

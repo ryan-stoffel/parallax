@@ -1,6 +1,6 @@
 //! Running `wispd attach`, and the `wispd serve` it reaches, in temporary data folders.
 //!
-//! Every data folder is under `/tmp`, which keeps socket paths under macOS's 103-byte limit and
+//! Every data folder comes from [`temp_dir`], which keeps socket paths under the OS's limit and
 //! keeps the tests away from the real data folder and any installed launch agent.
 
 use std::fmt;
@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use rustix::process::{Pid, Signal, WaitOptions};
-use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
@@ -28,18 +27,14 @@ use wisp_protocol::{
 };
 use wispd::paths::DataDir;
 
+#[path = "../common/temp.rs"]
+mod temp;
+pub use temp::temp_dir;
+
 /// How long a test waits for anything before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(10);
 
 pub const WISPD: &str = env!("CARGO_BIN_EXE_wispd");
-
-/// A fresh folder under `/tmp`, removed when dropped.
-pub fn temp_dir() -> TempDir {
-    tempfile::Builder::new()
-        .prefix("wispd-")
-        .tempdir_in("/tmp")
-        .expect("create a temp dir under /tmp")
-}
 
 /// Held while a test spawns a process or makes a descriptor without close-on-exec.
 ///
@@ -212,6 +207,10 @@ impl Attach {
             .kill_on_drop(true);
         let mut child = {
             let _lock = spawn_lock();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the copy must lack close-on-exec"
+            )]
             let leaked = inherit.map(|fd| rustix::io::dup(fd).expect("copy the descriptor"));
             let child = command.spawn().expect("spawn wispd attach");
             drop(leaked);
@@ -343,19 +342,47 @@ pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
         id: ProjectId::generate(),
         name: name.to_owned(),
         repo_path: path.to_str().expect("a UTF-8 path").to_owned(),
+        icon: None,
     }
 }
 
 /// The paths of `pid`'s descriptors 0 to 2, from `lsof`.
+#[cfg(target_os = "macos")]
 pub fn stdio_paths(pid: Pid) -> Vec<String> {
     lsof_names(pid, "0-2")
 }
 
 /// `pid`'s working directory, from `lsof`.
+#[cfg(target_os = "macos")]
 pub fn working_dir(pid: Pid) -> Vec<String> {
     lsof_names(pid, "cwd")
 }
 
+/// The paths of `pid`'s descriptors 0 to 2, from `/proc`.
+#[cfg(target_os = "linux")]
+pub fn stdio_paths(pid: Pid) -> Vec<String> {
+    ["fd/0", "fd/1", "fd/2"]
+        .into_iter()
+        .map(|entry| proc_link(pid, entry))
+        .collect()
+}
+
+/// `pid`'s working directory, from `/proc`.
+#[cfg(target_os = "linux")]
+pub fn working_dir(pid: Pid) -> Vec<String> {
+    vec![proc_link(pid, "cwd")]
+}
+
+#[cfg(target_os = "linux")]
+fn proc_link(pid: Pid, entry: &str) -> String {
+    let path = format!("/proc/{}/{entry}", pid.as_raw_nonzero());
+    fs::read_link(&path)
+        .unwrap_or_else(|error| panic!("read {path}: {error}"))
+        .display()
+        .to_string()
+}
+
+#[cfg(target_os = "macos")]
 fn lsof_names(pid: Pid, descriptors: &str) -> Vec<String> {
     let lsof = {
         let _lock = spawn_lock();

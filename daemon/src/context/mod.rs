@@ -26,22 +26,34 @@ pub(crate) mod watcher;
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write as _};
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use jiff::Timestamp;
-use rustix::fs::OFlags;
 use wisp_protocol::jsonrpc::ErrorObject;
 use wisp_protocol::{ContextFile, ContextWriteId, ErrorKind, ProjectId};
 
 use crate::paths::DataDir;
 
-/// True if `error` is `ELOOP`, "too many levels of symbolic links": what `O_NOFOLLOW` produces
-/// when the final path component is a symlink. `std::io::ErrorKind` has no stable variant for it
+/// True if `error` is [`symlink_error`]. `std::io::ErrorKind` has no stable variant for it
 /// (`io_error_more` is still unstable), so this compares the raw OS error code instead.
 fn is_symlink_error(error: &io::Error) -> bool {
-    error.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error())
+    error.raw_os_error() == symlink_error().raw_os_error()
+}
+
+/// The error for a final path component that is a symlink: `ELOOP`, "too many levels of symbolic
+/// links", which `O_NOFOLLOW` produces. Windows has no such flag, so there wispd refuses the
+/// reparse point itself, with `ERROR_STOPPED_ON_SYMLINK`.
+fn symlink_error() -> io::Error {
+    #[cfg(unix)]
+    let code = rustix::io::Errno::LOOP.raw_os_error();
+    #[cfg(windows)]
+    let code = windows_sys::Win32::Foundation::ERROR_STOPPED_ON_SYMLINK.cast_signed();
+    io::Error::from_raw_os_error(code)
 }
 
 /// The largest a single shared context file may be: 1 MiB.
@@ -108,7 +120,8 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
 /// Reads a shared context file's content and metadata.
 ///
 /// Opens with `O_NOFOLLOW`, so a symlink at `name` is refused rather than followed, whether or not
-/// it was already there when the caller last checked.
+/// it was already there when the caller last checked. Windows opens the reparse point itself
+/// (`FILE_FLAG_OPEN_REPARSE_POINT`) and refuses it.
 ///
 /// # Errors
 ///
@@ -116,11 +129,30 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
 /// a directory, so one can't be read as though it were content), or an `ELOOP` error (see
 /// [`is_symlink_error`]) if it is a symlink.
 pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs::Metadata)> {
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(OFlags::NOFOLLOW.bits().cast_signed())
-        .open(dir.join(name))?;
+    let path = dir.join(name);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut file = match options.open(&path) {
+        Ok(file) => file,
+        // Windows can't open a folder as a file, and says so as access denied.
+        #[cfg(windows)]
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied && path.is_dir() => {
+            return Err(io::Error::from(io::ErrorKind::NotFound));
+        }
+        Err(error) => return Err(error),
+    };
     let metadata = file.metadata()?;
+    #[cfg(windows)]
+    if metadata.file_attributes()
+        & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+        != 0
+    {
+        return Err(symlink_error());
+    }
     if !metadata.is_file() {
         return Err(io::Error::from(io::ErrorKind::NotFound));
     }
@@ -139,16 +171,14 @@ pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs:
 ///
 /// # Errors
 ///
-/// An `ELOOP` [`io::Error`] (see [`is_symlink_error`]) if `name` is already a symlink, or another
+/// A [`symlink_error`] if `name` is already a symlink, or another
 /// [`io::Error`] from creating or renaming the temporary file.
 pub(crate) fn write_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<std::fs::Metadata> {
     let target = dir.join(name);
     if let Ok(metadata) = std::fs::symlink_metadata(&target)
         && metadata.file_type().is_symlink()
     {
-        return Err(io::Error::from_raw_os_error(
-            rustix::io::Errno::LOOP.raw_os_error(),
-        ));
+        return Err(symlink_error());
     }
     let mut temp = tempfile::Builder::new()
         .prefix(".wisp-context-")
@@ -204,15 +234,13 @@ pub(crate) fn other_files_total(dir: &Path, except: &str) -> io::Result<u64> {
     Ok(total)
 }
 
-/// `metadata`'s size and modification time as the protocol reports them. `mtime`/`mtime_nsec`
-/// (rather than [`std::fs::Metadata::modified`]) so a fixture can back-date a file with `utimes`
-/// in a test without needing raw `SystemTime` plumbing.
+/// `metadata`'s modification time as the protocol reports it, or the epoch if the OS can't say.
 pub(crate) fn modified_at(metadata: &std::fs::Metadata) -> Timestamp {
-    Timestamp::new(
-        metadata.mtime(),
-        metadata.mtime_nsec().try_into().unwrap_or(0),
-    )
-    .unwrap_or(Timestamp::UNIX_EPOCH)
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| Timestamp::try_from(modified).ok())
+        .unwrap_or(Timestamp::UNIX_EPOCH)
 }
 
 fn hash_content(content: &[u8]) -> u64 {
@@ -277,16 +305,30 @@ impl ContextIndex {
         }
     }
 
-    /// Records a write that came through `context/write`.
-    pub fn record_protocol_write(
+    /// Puts a `context/write`'s `content` on disk with `write`, then records it, holding the
+    /// index the whole time.
+    ///
+    /// The watcher checks the index for every change it sees, and inotify reports the rename at
+    /// once, so recording after letting go would let the watcher take wispd's own write for an
+    /// agent's. Holding it also orders racing writes: the last one recorded is the one on disk.
+    ///
+    /// # Errors
+    ///
+    /// `write`'s, in which case nothing is recorded.
+    pub fn write_protocol<T>(
         &self,
         project: ProjectId,
         path: &str,
         write_id: ContextWriteId,
         writer: Option<String>,
         content: &[u8],
-    ) {
-        self.lock().insert(
+        write: impl FnOnce() -> io::Result<T>,
+    ) -> io::Result<T> {
+        // ponytail: one lock for every project's index, held across the write's fsync, so all
+        // context writes and watcher checks queue behind it. Per-path locks if write volume grows.
+        let mut records = self.lock();
+        let written = write()?;
+        records.insert(
             (project, path.to_owned()),
             Record {
                 write_id: Some(write_id),
@@ -294,30 +336,43 @@ impl ContextIndex {
                 writer,
             },
         );
+        Ok(written)
     }
 
-    /// True if `content`'s hash already matches the last write recorded for this path, whether
-    /// that was `context/write`'s own or an earlier disk observation. A filesystem event that
-    /// matches carries no new information and should not be reported: it is either the echo of
-    /// wispd's own write (which the OS can report more than once for a single rename, so this
-    /// checks content rather than consuming a one-shot flag), or a rewrite of a file with the
-    /// content it already had.
-    pub fn matches_recorded(&self, project: ProjectId, path: &str, content: &[u8]) -> bool {
-        self.lock()
-            .get(&(project, path.to_owned()))
-            .is_some_and(|record| record.hash == hash_content(content))
-    }
-
-    /// Records a write the watcher found on disk, with no `context/write` behind it.
-    pub fn record_external_write(&self, project: ProjectId, path: &str, content: &[u8]) {
-        self.lock().insert(
-            (project, path.to_owned()),
+    /// Reads a file the watcher saw change with `read`, and records it as a write with no
+    /// `context/write` behind it, unless its content matches the last write recorded for this
+    /// path. Returns whether it was new: `false` when it matched or `read` failed.
+    ///
+    /// A change that matches carries no new information and should not be reported: it is either
+    /// the echo of wispd's own write (which the OS can report more than once for a single rename,
+    /// so this checks content rather than consuming a one-shot flag), or a rewrite of a file with
+    /// the content it already had. The index is held from the read to the record, as
+    /// [`ContextIndex::write_protocol`] holds it, so a `context/write` can't land in between and
+    /// get its content taken for an agent's.
+    pub fn record_disk_write(
+        &self,
+        project: ProjectId,
+        path: &str,
+        read: impl FnOnce() -> Option<Vec<u8>>,
+    ) -> bool {
+        let mut records = self.lock();
+        let Some(content) = read() else {
+            return false;
+        };
+        let hash = hash_content(&content);
+        let key = (project, path.to_owned());
+        if records.get(&key).is_some_and(|record| record.hash == hash) {
+            return false;
+        }
+        records.insert(
+            key,
             Record {
                 write_id: None,
-                hash: hash_content(content),
+                hash,
                 writer: None,
             },
         );
+        true
     }
 
     /// Who last wrote `path` in `project`, if wispd has seen a write to it since it started.
@@ -362,6 +417,7 @@ pub(crate) fn io_error(path: &str, error: &io::Error) -> ErrorObject {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     use wisp_protocol::jsonrpc::INVALID_PARAMS;
@@ -395,17 +451,18 @@ mod tests {
 
     #[test]
     fn a_context_dir_is_created_private_and_ensuring_it_again_is_a_no_op() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let temp = tempfile::tempdir().unwrap();
         let data_dir = DataDir::new(temp.path()).unwrap();
         let project = wisp_protocol::ProjectId::generate();
         let dir = ensure_dir(&data_dir, project).unwrap();
         assert!(dir.is_dir());
-        assert_eq!(
-            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
         assert_eq!(ensure_dir(&data_dir, project).unwrap(), dir);
     }
 
@@ -428,6 +485,7 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_target_is_refused_for_both_read_and_write() {
         let dir = tempfile::tempdir().unwrap();
@@ -447,6 +505,7 @@ mod tests {
     /// The TOCTOU scenario from the acceptance criteria: a path checks out clean, then something
     /// swaps a symlink in before the write actually happens. The rename-based write must not
     /// write through the swapped-in link even when it isn't rejected outright first.
+    #[cfg(unix)]
     #[test]
     fn a_symlink_swapped_in_after_validation_is_never_written_through() {
         let dir = tempfile::tempdir().unwrap();
@@ -522,7 +581,16 @@ mod tests {
             Existing::New
         );
 
-        index.record_protocol_write(project, "notes.md", id, Some("editor".to_owned()), b"hello");
+        index
+            .write_protocol(
+                project,
+                "notes.md",
+                id,
+                Some("editor".to_owned()),
+                b"hello",
+                || Ok(()),
+            )
+            .unwrap();
         assert_eq!(
             index.check(project, "notes.md", id, b"hello", Some("editor")),
             Existing::SameRetry
@@ -550,16 +618,22 @@ mod tests {
         let index = ContextIndex::default();
         let project = wisp_protocol::ProjectId::generate();
         let id = wisp_protocol::ContextWriteId::generate();
-        index.record_protocol_write(project, "notes.md", id, None, b"hello");
+        index
+            .write_protocol(project, "notes.md", id, None, b"hello", || Ok(()))
+            .unwrap();
         // The OS can report more than one filesystem event for a single atomic write (a rename
         // touches both the temporary name and the target); every one of them must still count as
         // the same already-known write, not just the first.
-        assert!(index.matches_recorded(project, "notes.md", b"hello"));
-        assert!(index.matches_recorded(project, "notes.md", b"hello"));
+        let observe = |content: &[u8]| {
+            index.record_disk_write(project, "notes.md", || Some(content.to_vec()))
+        };
+        assert!(!observe(b"hello"));
+        assert!(!observe(b"hello"));
         assert!(
-            !index.matches_recorded(project, "notes.md", b"something else"),
+            observe(b"something else"),
             "different content is new information, not an echo"
         );
+        assert!(!observe(b"something else"), "and is recorded");
     }
 
     #[test]
@@ -567,10 +641,19 @@ mod tests {
         let index = ContextIndex::default();
         let project = wisp_protocol::ProjectId::generate();
         assert_eq!(index.writer_of(project, "notes.md"), None);
-        index.record_external_write(project, "notes.md", b"from disk");
+        index.record_disk_write(project, "notes.md", || Some(b"from disk".to_vec()));
         assert_eq!(index.writer_of(project, "notes.md"), None);
         let id = wisp_protocol::ContextWriteId::generate();
-        index.record_protocol_write(project, "notes.md", id, Some("editor".to_owned()), b"hi");
+        index
+            .write_protocol(
+                project,
+                "notes.md",
+                id,
+                Some("editor".to_owned()),
+                b"hi",
+                || Ok(()),
+            )
+            .unwrap();
         assert_eq!(
             index.writer_of(project, "notes.md"),
             Some("editor".to_owned())
