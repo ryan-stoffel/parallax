@@ -147,20 +147,33 @@ const checklists = new WeakMap<Item, Todo>();
  * lasts the session, across turns and resumes. So after each call that changes it, the whole list
  * goes in as a checklist, as wispd puts one after TodoWrite, and the plan card and strip read it
  * the same way. A list whose every step is done is put away when the next turn starts, as Claude
- * Code's own view of it is; a step a later TaskUpdate touches comes back.
+ * Code's own view of it is; a step a later TaskUpdate reopens comes back. The session rows go: a
+ * new session, as an account fallback starts with ids from 1 again, starts a new list, and clears
+ * the plan if it showed steps, while a resume keeps its session and so its list (RYA-250).
  */
 export function withTaskLists<R extends { kind: string; key: string }>(
   rows: readonly (Item | R)[],
 ): (Item | R)[] {
   const tasks = new Map<string, Task>();
   const shown = () => [...tasks.values()].filter((t) => !t.away);
+  let session: string | undefined;
   const out: (Item | R)[] = [];
   for (const row of rows) {
-    out.push(row);
     const item = row as Item;
-    if (item.kind === "user" && shown().every((t) => t.status === "completed"))
-      for (const task of tasks.values()) task.away = true;
-    if (item.kind !== "tool" || !applyTask(tasks, item)) continue;
+    if (item.kind === "session") {
+      const fresh = session !== undefined && item.sessionId !== session;
+      session = item.sessionId;
+      if (!fresh) continue;
+      // Steps that showed give way to an empty checklist, so the strip drops them.
+      const showing = shown().length > 0;
+      tasks.clear();
+      if (!showing) continue;
+    } else {
+      out.push(row);
+      if (item.kind === "user" && shown().every((t) => t.status === "completed"))
+        for (const task of tasks.values()) task.away = true;
+      if (item.kind !== "tool" || !applyTask(tasks, item)) continue;
+    }
     const steps = shown();
     const items = steps.map(({ text, status }) => ({ text, status }));
     const active = steps.find((t) => t.status === "inProgress")?.active;
