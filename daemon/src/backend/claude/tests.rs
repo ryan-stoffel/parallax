@@ -184,6 +184,7 @@ fn request(cwd: &Path) -> RunRequest {
         effort: None,
         permission: None,
         coordinator_tools: None,
+        approvals: false,
     }
 }
 
@@ -1841,16 +1842,21 @@ fn coordinator(cwd: &Path) -> RunRequest {
 }
 
 /// RYA-222: Manual, Auto, and Plan ask wispd over stdio, right after the mode, for a worker and a
-/// coordinator alike. Accept Edits and Bypass Permissions run as before, and a plain no-write run
-/// never asks.
+/// coordinator alike, when the client answers. Without `approvals`, every mode runs as before, as
+/// do Accept Edits and Bypass Permissions, and a plain no-write run never asks.
 #[test]
-fn only_the_modes_that_prompt_ask_wispd_over_stdio() {
+fn only_the_modes_that_prompt_ask_wispd_over_stdio_and_only_with_approvals() {
     let cwd = Path::new("/Users/u/wt");
     let mut worker = request(cwd);
     worker.policy = ToolPolicy::WorkspaceWrite;
     worker.sandbox = Some(worker_sandbox(cwd));
-    for base in [worker, coordinator(cwd)] {
-        for (permission, expected) in [
+    for (base, approvals) in [
+        (worker.clone(), true),
+        (coordinator(cwd), true),
+        (worker, false),
+        (coordinator(cwd), false),
+    ] {
+        for (permission, prompting) in [
             (None, false),
             (Some(AgentPermission::Edit), false),
             (Some(AgentPermission::Bypass), false),
@@ -1858,8 +1864,10 @@ fn only_the_modes_that_prompt_ask_wispd_over_stdio() {
             (Some(AgentPermission::Auto), true),
             (Some(AgentPermission::Plan), true),
         ] {
+            let expected = prompting && approvals;
             let request = RunRequest {
                 permission,
+                approvals,
                 ..base.clone()
             };
             let args: Vec<String> = super::arguments(&request)
@@ -1876,9 +1884,27 @@ fn only_the_modes_that_prompt_ask_wispd_over_stdio() {
             } else {
                 assert_eq!(prompt_tool, None, "{args:?}");
             }
+            // The prompt channel is the only argument `approvals` changes.
+            if !approvals {
+                let mut asking: Vec<String> = super::arguments(&RunRequest {
+                    approvals: true,
+                    ..request.clone()
+                })
+                .unwrap()
+                .into_iter()
+                .map(|arg| arg.into_string().unwrap())
+                .collect();
+                if let Some(at) = asking.iter().position(|arg| arg == PROMPT_TOOL_ARGS[0]) {
+                    asking.drain(at..at + PROMPT_TOOL_ARGS.len());
+                }
+                assert_eq!(args, asking, "{permission:?}");
+            }
         }
     }
-    let plain = request(cwd);
+    let plain = RunRequest {
+        approvals: true,
+        ..request(cwd)
+    };
     assert!(!super::prompts(&plain));
     assert!(
         !super::arguments(&plain)
@@ -1895,6 +1921,7 @@ async fn an_allowed_permission_request_answers_the_cli_on_stdin() {
     let fake = Fake::new("approval");
     let request = RunRequest {
         permission: Some(AgentPermission::Manual),
+        approvals: true,
         ..coordinator(&fake.root())
     };
     let Started { run, mut events } = launch(&fake.backend, request).await;
@@ -1995,6 +2022,7 @@ async fn a_denied_or_edited_request_answers_with_what_the_user_said() {
         let fake = Fake::new("approval");
         let request = RunRequest {
             permission: Some(AgentPermission::Manual),
+            approvals: true,
             ..coordinator(&fake.root())
         };
         let Started { run, mut events } = launch(&fake.backend, request).await;
@@ -2017,6 +2045,7 @@ async fn a_withdrawn_request_takes_no_answer_and_other_control_requests_get_an_e
     let fake = Fake::new("approval-withdrawn");
     let request = RunRequest {
         permission: Some(AgentPermission::Auto),
+        approvals: true,
         ..coordinator(&fake.root())
     };
     let Started { run, mut events } = launch(&fake.backend, request).await;
@@ -2076,6 +2105,7 @@ async fn an_approved_plan_lets_a_coordinator_leave_plan_mode() {
     let fake = Fake::new("exit-plan");
     let request = RunRequest {
         permission: Some(AgentPermission::Plan),
+        approvals: true,
         ..coordinator(&fake.root())
     };
     let Started { run, mut events } = launch(&fake.backend, request).await;

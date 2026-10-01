@@ -1,6 +1,37 @@
 [
   {
     "jsonrpc": "2.0",
+    "id": 0,
+    "method": "project/start",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "prompt": "Add a README, and link it from the docs.",
+      "permission": "plan",
+      "approvals": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "result": {
+      "run": {
+        "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "prompt": "Add a README, and link it from the docs.",
+        "policy": "noWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "coordinatorThread": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "permission": "plan",
+        "createdAt": "2026-10-01T11:59:58Z",
+        "updatedAt": "2026-10-01T11:59:59Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "method": "events/event",
     "params": {
       "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",

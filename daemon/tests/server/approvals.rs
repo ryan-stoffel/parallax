@@ -10,7 +10,8 @@ use wisp_protocol::methods::{AgentApprove, AgentCancel, AgentEvents, AgentStart,
 use wisp_protocol::{
     AccountChoice, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
     AgentApproveResult, AgentCancelParams, AgentEventsParams, AgentOutcome, AgentOutputItem,
-    AgentStatus, ApprovalId, ErrorKind, EventsEventParams, ProjectStartParams, RunId, WispEvent,
+    AgentStartParams, AgentStatus, ApprovalId, ErrorKind, EventsEventParams, ProjectStartParams,
+    RunId, WispEvent,
 };
 use wispd::backend::fake::{AskedApproval, Step};
 
@@ -67,15 +68,24 @@ fn asking(asked: AskedApproval) -> Vec<Step> {
     ]
 }
 
-/// Starts a worker on `host`'s script in a new project, with a client subscribed to its events.
-async fn start_worker(host: &Host) -> (Conn, RunId) {
+/// Starts a worker on `host`'s script in a new project, with a client subscribed to its events,
+/// answering its permission requests when `approvals`.
+async fn start_run(host: &Host, approvals: bool) -> (Conn, RunId) {
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
     subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Run the tests");
+    let params = AgentStartParams {
+        approvals,
+        ..start_params(project.id, "Run the tests")
+    };
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
     (client, run_id)
+}
+
+/// [`start_run`] for a client that answers permission requests.
+async fn start_worker(host: &Host) -> (Conn, RunId) {
+    start_run(host, true).await
 }
 
 /// [`start_worker`], once its permission request is logged.
@@ -240,6 +250,33 @@ async fn an_allowed_request_reaches_the_cli_and_its_answer_is_logged_once() {
     assert_eq!(client.call::<AgentApprove>(allow).await.unwrap(), allowed);
     let deny = answer(run_id, approval_id, AgentApprovalAnswer::Deny);
     assert_eq!(client.call::<AgentApprove>(deny).await.unwrap(), allowed);
+}
+
+/// A client that doesn't set `approvals`, such as an app from before them, gets what it always
+/// did: its run never asks, and so has no request to answer.
+#[tokio::test]
+async fn a_run_started_without_approvals_never_asks() {
+    let script = vec![
+        init("approval-1"),
+        Step::RequestApproval(bash()),
+        end_turn("Done."),
+    ];
+    let host = host(script, NEVER);
+    let (mut client, run_id) = start_run(&host, false).await;
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert!(
+        events.iter().all(|event| requested(event).is_empty()),
+        "{events:#?}"
+    );
+    assert!(
+        !logged(&mut client, run_id)
+            .await
+            .iter()
+            .any(|item| matches!(item, AgentOutputItem::ApprovalRequested { .. }))
+    );
+    let any = answer(run_id, ApprovalId::generate(), AgentApprovalAnswer::Allow);
+    let error = client.call::<AgentApprove>(any).await.unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::ApprovalNotFound);
 }
 
 #[tokio::test]
@@ -506,6 +543,7 @@ async fn a_coordinator_asks_too() {
         effort: None,
         permission: None,
         images: Vec::new(),
+        approvals: true,
     };
     let run_id = params.run_id;
     client.call::<ProjectStart>(params).await.unwrap();

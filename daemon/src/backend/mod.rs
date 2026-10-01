@@ -174,6 +174,10 @@ pub struct RunRequest {
     /// wispd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
     /// Routing drops them for every other role, and a backend refuses them on a worker.
     pub coordinator_tools: Option<CoordinatorTools>,
+    /// The client answers permission requests (RYA-222, 0031): a CLI that can ask before a tool
+    /// call asks through [`Event::ApprovalRequested`] and [`Run::answer`]. Without it, the CLI
+    /// runs as it did before, denying what would prompt.
+    pub approvals: bool,
 }
 
 /// How a coordinator's CLI launches `wispd mcp` (0019): the server is bound to one project and one

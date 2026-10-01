@@ -12,7 +12,9 @@
 //!
 //! The child gets its arguments as the vendor CLIs would: the resume id, the prompt as a JSON
 //! string, the policy, and the model. Follow-ups reach it on stdin, one JSON string per line, and
-//! so do answers to its permission requests (RYA-222), each a JSON object in that string.
+//! so do answers to its permission requests (RYA-222), each a JSON object in that string. As
+//! Claude Code without its prompt channel denies instead of asking, a run without
+//! [`RunRequest::approvals`] skips the script's requests and takes no answers.
 //! With an API key account, the key is in `FAKE_API_KEY`; with a subscription it is scrubbed, as
 //! 0004 has the Claude backend do with Anthropic's variables. Like every backend, it refuses a
 //! workspace-write run without a [`WorkerSandbox`](super::WorkerSandbox) (0013), though it
@@ -339,7 +341,8 @@ impl Backend for FakeBackend {
         switch.arm(process.signals().clone(), self.cancel);
         let (handle, control) = RunHandle::new(request.run_id, self.follow_ups, switch.clone());
         // Answers reach the CLI on stdin, as follow-ups do.
-        let (handle, answers) = if self.follow_ups {
+        let asks = self.follow_ups && request.approvals;
+        let (handle, answers) = if asks {
             let (handle, answers) = handle.with_answers();
             (handle, Some(answers))
         } else {
@@ -502,6 +505,7 @@ async fn drive(
     let mut state = State {
         switch,
         turns: VecDeque::from([first_turn]),
+        asks: answers.is_some(),
         approvals: HashSet::new(),
         reported: None,
         last_result: None,
@@ -603,6 +607,8 @@ struct State {
     switch: CancelSwitch,
     /// Turns the CLI has taken but not finished, oldest first.
     turns: VecDeque<Option<TurnId>>,
+    /// Whether the run takes permission requests: [`RunRequest::approvals`], with a stdin.
+    asks: bool,
     /// Permission requests the CLI waits on.
     approvals: HashSet<ApprovalId>,
     /// The outcome the CLI reported itself, before any cancel.
@@ -650,6 +656,10 @@ impl State {
                 if !self.switch.is_cancelled() && self.reported.is_none() {
                     self.reported = Some(outcome);
                 }
+                return Parsed::Event(None);
+            }
+            // A run that takes no answers never asks, as Claude Code without its prompt channel.
+            Event::ApprovalRequested(_) | Event::ApprovalWithdrawn { .. } if !self.asks => {
                 return Parsed::Event(None);
             }
             Event::ApprovalRequested(request) => {

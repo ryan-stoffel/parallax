@@ -1028,6 +1028,7 @@ impl Actor {
             effort: self.row.fields.effort.as_deref().and_then(option_value),
             permission: self.row.fields.permission.as_deref().and_then(option_value),
             coordinator_tools: tools,
+            approvals: self.row.fields.approvals,
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
             Ok(started) => {
@@ -1549,6 +1550,7 @@ mod tests {
                 model: None,
                 effort: None,
                 permission: None,
+                approvals: false,
             },
             state: RunState {
                 status: "running".to_owned(),

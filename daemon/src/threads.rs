@@ -320,6 +320,7 @@ pub(crate) async fn start(
         permission,
         branch_slug,
         images,
+        approvals,
     } = params;
     if let Some(slug) = &branch_slug
         && !valid_branch_slug(slug)
@@ -385,6 +386,7 @@ pub(crate) async fn start(
             effort,
             permission,
         },
+        approvals,
         thread: Some(NewThread {
             scratch: scratch.clone(),
             branch_slug,

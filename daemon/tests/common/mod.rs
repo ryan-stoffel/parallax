@@ -48,6 +48,7 @@ pub fn worker_request(
         effort: None,
         permission: None,
         coordinator_tools: None,
+        approvals: false,
     };
     (request, temp)
 }

@@ -91,8 +91,8 @@ pub enum ErrorKind {
     ImageTooLarge,
     /// No image of the run has the given id (RYA-191).
     ImageNotFound,
-    /// The run has no permission request with the given id, or none this wispd has seen since
-    /// it started (RYA-222).
+    /// The run has no permission request with the given id, as a run started without
+    /// `approvals` never has, or none this wispd has seen since it started (RYA-222).
     ApprovalNotFound,
     /// A kind this version does not know yet.
     #[serde(other)]

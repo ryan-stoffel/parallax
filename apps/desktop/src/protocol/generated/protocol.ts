@@ -1150,6 +1150,15 @@ export type AgentStartParams = {
 	 * retry must repeat them; wispd doesn't compare them.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Forward the run's permission requests to the client as `approvalRequested` items, which
+	 * `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
+	 * answers them, and only to a wispd that advertises `approvals`. Absent, a run in Manual,
+	 * Auto, or Plan denies what would prompt, as before. A run with a `coordinatorThread` also
+	 * gets it when its coordinator has it. The run keeps it when it resumes, and a retry must
+	 * repeat it.
+	 */
+	approvals?: boolean,
 };
 
 /**
@@ -2266,7 +2275,8 @@ export type AgentOpenPrResult = {
  * `approvalRequested`.
  *
  * Idempotent: answering a request that is already resolved changes nothing, and returns how it
- * was resolved, which may be another answer, a timeout, or a cancel.
+ * was resolved, which may be another answer, a timeout, or a cancel. A run started without
+ * `approvals` has no requests, so any answer for it fails with `approvalNotFound`.
  */
 export type AgentApproveParams = {
 	/**
@@ -2427,6 +2437,10 @@ export type ThreadStartParams = {
 	 * Images for the first message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Forward the agent's permission requests to the client, as `agent/start` takes it.
+	 */
+	approvals?: boolean,
 };
 
 /**
@@ -2533,6 +2547,11 @@ export type ProjectStartParams = {
 	 * Images for the first message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Forward the coordinator's permission requests to the client, as `agent/start` takes it.
+	 * The runs it spawns forward theirs too.
+	 */
+	approvals?: boolean,
 };
 
 /**

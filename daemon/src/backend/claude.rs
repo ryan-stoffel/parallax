@@ -110,13 +110,15 @@
 //! # Permission requests
 //!
 //! In Manual, Auto, and Plan, a worker's, a thread's, or a coordinator's CLI gets
-//! [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its `canUseTool` (RYA-222, 0031).
+//! [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its `canUseTool` (RYA-222, 0031), when
+//! its client answers permission requests ([`RunRequest::approvals`]).
 //! Instead of denying a tool call nobody approved, the CLI writes a `can_use_tool` control request
 //! on stdout and waits. The driver reports it as [`Event::ApprovalRequested`] and writes the
 //! answer that [`Run::answer`] gives as a `control_response` on stdin, which stays open while a
 //! request waits. A `control_cancel_request` withdraws one, and any other control request gets an
-//! error response. Accept Edits and Bypass Permissions never ask, and a plain no-write run denies
-//! what isn't allowed (`dontAsk`), so their CLIs run as before.
+//! error response. Accept Edits and Bypass Permissions never ask, a plain no-write run denies
+//! what isn't allowed (`dontAsk`), and a run without `approvals` denies what would prompt, so
+//! their CLIs run as before.
 //!
 //! # Cancel
 //!
@@ -602,14 +604,16 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
 }
 
 /// Whether `request`'s CLI asks wispd before a tool call that would prompt (RYA-222, 0031): a
-/// worker, a thread, or a coordinator in Manual, Auto, or Plan. Accept Edits and Bypass
-/// Permissions don't ask about what they run, and a plain no-write run denies anything not
-/// allowed (`dontAsk`).
+/// worker, a thread, or a coordinator in Manual, Auto, or Plan, whose client answers
+/// ([`RunRequest::approvals`]). Accept Edits and Bypass Permissions don't ask about what they run,
+/// a plain no-write run denies anything not allowed (`dontAsk`), and a run without `approvals`
+/// denies what would prompt, as headless Claude Code does.
 #[must_use]
 pub fn prompts(request: &RunRequest) -> bool {
     let plain_no_write =
         request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none();
-    !plain_no_write
+    request.approvals
+        && !plain_no_write
         && matches!(
             request.permission,
             Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)

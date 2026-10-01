@@ -9,8 +9,10 @@
 //! `agent/send` and `agent/cancel`, and when a CLI process ends, commits the worktree through
 //! #166's hardened `commit_all` and reports `agent.diffReady`.
 //!
-//! A run whose CLI asks before a tool call (RYA-222, decision 0031) logs the request, takes
+//! A run whose client started it with `approvals`, and a subagent of a coordinator that has them,
+//! lets its CLI ask before a tool call (RYA-222, decision 0031). It logs the request, takes
 //! `agent/approve`'s answer, and denies it itself when nobody answers in time ([`approvals`]).
+//! Every launch of the run, a resume included, keeps the flag.
 //!
 //! A run outlives its CLI processes: `agent/send` to a run whose CLI has ended resumes the
 //! vendor session in the same worktree. When wispd stops, running CLIs are cancelled and their
@@ -479,7 +481,7 @@ async fn existing(
             ErrorKind::IdConflict,
             format!(
                 "run {run_id} exists with a different project, prompt, account, policy, \
-                 coordinator thread, model, effort, or permission"
+                 coordinator thread, model, effort, permission, or approvals"
             ),
         ));
     }
@@ -577,26 +579,35 @@ async fn record(
 }
 
 /// A coordinator's subagent runs in the coordinator's current permission mode unless it names its
-/// own (0027): sets `options`' permission to the mode of the coordinator whose thread is
-/// `coordinator_thread`, its own run (0024), and returns it. The coordinator's mode only changes
-/// between its turns, so a retried spawn from the same turn inherits the same one.
+/// own (0027), and forwards its permission requests when the coordinator does (0031): sets
+/// `options`' permission to the mode of the coordinator whose thread is `coordinator_thread`, its
+/// own run (0024), sets `approvals` when that run has them, and returns the inherited mode. The
+/// coordinator's mode only changes between its turns, and its `approvals` never do, so a retried
+/// spawn from the same turn inherits the same.
 // ponytail: `create` drops an inherited mode the subagent's backend lacks, so a retry of that
 // spawn gets idConflict; keep requested and inherited modes apart if that bites.
-async fn inherit_permission(
+async fn inherit(
     daemon: &Arc<Daemon>,
     coordinator_thread: Option<CoordinatorThreadId>,
     options: &mut RunOptions,
+    approvals: &mut bool,
 ) -> Result<Option<AgentPermission>, ErrorObject> {
-    let Some(thread) = coordinator_thread.filter(|_| options.permission.is_none()) else {
+    let Some(thread) = coordinator_thread else {
         return Ok(None);
     };
     let id = Uuid::from(thread);
-    let row = store(daemon, move |db| {
+    let Some(row) = store(daemon, move |db| {
         db.get_run(id).map_err(|e| store_error(&e))
     })
-    .await?;
-    options.permission =
-        row.and_then(|row| row.fields.permission.as_deref().and_then(option_value));
+    .await?
+    else {
+        return Ok(None);
+    };
+    *approvals |= row.fields.approvals;
+    if options.permission.is_some() {
+        return Ok(None);
+    }
+    options.permission = row.fields.permission.as_deref().and_then(option_value);
     Ok(options.permission)
 }
 
@@ -627,6 +638,7 @@ pub(crate) async fn start(
         effort,
         permission,
         images,
+        approvals,
         ..
     } = params;
     let new = NewRun {
@@ -641,6 +653,7 @@ pub(crate) async fn start(
             effort,
             permission,
         },
+        approvals,
         thread: None,
     };
     Ok(create(daemon, new).await?.run)
@@ -659,6 +672,8 @@ pub(crate) struct NewRun {
     /// The coordinator thread starting the run through `wispd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
     pub options: RunOptions,
+    /// The client answers the run's permission requests (RYA-222, 0031).
+    pub approvals: bool,
     pub thread: Option<NewThread>,
 }
 
@@ -688,10 +703,11 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         account,
         coordinator_thread,
         mut options,
+        mut approvals,
         thread,
     } = new;
     let _starting = agents.start_guard(run_id).await;
-    let inherited = inherit_permission(&daemon, coordinator_thread, &mut options).await?;
+    let inherited = inherit(&daemon, coordinator_thread, &mut options, &mut approvals).await?;
     // What the request asks for, as the runs table stores it. Routing fills in the backend below.
     let mut fields = RunFields {
         project_id: project.into(),
@@ -703,6 +719,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
+        approvals,
     };
 
     if let Some(run) = existing(&daemon, run_id, &fields).await? {

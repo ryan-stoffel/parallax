@@ -19,6 +19,7 @@ fn fields(project_id: Uuid) -> RunFields {
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         permission: None,
+        approvals: false,
     }
 }
 
@@ -54,6 +55,23 @@ fn a_run_keeps_the_coordinator_thread_that_started_it() {
     assert_eq!(read.fields.coordinator_thread, Some(thread));
     let listed = store.list_runs(Some(project)).unwrap();
     assert_eq!(listed[0].fields, tagged);
+}
+
+/// RYA-222: whether a run forwards its permission requests is kept with it, for every launch.
+#[test]
+fn a_run_keeps_whether_it_forwards_permission_requests() {
+    let (_dir, store) = open();
+    let (project, asking, quiet) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let forwarding = RunFields {
+        approvals: true,
+        ..fields(project)
+    };
+    store.create_run(asking, &forwarding, &starting()).unwrap();
+    store
+        .create_run(quiet, &fields(project), &starting())
+        .unwrap();
+    assert!(store.get_run(asking).unwrap().unwrap().fields.approvals);
+    assert!(!store.get_run(quiet).unwrap().unwrap().fields.approvals);
 }
 
 #[test]

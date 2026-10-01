@@ -365,6 +365,7 @@ mod tests {
                     model: None,
                     effort: None,
                     permission: None,
+                    approvals: false,
                 };
                 let state = RunState {
                     status: "running".to_owned(),

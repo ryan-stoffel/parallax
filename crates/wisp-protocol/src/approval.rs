@@ -1,9 +1,10 @@
 //! Permission requests, behind the `approvals` capability (RYA-222, decision 0031).
 //!
 //! A run whose CLI would ask before a tool call (Claude Code in Manual, Auto, or Plan) asks the
-//! app instead of denying it. The request is an `approvalRequested` item in the run's
-//! transcript, `agent/approve` answers it, and an `approvalResolved` item says how it ended:
-//! the user's answer, a timeout, a cancel, a stop, or the CLI no longer asking.
+//! app instead of denying it, when the client started it with `approvals`. The request is an
+//! `approvalRequested` item in the run's transcript, `agent/approve` answers it, and an
+//! `approvalResolved` item says how it ended: the user's answer, a timeout, a cancel, a stop, or
+//! the CLI no longer asking.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -80,7 +81,8 @@ pub enum AgentApprovalBy {
 /// `approvalRequested`.
 ///
 /// Idempotent: answering a request that is already resolved changes nothing, and returns how it
-/// was resolved, which may be another answer, a timeout, or a cancel.
+/// was resolved, which may be another answer, a timeout, or a cancel. A run started without
+/// `approvals` has no requests, so any answer for it fails with `approvalNotFound`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentApproveParams {
@@ -127,6 +129,7 @@ mod tests {
     use serde_json::json;
 
     use super::{AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams};
+    use crate::ThreadStartParams;
 
     #[test]
     fn unknown_values_decode_as_unknown() {
@@ -158,5 +161,27 @@ mod tests {
         assert!(value.get("always").is_none());
         assert!(value.get("input").is_none());
         assert!(value.get("message").is_none());
+    }
+
+    /// An older client never sends `approvals`, so its runs keep denying what would prompt.
+    #[test]
+    fn a_start_asks_for_approvals_only_when_it_says_so() {
+        let older: ThreadStartParams = serde_json::from_value(json!({
+            "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+            "prompt": "Fix the flaky test.",
+        }))
+        .unwrap();
+        assert!(!older.approvals);
+        assert!(
+            serde_json::to_value(&older)
+                .unwrap()
+                .get("approvals")
+                .is_none()
+        );
+        let newer = ThreadStartParams {
+            approvals: true,
+            ..older
+        };
+        assert_eq!(serde_json::to_value(&newer).unwrap()["approvals"], true);
     }
 }

@@ -499,6 +499,7 @@ mod tests {
                 effort: None,
                 permission: None,
                 coordinator_tools: None,
+                approvals: false,
             })
             .unwrap();
         let mut seen = Vec::new();

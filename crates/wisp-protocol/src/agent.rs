@@ -541,8 +541,9 @@ pub enum AgentOutputItem {
         /// A short description.
         detail: String,
     },
-    /// The agent asks to use a tool and waits for `agent/approve` (RYA-222, decision 0031). It
-    /// is pending until its `approvalResolved`, or until the run's next `agent.finished`.
+    /// The agent asks to use a tool and waits for `agent/approve` (RYA-222, decision 0031), in a
+    /// run started with `approvals`. It is pending until its `approvalResolved`, or until the
+    /// run's next `agent.finished`.
     ApprovalRequested {
         /// The request's id.
         approval_id: ApprovalId,
@@ -647,6 +648,14 @@ pub struct AgentStartParams {
     /// retry must repeat them; wispd doesn't compare them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
+    /// Forward the run's permission requests to the client as `approvalRequested` items, which
+    /// `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
+    /// answers them, and only to a wispd that advertises `approvals`. Absent, a run in Manual,
+    /// Auto, or Plan denies what would prompt, as before. A run with a `coordinatorThread` also
+    /// gets it when its coordinator has it. The run keeps it when it resumes, and a retry must
+    /// repeat it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approvals: bool,
 }
 
 /// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.

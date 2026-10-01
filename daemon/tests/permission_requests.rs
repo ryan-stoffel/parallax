@@ -1,5 +1,6 @@
-//! Real Claude Code for RYA-222 (0031): in Manual, the CLI asks wispd over stdio before a tool
-//! call that would prompt, and runs it or not on wispd's answer. Each test starts the CLI through
+//! Real Claude Code for RYA-222 (0031): in Manual, a run whose client answers permission requests
+//! asks wispd over stdio before a tool call that would prompt, and runs it or not on wispd's
+//! answer, and a run whose client doesn't is denied as before. Each test starts the CLI through
 //! wispd's own Claude backend, so the arguments, the translator that reads the CLI's
 //! `can_use_tool` request, and the driver that writes the `control_response` are the ones a real
 //! run uses. A local fake Messages API asks for the tool calls, so no account or Anthropic
@@ -79,8 +80,9 @@ fn claude_backend(
     ClaudeBackend::new(Launcher::new(DataDir::new(data).unwrap(), env)).with_program(wrapper())
 }
 
-/// A coordinator in Manual at `cwd`, which is full Claude Code (0027), on an API key. Its wispd
-/// tools' server can't reach a wispd, so it fails to start, which the run doesn't need.
+/// A coordinator in Manual at `cwd`, which is full Claude Code (0027), on an API key, whose
+/// client answers permission requests. Its wispd tools' server can't reach a wispd, so it fails
+/// to start, which the run doesn't need.
 fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
     RunRequest {
         run_id: RunId::generate(),
@@ -104,6 +106,7 @@ fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
             project: ProjectId::generate(),
             thread: CoordinatorThreadId::generate(),
         }),
+        approvals: true,
     }
 }
 
@@ -274,6 +277,34 @@ async fn a_manual_coordinator_skips_bash_that_wispd_denies() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
+/// A coordinator whose client doesn't answer runs as before the prompt channel: Claude Code
+/// denies its Bash without asking anyone, and the turn goes on.
+#[tokio::test]
+async fn a_manual_coordinator_without_approvals_is_denied_without_asking() {
+    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        return;
+    };
+    let folders = Folders::new();
+    let api = fake_api(vec![ToolCall::bash("sh probe.sh")]).await;
+    let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
+    let request = RunRequest {
+        approvals: false,
+        ..coordinator(&folders.project, &folders.data)
+    };
+
+    let events = drive(&backend, request, |asked| {
+        panic!("a run without approvals asked: {asked:?}")
+    })
+    .await;
+    assert!(requests(&events).is_empty(), "{events:#?}");
+    let results = results(&events);
+    assert_eq!(results.len(), 1, "{events:#?}");
+    assert_ne!(results[0].1, ToolStatus::Ok, "{events:#?}");
+    assert!(!folders.project.join("ran").exists(), "the probe never ran");
+    assert_eq!(outcome(&events), &done(), "{events:#?}");
+}
+
 /// A worker in Manual, in its sandbox: its Bash runs without asking, since its settings allow
 /// Bash (0013), and its `Write` asks. wispd allows it, and the file is written.
 #[tokio::test]
@@ -305,6 +336,7 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
     let (mut request, _temp) =
         worker_request(&folders.home, &folders.data, &worktree, &git_dir, &context);
     request.permission = Some(AgentPermission::Manual);
+    request.approvals = true;
     request.account.credential = Credential::ApiKey(ApiKey::new(KEY.into()));
 
     let events = drive(&backend, request, |_| Decision::Allow {

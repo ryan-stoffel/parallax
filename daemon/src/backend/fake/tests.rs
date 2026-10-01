@@ -72,6 +72,7 @@ fn request(cwd: &Path) -> RunRequest {
         effort: None,
         permission: None,
         coordinator_tools: None,
+        approvals: false,
     }
 }
 
@@ -743,6 +744,14 @@ async fn backends_work_behind_trait_objects() {
     }
 }
 
+/// A run whose client answers permission requests (RYA-222).
+fn answering(cwd: &Path) -> RunRequest {
+    RunRequest {
+        approvals: true,
+        ..request(cwd)
+    }
+}
+
 /// The script's permission request, the first one the run reports after its session.
 async fn asked(events: &mut EventStream) -> ApprovalRequest {
     assert!(matches!(next(events).await, Event::SessionStarted { .. }));
@@ -771,7 +780,7 @@ async fn a_permission_request_takes_its_first_answer() {
     )
     .unwrap();
     let backend = FakeBackend::new(launcher(), script);
-    let Started { run, mut events } = launch(&backend, request(&root())).await;
+    let Started { run, mut events } = launch(&backend, answering(&root())).await;
     let request = asked(&mut events).await;
     assert_eq!(request.tool_name, "Bash");
     assert_eq!(request.input, json!({"command": "pnpm test"}));
@@ -817,7 +826,7 @@ async fn a_withdrawn_request_takes_no_answer() {
     )
     .unwrap();
     let backend = FakeBackend::new(launcher(), script);
-    let Started { run, mut events } = launch(&backend, request(&root())).await;
+    let Started { run, mut events } = launch(&backend, answering(&root())).await;
     let request = asked(&mut events).await;
     assert!(request.interactive);
     assert_eq!(
@@ -851,11 +860,11 @@ async fn a_withdrawn_request_takes_no_answer() {
 async fn approvals_need_a_request_and_a_stdin() {
     let script = Script::from_json(r#"["withdrawApproval"]"#).unwrap();
     assert!(matches!(
-        FakeBackend::new(launcher(), script).start(request(&root())),
+        FakeBackend::new(launcher(), script).start(answering(&root())),
         Err(StartError::Invalid(_))
     ));
     let backend = backend("follow-up").without_follow_ups();
-    let Started { run, mut events } = launch(&backend, request(&root())).await;
+    let Started { run, mut events } = launch(&backend, answering(&root())).await;
     let answer = Answer {
         approval_id: ApprovalId::generate(),
         decision: Decision::Allow {
@@ -865,6 +874,45 @@ async fn approvals_need_a_request_and_a_stdin() {
     };
     assert_eq!(run.answer(answer), Err(AnswerError::Unsupported));
     rest(&mut events).await;
+}
+
+/// RYA-222: a run whose client doesn't answer never asks, as Claude Code without its prompt
+/// channel denies instead: the script's requests are skipped, and answers are refused.
+#[tokio::test]
+async fn a_run_without_approvals_never_asks() {
+    let script = Script::from_json(
+        r#"[
+            {"init": {"sessionId": "approval-3"}},
+            {"requestApproval": {"toolName": "Bash", "input": {"command": "pnpm test"}}},
+            "withdrawApproval",
+            {"endTurn": {"result": "Denied, as before."}}
+        ]"#,
+    )
+    .unwrap();
+    let backend = FakeBackend::new(launcher(), script);
+    let Started { run, mut events } = launch(&backend, request(&root())).await;
+    let answer = Answer {
+        approval_id: ApprovalId::generate(),
+        decision: Decision::Allow {
+            input: None,
+            always: false,
+        },
+    };
+    assert_eq!(run.answer(answer), Err(AnswerError::Unsupported));
+    let all = rest(&mut events).await;
+    assert!(
+        !all.iter().any(|event| matches!(
+            event,
+            Event::ApprovalRequested(_) | Event::ApprovalWithdrawn { .. }
+        )),
+        "{all:?}"
+    );
+    assert_eq!(
+        outcome(&all),
+        &Outcome::Completed {
+            result: Some("Denied, as before.".into())
+        }
+    );
 }
 
 #[cfg(not(feature = "fake-backend"))]
