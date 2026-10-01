@@ -498,6 +498,7 @@ fi"#;
             effort: None,
             permission: None,
             coordinator_tools: None,
+            approvals: false,
         };
         let mut started = backend.start(request).unwrap();
         loop {

@@ -99,6 +99,9 @@ pub struct Config {
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
     /// default, is wispd's own with the usual install folders on `PATH` (#96, decision 0014).
     pub agent_environment: Option<Environment>,
+    /// How long a run's permission request waits for an answer before wispd denies it (RYA-222,
+    /// decision 0031). 30 minutes by default.
+    pub approval_timeout: Duration,
 }
 
 impl Config {
@@ -117,6 +120,7 @@ impl Config {
             outbound_queue: 32,
             backends: None,
             agent_environment: None,
+            approval_timeout: agents::APPROVAL_TIMEOUT,
         }
     }
 }
@@ -332,7 +336,7 @@ impl Server {
             keys: keystore::system_store(),
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
-            agents: Agents::new(backends, worktrees),
+            agents: Agents::new(backends, worktrees).with_approval_timeout(config.approval_timeout),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for

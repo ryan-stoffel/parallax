@@ -11,7 +11,10 @@
 //! [`CancelSwitch`] stop the process directly, and leaves usage totals to [`EventSink`].
 //!
 //! The child gets its arguments as the vendor CLIs would: the resume id, the prompt as a JSON
-//! string, the policy, and the model. Follow-ups reach it on stdin, one JSON string per line.
+//! string, the policy, and the model. Follow-ups reach it on stdin, one JSON string per line, and
+//! so do answers to its permission requests (RYA-222), each a JSON object in that string. As
+//! Claude Code without its prompt channel denies instead of asking, a run without
+//! [`RunRequest::approvals`] skips the script's requests and takes no answers.
 //! With an API key account, the key is in `FAKE_API_KEY`; with a subscription it is scrubbed, as
 //! 0004 has the Claude backend do with Anthropic's variables. Like every backend, it refuses a
 //! workspace-write run without a [`WorkerSandbox`](super::WorkerSandbox) (0013), though it
@@ -20,7 +23,7 @@
 //! Outside unit tests, a `wispd` built with the `fake-backend` feature runs every worker on this
 //! backend when [`SCRIPT_ENV`] names a script, for the app's end-to-end tests (RYA-16).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::io;
@@ -31,14 +34,16 @@ use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
-use super::event::{Event, Failure, FailureKind, ModelUsage, Outcome, WarningKind};
+use super::event::{
+    ApprovalRequest, Event, Failure, FailureKind, ModelUsage, Outcome, WarningKind,
+};
 use super::process::{
     CancelPolicy, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, StdinMode, StdinPipe,
 };
 use super::sandbox::worker_sandbox;
 use super::{
-    Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, EventSink, FollowUp, RunHandle,
-    RunRequest, StartError, Started, ToolPolicy, TurnId,
+    Answer, ApprovalId, Backend, CancelSwitch, Capabilities, Credential, Decision, EVENT_BUFFER,
+    EventSink, FollowUp, RunHandle, RunRequest, StartError, Started, ToolPolicy, TurnId,
 };
 
 // The feature swaps real agents for scripted ones, so no release may ever have it.
@@ -117,6 +122,17 @@ pub enum Step {
     /// Waits for a follow-up on stdin and prints [`Event::Text`] with it. Exits with code 0 if
     /// stdin ends first.
     AwaitFollowUp,
+    /// Prints [`Event::ApprovalRequested`] with a new approval id, as Claude Code's
+    /// `can_use_tool` asks whether a tool call may run (RYA-222).
+    RequestApproval(AskedApproval),
+    /// Waits for the answer to a permission request on stdin and prints [`Event::Text`] with
+    /// it, as JSON: `{"approvalId", "decision": "allow", "input"?, "always"?}` or
+    /// `{"approvalId", "decision": "deny", "message", "interrupt"}`. Exits with code 0 if stdin
+    /// ends first.
+    AwaitApproval,
+    /// Prints [`Event::ApprovalWithdrawn`] for the script's last `requestApproval`, as Claude
+    /// Code's `control_cancel_request` does when its turn is interrupted.
+    WithdrawApproval,
     /// Writes `content` to the file at `path`, relative to the working directory or absolute,
     /// replacing it, as an agent's edit would.
     WriteFile {
@@ -139,6 +155,49 @@ pub enum Step {
     IgnoreInterrupt,
     /// Waits forever.
     Hang,
+}
+
+/// What a [`Step::RequestApproval`] asks. In JSON, `toolName` and any of the rest.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AskedApproval {
+    /// The tool.
+    pub tool_name: String,
+    /// Its input, `{}` by default.
+    #[serde(default = "empty_input")]
+    pub input: serde_json::Value,
+    /// The tool call's id.
+    #[serde(default)]
+    pub call_id: Option<String>,
+    /// Why the CLI asks.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The rules an answer with `always` adds.
+    #[serde(default)]
+    pub always_allow: Vec<String>,
+    /// Whether the request is a question for the user, as `ExitPlanMode`'s is.
+    #[serde(default)]
+    pub interactive: bool,
+}
+
+impl AskedApproval {
+    fn request(&self, approval_id: ApprovalId) -> ApprovalRequest {
+        ApprovalRequest {
+            approval_id,
+            tool_name: self.tool_name.clone(),
+            input: self.input.clone(),
+            call_id: self.call_id.clone(),
+            reason: self.reason.clone(),
+            blocked_path: None,
+            subagent: None,
+            always_allow: self.always_allow.clone(),
+            interactive: self.interactive,
+        }
+    }
+}
+
+fn empty_input() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
 }
 
 /// A [`Backend`] that runs a [`Script`].
@@ -281,12 +340,27 @@ impl Backend for FakeBackend {
         let switch = CancelSwitch::new();
         switch.arm(process.signals().clone(), self.cancel);
         let (handle, control) = RunHandle::new(request.run_id, self.follow_ups, switch.clone());
+        // Answers reach the CLI on stdin, as follow-ups do.
+        let asks = self.follow_ups && request.approvals;
+        let (handle, answers) = if asks {
+            let (handle, answers) = handle.with_answers();
+            (handle, Some(answers))
+        } else {
+            (handle, None)
+        };
         let baseline = request
             .resume
             .map(|resume| resume.usage_totals)
             .unwrap_or_default();
         let (sink, events) = EventSink::channel(EVENT_BUFFER, baseline);
-        tokio::spawn(drive(process, control, sink, switch, request.turn_id));
+        tokio::spawn(drive(
+            process,
+            control,
+            answers,
+            sink,
+            switch,
+            request.turn_id,
+        ));
         Ok(Started {
             run: Arc::new(handle),
             events,
@@ -300,30 +374,43 @@ enum Delivery {
     Failed(TurnId),
 }
 
-/// Writes follow-ups to stdin in order, off the driver's loop, so a CLI that stops reading stdin
-/// can't keep the driver from reading its stdout.
-async fn write_follow_ups(
+/// A line for the CLI's stdin.
+enum Input {
+    /// A follow-up, whose delivery is reported.
+    FollowUp(FollowUp),
+    /// An answer to a permission request, as [`answer_json`] writes it (RYA-222).
+    Answer(String),
+}
+
+/// Writes follow-ups and answers to stdin in order, off the driver's loop, so a CLI that stops
+/// reading stdin can't keep the driver from reading its stdout.
+async fn write_inputs(
     mut stdin: StdinPipe,
-    mut queue: mpsc::UnboundedReceiver<FollowUp>,
+    mut queue: mpsc::UnboundedReceiver<Input>,
     results: mpsc::UnboundedSender<Delivery>,
 ) {
     let mut broken = false;
-    while let Some(follow_up) = queue.recv().await {
-        let mut line = json_string(&follow_up.text);
+    while let Some(input) = queue.recv().await {
+        let (mut line, turn_id) = match input {
+            Input::FollowUp(follow_up) => (json_string(&follow_up.text), Some(follow_up.turn_id)),
+            Input::Answer(answer) => (json_string(&answer), None),
+        };
         line.push('\n');
         broken = broken || stdin.write_all(line.as_bytes()).await.is_err();
-        let result = if broken {
-            Delivery::Failed(follow_up.turn_id)
-        } else {
-            Delivery::Written(follow_up.turn_id)
-        };
-        let _ = results.send(result);
+        if let Some(turn_id) = turn_id {
+            let result = if broken {
+                Delivery::Failed(turn_id)
+            } else {
+                Delivery::Written(turn_id)
+            };
+            let _ = results.send(result);
+        }
     }
 }
 
-/// The follow-ups' way to the CLI: a queue into [`write_follow_ups`], and its results.
+/// The CLI's stdin: a queue into [`write_inputs`], and its results.
 struct Stdin {
-    queue: Option<mpsc::UnboundedSender<FollowUp>>,
+    queue: Option<mpsc::UnboundedSender<Input>>,
     results: Option<mpsc::UnboundedReceiver<Delivery>>,
     writer: Option<tokio::task::JoinHandle<()>>,
 }
@@ -344,7 +431,7 @@ impl Stdin {
         Self {
             queue: Some(queue),
             results: Some(results_rx),
-            writer: Some(tokio::spawn(write_follow_ups(stdin, queue_rx, results))),
+            writer: Some(tokio::spawn(write_inputs(stdin, queue_rx, results))),
         }
     }
 
@@ -358,7 +445,7 @@ impl Stdin {
         control.close();
         while let Ok(follow_up) = control.try_recv() {
             if let Some(queue) = &self.queue {
-                let _ = queue.send(follow_up);
+                let _ = queue.send(Input::FollowUp(follow_up));
             }
         }
         drop(self.queue.take());
@@ -378,12 +465,38 @@ impl Stdin {
     }
 }
 
-/// Runs one fake run: forwards the CLI's events, delivers follow-ups, and decides the outcome
-/// when the CLI exits. Cancelling doesn't go through here: the run's handle signals the process
-/// through `switch`, so it works even while this task waits for a consumer that isn't reading.
+/// An answer as the fake CLI reads it and [`Step::AwaitApproval`] prints it: `{"approvalId",
+/// "decision": "allow", "input"?, "always"?}` or `{"approvalId", "decision": "deny", "message",
+/// "interrupt"}`.
+fn answer_json(answer: &Answer) -> String {
+    let mut json = serde_json::json!({"approvalId": answer.approval_id});
+    match &answer.decision {
+        Decision::Allow { input, always } => {
+            json["decision"] = "allow".into();
+            if let Some(input) = input {
+                json["input"] = input.clone();
+            }
+            if *always {
+                json["always"] = true.into();
+            }
+        }
+        Decision::Deny { message, interrupt } => {
+            json["decision"] = "deny".into();
+            json["message"] = message.as_str().into();
+            json["interrupt"] = (*interrupt).into();
+        }
+    }
+    json.to_string()
+}
+
+/// Runs one fake run: forwards the CLI's events, delivers follow-ups and answers, and decides the
+/// outcome when the CLI exits. Cancelling doesn't go through here: the run's handle signals the
+/// process through `switch`, so it works even while this task waits for a consumer that isn't
+/// reading.
 async fn drive(
     mut process: Process,
     mut control: mpsc::UnboundedReceiver<FollowUp>,
+    mut answers: Option<mpsc::UnboundedReceiver<Answer>>,
     mut sink: EventSink,
     switch: CancelSwitch,
     first_turn: Option<TurnId>,
@@ -392,6 +505,8 @@ async fn drive(
     let mut state = State {
         switch,
         turns: VecDeque::from([first_turn]),
+        asks: answers.is_some(),
+        approvals: HashSet::new(),
         reported: None,
         last_result: None,
     };
@@ -446,9 +561,17 @@ async fn drive(
                     state.switch.cancel();
                 }
             }
+            // Only a request the CLI still waits on gets its answer, once.
+            Some(answer) = recv(&mut answers) => {
+                if state.approvals.remove(&answer.approval_id)
+                    && let Some(queue) = &stdin.queue
+                {
+                    let _ = queue.send(Input::Answer(answer_json(&answer)));
+                }
+            }
             follow_up = control.recv(), if control_open => match follow_up {
                 Some(follow_up) => match &stdin.queue {
-                    Some(queue) if queue.send(follow_up.clone()).is_ok() => {}
+                    Some(queue) if queue.send(Input::FollowUp(follow_up.clone())).is_ok() => {}
                     _ => {
                         let dropped = Event::FollowUpDropped { turn_id: follow_up.turn_id };
                         let _ = sink.emit(dropped).await;
@@ -461,6 +584,10 @@ async fn drive(
     };
 
     stdin.drop_undelivered(&mut control, &mut sink).await;
+    // As the Claude driver does: a request the CLI still waited on ends with it.
+    for approval_id in std::mem::take(&mut state.approvals) {
+        let _ = sink.emit(Event::ApprovalWithdrawn { approval_id }).await;
+    }
     let outcome = state.outcome(exit);
     let _ = sink.finish(outcome).await;
 }
@@ -484,6 +611,10 @@ struct State {
     switch: CancelSwitch,
     /// Turns the CLI has taken but not finished, oldest first.
     turns: VecDeque<Option<TurnId>>,
+    /// Whether the run takes permission requests: [`RunRequest::approvals`], with a stdin.
+    asks: bool,
+    /// Permission requests the CLI waits on.
+    approvals: HashSet<ApprovalId>,
     /// The outcome the CLI reported itself, before any cancel.
     reported: Option<Outcome>,
     last_result: Option<String>,
@@ -530,6 +661,18 @@ impl State {
                     self.reported = Some(outcome);
                 }
                 return Parsed::Event(None);
+            }
+            // A run that takes no answers never asks, as Claude Code without its prompt channel.
+            Event::ApprovalRequested(_) | Event::ApprovalWithdrawn { .. } if !self.asks => {
+                return Parsed::Event(None);
+            }
+            Event::ApprovalRequested(request) => {
+                self.approvals.insert(request.approval_id);
+                Event::ApprovalRequested(request)
+            }
+            Event::ApprovalWithdrawn { approval_id } => {
+                self.approvals.remove(&approval_id);
+                Event::ApprovalWithdrawn { approval_id }
             }
             event => event,
         };
@@ -625,10 +768,18 @@ fn print_text(out: &mut String, word: &str, quoted: bool) {
     }
 }
 
+/// `printf` for one event's line of JSON.
+fn print_event(out: &mut String, event: &Event) -> Result<(), String> {
+    let json = serde_json::to_string(event).map_err(|e| e.to_string())?;
+    writeln!(out, "printf '%s\\n' {}", quote(&json)).expect("infallible");
+    Ok(())
+}
+
 /// Compiles a script into a `/bin/sh` program. It takes `$1` resume id, `$2` prompt as a JSON
 /// string, `$3` policy, and `$4` model.
 fn compile(script: &Script) -> Result<String, String> {
     let mut out = String::from("resume=$1; prompt=$2; policy=$3\n");
+    let mut last_approval = None;
     for step in &script.steps {
         match step {
             Step::Init { session_id, model } => {
@@ -650,10 +801,7 @@ fn compile(script: &Script) -> Result<String, String> {
                     ],
                 );
             }
-            Step::Emit(event) => {
-                let json = serde_json::to_string(event).map_err(|e| e.to_string())?;
-                writeln!(out, "printf '%s\\n' {}", quote(&json)).expect("infallible");
-            }
+            Step::Emit(event) => print_event(&mut out, event)?,
             Step::UsageTotal(total) => {
                 let mut json = serde_json::to_value(total).map_err(|e| e.to_string())?;
                 json["kind"] = "usageTotal".into();
@@ -683,9 +831,20 @@ fn compile(script: &Script) -> Result<String, String> {
                 }
                 print_text(&mut out, &format!("\"${{{name}-<unset>}}\""), false);
             }
-            Step::AwaitFollowUp => {
+            Step::AwaitFollowUp | Step::AwaitApproval => {
                 out.push_str("IFS= read -r line || exit 0\n");
                 print_text(&mut out, "\"$line\"", true);
+            }
+            Step::RequestApproval(asked) => {
+                // A new id for every run, since the script compiles for each.
+                let request = asked.request(ApprovalId::generate());
+                last_approval = Some(request.approval_id);
+                print_event(&mut out, &Event::ApprovalRequested(request))?;
+            }
+            Step::WithdrawApproval => {
+                let approval_id =
+                    last_approval.ok_or("withdrawApproval comes before any requestApproval")?;
+                print_event(&mut out, &Event::ApprovalWithdrawn { approval_id })?;
             }
             Step::WriteFile { path, content } => {
                 writeln!(out, "printf '%s' {} > {}", quote(content), quote(path))
@@ -696,8 +855,7 @@ fn compile(script: &Script) -> Result<String, String> {
                     turn_id: None,
                     result: result.clone(),
                 };
-                let json = serde_json::to_string(&event).map_err(|e| e.to_string())?;
-                writeln!(out, "printf '%s\\n' {}", quote(&json)).expect("infallible");
+                print_event(&mut out, &event)?;
             }
             Step::Exit(code) => writeln!(out, "exit {code}").expect("infallible"),
             Step::Crash => out.push_str("kill -KILL $$\n"),

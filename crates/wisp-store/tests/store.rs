@@ -577,12 +577,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 16,
+        version, 17,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
-         #257), 13 (run options, RYA-97), 14 (wakes, RYA-178), 15 (images, RYA-191), and 16 \
-         (project icons, RYA-227) also apply"
+         #257), 13 (run options, RYA-97), 14 (wakes, RYA-178), 15 (images, RYA-191), 16 \
+         (project icons, RYA-227), and 17 (approvals, RYA-222) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -707,11 +707,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 16,
+        version, 17,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, RYA-97), 14 (wakes, \
-         RYA-178), 15 (images, RYA-191), and 16 (project icons, RYA-227) also apply"
+         RYA-178), 15 (images, RYA-191), 16 (project icons, RYA-227), and 17 (approvals, \
+         RYA-222) also apply"
     );
 }
 

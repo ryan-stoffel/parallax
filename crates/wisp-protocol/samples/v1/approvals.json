@@ -1,0 +1,275 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "project/start",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "prompt": "Add a README, and link it from the docs.",
+      "permission": "plan",
+      "approvals": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "result": {
+      "run": {
+        "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "prompt": "Add a README, and link it from the docs.",
+        "policy": "noWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "coordinatorThread": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "permission": "plan",
+        "approvals": true,
+        "createdAt": "2026-10-01T11:59:58Z",
+        "updatedAt": "2026-10-01T11:59:59Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 12,
+      "time": "2026-10-01T12:00:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "items": [
+          {
+            "kind": "toolCall",
+            "callId": "toolu_01Ap1",
+            "name": "Bash",
+            "input": {"command": "pnpm test", "description": "Run the tests"}
+          },
+          {
+            "kind": "approvalRequested",
+            "approvalId": "01a0f1c2-3d4e-7f50-8a61-7b8c9d0e1f21",
+            "toolName": "Bash",
+            "input": {"command": "pnpm test", "description": "Run the tests"},
+            "callId": "toolu_01Ap1",
+            "alwaysAllow": ["Bash(pnpm test:*)"],
+            "expiresAt": "2026-10-01T12:30:00Z"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/approve",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "approvalId": "01a0f1c2-3d4e-7f50-8a61-7b8c9d0e1f21",
+      "decision": "allow",
+      "always": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "decision": "allowed",
+      "by": "user",
+      "always": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 13,
+      "time": "2026-10-01T12:00:05Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "items": [
+          {
+            "kind": "approvalResolved",
+            "approvalId": "01a0f1c2-3d4e-7f50-8a61-7b8c9d0e1f21",
+            "decision": "allowed",
+            "by": "user",
+            "always": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 14,
+      "time": "2026-10-01T12:01:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "items": [
+          {
+            "kind": "approvalRequested",
+            "approvalId": "01a0f1c3-4e5f-7a61-9b72-8c9d0e1f2a32",
+            "toolName": "ExitPlanMode",
+            "input": {"plan": "1. Add a README.\n2. Link it from the docs."},
+            "callId": "toolu_01Ap2",
+            "interactive": true,
+            "expiresAt": "2026-10-01T12:31:00Z"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/approve",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "approvalId": "01a0f1c3-4e5f-7a61-9b72-8c9d0e1f2a32",
+      "decision": "deny",
+      "message": "Keep planning: cover the changelog too."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "decision": "denied",
+      "by": "user",
+      "message": "Keep planning: cover the changelog too."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 15,
+      "time": "2026-10-01T12:31:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "items": [
+          {
+            "kind": "approvalRequested",
+            "approvalId": "01a0f1c4-5f60-7b72-8c83-9d0e1f2a3b43",
+            "toolName": "Edit",
+            "input": {"file_path": "/Users/me/src/app/.claude/settings.json", "old_string": "{}", "new_string": "{\"hooks\": {}}"},
+            "reason": "Claude requested permissions to edit /Users/me/src/app/.claude/settings.json, which is a sensitive file.",
+            "blockedPath": "/Users/me/src/app/.claude/settings.json",
+            "subagent": "a7f3c2e1",
+            "expiresAt": "2026-10-01T13:01:00Z"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 16,
+      "time": "2026-10-01T13:01:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "items": [
+          {
+            "kind": "approvalResolved",
+            "approvalId": "01a0f1c4-5f60-7b72-8c83-9d0e1f2a3b43",
+            "decision": "expired",
+            "by": "timeout"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "agent/approve",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "approvalId": "01a0f1c4-5f60-7b72-8c83-9d0e1f2a3b43",
+      "decision": "allow",
+      "input": {"file_path": "/Users/me/src/app/.claude/settings.json", "old_string": "{}", "new_string": "{}"}
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "decision": "expired",
+      "by": "timeout"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "agent/approve",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "approvalId": "01a0f1c5-6071-7c83-9d94-0e1f2a3b4c54",
+      "decision": "deny"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32000,
+      "message": "run 01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01 has no permission request 01a0f1c5-6071-7c83-9d94-0e1f2a3b4c54",
+      "data": {
+        "kind": "approvalNotFound"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 17,
+      "time": "2026-10-01T13:05:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "items": [
+          {
+            "kind": "approvalResolved",
+            "approvalId": "01a0f1c6-7182-7d94-8ea5-1f2a3b4c5d65",
+            "decision": "denied",
+            "by": "cancel"
+          },
+          {
+            "kind": "approvalResolved",
+            "approvalId": "01a0f1c7-8293-7ea5-9fb6-2a3b4c5d6e76",
+            "decision": "withdrawn",
+            "by": "agent"
+          },
+          {
+            "kind": "approvalResolved",
+            "approvalId": "01a0f1c8-93a4-7fb6-a0c7-3b4c5d6e7f87",
+            "decision": "denied",
+            "by": "stop"
+          }
+        ]
+      }
+    }
+  }
+]
