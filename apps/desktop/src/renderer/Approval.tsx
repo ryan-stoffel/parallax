@@ -826,6 +826,7 @@ function PlanApprovalCard({
         open={open}
         onToggle={(_, next) => setOpen(next)}
         foldAt={pinnedPlanHeight}
+        openHeight="45vh"
         actions={
           <>
             {/* At the foot, by the buttons, where the fold can't hide it. */}
@@ -868,7 +869,8 @@ function PlanApprovalCard({
 
 /**
  * The pinned card's frame, keyed by request so each one rises into place. As it leaves the page,
- * it says whether focus was in it, so the next card or the composer can take it (`onLeave`).
+ * it says whether focus was in it, so the next card or the composer can take it (`onLeave`). Focus
+ * on the body counts, as when the button pressed turned off while its answer went.
  */
 function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -876,7 +878,8 @@ function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNod
   useLayoutEffect(() => {
     const el = ref.current!;
     return () => {
-      if (el.contains(document.activeElement)) leave();
+      const active = document.activeElement;
+      if (!active || active === document.body || el.contains(active)) leave();
     };
   }, [leave]);
   return (
@@ -964,7 +967,8 @@ export function ApprovalQueue({
   };
   return (
     <>
-      <p role="status" className="sr-only">
+      {/* Always on the page, so a screen reader hears what changes in it. */}
+      <p aria-live="polite" aria-atomic="true" className="sr-only">
         {said.text}
       </p>
       {head && props && (

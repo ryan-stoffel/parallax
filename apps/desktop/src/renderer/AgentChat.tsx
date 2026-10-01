@@ -36,6 +36,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactNode,
 } from "react";
 import Markdown, { type Components } from "react-markdown";
@@ -97,6 +98,23 @@ type ViewRow = Row | Work | PlanRow | ProposedPlanRow;
 const focusComposer = () => document.getElementById("composer-input")?.focus();
 /** A pinned plan's Markdown, rendered as the transcript renders the agent's. */
 const markdown = (text: string) => <MarkdownText text={text} />;
+
+/**
+ * The permission requests waiting on the user, pinned over the composer (RYA-196): tools named as
+ * the transcript names them, and focus back to the composer once the last one goes.
+ */
+export function PinnedApprovals(
+  props: Omit<ComponentProps<typeof ApprovalQueue>, "describe" | "markdown" | "returnFocus">,
+) {
+  return (
+    <ApprovalQueue
+      {...props}
+      describe={describeTool}
+      markdown={markdown}
+      returnFocus={focusComposer}
+    />
+  );
+}
 
 /**
  * An agent run as a chat: its transcript, the composer, and the run's footer.
@@ -292,15 +310,12 @@ export function AgentChat({
       )}
       <div className="mx-auto w-full max-w-3xl px-6 pb-5">
         {/* Requests waiting on the user, pinned so they can't scroll away. */}
-        <ApprovalQueue
+        <PinnedApprovals
           asked={asked}
           answers={answers}
           onAnswer={(a, choice, message) => void answer(a, choice, message)}
           onDismiss={dismiss}
-          describe={describeTool}
-          markdown={markdown}
           disabledReason={connected ? undefined : (disabledReason ?? "Connecting to wispd…")}
-          returnFocus={focusComposer}
         />
         {/* A loaded transcript that stopped updating, a failed Send again, or Open PR. */}
         {(error ?? resendError ?? prError) && rows.length > 0 && (
