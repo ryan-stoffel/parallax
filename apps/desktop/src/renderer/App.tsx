@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
 import { AgentChat } from "./AgentChat";
+import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
 import { ContextPanel } from "./ContextPanel";
 import { NewThread } from "./NewThread";
@@ -61,7 +62,9 @@ export function App() {
 
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
-  const threads = useThreads(host.id, connected);
+  // Runs started here forward their permission requests, only to a wispd that takes the flag.
+  const approvals = connected && "approvals" in connection.capabilities;
+  const threads = useThreads(host.id, connected, approvals);
   const { groups } = groupThreads(threads.state);
   // The open thread's group (No Repo's until wispd lists it), or the new thread's.
   let group = groups[0]!;
@@ -88,7 +91,7 @@ export function App() {
       ? threads.state.projects.find((p) => p.id === selection.projectId)
       : undefined;
   if (selection.kind === "project" && !project) setSelection({ kind: "new" });
-  const agents = useProjectAgents(host.id, project?.id, connected);
+  const agents = useProjectAgents(host.id, project?.id, connected, approvals);
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
   const agent = agents.runs.find((r) => r.id === agentId);
@@ -98,6 +101,18 @@ export function App() {
     setSelection({ kind: "project", projectId: project.id, agentId: id });
     setPanelExpanded(false);
   };
+  // The permission requests the Project's other runs wait on, pinned in whichever of its chats is
+  // open, each named and with a way to its own chat (RYA-196).
+  const othersAsked = (open: string | undefined): Asked[] =>
+    agents.runs.flatMap((run) => {
+      if (run.id === open || !project) return [];
+      const coordinator = run.id === project.coordinator;
+      const from = {
+        label: coordinator ? "Coordinator" : `Subagent: ${titleOf(run)}`,
+        open: () => openAgent(coordinator ? undefined : run.id),
+      };
+      return (agents.waiting[run.id] ?? []).map((approval) => ({ runId: run.id, approval, from }));
+    });
 
   // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
   // back to the coordinator.
@@ -298,6 +313,7 @@ export function App() {
                 prompt={agent?.prompt}
                 // A Project's subagents are kept current.
                 going={isRunning(agent?.status)}
+                others={othersAsked(agentId)}
               />
             ) : (
               project && (
@@ -307,6 +323,7 @@ export function App() {
                   project={project}
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
                   startCoordinator={threads.startCoordinator}
+                  others={othersAsked(project.coordinator)}
                 />
               )
             )}

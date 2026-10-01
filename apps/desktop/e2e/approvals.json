@@ -1,0 +1,37 @@
+[
+  { "init": { "sessionId": "e2e-approvals", "model": "fake-model" } },
+  {
+    "emit": {
+      "kind": "toolCall",
+      "callId": "toolu_e2e_bash",
+      "name": "Bash",
+      "input": { "command": "pnpm test", "description": "Run the tests" }
+    }
+  },
+  {
+    "requestApproval": {
+      "toolName": "Bash",
+      "input": { "command": "pnpm test", "description": "Run the tests" },
+      "callId": "toolu_e2e_bash",
+      "alwaysAllow": ["Bash(pnpm test:*)"]
+    }
+  },
+  "awaitApproval",
+  {
+    "emit": { "kind": "toolCall", "callId": "toolu_e2e_plan", "name": "ExitPlanMode", "input": {} }
+  },
+  {
+    "requestApproval": {
+      "toolName": "ExitPlanMode",
+      "input": {
+        "plan": "1. Tag the release.\n2. Write the changelog.",
+        "planFilePath": "/tmp/e2e-plan.md"
+      },
+      "callId": "toolu_e2e_plan",
+      "interactive": true
+    }
+  },
+  "awaitApproval",
+  { "emit": { "kind": "text", "text": "The fake agent is done asking." } },
+  "hang"
+]

@@ -1,16 +1,26 @@
-import { ArrowUp, GitBranch, LoaderCircle, Workflow } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowUp, GitBranch, LoaderCircle, ShieldQuestion, Workflow } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentRun, WispEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { backendLogos, statusLooks } from "./Sidebar";
 import { titleOf } from "./threads";
-import { accountLabel, statusLabel, updateRun } from "./transcript";
+import {
+  accountLabel,
+  isRunning,
+  statusLabel,
+  trackApprovals,
+  updateRun,
+  type Approval,
+  type ApprovalsByRun,
+} from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
 /** A Project's runs, oldest first, kept live, and a way to start one by hand. */
 export interface ProjectAgentsView {
   runs: AgentRun[];
+  /** By run id: the permission requests each run waits on, oldest first (RYA-196). */
+  waiting: Readonly<Record<string, readonly Approval[]>>;
   /** Why the list couldn't load or stopped updating, for people. */
   error?: string;
   /**
@@ -32,14 +42,18 @@ export function applyAgentEvent(runs: AgentRun[], event: WispEvent): AgentRun[] 
 /**
  * A Project's runs, coordinator included, kept live: `agent/list {project}`, then the Project's
  * events after its `seq`, starting over on `resync`. Empty with no Project, and loads only while
- * `connected`.
+ * `connected`. The permission requests its runs wait on come from the same events, after each
+ * running run's log is read once for those from before. With `approvals`, the host's wispd
+ * advertises them, and a subagent started here forwards its requests (RYA-196, 0031).
  */
 export function useProjectAgents(
   hostId: string,
   project: string | undefined,
   connected: boolean,
+  approvals = false,
 ): ProjectAgentsView {
   const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [asked, setAsked] = useState<ApprovalsByRun>({});
   const [error, setError] = useState<string>();
   // Another Project starts empty, rather than showing this one's runs until its list loads.
   const scope = `${hostId}/${project}`;
@@ -47,6 +61,7 @@ export function useProjectAgents(
   if (shown !== scope) {
     setShown(scope);
     setRuns([]);
+    setAsked({});
     setError(undefined);
   }
   // The scope shown now, so `start` drops a late answer from a Project the user has left.
@@ -66,12 +81,26 @@ export function useProjectAgents(
       if ("error" in list) return setError(list.error.message);
       setRuns(list.result.runs);
       setError(undefined);
+      // Requests from before the list are in the logs of runs that still go. A page that fails
+      // leaves those out; new ones still arrive below.
+      let byRun: ApprovalsByRun = {};
+      for (const run of list.result.runs.filter((r) => r.approvals && isRunning(r.status)))
+        for (let after = 0, more = true; more;) {
+          const page = await window.wisp.request(hostId, "agent/events", { runId: run.id, after });
+          if (stopped) return;
+          if ("error" in page) break;
+          byRun = trackApprovals(byRun, page.result.events);
+          after = page.result.events.at(-1)?.seq ?? after;
+          more = page.result.more && page.result.events.length > 0;
+        }
+      setAsked(byRun);
       const since = { after: list.result.seq, project, logId: list.logId };
       unsubscribe = window.wisp.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
         if (message.type === "error") return setError(message.error.message);
         setRuns((prev) => applyAgentEvent(prev, message.event.event));
+        setAsked((prev) => trackApprovals(prev, [message.event]));
       });
     }
 
@@ -90,6 +119,7 @@ export function useProjectAgents(
         project,
         prompt,
         policy: "workspaceWrite",
+        ...(approvals && { approvals }),
       });
       if ("error" in answer) return describeError(answer.error);
       // Unless its agent.started got here first, with whatever followed it.
@@ -98,10 +128,20 @@ export function useProjectAgents(
         setRuns((prev) => (prev.some((r) => r.id === run.id) ? prev : [...prev, run]));
       return undefined;
     },
-    [hostId, project],
+    [hostId, project, approvals],
   );
 
-  return { runs, error, start };
+  const waiting = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(asked).flatMap(([id, t]) =>
+          t.items.length > 0 ? [[id, t.items as Approval[]]] : [],
+        ),
+      ),
+    [asked],
+  );
+
+  return { runs, waiting, error, start };
 }
 
 /**
@@ -130,6 +170,7 @@ export function AgentsPanel({
             <AgentRow
               key={run.id}
               run={run}
+              asks={agents.waiting[run.id]?.length ?? 0}
               open={run.id === openId}
               onOpen={() => onOpen(run.id)}
             />
@@ -154,8 +195,21 @@ export function AgentsPanel({
   );
 }
 
-/** A subagent's row: status and title, who started it, then its branch, changes, and account. */
-function AgentRow({ run, open, onOpen }: { run: AgentRun; open: boolean; onOpen: () => void }) {
+/**
+ * A subagent's row: status and title, who started it, then its branch, changes, and account. One
+ * that waits on the user's approval (`asks`) says so in place of its status.
+ */
+function AgentRow({
+  run,
+  asks,
+  open,
+  onOpen,
+}: {
+  run: AgentRun;
+  asks: number;
+  open: boolean;
+  onOpen: () => void;
+}) {
   const look = statusLooks[run.status] ?? statusLooks.completed!;
   const Logo = backendLogos[run.backend];
   return (
@@ -167,14 +221,22 @@ function AgentRow({ run, open, onOpen }: { run: AgentRun; open: boolean; onOpen:
         className={`flex w-full flex-col gap-1 rounded-lg px-2.5 py-2 text-left hover:bg-hover ${open ? "bg-selected" : ""}`}
       >
         <span className="flex w-full items-center gap-2">
-          <look.Icon aria-hidden className={`size-3.5 shrink-0 ${look.color}`} />
+          {asks > 0 ? (
+            <ShieldQuestion aria-hidden className="size-3.5 shrink-0 text-foreground" />
+          ) : (
+            <look.Icon aria-hidden className={`size-3.5 shrink-0 ${look.color}`} />
+          )}
           <span className="min-w-0 flex-1 truncate text-[13px]">{titleOf(run)}</span>
           <span className="shrink-0 text-[11.5px] text-faint-foreground">
             {run.coordinatorThread ? "by coordinator" : "by you"}
           </span>
         </span>
         <span className="flex w-full items-center gap-2 pl-5.5 text-[11.5px] text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
-          <span className={`shrink-0 ${look.color}`}>{statusLabel(run.status)}</span>
+          {asks > 0 ? (
+            <span className="shrink-0 font-medium text-foreground">Needs approval</span>
+          ) : (
+            <span className={`shrink-0 ${look.color}`}>{statusLabel(run.status)}</span>
+          )}
           {run.branch && (
             <span className="flex min-w-0 items-center gap-1">
               <GitBranch aria-hidden />

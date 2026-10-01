@@ -622,6 +622,8 @@ export function ProposedPlan({
   open,
   onToggle,
   actions,
+  foldAt = collapsedHeight,
+  openHeight,
   children,
 }: {
   id: string;
@@ -630,6 +632,10 @@ export function ProposedPlan({
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
   actions?: ReactNode;
+  /** The folded height in px, shorter where it's pinned over the composer. */
+  foldAt?: number;
+  /** Where it's pinned: the open plan's height at most, as CSS, past which it scrolls. */
+  openHeight?: string;
   children: ReactNode;
 }) {
   const verdict =
@@ -644,12 +650,12 @@ export function ProposedPlan({
   const [long, setLong] = useState(false);
   useLayoutEffect(() => {
     const el = content.current!;
-    const measure = () => setLong(el.scrollHeight > collapsedHeight + slack);
+    const measure = () => setLong(el.scrollHeight > foldAt + slack);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [foldAt]);
   const folded = long && !open;
   return (
     <div
@@ -674,7 +680,13 @@ export function ProposedPlan({
       </div>
       <div
         className="relative overflow-hidden px-4 pt-3 pb-3.5"
-        style={folded ? { maxHeight: collapsedHeight } : undefined}
+        style={
+          folded
+            ? { maxHeight: foldAt }
+            : long && openHeight
+              ? { maxHeight: openHeight, overflowY: "auto" }
+              : undefined
+        }
         // Tabbing into the fold, as to a code block's Copy, opens it rather than scroll within it;
         // a click doesn't.
         onFocus={(e) => folded && e.target.matches(":focus-visible") && onToggle(id, true)}
