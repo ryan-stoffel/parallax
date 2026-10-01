@@ -7,7 +7,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
 import type { SubscriptionMessage, WispBridge } from "../preload/bridge";
 import type { AgentRunResult, LoggedEvent } from "../protocol/generated/protocol";
-import { AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
+import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
 import type { Item } from "./transcript";
 
@@ -45,6 +45,19 @@ const type = (text: string) => act(() => void composer().editor!.commands.setCon
 
 const row = (item: Item) =>
   render(<RowView row={item} live={false} open={false} onToggle={() => {}} />);
+
+test("a message on its way to the agent shows at full strength", () => {
+  render(
+    <RowView
+      row={{ kind: "pending", key: "p", text: "And this?" }}
+      live={false}
+      open={false}
+      onToggle={() => {}}
+    />,
+  );
+  expect(document.body.textContent).toBe("And this?");
+  expect(document.querySelector('[class*="opacity"]')).toBeNull();
+});
 
 test("a user message shows its text, or a neutral label when the log has none", () => {
   row({ kind: "user", key: "a", text: "Fix the build" });
@@ -179,6 +192,104 @@ test("a coordinator's wispd tool calls read as what they did, and to what", () =
   );
   // A wispd tool this app doesn't know keeps its name.
   expect(summary("mcp__wispd__plan_approve", {})).toBe("mcp__wispd__plan_approve");
+});
+
+test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
+  const summary = (name: string, input: Record<string, string>) => {
+    row({ kind: "tool", key: "t", callId: "1", name, input });
+    const text = document.querySelector("summary")!.textContent;
+    act(() => unmount());
+    return text;
+  };
+  expect(summary("mcp__linear__save_issue", { title: "Fix it" })).toBe("Linearsave issue");
+  expect(summary("mcp__claude-code-remote__list_repos", {})).toBe("Claude code remotelist repos");
+  expect(summary("Skill", { skill: "code-review" })).toBe("Skillcode-review");
+  // Older Claude Code versions name it `command`.
+  expect(summary("Skill", { command: "simplify" })).toBe("Skillsimplify");
+});
+
+test("each kind of work has its own loader, and MCP tools and skills read by name", () => {
+  const tool = (name: string | null, input: Record<string, string> = {}): Item => ({
+    kind: "tool",
+    key: "t",
+    callId: "1",
+    name,
+    input,
+  });
+  const loader = (kind: string, variant: string) => ({ kind, variant });
+  expect(activity({ kind: "reasoning", key: "r", text: "Hm" })).toEqual({
+    label: "Thinking",
+    loader: loader("matrix", "ripple"),
+  });
+  expect(activity(tool("Bash", { command: "cargo test\n--quiet" }))).toEqual({
+    label: "Running",
+    detail: "cargo test",
+    loader: loader("register", "shift"),
+  });
+  expect(activity(tool("Read", { file_path: "src/main.rs" }))).toEqual({
+    label: "Reading",
+    detail: "src/main.rs",
+    loader: loader("bands", "descend"),
+  });
+  expect(activity(tool("Grep", { pattern: "TODO" })).loader).toEqual(loader("matrix", "scan"));
+  expect(activity(tool("WebSearch")).loader).toEqual(loader("matrix", "scan"));
+  expect(activity(tool("Edit")).loader).toEqual(loader("cells", "merge"));
+  expect(activity(tool("Write")).loader).toEqual(loader("cells", "merge"));
+  expect(activity(tool("WebFetch")).loader).toEqual(loader("beacon", "rise"));
+  expect(activity(tool("Task", { description: "Find the bug" }))).toEqual({
+    label: "Running agent",
+    detail: "Find the bug",
+    loader: loader("orbit", "oppose"),
+  });
+  expect(activity(tool("Skill", { skill: "code-review" }))).toEqual({
+    label: "Using skill",
+    detail: "code-review",
+    loader: loader("lift", "rise"),
+  });
+  expect(activity(tool("mcp__linear__save_issue", { title: "Fix it" }))).toEqual({
+    label: "Using Linear",
+    detail: "save issue",
+    loader: loader("beacon", "balance"),
+  });
+  expect(activity(tool("mcp__wispd__spawn_agent", { prompt: "Fix the login bug" }))).toEqual({
+    label: "Started a subagent",
+    detail: "Fix the login bug",
+    loader: loader("cells", "spread"),
+  });
+  // A wispd tool this app doesn't know keeps its name, and still draws wispd's loader.
+  expect(activity(tool("mcp__wispd__plan_approve"))).toMatchObject({
+    label: "mcp__wispd__plan_approve",
+    loader: loader("cells", "spread"),
+  });
+  expect(activity({ kind: "todo", key: "c", items: [] })).toEqual({
+    label: "Planning",
+    loader: loader("lift", "breathe"),
+  });
+  // Anything else.
+  expect(activity(tool("Frobnicate", { path: "a.txt" }))).toEqual({
+    label: "Frobnicate",
+    detail: "a.txt",
+    loader: loader("orbit", "chase"),
+  });
+  expect(activity(tool(null))).toMatchObject({
+    label: "Working",
+    loader: loader("orbit", "chase"),
+  });
+  expect(activity()).toEqual({ label: "Working", loader: loader("orbit", "chase") });
+});
+
+test("a running tool call draws its work's loader, and a finished one its status", () => {
+  const tool: Item = { kind: "tool", key: "t", callId: "1", name: "Read", input: {} };
+  render(<RowView row={tool} live open={false} onToggle={() => {}} />);
+  const running = document.querySelector('[aria-label="Running"]')!;
+  expect(running.querySelector('[data-loader="bands"][data-variant="descend"]')).not.toBeNull();
+  // Screen readers hear the label, not the loader.
+  expect(running.querySelector(".loader")!.getAttribute("aria-hidden")).toBe("true");
+  act(() => unmount());
+
+  render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
+  expect(document.querySelector('[aria-label="Succeeded"]')).not.toBeNull();
+  expect(document.querySelector(".loader")).toBeNull();
 });
 
 test("a coordinator's no-write stop lists the files it changed", () => {
@@ -542,23 +653,88 @@ test("while a run goes, only the last work row shows what the agent is doing", (
     input: { command: "ls" },
   };
   const reply: Item = { kind: "assistant", key: "a", text: "Hi", partial: true };
-  const header = () => document.querySelector("button[aria-expanded]")?.textContent;
-
-  // Before the agent does anything, a placeholder says it is working.
-  transcript([user]);
-  expect(header()).toBe("Working");
-  act(() => unmount());
+  const header = () => document.querySelector("button[aria-expanded]");
 
   // A reply with no tools needs no placeholder above it.
   transcript([user, reply]);
-  expect(header()).toBeUndefined();
+  expect(header()).toBeNull();
   act(() => unmount());
 
+  // The loader for what it's doing, its label, and what it's doing it to.
   transcript([user, tool]);
-  expect(header()).toBe("Runningls");
+  expect(header()!.textContent).toBe("Runningls");
+  expect(header()!.querySelector('[data-loader="register"][data-variant="shift"]')).not.toBeNull();
   act(() => unmount());
 
   // Once its text streams, the work before it is done.
   transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, reply]);
-  expect(header()).toBe("Worked briefly");
+  expect(header()!.textContent).toBe("Worked briefly");
+  expect(document.querySelector(".loader")).toBeNull();
+});
+
+test("until the agent does anything, a loader muses under the message on its way to it", () => {
+  const user: Item = { kind: "user", key: "u", text: "go" };
+  const reply: Item = { kind: "assistant", key: "a", text: "Done." };
+  const end: Item = { kind: "end", key: "e", outcome: { status: "completed" } };
+  const pending = { kind: "pending" as const, key: "pending:t", text: "And the tests?" };
+  const fallback: Item = { kind: "notice", key: "n", tone: "info", text: "Switched accounts." };
+  const transcript = (rows: Parameters<typeof TranscriptView>[0]["rows"], live: boolean) =>
+    render(<TranscriptView rows={rows} sent={new Map()} live={live} />);
+  // The empty work row's header: the loader and a word, which screen readers hear as Working.
+  const musing = () => {
+    const header = document.querySelector<HTMLButtonElement>("button[aria-expanded]");
+    if (!header) return undefined;
+    expect(header.disabled).toBe(true);
+    expect(header.querySelector('[data-loader="orbit"][data-variant="chase"]')).not.toBeNull();
+    expect(header.querySelector('[aria-hidden="true"]:not(.loader)')!.textContent).toMatch(
+      /^[A-Z][a-z]+$/,
+    );
+    return header.querySelector(".sr-only")?.textContent;
+  };
+  // What follows the message, by row: a musing is a work row with nothing in it.
+  const after = (text: string) => {
+    const rows = [...document.querySelectorAll("[data-index]")];
+    const i = rows.findIndex((r) => r.textContent === text);
+    return rows.slice(i + 1).map((r) => r.textContent);
+  };
+
+  // A message the run has, but hasn't answered yet.
+  transcript([user], true);
+  expect(musing()).toBe("Working");
+  act(() => unmount());
+
+  // A message on its way to the agent, even before the run goes again, as a finished one resumes.
+  transcript([user, reply, end, pending], false);
+  expect(musing()).toBe("Working");
+  expect(after("And the tests?")).toHaveLength(1);
+  act(() => unmount());
+
+  // The musing goes where the work will be, before a notice after the message.
+  transcript([user, fallback], true);
+  expect(musing()).toBe("Working");
+  expect(after("go").at(-1)).toBe("Switched accounts.");
+  act(() => unmount());
+
+  // Not once the agent answered, nor for a message of a run that has stopped.
+  transcript([user, reply], true);
+  expect(musing()).toBeUndefined();
+  act(() => unmount());
+  transcript([user], false);
+  expect(musing()).toBeUndefined();
+  act(() => unmount());
+
+  // Nor in a transcript that's out of date: no loader at all.
+  render(<TranscriptView rows={[user, pending]} sent={new Map()} live stalled />);
+  expect(musing()).toBeUndefined();
+  expect(document.querySelector(".loader")).toBeNull();
+});
+
+test("a chat that couldn't load shows its first message, with no loader", async () => {
+  fakeBridge(8);
+  window.wisp.request = vi.fn(async () => ({ error: { code: -32000, message: "wispd is gone" } }));
+  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" />);
+  await settle();
+  expect(transcriptText()).toBe("Add a README");
+  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe("wispd is gone");
 });

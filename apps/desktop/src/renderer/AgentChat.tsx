@@ -36,6 +36,7 @@ import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
+import { Loader, type LoaderStyle } from "./Loader";
 import type { RunOptions } from "./models";
 import { titleOf } from "./threads";
 import {
@@ -200,6 +201,8 @@ export function AgentChat({
           rows={rows}
           sent={unsent}
           live={isRunning(run?.status)}
+          // One that couldn't load, stopped updating, or lost wispd shows nothing in progress.
+          stalled={error !== undefined || (connection !== undefined && !connected)}
           onResend={resend}
           loadImage={showImage}
         />
@@ -270,12 +273,15 @@ export function TranscriptView({
   rows,
   sent,
   live,
+  stalled = false,
   onResend,
   loadImage,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
   live: boolean;
+  /** Whether the transcript is out of date, so nothing in it shows as in progress. */
+  stalled?: boolean;
   onResend?: (turnId: string, message: SentMessage) => void;
   /** Fetches a message's image by id, as a data URL. */
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
@@ -295,19 +301,23 @@ export function TranscriptView({
     [],
   );
 
-  // While the run goes, a work row follows a message that has no reply yet, standing for what
-  // the agent is doing before it does anything.
+  const going = live && !stalled;
+  // A work row with nothing in it follows a message on its way to the agent, or one it has but
+  // hasn't answered while the run goes, standing for what the agent is doing before it does
+  // anything. It goes before any notices after the message, where the work it stands for will be.
   const view = useMemo(() => {
     const grouped = groupWork(rows);
-    const last = grouped.at(-1);
-    if (live && (last?.kind === "user" || last?.kind === "pending"))
-      grouped.push({ kind: "work", key: "work:pending", items: [] });
+    const at = grouped.findLastIndex((r) => r.kind !== "notice");
+    const last = grouped[at];
+    if (!stalled && (last?.kind === "pending" || (live && last?.kind === "user")))
+      grouped.splice(at + 1, 0, { kind: "work", key: "work:pending", items: [] });
     return grouped;
-  }, [rows, live]);
+  }, [rows, live, stalled]);
   // The agent's text streams in its own row, so a work row is only live while it is the last
-  // (a notice after it doesn't count).
+  // (a notice after it doesn't count). The empty one is, even before the run goes again.
   const tail = view.findLastIndex((r) => r.kind !== "notice");
-  const activeIndex = live && view[tail]?.kind === "work" ? tail : -1;
+  const activeIndex =
+    view[tail]?.kind === "work" && (going || view[tail].key === "work:pending") ? tail : -1;
 
   const virtualizer = useVirtualizer({
     count: view.length,
@@ -359,7 +369,7 @@ export function TranscriptView({
                 <RowView
                   row={row}
                   sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
-                  live={live}
+                  live={going}
                   open={open.has(row.key)}
                   openKeys={row.kind === "work" ? open : undefined}
                   active={v.index === activeIndex}
@@ -443,9 +453,7 @@ export const RowView = memo(function RowView({
       // Images sent from here are at hand; the log's come from wispd by id.
       const images = row.kind === "pending" ? row.images : (sent?.images ?? row.images);
       return (
-        <div
-          className={`flex flex-col items-end gap-1.5 ${row.kind === "pending" ? "opacity-60" : ""}`}
-        >
+        <div className="flex flex-col items-end gap-1.5">
           {images && images.length > 0 && (
             <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
               {images.map((image, i) => (
@@ -617,7 +625,8 @@ function MessageImage({
 
 /**
  * A run of thinking, tool calls, and checklists under one dropdown. While the agent works its
- * header says what it's doing now; afterward it says how long it worked, and hides the rest.
+ * header says what it's doing now, with a loader for that; afterward it says how long it worked,
+ * and hides the rest. Before the agent does anything, it's empty and muses.
  */
 function WorkGroup({
   work,
@@ -644,9 +653,15 @@ function WorkGroup({
         onClick={() => onToggle(work.key, !open)}
         className="group/work flex max-w-full cursor-default items-center gap-1.5 rounded-md py-0.5 text-[13px] hover:text-foreground"
       >
-        {now ? (
+        {now && work.items.length === 0 ? (
+          <Musing />
+        ) : now ? (
           <>
-            <span className="shrink-0 animate-pulse">{now.label}</span>
+            <Loader {...now.loader} />
+            {/* Keyed, so a new label fades in. */}
+            <span key={now.label} className="working-in shrink-0">
+              <Shimmer>{now.label}</Shimmer>
+            </span>
             {now.detail && <span className="truncate text-muted-foreground">{now.detail}</span>}
           </>
         ) : (
@@ -676,6 +691,70 @@ function WorkGroup({
   );
 }
 
+// A word for what the agent might be doing before it does anything, and how often it changes.
+const musings = [
+  "Picturing",
+  "Pondering",
+  "Sketching",
+  "Mulling",
+  "Brewing",
+  "Tinkering",
+  "Percolating",
+  "Noodling",
+];
+const musingMs = 2400;
+
+/**
+ * The working line before the agent does anything: a loader and a word that changes every few
+ * seconds, which screen readers hear as a steady "Working".
+ */
+function Musing() {
+  // Picked by the wall clock, so a remount (New Thread handing off to the opened thread) keeps the
+  // sequence. A word fades in, and the last one out, only once it changes here.
+  const [tick, setTick] = useState(() => Math.floor(Date.now() / musingMs));
+  const [first] = useState(tick);
+  useEffect(() => {
+    const timer = setTimeout(
+      () => setTick(Math.max(tick + 1, Math.floor(Date.now() / musingMs))),
+      musingMs - (Date.now() % musingMs),
+    );
+    return () => clearTimeout(timer);
+  }, [tick]);
+  const word = (at: number) => musings[at % musings.length]!;
+  return (
+    <>
+      <Loader {...loaders.working} />
+      <span className="sr-only">Working</span>
+      <span aria-hidden className="grid shrink-0 justify-items-start">
+        {tick > first && (
+          <span key={tick - 1} className="working-out [grid-area:1/1]">
+            <Shimmer>{word(tick - 1)}</Shimmer>
+          </span>
+        )}
+        <span key={tick} className={`[grid-area:1/1] ${tick > first ? "working-in" : ""}`}>
+          <Shimmer>{word(tick)}</Shimmer>
+        </span>
+      </span>
+    </>
+  );
+}
+
+// How long the shimmer takes to sweep across its text.
+const shimmerMs = 2000;
+
+/** Text with a soft highlight sweeping across it, on the wall clock so a remount carries on. */
+function Shimmer({ children }: { children: string }) {
+  const [now] = useState(Date.now);
+  return (
+    <span
+      className="working-shimmer"
+      style={{ animationDuration: `${shimmerMs}ms`, animationDelay: `${-(now % shimmerMs)}ms` }}
+    >
+      {children}
+    </span>
+  );
+}
+
 // What a tool is doing, in a word, by the names common tools use.
 const verbs: Partial<Record<string, string>> = {
   Bash: "Running",
@@ -691,22 +770,75 @@ const verbs: Partial<Record<string, string>> = {
   Agent: "Running agent",
 };
 
+/** The loader for each kind of work. */
+const loaders = {
+  thinking: { kind: "matrix", variant: "ripple" },
+  shell: { kind: "register", variant: "shift" },
+  reading: { kind: "bands", variant: "descend" },
+  searching: { kind: "matrix", variant: "scan" },
+  editing: { kind: "cells", variant: "merge" },
+  fetching: { kind: "beacon", variant: "rise" },
+  agent: { kind: "orbit", variant: "oppose" },
+  skill: { kind: "lift", variant: "rise" },
+  mcp: { kind: "beacon", variant: "balance" },
+  wispd: { kind: "cells", variant: "spread" },
+  planning: { kind: "lift", variant: "breathe" },
+  working: { kind: "orbit", variant: "chase" },
+} as const satisfies Record<string, LoaderStyle>;
+
+// The kind of work a tool does, by the names common tools use.
+const toolLoaders: Partial<Record<string, LoaderStyle>> = {
+  Bash: loaders.shell,
+  Read: loaders.reading,
+  NotebookRead: loaders.reading,
+  LS: loaders.reading,
+  Grep: loaders.searching,
+  Glob: loaders.searching,
+  WebSearch: loaders.searching,
+  ToolSearch: loaders.searching,
+  Edit: loaders.editing,
+  MultiEdit: loaders.editing,
+  Write: loaders.editing,
+  NotebookEdit: loaders.editing,
+  WebFetch: loaders.fetching,
+  Task: loaders.agent,
+  Agent: loaders.agent,
+  Skill: loaders.skill,
+  TodoWrite: loaders.planning,
+};
+
+/** What the agent is doing: a label, what it's doing it to, and the loader drawn beside them. */
+export interface Activity {
+  label: string;
+  detail?: string;
+  loader: LoaderStyle;
+}
+
 /** The header of the work in progress: what its latest item is doing. */
-function activity(item?: Item): { label: string; detail?: string } {
+export function activity(item?: Item): Activity {
   switch (item?.kind) {
     case "reasoning":
-      return { label: "Thinking" };
-    case "tool":
-      return (
-        wispdCall(item) ?? {
-          label: verbs[item.name ?? ""] ?? item.name ?? "Working",
-          detail: toolHint(item.input),
-        }
-      );
+      return { label: "Thinking", loader: loaders.thinking };
+    case "tool": {
+      const wispd = wispdCall(item);
+      if (wispd) return { ...wispd, loader: loaders.wispd };
+      const mcp = mcpTool(item.name);
+      if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool, loader: loaders.mcp };
+      if (item.name === "Skill")
+        return { label: "Using skill", detail: skillName(item.input), loader: loaders.skill };
+      return {
+        label: verbs[item.name ?? ""] ?? item.name ?? "Working",
+        detail: toolHint(item.input),
+        // A wispd tool this app doesn't know keeps its name, but not the generic loader.
+        loader: item.name?.startsWith(wispdTools)
+          ? loaders.wispd
+          : (toolLoaders[item.name ?? ""] ?? loaders.working),
+      };
+    }
     case "todo":
-      return { label: "Planning" };
+      return { label: "Planning", loader: loaders.planning };
     default:
-      return { label: "Working" };
+      return { label: "Working", loader: loaders.working };
   }
 }
 
@@ -726,11 +858,13 @@ function ToolCall({
     error: <CircleX aria-label="Failed" className="text-danger" />,
     denied: <Ban aria-label="Denied" className="text-danger" />,
   };
-  const wispd = wispdCall(item);
+  const named = wispdCall(item) ?? namedTool(item);
   let icon = item.status ? icons[item.status] : undefined;
   icon ??=
     live && !item.status ? (
-      <LoaderCircle aria-label="Running" className="animate-spin" />
+      <span role="img" aria-label="Running" className="block">
+        <Loader {...activity(item).loader} size={14} />
+      </span>
     ) : (
       <CircleDashed aria-label="No result" />
     );
@@ -742,9 +876,9 @@ function ToolCall({
       summary={
         <>
           <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{icon}</span>
-          <span className="shrink-0 font-medium">{wispd?.label ?? item.name ?? "Tool"}</span>
-          {wispd ? (
-            <span className="truncate text-muted-foreground">{wispd.detail}</span>
+          <span className="shrink-0 font-medium">{named?.label ?? item.name ?? "Tool"}</span>
+          {named ? (
+            <span className="truncate text-muted-foreground">{named.detail}</span>
           ) : (
             <span className="truncate font-mono text-[12px] text-muted-foreground">
               {toolHint(item.input)}
@@ -836,6 +970,32 @@ function wispdCall(item: Extract<Item, { kind: "tool" }>) {
   return label
     ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path"]) }
     : undefined;
+}
+
+/**
+ * Another MCP server's tool as Claude Code names it, `mcp__<server>__<tool>`, readably: the
+ * server's name, capitalized, and the tool's. Undefined for any other tool, and for wispd's.
+ */
+function mcpTool(name: string | null) {
+  if (!name || name.startsWith(wispdTools)) return undefined;
+  const [, server, tool] = /^mcp__(.+?)__(.+)$/.exec(name) ?? [];
+  if (!server || !tool) return undefined;
+  const words = server.replace(/[_-]/g, " ");
+  return {
+    server: words.charAt(0).toUpperCase() + words.slice(1),
+    tool: tool.replaceAll("_", " "),
+  };
+}
+
+/** The skill a Skill call runs: `skill`, or `command` from older Claude Code versions. */
+const skillName = (input?: JsonValue) => toolHint(input, ["skill", "command"]);
+
+/** A tool call its row names readably: an MCP server's tool by the server, or a skill. */
+function namedTool(item: Extract<Item, { kind: "tool" }>) {
+  const mcp = mcpTool(item.name);
+  if (mcp) return { label: mcp.server, detail: mcp.tool };
+  if (item.name === "Skill") return { label: "Skill", detail: skillName(item.input) };
+  return undefined;
 }
 
 function inputText(input: JsonValue): string {
