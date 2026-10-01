@@ -264,12 +264,19 @@ const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (run_id, id)
         );",
     },
+    // A project's icon (RYA-227, decision 0032), as the client sent it: a Lucide icon's name and
+    // an optional palette key. A NULL `icon_name` means no icon, so existing projects have none.
+    Migration {
+        version: 16,
+        sql: "ALTER TABLE projects ADD COLUMN icon_name TEXT;
+        ALTER TABLE projects ADD COLUMN icon_color TEXT;",
+    },
     // Whether a run forwards its CLI's permission requests to the client (RYA-222, decision
     // 0031), which only a client that answers them asks for. 0 for every run before, which keeps
     // denying what would prompt. Part of the start methods' idempotent params, and passed again
     // when a run resumes.
     Migration {
-        version: 16,
+        version: 17,
         sql: "ALTER TABLE runs ADD COLUMN approvals INTEGER NOT NULL DEFAULT 0;",
     },
 ];

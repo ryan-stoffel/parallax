@@ -90,6 +90,8 @@ pub(crate) fn initialize(
 /// `approvals`, which an older wispd would silently ignore. A run started with it, in Manual,
 /// Auto, or Plan, asks through `approvalRequested` items, which `agent/approve` answers, instead
 /// of denying what would prompt.
+/// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
+/// and `project/create`, which an older wispd would silently drop.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -104,6 +106,7 @@ fn capabilities_advertised() -> Capabilities {
         ("approvals".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
+        ("projectEdit".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("sendModel".to_owned(), serde_json::Map::new()),

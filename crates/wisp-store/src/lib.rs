@@ -35,7 +35,7 @@ pub use defaults::RoleDefault;
 pub use error::StoreError;
 pub use events::StoredEvent;
 pub use images::StoredImage;
-pub use project::{Project, ProjectFields};
+pub use project::{Project, ProjectEdit, ProjectFields, ProjectIcon};
 pub use runs::{Run, RunAccept, RunFields, RunState};
 pub use threads::{Repo, RepoFields, Thread};
 pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageHour, UsageSummary};

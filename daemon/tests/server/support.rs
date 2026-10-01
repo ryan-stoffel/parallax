@@ -346,6 +346,7 @@ pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
         id: ProjectId::generate(),
         name: name.to_owned(),
         repo_path: repo(dir, name),
+        icon: None,
     }
 }
 

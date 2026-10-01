@@ -32,6 +32,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("approvals".to_owned(), serde_json::Map::new()),
             ("coordinator".to_owned(), serde_json::Map::new()),
             ("openPr".to_owned(), serde_json::Map::new()),
+            ("projectEdit".to_owned(), serde_json::Map::new()),
             (
                 "promptImages".to_owned(),
                 serde_json::from_value(json!({

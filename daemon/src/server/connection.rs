@@ -534,6 +534,7 @@ mod tests {
             let project = Project {
                 id: ProjectId::generate(),
                 name: "wisp".to_owned(),
+                icon: None,
                 repo_path: "/src/wisp".to_owned(),
                 branch: None,
                 coordinator: None,
@@ -680,6 +681,7 @@ mod tests {
                 project: Project {
                     id: ProjectId::generate(),
                     name: name.to_owned(),
+                    icon: None,
                     repo_path: "/src".to_owned(),
                     branch: None,
                     coordinator: None,

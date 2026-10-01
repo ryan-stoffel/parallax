@@ -89,6 +89,13 @@ pub enum WispEvent {
         /// The new project.
         project: Project,
     },
+    /// `project/update` renamed a project or changed its icon (RYA-227). Host-level, like
+    /// `project.created`.
+    #[serde(rename = "project.updated")]
+    ProjectUpdated {
+        /// The project as it stands.
+        project: Project,
+    },
     /// A shared context file was created or changed (0005, #155): from `context/write`, or from
     /// an agent's own write, detected on disk. Project-scoped.
     #[serde(rename = "context.changed")]

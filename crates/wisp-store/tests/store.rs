@@ -6,7 +6,8 @@ use std::time::Duration;
 use rusqlite::Connection;
 use uuid::Uuid;
 use wisp_store::{
-    AccountFields, ProjectFields, Store, StoreError, StoredEvent, UsageDelta, WorktreeFields,
+    AccountFields, ProjectEdit, ProjectFields, ProjectIcon, Store, StoreError, StoredEvent,
+    UsageDelta, WorktreeFields,
 };
 
 fn temp_db_path() -> (tempfile::TempDir, PathBuf) {
@@ -19,6 +20,14 @@ fn sample_fields() -> ProjectFields {
     ProjectFields {
         name: "wisp".to_string(),
         repo_path: "/Users/ryan/dev/wisp".to_string(),
+        icon: None,
+    }
+}
+
+fn icon(name: &str, color: Option<&str>) -> ProjectIcon {
+    ProjectIcon {
+        name: name.to_string(),
+        color: color.map(str::to_string),
     }
 }
 
@@ -138,7 +147,49 @@ fn creating_with_the_same_id_and_different_fields_conflicts() {
 }
 
 #[test]
-fn update_replaces_fields_and_bumps_updated_at() {
+fn a_project_is_created_with_its_icon_and_the_icon_is_part_of_the_retry_check() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let fields = ProjectFields {
+        icon: Some(icon("rocket", Some("green"))),
+        ..sample_fields()
+    };
+
+    let created = store.create_project(id, &fields).expect("create");
+    assert_eq!(created.icon, fields.icon);
+    assert_eq!(
+        store
+            .create_project(id, &fields)
+            .expect("an identical retry"),
+        created
+    );
+    assert_eq!(
+        store.get_project(id).expect("get").expect("the project"),
+        created,
+        "the icon reads back as it was stored"
+    );
+
+    for other in [
+        None,
+        Some(icon("rocket", None)),
+        Some(icon("rocket", Some("blue"))),
+        Some(icon("star", Some("green"))),
+    ] {
+        let conflicting = ProjectFields {
+            icon: other.clone(),
+            ..sample_fields()
+        };
+        match store.create_project(id, &conflicting) {
+            Err(StoreError::IdConflict { id: conflicted }) => assert_eq!(conflicted, id),
+            result => panic!("expected IdConflict for {other:?}, got {result:?}"),
+        }
+    }
+    assert_eq!(store.list_projects().expect("list"), [created]);
+}
+
+#[test]
+fn update_renames_and_sets_the_icon_without_touching_the_rest() {
     let (_dir, path) = temp_db_path();
     let mut store = Store::open(&path).expect("open");
     let id = Uuid::now_v7();
@@ -146,25 +197,96 @@ fn update_replaces_fields_and_bumps_updated_at() {
         .create_project(id, &sample_fields())
         .expect("create should succeed");
 
-    let mut updated_fields = sample_fields();
-    updated_fields.name = "renamed".to_string();
-    let updated = store
-        .update_project(id, &updated_fields)
-        .expect("update of an existing project should succeed");
+    let (renamed, changed) = store
+        .update_project(
+            id,
+            &ProjectEdit {
+                name: Some("renamed".to_string()),
+                icon: None,
+            },
+        )
+        .expect("a rename");
+    assert!(changed);
+    assert_eq!(
+        renamed,
+        wisp_store::Project {
+            name: "renamed".to_string(),
+            ..created.clone()
+        },
+        "only the name changes: not the repository, the icon, or updated_at"
+    );
 
-    assert_eq!(updated.name, "renamed");
-    assert_eq!(updated.created_at, created.created_at);
-    assert!(updated.updated_at >= created.updated_at);
+    let (with_icon, changed) = store
+        .update_project(
+            id,
+            &ProjectEdit {
+                name: None,
+                icon: Some(icon("rocket", Some("green"))),
+            },
+        )
+        .expect("an icon");
+    assert!(changed);
+    assert_eq!(with_icon.name, "renamed", "an absent name stays as it is");
+    assert_eq!(with_icon.icon, Some(icon("rocket", Some("green"))));
+    assert_eq!(with_icon.updated_at, created.updated_at);
+
+    let (recolored, changed) = store
+        .update_project(
+            id,
+            &ProjectEdit {
+                name: None,
+                icon: Some(icon("rocket", None)),
+            },
+        )
+        .expect("an icon without a color");
+    assert!(changed, "the icon is replaced whole, so its color goes");
+    assert_eq!(recolored.icon, Some(icon("rocket", None)));
+
+    assert_eq!(
+        store.get_project(id).expect("get").expect("the project"),
+        recolored,
+        "the update was stored"
+    );
+}
+
+#[test]
+fn an_update_that_changes_nothing_reports_no_change() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let fields = ProjectFields {
+        icon: Some(icon("rocket", Some("green"))),
+        ..sample_fields()
+    };
+    let created = store.create_project(id, &fields).expect("create");
+
+    for edit in [
+        ProjectEdit::default(),
+        ProjectEdit {
+            name: Some(fields.name.clone()),
+            icon: fields.icon.clone(),
+        },
+    ] {
+        let (project, changed) = store.update_project(id, &edit).expect("update");
+        assert!(!changed, "{edit:?}");
+        assert_eq!(project, created);
+    }
 }
 
 #[test]
 fn update_of_a_missing_project_fails_with_not_found() {
     let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let mut store = Store::open(&path).expect("open");
     let id = Uuid::now_v7();
 
     let err = store
-        .update_project(id, &sample_fields())
+        .update_project(
+            id,
+            &ProjectEdit {
+                name: Some("renamed".to_string()),
+                icon: None,
+            },
+        )
         .expect_err("update of a missing project should fail");
 
     match err {
@@ -413,12 +535,17 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         .expect("the row should survive the migration");
     assert_eq!(project.name, "wisp");
     assert_eq!(project.repo_path, "/r");
+    assert_eq!(
+        project.icon, None,
+        "migration 16 leaves old projects with no icon"
+    );
     let again = store
         .create_project(
             id,
             &ProjectFields {
                 name: "wisp".to_string(),
                 repo_path: "/r".to_string(),
+                icon: None,
             },
         )
         .expect("an idempotent create should match the migrated row");
@@ -434,7 +561,15 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         .expect("collect");
     assert_eq!(
         columns,
-        ["id", "name", "repo_path", "created_at", "updated_at"]
+        [
+            "id",
+            "name",
+            "repo_path",
+            "created_at",
+            "updated_at",
+            "icon_name",
+            "icon_color"
+        ]
     );
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
@@ -442,12 +577,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 16,
+        version, 17,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
-         #257), 13 (run options, RYA-97), 14 (wakes, RYA-178), 15 (images, RYA-191), and 16 \
-         (approvals, RYA-222) also apply"
+         #257), 13 (run options, RYA-97), 14 (wakes, RYA-178), 15 (images, RYA-191), 16 \
+         (project icons, RYA-227), and 17 (approvals, RYA-222) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -460,6 +595,42 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         account_columns,
         ["id", "provider", "label", "masked_key", "created_at"]
     );
+}
+
+/// Migration 16 (RYA-227) adds the icon columns. A project stored at
+/// version 15 reads back with no icon, and can then be given one.
+#[test]
+fn a_version_15_database_gains_project_icons_and_keeps_its_projects() {
+    let (_dir, path) = temp_db_path();
+    let id = Uuid::now_v7();
+    let created = Store::open(&path)
+        .expect("open")
+        .create_project(id, &sample_fields())
+        .expect("create");
+    let conn = Connection::open(&path).expect("open raw connection");
+    conn.execute_batch(
+        "ALTER TABLE projects DROP COLUMN icon_name;
+         ALTER TABLE projects DROP COLUMN icon_color;
+         DELETE FROM schema_version WHERE version = 16;",
+    )
+    .expect("roll the database back to version 15");
+    drop(conn);
+
+    let mut store = Store::open(&path).expect("open should apply migration 16");
+    let project = store.get_project(id).expect("get").expect("the project");
+    assert_eq!(project, created);
+    assert_eq!(project.icon, None);
+    let (with_icon, changed) = store
+        .update_project(
+            id,
+            &ProjectEdit {
+                name: None,
+                icon: Some(icon("rocket", Some("green"))),
+            },
+        )
+        .expect("set an icon after migrating");
+    assert!(changed);
+    assert_eq!(with_icon.icon, Some(icon("rocket", Some("green"))));
 }
 
 /// A database as `develop` (schema version 3, `accounts` but no usage tables) leaves it, opened by
@@ -536,11 +707,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 16,
+        version, 17,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, RYA-97), 14 (wakes, \
-         RYA-178), 15 (images, RYA-191), and 16 (approvals, RYA-222) also apply"
+         RYA-178), 15 (images, RYA-191), 16 (project icons, RYA-227), and 17 (approvals, \
+         RYA-222) also apply"
     );
 }
 
