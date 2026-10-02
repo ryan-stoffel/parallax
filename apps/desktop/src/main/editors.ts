@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 import type { OpenTarget } from "../preload/bridge";
@@ -54,6 +54,12 @@ export function detectEditors(
   }
   return found;
 }
+
+/** The macOS `.app` bundle `program` is in or is, following symlinks, or undefined. */
+export const appBundle = (
+  program: string,
+  realpath: (file: string) => string = realpathSync,
+): string | undefined => /^(.*?\.app)(?:\/|$)/.exec(realpath(program))?.[1];
 
 /**
  * The argv that opens `folder` with an editor's `program`: here, or on an SSH host through the

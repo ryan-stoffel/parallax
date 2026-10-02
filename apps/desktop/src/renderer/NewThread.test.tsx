@@ -81,6 +81,7 @@ beforeEach(() => {
     hosts: async () => [],
     onHosts: () => () => {},
     openTargets: async () => [],
+    openTargetIcons: async () => ({}),
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
