@@ -78,7 +78,8 @@ function bringForward() {
 /**
  * Starts the Parallax account (0037): a Supabase Auth session kept in the main process, so the
  * renderer only ever sees the profile. Signing in happens on a page in the system browser that
- * main serves on loopback (loopback.ts), and OAuth uses PKCE. Call once the app is ready, as safeStorage needs.
+ * main serves on loopback (loopback.ts), with PKCE. Call once the app is ready, as safeStorage
+ * needs.
  */
 export function startAccount() {
   const auth = SUPABASE_URL
@@ -88,6 +89,10 @@ export function startAccount() {
         storage: encryptedStorage(path.join(app.getPath("userData"), "account")),
         flowType: "pkce",
         detectSessionInUrl: false,
+        // Each redirect carries its PKCE flow id, so a sign-up's email link and an OAuth sign-in
+        // started on the same page each trade their code with their own verifier. Sign-up has no
+        // other way to name its flow. Experimental in auth-js: recheck it on upgrades (PLX-300).
+        experimental: { appendPkceFlowIdToRedirects: true },
       })
     : undefined;
 
@@ -117,8 +122,7 @@ export function startAccount() {
     });
   });
 
-  // The open sign-in page, if any. Its last OAuth sign-in's PKCE flow id picks the verifier its
-  // code is traded with. Sign-up's email link has no id, and uses the latest verifier.
+  // The open sign-in page, if any.
   let page: SignInPage | undefined;
 
   ipcMain.handle("parallax:profile", () => profile);
@@ -127,7 +131,6 @@ export function startAccount() {
     if (!auth) return notSetUp;
     // One page at a time, so a late one can't switch accounts.
     page?.close();
-    let flowId: string | undefined;
     const signedIn = (error: { message: string } | null): Answer =>
       error ? { error: error.message } : { signedIn: true };
     const current = await serveSignIn({
@@ -136,14 +139,11 @@ export function startAccount() {
           provider,
           options: { redirectTo, skipBrowserRedirect: true },
         });
-        if (error) return { error: error.message };
-        flowId = data.flowId ?? undefined;
-        return data.url;
+        return error ? { error: error.message } : data.url;
       },
       signIn: async (email, password) =>
         signedIn((await auth.signInWithPassword({ email, password })).error),
       signUp: async (account, redirectTo) => {
-        flowId = undefined;
         const { data, error } = await auth.signUp({
           email: account.email,
           password: account.password,
@@ -157,11 +157,18 @@ export function startAccount() {
         // by default. A later click still confirms the account.
         return { note: `Check ${account.email} for a link to confirm your account.` };
       },
-      exchange: async (code) =>
+      exchange: async (code, flowId) =>
         signedIn((await auth.exchangeCodeForSession(code, flowId ? { flowId } : undefined)).error),
     });
     page = current;
-    await shell.openExternal(create ? `${current.url}?create` : current.url);
+    const url = new URL(current.url);
+    if (create) url.searchParams.set("create", "");
+    try {
+      await shell.openExternal(url.href);
+    } catch (error) {
+      current.close();
+      return `Couldn't open your browser: ${(error as Error).message}`;
+    }
     const error = await current.done;
     if (page === current) page = undefined;
     if (!error) bringForward();

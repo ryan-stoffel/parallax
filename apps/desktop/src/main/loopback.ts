@@ -19,12 +19,13 @@ export type Accounts = {
   signIn(email: string, password: string): Promise<Answer>;
   /** The confirmation email's link comes back to `redirectTo` with a code. */
   signUp(account: NewAccount, redirectTo: string): Promise<Answer>;
-  /** Trades a code that came back to `redirectTo` for a session. */
-  exchange(code: string): Promise<Answer>;
+  /** Trades a code that came back to `redirectTo` for a session, with its PKCE flow's id. */
+  exchange(code: string, flowId: string | undefined): Promise<Answer>;
 };
 
 /**
- * The open sign-in page: `url` to open in the browser (`?create` opens Create an account), and
+ * The open sign-in page: `url` to open in the browser, which carries the page's secret (a
+ * `create` parameter opens Create an account), and
  * `done`, which resolves to undefined once signed in, or to why it stopped: on `close`, or after
  * `timeoutMs`.
  */
@@ -35,6 +36,10 @@ export type SignInPage = { url: string; done: Promise<string | undefined>; close
  * in or creates an account there with a provider or an email, and providers and email links
  * redirect back to its `/callback` (RFC 8252). Every step runs through `accounts`, so the page
  * never holds a token. A failed step shows on the page, which can try again.
+ *
+ * Only the browser the app opened may sign in: `url` carries a secret, which the first visit
+ * trades for a cookie that starting a sign-in requires. `/callback` needs none, since PKCE ties
+ * its code to this app.
  */
 export async function serveSignIn(
   accounts: Accounts,
@@ -49,6 +54,9 @@ export async function serveSignIn(
   const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
   const origin = `http://${host}`;
   const callback = `${origin}/callback`;
+  const secret = randomUUID();
+  // Cookies ignore ports, so the port keeps two pages' cookies apart.
+  const cookie = `parallax-${host.split(":")[1]}=${secret}`;
 
   const timer = setTimeout(() => stop("Sign-in timed out. Try again."), timeoutMs);
   function stop(error: string | undefined) {
@@ -69,10 +77,26 @@ export async function serveSignIn(
     const url = new URL(req.url ?? "/", origin);
     const get = req.method === "GET";
 
-    if (get && url.pathname === "/") return page(res, signInPage);
+    const opened = url.searchParams.get("s") === secret;
+    const allowed = opened || (req.headers.cookie ?? "").split(/;\s*/).includes(cookie);
+
+    if (get && url.pathname === "/") {
+      if (!allowed) return void res.writeHead(403).end("Start signing in from the Parallax app.");
+      // The secret leaves the address bar and history.
+      if (opened)
+        return void res
+          .writeHead(302, {
+            location: url.searchParams.has("create") ? "/?create" : "/",
+            "set-cookie": `${cookie}; HttpOnly; SameSite=Strict; Path=/`,
+            "cache-control": "no-store",
+          })
+          .end();
+      return page(res, signInPage);
+    }
 
     const provider = url.pathname.match(/^\/oauth\/(\w+)$/)?.[1];
     if (get && provider && providers.includes(provider)) {
+      if (!allowed) return void res.writeHead(403).end();
       const target = await accounts
         .oauthUrl(provider as OAuthProvider, callback)
         .catch((error: Error) => ({ error: error.message }));
@@ -83,7 +107,9 @@ export async function serveSignIn(
     if (get && url.pathname === "/callback") {
       const code = url.searchParams.get("code");
       const answer = code
-        ? await attempt(() => accounts.exchange(code))
+        ? await attempt(() =>
+            accounts.exchange(code, url.searchParams.get("sb_flow_id") ?? undefined),
+          )
         : {
             error:
               url.searchParams.get("error_description") ??
@@ -95,7 +121,7 @@ export async function serveSignIn(
 
     if (req.method === "POST" && url.pathname === "/email") {
       // Only the page itself: browsers send Origin with every POST.
-      if (req.headers.origin !== origin) return void res.writeHead(403).end();
+      if (!allowed || req.headers.origin !== origin) return void res.writeHead(403).end();
       const form = await readJson(req);
       if (!form) return void res.writeHead(400).end();
       const text = (key: string) => (typeof form[key] === "string" ? form[key] : "");
@@ -116,7 +142,7 @@ export async function serveSignIn(
     res.writeHead(404).end();
   }
 
-  return { url: `${origin}/`, done, close: () => stop("Sign-in was cancelled.") };
+  return { url: `${origin}/?s=${secret}`, done, close: () => stop("Sign-in was cancelled.") };
 }
 
 /**
