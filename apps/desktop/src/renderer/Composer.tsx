@@ -171,6 +171,12 @@ const manualDenials = {
 export const tabItem =
   "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
 
+/** A prompt for Stop to put back: its text, then its images once they load. */
+export interface Unanswered {
+  text: string;
+  images: () => Promise<PromptImage[]>;
+}
+
 export interface ComposerProps {
   /** Whether it starts a new thread, which only changes its hint. */
   newThread?: boolean;
@@ -188,9 +194,12 @@ export interface ComposerProps {
   onSendInBackground?: ComposerProps["onSend"];
   /**
    * While set, an empty box shows Stop instead of Send. Resolves to an error message.
-   * Stop stays pending until the caller drops `onStop`, when the run stops.
+   * Stop stays pending until the caller drops `onStop`, when the run stops. Esc in the box stops
+   * too.
    */
   onStop?: () => Promise<string | undefined>;
+  /** The run's latest prompt while nothing answers it yet, which a Stop that works puts back. */
+  unanswered?: Unanswered;
   /** Why sending is off right now, shown in place of the box's hint. */
   disabledReason?: string;
   /** The tab tucked under the box: where the thread runs, or an open run's status. */
@@ -248,6 +257,7 @@ export function Composer({
   onSend,
   onSendInBackground,
   onStop,
+  unanswered,
   disabledReason,
   tab,
   footer,
@@ -385,6 +395,27 @@ export function Composer({
     }
   };
 
+  const stop = async () => {
+    const back = unanswered;
+    setStopping(true);
+    setError(undefined);
+    const failed = await onStop?.();
+    if (failed) {
+      setStopping(false);
+      setError(failed);
+    } else if (back && !editor.isDestroyed) {
+      // Back ahead of anything typed meanwhile, as plain lines: they send as the same Markdown.
+      // ponytail: its formatting shows as typed Markdown, until the box parses Markdown.
+      editor.commands.focus("start");
+      editor.view.pasteText(editor.isEmpty ? back.text : `${back.text}\n`);
+      void back
+        .images()
+        .then((images) =>
+          setImages((added) => [...images, ...added].slice(0, imageCaps?.maxImages)),
+        );
+    }
+  };
+
   const placeholder =
     disabledReason ??
     (newThread
@@ -432,6 +463,10 @@ export function Composer({
             .setContent(next < history.length ? { type: "doc", content: lines } : "")
             .focus("end")
             .run();
+          return true;
+        }
+        if (event.key === "Escape" && showStop && !stopping && !event.isComposing) {
+          void stop();
           return true;
         }
         if (event.key !== "Enter" || event.isComposing) return false;
@@ -518,16 +553,6 @@ export function Composer({
       .insertContent(space + insert)
       .run();
   }, [insert, editor]);
-
-  const stop = async () => {
-    setStopping(true);
-    setError(undefined);
-    const failed = await onStop?.();
-    if (failed) {
-      setStopping(false);
-      setError(failed);
-    }
-  };
 
   return (
     <div className="w-full">
