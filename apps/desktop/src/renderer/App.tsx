@@ -487,7 +487,12 @@ export function App() {
           </>
         )}
         {/* Outside the views, so the terminals live on behind Settings and Usage. */}
-        <TerminalDrawer open={drawerOpen} folder={folder} deleted={deleted} />
+        <TerminalDrawer
+          open={drawerOpen}
+          folder={folder}
+          deleted={deleted}
+          onClose={toggleDrawer}
+        />
       </main>
 
       <SidePanel
