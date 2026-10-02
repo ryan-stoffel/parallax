@@ -185,3 +185,22 @@ pub struct ProjectStartParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
 }
+
+/// Params of `project/delete`: deletes a project with its coordinator and every run in it, their
+/// stored events, sent turns, images, worktrees, and branches, and its shared context folder,
+/// behind the `projectDelete` capability (PLX-338).
+///
+/// Running CLIs are cancelled first, and the delete answers once they have exited and the
+/// project is gone, after appending `project.deleted`. Deleting a project that doesn't exist, or
+/// a repo entry's id, fails with `projectNotFound`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDeleteParams {
+    /// The project.
+    pub project: ProjectId,
+}
+
+/// Result of `project/delete`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDeleteResult {}

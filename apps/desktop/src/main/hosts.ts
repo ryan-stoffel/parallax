@@ -36,6 +36,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "project/create": true,
   "project/start": true,
   "project/update": true,
+  "project/delete": true,
   "accounts/keys/add": true,
   "accounts/keys/list": true,
   "accounts/keys/remove": true,

@@ -25,6 +25,7 @@ A project lives in its host's store (0009), and any number of clients can attach
   - There is no way to remove an icon once set. `"icon": null` reads as absent, like every optional field, and leaves the icon as it is. The app can pick its default icon by name instead.
 - **`updatedAt`.** A rename or a new icon is not activity, so `project/update` leaves `updatedAt` as it is, and the sidebar order stays put.
 - **Event.** A change appends a host-level `project.updated` event carrying the whole project, logged, replayed, and pruned like `project.created` (0016). An update that changes nothing appends no event.
+- **Deleting (PLX-338).** `project/delete { project }` deletes each of the Project's runs through its actor, coordinators first, as `thread/delete` deletes a thread's: it stops a running CLI, then removes the run's rows, events, turns, images, worktree, and branch, one run per transaction. The Project row goes last, in the same store job that appends a host-level `project.deleted { project }`, so a crash midway leaves the Project listed and deleting it again finishes the job. An unknown id or a repo entry's id fails with `projectNotFound`. plxd advertises it as `projectDelete`.
 - **Capability.** plxd advertises `projectEdit` in `initialize`. It gates `project/update`, `project.updated`, and `icon` on `Project` and `project/create`, since an older plxd would silently drop an `icon` (0007). On a host without it, the app hides editing and sends no icon.
 
 ## Consequences

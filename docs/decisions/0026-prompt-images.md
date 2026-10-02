@@ -20,7 +20,7 @@ Ryan wants to paste images into the composer the way Claude desktop does: the im
   - Once a CLI has taken a message, plxd writes each of its images to a new `images` table in the store (`run_id`, `id`, `media_type`, `data`) under a fresh UUIDv7.
   - The message's `turnStarted` item lists those ids, the same way it carries a follow-up's text (RYA-92). That includes the prompt's turn, which has no `turnId`.
   - `agent/image {runId, imageId}` returns the image as it was sent. It fails with `imageNotFound` for an unknown id.
-  - `thread/delete` removes a thread's images along with its turns and events. Otherwise, images stay as long as their run does, like its events (0016, #207).
+  - `thread/delete` removes a thread's images along with its turns and events, and `project/delete` (PLX-338) removes those of every run in the Project. Otherwise, images stay as long as their run does, like its events (0016, #207).
 - **Backends.**
   - Claude Code gets a message's images as Messages API base64 image blocks, ahead of the text block, in its stream-json user message.
   - Codex gets them as files in a private folder under the data folder's `tmp/`, one `--image=<file>` each, on `exec` and `exec resume`. plxd deletes the folder once Codex exits.

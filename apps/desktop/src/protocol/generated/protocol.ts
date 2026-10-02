@@ -265,6 +265,12 @@ export type ParallaxRequests = {
 	 * and cut at a size cap (PLX-328). Gated on the `prDiff` capability.
 	 */
 	"pr/diff": { params: PrViewParams, result: PrDiffResult },
+	/**
+	 * `project/delete`: deletes a project with every run in it, stopping their CLIs first
+	 * (PLX-338). Fails with `projectNotFound` for an unknown project or a repo entry's id.
+	 * Gated on the `projectDelete` capability.
+	 */
+	"project/delete": { params: ProjectDeleteParams, result: ProjectDeleteResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1647,7 +1653,11 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * The project as it stands.
 	 */
-	project: Project, } | { "kind": "context.changed",
+	project: Project, } | { "kind": "project.deleted",
+	/**
+	 * The deleted project's id.
+	 */
+	project: ProjectId, } | { "kind": "context.changed",
 	/**
 	 * The changed file.
 	 */
@@ -3326,6 +3336,27 @@ export type PrDiffResult = {
 	 */
 	truncated: boolean,
 };
+
+/**
+ * Params of `project/delete`: deletes a project with its coordinator and every run in it, their
+ * stored events, sent turns, images, worktrees, and branches, and its shared context folder,
+ * behind the `projectDelete` capability (PLX-338).
+ *
+ * Running CLIs are cancelled first, and the delete answers once they have exited and the
+ * project is gone, after appending `project.deleted`. Deleting a project that doesn't exist, or
+ * a repo entry's id, fails with `projectNotFound`.
+ */
+export type ProjectDeleteParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Result of `project/delete`.
+ */
+export type ProjectDeleteResult = Record<symbol, never>;
 
 /**
  * Params of `$/cancelRequest`.

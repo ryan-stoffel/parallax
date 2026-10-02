@@ -670,6 +670,19 @@ async fn record(
     });
     let scope = fields.project_id;
     let recorded = store(daemon, move |db| {
+        // `prepare_run` read the scope in an earlier job: a Project that `project/delete` removed
+        // since gets no run (PLX-338).
+        if db
+            .get_project(scope)
+            .map_err(|e| store_error(&e))?
+            .is_none()
+            && db.get_repo(scope).map_err(|e| store_error(&e))?.is_none()
+        {
+            return Err(ErrorObject::parallax(
+                ErrorKind::ProjectNotFound,
+                format!("no project has id {scope}"),
+            ));
+        }
         if is_thread {
             db.create_thread_run(
                 run_id.into(),
@@ -1017,8 +1030,8 @@ async fn ask<T>(
     let (reply, answer) = oneshot::channel();
     let mut command = command(reply);
     let stopping = || ErrorObject::internal_error("plxd is stopping");
-    // An actor that `thread/delete` just stopped has closed its channel: look the run up again,
-    // which then finds it gone.
+    // An actor that `thread/delete` or `project/delete` just stopped has closed its channel: look
+    // the run up again, which then finds it gone.
     for _ in 0..2 {
         let actor = actor_for(daemon, id).await?;
         match actor.send(command).await {
@@ -1116,8 +1129,8 @@ pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObjec
     )
 }
 
-/// `thread/delete`'s part in the runner: through the run's actor, which stops a running CLI
-/// first and never races the run's own resume, commit, or accept.
+/// `thread/delete`'s and `project/delete`'s part in the runner: deletes a run through its actor,
+/// which stops a running CLI first and never races the run's own resume, commit, or accept.
 pub(crate) async fn delete(daemon: &Arc<Daemon>, id: RunId) -> Result<(), ErrorObject> {
     ask(daemon, id, |reply| Command::Delete { reply }).await
 }
@@ -1320,9 +1333,74 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use parallax_protocol::RunId;
+    use std::path::Path;
 
-    use super::StartLocks;
+    use parallax_protocol::{ErrorKind, RunId};
+    use parallax_store::{ProjectFields, RunFields, RunState};
+    use uuid::Uuid;
+
+    use super::{StartLocks, record, store, store_error};
+    use crate::server::Daemon;
+
+    /// PLX-338: a worker start that read its Project before `project/delete` removed it records
+    /// no run once the row is gone, so the delete leaves no orphan behind.
+    #[tokio::test]
+    async fn a_start_racing_a_project_delete_records_no_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let project = Uuid::now_v7();
+        let fields = ProjectFields {
+            name: "app".to_owned(),
+            repo_path: "/src/app".to_owned(),
+            icon: None,
+        };
+        // The start's `prepare_run` saw the project; the delete then removed it.
+        store(&daemon, move |db| {
+            db.create_project(project, &fields)
+                .map_err(|e| store_error(&e))?;
+            db.delete_project(project).map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+
+        let run_id = RunId::generate();
+        let run = RunFields {
+            project_id: project,
+            prompt: "Build it.".to_owned(),
+            requested_account: None,
+            policy: super::WORKSPACE_WRITE.to_owned(),
+            backend: "fake".to_owned(),
+            coordinator_thread: None,
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            approvals: false,
+            checkout: false,
+        };
+        let state = RunState::default();
+        let error = record(
+            &daemon,
+            run_id,
+            (run, state),
+            false,
+            Path::new("/src/app"),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.parallax_data().map(|data| data.kind),
+            Some(ErrorKind::ProjectNotFound)
+        );
+        let stored = store(&daemon, move |db| {
+            db.get_run(run_id.into()).map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+        assert_eq!(stored, None);
+    }
 
     #[test]
     fn different_run_ids_get_independent_locks() {

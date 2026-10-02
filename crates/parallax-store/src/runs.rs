@@ -262,6 +262,22 @@ impl Store {
         Ok((run, worktree))
     }
 
+    /// Deletes run `id` with its worktree row, stored events, sent turns, images, and wake-up
+    /// state, in one transaction: how `project/delete` (PLX-338) removes a Project's run. Returns
+    /// whether the run existed.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn delete_run(&mut self, id: Uuid) -> Result<bool, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existed = delete_run_rows(&tx, id)?;
+        tx.commit()?;
+        Ok(existed)
+    }
+
     /// Reads a run.
     ///
     /// # Errors
@@ -428,4 +444,19 @@ pub(crate) fn insert_run(
         return Err(StoreError::IdConflict { id });
     }
     fetch(conn, id)?.ok_or(StoreError::NotFound { id })
+}
+
+/// Deletes run `id`'s rows in every table that keeps them. None of them has a foreign key to
+/// `runs`, so nothing else removes them. Returns whether the run row existed.
+pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, StoreError> {
+    let key = id.to_string();
+    let existed = conn.execute("DELETE FROM runs WHERE id = ?1", params![key])? > 0;
+    conn.execute("DELETE FROM worktrees WHERE id = ?1", params![key])?;
+    for table in ["events", "turns", "images", "wakes"] {
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE run_id = ?1"),
+            params![key],
+        )?;
+    }
+    Ok(existed)
 }
