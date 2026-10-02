@@ -23,10 +23,11 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestI
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
-    AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentGitStatus, AgentImage, AgentList,
-    AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart, ContextList, ContextRead,
-    ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion, Initialize,
-    ProjectCreate, ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
+    AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus, AgentImage,
+    AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart, ContextList,
+    ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
+    Initialize, ProjectCreate, ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageGet,
+    UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -194,6 +195,7 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentImage::NAME => handle::<AgentImage, _, _>(request, |p| agent::image(context, p)).await,
         AgentDiff::NAME => handle::<AgentDiff, _, _>(request, |p| agent::diff(context, p)).await,
         AgentFile::NAME => handle::<AgentFile, _, _>(request, |p| agent::file(context, p)).await,
+        AgentFiles::NAME => handle::<AgentFiles, _, _>(request, |p| agent::files(context, p)).await,
         AgentAccept::NAME => {
             handle::<AgentAccept, _, _>(request, |p| agent::accept(context, p)).await
         }

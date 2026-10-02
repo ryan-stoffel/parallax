@@ -56,6 +56,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "agent/image": true,
   "agent/diff": true,
   "agent/file": true,
+  "agent/files": true,
   "agent/accept": true,
   "agent/requestChanges": true,
   "agent/openPr": true,

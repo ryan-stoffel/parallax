@@ -1274,7 +1274,7 @@ async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
     host.server.stop().await;
 }
 
-fn decode_base64(text: &str) -> Vec<u8> {
+pub(crate) fn decode_base64(text: &str) -> Vec<u8> {
     let value = |c: u8| -> u32 {
         match c {
             b'A'..=b'Z' => u32::from(c - b'A'),

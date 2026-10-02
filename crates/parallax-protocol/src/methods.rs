@@ -32,19 +32,19 @@ use crate::{
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
     AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentCommitParams, AgentDiffParams,
     AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult,
-    AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams,
-    AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
-    AgentStartParams, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
-    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
-    HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams,
-    InitializeResult, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
-    RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
-    UsageHistoryResult,
+    AgentFilesParams, AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams,
+    AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPushParams,
+    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams,
+    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, HostHealthParams,
+    HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams, InitializeResult,
+    ProjectCreateParams, ProjectCreateResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, RepoAddParams,
+    RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -193,8 +193,13 @@ method_table! {
         /// capability, like every review method.
         AgentDiff = "agent/diff": AgentDiffParams => AgentDiffResult;
         /// `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
-        /// size-capped, for a diff editor.
+        /// size-capped, for a diff editor. Its `working` side, behind the `files` capability,
+        /// reads the file on disk now.
         AgentFile = "agent/file": AgentFileParams => AgentFileResult;
+        /// `agent/files`: one folder of a run's worktree, or a Current checkout thread's
+        /// checkout, without `.git` or what git ignores, for browsing (RYA-296). Gated on the
+        /// `files` capability.
+        AgentFiles = "agent/files": AgentFilesParams => AgentFilesResult;
         /// `agent/accept`: merges a run's commit into the project repository's current branch on
         /// the host, fast-forward when possible, then removes its worktree and branch. Never
         /// pushes. Idempotent on its client-generated id.
@@ -315,6 +320,7 @@ mod tests {
                 "agent/image",
                 "agent/diff",
                 "agent/file",
+                "agent/files",
                 "agent/accept",
                 "agent/requestChanges",
                 "agent/openPr",
