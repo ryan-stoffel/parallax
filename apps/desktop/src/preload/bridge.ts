@@ -119,7 +119,35 @@ export interface ParallaxBridge {
   openTargets(hostId: string): Promise<OpenTarget[]>;
   /** Opens a host's folder with `target`. Main shows a dialog when it can't. */
   openFolder(hostId: string, target: OpenTarget, folder: string): Promise<void>;
+
+  /**
+   * Calls `listener` with the signed-in Parallax account (0037), or null, now and on every
+   * change. Returns the unsubscribe function.
+   */
+  onProfile(listener: (profile: Profile | null) => void): () => void;
+  /**
+   * Signs in with a provider in the system browser, which creates the account the first time.
+   * Settles once the browser comes back, or another sign-in replaces this one. Resolves to an
+   * error for people, or undefined.
+   */
+  signInWith(provider: OAuthProvider): Promise<string | undefined>;
+  /** Signs in with email and password. Resolves to an error for people, or undefined. */
+  signInWithEmail(email: string, password: string): Promise<string | undefined>;
+  /**
+   * Creates an account with email and password. Resolves to a note for people, such as an error
+   * or "Check your email", or undefined once signed in.
+   */
+  signUp(account: NewAccount): Promise<string | undefined>;
+  /** Signs out on this computer. */
+  signOut(): Promise<void>;
 }
+
+/** The signed-in Parallax account, as the app shows it. `picture` is a data: URL. */
+export type Profile = { name: string; email: string; picture?: string };
+
+export type OAuthProvider = "github" | "google" | "apple";
+
+export type NewAccount = { firstName: string; lastName: string; email: string; password: string };
 
 /** What the sidebar's Update button shows. */
 export type UpdateState = {

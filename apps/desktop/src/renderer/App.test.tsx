@@ -16,6 +16,7 @@ const bridge: Partial<ParallaxBridge> = {
   hosts: async () => [],
   onHosts: () => () => {},
   openTargets: async () => [],
+  onProfile: () => () => {},
 };
 window.parallax = bridge as ParallaxBridge;
 // happy-dom has no popovers.

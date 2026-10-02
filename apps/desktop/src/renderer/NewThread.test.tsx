@@ -64,6 +64,7 @@ beforeEach(() => {
     "project/list": () => ({ result: { projects: [], seq: 7 } }),
   };
   window.parallax = {
+    onProfile: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async () => ({

@@ -34,13 +34,13 @@ export function statusLabel(state: ConnectionState): string {
 }
 
 /**
- * A quiet status line for the sidebar's footer, for the open host: a dot and a
- * word while things are fine; on failure, why, and Retry once it stops retrying
+ * A quiet status line for the sidebar's footer, for the open host, shown only while it isn't
+ * connected: a dot and a word while connecting; on failure, why, and Retry once it stops retrying
  * by itself. The tail of attach's (and ssh's) stderr is only in the tooltip.
  */
 export function ConnectionStatus({ hostId }: { hostId: string }) {
   const state = useConnection(hostId);
-  if (!state) return null;
+  if (!state || state.status === "connected") return null;
 
   const failed = state.status === "failed";
   const label = statusLabel(state);
@@ -52,12 +52,7 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
         <span aria-hidden className="grid w-4 shrink-0 place-items-center">
           <StatusDot state={state} />
         </span>
-        <span className="min-w-0 flex-1 truncate">
-          {label}
-          {state.status === "connected" && (
-            <span className="text-faint-foreground"> · plxd {state.plxd}</span>
-          )}
-        </span>
+        <span className="min-w-0 flex-1 truncate">{label}</span>
         {failed && !state.retrying && (
           <button
             type="button"
