@@ -1,0 +1,63 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/commands",
+    "params": {
+      "backend": "claude",
+      "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5ed"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "commands": [
+        {
+          "text": "/ponytail:ponytail",
+          "name": "ponytail:ponytail",
+          "description": "(ponytail) Forces the laziest solution that actually works.",
+          "argumentHint": "[lite|full|ultra]"
+        },
+        {
+          "text": "/compact",
+          "name": "compact",
+          "description": "Clear conversation history but keep a summary in context."
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/commands",
+    "params": { "backend": "codex", "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "commands": [
+        {
+          "text": "$create-rule",
+          "name": "create-rule",
+          "description": "Create a Cursor rule."
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "repo/files",
+    "params": { "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "files": ["README.md", "src/main.rs", "notes/todo.md"],
+      "truncated": false
+    }
+  }
+]

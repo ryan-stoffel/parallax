@@ -972,6 +972,11 @@ impl Agents {
     pub(crate) fn worktrees(&self) -> &WorktreeManager {
         &self.worktrees
     }
+
+    /// The backends runs start on.
+    pub(crate) fn backends(&self) -> &BackendRegistry {
+        &self.backends
+    }
 }
 
 /// The command channel of `id`'s actor, spawning one for a run created before this plxd

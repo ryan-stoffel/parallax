@@ -33,6 +33,7 @@ mod account;
 mod agent;
 mod approval;
 mod cli_account;
+mod composer;
 mod context;
 mod defaults;
 mod error;
@@ -74,6 +75,9 @@ pub use approval::{
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,
     CliKind, DetectedCli,
+};
+pub use composer::{
+    AgentCommand, AgentCommandsParams, AgentCommandsResult, RepoFilesParams, RepoFilesResult,
 };
 pub use context::{
     ContextFile, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
