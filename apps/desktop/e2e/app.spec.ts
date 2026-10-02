@@ -384,7 +384,10 @@ test("starts a thread in the repository's current checkout, on its branch, with 
 
   await page.getByRole("button", { name: "quill", exact: true }).hover();
   await page.getByRole("button", { name: "New thread in quill" }).click();
-  await expect(page.getByRole("heading", { name: "What should we build in quill?" })).toBeVisible();
+  // The heading's accessible name spaces out the repository button inside it, so match its text.
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "What should we build in quill?",
+  );
   await page.getByRole("button", { name: /^Runs on: .*, New worktree$/ }).click();
   await page.getByRole("menuitemradio", { name: /^Current checkout/ }).click();
   await expect(page.getByRole("button", { name: /^Runs on: .*, Current checkout$/ })).toBeVisible();
