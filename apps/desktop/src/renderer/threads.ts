@@ -111,6 +111,14 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         case "project.created":
         case "project.updated":
           return { ...state, projects: upsert(state.projects, e.project) };
+        case "project.deleted":
+          return {
+            ...state,
+            projects: state.projects.filter((p) => p.id !== e.project),
+            runs: Object.fromEntries(
+              Object.entries(state.runs).filter(([, r]) => r.project !== e.project),
+            ),
+          };
         case "repo.added":
         case "repo.updated":
           return { ...state, repos: upsert(state.repos, e.repo) };
@@ -244,6 +252,11 @@ export interface ThreadsView {
    */
   updateProject: (project: string, change: ProjectChange) => Promise<string | undefined>;
   /**
+   * Deletes a Project with every run in it, once plxd has stopped them. Resolves to an error
+   * message, or undefined.
+   */
+  removeProject: (project: string) => Promise<string | undefined>;
+  /**
    * Starts a Project's coordinator with `prompt` and its `images`, or starts it over with a new
    * `runId` (0024), then keeps it as the Project's. Reusing `runId` to retry is safe with any
    * prompt or options: a failed `project/start` creates nothing, and one whose answer was lost
@@ -260,6 +273,8 @@ export interface ThreadsView {
   attention: boolean;
   /** Whether the host's plxd renames Projects and sets their icons (`projectEdit`, 0032). */
   editable: boolean;
+  /** Whether the host's plxd deletes Projects (`projectDelete`, PLX-338). */
+  deletable: boolean;
   /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
   iconImageBytes?: number;
   /**
@@ -289,7 +304,8 @@ export type CoordinatorOptions = Pick<
  * Project's own events for its runs and their permission requests (0033), starting over on
  * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
  * `approvals`, the threads and coordinators started here forward their permission requests
- * (RYA-196, 0031); `attention`, `editable`, and `iconImageBytes` are passed through for the sidebar.
+ * (RYA-196, 0031); `attention`, `editable`, `deletable`, and `iconImageBytes` are passed through
+ * for the sidebar.
  */
 export function useThreads(
   hostId: string,
@@ -298,8 +314,9 @@ export function useThreads(
     approvals = false,
     attention = false,
     editable = false,
+    deletable = false,
     iconImageBytes,
-  }: Partial<Pick<ThreadsView, "attention" | "editable" | "iconImageBytes">> & {
+  }: Partial<Pick<ThreadsView, "attention" | "editable" | "deletable" | "iconImageBytes">> & {
     approvals?: boolean;
   } = {},
 ): ThreadsView {
@@ -502,6 +519,17 @@ export function useThreads(
     [hostId],
   );
 
+  const removeProject = useCallback(
+    async (project: string) => {
+      const answer = await window.parallax.request(hostId, "project/delete", { project });
+      if ("error" in answer) return describeError(answer.error);
+      if (shown.current === hostId)
+        dispatch({ type: "event", event: { kind: "project.deleted", project } });
+      return undefined;
+    },
+    [hostId],
+  );
+
   const startCoordinator = useCallback(
     async (
       project: string,
@@ -552,6 +580,7 @@ export function useThreads(
       error,
       attention,
       editable,
+      deletable,
       iconImageBytes,
       update,
       updateRepo,
@@ -561,6 +590,7 @@ export function useThreads(
       remove,
       createProject,
       updateProject,
+      removeProject,
       startCoordinator,
     }),
     [
@@ -568,6 +598,7 @@ export function useThreads(
       error,
       attention,
       editable,
+      deletable,
       iconImageBytes,
       update,
       updateRepo,
@@ -577,6 +608,7 @@ export function useThreads(
       remove,
       createProject,
       updateProject,
+      removeProject,
       startCoordinator,
     ],
   );
@@ -611,12 +643,14 @@ export const idleThreads: ThreadsView = {
   state: emptyThreads,
   attention: false,
   editable: false,
+  deletable: false,
   addRepo: async () => notConnected,
   start: async () => ({ code: -32000, message: notConnected }),
   archive: async () => notConnected,
   remove: async () => notConnected,
   createProject: async () => notConnected,
   updateProject: async () => notConnected,
+  removeProject: async () => notConnected,
   startCoordinator: async () => ({ code: -32000, message: notConnected }),
   update: async () => notConnected,
   updateRepo: async () => notConnected,
