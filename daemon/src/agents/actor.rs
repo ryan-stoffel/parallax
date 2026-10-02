@@ -940,15 +940,6 @@ impl Actor {
     ) -> Result<AgentRun, ErrorObject> {
         let moving = self.moves(account.as_ref());
         let session_id = self.row.state.session_id.clone();
-        if session_id.is_none() && !moving {
-            return Err(ErrorObject::parallax(
-                ErrorKind::RunNotResumable,
-                format!(
-                    "run {} ended before its CLI reported a session, so it can't be resumed",
-                    self.id
-                ),
-            ));
-        }
         // The session belongs to the account the run was on when it ended, after any fallback,
         // not to whatever the worker role's default is now.
         let account = match account {
@@ -1025,14 +1016,17 @@ impl Actor {
         };
         let fresh = resume.is_none();
         let to = backend.to_owned();
+        // The old session, if any, is another CLI's, so the new CLI's start never stores it.
+        let old_session = if fresh {
+            self.row.state.session_id.take()
+        } else {
+            None
+        };
         if self
             .launch(prepared, prompt, images, Some(turn_id), resume, paths)
             .await
         {
             if fresh {
-                // The old session, if any, is another CLI's, or one that never started.
-                self.row.state.session_id = None;
-                self.save().await;
                 self.push(AgentOutputItem::Notice {
                     detail: handoff_notice(&from, &to),
                 })
@@ -1043,6 +1037,7 @@ impl Actor {
             self.record_turn(turn_id, message.clone()).await;
             self.last_message = message;
         } else {
+            self.row.state.session_id = old_session;
             self.move_back(moved_from).await;
         }
         self.snapshot()

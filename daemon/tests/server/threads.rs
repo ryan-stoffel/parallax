@@ -1161,10 +1161,22 @@ async fn a_message_with_a_new_model_waits_for_a_running_thread_to_finish() {
 }
 
 /// The fake CLI under another name, as another provider's backend, recording each prompt it gets
-/// and whether it resumed a session.
+/// and whether it resumed a session. Each start takes the next of `first`, where `None` refuses
+/// to start, then `fake` once `first` is empty.
 struct Other {
     fake: FakeBackend,
+    first: Mutex<VecDeque<Option<FakeBackend>>>,
     prompts: Arc<Mutex<Vec<(String, bool)>>>,
+}
+
+impl Other {
+    fn new(fake: FakeBackend, prompts: &Arc<Mutex<Vec<(String, bool)>>>) -> Self {
+        Self {
+            fake,
+            first: Mutex::new(VecDeque::new()),
+            prompts: Arc::clone(prompts),
+        }
+    }
 }
 
 impl Backend for Other {
@@ -1179,7 +1191,11 @@ impl Backend for Other {
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         let prompt = (request.prompt.clone(), request.resume.is_some());
         self.prompts.lock().unwrap().push(prompt);
-        self.fake.start(request)
+        match self.first.lock().unwrap().pop_front() {
+            Some(Some(fake)) => fake.start(request),
+            Some(None) => Err(StartError::Unsupported("refused".to_owned())),
+            None => self.fake.start(request),
+        }
     }
 }
 
@@ -1191,10 +1207,7 @@ async fn a_message_on_another_backends_account_moves_the_thread_there() {
     let mut backends = fake(editing());
     backends.register(
         Provider::Openai,
-        Arc::new(Other {
-            fake: fake_backend(editing()),
-            prompts: Arc::clone(&prompts),
-        }),
+        Arc::new(Other::new(fake_backend(editing()), &prompts)),
     );
     let host = Host::start(backends);
     let mut client = host.client().await;
@@ -1241,6 +1254,154 @@ async fn a_message_on_another_backends_account_moves_the_thread_there() {
         prompt.ends_with("which is yours to answer:\nNow the tests"),
         "{prompt}"
     );
+    host.server.stop().await;
+}
+
+/// A message on another backend's account moves a Current checkout thread there, still in the
+/// user's checkout.
+#[tokio::test]
+async fn a_checkout_thread_moves_to_another_backend_in_the_same_checkout() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = fake(editing());
+    backends.register(
+        Provider::Openai,
+        Arc::new(Other::new(fake_backend(editing()), &prompts)),
+    );
+    let host = Host::start(backends);
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let params = ThreadStartParams {
+        checkout: true,
+        ..start_params(Some(repo.id), "Write the notes")
+    };
+    client.call::<ThreadStart>(params.clone()).await.unwrap();
+    client.until(updated_to(AgentStatus::Completed)).await;
+    std::fs::remove_file(path.join("NOTES.md")).unwrap();
+
+    let moved = client
+        .call::<AgentSend>(AgentSendParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..message(params.run_id, "Write them again")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(moved.backend, "other");
+    assert!(moved.checkout);
+    client.until(updated_to(AgentStatus::Completed)).await;
+    assert!(
+        path.join("NOTES.md").is_file(),
+        "the new CLI wrote in the checkout"
+    );
+    let prompts = prompts.lock().unwrap().clone();
+    let [(prompt, false)] = prompts.as_slice() else {
+        panic!("one new session on the other backend: {prompts:?}");
+    };
+    assert!(
+        prompt.contains(&format!(
+            "own checkout of their repository at {}",
+            path.display()
+        )),
+        "{prompt}"
+    );
+    host.server.stop().await;
+}
+
+/// When the other backend's CLI doesn't start, the thread moves back, and its next message
+/// resumes its original session.
+#[tokio::test]
+async fn a_thread_moves_back_when_the_other_backends_cli_does_not_start() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let other = Other::new(fake_backend(editing()), &prompts);
+    other.first.lock().unwrap().push_back(None);
+    let mut backends = fake(editing());
+    backends.register(Provider::Openai, Arc::new(other));
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let params = start_params(None, "Write the notes");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    client.subscribe(0, Some(scope(started.thread.repo))).await;
+    client.until(updated_to(AgentStatus::Completed)).await;
+
+    let refused = client
+        .call::<AgentSend>(AgentSendParams {
+            model: Some("gpt-6".to_owned()),
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..message(params.run_id, "Now the tests")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(refused.status, AgentStatus::Failed, "{refused:?}");
+    assert_eq!(refused.backend, started.run.backend, "moved back");
+    assert_eq!(refused.model, started.run.model);
+    assert_eq!(
+        refused.session_id.as_deref(),
+        Some("thread-1"),
+        "its session is kept"
+    );
+
+    let resumed = client
+        .call::<AgentSend>(message(params.run_id, "Try again"))
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(resumed.backend, started.run.backend);
+    client.until(updated_to(AgentStatus::Completed)).await;
+    assert_eq!(prompts.lock().unwrap().len(), 1, "only the refused start");
+    host.server.stop().await;
+}
+
+/// A thread whose new CLI on another backend exits before reporting a session isn't stuck: its
+/// next message on that backend starts another new session there.
+#[tokio::test]
+async fn a_moved_thread_with_no_session_starts_a_new_one_on_its_next_message() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let other = Other::new(fake_backend(editing()), &prompts);
+    let quits = fake_backend(vec![Step::Stderr("not logged in".to_owned())]);
+    other.first.lock().unwrap().push_back(Some(quits));
+    let mut backends = fake(editing());
+    backends.register(Provider::Openai, Arc::new(other));
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let params = start_params(None, "Write the notes");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    client.subscribe(0, Some(scope(started.thread.repo))).await;
+    client.until(updated_to(AgentStatus::Completed)).await;
+
+    client
+        .call::<AgentSend>(AgentSendParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..message(params.run_id, "Now the tests")
+        })
+        .await
+        .unwrap();
+    client
+        .until(|event| {
+            matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. }
+                if matches!(state.status, AgentStatus::Completed | AgentStatus::Failed))
+        })
+        .await;
+
+    let again = client
+        .call::<AgentSend>(message(params.run_id, "Try again"))
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(again.backend, "other");
+    client.until(updated_to(AgentStatus::Completed)).await;
+    let prompts = prompts.lock().unwrap().clone();
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(!prompts[1].1, "a new session");
+    assert!(prompts[1].0.contains("<conversation>"), "{}", prompts[1].0);
     host.server.stop().await;
 }
 
