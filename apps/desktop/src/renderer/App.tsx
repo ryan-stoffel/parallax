@@ -15,6 +15,7 @@ import { localId, useHosts } from "./hosts";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
+import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { attentionOf } from "./attention";
@@ -75,6 +76,11 @@ export function App() {
   const [browse, setBrowse] = useState<{ url: string }>();
   // A quiet note for the thread New Thread just started, such as the account it picked.
   const [notice, setNotice] = useState<{ threadId: string; text: string }>();
+  // The pull request the side panel last opened, or with no URL its Pull requests view.
+  const [showPr, setShowPr] = useState<{ url?: string }>();
+  // A message the PR view handed the open thread's chat, until the chat takes it.
+  const [compose, setCompose] = useState<{ text: string; send: boolean }>();
+  const composed = useCallback(() => setCompose(undefined), []);
 
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
@@ -129,6 +135,15 @@ export function App() {
   const agent = agents.runs.find((r) => r.id === agentId);
   // The run whose folder the side panel's Files view browses: the open thread or subagent.
   const filesRunId = selection.kind === "thread" ? selection.threadId : agentId;
+  // The open thread's linked pull requests, on a plxd that links them (PLX-318).
+  const threadRun =
+    selection.kind === "thread" ? threads.state.runs[selection.threadId] : undefined;
+  const linksPrs = connected && "pullRequests" in connection.capabilities;
+  const prs = usePullRequests(host.id, threadRun?.id, (linksPrs && threadRun?.pullRequests) || []);
+  const openPr = (url?: string) => {
+    setPanelOpen(true);
+    setShowPr({ url });
+  };
   // Shrinks an expanded side panel, which hides the main pane the chat opens in.
   const openAgent = (id?: string) => {
     if (!project) return;
@@ -376,6 +391,7 @@ export function App() {
                     key={`${host.id}/${selection.threadId}`}
                     hostId={host.id}
                     run={threads.state.runs[selection.threadId]}
+                    onPrOpened={linksPrs ? openPr : undefined}
                   />
                 )}
                 {folder && (
@@ -414,6 +430,10 @@ export function App() {
                 // The list's status goes stale once the run moves on, so only a start says so.
                 going={selection.started}
                 noRepo={group.id === noRepo}
+                pullRequests={prs.urls.length > 0 && <PullRequestChip prs={prs} onOpen={openPr} />}
+                onPrOpened={linksPrs ? openPr : undefined}
+                compose={compose}
+                onComposed={composed}
               />
             ) : selection.kind === "new" ? (
               <NewThread
@@ -472,6 +492,27 @@ export function App() {
         topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
         remoteHost={host.id === localId ? undefined : host.name}
         browse={browse}
+        pullRequest={showPr}
+        pullRequests={
+          linksPrs && threadRun
+            ? {
+                urls: prs.urls,
+                list: <PullRequestList prs={prs} onOpen={openPr} />,
+                view: (url) => (
+                  <PullRequestView
+                    key={`${host.id}/${threadRun.id}`}
+                    url={url}
+                    prs={prs}
+                    onCompose={(text, send) => {
+                      // The chat is under an expanded panel.
+                      setPanelExpanded(false);
+                      setCompose({ text, send });
+                    }}
+                  />
+                ),
+              }
+            : undefined
+        }
         agents={
           project && (
             <AgentsPanel

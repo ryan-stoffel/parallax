@@ -57,11 +57,19 @@ export function gitActions(
  * The top bar's Git split button for a thread (RYA-298). The main part runs the next useful
  * action; the chevron lists Commit, Push, and Create PR, each disabled with its reason. Commit
  * asks for a message, prefilled with the thread's title. Create PR pushes and opens the pull
- * request in the browser, through `agent/openPr`. The status is read again after each action and
- * whenever the run's status or commit changes, as when a turn ends. Absent until the host's plxd
- * has the `git` capability.
+ * request through `agent/openPr`, in the browser, or with `onPrOpened`, in the PR view. The status
+ * is read again after each action and whenever the run's status or commit changes, as when a turn
+ * ends. Absent until the host's plxd has the `git` capability.
  */
-export function GitMenu({ hostId, run }: { hostId: string; run?: AgentRun }) {
+export function GitMenu({
+  hostId,
+  run,
+  onPrOpened,
+}: {
+  hostId: string;
+  run?: AgentRun;
+  onPrOpened?: (url: string) => void;
+}) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -111,7 +119,8 @@ export function GitMenu({ hostId, run }: { hostId: string; run?: AgentRun }) {
       });
       if ("error" in answer) failed = answer.error;
       else {
-        window.open(answer.result.url, "_blank");
+        if (onPrOpened) onPrOpened(answer.result.url);
+        else window.open(answer.result.url, "_blank");
         await load();
       }
     } else {

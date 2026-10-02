@@ -182,6 +182,26 @@ test("Create PR opens the pull request in the browser and reads the status again
   expect(request.mock.calls.filter(([, m]) => m === "agent/gitStatus")).toHaveLength(2);
 });
 
+test("with onPrOpened, Create PR opens the PR view in place of the browser", async () => {
+  const url = "https://github.com/me/app/pull/42";
+  const open = vi.fn();
+  vi.stubGlobal("open", open);
+  fakeBridge(
+    { git: {}, openPr: {}, pullRequests: {} },
+    {
+      "agent/gitStatus": () => ({ result: { ...clean, upstream: null, ahead: 1 } }),
+      "agent/openPr": () => ({ result: { url } }),
+    },
+  );
+  const onPrOpened = vi.fn();
+  root ??= createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root!.render(<GitMenu hostId="local" run={finished} onPrOpened={onPrOpened} />));
+  await settle();
+  await act(async () => item("Create PR").click());
+  expect(onPrOpened).toHaveBeenCalledWith(url);
+  expect(open).not.toHaveBeenCalled();
+});
+
 test("the status is read again when a turn ends, and every action waits while one runs", async () => {
   const request = fakeBridge(
     { git: {}, openPr: {} },
