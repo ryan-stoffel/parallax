@@ -65,6 +65,7 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => [],
     onHosts: () => () => {},
+    openTargets: async () => [],
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 

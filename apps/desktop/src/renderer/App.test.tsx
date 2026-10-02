@@ -15,6 +15,7 @@ const bridge: Partial<ParallaxBridge> = {
   onConnectionState: () => () => {},
   hosts: async () => [],
   onHosts: () => () => {},
+  openTargets: async () => [],
 };
 window.parallax = bridge as ParallaxBridge;
 
