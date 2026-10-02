@@ -350,7 +350,6 @@ export function ThreadList({
         snoozable={view.attention}
         onOpen={() => onSelect(item.host.id, { kind: "thread", threadId: t.id })}
         onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
-        onSettle={async () => setActionError(await view.update(t.id, { seen: true }))}
         onSnooze={async (until) =>
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
         }
@@ -969,27 +968,32 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 /**
  * A row's first line: its repo's icon and name (and host, when there are several), then `status`:
  * what it asks of the user, or how long ago it was prompted. With `hideStatus`, hovering or
- * focusing the row hides the status for the row's actions.
+ * focusing the row hides the status for the row's actions. With `clearOfActions`, it also keeps the
+ * repo name clear of a thread row's actions.
  */
 function RowHead({
   repo,
   host,
   status,
   hideStatus = true,
+  clearOfActions = false,
 }: {
   repo?: Repo;
   host?: Host;
   status: ReactNode;
   hideStatus?: boolean;
+  clearOfActions?: boolean;
 }) {
   return (
-    <span className="flex w-full items-center gap-1.5 text-[12px] text-faint-foreground">
+    <span
+      className={`flex w-full items-center gap-1.5 text-[12px] text-faint-foreground ${clearOfActions ? "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34" : ""}`}
+    >
       <RepoIcon repo={repo} />
       <span className="min-w-0 truncate">{repo && !repo.scratch ? repo.name : "No repo"}</span>
       {host && <span className="shrink-0 truncate">· {host.name}</span>}
       <span
         data-status
-        className={`ml-auto shrink-0 text-[11.5px] ${hideStatus ? "group-has-[:focus-visible]/row:invisible group-hover/row:invisible" : ""}`}
+        className={`ml-auto shrink-0 text-[11.5px] ${hideStatus ? (clearOfActions ? "group-has-[:focus-visible]/row:hidden group-hover/row:hidden" : "group-has-[:focus-visible]/row:invisible group-hover/row:invisible") : ""}`}
       >
         {status}
       </span>
@@ -1000,9 +1004,8 @@ function RowHead({
 /**
  * A thread's row (0033): its repo and status (what it asks of the user, or how long ago it was
  * prompted), its title, then its branch, diff, and provider. Resting on it shows its card;
- * hovering or focusing it swaps the status for Snooze, Settle (while it has news) or Archive, and
- * more actions, which also open by right-clicking the row: native popovers, so Escape and clicking
- * away close them.
+ * hovering or focusing it swaps the status for Snooze, Archive, and more actions, which also open
+ * by right-clicking the row: native popovers, so Escape and clicking away close them.
  */
 function ThreadRow({
   thread,
@@ -1014,7 +1017,6 @@ function ThreadRow({
   snoozable,
   onOpen,
   onArchive,
-  onSettle,
   onSnooze,
   onDelete,
   onRest,
@@ -1030,7 +1032,6 @@ function ThreadRow({
   snoozable: boolean;
   onOpen: () => void;
   onArchive: () => void;
-  onSettle: () => void;
   onSnooze: (until: Date) => void;
   onDelete: () => void;
   onRest: (row: HTMLElement) => void;
@@ -1050,15 +1051,8 @@ function ThreadRow({
   };
   const Logo = run?.backend ? backendLogos[run.backend] : undefined;
   const hasDetails = !!(run?.branch || run?.diff || Logo);
-  // Settle while it has news, Archive otherwise.
-  const settle = snoozable && (attention === "done" || attention === "failed");
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
-  const mainLabel = settle ? (
-    <>
-      <Check aria-hidden />
-      Settle
-    </>
-  ) : (
+  const mainLabel = (
     <>
       {thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
       {thread.archived ? "Unarchive" : "Archive"}
@@ -1087,7 +1081,7 @@ function ThreadRow({
         }}
         className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left hover:bg-hover ${selected ? current : ""}`}
       >
-        <RowHead repo={repo} status={status} />
+        <RowHead repo={repo} status={status} clearOfActions />
         <span
           data-title
           className={`w-full truncate text-[13px] ${selected || attention !== "settled" ? "text-foreground" : "text-foreground/70"}`}
@@ -1124,8 +1118,7 @@ function ThreadRow({
           type="button"
           onClick={() => {
             onLeave();
-            if (settle) onSettle();
-            else onArchive();
+            onArchive();
           }}
           className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
