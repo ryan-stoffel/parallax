@@ -108,7 +108,7 @@ pub(crate) fn agent_environment() -> Environment {
     #[cfg(unix)]
     let login = std::env::var_os("SHELL").and_then(|shell| login_shell_path(&shell));
     #[cfg(not(unix))]
-    let login = None;
+    let login: Option<OsString> = None;
     with_extra_path(
         allowlisted(&Environment::inherited()),
         std::env::home_dir().as_deref(),
