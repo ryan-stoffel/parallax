@@ -22,6 +22,10 @@ export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 export const UPDATE_CHANNELS = ["nightly", "release"] as const;
 export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
 
+/** Where the top bar's Open button opens a folder: an editor, or the OS's file manager. */
+export const OPEN_TARGETS = ["cursor", "vscode", "files"] as const;
+export type OpenTarget = (typeof OPEN_TARGETS)[number];
+
 export interface ParallaxBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
@@ -119,6 +123,14 @@ export interface ParallaxBridge {
   closeTerminal(): void;
   /** What the terminal prints, then its exit. Returns the unsubscribe function. */
   onTerminal(listener: (message: TerminalMessage) => void): () => void;
+
+  /**
+   * Where `openFolder` can open a folder on a host: the editors this computer has, and the file
+   * manager for this computer's own folders. Empty for an unknown host.
+   */
+  openTargets(hostId: string): Promise<OpenTarget[]>;
+  /** Opens a host's folder with `target`. Main shows a dialog when it can't. */
+  openFolder(hostId: string, target: OpenTarget, folder: string): Promise<void>;
 }
 
 /** What the sidebar's Update button shows. */
