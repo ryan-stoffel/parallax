@@ -11,6 +11,7 @@ import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
+import { iconImageBytes } from "./images";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
 import { IconButton } from "./ui";
@@ -56,7 +57,10 @@ export function NewProjectDialog({
   // would drop an icon, so none is shown or sent.
   const connection = useConnection(workspace?.hostId ?? hostId);
   const iconable = connection?.status === "connected" && "projectEdit" in connection.capabilities;
-  const icon = iconable ? chosenIcon : undefined;
+  const maxImageBytes = iconImageBytes(connection);
+  let icon = iconable ? chosenIcon : undefined;
+  // Nor an image where it would drop that (0038), after a Workspace on another host.
+  if (icon?.image && maxImageBytes === undefined) icon = { ...icon, image: undefined };
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
   // The last try's params, whose id a retry with the same host, name, path, and icon sends again
@@ -81,7 +85,8 @@ export function NewProjectDialog({
       last.name === name &&
       last.repoPath === workspace.repo.path &&
       last.icon?.name === icon?.name &&
-      last.icon?.color === icon?.color
+      last.icon?.color === icon?.color &&
+      last.icon?.image === icon?.image
         ? last
         : {
             hostId: workspace.hostId,
@@ -195,7 +200,15 @@ export function NewProjectDialog({
         </div>
       </form>
       {/* Outside the form, so Enter in the picker never creates the Project. */}
-      {iconable && <IconPicker id={pickerId} value={icon} onPick={setChosenIcon} align="center" />}
+      {iconable && (
+        <IconPicker
+          id={pickerId}
+          value={icon}
+          onPick={setChosenIcon}
+          align="center"
+          maxImageBytes={maxImageBytes}
+        />
+      )}
     </dialog>
   );
 }
