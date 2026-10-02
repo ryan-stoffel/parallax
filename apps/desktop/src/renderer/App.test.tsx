@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { UpdateState, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
+import { appShortcut } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // Only what the frame calls, so new bridge methods don't break this stub.
@@ -76,6 +77,36 @@ test("the sidebar's title opens a new thread", () => {
   )!;
   act(() => title.click());
   expect(crumbs().at(-1)).toBe("New thread");
+});
+
+test("Mod+S toggles the sidebar, and Mod+Alt+U opens the Usage page", () => {
+  renderApp();
+  const press = (init: KeyboardEventInit) =>
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { metaKey: true, ...init }));
+    });
+  const showSidebar = () => document.querySelector('main button[aria-label="Show sidebar"]');
+  expect(showSidebar()).toBeNull();
+  press({ code: "KeyS" });
+  expect(showSidebar()).not.toBeNull();
+  press({ code: "KeyS" });
+  expect(showSidebar()).toBeNull();
+
+  press({ code: "KeyU", altKey: true });
+  const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
+});
+
+test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not Mod+O or Mod+B", () => {
+  const press = (init: KeyboardEventInit) => appShortcut(new KeyboardEvent("keydown", init));
+  expect(press({ code: "Backquote", ctrlKey: true, shiftKey: true })).toBe("terminal");
+  expect(press({ code: "Backquote", metaKey: true, shiftKey: true })).toBeUndefined();
+  expect(press({ code: "KeyO", metaKey: true, altKey: true })).toBe("open");
+  expect(press({ code: "KeyO", metaKey: true })).toBeUndefined();
+  expect(press({ code: "KeyB", metaKey: true })).toBeUndefined();
+  // With Shift they're free for repository actions.
+  expect(press({ code: "KeyS", metaKey: true, shiftKey: true })).toBeUndefined();
+  expect(press({ code: "KeyO", metaKey: true, altKey: true, shiftKey: true })).toBeUndefined();
 });
 
 test("the footer's Usage opens the Usage page, and Update shows when it's ready and its answer", async () => {

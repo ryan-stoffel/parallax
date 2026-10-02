@@ -12,6 +12,7 @@ import { GitMenu } from "./GitMenu";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
+import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
@@ -278,7 +279,7 @@ export function App() {
     }
   };
 
-  // The app's shortcuts (ui.tsx), but Mod+O, which OpenMenu takes, and Mod+1 to Mod+9, which
+  // The app's shortcuts (ui.tsx), but Open, which OpenMenu takes, and Mod+1 to Mod+9, which
   // ThreadList takes.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -293,6 +294,7 @@ export function App() {
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
+      else if (command === "usage") openOnHost(host.id, { kind: "usage" });
       else return;
       e.preventDefault();
     };
@@ -304,7 +306,7 @@ export function App() {
   const showSidebar = !sidebarOpen && (
     <IconButton
       label="Show sidebar"
-      keys="B"
+      keys="S"
       aria-expanded={false}
       aria-controls="sidebar"
       onClick={() => setSidebarOpen(true)}
@@ -584,6 +586,8 @@ function HostLoader({
     approvals: !!capabilities && "approvals" in capabilities,
     attention: !!capabilities && "threadAttention" in capabilities,
     editable: !!capabilities && "projectEdit" in capabilities,
+    deletable: !!capabilities && "projectDelete" in capabilities,
+    iconImageBytes: iconImageBytes(connection),
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;
