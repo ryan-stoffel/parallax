@@ -26,9 +26,9 @@ The naming convention has no exceptions, including for small fixes.
 | `docs/<ID>-<slug>` | Documentation | `develop` | `develop` |
 | `hotfix/<ID>-<slug>` | Urgent fix to a release | `main` | `main` and `develop` |
 
-- Every branch starts from an existing Linear issue and uses its ID. The prefix follows the issue's type label (Feature, Bug, Chore, Docs; Improvement uses `feature/`), whatever its title says. Examples: `feature/RYA-12-connect-app-to-plxd`, `docs/RYA-5-linear-work-record`. Never use Linear's suggested branch name.
+- Every branch starts from an existing Linear issue and uses its ID. The prefix follows the issue's type label (Feature, Bug, Chore, Docs; Improvement uses `feature/`), whatever its title says. Examples: `feature/PLX-12-connect-app-to-plxd`, `docs/PLX-5-linear-work-record`. Never use Linear's suggested branch name.
 - Slugs are lowercase, hyphenated, five words or fewer.
-- Commits use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`) and end with the Linear ID, e.g. `feat: show follow-up messages in a rebuilt transcript (RYA-92)`.
+- Commits use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`) and end with the Linear ID, e.g. `feat: show follow-up messages in a rebuilt transcript (PLX-92)`.
 - Commits and PRs are authored as Ryan only: no co-author or attribution trailers.
 - `main` and `develop` are protected. Changes land only through pull requests.
 
