@@ -159,7 +159,7 @@ fn newest(
 }
 
 /// The coordinator's first message: its instructions, where it is, then the user's message.
-fn first_message(message: &str, repo: &str) -> String {
+pub(super) fn first_message(message: &str, repo: &str) -> String {
     format!(
         "{INSTRUCTIONS}\nThe project's repository is {repo}, your working directory: the user's \
          own checkout, uncommitted changes included.\n\nThe user's message:\n{message}"

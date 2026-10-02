@@ -9,6 +9,12 @@
 //! answered in time, and logs how each one ended, including when a cancel, a stop, or the CLI's
 //! exit ends it first.
 //!
+//! A message that changes what its CLI runs with (its model, effort, permission, or account)
+//! can't reach a CLI that's running, so it waits in a queue, with every message sent after it,
+//! until that CLI exits; then each goes to a new CLI process in turn. A new account on another
+//! backend moves the run there: the session can't follow, so a new one starts in the same place,
+//! told the conversation so far.
+//!
 //! A project's coordinator (0024) differs in four places: it starts in a detached worktree of
 //! the project's repository (RYA-171) with plxd's tools and no sandbox, that worktree is checked
 //! after every turn (0004), it is never committed, and runs it started wake it when they finish
@@ -17,7 +23,7 @@
 //! A thread in its repository's own checkout has no worktree: every launch, a resume included,
 //! starts in the checkout, and it is never committed either.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -43,11 +49,12 @@ use super::convert::{
     self, WORKSPACE_WRITE, agent_run, item_bytes, option_name, option_value, output_item,
 };
 use super::wake::{self, Wakes};
-use super::worker::{sandbox_path, worker_unavailable};
+use super::worker::{ThreadFolder, sandbox_path, thread_prompt, worker_prompt, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, Answer, AnswerError, CoordinatorTools, Credential, Decision, Event, EventStream,
-    FollowUp, ModelUsage, Outcome, Resume, Run, RunRequest, SendError, Usage, WorkerSandbox,
+    AccountRef, Answer, AnswerError, Backend, CoordinatorTools, Credential, Decision, Event,
+    EventStream, FollowUp, ModelUsage, Outcome, Resume, Run, RunRequest, SendError, Usage,
+    WorkerSandbox,
     run_temp::{self, RunTemp},
 };
 use crate::routing;
@@ -70,6 +77,8 @@ pub(super) enum Command {
         images: Vec<PromptImage>,
         /// A new model, effort, or permission for the run (RYA-161, RYA-163).
         options: RunOptions,
+        /// A new account for the run, perhaps on another backend.
+        account: Option<AccountChoice>,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
     /// `agent/cancel`.
@@ -125,6 +134,16 @@ impl Command {
     }
 }
 
+/// A message waiting for the run's CLI to exit: one that changes what the CLI runs with, or one
+/// sent after it.
+struct Queued {
+    turn_id: TurnId,
+    text: String,
+    images: Vec<PromptImage>,
+    options: RunOptions,
+    account: Option<AccountChoice>,
+}
+
 struct Live {
     run: Arc<dyn Run>,
     events: EventStream,
@@ -165,6 +184,8 @@ pub(super) struct Actor {
     images: HashMap<Option<TurnId>, Vec<ImageId>>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
+    /// Messages waiting for the running CLI to exit, oldest first.
+    queued: VecDeque<Queued>,
     stopping: bool,
     /// Set once `thread/delete` removed the run: the actor stops, refusing what is still queued.
     deleted: bool,
@@ -201,6 +222,7 @@ impl Actor {
             turns,
             images: HashMap::new(),
             last_message,
+            queued: VecDeque::new(),
             stopping: false,
             deleted: false,
             wakes: Wakes::default(),
@@ -230,6 +252,9 @@ impl Actor {
             self.load_wakes().await;
         }
         loop {
+            if self.live.is_none() && !self.stopping {
+                self.send_queued().await;
+            }
             let deadline = self.batch.since.map(|since| since + COALESCE);
             // A coordinator's turn in progress gets its wake-ups next, once its CLI has exited.
             let wake_at = self.wakes.due().filter(|_| self.live.is_none());
@@ -247,6 +272,7 @@ impl Actor {
                 biased;
                 () = shutdown.cancelled(), if !self.stopping => {
                     self.stopping = true;
+                    self.drop_queued().await;
                     self.stop_approvals(AgentApprovalBy::Stop).await;
                     if let Some(live) = &self.live {
                         live.run.cancel();
@@ -287,9 +313,10 @@ impl Actor {
                 text,
                 images,
                 options,
+                account,
                 reply,
             } => {
-                let answer = self.send(turn_id, text, images, options).await;
+                let answer = self.send(turn_id, text, images, options, account).await;
                 if answer.is_ok() && self.wakes.attended() {
                     self.save_wakes().await;
                 }
@@ -300,6 +327,8 @@ impl Actor {
                     info!(run = %self.id, "cancelling an agent run");
                     self.stop_approvals(AgentApprovalBy::Cancel).await;
                 }
+                // Stop means stop: what waited for this turn to end doesn't start another.
+                self.drop_queued().await;
                 if let Some(live) = &self.live {
                     live.run.cancel();
                 }
@@ -370,7 +399,7 @@ impl Actor {
         };
         info!(run = %self.id, "waking a coordinator: runs it started finished");
         match self
-            .resume(turn_id, text, Vec::new(), RunOptions::default())
+            .resume(turn_id, text, Vec::new(), RunOptions::default(), None)
             .await
         {
             Ok(_) if self.live.is_some() => {
@@ -747,6 +776,7 @@ impl Actor {
         text: String,
         images: Vec<PromptImage>,
         options: RunOptions,
+        account: Option<AccountChoice>,
     ) -> Result<AgentRun, ErrorObject> {
         if text.trim().is_empty() && images.is_empty() {
             return Err(ErrorObject::invalid_params("text must not be empty"));
@@ -754,7 +784,12 @@ impl Actor {
         if self.accepted() {
             return Err(super::run_accepted(self.id));
         }
-        if let Some(sent) = self.turns.get(&turn_id) {
+        let waiting = self.queued.iter().find(|queued| queued.turn_id == turn_id);
+        if let Some(sent) = self
+            .turns
+            .get(&turn_id)
+            .or(waiting.map(|queued| &queued.text))
+        {
             return if *sent == text {
                 self.snapshot()
             } else {
@@ -764,22 +799,12 @@ impl Actor {
                 ))
             };
         }
-        // Only a model, effort, or permission that differs from the run's changes anything.
-        let fields = &self.row.fields;
-        let changes = RunOptions {
-            model: options.model.filter(|m| Some(m) != fields.model.as_ref()),
-            effort: options.effort.filter(|&e| option_name(e) != fields.effort),
-            permission: options
-                .permission
-                .filter(|&p| option_name(p) != fields.permission),
-        };
-        let changing = changes != RunOptions::default();
-        if changing && self.live.is_some() {
-            return Err(ErrorObject::parallax(
-                ErrorKind::UnsupportedOption,
-                "the model, effort, and access can't change while the run is working; send the \
-                 message again once it has finished",
-            ));
+        // A running CLI can't change what it runs with, and what's sent after a message that
+        // waits for it waits too, so the messages keep their order.
+        let changing =
+            self.changes(options.clone()) != RunOptions::default() || self.moves(account.as_ref());
+        if self.live.is_some() && (changing || !self.queued.is_empty()) {
+            return self.queue(turn_id, text, images, options, account);
         }
         if let Some(live) = &self.live {
             let follow_up = FollowUp {
@@ -800,12 +825,9 @@ impl Actor {
                         format!("turn {turn_id} was already sent with a different text"),
                     ));
                 }
+                // A backend that takes no messages while it runs gets this one once it's done.
                 Err(SendError::Unsupported) => {
-                    return Err(ErrorObject::parallax(
-                        ErrorKind::RunNotResumable,
-                        "this run's backend takes no messages while it runs; send it again \
-                         once the run has finished",
-                    ));
+                    return self.queue(turn_id, text, images, options, account);
                 }
                 // The CLI is exiting: let the run finish, then resume it with the message.
                 Err(SendError::Finished) => {
@@ -816,31 +838,114 @@ impl Actor {
                 }
             }
         }
-        self.resume(turn_id, text, images, changes).await
+        let changes = self.changes(options);
+        self.resume(turn_id, text, images, changes, account).await
     }
 
-    /// Starts a new CLI process for the run, resuming its vendor session with `text` and
-    /// `images`, after storing `changes` to its model, effort, and permission, which the new
-    /// process runs with.
+    /// Of `options`, the model, effort, and permission that differ from the run's.
+    fn changes(&self, options: RunOptions) -> RunOptions {
+        let fields = &self.row.fields;
+        RunOptions {
+            model: options.model.filter(|m| Some(m) != fields.model.as_ref()),
+            effort: options.effort.filter(|&e| option_name(e) != fields.effort),
+            permission: options
+                .permission
+                .filter(|&p| option_name(p) != fields.permission),
+        }
+    }
+
+    /// Whether `account` is another account than the one the run's session is on.
+    fn moves(&self, account: Option<&AccountChoice>) -> bool {
+        account.is_some_and(|account| *account != session_account(&self.row.state.account_id))
+    }
+
+    /// Keeps a message until the running CLI exits.
+    fn queue(
+        &mut self,
+        turn_id: TurnId,
+        text: String,
+        images: Vec<PromptImage>,
+        options: RunOptions,
+        account: Option<AccountChoice>,
+    ) -> Result<AgentRun, ErrorObject> {
+        info!(run = %self.id, turn = %turn_id, "a message waits for the run's CLI to exit");
+        self.queued.push_back(Queued {
+            turn_id,
+            text,
+            images,
+            options,
+            account,
+        });
+        self.snapshot()
+    }
+
+    /// Sends the next waiting message, now that no CLI runs, to a new CLI process with its
+    /// changes; those after it wait for that process in turn. A message that can't be sent is
+    /// dropped, and the transcript says why, and the next is tried.
+    async fn send_queued(&mut self) {
+        while self.live.is_none() {
+            let Some(next) = self.queued.pop_front() else {
+                return;
+            };
+            let Queued {
+                turn_id,
+                text,
+                images,
+                options,
+                account,
+            } = next;
+            let changes = self.changes(options);
+            let why = match self.resume(turn_id, text, images, changes, account).await {
+                Ok(_) if self.live.is_some() => return,
+                Ok(_) => self
+                    .row
+                    .state
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "its CLI didn't start".to_owned()),
+                Err(error) => error.message,
+            };
+            warn!(run = %self.id, turn = %turn_id, %why, "a waiting message couldn't be sent");
+            self.push(AgentOutputItem::Warning {
+                detail: format!("A message couldn't be sent: {why}"),
+            })
+            .await;
+            self.push(AgentOutputItem::FollowUpDropped { turn_id })
+                .await;
+            self.flush().await;
+        }
+    }
+
+    /// Drops every waiting message, which never reached a CLI, as a stopped run's follow-ups are.
+    async fn drop_queued(&mut self) {
+        while let Some(queued) = self.queued.pop_front() {
+            info!(run = %self.id, turn = %queued.turn_id, "dropping a waiting message");
+            let turn_id = queued.turn_id;
+            self.push(AgentOutputItem::FollowUpDropped { turn_id })
+                .await;
+        }
+    }
+
+    /// Starts a new CLI process for the run with `text` and `images`, after storing `changes` to
+    /// its model, effort, and permission, which the new process runs with. It resumes the run's
+    /// vendor session, on `account` if that's another of the same backend's. On another backend's
+    /// account, or with no session to resume, a new session starts, told the conversation so far.
     async fn resume(
         &mut self,
         turn_id: TurnId,
         text: String,
         images: Vec<PromptImage>,
         changes: RunOptions,
+        account: Option<AccountChoice>,
     ) -> Result<AgentRun, ErrorObject> {
-        let Some(session_id) = self.row.state.session_id.clone() else {
-            return Err(ErrorObject::parallax(
-                ErrorKind::RunNotResumable,
-                format!(
-                    "run {} ended before its CLI reported a session, so it can't be resumed",
-                    self.id
-                ),
-            ));
-        };
+        let moving = self.moves(account.as_ref());
+        let session_id = self.row.state.session_id.clone();
         // The session belongs to the account the run was on when it ended, after any fallback,
         // not to whatever the worker role's default is now.
-        let account = session_account(&self.row.state.account_id);
+        let account = match account {
+            Some(account) if moving => account,
+            _ => session_account(&self.row.state.account_id),
+        };
         let not_resumable = |why: String| {
             ErrorObject::parallax(
                 ErrorKind::RunNotResumable,
@@ -867,9 +972,10 @@ impl Actor {
             match prepare(&self.daemon, self.project, self.id, Some(account), role).await {
                 Ok(prepared) => prepared,
                 Err(error)
-                    if error
-                        .parallax_data()
-                        .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
+                    if !moving
+                        && error
+                            .parallax_data()
+                            .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
                 {
                     return Err(not_resumable(format!(
                         "its session's account {} no longer exists",
@@ -879,59 +985,231 @@ impl Actor {
                 Err(error) => return Err(error),
             };
         let backend = prepared.resolved.backend().name();
-        if backend != self.row.fields.backend {
+        let from = self.row.fields.backend.clone();
+        if backend != from && !moving {
             return Err(not_resumable(format!(
-                "its session ran on {}, but its account now runs on {backend}",
-                self.row.fields.backend
+                "its session ran on {from}, but its account now runs on {backend}"
             )));
         }
-        if changes != RunOptions::default() {
-            changes.check(prepared.resolved.backend())?;
-            let (id, fields) = (self.row.id, &self.row.fields);
-            let model = changes.model.clone().or(fields.model.clone());
-            let effort = changes
-                .effort
-                .and_then(option_name)
-                .or(fields.effort.clone());
-            let permission = changes
-                .permission
-                .and_then(option_name)
-                .or(fields.permission.clone());
+        let session_id = session_id.filter(|_| backend == from);
+        let paths = self.checkout_paths(&repo_path).await?;
+        // The run's fields before it moves, to move it back if its new CLI doesn't start.
+        let moved_from = self
+            .store_options(prepared.resolved.backend(), changes)
+            .await?;
+        let message = text.clone();
+        let (prompt, resume) = if let Some(session_id) = session_id {
+            info!(run = %self.id, "resuming an agent run's session");
+            (text, Some(self.resume_of(session_id).await?))
+        } else {
+            info!(run = %self.id, from, to = backend, "starting a new session for an agent run");
+            match self
+                .handoff_prompt(&from, &text, &prepared.place, paths.as_ref())
+                .await
+            {
+                Ok(prompt) => (prompt, None),
+                Err(error) => {
+                    self.move_back(moved_from).await;
+                    return Err(error);
+                }
+            }
+        };
+        let fresh = resume.is_none();
+        let to = backend.to_owned();
+        // The old session, if any, is another CLI's, so the new CLI's start never stores it.
+        let old_session = if fresh {
+            self.row.state.session_id.take()
+        } else {
+            None
+        };
+        if self
+            .launch(prepared, prompt, images, Some(turn_id), resume, paths)
+            .await
+        {
+            if fresh {
+                self.push(AgentOutputItem::Notice {
+                    detail: handoff_notice(&from, &to),
+                })
+                .await;
+            }
+            // Only a turn that reached a CLI counts as sent: a retry after a failed start
+            // tries again.
+            self.record_turn(turn_id, message.clone()).await;
+            self.last_message = message;
+        } else {
+            self.row.state.session_id = old_session;
+            self.move_back(moved_from).await;
+        }
+        self.snapshot()
+    }
+
+    /// Stores `changes` to the run's model, effort, and permission, checked against `backend`.
+    /// When `backend` isn't the run's, moves the run to it, where another vendor's model can't
+    /// carry over but the effort and permission can if `backend` maps them, and returns the
+    /// run's fields from before the move.
+    async fn store_options(
+        &mut self,
+        backend: &dyn Backend,
+        changes: RunOptions,
+    ) -> Result<Option<parallax_store::RunFields>, ErrorObject> {
+        let fields = &self.row.fields;
+        if backend.name() != fields.backend {
+            let effort = fields.effort.as_deref().and_then(option_value);
+            let permission = fields.permission.as_deref().and_then(option_value);
+            let options = RunOptions {
+                model: changes.model,
+                effort: changes
+                    .effort
+                    .or(effort.filter(|effort| backend.efforts().contains(effort))),
+                permission: changes
+                    .permission
+                    .or(permission.filter(|permission| backend.permissions().contains(permission))),
+            };
+            options.check(backend)?;
+            let (id, name) = (self.row.id, backend.name().to_owned());
             let row = store(&self.daemon, move |db| {
-                db.set_run_options(
+                db.move_run(
                     id,
-                    model.as_deref(),
-                    effort.as_deref(),
-                    permission.as_deref(),
+                    &name,
+                    options.model.as_deref(),
+                    options.effort.and_then(option_name).as_deref(),
+                    options.permission.and_then(option_name).as_deref(),
                 )
                 .map_err(|error| store_error(&error))
             })
             .await?;
-            self.row.fields = row.fields;
+            return Ok(Some(std::mem::replace(&mut self.row.fields, row.fields)));
         }
+        if changes == RunOptions::default() {
+            return Ok(None);
+        }
+        changes.check(backend)?;
+        let id = self.row.id;
+        let model = changes.model.clone().or(fields.model.clone());
+        let effort = changes
+            .effort
+            .and_then(option_name)
+            .or(fields.effort.clone());
+        let permission = changes
+            .permission
+            .and_then(option_name)
+            .or(fields.permission.clone());
+        let row = store(&self.daemon, move |db| {
+            db.set_run_options(
+                id,
+                model.as_deref(),
+                effort.as_deref(),
+                permission.as_deref(),
+            )
+            .map_err(|error| store_error(&error))
+        })
+        .await?;
+        self.row.fields = row.fields;
+        Ok(None)
+    }
+
+    /// What a CLI needs to resume `session_id`: it, and the usage it has reported so far.
+    async fn resume_of(&self, session_id: String) -> Result<Resume, ErrorObject> {
         let session = session_id.clone();
         let totals = store(&self.daemon, move |db| {
             db.session_usage_totals(&session)
                 .map_err(|error| store_error(&error))
         })
         .await?;
-        let resume = Resume {
+        Ok(Resume {
             session_id,
             usage_totals: totals.into_iter().map(model_usage).collect(),
+        })
+    }
+
+    /// Moves the run back to the backend and options it had, `fields`, after its move to another
+    /// backend failed before a CLI started there.
+    async fn move_back(&mut self, fields: Option<parallax_store::RunFields>) {
+        let Some(fields) = fields else {
+            return;
         };
-        let paths = self.checkout_paths(&repo_path).await?;
-        info!(run = %self.id, "resuming an agent run's session");
-        let message = text.clone();
-        if self
-            .launch(prepared, text, images, Some(turn_id), Some(resume), paths)
-            .await
-        {
-            // Only a turn that reached a CLI counts as sent: a retry after a failed start
-            // tries again.
-            self.record_turn(turn_id, message.clone()).await;
-            self.last_message = message;
+        let id = self.row.id;
+        let moved = store(&self.daemon, move |db| {
+            db.move_run(
+                id,
+                &fields.backend,
+                fields.model.as_deref(),
+                fields.effort.as_deref(),
+                fields.permission.as_deref(),
+            )
+            .map_err(|error| store_error(&error))
+        })
+        .await;
+        match moved {
+            Ok(row) => {
+                self.row.fields = row.fields;
+                self.save().await;
+            }
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not move a run back to its backend");
+            }
         }
-        self.snapshot()
+    }
+
+    /// The first message of a new session that takes over the run from one on `from`: what the
+    /// run's first message says about where the agent is and what it may do, then the
+    /// conversation so far, then `text`.
+    async fn handoff_prompt(
+        &mut self,
+        from: &str,
+        text: &str,
+        place: &Place,
+        paths: Option<&(PathBuf, PathBuf)>,
+    ) -> Result<String, ErrorObject> {
+        // What the agent said last is logged before the conversation is read.
+        self.flush().await;
+        let (log, run) = (Arc::clone(&self.daemon.log), self.id);
+        let events = tokio::task::spawn_blocking(move || {
+            let mut events = Vec::new();
+            let mut after = 0;
+            loop {
+                let (page, more) = log.run_events(run, after, 1000, 4 * 1024 * 1024)?;
+                after = page.last().map_or(after, |entry| entry.seq);
+                events.extend(page.iter().map(|entry| entry.event.clone()));
+                if !more || page.is_empty() {
+                    return Ok(events);
+                }
+            }
+        })
+        .await
+        .map_err(ErrorObject::internal_error)?
+        .map_err(|error| store_error(&error))?;
+        let message = handoff_message(from, &conversation(&events), text);
+        match place {
+            Place::Coordinator { repo } => Ok(super::coordinator::first_message(
+                &message,
+                &repo.to_string_lossy(),
+            )),
+            Place::Worker { context, .. } => {
+                let cwd = match paths {
+                    Some((cwd, _)) => cwd.clone(),
+                    None => self.worker_paths().await?.0,
+                };
+                let (project, id) = (self.project, self.row.id);
+                let (thread, scratch) = store(&self.daemon, move |db| {
+                    let thread = db.get_thread(id).map_err(|e| store_error(&e))?;
+                    Ok((thread.is_some(), crate::threads::is_scratch(db, project)?))
+                })
+                .await?;
+                let folder = if self.row.fields.checkout {
+                    ThreadFolder::Checkout
+                } else if scratch {
+                    ThreadFolder::Scratch
+                } else {
+                    ThreadFolder::Worktree
+                };
+                Ok(if thread {
+                    thread_prompt(&message, &cwd, context, folder)
+                } else {
+                    worker_prompt(&message, &cwd, context)
+                })
+            }
+        }
     }
 
     /// Records that `turn_id` was sent with `text`, in memory and in the store, so a retry of
@@ -1453,6 +1731,109 @@ fn session_account(account_id: &str) -> AccountChoice {
     }
 }
 
+/// About the most of the conversation a new session is told, in bytes: its latest messages.
+const HISTORY_BYTES: usize = 64 * 1024;
+
+/// A run's conversation as `events` logged it, for a new session to take over: the user's
+/// messages, Parallax's wake-ups, and the agent's replies, oldest first, without its tool calls,
+/// whose work is in the run's folder. Only the latest that fit in about [`HISTORY_BYTES`] are
+/// kept.
+fn conversation(events: &[ParallaxEvent]) -> String {
+    let mut said: Vec<String> = Vec::new();
+    // The last thing the agent said, which a turn's result often repeats.
+    let mut last_reply = String::new();
+    for event in events {
+        match event {
+            ParallaxEvent::AgentStarted { run: Some(run), .. } => {
+                said.push(format!("User:\n{}", run.prompt.trim()));
+            }
+            ParallaxEvent::AgentOutput { items, .. } => {
+                for item in items {
+                    match item {
+                        AgentOutputItem::TurnStarted {
+                            text: Some(text),
+                            wake,
+                            ..
+                        } => {
+                            let who = if *wake { "Parallax" } else { "User" };
+                            said.push(format!("{who}:\n{}", text.trim()));
+                        }
+                        AgentOutputItem::Text { text, .. } if !text.trim().is_empty() => {
+                            text.trim().clone_into(&mut last_reply);
+                            said.push(format!("Agent:\n{last_reply}"));
+                        }
+                        AgentOutputItem::TurnFinished {
+                            result: Some(result),
+                            ..
+                        } if !result.trim().is_empty() && result.trim() != last_reply => {
+                            result.trim().clone_into(&mut last_reply);
+                            said.push(format!("Agent:\n{last_reply}"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut kept = Vec::new();
+    let mut bytes = 0;
+    for message in said.iter().rev() {
+        if bytes + message.len() > HISTORY_BYTES {
+            // One message longer than the whole is cut, rather than leaving nothing.
+            if kept.is_empty() {
+                kept.push(convert::truncate(message, HISTORY_BYTES));
+            }
+            break;
+        }
+        bytes += message.len();
+        kept.push(message.clone());
+    }
+    let cut = kept.len() < said.len();
+    kept.reverse();
+    let conversation = kept.join("\n\n");
+    if cut {
+        format!("(Earlier messages are left out.)\n\n{conversation}")
+    } else {
+        conversation
+    }
+}
+
+/// The message a new session on another backend gets in place of the user's `message`: that it
+/// takes over from an agent on `from`, and what was said so far.
+fn handoff_message(from: &str, conversation: &str, message: &str) -> String {
+    format!(
+        "This conversation began with another agent, on {from}, and the user has handed it to \
+         you. Its work so far is in your working folder. Here is the conversation, oldest \
+         first:\n\n<conversation>\n{conversation}\n</conversation>\n\nThe user's new message, \
+         which is yours to answer:\n{message}",
+        from = backend_name(from),
+    )
+}
+
+/// The transcript's line where a new session took over the run from one on `from`.
+fn handoff_notice(from: &str, to: &str) -> String {
+    if from == to {
+        "A new session picks up this conversation from what was said so far.".to_owned()
+    } else {
+        format!(
+            "Moved from {} to {}: a new session picks up this conversation from what was said \
+             so far.",
+            backend_name(from),
+            backend_name(to),
+        )
+    }
+}
+
+/// A backend's name for people.
+fn backend_name(backend: &str) -> &str {
+    match backend {
+        "claude" => "Claude Code",
+        "codex" => "Codex",
+        other => other,
+    }
+}
+
 async fn next_event(live: &mut Option<Live>) -> Option<Event> {
     match live {
         Some(live) => live.events.next().await,
@@ -1521,13 +1902,19 @@ mod tests {
 
     use parallax_protocol::{
         AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
-        AgentApproveParams, ApprovalId, ProjectId, RunId,
+        AgentApproveParams, AgentOutputItem, ApprovalId, ErrorKind, ParallaxEvent, ProjectId,
+        RunId, TurnId,
     };
     use parallax_store::{Run as RunRow, RunFields, RunState, Worktree};
     use tokio::sync::{mpsc, oneshot};
     use tokio_util::sync::CancellationToken;
 
-    use super::{Actor, Command, Live, commit_message, session_account};
+    use super::{
+        Actor, Command, HISTORY_BYTES, Live, commit_message, conversation, handoff_message,
+        handoff_notice, session_account,
+    };
+    use crate::agents::RunOptions;
+    use crate::agents::convert::agent_run;
     use crate::backend::{
         Answer, AnswerError, ApprovalRequest, Event, EventSink, FollowUp, Run, SendError,
     };
@@ -1747,5 +2134,197 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.decision, AgentApprovalDecision::Withdrawn);
         assert_eq!(resolved.by, AgentApprovalBy::Agent);
+    }
+
+    /// A run's turns as a new session is told them: the user's messages, Parallax's wake-ups,
+    /// and the agent's replies, with a turn's result only where it adds to what the agent said.
+    #[test]
+    fn a_new_session_is_told_the_conversation_so_far() {
+        let (row, worktree) = fake_row_and_worktree();
+        let run = agent_run(&row, Some(&worktree)).unwrap();
+        let output = |items| ParallaxEvent::AgentOutput {
+            run_id: run.id,
+            items,
+        };
+        let turn = |text: &str, wake| AgentOutputItem::TurnStarted {
+            turn_id: Some(TurnId::generate()),
+            text: Some(text.to_owned()),
+            wake,
+            images: Vec::new(),
+        };
+        let finished = |result: &str| AgentOutputItem::TurnFinished {
+            turn_id: None,
+            result: Some(result.to_owned()),
+        };
+        let events = [
+            ParallaxEvent::AgentStarted {
+                run_id: run.id,
+                run: Some(run.clone()),
+            },
+            output(vec![
+                AgentOutputItem::TurnStarted {
+                    turn_id: None,
+                    text: None,
+                    wake: false,
+                    images: Vec::new(),
+                },
+                AgentOutputItem::ToolCall {
+                    call_id: "call-1".to_owned(),
+                    name: "Read".to_owned(),
+                    input: serde_json::json!({"file_path": "README.md"}),
+                },
+                AgentOutputItem::Text {
+                    message_id: None,
+                    text: "Read it.\n".to_owned(),
+                },
+                finished("Read it."),
+            ]),
+            output(vec![turn(" And now? ", false), finished("All done.")]),
+            output(vec![turn("Subagents finished", true)]),
+        ];
+        assert_eq!(
+            conversation(&events),
+            "User:\nflood\n\nAgent:\nRead it.\n\nUser:\nAnd now?\n\nAgent:\nAll done.\n\n\
+             Parallax:\nSubagents finished"
+        );
+
+        // A long one keeps its latest messages.
+        let long: Vec<_> = (0..20)
+            .map(|i| output(vec![turn(&format!("{i}{}", "x".repeat(8 * 1024)), false)]))
+            .collect();
+        let kept = conversation(&long);
+        assert!(kept.starts_with("(Earlier messages are left out.)\n\nUser:\n"));
+        assert!(kept.ends_with(&format!("19{}", "x".repeat(8 * 1024))));
+        assert!(kept.len() <= HISTORY_BYTES + 64, "{}", kept.len());
+    }
+
+    #[test]
+    fn a_handoff_names_where_the_conversation_began() {
+        let message = handoff_message("claude", "User:\nHi", "Carry on");
+        assert!(
+            message.contains("another agent, on Claude Code"),
+            "{message}"
+        );
+        assert!(message.contains("<conversation>\nUser:\nHi\n</conversation>"));
+        assert!(message.ends_with("The user's new message, which is yours to answer:\nCarry on"));
+        assert_eq!(
+            handoff_notice("claude", "codex"),
+            "Moved from Claude Code to Codex: a new session picks up this conversation from what \
+             was said so far."
+        );
+    }
+
+    /// A message that changes the model can't reach a running CLI, so it waits, as does every
+    /// message after it, a retry of it is the same message, and Stop drops them all.
+    #[tokio::test]
+    async fn messages_wait_for_a_running_cli_and_stop_drops_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live {
+            run: Arc::new(NoopRun),
+            events,
+            temp: None,
+        });
+
+        let sonnet = RunOptions {
+            model: Some("sonnet".to_owned()),
+            ..RunOptions::default()
+        };
+        let (first, second) = (TurnId::generate(), TurnId::generate());
+        let run = actor
+            .send(
+                first,
+                "Hurry up".to_owned(),
+                Vec::new(),
+                sonnet.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(run.model, None, "nothing changes until the CLI exits");
+        actor
+            .send(
+                second,
+                "And then".to_owned(),
+                Vec::new(),
+                RunOptions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        actor
+            .send(
+                first,
+                "Hurry up".to_owned(),
+                Vec::new(),
+                sonnet.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+        let conflict = actor
+            .send(first, "Other".to_owned(), Vec::new(), sonnet, None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            conflict.parallax_data().unwrap().kind,
+            ErrorKind::IdConflict
+        );
+        let waiting: Vec<_> = actor.queued.iter().map(|queued| queued.turn_id).collect();
+        assert_eq!(waiting, [first, second]);
+
+        let (reply, answer) = oneshot::channel();
+        actor.on_command(Command::Cancel { reply }).await;
+        answer.await.unwrap().unwrap();
+        assert!(actor.queued.is_empty());
+        actor.flush().await;
+        let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
+        let dropped: Vec<_> = logged
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                ParallaxEvent::AgentOutput { items, .. } => Some(items),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|item| match item {
+                AgentOutputItem::FollowUpDropped { turn_id } => Some(*turn_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dropped, [first, second]);
+    }
+
+    /// A backend that takes no messages while it runs gets one once its CLI exits, rather than
+    /// refusing it.
+    #[tokio::test]
+    async fn a_message_a_running_cli_cant_take_waits_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live {
+            run: Arc::new(NoopRun),
+            events,
+            temp: None,
+        });
+        let turn = TurnId::generate();
+        actor
+            .send(
+                turn,
+                "Also this".to_owned(),
+                Vec::new(),
+                RunOptions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            actor.queued.front().map(|queued| queued.turn_id),
+            Some(turn)
+        );
     }
 }

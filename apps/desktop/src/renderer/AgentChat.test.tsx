@@ -802,6 +802,9 @@ test("an open thread's composer picks within its provider and sends only what ch
       <Composer
         backend="claude"
         started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
+        unavailable={{
+          Codex: "Codex is unavailable in this thread. Start a new thread to switch providers.",
+        }}
         onSend={onSend}
         optionsDisabled={optionsDisabled}
       />,
@@ -852,6 +855,87 @@ test("an open thread's composer picks within its provider and sends only what ch
     { model: "claude-sonnet-5", effort: "low" },
     [],
   );
+});
+
+test("another provider's model moves an open thread there, with every option and the account", async () => {
+  const onSend = vi.fn(async () => undefined);
+  render(
+    <Composer
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
+      onSend={onSend}
+    />,
+  );
+  const control = (label: string) => document.querySelector(`[aria-label="${label}"]`);
+  const menu = document.getElementById(
+    control("Model: Claude Opus 5.5")!.getAttribute("popovertarget")!,
+  )!;
+  expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!.disabled).toBe(false);
+  act(() => menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!.click());
+  const astra = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((m) =>
+    m.textContent?.startsWith("GPT-6 Astra"),
+  )!;
+  await act(async () => astra.click());
+  // Codex maps one access, so there's no choice, and Plan becomes Accept Edits.
+  expect(control("Access: Plan")).toBeNull();
+  type("Carry on");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
+  );
+  expect(onSend).toHaveBeenCalledWith(
+    "Carry on",
+    {
+      model: "gpt-6-astra",
+      effort: "xhigh",
+      permission: "edit",
+      account: { kind: "subscription", backend: "codex" },
+    },
+    [],
+  );
+});
+
+test("a thread's options change while it runs, and other providers are offered, on a plxd that moves runs", async () => {
+  const tooltip = (provider: string) => {
+    const model = document.querySelector('[aria-label^="Model: "]')!;
+    const menu = document.getElementById(model.getAttribute("popovertarget")!)!;
+    const rail = menu.querySelector<HTMLButtonElement>(`button[aria-label="${provider}"]`)!;
+    return rail.disabled ? rail.parentElement!.querySelector('[role="tooltip"]')!.textContent : "";
+  };
+  const fieldset = () => document.querySelector('[aria-label^="Model: "]')!.closest("fieldset")!;
+
+  // The sample's run is still going at seq 4.
+  fakeBridge(4, { capabilities: { sendModel: {} } });
+  await renderChat();
+  expect(fieldset().disabled).toBe(true);
+  expect(tooltip("Codex")).toBe(
+    "Codex is unavailable in this thread. Start a new thread to switch providers.",
+  );
+  act(() => unmount());
+
+  fakeBridge(4, { capabilities: { sendModel: {}, sendAccount: {} } });
+  await renderChat();
+  expect(fieldset().disabled).toBe(false);
+  expect(tooltip("Codex")).toBe("");
+  act(() => unmount());
+
+  // A coordinator can't move to a backend that can't run one.
+  fakeBridge(4, { capabilities: { sendModel: {}, sendAccount: {} } });
+  const sample = [...logged];
+  logged.splice(
+    0,
+    logged.length,
+    ...sample.map((e) =>
+      e.event.kind === "agent.started" && e.event.run
+        ? { ...e, event: { ...e.event, run: { ...e.event.run, policy: "noWrite" as const } } }
+        : e,
+    ),
+  );
+  try {
+    await renderChat();
+    expect(tooltip("Codex")).toBe("Codex can't run a Project's coordinator yet.");
+  } finally {
+    logged.splice(0, logged.length, ...sample);
+  }
 });
 
 test("while a run goes, only the last work row shows what the agent is doing", () => {
@@ -1184,4 +1268,80 @@ test("while the run works on a plan, a strip over the composer shows it, until a
   third.connect({ status: "connecting" });
   expect(strip()).toBeNull();
   expect(card().querySelector(".loader")).toBeNull();
+});
+
+test("a bar beside the transcript for each prompt shows it and its reply, and scrolls back to it", () => {
+  const scrollTo = vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(() => {});
+  const rows: Item[] = [
+    { kind: "user", key: "u1", text: "Add a **README**" },
+    { kind: "assistant", key: "a1", text: "Started.\n\nStill going." },
+    { kind: "assistant", key: "a2", text: "Wrote `README.md`.\n\nIt lists the commands." },
+    // Parallax's wake-up isn't the user's, and the reply to it isn't the README's.
+    { kind: "user", key: "w", text: "Subagents finished", wake: true },
+    { kind: "assistant", key: "a3", text: "Merged the PR." },
+    { kind: "user", key: "u2", text: null, turnId: "t2" },
+  ];
+  const sent = new Map([["t2", { text: "Now the tests", images: [] }]]);
+  render(<TranscriptView rows={rows} sent={sent} live={false} />);
+  const bars = [...document.querySelectorAll<HTMLElement>('nav[aria-label="Prompts"] button')];
+  expect(bars.map((b) => b.getAttribute("aria-label"))).toEqual([
+    "Go to prompt 1: Add a README",
+    "Go to prompt 2: Now the tests",
+  ]);
+  // Scrolled to the end, the latest prompt is the one being read.
+  expect(bars.map((b) => b.getAttribute("aria-current"))).toEqual([null, "true"]);
+
+  act(() => bars[0]!.focus());
+  const card = document.querySelector('nav[aria-label="Prompts"] + [aria-hidden]')!;
+  expect([...card.querySelectorAll("p")].map((p) => p.textContent)).toEqual([
+    "Add a README",
+    "Wrote README.md.",
+  ]);
+  act(() => bars[0]!.click());
+  expect(scrollTo).toHaveBeenCalled();
+  scrollTo.mockRestore();
+});
+
+test("one prompt has no rail", () => {
+  render(
+    <TranscriptView
+      rows={[{ kind: "user", key: "u", text: "go" }]}
+      sent={new Map()}
+      live={false}
+    />,
+  );
+  expect(document.querySelector('nav[aria-label="Prompts"]')).toBeNull();
+});
+
+test("scrolled up from the end, Scroll to end shows over the transcript, and goes back down", () => {
+  const scrollTo = vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(() => {});
+  render(
+    <TranscriptView
+      rows={[{ kind: "user", key: "u", text: "go" }]}
+      sent={new Map()}
+      live={false}
+    />,
+  );
+  const end = () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Scroll to end");
+  expect(end()).toBeUndefined();
+
+  const log = document.querySelector<HTMLElement>('[role="log"]')!;
+  Object.defineProperty(log, "scrollHeight", { configurable: true, value: 5000 });
+  Object.defineProperty(log, "clientHeight", { configurable: true, value: 800 });
+  act(() => {
+    log.scrollTop = 1000;
+    log.dispatchEvent(new Event("scroll"));
+  });
+  act(() => end()!.click());
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 5000, behavior: "smooth" });
+  expect(end()).toBeUndefined();
+
+  // Back at the end, it stays gone.
+  act(() => {
+    log.scrollTop = 4200;
+    log.dispatchEvent(new Event("scroll"));
+  });
+  expect(end()).toBeUndefined();
+  scrollTo.mockRestore();
 });

@@ -8,7 +8,7 @@ use crate::{Store, Worktree, WorktreeFields, timestamp};
 
 /// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only model,
 /// effort, and permission change after the run is created, through `agent/send` (RYA-161,
-/// RYA-163).
+/// RYA-163), and the backend, when `agent/send` moves the run to another backend's account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFields {
     pub project_id: Uuid,
@@ -299,6 +299,39 @@ impl Store {
             "UPDATE runs SET model = ?2, effort = ?3, permission = ?4, updated_at = ?5
              WHERE id = ?1",
             params![id.to_string(), model, effort, permission, timestamp::now()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound { id });
+        }
+        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
+    }
+
+    /// Moves run `id` to `backend`, with its model, effort, and permission there, and returns the
+    /// updated row.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no run has `id`, or a database error.
+    pub fn move_run(
+        &self,
+        id: Uuid,
+        backend: &str,
+        model: Option<&str>,
+        effort: Option<&str>,
+        permission: Option<&str>,
+    ) -> Result<Run, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE runs SET backend = ?2, model = ?3, effort = ?4, permission = ?5,
+                             updated_at = ?6
+             WHERE id = ?1",
+            params![
+                id.to_string(),
+                backend,
+                model,
+                effort,
+                permission,
+                timestamp::now()
+            ],
         )?;
         if changed == 0 {
             return Err(StoreError::NotFound { id });

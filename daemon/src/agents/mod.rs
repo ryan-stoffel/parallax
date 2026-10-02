@@ -937,6 +937,7 @@ pub(crate) async fn send(
         model,
         effort,
         permission,
+        account,
         images,
     } = params;
     let options = RunOptions {
@@ -949,6 +950,7 @@ pub(crate) async fn send(
         text,
         images,
         options,
+        account,
         reply,
     })
     .await
@@ -1090,6 +1092,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                             state: AgentRunState {
                                 status: run.status,
                                 account_id: run.account_id,
+                                backend: Some(run.backend),
                                 session_id: run.session_id,
                                 error: run.error,
                                 diff: run.diff,

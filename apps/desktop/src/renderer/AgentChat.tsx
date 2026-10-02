@@ -65,7 +65,7 @@ import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
-import type { RunOptions } from "./models";
+import { backendOf, backends, models, type Provider, type RunOptions } from "./models";
 import {
   latestPlan,
   PlanCard,
@@ -76,6 +76,7 @@ import {
   type PlanRow,
   type ProposedPlanRow,
 } from "./Plan";
+import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { titleOf } from "./threads";
 import {
   failureText,
@@ -269,11 +270,24 @@ export function AgentChat({
   else if (!connected) disabledReason = "Connecting to plxd…";
   else if (!run) disabledReason = error ? "This chat couldn't load" : "Loading…";
   let optionsDisabled: string | undefined;
-  // `sendModel` is `sendOptions`' successor, which also takes the model (RYA-163).
+  // `sendModel` is `sendOptions`' successor, which also takes the model (RYA-163). With
+  // `sendAccount`, a message that changes them while the run works waits for it to finish.
+  const moves = connected && "sendAccount" in connection.capabilities;
   if (connected && !("sendModel" in connection.capabilities))
     optionsDisabled = "This host's plxd can't change a thread's model, effort, or access";
-  else if (isRunning(run?.status))
+  else if (isRunning(run?.status) && !moves)
     optionsDisabled = "The model, effort, and access can change once it finishes";
+  // The providers the run can't move to, by why: any but its own on a plxd that can't move runs,
+  // and for a coordinator, those whose backend can't run one.
+  const unavailable: Partial<Record<Provider, string>> = {};
+  const own = run && backends[run.backend]?.provider;
+  for (const p of new Set(models.map((m) => m.provider)))
+    if (p === own) continue;
+    else if (!moves)
+      unavailable[p] =
+        `${p} is unavailable in this thread. Start a new thread to switch providers.`;
+    else if (run?.policy === "noWrite" && !backends[backendOf(p)]?.coordinator)
+      unavailable[p] = `${p} can't run a Project's coordinator yet.`;
   // Manual's requests come here only from a run that asked for them, on a plxd that sends them.
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
@@ -370,6 +384,7 @@ export function AgentChat({
           }
           backend={run?.backend}
           started={run}
+          unavailable={unavailable}
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
@@ -402,6 +417,8 @@ export function TranscriptView({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+  // Whether Scroll to end's smooth scroll is on its way down.
+  const ending = useRef(false);
   // Which tool calls and thoughts are expanded, kept here since rows unmount off screen.
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const toggle = useCallback(
@@ -448,10 +465,28 @@ export function TranscriptView({
     getItemKey: (i) => view[i]!.key,
   });
   const total = virtualizer.getTotalSize();
+  // Whether it's scrolled up from the end, which offers Scroll to end.
+  const [scrolledUp, setScrolledUp] = useState(false);
+  // The user's prompts, for the rail, and which one is being read.
+  const prompts = useMemo(() => promptsOf(view, sent), [view, sent]);
+  const [reading, setReading] = useState(-1);
+  // The prompt being read: the last one starting above the viewport's top third, so a prompt
+  // counts once its reply fills the view, and at the end, the latest.
+  const follow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const line = el.scrollTop + el.clientHeight / 3;
+    const starts = virtualizer.measurementsCache;
+    const at = atBottom.current
+      ? prompts.length - 1
+      : prompts.findLastIndex((p) => (starts[p.index]?.start ?? Infinity) <= line);
+    setReading(Math.max(0, at));
+  }, [prompts, virtualizer]);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [total, view.length]);
+    follow();
+  }, [total, view.length, follow]);
   // As the composer grows it shrinks the list from below: keep the latest output in view.
   useEffect(() => {
     const el = scrollRef.current!;
@@ -461,48 +496,96 @@ export function TranscriptView({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+  const scrollToEnd = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    ending.current = true;
+    setScrolledUp(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
+  const jump = (prompt: Prompt) => {
+    ending.current = false;
+    virtualizer.scrollToIndex(prompt.index, { align: "start" });
+  };
 
   return (
-    <div
-      ref={scrollRef}
-      role="log"
-      aria-label="Transcript"
-      onScroll={(e) => {
-        const el = e.currentTarget;
-        atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-      }}
-      className="min-h-0 flex-1 overflow-y-auto select-text"
-    >
-      <div className="relative w-full" style={{ height: total }}>
-        {virtualizer.getVirtualItems().map((v) => {
-          const row = view[v.index]!;
-          return (
-            <div
-              key={v.key}
-              data-index={v.index}
-              ref={virtualizer.measureElement}
-              className="absolute top-0 left-0 w-full"
-              style={{ transform: `translateY(${v.start}px)` }}
-            >
-              <div className="mx-auto max-w-3xl px-6 py-2">
-                <RowView
-                  row={row}
-                  sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
-                  live={going}
-                  open={open.has(row.key)}
-                  openKeys={row.kind === "work" ? open : undefined}
-                  active={v.index === activeIndex}
-                  onToggle={toggle}
-                  onResend={onResend}
-                  loadImage={loadImage}
-                />
+    // Bounds the rail and Scroll to end, which stay put while the list scrolls under them.
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        role="log"
+        aria-label="Transcript"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+          if (atBottom.current) ending.current = false;
+          // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
+          if (!ending.current) setScrolledUp(!atBottom.current);
+          follow();
+        }}
+        // Scrolling by hand cuts Scroll to end's scroll short.
+        onWheel={() => (ending.current = false)}
+        onPointerDown={() => (ending.current = false)}
+        onKeyDown={() => (ending.current = false)}
+        className="min-h-0 flex-1 overflow-y-auto select-text"
+      >
+        <div className="relative w-full" style={{ height: total }}>
+          {virtualizer.getVirtualItems().map((v) => {
+            const row = view[v.index]!;
+            return (
+              <div
+                key={v.key}
+                data-index={v.index}
+                ref={virtualizer.measureElement}
+                className="absolute top-0 left-0 w-full"
+                style={{ transform: `translateY(${v.start}px)` }}
+              >
+                <div className="mx-auto max-w-3xl px-6 py-2">
+                  <RowView
+                    row={row}
+                    sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
+                    live={going}
+                    open={open.has(row.key)}
+                    openKeys={row.kind === "work" ? open : undefined}
+                    active={v.index === activeIndex}
+                    onToggle={toggle}
+                    onResend={onResend}
+                    loadImage={loadImage}
+                  />
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
+      {/* One prompt is no choice of where to go, so there's no rail for it. */}
+      {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
+      {scrolledUp && <ScrollToEnd onClick={scrollToEnd} />}
     </div>
   );
+}
+
+/**
+ * The user's prompts among `view`'s rows, for the rail: a follow-up's text from `sent` when the
+ * log lacks it, and the start of the agent's last reply before the next prompt. Parallax's own
+ * wake-ups aren't the user's, and replies to them aren't replies to the prompt before.
+ */
+function promptsOf(view: readonly ViewRow[], sent: ReadonlyMap<string, SentMessage>): Prompt[] {
+  const prompts: Prompt[] = [];
+  let last: Prompt | undefined;
+  view.forEach((row, index) => {
+    if (row.kind === "user" && row.wake) last = undefined;
+    else if (row.kind === "user" || row.kind === "pending") {
+      const said = row.text ?? (row.kind === "user" && row.turnId && sent.get(row.turnId)?.text);
+      const text = said ? plainText(said) : "";
+      last = { index, text: text || (row.images?.length ? "Image" : "Follow-up message") };
+      prompts.push(last);
+    } else if (row.kind === "assistant" && last) {
+      const reply = plainText(row.text.split(/\n\s*\n/).find((p) => p.trim()) ?? "");
+      if (reply) last.reply = reply;
+    }
+  });
+  return prompts;
 }
 
 // A proposed plan the user sent back, by its row, so the row keeps its object (RowView's memo).
@@ -1303,19 +1386,19 @@ export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode 
   return (
     <>
       {run.checkout ? (
-        <span className={tabItem}>
+        <span className={`${tabItem} shrink-0`}>
           <Folder aria-hidden />
           Current checkout
         </span>
       ) : (
-        <span className={tabItem}>
+        <span className={`${tabItem} shrink-0`}>
           <FolderGit2 aria-hidden />
           Worktree
         </span>
       )}
       <span className="flex min-w-0 items-center">
         {run.branch && (
-          <span className={tabItem} title="Worktree branch">
+          <span className={tabItem} title={`Worktree branch: ${run.branch}`}>
             <GitBranch aria-hidden />
             <span className="truncate">{run.branch}</span>
           </span>

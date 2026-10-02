@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification, RequestId};
 use parallax_protocol::methods::{
-    AgentAccept, AgentEvents, AgentList, AgentSend, EventsEvent, EventsSubscribe, HostHealth,
-    NotificationMethod, RepoAdd, RequestMethod, ThreadArchive, ThreadDelete, ThreadList,
-    ThreadStart,
+    AgentAccept, AgentCancel, AgentEvents, AgentList, AgentSend, EventsEvent, EventsSubscribe,
+    HostHealth, NotificationMethod, RepoAdd, RequestMethod, ThreadArchive, ThreadDelete,
+    ThreadList, ThreadStart,
 };
 use parallax_protocol::{
-    AcceptId, AccountChoice, AgentAcceptParams, AgentEffort, AgentEventsParams, AgentListParams,
-    AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
+    AcceptId, AccountChoice, AgentAcceptParams, AgentCancelParams, AgentEffort, AgentEventsParams,
+    AgentListParams, AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
     EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectId, Provider, Repo,
     RepoAddParams, RepoId, RunId, ThreadArchiveParams, ThreadDeleteParams, ThreadListParams,
     ThreadListResult, ThreadStartParams, TurnId,
@@ -170,6 +170,7 @@ fn message(run_id: RunId, text: &str) -> AgentSendParams {
         model: None,
         effort: None,
         permission: None,
+        account: None,
         images: Vec::new(),
     }
 }
@@ -1074,39 +1075,373 @@ async fn a_message_changes_a_finished_threads_model_and_effort() {
     assert_eq!(listed[0].effort, Some(AgentEffort::Low), "it was stored");
 }
 
-/// RYA-161, RYA-163: a running CLI can't change its model or effort, so a message asking for
-/// another one is refused, and nothing changes.
+/// A running CLI can't change its model or effort, so a message asking for another one waits,
+/// with every message sent after it, until the CLI exits; then each starts a CLI of its own, in
+/// order, the first with the new model.
 #[tokio::test]
-async fn a_running_thread_refuses_a_new_model_or_effort() {
-    let (host, seen) = with_options(hang());
+async fn a_message_with_a_new_model_waits_for_a_running_thread_to_finish() {
+    let slow = vec![
+        Step::Init {
+            session_id: "slow-1".to_owned(),
+            model: None,
+        },
+        Step::SleepMs(1000),
+        Step::Emit(Event::Text {
+            message_id: None,
+            text: "Done.".to_owned(),
+        }),
+        Step::EndTurn {
+            result: Some("Done.".to_owned()),
+        },
+    ];
+    let (host, seen) = with_options(slow);
     let mut client = host.client().await;
     let params = ThreadStartParams {
         effort: Some(AgentEffort::High),
-        ..start_params(None, "Wait for me")
+        ..start_params(None, "Take your time")
     };
     let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
     let scope = scope(started.thread.repo);
     client.subscribe(0, Some(scope)).await;
     client.until(updated_to(AgentStatus::Running)).await;
 
-    for change in [
-        AgentSendParams {
-            model: Some("sonnet".to_owned()),
-            ..message(params.run_id, "Hurry up")
-        },
-        AgentSendParams {
-            effort: Some(AgentEffort::Low),
-            ..message(params.run_id, "Hurry up")
-        },
-    ] {
-        let refused = client.call::<AgentSend>(change).await.unwrap_err();
-        assert_eq!(kind(&refused), ErrorKind::UnsupportedOption, "{refused:?}");
-        assert!(
-            refused.message.contains("while the run is working"),
-            "{refused:?}"
-        );
+    let change = AgentSendParams {
+        model: Some("sonnet".to_owned()),
+        ..message(params.run_id, "Hurry up")
+    };
+    let waiting = client.call::<AgentSend>(change.clone()).await.unwrap().run;
+    assert_eq!(waiting.status, AgentStatus::Running);
+    assert_eq!(waiting.model, None, "nothing changes until the CLI exits");
+    let after = message(params.run_id, "And the tests");
+    client.call::<AgentSend>(after.clone()).await.unwrap();
+    // A retry of a waiting message is the same message.
+    client.call::<AgentSend>(change.clone()).await.unwrap();
+    let conflict = client
+        .call::<AgentSend>(AgentSendParams {
+            text: "Something else".to_owned(),
+            ..change.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&conflict), ErrorKind::IdConflict, "{conflict:?}");
+    assert_eq!(seen.lock().unwrap().len(), 1, "no other CLI started yet");
+
+    // The first CLI, then one for each waiting message.
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        events.extend(client.until(updated_to(AgentStatus::Completed)).await);
+    }
+    let turns: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            ParallaxEvent::AgentOutput { items, .. } => Some(items),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|item| match item {
+            parallax_protocol::AgentOutputItem::TurnStarted {
+                turn_id: Some(turn_id),
+                ..
+            } => Some(*turn_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turns, [change.turn_id, after.turn_id], "in the order sent");
+    let sonnet = Some("sonnet".to_owned());
+    let high = Some(AgentEffort::High);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            (None, high, None, false),
+            (sonnet.clone(), high, None, false),
+            (sonnet, high, None, false),
+        ]
+    );
+    host.server.stop().await;
+}
+
+/// The fake CLI under another name, as another provider's backend, recording each prompt it gets
+/// and whether it resumed a session. Each start takes the next of `first`, where `None` refuses
+/// to start, then `fake` once `first` is empty.
+struct Other {
+    fake: FakeBackend,
+    first: Mutex<VecDeque<Option<FakeBackend>>>,
+    prompts: Arc<Mutex<Vec<(String, bool)>>>,
+}
+
+impl Other {
+    fn new(fake: FakeBackend, prompts: &Arc<Mutex<Vec<(String, bool)>>>) -> Self {
+        Self {
+            fake,
+            first: Mutex::new(VecDeque::new()),
+            prompts: Arc::clone(prompts),
+        }
+    }
+}
+
+impl Backend for Other {
+    fn name(&self) -> &'static str {
+        "other"
     }
 
+    fn capabilities(&self) -> Capabilities {
+        self.fake.capabilities()
+    }
+
+    fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        let prompt = (request.prompt.clone(), request.resume.is_some());
+        self.prompts.lock().unwrap().push(prompt);
+        match self.first.lock().unwrap().pop_front() {
+            Some(Some(fake)) => fake.start(request),
+            Some(None) => Err(StartError::Unsupported("refused".to_owned())),
+            None => self.fake.start(request),
+        }
+    }
+}
+
+/// A message on another backend's account moves the thread there: the same run, worktree, and
+/// transcript, on a new session that's told the conversation so far.
+#[tokio::test]
+async fn a_message_on_another_backends_account_moves_the_thread_there() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = fake(editing());
+    backends.register(
+        Provider::Openai,
+        Arc::new(Other::new(fake_backend(editing()), &prompts)),
+    );
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let params = start_params(None, "Write the notes");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    let scope = scope(started.thread.repo);
+    client.subscribe(0, Some(scope)).await;
+    client.until(updated_to(AgentStatus::Completed)).await;
+
+    let moved = client
+        .call::<AgentSend>(AgentSendParams {
+            model: Some("gpt-6".to_owned()),
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..message(params.run_id, "Now the tests")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(moved.id, params.run_id, "the same thread");
+    assert_eq!(moved.backend, "other");
+    assert_eq!(moved.account_id, "other");
+    assert_eq!(moved.model.as_deref(), Some("gpt-6"));
+    assert_eq!(moved.branch, started.run.branch, "the same worktree");
+    let events = client.until(updated_to(AgentStatus::Completed)).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.event,
+            ParallaxEvent::AgentUpdated { state, .. } if state.backend.as_deref() == Some("other")
+        )),
+        "agent.updated reports the move: {events:?}"
+    );
+    let prompts = prompts.lock().unwrap().clone();
+    let [(prompt, resumed)] = prompts.as_slice() else {
+        panic!("one CLI started on the other backend: {prompts:?}");
+    };
+    assert!(!resumed, "a new session");
+    assert!(
+        prompt.contains("User:\nWrite the notes\n\nAgent:\nDone.\n</conversation>"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.ends_with("which is yours to answer:\nNow the tests"),
+        "{prompt}"
+    );
+    host.server.stop().await;
+}
+
+/// A message on another backend's account moves a Current checkout thread there, still in the
+/// user's checkout.
+#[tokio::test]
+async fn a_checkout_thread_moves_to_another_backend_in_the_same_checkout() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = fake(editing());
+    backends.register(
+        Provider::Openai,
+        Arc::new(Other::new(fake_backend(editing()), &prompts)),
+    );
+    let host = Host::start(backends);
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let params = ThreadStartParams {
+        checkout: true,
+        ..start_params(Some(repo.id), "Write the notes")
+    };
+    client.call::<ThreadStart>(params.clone()).await.unwrap();
+    client.until(updated_to(AgentStatus::Completed)).await;
+    std::fs::remove_file(path.join("NOTES.md")).unwrap();
+
+    let moved = client
+        .call::<AgentSend>(AgentSendParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..message(params.run_id, "Write them again")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(moved.backend, "other");
+    assert!(moved.checkout);
+    client.until(updated_to(AgentStatus::Completed)).await;
+    assert!(
+        path.join("NOTES.md").is_file(),
+        "the new CLI wrote in the checkout"
+    );
+    let prompts = prompts.lock().unwrap().clone();
+    let [(prompt, false)] = prompts.as_slice() else {
+        panic!("one new session on the other backend: {prompts:?}");
+    };
+    assert!(
+        prompt.contains(&format!(
+            "own checkout of their repository at {}",
+            path.display()
+        )),
+        "{prompt}"
+    );
+    host.server.stop().await;
+}
+
+/// When the other backend's CLI doesn't start, the thread moves back, and its next message
+/// resumes its original session.
+#[tokio::test]
+async fn a_thread_moves_back_when_the_other_backends_cli_does_not_start() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let other = Other::new(fake_backend(editing()), &prompts);
+    other.first.lock().unwrap().push_back(None);
+    let mut backends = fake(editing());
+    backends.register(Provider::Openai, Arc::new(other));
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let params = start_params(None, "Write the notes");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    client.subscribe(0, Some(scope(started.thread.repo))).await;
+    client.until(updated_to(AgentStatus::Completed)).await;
+
+    let refused = client
+        .call::<AgentSend>(AgentSendParams {
+            model: Some("gpt-6".to_owned()),
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..message(params.run_id, "Now the tests")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(refused.status, AgentStatus::Failed, "{refused:?}");
+    assert_eq!(refused.backend, started.run.backend, "moved back");
+    assert_eq!(refused.model, started.run.model);
+    assert_eq!(
+        refused.session_id.as_deref(),
+        Some("thread-1"),
+        "its session is kept"
+    );
+
+    let resumed = client
+        .call::<AgentSend>(message(params.run_id, "Try again"))
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(resumed.backend, started.run.backend);
+    client.until(updated_to(AgentStatus::Completed)).await;
+    assert_eq!(prompts.lock().unwrap().len(), 1, "only the refused start");
+    host.server.stop().await;
+}
+
+/// A thread whose new CLI on another backend exits before reporting a session isn't stuck: its
+/// next message on that backend starts another new session there.
+#[tokio::test]
+async fn a_moved_thread_with_no_session_starts_a_new_one_on_its_next_message() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let other = Other::new(fake_backend(editing()), &prompts);
+    let quits = fake_backend(vec![Step::Stderr("not logged in".to_owned())]);
+    other.first.lock().unwrap().push_back(Some(quits));
+    let mut backends = fake(editing());
+    backends.register(Provider::Openai, Arc::new(other));
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let params = start_params(None, "Write the notes");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    client.subscribe(0, Some(scope(started.thread.repo))).await;
+    client.until(updated_to(AgentStatus::Completed)).await;
+
+    client
+        .call::<AgentSend>(AgentSendParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..message(params.run_id, "Now the tests")
+        })
+        .await
+        .unwrap();
+    client
+        .until(|event| {
+            matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. }
+                if matches!(state.status, AgentStatus::Completed | AgentStatus::Failed))
+        })
+        .await;
+
+    let again = client
+        .call::<AgentSend>(message(params.run_id, "Try again"))
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(again.backend, "other");
+    client.until(updated_to(AgentStatus::Completed)).await;
+    let prompts = prompts.lock().unwrap().clone();
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(!prompts[1].1, "a new session");
+    assert!(prompts[1].0.contains("<conversation>"), "{}", prompts[1].0);
+    host.server.stop().await;
+}
+
+/// Stopping a thread drops the messages waiting for its CLI to exit, which never reached it, and
+/// starts no other CLI.
+#[tokio::test]
+async fn stopping_a_running_thread_drops_the_messages_waiting_for_it() {
+    let (host, seen) = with_options(hang());
+    let mut client = host.client().await;
+    let params = start_params(None, "Wait for me");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    let scope = scope(started.thread.repo);
+    client.subscribe(0, Some(scope)).await;
+    client.until(updated_to(AgentStatus::Running)).await;
+
+    let change = AgentSendParams {
+        effort: Some(AgentEffort::Low),
+        ..message(params.run_id, "Hurry up")
+    };
+    client.call::<AgentSend>(change.clone()).await.unwrap();
+    client
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: params.run_id,
+        })
+        .await
+        .unwrap();
+    let events = client.until(updated_to(AgentStatus::Cancelled)).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.event,
+            ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item| matches!(
+                item,
+                parallax_protocol::AgentOutputItem::FollowUpDropped { turn_id }
+                    if *turn_id == change.turn_id
+            ))
+        )),
+        "the waiting message was dropped: {events:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(seen.lock().unwrap().len(), 1, "no other CLI started");
     let listed = client
         .call::<AgentList>(AgentListParams {
             project: Some(scope),
@@ -1114,8 +1449,6 @@ async fn a_running_thread_refuses_a_new_model_or_effort() {
         .await
         .unwrap()
         .runs;
-    assert_eq!(listed[0].model, None);
-    assert_eq!(listed[0].effort, Some(AgentEffort::High));
-    assert_eq!(seen.lock().unwrap().len(), 1, "no other CLI started");
+    assert_eq!(listed[0].effort, None, "nothing changed");
     host.server.stop().await;
 }

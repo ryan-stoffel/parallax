@@ -270,6 +270,7 @@ pub(crate) async fn request_changes(
             model: None,
             effort: None,
             permission: None,
+            account: None,
             images: Vec::new(),
         },
     )
