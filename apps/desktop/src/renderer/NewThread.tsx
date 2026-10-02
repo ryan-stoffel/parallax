@@ -13,7 +13,7 @@ import type { RunOptions } from "./models";
 import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { noRepo, type ThreadGroup } from "./threads";
-import { Picker } from "./ui";
+import { Picker, shortcut } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
 // The picker's value that opens the folder picker instead of choosing a group.
@@ -343,7 +343,9 @@ export function NewThread({
       >
         {starting === undefined && (
           <>
-            <h1 className="mb-7 text-center text-[24px] font-medium tracking-tight">
+            <h1
+              className={`${group.id === noRepo ? "mb-7" : "mb-2"} text-center text-[24px] font-medium tracking-tight`}
+            >
               {group.id === noRepo ? "What should we work on " : "What should we build in "}
               <button
                 type="button"
@@ -355,6 +357,31 @@ export function NewThread({
               </button>
               ?
             </h1>
+            {group.id !== noRepo && (
+              <div className="mb-5 text-center">
+                {/* Its shortcut, Mod+Shift+N, shows under it on hover or focus. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRepoError(undefined);
+                    setChoices(undefined);
+                    onGroupChange(noRepo);
+                  }}
+                  aria-keyshortcuts={
+                    window.parallax.platform === "darwin" ? "Meta+Shift+N" : "Control+Shift+N"
+                  }
+                  className="group relative rounded-md text-[15px] text-muted-foreground underline underline-offset-4 hover:text-foreground focus-visible:text-foreground"
+                >
+                  or start without a repo
+                  <kbd
+                    aria-hidden
+                    className="pointer-events-none invisible absolute top-full left-1/2 z-10 mt-1.5 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-[12px] text-muted-foreground group-hover:visible group-focus-visible:visible"
+                  >
+                    {shortcut("Shift+N")}
+                  </kbd>
+                </button>
+              </div>
+            )}
             {/* Menu only: the repository name in the heading opens it. */}
             <Picker
               id={repoMenu}
