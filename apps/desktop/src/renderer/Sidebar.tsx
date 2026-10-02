@@ -986,7 +986,7 @@ function RowHead({
 }) {
   return (
     <span
-      className={`flex w-full items-center gap-1.5 text-[12px] text-faint-foreground ${clearOfActions ? "group-has-[:focus-visible]/row:pr-32 group-hover/row:pr-32" : ""}`}
+      className={`flex w-full items-center gap-1.5 text-[12px] text-faint-foreground ${clearOfActions ? "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34" : ""}`}
     >
       <RepoIcon repo={repo} />
       <span className="min-w-0 truncate">{repo && !repo.scratch ? repo.name : "No repo"}</span>
