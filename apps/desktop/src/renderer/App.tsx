@@ -6,6 +6,7 @@ import { AgentChat } from "./AgentChat";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
 import { ContextPanel } from "./ContextPanel";
+import { FilesPanel } from "./FilesPanel";
 import { GitMenu } from "./GitMenu";
 import { NewThread } from "./NewThread";
 import { localId, useHosts } from "./hosts";
@@ -122,6 +123,8 @@ export function App() {
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
   const agent = agents.runs.find((r) => r.id === agentId);
+  // The run whose folder the side panel's Files view browses: the open thread or subagent.
+  const filesRunId = selection.kind === "thread" ? selection.threadId : agentId;
   // Shrinks an expanded side panel, which hides the main pane the chat opens in.
   const openAgent = (id?: string) => {
     if (!project) return;
@@ -445,6 +448,21 @@ export function App() {
               openId={agentId}
               onOpen={openAgent}
               disabledReason={offline}
+            />
+          )
+        }
+        files={
+          filesRunId && (
+            <FilesPanel
+              key={`${host.id}/${filesRunId}`}
+              hostId={host.id}
+              runId={filesRunId}
+              unavailable={
+                offline ??
+                (connected && "files" in connection.capabilities
+                  ? undefined
+                  : "Update Parallax on this host to browse a thread's files.")
+              }
             />
           )
         }
