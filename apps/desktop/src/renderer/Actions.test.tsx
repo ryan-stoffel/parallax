@@ -101,13 +101,13 @@ test("Add action saves an action for the repository, refusing the app's shortcut
 
   fill(field('input[placeholder="Test"]'), "Test");
   fill(field("textarea"), "pnpm test");
-  // Cmd+B is the sidebar's, and nothing else hears it while it's pressed here.
+  // Cmd+S is the sidebar's, and nothing else hears it while it's pressed here.
   const sidebar = vi.fn();
   window.addEventListener("keydown", sidebar);
-  press(keybindingField(), { key: "b", code: "KeyB", metaKey: true });
+  press(keybindingField(), { key: "s", code: "KeyS", metaKey: true });
   window.removeEventListener("keydown", sidebar);
   expect(sidebar).not.toHaveBeenCalled();
-  expect(dialog()!.textContent).toContain("⌘B is one of Parallax's shortcuts.");
+  expect(dialog()!.textContent).toContain("⌘S is one of Parallax's shortcuts.");
   press(keybindingField(), { key: "c", code: "KeyC", metaKey: true });
   expect(dialog()!.textContent).toContain("⌘C is an editing shortcut.");
   press(keybindingField(), { key: "Enter", code: "Enter", metaKey: true });
