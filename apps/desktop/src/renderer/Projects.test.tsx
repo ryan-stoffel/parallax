@@ -119,6 +119,7 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => sshHosts,
     onHosts: () => () => {},
+    openTargets: async () => [],
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 

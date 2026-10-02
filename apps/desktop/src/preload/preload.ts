@@ -82,6 +82,10 @@ const bridge: ParallaxBridge = {
     ipcRenderer.on("parallax:terminal", forward);
     return () => ipcRenderer.removeListener("parallax:terminal", forward);
   },
+
+  openTargets: (hostId) => ipcRenderer.invoke("parallax:openTargets", hostId),
+  openFolder: (hostId, target, folder) =>
+    ipcRenderer.invoke("parallax:openFolder", hostId, target, folder),
 };
 
 contextBridge.exposeInMainWorld("parallax", bridge);

@@ -212,6 +212,10 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
   return loginCommand(cli, path, ssh);
 }
 
+/** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
+export const savedHost = (id: string): SshHost | undefined =>
+  settings.hosts.find((h) => h.id === id);
+
 /** The local `plxd` binary (plxd.ts). */
 const localPlxd = () =>
   findPlxd({

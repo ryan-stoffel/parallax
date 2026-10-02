@@ -1,9 +1,17 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
 import path from "node:path";
 
-import { THEME_PREFERENCES, type UpdateState } from "../preload/bridge";
+import { THEME_PREFERENCES, type OpenTarget, type UpdateState } from "../preload/bridge";
+import {
+  detectEditors,
+  editorCommand,
+  isDirectory,
+  isFolderPath,
+  launch,
+  type Editor,
+} from "./editors";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
-import { startHosts } from "./hosts";
+import { savedHost, startHosts } from "./hosts";
 import { isOpenableExternally, isReload } from "./links";
 import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
@@ -129,6 +137,41 @@ ipcMain.handle("parallax:pickFolder", async (event) => {
     : dialog.showOpenDialog(options));
   return canceled ? null : (filePaths[0] ?? null);
 });
+
+// The top bar's Open button (editors.ts). The renderer names the host, target, and folder; main
+// checks each and runs only a program it found, never through a shell. Editors are found once.
+let editors: Partial<Record<Editor, string>> | undefined;
+const installedEditors = () => (editors ??= detectEditors(process.platform, process.env));
+// Every editor opens an SSH host's folder over its Remote SSH. The file manager is this computer's.
+function openTargets(hostId: unknown): OpenTarget[] {
+  const local = hostId === "local";
+  if (!local && (typeof hostId !== "string" || !savedHost(hostId))) return [];
+  const found = Object.keys(installedEditors()) as Editor[];
+  return local ? [...found, "files"] : found;
+}
+ipcMain.handle("parallax:openTargets", (_event, hostId: unknown) => openTargets(hostId));
+ipcMain.handle(
+  "parallax:openFolder",
+  async (event, hostId: unknown, target: unknown, folder: unknown) => {
+    if (!isFolderPath(folder) || !openTargets(hostId).some((t) => t === target)) return;
+    const destination = savedHost(hostId as string)?.destination;
+    let error: string | undefined;
+    // A local folder must be one: `shell.openPath` would run an executable file.
+    if (!destination && !isDirectory(folder)) error = "That folder isn't there anymore.";
+    else if (target === "files") error = (await shell.openPath(folder)) || undefined;
+    else {
+      const program = installedEditors()[target as Editor]!;
+      error = await launch(editorCommand(program, folder, destination));
+    }
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (error && win)
+      await dialog.showMessageBox(win, {
+        type: "warning",
+        message: "Parallax couldn't open the folder.",
+        detail: error,
+      });
+  },
+);
 
 // The renderer's Appearance setting. Native UI follows it.
 ipcMain.on("parallax:theme", (_event, preference: unknown) => {

@@ -44,6 +44,7 @@ beforeEach(() => {
     request: request as unknown as ParallaxBridge["request"],
     hosts: async () => [mini],
     onHosts: () => () => {},
+    openTargets: async () => [],
     saveHost,
     // Settings opens on General, which shows the update channel.
     updateChannel: async () => "nightly",

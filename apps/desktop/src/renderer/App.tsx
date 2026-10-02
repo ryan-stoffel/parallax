@@ -8,6 +8,7 @@ import { useConnection } from "./ConnectionStatus";
 import { ContextPanel } from "./ContextPanel";
 import { NewThread } from "./NewThread";
 import { localId, useHosts } from "./hosts";
+import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
 import { Settings } from "./Settings";
@@ -300,9 +301,20 @@ export function App() {
             <TopBar className={topBarInset}>
               {showSidebar}
               <Breadcrumb items={crumbs} />
-              {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
-              {!panelOpen && (
-                <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-2">
+                <OpenMenu
+                  hostId={host.id}
+                  // The thread's worktree, or New thread's repository.
+                  folder={
+                    selection.kind === "thread"
+                      ? threads.state.runs[selection.threadId]?.worktreePath
+                      : selection.kind === "new"
+                        ? threads.state.repos.find((r) => r.id === group.id)?.path
+                        : undefined
+                  }
+                />
+                {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
+                {!panelOpen && (
                   <IconButton
                     label="Show side panel"
                     keys="Alt+B"
@@ -312,8 +324,8 @@ export function App() {
                   >
                     <PanelRight />
                   </IconButton>
-                </div>
-              )}
+                )}
+              </div>
             </TopBar>
             {selection.kind === "thread" ? (
               // Keyed, so another run starts from an empty transcript.
