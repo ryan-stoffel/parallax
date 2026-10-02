@@ -697,7 +697,7 @@ test("another client's project.updated renames a row and changes its icon, in th
   ]);
 });
 
-test("with iconImages, Change icon uploads an image, and a Project's and its repo's images draw in the row, the breadcrumb, and the chat", async () => {
+test("with iconImages, Change icon uploads an image, and a Project's and its repo's images draw in the row, the Repos filter, the breadcrumb, and the chat", async () => {
   capabilities = { projectEdit: {}, iconImages: { maxBytes: 65536 } };
   const logo = { mediaType: "image/webp" as const, data: "UklGRg==" };
   const repoLogo = { mediaType: "image/png" as const, data: "iVBORw==" };
@@ -744,8 +744,11 @@ test("with iconImages, Change icon uploads an image, and a Project's and its rep
     );
   const projectUrl = `data:image/webp;base64,${logo.data}`;
   const repoUrl = `data:image/png;base64,${repoLogo.data}`;
-  // The row's repo, then the Project.
-  expect(drawn(rowButton("ember"))).toEqual([repoUrl, projectUrl]);
+  // The row has no repo line (PLX-340), so the repo's image draws in the Repos filter.
+  expect(drawn(rowButton("ember"))).toEqual([projectUrl]);
+  expect(drawn(document.querySelector('#sidebar [role="menu"][aria-label="Repos"]'))).toEqual([
+    repoUrl,
+  ]);
   await click(rowButton("ember"));
   expect(drawn(document.querySelector('[aria-label="Breadcrumb"]'))).toEqual([projectUrl]);
   expect(drawn(document.querySelector("main svg.size-10")?.parentElement)).toEqual([projectUrl]);
