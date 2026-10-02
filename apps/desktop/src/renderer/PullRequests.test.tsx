@@ -3,10 +3,17 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
+import diffSamples from "../../../../crates/parallax-protocol/samples/v1/pr-diff.json";
 import samples from "../../../../crates/parallax-protocol/samples/v1/pull-requests.json";
 import type { ParallaxBridge } from "../preload/bridge";
-import type { PullRequest } from "../protocol/generated/protocol";
-import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
+import type { PrDiffResult, PullRequest } from "../protocol/generated/protocol";
+import {
+  parseDiff,
+  PullRequestChip,
+  PullRequestList,
+  PullRequestView,
+  usePullRequests,
+} from "./PullRequests";
 import { SidePanel } from "./SidePanel";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -25,13 +32,22 @@ const prOf = (n: number, more: Partial<PullRequest> = {}): PullRequest => ({
   title: `Change ${n}`,
   ...more,
 });
+// The merged one with a commit and every kind of review, and its diff.
+const merged = (diffSamples as { id?: number; result?: PullRequest }[]).find(
+  (m) => m.id === 1 && m.result,
+)!.result!;
+const sampleDiff = (diffSamples as { id?: number; result?: PrDiffResult }[]).find(
+  (m) => m.id === 2 && m.result,
+)!.result!;
 const now = Date.parse("2026-10-02T13:10:00Z");
 
 let read: Record<string, PullRequest>;
 let actions: Record<string, () => object>;
+let diffs: Record<string, PrDiffResult>;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
   if (method === "pr/view") return { logId: "l", result: read[params["url"] as string] };
   if (method === "pr/act") return { logId: "l", ...actions[params["action"] as string]!() };
+  if (method === "pr/diff") return { logId: "l", result: diffs[params["url"] as string] };
   return { logId: "l", result: {} };
 });
 
@@ -40,6 +56,7 @@ beforeEach(() => {
   request.mockClear();
   read = {};
   actions = {};
+  diffs = {};
   window.parallax = { platform: "darwin", request } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
@@ -74,7 +91,7 @@ async function render(
   view: (prs: ReturnType<typeof usePullRequests>) => React.ReactNode,
 ) {
   function Harness() {
-    return <>{view(usePullRequests("local", "run-1", urls))}</>;
+    return <>{view(usePullRequests("local", "run-1", urls, true))}</>;
   }
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
   act(() => root!.render(<Harness />));
@@ -120,7 +137,7 @@ test("the list shows each pull request newest first, with the open and linked co
   expect(onOpen).toHaveBeenCalledWith(url(40));
 });
 
-test("the view shows the header, the checks' state, reviewers, labels, description, checks, and comments newest first", async () => {
+test("the view shows the header, the checks' state, reviewers, labels, description, and comments newest first", async () => {
   read = {
     [url(42)]: prOf(42, {
       comments: [
@@ -141,10 +158,13 @@ test("the view shows the header, the checks' state, reviewers, labels, descripti
   expect(document.querySelector("dl")!.textContent).toBe("Reviewersreviewer, docs-teamLabelsdocs");
   expect(document.body.textContent).toContain("Explains how to build the app.");
 
-  // Checks start folded.
-  expect(document.body.textContent).not.toContain("buildsuccess");
-  await click(button("Checks (2)"));
-  expect(document.body.textContent).toContain("buildsuccessDetails");
+  // The checks' state opens every check.
+  const checks = document.querySelector('[aria-label="Checks"]')!;
+  expect(button("1 of 2 running")!.getAttribute("popovertarget")).toBe(checks.id);
+  expect([...checks.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+    "buildsuccessDetails",
+    "testpending",
+  ]);
 
   const comments = [...document.querySelectorAll("section:last-of-type li")];
   expect(comments.map((c) => c.querySelector("p")!.textContent)).toEqual([
@@ -283,4 +303,87 @@ test("the side panel opens a pull request's tab, or the list, and hides tabs the
   // Another thread: its own pull requests only.
   panel([url(7)], {});
   expect(tabs()).toEqual(["Pull requests*"]);
+});
+
+test("the timeline shows opening, commits, comments, reviews, and the merge, newest first or oldest", async () => {
+  read = {
+    [url(42)]: {
+      ...merged,
+      comments: [{ author: "reviewer", body: "Nice.", createdAt: "2026-10-02T12:14:00Z" }],
+    },
+  };
+  await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
+  await click(document.querySelector('[role="tab"]:nth-child(2)'));
+  const rows = () =>
+    [...document.querySelectorAll('[aria-label="Timeline"] > li')].map(
+      (li) => li.querySelector("p")!.textContent,
+    );
+  expect(rows()).toEqual([
+    "reviewer merged parallax/add-readme into main",
+    "bot had a review dismissed",
+    "bot requested changes",
+    "reviewer approved these changes",
+    "reviewer commented",
+    "me opened this pull request",
+    "docs: add a README",
+  ]);
+  await click(button("Newest first"));
+  expect(rows()[0]).toBe("docs: add a README");
+});
+
+test("the code tab reads the diff once and shows each file numbered, folding a viewed one", async () => {
+  read = { [url(42)]: merged };
+  diffs = { [url(42)]: sampleDiff };
+  await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
+  expect(request.mock.calls.some(([, m]) => m === "pr/diff")).toBe(false);
+  await click(document.querySelector('[role="tab"]:nth-child(3)'));
+  expect(request).toHaveBeenCalledWith("local", "pr/diff", { runId: "run-1", url: url(42) });
+  expect(document.body.textContent).toContain("1 file · 0 / 1 viewed");
+  const file = document.querySelector('[aria-label="Changed files"] li')!;
+  expect(file.textContent).toContain("README.md+2 −0");
+  expect(file.textContent).toContain("1+Added: # App");
+  await click(file.querySelector('input[type="checkbox"]'));
+  expect(document.body.textContent).toContain("1 file · 1 / 1 viewed");
+  expect(file.textContent).not.toContain("# App");
+
+  // Back again: the same diff, not read again.
+  await click(document.querySelector('[role="tab"]:nth-child(1)'));
+  await click(document.querySelector('[role="tab"]:nth-child(3)'));
+  expect(request.mock.calls.filter(([, m]) => m === "pr/diff")).toHaveLength(1);
+});
+
+test("parseDiff numbers each side, and keeps renames and binary files", () => {
+  const files = parseDiff(
+    [
+      "diff --git a/a.txt b/a.txt",
+      "index 1..2 100644",
+      "--- a/a.txt",
+      "+++ b/a.txt",
+      "@@ -10,3 +10,3 @@ fn main",
+      " keep",
+      "--- gone",
+      "+++ here",
+      "\\ No newline at end of file",
+      "diff --git a/old.png b/new.png",
+      "rename from old.png",
+      "rename to new.png",
+      "Binary files a/old.png and b/new.png differ",
+      "",
+    ].join("\n"),
+  );
+  expect(files).toEqual([
+    {
+      path: "a.txt",
+      added: 1,
+      removed: 1,
+      binary: false,
+      lines: [
+        { op: "@", text: "@@ -10,3 +10,3 @@ fn main" },
+        { op: " ", text: "keep", old: 10, new: 10 },
+        { op: "-", text: "-- gone", old: 11 },
+        { op: "+", text: "++ here", new: 11 },
+      ],
+    },
+    { path: "new.png", oldPath: "old.png", added: 0, removed: 0, binary: true, lines: [] },
+  ]);
 });

@@ -4,6 +4,7 @@ import {
   BookOpen,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   CircleCheck,
   CircleDot,
   CircleMinus,
@@ -12,6 +13,7 @@ import {
   Ellipsis,
   ExternalLink,
   FileDiff,
+  GitCommitHorizontal,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -25,9 +27,15 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import type { PrAction, PrCheck, PrComment, PullRequest } from "../protocol/generated/protocol";
+import type {
+  PrAction,
+  PrCheck,
+  PrComment,
+  PrDiffResult,
+  PullRequest,
+} from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { tabItem } from "./Composer";
 import { describeError } from "./errors";
@@ -50,11 +58,13 @@ export interface PullRequests {
   refresh: (url: string) => Promise<void>;
   /** Runs `action` on one, keeping what GitHub has after it. Resolves to an error message. */
   act: (url: string, action: PrAction) => Promise<string | undefined>;
+  /** Reads one's unified diff, on a plxd with `prDiff` (PLX-328); absent on an older one. */
+  diff?: (url: string) => Promise<{ result?: PrDiffResult; error?: string }>;
 }
 
 /**
  * Reads each of a run's linked pull requests with `pr/view`, again whenever the list changes, and
- * acts on them with `pr/act`. Reads are kept by run and URL, so a late answer for another thread
+ * acts on them with `pr/act`. With `diffs`, reads one's diff with `pr/diff` on demand. Reads are kept by run and URL, so a late answer for another thread
  * lands under that thread. ponytail: every linked one is read on open; read on demand if threads
  * come to link many.
  */
@@ -62,6 +72,7 @@ export function usePullRequests(
   hostId: string,
   runId: string | undefined,
   urls: readonly string[],
+  diffs = false,
 ): PullRequests {
   const [read, setRead] = useState<Readonly<Record<string, Linked>>>({});
   const put = useCallback(
@@ -93,6 +104,15 @@ export function usePullRequests(
       if ("error" in answer) return describeError(answer.error);
       put(url, () => ({ pr: answer.result, at: new Date().toISOString() }));
     },
+    diff:
+      diffs && runId
+        ? async (url) => {
+            const answer = await window.parallax.request(hostId, "pr/diff", { runId, url });
+            return "error" in answer
+              ? { error: describeError(answer.error) }
+              : { result: answer.result };
+          }
+        : undefined,
   };
 }
 
@@ -317,10 +337,233 @@ function Section({
 // ponytail: "long" by length, not rendered height; measure it if this cuts the wrong ones.
 const isLong = (c: PrComment) => c.body.length > 600 || c.body.split("\n").length > 12;
 
+/** A comment's card: its author, age, and Markdown, folded when long until `onUnfold`. */
+function CommentCard({
+  c,
+  folded,
+  onUnfold,
+}: {
+  c: PrComment;
+  folded: boolean;
+  onUnfold: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-border px-4 py-3">
+      <p className="text-[13px]">
+        <span className="font-medium">{c.author}</span>{" "}
+        <span className="text-faint-foreground">{ago(c.createdAt)}</span>
+      </p>
+      <div
+        className={`mt-2 select-text ${folded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}
+      >
+        <MarkdownText text={c.body} />
+      </div>
+      {folded && (
+        <button
+          type="button"
+          onClick={onUnfold}
+          className="mt-2 text-[13px] text-muted-foreground hover:text-foreground"
+        >
+          Show full comment
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** A line of a diff: added, removed, context, or a hunk's `@@` header, with its line numbers. */
+export interface DiffLine {
+  op: "+" | "-" | " " | "@";
+  text: string;
+  old?: number;
+  new?: number;
+}
+
+/** One file of a unified diff. */
+export interface DiffFile {
+  path: string;
+  /** Its path before a rename. */
+  oldPath?: string;
+  added: number;
+  removed: number;
+  binary: boolean;
+  lines: DiffLine[];
+}
+
+/** `gh pr diff`'s unified diff as its files, each with its lines numbered on both sides. */
+export function parseDiff(diff: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  let file: DiffFile | undefined;
+  let old = 0;
+  let now = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      // `diff --git a/<old> b/<new>`; a `+++` line below, when there is one, says it exactly.
+      file = {
+        path: / b\/(.*)$/.exec(line)?.[1] ?? line.slice(11),
+        added: 0,
+        removed: 0,
+        binary: false,
+        lines: [],
+      };
+      files.push(file);
+    } else if (!file) {
+      continue;
+    } else if (line.startsWith("@@")) {
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
+      old = Number(m?.[1] ?? 0);
+      now = Number(m?.[2] ?? 0);
+      file.lines.push({ op: "@", text: line });
+    } else if (file.lines.length === 0) {
+      // The file's header, before its first hunk.
+      if (line.startsWith("rename from ")) file.oldPath = line.slice(12);
+      else if (line.startsWith("+++ b/")) file.path = line.slice(6);
+      else if (line.startsWith("Binary files ")) file.binary = true;
+    } else if (line.startsWith("+")) {
+      file.added++;
+      file.lines.push({ op: "+", text: line.slice(1), new: now++ });
+    } else if (line.startsWith("-")) {
+      file.removed++;
+      file.lines.push({ op: "-", text: line.slice(1), old: old++ });
+    } else if (line.startsWith(" ")) {
+      file.lines.push({ op: " ", text: line.slice(1), old: old++, new: now++ });
+    }
+  }
+  return files;
+}
+
+const lineLook = {
+  "+": "bg-added/10",
+  "-": "bg-danger/10",
+  " ": "",
+  "@": "text-faint-foreground",
+};
+
+/**
+ * One file of the Code tab: a header that folds it, with its path, size, and Viewed, over its
+ * lines numbered on both sides. ponytail: every line renders; window them if huge diffs lag.
+ */
+function DiffFileView({
+  file,
+  viewed,
+  onViewed,
+}: {
+  file: DiffFile;
+  viewed: boolean;
+  onViewed: (viewed: boolean) => void;
+}) {
+  const [folded, setFolded] = useState(false);
+  const shut = folded || viewed;
+  const Chevron = shut ? ChevronRight : ChevronDown;
+  return (
+    <li className="border-b border-border">
+      <div className="flex items-center gap-2 px-3 py-2 text-[13px]">
+        <button
+          type="button"
+          aria-expanded={!shut}
+          aria-label={`${shut ? "Show" : "Hide"} ${file.path}`}
+          onClick={() => (viewed ? onViewed(false) : setFolded(!folded))}
+          className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-hover"
+        >
+          <Chevron aria-hidden className="size-4" />
+        </button>
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-[12.5px]"
+          title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+        >
+          {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+        </span>
+        <span className="shrink-0 font-mono text-[12px]">
+          <span className="text-added">+{file.added}</span>{" "}
+          <span className="text-danger">−{file.removed}</span>
+        </span>
+        <label className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
+          <input type="checkbox" checked={viewed} onChange={(e) => onViewed(e.target.checked)} />
+          Viewed
+        </label>
+      </div>
+      {!shut && (
+        <div className="overflow-x-auto pb-2 font-mono text-[12px] leading-5">
+          {file.binary && <p className="px-3 text-faint-foreground">Binary file not shown</p>}
+          {file.lines.map((line, i) => (
+            <div key={i} className={`flex min-w-max ${lineLook[line.op]}`}>
+              {line.op === "@" ? (
+                <span className="px-3">{line.text}</span>
+              ) : (
+                <>
+                  <span
+                    aria-hidden
+                    className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none"
+                  >
+                    {line.old}
+                  </span>
+                  <span
+                    aria-hidden
+                    className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none"
+                  >
+                    {line.new}
+                  </span>
+                  <span
+                    aria-hidden
+                    className={`w-4 shrink-0 select-none ${line.op === "+" ? "text-added" : line.op === "-" ? "text-danger" : ""}`}
+                  >
+                    {line.op === "-" ? "−" : line.op}
+                  </span>
+                  {line.op !== " " && (
+                    <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
+                  )}
+                  <span className="pr-3 whitespace-pre">{line.text || " "}</span>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </li>
+  );
+}
+
+/** A review verdict in words, and its icon. A plain "commented" review shows as its comment. */
+const verdicts: Record<string, { Icon: LucideIcon; color: string; text: string }> = {
+  approved: { Icon: CircleCheck, color: "text-added", text: "approved these changes" },
+  changesRequested: { Icon: CircleAlert, color: "text-danger", text: "requested changes" },
+  dismissed: { Icon: CircleMinus, color: "text-faint-foreground", text: "had a review dismissed" },
+};
+
+/** One row of the Timeline: its icon on the rail, a line of what happened, and what's under it. */
+function TimelineEvent({
+  Icon,
+  color = "text-muted-foreground",
+  title,
+  sub,
+  children,
+}: {
+  Icon: LucideIcon;
+  color?: string;
+  title: ReactNode;
+  sub?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <li className="relative flex gap-3 pb-5 before:absolute before:top-7 before:bottom-0 before:left-[11px] before:w-px before:bg-border last:before:hidden">
+      <span className="grid size-6 shrink-0 place-items-center rounded-full bg-surface">
+        <Icon aria-hidden className={`size-4 ${color}`} />
+      </span>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <p className="text-[13px]">{title}</p>
+        {sub && <p className="mt-0.5 text-[12px] text-faint-foreground">{sub}</p>}
+        {children && <div className="mt-2">{children}</div>}
+      </div>
+    </li>
+  );
+}
+
 /**
  * One linked pull request in the side panel: its repository and number (a link to GitHub), comment
- * count, Merge, and a `…` menu of everything else; its title, author, branches, and size; then a
- * Summary of its checks, reviewers, labels, description, checks, and comments, newest first.
+ * count, Merge, and a `…` menu of everything else; its title, author, branches, and size; then its
+ * tabs (PLX-328): a Summary of its reviewers, labels, description, and comments, newest first; a
+ * Timeline of its commits, comments, reviews, and merge; and, on a plxd with `prDiff`, the Code it
+ * changes. The checks' state beside the tabs opens a list of every check.
  * `onCompose` hands a message to this thread's chat: sent, or put in the composer to finish.
  */
 export function PullRequestView({
@@ -338,12 +581,26 @@ export function PullRequestView({
   const closeDialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [tab, setTab] = useState<"summary" | "timeline" | "code">("summary");
   const [description, setDescription] = useState(true);
-  const [checks, setChecks] = useState(false);
   const [comments, setComments] = useState(true);
   const [full, setFull] = useState<ReadonlySet<number>>(new Set());
+  const [oldestFirst, setOldestFirst] = useState(false);
+  // The diff as read for the pull request's `updatedAt`, and the files marked viewed, by path.
+  const [diff, setDiff] = useState<{ for: string; result?: PrDiffResult; error?: string }>();
+  const [viewed, setViewed] = useState<ReadonlySet<string>>(new Set());
   const linked = prs.get(url);
   const pr = linked?.pr;
+  const readDiff = prs.diff;
+  const updatedAt = pr?.updatedAt;
+  useEffect(() => {
+    if (tab !== "code" || !readDiff || !updatedAt || diff?.for === updatedAt) return;
+    let live = true;
+    void readDiff(url).then((read) => live && setDiff({ for: updatedAt, ...read }));
+    return () => {
+      live = false;
+    };
+  }, [tab, readDiff, url, updatedAt, diff?.for]);
 
   // Runs `fn` from the menus, which close first; its error shows over the Summary.
   const run = async (fn: () => Promise<string | undefined | void>) => {
@@ -393,6 +650,150 @@ export function PullRequestView({
   const look = lookOf(pr);
   const summary = checksOf(pr);
   const newest = pr.comments.map((c, i) => ({ c, i })).reverse();
+  const card = (c: PrComment, i: number) => (
+    <CommentCard
+      c={c}
+      folded={isLong(c) && !full.has(i)}
+      onUnfold={() => setFull(new Set(full).add(i))}
+    />
+  );
+  const files = diff?.result ? parseDiff(diff.result.diff) : [];
+  // Every event, by time; a plain "commented" review shows as its comment instead.
+  const events: { at: string; key: string; node: ReactNode }[] = [
+    ...(pr.createdAt
+      ? [
+          {
+            at: pr.createdAt,
+            key: "opened",
+            node: (
+              <TimelineEvent
+                Icon={GitPullRequest}
+                color="text-added"
+                title={
+                  <>
+                    <span className="font-medium">{pr.author}</span> opened this pull request
+                  </>
+                }
+                sub={ago(pr.createdAt)}
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(pr.commits ?? []).map((c) => ({
+      at: c.committedAt,
+      key: `commit ${c.oid}`,
+      node: (
+        <TimelineEvent
+          Icon={GitCommitHorizontal}
+          title={<span className="font-medium">{c.headline}</span>}
+          sub={
+            <>
+              <span className="font-mono">{c.oid.slice(0, 7)}</span> · {c.author} ·{" "}
+              {ago(c.committedAt)}
+            </>
+          }
+        />
+      ),
+    })),
+    ...pr.comments.map((c, i) => ({
+      at: c.createdAt,
+      key: `comment ${i}`,
+      node: (
+        <TimelineEvent
+          Icon={MessageSquare}
+          title={
+            <>
+              <span className="font-medium">{c.author}</span> commented
+            </>
+          }
+        >
+          {card(c, i)}
+        </TimelineEvent>
+      ),
+    })),
+    ...(pr.reviews ?? []).flatMap((r, i) => {
+      const verdict = verdicts[r.state];
+      if (!verdict) return [];
+      return [
+        {
+          at: r.submittedAt,
+          key: `review ${i}`,
+          node: (
+            <TimelineEvent
+              Icon={verdict.Icon}
+              color={verdict.color}
+              title={
+                <>
+                  <span className="font-medium">{r.author}</span> {verdict.text}
+                </>
+              }
+              sub={ago(r.submittedAt)}
+            />
+          ),
+        },
+      ];
+    }),
+    ...(pr.mergedAt
+      ? [
+          {
+            at: pr.mergedAt,
+            key: "merged",
+            node: (
+              <TimelineEvent
+                Icon={GitMerge}
+                color="text-project-violet"
+                title={
+                  <>
+                    <span className="font-medium">{pr.mergedBy ?? "Someone"}</span> merged{" "}
+                    <span className="font-mono">{pr.headBranch}</span> into{" "}
+                    <span className="font-mono">{pr.baseBranch}</span>
+                  </>
+                }
+                sub={ago(pr.mergedAt)}
+              />
+            ),
+          },
+        ]
+      : pr.state === "closed" && pr.closedAt
+        ? [
+            {
+              at: pr.closedAt,
+              key: "closed",
+              node: (
+                <TimelineEvent
+                  Icon={GitPullRequestClosed}
+                  color="text-danger"
+                  title="Closed without merging"
+                  sub={ago(pr.closedAt)}
+                />
+              ),
+            },
+          ]
+        : []),
+  ].sort((a, b) => a.at.localeCompare(b.at));
+  if (!oldestFirst) events.reverse();
+  const tabButton = (name: typeof tab, label: string) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={tab === name}
+      onClick={() => setTab(name)}
+      className={`rounded-lg px-2.5 py-1 text-[13px] ${tab === name ? "bg-selected font-medium" : "text-muted-foreground hover:text-foreground"}`}
+    >
+      {label}
+    </button>
+  );
+  const sort = (
+    <button
+      type="button"
+      onClick={() => setOldestFirst(!oldestFirst)}
+      className="ml-auto flex items-center gap-1 text-[12.5px] text-muted-foreground hover:text-foreground"
+    >
+      <ArrowDownUp aria-hidden className="size-3.5" />
+      {oldestFirst ? "Oldest first" : "Newest first"}
+    </button>
+  );
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <header className="border-b border-border px-4 pt-2 pb-3">
@@ -473,20 +874,85 @@ export function PullRequestView({
         </div>
       </header>
 
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2">
-        <span className="rounded-lg bg-selected px-2.5 py-1 text-[13px] font-medium">Summary</span>
-        <span className={`ml-auto flex items-center gap-1.5 text-[12.5px] ${summary.color}`}>
+      <div className="flex items-center gap-1 border-b border-border px-4 py-2">
+        <div role="tablist" aria-label="Pull request" className="flex gap-1">
+          {tabButton("summary", "Summary")}
+          {tabButton("timeline", "Timeline")}
+          {prs.diff && tabButton("code", "Code")}
+        </div>
+        <button
+          type="button"
+          popoverTarget={`${id}-checks`}
+          aria-haspopup="dialog"
+          className={`ml-auto flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[12.5px] hover:bg-hover ${summary.color}`}
+        >
           <summary.Icon aria-hidden className="size-4" />
           <span className="text-muted-foreground">{summary.text}</span>
-        </span>
+        </button>
       </div>
 
-      <div className="px-4 pb-6">
-        {failure && (
-          <p role="alert" className="mt-3 text-[12.5px] text-danger">
-            {failure}
-          </p>
-        )}
+      {failure && (
+        <p role="alert" className="mx-4 mt-3 text-[12.5px] text-danger">
+          {failure}
+        </p>
+      )}
+
+      {tab === "timeline" && (
+        <div className="px-4 pb-6">
+          <div className="flex items-center gap-1.5 py-3 text-[12.5px] text-muted-foreground">
+            <MessageSquare aria-hidden className="size-3.5" />
+            {pr.comments.length} · <GitCommitHorizontal aria-hidden className="size-3.5" />
+            {pr.commits?.length ?? 0}
+            {sort}
+          </div>
+          <ol aria-label="Timeline">
+            {events.map((e) => (
+              <Fragment key={e.key}>{e.node}</Fragment>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {tab === "code" && (
+        <div className="pb-6">
+          {!diff ? (
+            <p className="px-4 py-3 text-[13px] text-faint-foreground">Loading…</p>
+          ) : diff.error ? (
+            <p role="alert" className="px-4 py-3 text-[13px] text-danger">
+              {diff.error}
+            </p>
+          ) : (
+            <>
+              <p className="border-b border-border px-4 py-2.5 text-[12.5px] text-muted-foreground">
+                {files.length} {files.length === 1 ? "file" : "files"} ·{" "}
+                {files.filter((f) => viewed.has(f.path)).length} / {files.length} viewed
+              </p>
+              {diff.result?.truncated && (
+                <p className="border-b border-border px-4 py-2.5 text-[12.5px] text-warning">
+                  This diff is too large to show whole. Open it on GitHub for the rest.
+                </p>
+              )}
+              <ul aria-label="Changed files">
+                {files.map((f) => (
+                  <DiffFileView
+                    key={f.path}
+                    file={f}
+                    viewed={viewed.has(f.path)}
+                    onViewed={(on) => {
+                      const next = new Set(viewed);
+                      if (on) next.add(f.path);
+                      else next.delete(f.path);
+                      setViewed(next);
+                    }}
+                  />
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className={tab === "summary" ? "px-4 pb-6" : "hidden"}>
         <dl className="mt-3 grid grid-cols-[7rem_1fr] gap-y-2.5 text-[13px]">
           <dt className="flex items-center gap-2 text-muted-foreground">
             <Users aria-hidden className="size-4" />
@@ -525,43 +991,6 @@ export function PullRequestView({
         </Section>
 
         <Section
-          title={`Checks (${pr.checks.length})`}
-          open={checks}
-          onToggle={() => setChecks(!checks)}
-        >
-          <ul className="flex flex-col gap-1">
-            {pr.checks.map((c, i) => {
-              const { Icon, color } = checkIcons[c.state] ?? {
-                Icon: CircleMinus,
-                color: "text-faint-foreground",
-              };
-              return (
-                <li key={i} className="flex items-center gap-2 text-[13px]">
-                  <Icon aria-hidden className={`size-4 shrink-0 ${color}`} />
-                  <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                  {c.conclusion && (
-                    <span className="shrink-0 text-[12px] text-faint-foreground">
-                      {c.conclusion}
-                    </span>
-                  )}
-                  {c.url && (
-                    <a
-                      href={c.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="shrink-0 text-[12px] text-muted-foreground hover:text-foreground"
-                    >
-                      Details
-                    </a>
-                  )}
-                </li>
-              );
-            })}
-            {pr.checks.length === 0 && <li className="text-[13px] text-faint-foreground">None</li>}
-          </ul>
-        </Section>
-
-        <Section
           title={`Comments (${pr.comments.length})`}
           open={comments}
           onToggle={() => setComments(!comments)}
@@ -573,36 +1002,52 @@ export function PullRequestView({
           }
         >
           <ul className="flex flex-col gap-3">
-            {newest.map(({ c, i }) => {
-              const folded = isLong(c) && !full.has(i);
-              return (
-                <li key={i} className="rounded-xl border border-border px-4 py-3">
-                  <p className="text-[13px]">
-                    <span className="font-medium">{c.author}</span>{" "}
-                    <span className="text-faint-foreground">{ago(c.createdAt)}</span>
-                  </p>
-                  <div
-                    className={`mt-2 select-text ${folded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}
-                  >
-                    <MarkdownText text={c.body} />
-                  </div>
-                  {folded && (
-                    <button
-                      type="button"
-                      onClick={() => setFull(new Set(full).add(i))}
-                      className="mt-2 text-[13px] text-muted-foreground hover:text-foreground"
-                    >
-                      Show full comment
-                    </button>
-                  )}
-                </li>
-              );
-            })}
+            {newest.map(({ c, i }) => (
+              <li key={i}>{card(c, i)}</li>
+            ))}
             {pr.comments.length === 0 && (
               <li className="text-[13px] text-faint-foreground">No comments</li>
             )}
           </ul>
         </Section>
+      </div>
+
+      <div
+        id={`${id}-checks`}
+        popover="auto"
+        role="dialog"
+        aria-label="Checks"
+        className={`${menuPanel("end")} w-96 p-3`}
+      >
+        <p className="text-[14px] font-medium">{summary.text}</p>
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {pr.checks.map((c, i) => {
+            const { Icon, color } = checkIcons[c.state] ?? {
+              Icon: CircleMinus,
+              color: "text-faint-foreground",
+            };
+            return (
+              <li key={i} className="flex items-center gap-2 text-[13px]">
+                <Icon aria-hidden className={`size-4 shrink-0 ${color}`} />
+                <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                <span className="shrink-0 text-[12px] text-faint-foreground">
+                  {c.conclusion ?? c.state}
+                </span>
+                {c.url && (
+                  <a
+                    href={c.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 text-[12px] text-accent hover:underline"
+                  >
+                    Details
+                  </a>
+                )}
+              </li>
+            );
+          })}
+          {pr.checks.length === 0 && <li className="text-[13px] text-faint-foreground">None</li>}
+        </ul>
       </div>
 
       {open && (

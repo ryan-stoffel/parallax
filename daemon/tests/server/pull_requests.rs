@@ -1,9 +1,9 @@
 //! Linked pull requests end to end (PLX-318): an agent's `gh pr create` links what it prints,
-//! the link survives a restart, and `pr/view` and `pr/act` reach only a linked one, through
-//! `open_pr`'s fake `gh`.
+//! the link survives a restart, and `pr/view`, `pr/diff` (PLX-328), and `pr/act` reach only a
+//! linked one, through `open_pr`'s fake `gh`.
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
-use parallax_protocol::methods::{AgentList, AgentStart, PrAct, PrView};
+use parallax_protocol::methods::{AgentList, AgentStart, PrAct, PrDiff, PrView};
 use parallax_protocol::{
     AgentListParams, AgentStatus, ErrorKind, ParallaxEvent, PrActParams, PrAction, PrState,
     PrViewParams, RunId,
@@ -124,11 +124,21 @@ async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_vie
     let viewed = client.call::<PrView>(view(run_id, FIRST)).await.unwrap();
     assert_eq!((viewed.number, viewed.repo.as_str()), (1, "me/app"));
     assert_eq!(viewed.state, PrState::Open);
+    let diff = client.call::<PrDiff>(view(run_id, FIRST)).await.unwrap();
+    assert_eq!(
+        (diff.diff.as_str(), diff.truncated),
+        ("diff --git a/README.md b/README.md\n", false)
+    );
 
     // A URL the run never linked never reaches gh.
     let before = tools.log().len();
     let refused = client
         .call::<PrView>(view(run_id, "https://github.com/me/app/pull/3"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS);
+    let refused = client
+        .call::<PrDiff>(view(run_id, "https://github.com/me/app/pull/3"))
         .await
         .unwrap_err();
     assert_eq!(refused.code, INVALID_PARAMS);
