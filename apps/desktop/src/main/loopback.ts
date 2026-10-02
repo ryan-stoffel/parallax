@@ -38,7 +38,7 @@ export type SignInPage = { url: string; done: Promise<string | undefined>; close
  * never holds a token. A failed step shows on the page, which can try again.
  *
  * Only the browser the app opened may sign in: `url` carries a secret, which the first visit
- * trades for a cookie that starting a sign-in requires. `/callback` needs none, since PKCE ties
+ * trades for a cookie that starting a sign-in requires. The secret works only that once. `/callback` needs none, since PKCE ties
  * its code to this app.
  */
 export async function serveSignIn(
@@ -57,6 +57,8 @@ export async function serveSignIn(
   const secret = randomUUID();
   // Cookies ignore ports, so the port keeps two pages' cookies apart.
   const cookie = `parallax-${host.split(":")[1]}=${secret}`;
+  // The secret works once, on the first visit: a browser's command line can show its URL.
+  let unopened = true;
 
   const timer = setTimeout(() => stop("Sign-in timed out. Try again."), timeoutMs);
   function stop(error: string | undefined) {
@@ -77,7 +79,8 @@ export async function serveSignIn(
     const url = new URL(req.url ?? "/", origin);
     const get = req.method === "GET";
 
-    const opened = url.searchParams.get("s") === secret;
+    const opened = unopened && get && url.pathname === "/" && url.searchParams.get("s") === secret;
+    if (opened) unopened = false;
     const allowed = opened || (req.headers.cookie ?? "").split(/;\s*/).includes(cookie);
 
     if (get && url.pathname === "/") {
