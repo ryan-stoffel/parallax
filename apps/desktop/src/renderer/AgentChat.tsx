@@ -283,6 +283,17 @@ export function AgentChat({
         : { kind: "user", key: "prompt", text: prompt },
     ];
   }, [items, sent, prompt, going]);
+  // The user's prompts, for the composer's Up: not Parallax's wake-ups.
+  const history = useMemo(
+    () =>
+      rows.flatMap((row) => {
+        if (row.kind === "pending") return [row.text];
+        if (row.kind !== "user" || row.wake) return [];
+        const text = row.text ?? (row.turnId && sent.get(row.turnId)?.text);
+        return text ? [text] : [];
+      }),
+    [rows, sent],
+  );
 
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
@@ -391,6 +402,7 @@ export function AgentChat({
         )}
         <Composer
           onSend={sendText}
+          history={history}
           onStop={isRunning(run?.status) ? cancel : undefined}
           disabledReason={disabledReason}
           tab={
