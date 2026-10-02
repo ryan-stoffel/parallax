@@ -210,7 +210,7 @@ test("Send shows the prompt at once while plxd starts the thread, and a failure 
   await send("Tidy the README");
   expect(heading()).toBeUndefined();
   expect(bubble()).toBe("Tidy the README");
-  expect(document.querySelector('[role="log"] [class*="opacity"]')).toBeNull();
+  expect(document.querySelector('[role="log"] .bg-selected')!.className).not.toContain("opacity");
   expect(musing()).toBe("Working");
   expect(composer().getAttribute("aria-placeholder")).toBe("Starting thread…");
 

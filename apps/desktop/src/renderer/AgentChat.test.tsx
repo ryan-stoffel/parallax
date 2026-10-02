@@ -75,7 +75,21 @@ test("a message on its way to the agent shows at full strength", () => {
     />,
   );
   expect(document.body.textContent).toBe("And this?");
-  expect(document.querySelector('[class*="opacity"]')).toBeNull();
+  expect(document.querySelector(".bg-selected")!.className).not.toContain("opacity");
+});
+
+test("a prompt shows when it was sent and copies its text, on hover", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  row({ kind: "user", key: "a", text: "Fix the build", at: "2026-09-25T12:00:00Z" });
+  const time = document.querySelector("time")!;
+  expect(time.dateTime).toBe("2026-09-25T12:00:00Z");
+  expect(time.parentElement!.className).toContain("group-hover/prompt:opacity-100");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Copy message"]')!.click(),
+  );
+  expect(writeText).toHaveBeenCalledWith("Fix the build");
+  expect(document.querySelector('button[aria-label="Copied"]')).not.toBeNull();
 });
 
 test("a user message shows its text, or a neutral label when the log has none", () => {
@@ -516,7 +530,8 @@ const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
  * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as plxd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
  * plxd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
- * default), and `agent/openPr` answers `prUrl`. `connect` changes the connection's state.
+ * default), `agent/openPr` answers `prUrl`, and `agent/image` a tiny PNG. `connect` changes the
+ * connection's state.
  */
 function fakeBridge(
   seq: number,
@@ -538,6 +553,8 @@ function fakeBridge(
     if (method === "agent/send")
       return { result: { run: { ...sampleRun, status: "running", ...sent } }, logId: "log-1" };
     if (method === "agent/openPr") return { result: { url: prUrl }, logId: "log-1" };
+    if (method === "agent/image")
+      return { result: { mediaType: "image/png", data: "AAAA" }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
     return { result: { events: rest.slice(0, 2), more: rest.length > 2 }, logId: "log-1" };
@@ -688,6 +705,56 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   expect(sendAgain()).toBeUndefined();
 });
 
+test("Stop puts a first prompt's images back too, fetched from plxd by id", async () => {
+  const { request, emit } = fakeBridge(2);
+  await renderChat();
+  // The first turn's turnStarted brings its images' ids, before the agent says anything.
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "turnStarted", images: ["i-1"] }] },
+    },
+  });
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  await settle();
+  expect(request).toHaveBeenCalledWith("local", "agent/image", { runId, imageId: "i-1" });
+  expect(document.querySelector<HTMLImageElement>('img[alt="Image 1"]')!.src).toBe(
+    "data:image/png;base64,AAAA",
+  );
+});
+
+test("a follow-up Stop puts back in the box offers no Send again once plxd drops it", async () => {
+  const { request, emit } = fakeBridge(4);
+  await renderChat();
+  type("Also mention the tests.");
+  await act(async () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const { turnId } = send[2] as { turnId: string };
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  expect(composer().textContent).toBe("Also mention the tests.");
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "followUpDropped", turnId }] },
+    },
+  });
+  expect([...document.querySelectorAll("button")].some((b) => b.textContent === "Send again")).toBe(
+    false,
+  );
+});
+
 test("a message a finished run couldn't take goes back in the box, with no loader", async () => {
   const send = async (text: string) => {
     type(text);
@@ -749,6 +816,31 @@ test("Stop cancels, and a failed cancel says why and allows another try", async 
   expect(document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.disabled).toBe(
     false,
   );
+});
+
+test("Stop or Esc before the agent answers puts the prompt back in the box, but not after", async () => {
+  const prompt = "Add a README that explains how to build the app.";
+  const stopButton = () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!;
+  fakeBridge(2); // started, with nothing from the agent yet
+  await renderChat();
+  await act(async () => stopButton().click());
+  expect(composer().textContent).toBe(prompt);
+  act(() => unmount());
+
+  fakeBridge(2);
+  await renderChat();
+  await act(
+    async () =>
+      void composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+  );
+  expect(composer().textContent).toBe(prompt);
+  act(() => unmount());
+
+  const { request } = fakeBridge(4); // the agent has replied
+  await renderChat();
+  await act(async () => stopButton().click());
+  expect(request).toHaveBeenCalledWith("local", "agent/cancel", { runId });
+  expect(composer().textContent).toBe("");
 });
 
 test("a finished run opens a pull request titled like its thread, then links to it", async () => {
