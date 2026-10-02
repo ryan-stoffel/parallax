@@ -19,6 +19,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod commands;
 pub mod cursor;
 pub mod event;
 pub mod fake;
@@ -30,7 +31,7 @@ pub mod sandbox;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
@@ -43,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use zeroize::Zeroize;
 
+pub use self::commands::CommandsProbe;
 pub use self::event::{
     ApprovalRequest, CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus,
     LimitWindow, ModelUsage, Outcome, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
@@ -95,6 +97,17 @@ pub trait Backend: Send + Sync {
     /// [`Backend::efforts`].
     fn fast_mode(&self) -> bool {
         false
+    }
+
+    /// Starts the CLI in `cwd` to list its own slash commands and skills (PLX-359), with the
+    /// program and environment a thread on the user's own login gets, for
+    /// [`commands::list`]. `None` for a backend with no list, the default.
+    ///
+    /// # Errors
+    ///
+    /// If the CLI can't be started.
+    fn commands(&self, _cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        Ok(None)
     }
 }
 
