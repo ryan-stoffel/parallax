@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -54,6 +55,9 @@ pub struct CliDetector {
     cache: Mutex<Option<(Instant, Probe)>>,
     /// CLIs probed alone by [`Self::get`], while the full `cache` is empty or stale.
     single: Mutex<HashMap<CliKind, (Instant, DetectedCli)>>,
+    /// One lock per CLI, held while [`Self::get`] probes it, so many runs starting at once with a
+    /// stale cache wait on one probe instead of each running their own.
+    probing: Mutex<HashMap<CliKind, Arc<Mutex<()>>>>,
 }
 
 impl CliDetector {
@@ -66,6 +70,7 @@ impl CliDetector {
             timeout,
             cache: Mutex::new(None),
             single: Mutex::new(HashMap::new()),
+            probing: Mutex::new(HashMap::new()),
         }
     }
 
@@ -86,18 +91,32 @@ impl CliDetector {
     /// that starts on `cli`: [`Self::list`] would also wait on the other two, and Cursor's status
     /// command takes seconds.
     pub async fn get(&self, cli: CliKind) -> DetectedCli {
+        if let Some(found) = self.cached(cli).await {
+            return found;
+        }
+        let probing = Arc::clone(self.probing.lock().await.entry(cli).or_default());
+        let _probing = probing.lock().await;
+        // Another run may have probed it while this one waited.
+        if let Some(found) = self.cached(cli).await {
+            return found;
+        }
+        self.refresh_one(cli).await
+    }
+
+    /// `cli`'s status from either cache, while it's fresh.
+    async fn cached(&self, cli: CliKind) -> Option<DetectedCli> {
         if let Some((checked, probe)) = &*self.cache.lock().await
             && checked.elapsed() < CACHE_TTL
             && let Some(found) = probe.clis.iter().find(|found| found.cli == cli)
         {
-            return found.clone();
+            return Some(found.clone());
         }
         if let Some((checked, found)) = self.single.lock().await.get(&cli)
             && checked.elapsed() < CACHE_TTL
         {
-            return found.clone();
+            return Some(found.clone());
         }
-        self.refresh_one(cli).await
+        None
     }
 
     /// A fresh probe of `cli` alone. Updates what [`Self::get`] and [`Self::list`] serve for it.
