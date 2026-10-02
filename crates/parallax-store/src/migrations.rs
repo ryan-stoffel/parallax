@@ -286,6 +286,18 @@ const MIGRATIONS: &[Migration] = &[
         version: 18,
         sql: "ALTER TABLE runs ADD COLUMN checkout INTEGER NOT NULL DEFAULT 0;",
     },
+    // What the sidebar needs to show which threads need the user (RYA-270, decision 0033): when
+    // the user last saw each thread, until when it is snoozed, and each repo entry's icon in
+    // 0032's shape. Existing threads count as seen now, so an upgrade doesn't mark every old
+    // thread as new.
+    Migration {
+        version: 19,
+        sql: "ALTER TABLE threads ADD COLUMN seen_at TEXT;
+        ALTER TABLE threads ADD COLUMN snoozed_until TEXT;
+        UPDATE threads SET seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+        ALTER TABLE repos ADD COLUMN icon_name TEXT;
+        ALTER TABLE repos ADD COLUMN icon_color TEXT;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

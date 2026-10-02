@@ -21,9 +21,10 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, ParallaxEvent, ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId, RunId, Thread,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
-    ThreadStartParams, ThreadStartResult,
+    ErrorKind, ParallaxEvent, ProjectIcon, ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId,
+    RepoUpdateParams, RepoUpdateResult, RunId, Thread, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteResult, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult,
 };
 use parallax_store::RepoFields;
 use tokio_util::sync::CancellationToken;
@@ -65,6 +66,10 @@ pub(crate) fn repo_entry(row: parallax_store::Repo) -> Result<Repo, ErrorObject>
         name: row.fields.name,
         path: row.fields.path,
         scratch: row.fields.scratch,
+        icon: row.icon.map(|icon| ProjectIcon {
+            name: icon.name,
+            color: icon.color,
+        }),
         created_at: row.created_at,
     })
 }
@@ -76,6 +81,9 @@ pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, Error
         repo: RepoId::try_from(row.repo_id).map_err(|_| corrupt("thread", row.id))?,
         archived: row.archived,
         created_at: row.created_at,
+        seen_at: row.seen_at,
+        snoozed_until: row.snoozed_until,
+        last_prompt_at: Some(row.last_prompt_at),
     })
 }
 
@@ -506,6 +514,95 @@ pub(crate) async fn archive(
             },
         );
         Ok(ThreadArchiveResult { thread })
+    })
+    .await
+}
+
+/// `thread/update`: marks a thread seen or snoozes it (0033), appending `thread.updated` when
+/// anything changed.
+pub(crate) async fn update(
+    daemon: &Arc<Daemon>,
+    params: ThreadUpdateParams,
+) -> Result<ThreadUpdateResult, ErrorObject> {
+    let ThreadUpdateParams {
+        run_id,
+        seen,
+        snoozed_until,
+    } = params;
+    let log = Arc::clone(&daemon.log);
+    store(daemon, move |db| {
+        let (row, changed) = db
+            .update_thread(run_id.into(), seen, snoozed_until)
+            .map_err(|error| match error {
+                parallax_store::StoreError::NotFound { .. } => thread_not_found(run_id),
+                other => store_error(&other),
+            })?;
+        let thread = thread_entry(&row)?;
+        if changed {
+            log.append_blocking(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::ThreadUpdated {
+                    thread: thread.clone(),
+                },
+            );
+        }
+        Ok(ThreadUpdateResult { thread })
+    })
+    .await
+}
+
+/// After a message to run `run_id` is recorded: if the run is a thread, its `lastPromptAt` moved,
+/// so this appends `thread.updated` for the sidebar's order (0033). Runs on the store's thread.
+pub(crate) fn prompted(
+    db: &parallax_store::Store,
+    log: &crate::event_log::EventLog,
+    run_id: Uuid,
+) -> Result<(), ErrorObject> {
+    let Some(row) = db.get_thread(run_id).map_err(|e| store_error(&e))? else {
+        return Ok(());
+    };
+    log.append_blocking(
+        Timestamp::now(),
+        None,
+        ParallaxEvent::ThreadUpdated {
+            thread: thread_entry(&row)?,
+        },
+    );
+    Ok(())
+}
+
+/// `repo/update`: sets a repo entry's icon (0033), appending `repo.updated` when it changed.
+pub(crate) async fn update_repo(
+    daemon: &Arc<Daemon>,
+    params: RepoUpdateParams,
+) -> Result<RepoUpdateResult, ErrorObject> {
+    let RepoUpdateParams { repo, icon } = params;
+    crate::methods::project::check_icon(&icon)?;
+    let log = Arc::clone(&daemon.log);
+    let stored = parallax_store::ProjectIcon {
+        name: icon.name,
+        color: icon.color,
+    };
+    store(daemon, move |db| {
+        let (row, changed) =
+            db.set_repo_icon(repo.into(), &stored)
+                .map_err(|error| match error {
+                    parallax_store::StoreError::NotFound { .. } => ErrorObject::parallax(
+                        ErrorKind::RepoNotFound,
+                        format!("no repo entry has id {repo}"),
+                    ),
+                    other => store_error(&other),
+                })?;
+        let repo = repo_entry(row)?;
+        if changed {
+            log.append_blocking(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::RepoUpdated { repo: repo.clone() },
+            );
+        }
+        Ok(RepoUpdateResult { repo })
     })
     .await
 }

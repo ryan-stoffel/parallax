@@ -4,10 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRun, ParallaxEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { backendLogos, statusLooks } from "./Sidebar";
-import { titleOf } from "./threads";
+import { titleOf, waitingSince } from "./threads";
 import {
   accountLabel,
-  isRunning,
   statusLabel,
   trackApprovals,
   updateRun,
@@ -81,22 +80,10 @@ export function useProjectAgents(
       if ("error" in list) return setError(list.error.message);
       setRuns(list.result.runs);
       setError(undefined);
-      // Requests from before the list are in the logs of runs that still go. A page that fails
-      // leaves those out; new ones still arrive below.
-      let byRun: ApprovalsByRun = {};
-      for (const run of list.result.runs.filter((r) => r.approvals && isRunning(r.status)))
-        for (let after = 0, more = true; more;) {
-          const page = await window.parallax.request(hostId, "agent/events", {
-            runId: run.id,
-            after,
-          });
-          if (stopped) return;
-          if ("error" in page) break;
-          byRun = trackApprovals(byRun, page.result.events);
-          after = page.result.events.at(-1)?.seq ?? after;
-          more = page.result.more && page.result.events.length > 0;
-        }
-      setAsked(byRun);
+      // Requests from before the list are in the logs of runs that still go.
+      const backlog = await waitingSince(hostId, list.result.runs, () => stopped);
+      if (stopped) return;
+      setAsked(trackApprovals({}, backlog));
       const since = { after: list.result.seq, project, logId: list.logId };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;

@@ -10,15 +10,15 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification, RequestId};
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentEvents, AgentList, AgentSend, EventsEvent, EventsSubscribe,
-    HostHealth, NotificationMethod, RepoAdd, RequestMethod, ThreadArchive, ThreadDelete,
-    ThreadList, ThreadStart,
+    HostHealth, NotificationMethod, RepoAdd, RepoUpdate, RequestMethod, ThreadArchive,
+    ThreadDelete, ThreadList, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentCancelParams, AgentEffort, AgentEventsParams,
     AgentListParams, AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
-    EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectId, Provider, Repo,
-    RepoAddParams, RepoId, RunId, ThreadArchiveParams, ThreadDeleteParams, ThreadListParams,
-    ThreadListResult, ThreadStartParams, TurnId,
+    EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectIcon, ProjectId, Provider, Repo,
+    RepoAddParams, RepoId, RepoUpdateParams, RunId, ThreadArchiveParams, ThreadDeleteParams,
+    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadUpdateParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -1451,4 +1451,112 @@ async fn stopping_a_running_thread_drops_the_messages_waiting_for_it() {
         .runs;
     assert_eq!(listed[0].effort, None, "nothing changed");
     host.server.stop().await;
+}
+
+/// The sidebar's attention state (0033): a thread is marked seen and snoozed, a message moves its
+/// `lastPromptAt`, and a repo entry takes an icon, each with a host-level event.
+#[tokio::test]
+async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let params = start_params(Some(repo.id), "Write some notes");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    assert_eq!(started.thread.seen_at, None);
+    assert_eq!(
+        started.thread.last_prompt_at,
+        Some(started.thread.created_at)
+    );
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+    runs.until(updated_to(AgentStatus::Completed)).await;
+    let seq = client.list().await.seq;
+    client.subscribe(seq, None).await;
+
+    let until: jiff::Timestamp = "2030-01-01T09:00:00Z".parse().unwrap();
+    let updated = client
+        .call::<ThreadUpdate>(ThreadUpdateParams {
+            run_id: params.run_id,
+            seen: true,
+            snoozed_until: Some(until),
+        })
+        .await
+        .unwrap()
+        .thread;
+    assert!(updated.seen_at.unwrap() >= started.thread.created_at);
+    assert_eq!(updated.snoozed_until, Some(until));
+    client
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadUpdated { thread } if *thread == updated))
+        .await;
+    // The same snooze again changes nothing.
+    let again = client
+        .call::<ThreadUpdate>(ThreadUpdateParams {
+            run_id: params.run_id,
+            seen: false,
+            snoozed_until: Some(until),
+        })
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(again, updated);
+
+    client
+        .call::<AgentSend>(message(params.run_id, "And a summary"))
+        .await
+        .unwrap();
+    let prompted = client
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadUpdated { thread } if thread.last_prompt_at > updated.last_prompt_at))
+        .await;
+    let ParallaxEvent::ThreadUpdated { thread } = &prompted.last().unwrap().event else {
+        unreachable!()
+    };
+    assert_eq!(client.list().await.threads, std::slice::from_ref(thread));
+
+    let icon = ProjectIcon {
+        name: "flame".to_owned(),
+        color: Some("orange".to_owned()),
+    };
+    let with_icon = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: repo.id,
+            icon: icon.clone(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    assert_eq!(with_icon.icon, Some(icon.clone()));
+    client
+        .until(|event| matches!(&event.event, ParallaxEvent::RepoUpdated { repo } if repo.icon.is_some()))
+        .await;
+    assert_eq!(client.list().await.repos, [with_icon]);
+
+    let bad = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: repo.id,
+            icon: ProjectIcon {
+                name: "Not An Icon".to_owned(),
+                color: None,
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(bad.code, INVALID_PARAMS, "{bad:?}");
+    let missing = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: RepoId::generate(),
+            icon,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&missing), ErrorKind::RepoNotFound);
+    let missing = client
+        .call::<ThreadUpdate>(ThreadUpdateParams {
+            run_id: RunId::generate(),
+            seen: true,
+            snoozed_until: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&missing), ErrorKind::ThreadNotFound);
 }

@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{AccountChoice, AgentEffort, AgentPermission, AgentRun, PromptImage, RunId};
+use crate::{
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, PromptImage, RunId,
+};
 
 uuid_v7_id! {
     /// A repo entry's id: a version 7 UUID that the client generates once and sends again on
@@ -37,6 +39,11 @@ pub struct Repo {
     /// folder that holds each such thread's own scratch repository.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scratch: bool,
+    /// The icon the user chose, in a project's shape (0032), behind the `threadAttention`
+    /// capability (0033). Absent means the app's default: the name's initials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icon: Option<ProjectIcon>,
     /// When the entry was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
 }
@@ -54,6 +61,68 @@ pub struct Thread {
     pub archived: bool,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
+    /// When a client last marked it seen with `thread/update` (0033). The app counts a run that
+    /// stopped after this as one the user hasn't seen. Absent if never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub seen_at: Option<Timestamp>,
+    /// Until when the user snoozed it (0033). A time in the past means it isn't snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snoozed_until: Option<Timestamp>,
+    /// When its newest message was sent: its newest turn, or its creation (0033). Absent from a
+    /// plxd without `threadAttention`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_prompt_at: Option<Timestamp>,
+}
+
+/// Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
+/// `threadAttention` capability.
+///
+/// `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
+/// past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
+/// Fails with `threadNotFound` for an unknown thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUpdateParams {
+    /// The thread's run id.
+    pub run_id: RunId,
+    /// True to mark it seen now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seen: bool,
+    /// Snoozes it until this time, in RFC 3339 UTC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snoozed_until: Option<Timestamp>,
+}
+
+/// Result of `thread/update`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUpdateResult {
+    /// The thread as it stands.
+    pub thread: Thread,
+}
+
+/// Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
+/// behind the `threadAttention` capability. A change appends `repo.updated`. Fails with
+/// `repoNotFound` for an unknown entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoUpdateParams {
+    /// The entry's id.
+    pub repo: RepoId,
+    /// Its new icon, checked as `project/update` checks a project's.
+    pub icon: ProjectIcon,
+}
+
+/// Result of `repo/update`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoUpdateResult {
+    /// The entry as it stands.
+    pub repo: Repo,
 }
 
 /// Params of `thread/list`.
@@ -210,6 +279,7 @@ mod tests {
             name: "parallax".to_owned(),
             path: "/Users/me/src/parallax".to_owned(),
             scratch: false,
+            icon: None,
             created_at: "2026-09-26T12:00:00Z".parse().unwrap(),
         };
         let value = serde_json::to_value(&repo).unwrap();
@@ -219,6 +289,9 @@ mod tests {
             repo: repo.id,
             archived: false,
             created_at: repo.created_at,
+            seen_at: None,
+            snoozed_until: None,
+            last_prompt_at: None,
         };
         let value = serde_json::to_value(&thread).unwrap();
         assert!(value.get("archived").is_none(), "{value}");

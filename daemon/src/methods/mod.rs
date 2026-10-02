@@ -12,7 +12,7 @@ mod context;
 mod defaults;
 mod events;
 mod host;
-mod project;
+pub(crate) mod project;
 mod thread;
 mod usage;
 

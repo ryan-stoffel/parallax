@@ -974,3 +974,107 @@ body {
     visibility: hidden;
   }
 }
+
+/* The sidebar's attention marks (AttentionMark.tsx, 0033), from the logo's two circles. Only
+   transform and opacity move, so a list of working rows stays on the compositor. */
+.mark-blue,
+.mark-coral {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0.85;
+}
+.mark-blue {
+  fill: #2b5cff;
+}
+.mark-coral {
+  fill: #ff4a1f;
+}
+/* Each slides through the other and back; the one passing in front grows, the other shrinks. */
+.mark-working .mark-blue {
+  animation: mark-swap-blue 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.mark-working .mark-coral {
+  animation: mark-swap-coral 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes mark-swap-blue {
+  25% {
+    transform: translate(2.5px, 2.5px) scale(1.18);
+  }
+  50% {
+    transform: translate(5px, 5px);
+  }
+  75% {
+    transform: translate(2.5px, 2.5px) scale(0.78);
+  }
+}
+@keyframes mark-swap-coral {
+  25% {
+    transform: translate(-2.5px, -2.5px) scale(0.78);
+  }
+  50% {
+    transform: translate(-5px, -5px);
+  }
+  75% {
+    transform: translate(-2.5px, -2.5px) scale(1.18);
+  }
+}
+.mark-done .mark-disc {
+  fill: var(--added);
+}
+.mark-done .mark-check {
+  fill: none;
+  stroke: var(--background);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mark-done :is(.mark-disc, .mark-check) {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+/* Once: the circles meet in the middle and fade as the disc swells out of them, then the check. */
+.mark-done-animate .mark-blue {
+  animation: mark-meet-blue 0.42s cubic-bezier(0.55, 0, 0.45, 1) both;
+}
+.mark-done-animate .mark-coral {
+  animation: mark-meet-coral 0.42s cubic-bezier(0.55, 0, 0.45, 1) both;
+}
+.mark-done-animate .mark-disc {
+  animation: mark-disc-in 0.36s 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.mark-done-animate .mark-check {
+  animation: mark-check-in 0.3s 0.52s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes mark-meet-blue {
+  to {
+    transform: translate(2.5px, 2.5px) scale(0.5);
+    opacity: 0;
+  }
+}
+@keyframes mark-meet-coral {
+  to {
+    transform: translate(-2.5px, -2.5px) scale(0.5);
+    opacity: 0;
+  }
+}
+@keyframes mark-disc-in {
+  from {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+}
+@keyframes mark-check-in {
+  from {
+    transform: scale(0.4) rotate(-20deg);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mark-working :is(.mark-blue, .mark-coral),
+  .mark-done-animate :is(.mark-disc, .mark-check) {
+    animation: none;
+  }
+  .mark-done-animate :is(.mark-blue, .mark-coral) {
+    display: none;
+  }
+}

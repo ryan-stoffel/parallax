@@ -1,5 +1,5 @@
-import { Folder, House, PanelLeft, PanelRight, Workflow } from "lucide-react";
-import { useEffect, useState } from "react";
+import { PanelLeft, PanelRight, Workflow } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
 import { AgentChat } from "./AgentChat";
@@ -12,9 +12,20 @@ import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
-import { ProjectIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
+import { attentionOf } from "./attention";
+import { useSnoozeAlarms } from "./alarms";
+import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
-import { groupOf, groupThreads, noRepo, titleOf, useThreads } from "./threads";
+import {
+  asksOf,
+  groupOf,
+  groupThreads,
+  idleThreads,
+  noRepo,
+  titleOf,
+  useThreads,
+  type ThreadsView,
+} from "./threads";
 import { isRunning } from "./transcript";
 import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { UsagePage } from "./UsagePage";
@@ -48,12 +59,7 @@ export function App() {
   // check below drops a Project selection the open host's list doesn't have.
   const [opening, setOpening] = useState<{ hostId: string; projectId: string }>();
   const [settings, setSettings] = useState<SettingsSection | null>(null);
-  // Set by the sidebar's "Add host", so Hosts opens on its form; any other way in clears it.
-  const [addingHost, setAddingHost] = useState(false);
-  const openSettings = (section: SettingsSection, addHost = false) => {
-    setSettings(section);
-    setAddingHost(addHost);
-  };
+  const openSettings = (section: SettingsSection) => setSettings(section);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelExpanded, setPanelExpanded] = useState(false);
@@ -64,15 +70,30 @@ export function App() {
   const connected = connection?.status === "connected";
   // Runs started here forward their permission requests, only to a plxd that takes the flag.
   const approvals = connected && "approvals" in connection.capabilities;
-  const threads = useThreads(host.id, connected, approvals);
+  // Every host's threads and Projects, loaded side by side for the sidebar's one list (0033).
+  const [views, setViews] = useState<Readonly<Record<string, ThreadsView>>>({});
+  const report = useCallback(
+    (id: string, view: ThreadsView) =>
+      setViews((prev) => (prev[id] === view ? prev : { ...prev, [id]: view })),
+    [],
+  );
+  const threads = views[host.id] ?? idleThreads;
+  const listed = useMemo(
+    () => hosts.map((h) => ({ host: h, view: views[h.id] ?? idleThreads })),
+    [hosts, views],
+  );
   const { groups } = groupThreads(threads.state);
+  // Every thread and Project the open host has listed, so a selection is dropped only once what it
+  // opened leaves the list: a just-started one reaches the list a render after it opens.
+  const known = useRef(new Set<string>());
+  for (const t of threads.state.threads) known.current.add(t.id);
+  for (const p of threads.state.projects) known.current.add(p.id);
   // The open thread's group (No Repo's until plxd lists it), or the new thread's.
   let group = groups[0]!;
   if (selection.kind === "thread") {
     const open = threads.state.threads.find((t) => t.id === selection.threadId);
-    // Deleted, maybe by another client: leave it rather than show a stale transcript. An open
-    // thread is always listed, since a start and a click both come after the thread is.
-    if (!open) setSelection({ kind: "new" });
+    // Deleted, maybe by another client: leave it rather than show a stale transcript.
+    if (!open && known.current.has(selection.threadId)) setSelection({ kind: "new" });
     const id = open ? groupOf(threads.state, open) : noRepo;
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
@@ -90,7 +111,8 @@ export function App() {
     selection.kind === "project"
       ? threads.state.projects.find((p) => p.id === selection.projectId)
       : undefined;
-  if (selection.kind === "project" && !project) setSelection({ kind: "new" });
+  if (selection.kind === "project" && !project && known.current.has(selection.projectId))
+    setSelection({ kind: "new" });
   const agents = useProjectAgents(host.id, project?.id, connected, approvals);
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
@@ -114,6 +136,33 @@ export function App() {
       return (agents.waiting[run.id] ?? []).map((approval) => ({ runId: run.id, approval, from }));
     });
 
+  // An open thread that has news is seen now, including one that finishes while it is open.
+  const openThread =
+    selection.kind === "thread"
+      ? threads.state.threads.find((t) => t.id === selection.threadId)
+      : undefined;
+  const openNews =
+    openThread &&
+    threads.attention &&
+    ["done", "failed"].includes(
+      attentionOf(
+        openThread,
+        threads.state.runs[openThread.id],
+        asksOf(threads.state, openThread.id),
+      ),
+    );
+  useEffect(() => {
+    if (openNews && openThread) void threads.update(openThread.id, { seen: true });
+  }, [openNews, openThread, threads]);
+
+  const openOnHost = (hostId: string, next: Selection) => {
+    setSettings(null);
+    setHostId(hostId);
+    setSelection(next);
+    setOpening(undefined);
+  };
+  useSnoozeAlarms(listed, (hostId, threadId) => openOnHost(hostId, { kind: "thread", threadId }));
+
   // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
   // back to the coordinator.
   let crumbs: Crumb[];
@@ -128,7 +177,10 @@ export function App() {
     ];
     if (agentId) crumbs.push({ label: agent ? titleOf(agent) : "Subagent", icon: <Workflow /> });
   } else {
-    const repo = { label: group.name, icon: group.id === noRepo ? <House /> : <Folder /> };
+    const repo = {
+      label: group.name,
+      icon: <RepoIcon repo={threads.state.repos.find((r) => r.id === group.id)} />,
+    };
     const page =
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
@@ -149,10 +201,11 @@ export function App() {
     setSettings(null);
     setSelection({ kind: "new", groupId: selection.kind === "project" ? undefined : group.id });
   };
-  const deleteThread = async (thread: Thread) => {
-    const error = await threads.remove(thread);
+  const deleteThread = async (hostId: string, thread: Thread) => {
+    const view = views[hostId] ?? idleThreads;
+    const error = await view.remove(thread);
     if (!error && selection.kind === "thread" && selection.threadId === thread.id)
-      setSelection({ kind: "new", groupId: groupOf(threads.state, thread) });
+      setSelection({ kind: "new", groupId: groupOf(view.state, thread) });
     return error;
   };
 
@@ -207,6 +260,9 @@ export function App() {
 
   return (
     <div className="flex h-full">
+      {hosts.map((h) => (
+        <HostLoader key={h.id} hostId={h.id} onView={report} />
+      ))}
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} onNewThread={newThread}>
         {settings ? (
           <SettingsNav
@@ -216,21 +272,12 @@ export function App() {
           />
         ) : (
           <ThreadList
-            hosts={hosts}
+            hosts={listed}
             host={host}
-            onHostChange={(id) => {
-              setHostId(id);
-              setSelection({ kind: "new" });
-              setOpening(undefined);
-            }}
             selection={selection}
-            onSelect={(next) => {
-              setSelection(next);
-              setOpening(undefined);
-            }}
+            onSelect={openOnHost}
             onOpenProject={openProject}
             onOpenSettings={openSettings}
-            threads={threads}
             onDelete={deleteThread}
           />
         )}
@@ -244,12 +291,7 @@ export function App() {
               {showSidebar}
               <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[settings] }]} />
             </TopBar>
-            <Settings
-              section={settings}
-              addingHost={addingHost}
-              theme={theme}
-              onThemeChange={setTheme}
-            />
+            <Settings section={settings} theme={theme} onThemeChange={setTheme} />
           </>
         ) : selection.kind === "usage" ? (
           <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
@@ -364,4 +406,23 @@ export function App() {
       />
     </div>
   );
+}
+
+/** Loads one host's threads and Projects and hands them up, whenever they change. */
+function HostLoader({
+  hostId,
+  onView,
+}: {
+  hostId: string;
+  onView: (hostId: string, view: ThreadsView) => void;
+}) {
+  const connection = useConnection(hostId);
+  const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
+  const view = useThreads(hostId, !!capabilities, {
+    approvals: !!capabilities && "approvals" in capabilities,
+    attention: !!capabilities && "threadAttention" in capabilities,
+    editable: !!capabilities && "projectEdit" in capabilities,
+  });
+  useEffect(() => onView(hostId, view), [hostId, view, onView]);
+  return null;
 }
