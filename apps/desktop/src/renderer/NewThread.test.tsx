@@ -11,6 +11,20 @@ import { App } from "./App";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The row menu's buttons are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
+// The composer's image reads, so a test can wait for them: happy-dom reads a file on two chained
+// timers, which a fixed wait races when the event loop stalls (PLX-277).
+const reads = vi.hoisted(() => [] as Promise<unknown>[]);
+vi.mock(import("./images"), async (importOriginal) => {
+  const images = await importOriginal();
+  return {
+    ...images,
+    readImage: (...args) => {
+      const read = images.readImage(...args);
+      reads.push(read);
+      return read;
+    },
+  };
+});
 // happy-dom lays nothing out. A tall transcript with small rows renders every row.
 Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
   get(this: HTMLElement) {
@@ -70,7 +84,10 @@ beforeEach(() => {
 });
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  act(() => unmount());
+  vi.useRealTimers();
+});
 
 async function renderApp() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -218,6 +235,9 @@ test("the loader under the prompt carries on as the thread opens and loads", asy
     }) as unknown as RpcResponse<unknown>;
   // The opened thread's transcript is still on its way.
   answers["agent/events"] = () => new Promise(() => {}) as unknown as RpcResponse<unknown>;
+  // The musing's word changes on a 2.4 s wall-clock timer, which would fade a word in whenever
+  // the test straddles a change (PLX-277). Held, only the remount can.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   await renderApp();
   await send("Tidy the README");
   expect(musing()).toBe("Working");
@@ -619,7 +639,7 @@ test("a thread can start with an image alone, titled Image, and nothing to name 
   act(() => {
     composer().dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
   });
-  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  await act(() => Promise.all(reads.splice(0)));
   await send("");
   expect(calls("thread/start")).toEqual([
     {
