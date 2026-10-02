@@ -95,7 +95,10 @@ const bridge: ParallaxBridge = {
   onProfile(listener) {
     const forward = (_event: unknown, profile: Profile | null) => listener(profile);
     ipcRenderer.on("parallax:profile", forward);
-    void (ipcRenderer.invoke("parallax:profile") as Promise<Profile | null>).then(listener);
+    // Undefined until main knows: the listener first hears a real answer.
+    void (ipcRenderer.invoke("parallax:profile") as Promise<Profile | null | undefined>).then(
+      (profile) => profile !== undefined && listener(profile),
+    );
     return () => ipcRenderer.removeListener("parallax:profile", forward);
   },
   signInWith: (provider) => ipcRenderer.invoke("parallax:signInWith", provider),

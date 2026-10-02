@@ -48,12 +48,16 @@ function nameOf(meta: Record<string, unknown>): string {
   return given || text("full_name") || text("name");
 }
 
-/** The provider's picture as a data: URL, since the renderer's CSP loads no remote images. */
-async function pictureOf(meta: Record<string, unknown>): Promise<string | undefined> {
+/** The provider's picture's https URL, if it sent one. */
+function pictureUrl(meta: Record<string, unknown>): string | undefined {
   const url = meta["avatar_url"] ?? meta["picture"];
-  if (typeof url !== "string" || !url.startsWith("https://")) return undefined;
+  return typeof url === "string" && url.startsWith("https://") ? url : undefined;
+}
+
+/** A picture as a data: URL, since the renderer's CSP loads no remote images. */
+async function fetchPicture(url: string): Promise<string | undefined> {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     const type = res.headers.get("content-type") ?? "";
     if (!res.ok || !type.startsWith("image/")) return undefined;
     return `data:${type};base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`;
@@ -78,40 +82,52 @@ export function startAccount() {
       })
     : undefined;
 
-  let profile: Profile | null = null;
+  // Undefined until auth-js reads the stored session, so a signed-in user never looks signed out.
+  let profile: Profile | null | undefined = auth ? undefined : null;
+  const publish = (next: Profile | null) => {
+    profile = next;
+    for (const win of BrowserWindow.getAllWindows())
+      win.webContents.send("parallax:profile", profile);
+  };
+  // The last picture fetched, so an hourly token refresh doesn't fetch it again.
+  let picture: { url: string; data: string | undefined } | undefined;
   // Each change gets a number, so a slow picture fetch never overwrites a newer profile.
   let changes = 0;
   auth?.onAuthStateChange((_event, session) => {
     const change = ++changes;
     const user: User | undefined = session?.user;
-    // Not awaited: auth-js holds a lock while this runs.
-    void (async () => {
-      const next = user && {
-        name: nameOf(user.user_metadata),
-        email: user.email ?? "",
-        picture: await pictureOf(user.user_metadata),
-      };
-      if (change !== changes) return;
-      profile = next ?? null;
-      for (const win of BrowserWindow.getAllWindows())
-        win.webContents.send("parallax:profile", profile);
-    })();
+    if (!user) return publish(null);
+    const shown = { name: nameOf(user.user_metadata), email: user.email ?? "" };
+    const url = pictureUrl(user.user_metadata);
+    if (!url || url === picture?.url) return publish({ ...shown, picture: url && picture?.data });
+    // The name now, the picture once it's here. Not awaited: auth-js holds a lock while this runs.
+    publish(shown);
+    void fetchPicture(url).then((data) => {
+      picture = { url, data };
+      if (change === changes) publish({ ...shown, picture: data });
+    });
   });
 
-  // The sign-in waiting on the browser. A new one replaces it, as auth-js keeps one PKCE verifier.
-  let pending: Loopback | undefined;
-  const listen = async () => {
-    pending?.close();
-    return (pending = await listenForCode());
+  // Sign-ins waiting on the browser. Each OAuth one keeps the id of its own PKCE verifier, so two
+  // at once both work. Sign-up's email link has no id, and uses the latest verifier.
+  const pending = new Set<Loopback>();
+  const listen = async (flow: { id?: string }, timeoutMs?: number) => {
+    const loopback = await listenForCode(async (code) => {
+      try {
+        const options = flow.id ? { flowId: flow.id } : undefined;
+        const { error } = await auth!.exchangeCodeForSession(code, options);
+        return error?.message;
+      } catch (error) {
+        return (error as Error).message;
+      }
+    }, timeoutMs);
+    pending.add(loopback);
+    void loopback.done.then(() => pending.delete(loopback));
+    return loopback;
   };
-  // Trades the browser's code for a session. Resolves to an error for people, or undefined.
-  const finish = async (loopback: Loopback) => {
-    try {
-      const { error } = await auth!.exchangeCodeForSession(await loopback.code);
-      return error?.message;
-    } catch (error) {
-      return (error as Error).message;
-    }
+  // Another way in, or out, ends the browser sign-ins, so a late one can't switch accounts.
+  const cancelPending = () => {
+    for (const loopback of pending) loopback.close();
   };
 
   ipcMain.handle("parallax:profile", () => profile);
@@ -119,7 +135,8 @@ export function startAccount() {
   ipcMain.handle("parallax:signInWith", async (_event, provider: OAuthProvider) => {
     if (!auth) return notSetUp;
     if (!["github", "google", "apple"].includes(provider)) return "Unknown provider.";
-    const loopback = await listen();
+    const flow: { id?: string } = {};
+    const loopback = await listen(flow);
     const { data, error } = await auth.signInWithOAuth({
       provider,
       options: { redirectTo: loopback.url, skipBrowserRedirect: true },
@@ -128,20 +145,24 @@ export function startAccount() {
       loopback.close();
       return error.message;
     }
+    flow.id = data.flowId ?? undefined;
     await shell.openExternal(data.url);
-    return finish(loopback);
+    return loopback.done;
   });
 
   ipcMain.handle("parallax:signInWithEmail", async (_event, email: string, password: string) => {
     if (!auth) return notSetUp;
+    cancelPending();
     const { error } = await auth.signInWithPassword({ email, password });
     return error?.message;
   });
 
   ipcMain.handle("parallax:signUp", async (_event, account: NewAccount) => {
     if (!auth) return notSetUp;
-    // The confirmation email's link comes back here too, and signs the app in.
-    const loopback = await listen();
+    cancelPending();
+    // The confirmation email's link comes back here too, and signs the app in, for as long as
+    // Supabase's links last by default. A later click still confirms the account.
+    const loopback = await listen({}, 60 * 60_000);
     const { data, error } = await auth.signUp({
       email: account.email,
       password: account.password,
@@ -154,12 +175,11 @@ export function startAccount() {
       loopback.close();
       return error?.message;
     }
-    void finish(loopback);
     return `Check ${account.email} for a link to confirm your account.`;
   });
 
   ipcMain.handle("parallax:signOut", async () => {
-    pending?.close();
+    cancelPending();
     // Local: other devices stay signed in.
     await auth?.signOut({ scope: "local" });
   });
