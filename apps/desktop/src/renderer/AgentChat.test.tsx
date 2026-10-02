@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
-import { act, type ReactNode } from "react";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
@@ -781,6 +781,56 @@ test("a finished run opens a pull request titled like its thread, then links to 
   expect(link.textContent).toBe("PR #42");
   expect(link.target).toBe("_blank");
   expect(openPr()).toBeUndefined();
+});
+
+test("with the PR view, Open PR opens it, a linked one's chip takes its place, and the view's messages reach the chat", async () => {
+  const url = "https://github.com/me/app/pull/42";
+  const { request } = fakeBridge(8, { capabilities: { openPr: {} }, prUrl: url });
+  const onPrOpened = vi.fn();
+  const onComposed = vi.fn();
+  // One chat, drawn again with new props.
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+    unmount = () => {};
+  };
+  const chat = (props: Partial<ComponentProps<typeof AgentChat>>) =>
+    act(() =>
+      root.render(
+        <AgentChat
+          hostId="local"
+          runId={runId}
+          onPrOpened={onPrOpened}
+          onComposed={onComposed}
+          {...props}
+        />,
+      ),
+    );
+  chat({});
+  await settle();
+  await act(async () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Open PR")!.click(),
+  );
+  expect(onPrOpened).toHaveBeenCalledWith(url);
+  expect(document.querySelector(`a[href="${url}"]`)).toBeNull();
+
+  chat({ pullRequests: <button type="button">#42</button> });
+  expect(document.body.textContent).toContain("#42");
+  expect(document.body.textContent).not.toContain("Open PR");
+
+  chat({ compose: { text: "Explain this pull request", send: true } });
+  await settle();
+  expect(request).toHaveBeenCalledWith(
+    "local",
+    "agent/send",
+    expect.objectContaining({ runId, text: "Explain this pull request" }),
+  );
+  expect(onComposed).toHaveBeenCalledTimes(1);
+  chat({ compose: { text: `${url} `, send: false } });
+  await settle();
+  expect(document.querySelector('[role="textbox"]')!.textContent).toBe(`${url} `);
+  expect(onComposed).toHaveBeenCalledTimes(2);
 });
 
 test("while disconnected, nothing loads and the composer says why", async () => {

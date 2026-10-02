@@ -1,6 +1,7 @@
 import {
   FolderTree,
   GitCompare,
+  GitPullRequest,
   Globe,
   Maximize2,
   Minimize2,
@@ -15,15 +16,18 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { Browser } from "./Browser";
+import { numberOf } from "./PullRequests";
 import { IconButton, TopBar } from "./ui";
 
 interface Surface {
   name: string;
   icon: LucideIcon;
-  /** The letter that opens it from the list. */
+  /** The letter that opens it from the list; a pull request's tab has its URL. */
   key: string;
   /** Its empty state, or absent while it isn't built or has a view of its own. */
   empty?: { title: string; hint: string };
+  /** A pull request's tab: the URL it shows. */
+  url?: string;
 }
 
 const isBuilt = (s: Surface) => !!s.empty || s.name === "Browser";
@@ -60,6 +64,12 @@ const surfaces: Surface[] = [
     empty: { title: "No thread open", hint: "Open a thread to browse its folder." },
   },
   { name: "Browser", icon: Globe, key: "B" },
+  {
+    name: "Pull requests",
+    icon: GitPullRequest,
+    key: "P",
+    empty: { title: "No pull requests", hint: "Pull requests this thread opens show up here." },
+  },
 ];
 
 /**
@@ -72,7 +82,9 @@ const surfaces: Surface[] = [
  * `context`, and `files` are those views, such as a Project's, in place of their empty states.
  * `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal view,
  * told whether it's shown and given its empty state. Each new `browse` opens the Browser
- * view at its url.
+ * view at its url. `pullRequests` are the open thread's linked pull requests (PLX-319): its URLs,
+ * the Pull requests view, and each one's view, shown in a `#n` tab only while the thread links it.
+ * Each new `pullRequest` opens that URL's tab, or without one the Pull requests view.
  */
 export function SidePanel({
   open,
@@ -87,6 +99,8 @@ export function SidePanel({
   terminal,
   files,
   browse,
+  pullRequests,
+  pullRequest,
 }: {
   open: boolean;
   onClose: () => void;
@@ -100,23 +114,30 @@ export function SidePanel({
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
   files?: ReactNode;
   browse?: { url: string };
+  pullRequests?: { urls: readonly string[]; list: ReactNode; view: (url: string) => ReactNode };
+  pullRequest?: { url?: string };
 }) {
   // The open views in tab order, and the one shown; with none shown, the list is.
   const [tabs, setTabs] = useState<Surface[]>([]);
   const [active, setActive] = useState<Surface>();
 
+  // Another thread's pull request tabs stay open, but hidden.
+  const shown = tabs.filter((s) => !s.url || pullRequests?.urls.includes(s.url));
+  const current = active && shown.includes(active) ? active : undefined;
+
   const openView = (s: Surface) => {
-    if (!tabs.includes(s)) setTabs([...tabs, s]);
-    setActive(s);
+    const open = tabs.find((t) => t.key === s.key);
+    if (!open) setTabs([...tabs, s]);
+    setActive(open ?? s);
   };
   // Closing the shown tab shows the one after it, or before it; closing the last shows the list.
   // Focus moves to the shown tab, or to + with none shown, so it stays in the panel, where the
   // list's letters work.
   const closeView = (s: Surface) => {
-    const i = tabs.indexOf(s);
-    const rest = tabs.toSpliced(i, 1);
-    const next = s === active ? rest[Math.min(i, rest.length - 1)] : active;
-    setTabs(rest);
+    const i = shown.indexOf(s);
+    const rest = shown.toSpliced(i, 1);
+    const next = s === current ? rest[Math.min(i, rest.length - 1)] : current;
+    setTabs(tabs.filter((t) => t !== s));
     setActive(next);
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
   };
@@ -124,6 +145,13 @@ export function SidePanel({
   if (browse !== browsed) {
     setBrowsed(browse);
     if (browse) openView(surfaces.find((s) => s.name === "Browser")!);
+  }
+  const [prOpened, setPrOpened] = useState(pullRequest);
+  if (pullRequest !== prOpened) {
+    setPrOpened(pullRequest);
+    const url = pullRequest?.url;
+    if (url) openView({ name: `#${numberOf(url)}`, icon: GitPullRequest, key: url, url });
+    else if (pullRequest) openView(surfaces.find((s) => s.name === "Pull requests")!);
   }
   const emptyOf = (s: Surface) => (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
@@ -140,9 +168,13 @@ export function SidePanel({
     ) : s.name === "Context" && context ? (
       context
     ) : s.name === "Terminal" && terminal ? (
-      terminal(open && s === active, emptyOf(s))
+      terminal(open && s === current, emptyOf(s))
     ) : s.name === "Files" && files ? (
       files
+    ) : s.url && pullRequests ? (
+      pullRequests.view(s.url)
+    ) : s.name === "Pull requests" && pullRequests?.urls.length ? (
+      pullRequests.list
     ) : (
       emptyOf(s)
     );
@@ -154,7 +186,7 @@ export function SidePanel({
       hidden={!open}
       // From the list, a view's letter opens it while focus is in the panel.
       onKeyDown={(e) => {
-        if (active || e.metaKey || e.ctrlKey || e.altKey) return;
+        if (current || e.metaKey || e.ctrlKey || e.altKey) return;
         const next = surfaces.find((s) => isBuilt(s) && s.key === e.key.toUpperCase());
         if (!next) return;
         e.preventDefault();
@@ -165,15 +197,15 @@ export function SidePanel({
       <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
         {leading}
         <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
-          {tabs.map((s) => (
+          {shown.map((s) => (
             <li
-              key={s.name}
-              className={`flex shrink-0 items-center rounded-lg ${s === active ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+              key={s.key}
+              className={`flex shrink-0 items-center rounded-lg ${s === current ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
             >
               <button
                 type="button"
                 id={`side-panel-tab-${s.key}`}
-                aria-current={s === active ? "true" : undefined}
+                aria-current={s === current ? "true" : undefined}
                 onClick={() => setActive(s)}
                 className="flex items-center gap-1.5 py-1 pl-2 text-[13px]"
               >
@@ -217,12 +249,12 @@ export function SidePanel({
           </IconButton>
         </div>
       </TopBar>
-      {tabs.map((s) => (
-        <div key={s.name} hidden={s !== active} className="flex min-h-0 flex-1 flex-col">
+      {shown.map((s) => (
+        <div key={s.key} hidden={s !== current} className="flex min-h-0 flex-1 flex-col">
           {viewOf(s)}
         </div>
       ))}
-      {!active && (
+      {!current && (
         <nav
           aria-labelledby="side-panel-views"
           className="flex flex-1 flex-col items-center justify-center px-8 pb-16"
