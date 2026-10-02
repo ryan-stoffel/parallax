@@ -124,16 +124,14 @@ export function ProfilePage({
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
         <div className="@container mx-auto max-w-3xl px-2 pt-2 pb-16">
           <div ref={card} className="rounded-2xl bg-background px-6 pt-6 pb-7">
-            <header className="group flex items-center gap-4">
-              <Halo>
-                {profile ? (
-                  <Avatar profile={profile} size={60} />
-                ) : (
-                  <span className="grid size-15 place-items-center rounded-full bg-selected text-muted-foreground [&_svg]:size-7">
-                    <CircleUser />
-                  </span>
-                )}
-              </Halo>
+            <header className="flex items-center gap-4">
+              {profile ? (
+                <Avatar profile={profile} size={60} />
+              ) : (
+                <span className="grid size-15 shrink-0 place-items-center rounded-full bg-selected text-muted-foreground [&_svg]:size-7">
+                  <CircleUser />
+                </span>
+              )}
               <div className="min-w-0 flex-1">
                 <h1 className="truncate text-xl font-semibold">
                   {profile ? profile.name || profile.email : profile === null && "Your profile"}
@@ -189,6 +187,7 @@ export function ProfilePage({
               <Stat label="Current streak" value={activity.current} unit="d" />
             </dl>
 
+            {activity.peak && <Peak {...activity.peak} />}
             <Heatmap activity={activity} now={now} />
           </div>
 
@@ -202,28 +201,6 @@ export function ProfilePage({
   );
 }
 
-/**
- * The avatar between the mark's two circles, offset up-left in blue and down-right in coral,
- * which drift apart when the header is pointed at.
- */
-function Halo({ children }: { children: ReactNode }) {
-  const ring =
-    "absolute inset-0 rounded-full border-2 motion-safe:transition-transform motion-safe:duration-300";
-  return (
-    <div className="relative size-15 shrink-0">
-      <span
-        aria-hidden
-        className={`${ring} -translate-1.5 border-mark-blue group-hover:-translate-2.5`}
-      />
-      <span
-        aria-hidden
-        className={`${ring} translate-1.5 border-mark-coral group-hover:translate-2.5`}
-      />
-      <div className="relative flex">{children}</div>
-    </div>
-  );
-}
-
 function Stat({ label, value, unit }: { label: string; value: ReactNode; unit?: string }) {
   return (
     <div>
@@ -232,6 +209,71 @@ function Stat({ label, value, unit }: { label: string; value: ReactNode; unit?: 
         {value}
         {unit && <span className="text-muted-foreground">{unit}</span>}
       </dd>
+    </div>
+  );
+}
+
+/** How many circles the peak draws at most; more say so with a count after them. */
+const FAN = 12;
+
+/**
+ * The most agents started within an hour, drawn as the mark's circles, blue and coral by turns.
+ * They fan out from one when the page opens, then each pair's overlap fills in the mark's
+ * overlap color.
+ */
+function Peak({ agents, at }: { agents: number; at: number }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOpen(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const shown = Math.min(agents, FAN);
+  const r = 15;
+  const step = 19;
+  // Where two neighbors' edges cross, above and below the midpoint between their centers.
+  const h = Math.sqrt(r * r - (step / 2) ** 2);
+  const lens = `M${r + step / 2},${r - h} A${r},${r} 0 0 1 ${r + step / 2},${r + h} A${r},${r} 0 0 1 ${r + step / 2},${r - h}Z`;
+  const move = (i: number) => ({
+    transform: `translateX(${open ? i * step : 0}px)`,
+    transitionDelay: `${i * 35}ms`,
+  });
+  return (
+    <div className="mt-8 flex items-center justify-between gap-6 rounded-xl border border-border bg-surface px-5 py-4">
+      <div className="min-w-0">
+        <p className="text-[12.5px] font-medium text-muted-foreground">Most at once</p>
+        <p className="mt-1.5 text-2xl tabular-nums">
+          {agents}
+          <span className="text-muted-foreground"> {agents === 1 ? "agent" : "agents"}</span>
+        </p>
+        <p className="mt-1 text-[12.5px] text-faint-foreground">
+          Started within an hour, {shortDay.format(at)}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <svg aria-hidden width={2 * r + (shown - 1) * step} height={2 * r}>
+          {Array.from({ length: shown }, (_, i) => (
+            <circle
+              key={i}
+              cx={r}
+              cy={r}
+              r={r}
+              style={move(i)}
+              className={`motion-safe:transition-transform motion-safe:duration-700 motion-safe:ease-out ${i % 2 ? "fill-mark-coral" : "fill-mark-blue"}`}
+            />
+          ))}
+          {Array.from({ length: shown - 1 }, (_, i) => (
+            <path
+              key={i}
+              d={lens}
+              style={{ ...move(i), opacity: open ? 1 : 0, transitionDelay: `${500 + i * 35}ms` }}
+              className="fill-mark-overlap motion-safe:transition-opacity motion-safe:duration-300"
+            />
+          ))}
+        </svg>
+        {agents > FAN && (
+          <span className="text-[12.5px] text-muted-foreground tabular-nums">+{agents - FAN}</span>
+        )}
+      </div>
     </div>
   );
 }

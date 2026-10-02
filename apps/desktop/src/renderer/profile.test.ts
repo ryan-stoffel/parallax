@@ -56,3 +56,12 @@ test("models are counted per backend and model, most first, and pull requests su
   ]);
   expect(dayKey(new Date(2026, 0, 5, 23, 59).getTime())).toBe("2026-01-05");
 });
+
+test("the peak is the most agents started within one hour", () => {
+  const at = (h: number, m: number) =>
+    ({ backend: "claude", createdAt: new Date(2026, 9, 2, h, m).toISOString() }) as AgentRun;
+  const a = activityOf([at(9, 0), at(9, 40), at(9, 59), at(10, 0), at(10, 30), at(14, 0)], 0);
+  // 9:00, 9:40, and 9:59 fit in an hour, and so do 9:40, 9:59, 10:00, and 10:30.
+  expect(a.peak).toEqual({ agents: 4, at: Date.parse(at(9, 40).createdAt) });
+  expect(activityOf([], 0).peak).toBeUndefined();
+});
