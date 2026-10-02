@@ -1,4 +1,4 @@
-//! One run's actor: the task that owns a run for as long as wispd runs.
+//! One run's actor: the task that owns a run for as long as plxd runs.
 //!
 //! It takes commands (`agent/send`, `agent/cancel`, `agent/approve`, `agent/accept`,
 //! `agent/openPr`, `thread/delete`) and the run's backend events in one loop, so nothing about a
@@ -10,7 +10,7 @@
 //! exit ends it first.
 //!
 //! A project's coordinator (0024) differs in four places: it starts in a detached worktree of
-//! the project's repository (RYA-171) with wispd's tools and no sandbox, that worktree is checked
+//! the project's repository (RYA-171) with plxd's tools and no sandbox, that worktree is checked
 //! after every turn (0004), it is never committed, and runs it started wake it when they finish
 //! (RYA-42, [`super::wake`]).
 
@@ -20,20 +20,20 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{AcceptId, AgentMerge};
+use parallax_protocol::{
+    AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
+    AgentApproveParams, AgentApproveResult, AgentFailureKind, AgentOutcome, AgentOutputItem,
+    AgentRun, ApprovalId, CoordinatorThreadId, DiffSummary, ErrorKind, ImageId, ParallaxEvent,
+    ProjectId, PromptImage, Role, RunId, TurnId,
+};
+use parallax_store::{Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{AcceptId, AgentMerge};
-use wisp_protocol::{
-    AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
-    AgentApproveParams, AgentApproveResult, AgentFailureKind, AgentOutcome, AgentOutputItem,
-    AgentRun, ApprovalId, CoordinatorThreadId, DiffSummary, ErrorKind, ImageId, ProjectId,
-    PromptImage, Role, RunId, TurnId, WispEvent,
-};
-use wisp_store::{Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree};
 
 use super::approvals::{self, Approvals, Lookup, ended};
 use super::convert::{
@@ -174,7 +174,7 @@ pub(super) struct Actor {
 impl Actor {
     /// `turns` is what a run already sent, from the store (#190): empty for a run just created by
     /// `agents::start`, and loaded by `actor_for` for a run whose actor is spawned fresh, so a
-    /// restarted wispd still recognizes a retried `agent/send`.
+    /// restarted plxd still recognizes a retried `agent/send`.
     pub fn new(
         daemon: Arc<Daemon>,
         row: RunRow,
@@ -387,12 +387,12 @@ impl Actor {
         if self.wakes.pause() {
             info!(run = %self.id, "pausing a coordinator's wake-ups until the user writes");
             self.save_wakes().await;
-            self.append(WispEvent::AgentWakeupsPaused { run_id: self.id })
+            self.append(ParallaxEvent::AgentWakeupsPaused { run_id: self.id })
                 .await;
         }
     }
 
-    /// Takes up the coordinator's wake-up count and pause where the last wispd left them
+    /// Takes up the coordinator's wake-up count and pause where the last plxd left them
     /// (RYA-178). If they can't be read, pauses wake-ups, as a failed check does.
     async fn load_wakes(&mut self) {
         let id = self.row.id;
@@ -461,7 +461,7 @@ impl Actor {
             }
             return Err(super::run_accepted(self.id));
         }
-        let refused = |why: String| ErrorObject::wisp(ErrorKind::MergeRefused, why);
+        let refused = |why: String| ErrorObject::parallax(ErrorKind::MergeRefused, why);
         if self.live.is_some() {
             return Err(refused(format!(
                 "run {} is still running; wait for it to finish, or cancel it, then accept",
@@ -528,12 +528,12 @@ impl Actor {
         self.worktree = None;
         let merge = convert::merge(&accept);
         self.flush().await;
-        self.append(WispEvent::AgentAccepted {
+        self.append(ParallaxEvent::AgentAccepted {
             run_id: self.id,
             merge: merge.clone(),
         })
         .await;
-        self.append(WispEvent::AgentUpdated {
+        self.append(ParallaxEvent::AgentUpdated {
             run_id: self.id,
             state: convert::run_state(&self.row),
         })
@@ -548,7 +548,7 @@ impl Actor {
         if self.accepted() {
             return Err(super::run_accepted(self.id));
         }
-        let refused = |why: String| ErrorObject::wisp(ErrorKind::PrRefused, why);
+        let refused = |why: String| ErrorObject::parallax(ErrorKind::PrRefused, why);
         if self.live.is_some() {
             return Err(refused(format!(
                 "run {} is still running; open a pull request once it has finished",
@@ -595,7 +595,7 @@ impl Actor {
                     PrError::GhUnavailable(_) => ErrorKind::GhUnavailable,
                     PrError::Gh(_) => ErrorKind::PrFailed,
                 };
-                ErrorObject::wisp(kind, error.to_string())
+                ErrorObject::parallax(kind, error.to_string())
             })?;
         info!(run = %self.id, %url, "opened a pull request for an agent run");
         Ok(url)
@@ -755,7 +755,7 @@ impl Actor {
             return if *sent == text {
                 self.snapshot()
             } else {
-                Err(ErrorObject::wisp(
+                Err(ErrorObject::parallax(
                     ErrorKind::IdConflict,
                     format!("turn {turn_id} was already sent with a different text"),
                 ))
@@ -772,7 +772,7 @@ impl Actor {
         };
         let changing = changes != RunOptions::default();
         if changing && self.live.is_some() {
-            return Err(ErrorObject::wisp(
+            return Err(ErrorObject::parallax(
                 ErrorKind::UnsupportedOption,
                 "the model, effort, and access can't change while the run is working; send the \
                  message again once it has finished",
@@ -792,13 +792,13 @@ impl Actor {
                     return self.snapshot();
                 }
                 Err(SendError::IdConflict) => {
-                    return Err(ErrorObject::wisp(
+                    return Err(ErrorObject::parallax(
                         ErrorKind::IdConflict,
                         format!("turn {turn_id} was already sent with a different text"),
                     ));
                 }
                 Err(SendError::Unsupported) => {
-                    return Err(ErrorObject::wisp(
+                    return Err(ErrorObject::parallax(
                         ErrorKind::RunNotResumable,
                         "this run's backend takes no messages while it runs; send it again \
                          once the run has finished",
@@ -827,7 +827,7 @@ impl Actor {
         changes: RunOptions,
     ) -> Result<AgentRun, ErrorObject> {
         let Some(session_id) = self.row.state.session_id.clone() else {
-            return Err(ErrorObject::wisp(
+            return Err(ErrorObject::parallax(
                 ErrorKind::RunNotResumable,
                 format!(
                     "run {} ended before its CLI reported a session, so it can't be resumed",
@@ -839,7 +839,7 @@ impl Actor {
         // not to whatever the worker role's default is now.
         let account = session_account(&self.row.state.account_id);
         let not_resumable = |why: String| {
-            ErrorObject::wisp(
+            ErrorObject::parallax(
                 ErrorKind::RunNotResumable,
                 format!("run {} can't be resumed: {why}", self.id),
             )
@@ -865,7 +865,7 @@ impl Actor {
                 Ok(prepared) => prepared,
                 Err(error)
                     if error
-                        .wisp_data()
+                        .parallax_data()
                         .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
                 {
                     return Err(not_resumable(format!(
@@ -931,8 +931,8 @@ impl Actor {
     }
 
     /// Records that `turn_id` was sent with `text`, in memory and in the store, so a retry of
-    /// `agent/send` stays idempotent across a wispd restart, not only across a resumed CLI
-    /// process within the same wispd (#190).
+    /// `agent/send` stays idempotent across a plxd restart, not only across a resumed CLI
+    /// process within the same plxd (#190).
     /// Runs after the CLI has already accepted the turn (`live.run.send`'s `Ok`, or a successful
     /// `launch` in `resume`), so a crash between the two makes a retried `agent/send` after a
     /// restart send the message again: at-least-once, not exactly-once (#190 review non-blocking
@@ -1089,11 +1089,11 @@ impl Actor {
         })
     }
 
-    /// A coordinator runs in the project's repository (0027), with its wisp tools, bound to its
+    /// A coordinator runs in the project's repository (0027), with its Parallax tools, bound to its
     /// project and to its own thread (0019).
     fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
         let program = std::env::current_exe()
-            .map_err(|error| format!("could not find wispd's own executable: {error}"))?;
+            .map_err(|error| format!("could not find plxd's own executable: {error}"))?;
         let thread = self
             .row
             .fields
@@ -1135,14 +1135,14 @@ impl Actor {
             .worktrees
             .git_common_dir(Path::new(&worktree.repo_path))
             .await
-            .map_err(|error| ErrorObject::wisp(ErrorKind::WorktreeFailed, error.to_string()))?;
+            .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))?;
         let git_dir = sandbox_path(&git_dir, "the repository's git folder")?;
         Ok((cwd, git_dir))
     }
 
     async fn failed_to_start(&mut self, message: String) {
         warn!(run = %self.id, %message, "an agent run's CLI could not start");
-        self.append(WispEvent::AgentFinished {
+        self.append(ParallaxEvent::AgentFinished {
             run_id: self.id,
             outcome: AgentOutcome::Failed {
                 failure: AgentFailureKind::SpawnFailed,
@@ -1175,7 +1175,7 @@ impl Actor {
                 reason,
             } => {
                 self.flush().await;
-                self.append(WispEvent::AgentAccountFallback {
+                self.append(ParallaxEvent::AgentAccountFallback {
                     run_id: self.id,
                     from_account: from_account.clone(),
                     to_account: to_account.clone(),
@@ -1270,14 +1270,14 @@ impl Actor {
         }
     }
 
-    /// Records how a CLI process ended. Unless wispd stopped it, commits a worker's changes first,
+    /// Records how a CLI process ended. Unless plxd stopped it, commits a worker's changes first,
     /// through #166's hardened commit, and reports the commit, then wakes the coordinator that
     /// started the run.
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
         if self.stopping && matches!(outcome, Outcome::Cancelled) {
-            info!(run = %self.id, "an agent run was interrupted because wispd is stopping");
-            self.append(WispEvent::AgentFinished {
+            info!(run = %self.id, "an agent run was interrupted because plxd is stopping");
+            self.append(ParallaxEvent::AgentFinished {
                 run_id: self.id,
                 outcome: AgentOutcome::Interrupted,
             })
@@ -1307,7 +1307,7 @@ impl Actor {
                 None
             }
         };
-        self.append(WispEvent::AgentFinished {
+        self.append(ParallaxEvent::AgentFinished {
             run_id: self.id,
             outcome: outcome.clone(),
         })
@@ -1317,7 +1317,7 @@ impl Actor {
             self.row.state.files_changed = Some(diff.files);
             self.row.state.insertions = Some(diff.insertions);
             self.row.state.deletions = Some(diff.deletions);
-            self.append(WispEvent::AgentDiffReady {
+            self.append(ParallaxEvent::AgentDiffReady {
                 run_id: self.id,
                 diff,
             })
@@ -1343,7 +1343,7 @@ impl Actor {
         };
         if worktree.git_dir.is_empty() {
             return Err(
-                "the run's worktree has no recorded git folder, so wispd can't commit it safely"
+                "the run's worktree has no recorded git folder, so plxd can't commit it safely"
                     .to_owned(),
             );
         }
@@ -1382,7 +1382,7 @@ impl Actor {
     async fn flush(&mut self) {
         let batch = std::mem::take(&mut self.batch);
         if !batch.items.is_empty() {
-            self.append(WispEvent::AgentOutput {
+            self.append(ParallaxEvent::AgentOutput {
                 run_id: self.id,
                 items: batch.items,
             })
@@ -1392,7 +1392,7 @@ impl Actor {
 
     /// From a tokio task: the event log's own writer thread does the SQLite work, so awaiting it
     /// here yields this actor's worker thread to other work instead of blocking it (#190).
-    async fn append(&self, event: WispEvent) -> u64 {
+    async fn append(&self, event: ParallaxEvent) -> u64 {
         self.daemon
             .log
             .append(jiff::Timestamp::now(), Some(self.project), event)
@@ -1415,7 +1415,7 @@ impl Actor {
                 warn!(run = %self.id, error = %error.message, "could not store an agent run's state");
             }
         }
-        self.append(WispEvent::AgentUpdated {
+        self.append(ParallaxEvent::AgentUpdated {
             run_id: self.id,
             state: convert::run_state(&self.row),
         })
@@ -1454,42 +1454,44 @@ fn model_usage(total: SessionModelUsage) -> ModelUsage {
     }
 }
 
-/// The merge commit's message, when accepting a run needs one: `Merge wisp run: <the task's first
+/// The merge commit's message, when accepting a run needs one: `Merge Parallax run: <the task's first
 /// line>`, cut to 72 characters, then the run and its branch.
 fn merge_message(prompt: &str, run: RunId, branch: &str) -> String {
     let first = prompt
         .lines()
         .find(|line| !line.trim().is_empty())
         .unwrap_or("agent run");
-    let mut subject: String = format!("Merge wisp run: {}", first.trim());
+    let mut subject: String = format!("Merge Parallax run: {}", first.trim());
     if subject.chars().count() > 72 {
         subject = subject.chars().take(69).collect::<String>() + "...";
     }
-    format!("{subject}\n\nAccepted in wisp: agent run {run}, branch {branch}.\n")
+    format!("{subject}\n\nAccepted in parallax: agent run {run}, branch {branch}.\n")
 }
 
 fn accept_error(error: &crate::worktree::AcceptError) -> ErrorObject {
     use crate::worktree::AcceptError;
     match error {
-        AcceptError::Refused(message) => ErrorObject::wisp(ErrorKind::MergeRefused, message),
+        AcceptError::Refused(message) => ErrorObject::parallax(ErrorKind::MergeRefused, message),
         AcceptError::Conflict { .. } => {
-            ErrorObject::wisp(ErrorKind::MergeConflict, error.to_string())
+            ErrorObject::parallax(ErrorKind::MergeConflict, error.to_string())
         }
-        AcceptError::Git(error) => ErrorObject::wisp(ErrorKind::MergeRefused, error.to_string()),
+        AcceptError::Git(error) => {
+            ErrorObject::parallax(ErrorKind::MergeRefused, error.to_string())
+        }
     }
 }
 
-/// `wisp: <the message's first line>`, cut to 72 characters, then the run it belongs to.
+/// `parallax: <the message's first line>`, cut to 72 characters, then the run it belongs to.
 fn commit_message(message: &str, run: RunId) -> String {
     let first = message
         .lines()
         .find(|line| !line.trim().is_empty())
         .unwrap_or("agent run");
-    let mut subject: String = format!("wisp: {}", first.trim());
+    let mut subject: String = format!("parallax: {}", first.trim());
     if subject.chars().count() > 72 {
         subject = subject.chars().take(69).collect::<String>() + "...";
     }
-    format!("{subject}\n\nCommitted by wisp for agent run {run}.\n")
+    format!("{subject}\n\nCommitted by Parallax for agent run {run}.\n")
 }
 
 #[cfg(test)]
@@ -1498,13 +1500,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use tokio::sync::{mpsc, oneshot};
-    use tokio_util::sync::CancellationToken;
-    use wisp_protocol::{
+    use parallax_protocol::{
         AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
         AgentApproveParams, ApprovalId, ProjectId, RunId,
     };
-    use wisp_store::{Run as RunRow, RunFields, RunState, Worktree};
+    use parallax_store::{Run as RunRow, RunFields, RunState, Worktree};
+    use tokio::sync::{mpsc, oneshot};
+    use tokio_util::sync::CancellationToken;
 
     use super::{Actor, Command, Live, commit_message, session_account};
     use crate::backend::{
@@ -1532,11 +1534,14 @@ mod tests {
     fn commit_messages_are_one_short_subject_and_the_run() {
         let run = RunId::generate();
         let message = commit_message("\n  Add a README\nwith details", run);
-        assert!(message.starts_with("wisp: Add a README\n\n"), "{message}");
+        assert!(
+            message.starts_with("parallax: Add a README\n\n"),
+            "{message}"
+        );
         assert!(message.contains(&run.to_string()));
         let long = commit_message(&"x".repeat(200), run);
         assert_eq!(long.lines().next().unwrap().chars().count(), 72);
-        assert!(commit_message("", run).starts_with("wisp: agent run"));
+        assert!(commit_message("", run).starts_with("parallax: agent run"));
     }
 
     struct NoopRun;
@@ -1584,7 +1589,7 @@ mod tests {
             id,
             repo_path: "/tmp".to_owned(),
             path: "/tmp".to_owned(),
-            branch: "wisp/run".to_owned(),
+            branch: "parallax/run".to_owned(),
             base: "0".repeat(40),
             git_dir: String::new(),
             base_dirty: false,

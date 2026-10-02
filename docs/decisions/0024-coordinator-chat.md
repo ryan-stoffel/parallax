@@ -6,13 +6,13 @@
 
 ## Context
 
-The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinator` to no-write (0012), `routing::snapshot` and `routing::check` are 0004's second check, and `wispd mcp` gives the coordinator its tools, bound to a project and a coordinator thread (0019). Nothing started a coordinator or sent it a message, so a project couldn't be driven. 0007 sketched `coordinator/send`, `coordinator/stop`, and `coordinator.*` events. Since then, runs gained everything a chat needs: messages, Stop, a stored transcript, and resuming after a restart (0014, 0017).
+The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinator` to no-write (0012), `routing::snapshot` and `routing::check` are 0004's second check, and `plxd mcp` gives the coordinator its tools, bound to a project and a coordinator thread (0019). Nothing started a coordinator or sent it a message, so a project couldn't be driven. 0007 sketched `coordinator/send`, `coordinator/stop`, and `coordinator.*` events. Since then, runs gained everything a chat needs: messages, Stop, a stored transcript, and resuming after a restart (0014, 0017).
 
 ## Decision
 
 ### The coordinator is a run
 
-- A project's coordinator chat is one agent run: policy `noWrite`, scope the project's id, and `coordinatorThread` set to its own run id. The runs it spawns through `wispd mcp` carry that same id, so a client can tell them from runs it started itself.
+- A project's coordinator chat is one agent run: policy `noWrite`, scope the project's id, and `coordinatorThread` set to its own run id. The runs it spawns through `plxd mcp` carry that same id, so a client can tell them from runs it started itself.
 - The same actor runs it as a worker. Messages, Stop, and the transcript go through `agent/send`, `agent/cancel`, and `agent/events`, and its events are the project's `agent.*` events. So 0007's `coordinator/send`, `coordinator/stop`, and `coordinator.*` events aren't needed. `plan/approve` is still RYA-72's.
 - Only Claude Code runs it for now. A backend whose `capabilities().coordinator` is false, such as Codex until RYA-39, fails with `workerUnavailable` before anything is created.
 
@@ -34,8 +34,8 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 
 > Superseded by [0027](0027-claude-permission-modes.md): the coordinator runs in the project's repository, as Claude Code does, and the detached worktree is gone.
 
-- The coordinator's CLI runs in a detached worktree of the project's repository, `coordinators/<project id>` in wispd's data folder, with 0004's no-write arguments, no worker sandbox, and 0019's tools and allowlist. It is never committed and never on a branch.
-- Before each CLI process starts, the first and every resume, including after a restart, wispd moves it to the repository's current `HEAD`. It adds the worktree if it is missing. Otherwise it checks the commit out with `--force` and removes every untracked and ignored file. If that fails, or the folder has no `.git` file, wispd removes the folder and adds it again. Hooks stay off, as for every git call wispd makes (0014).
+- The coordinator's CLI runs in a detached worktree of the project's repository, `coordinators/<project id>` in plxd's data folder, with 0004's no-write arguments, no worker sandbox, and 0019's tools and allowlist. It is never committed and never on a branch.
+- Before each CLI process starts, the first and every resume, including after a restart, plxd moves it to the repository's current `HEAD`. It adds the worktree if it is missing. Otherwise it checks the commit out with `--force` and removes every untracked and ignored file. If that fails, or the folder has no `.git` file, plxd removes the folder and adds it again. Hooks stay off, as for every git call plxd makes (0014).
 - Only the coordinator writes there, so the check is exact. The user's edits, commits, stray files such as `.DS_Store`, `agent/accept`, and the sidebar's Update button change the checkout, not this worktree, and never stop a turn. The first version ran in the user's checkout, where all of those tripped the check.
 - It reads committed `HEAD` as of when its CLI process started, not the user's uncommitted work. A commit made while a process runs is seen from the next one. Its first message says so.
 - One worktree per project. A new `project/start` takes it over, so nothing is left to remove, and a replaced coordinator can't be resumed.
@@ -45,10 +45,10 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 
 ### 0004's check around every turn
 
-> Superseded by [0027](0027-claude-permission-modes.md): a coordinator in an editing mode may change files, so wispd no longer checks its tree.
+> Superseded by [0027](0027-claude-permission-modes.md): a coordinator in an editing mode may change files, so plxd no longer checks its tree.
 
-- Before each CLI process starts, right after the refresh, wispd takes `routing::snapshot` of the coordinator's worktree. After every `TurnFinished`, and again when the CLI exits, it runs `routing::check` against that snapshot.
-- On a change, wispd cancels the CLI, and the run fails with `policyViolation`. The message lists the changed paths from `git status`, and wispd reverts nothing then. A check that can't run at all also stops the run, as `internal`. The next message resumes the session, and the next process's refresh discards the change: it was the coordinator's own, never the user's.
+- Before each CLI process starts, right after the refresh, plxd takes `routing::snapshot` of the coordinator's worktree. After every `TurnFinished`, and again when the CLI exits, it runs `routing::check` against that snapshot.
+- On a change, plxd cancels the CLI, and the run fails with `policyViolation`. The message lists the changed paths from `git status`, and plxd reverts nothing then. A check that can't run at all also stops the run, as `internal`. The next message resumes the session, and the next process's refresh discards the change: it was the coordinator's own, never the user's.
 - The coordinator is never committed.
 
 ### Its first message
@@ -57,7 +57,7 @@ The coordinator's pieces existed before RYA-41: routing forces `Role::Coordinato
 
 ### It never sees itself
 
-`wispd mcp`'s tools skip the project's `noWrite` run. So `list_agents` doesn't list the coordinator, and `message_agent` or `cancel_agent` on its own id gets the same answer as an unknown run. Otherwise it could message itself and queue a turn on its own running CLI.
+`plxd mcp`'s tools skip the project's `noWrite` run. So `list_agents` doesn't list the coordinator, and `message_agent` or `cancel_agent` on its own id gets the same answer as an unknown run. Otherwise it could message itself and queue a turn on its own running CLI.
 
 ## Consequences
 

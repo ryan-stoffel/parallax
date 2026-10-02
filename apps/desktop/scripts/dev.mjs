@@ -5,7 +5,7 @@
 // and the sidebar's Update button asks it to move this checkout to the channel's
 // branch. This script tells the app, over the same channel, when that branch has
 // commits to take: it checks when the channel is set or changes, every minute,
-// when a wisp window comes to the front, and after each update.
+// when a Parallax window comes to the front, and after each update.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, watch } from "node:fs";
 import { homedir } from "node:os";
@@ -56,7 +56,7 @@ function killPackTree() {
 
 // Terminals inside Electron apps (VS Code, Cursor) set ELECTRON_RUN_AS_NODE,
 // which would start Electron as plain Node.
-const env = { ...process.env, WISP_DEV_SERVER_URL: url };
+const env = { ...process.env, PLX_DEV_SERVER_URL: url };
 delete env.ELECTRON_RUN_AS_NODE;
 
 let app;
@@ -105,8 +105,8 @@ let base;
  * Moves this checkout, detached, to the tip of the channel's branch on origin, then installs and
  * rebuilds what changed, backward too when the channel moves from nightly to release. Leaves
  * alone a checkout that whyNotMove refuses. The watchers reload the renderer and restart
- * Electron; a new wispd starts on the app's reconnect. Resolves to one line for the sidebar. New
- * packages, and a change to scripts/ or the Vite config, load only when wisp restarts, so then
+ * Electron; a new plxd starts on the app's reconnect. Resolves to one line for the sidebar. New
+ * packages, and a change to scripts/ or the Vite config, load only when Parallax restarts, so then
  * the line says to quit and reopen it (scripts/restart.mjs).
  */
 async function update() {
@@ -136,15 +136,15 @@ async function update() {
     if (install.code !== 0) return `pnpm install failed: ${errorLine(install.out)}`;
   }
   const rust = changed.some((file) => /^(daemon|crates)\/|^Cargo\.(toml|lock)$/.test(file));
-  // Windows won't replace the wispd.exe that the app's wispd is running from.
+  // Windows won't replace the plxd.exe that the app's plxd is running from.
   if (rust && windows) {
     base = undefined;
-    return `${updated}. Quit wisp and stop wispd, then run cargo build -p wispd.`;
+    return `${updated}. Quit Parallax and stop plxd, then run cargo build -p plxd.`;
   }
   if (rust) {
-    const build = await run("cargo", ["build", "-p", "wispd"]);
+    const build = await run("cargo", ["build", "-p", "plxd"]);
     if (build.code !== 0) return `cargo build failed: ${errorLine(build.out)}`;
-    stopWispd();
+    stopPlxd();
   }
   base = undefined;
   const note = restartNote(changed);
@@ -223,19 +223,22 @@ const errorLine = (text) => {
   return lines.find((line) => /^(fatal|error)\b/.test(line)) ?? lines.at(-1) ?? "";
 };
 
-// Asks the running `wispd serve` to shut down, by the pid in its lock file (daemon/src/paths.rs).
+// Asks the running `plxd serve` to shut down, by the pid in its lock file (daemon/src/paths.rs).
 // ponytail: stops runs in flight, so it's only called when Rust changed.
-function stopWispd() {
+function stopPlxd() {
   const dataDir =
-    process.env["WISPD_DATA_DIR"] ??
+    process.env["PLXD_DATA_DIR"] ??
     (process.platform === "darwin"
-      ? path.join(homedir(), "Library/Application Support/wisp")
-      : path.join(process.env["XDG_DATA_HOME"] || path.join(homedir(), ".local/share"), "wisp"));
+      ? path.join(homedir(), "Library/Application Support/parallax")
+      : path.join(
+          process.env["XDG_DATA_HOME"] || path.join(homedir(), ".local/share"),
+          "parallax",
+        ));
   try {
-    const pid = Number.parseInt(readFileSync(path.join(dataDir, "wispd.lock"), "utf8"));
+    const pid = Number.parseInt(readFileSync(path.join(dataDir, "plxd.lock"), "utf8"));
     // A crashed serve leaves its pid behind, which another process may have by now.
     const args = spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" }).stdout;
-    if (/wispd serve\b/.test(args)) process.kill(pid);
+    if (/plxd serve\b/.test(args)) process.kill(pid);
   } catch {
     // Not running.
   }

@@ -4,39 +4,39 @@ use std::process::{Command, Output};
 #[path = "common/temp.rs"]
 mod temp;
 
-fn wispd(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_wispd"))
+fn plxd(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_plxd"))
         .args(args)
-        .env_remove("WISPD_LOG")
-        .env_remove("WISPD_DATA_DIR")
+        .env_remove("PLXD_LOG")
+        .env_remove("PLXD_DATA_DIR")
         .output()
-        .expect("wispd should run")
+        .expect("plxd should run")
 }
 
 #[test]
 fn version_prints_name_and_version() {
-    let output = wispd(&["--version"]);
+    let output = plxd(&["--version"]);
 
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        concat!("wispd ", env!("CARGO_PKG_VERSION"), "\n")
+        concat!("plxd ", env!("CARGO_PKG_VERSION"), "\n")
     );
     assert!(output.stderr.is_empty(), "{output:?}");
 }
 
-/// A packaged wispd reports the version the app's package step wrote beside it (0030).
+/// A packaged plxd reports the version the app's package step wrote beside it (0030).
 #[test]
 fn version_prints_the_version_file_beside_the_executable() {
     let dir = tempfile::tempdir().expect("temp dir");
     let exe = dir.path().join(
-        std::path::Path::new(env!("CARGO_BIN_EXE_wispd"))
+        std::path::Path::new(env!("CARGO_BIN_EXE_plxd"))
             .file_name()
             .unwrap(),
     );
-    std::fs::copy(env!("CARGO_BIN_EXE_wispd"), &exe).expect("copy wispd");
+    std::fs::copy(env!("CARGO_BIN_EXE_plxd"), &exe).expect("copy plxd");
     std::fs::write(
-        dir.path().join(wispd::VERSION_FILE),
+        dir.path().join(plxd::VERSION_FILE),
         "2609.13017.14512-nightly\n",
     )
     .unwrap();
@@ -44,45 +44,45 @@ fn version_prints_the_version_file_beside_the_executable() {
     let output = Command::new(&exe)
         .arg("--version")
         .output()
-        .expect("wispd should run");
+        .expect("plxd should run");
 
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "wispd 2609.13017.14512-nightly\n"
+        "plxd 2609.13017.14512-nightly\n"
     );
 }
 
 #[test]
 fn unknown_argument_prints_usage_and_exits_2() {
-    let output = wispd(&["--bogus"]);
+    let output = plxd(&["--bogus"]);
 
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("Usage: wispd"),
+        String::from_utf8_lossy(&output.stderr).contains("Usage: plxd"),
         "{output:?}"
     );
 }
 
 #[test]
 fn no_arguments_print_help_and_exit_2() {
-    let output = wispd(&[]);
+    let output = plxd(&[]);
 
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Usage: wispd"), "{output:?}");
+    assert!(stderr.contains("Usage: plxd"), "{output:?}");
     assert!(stderr.contains("serve"), "{output:?}");
 }
 
 #[test]
 fn an_unknown_log_level_is_a_usage_error() {
-    let output = wispd(&[
+    let output = plxd(&[
         "serve",
         "--log-level",
         "loud",
         "--data-dir",
-        "/nonexistent/wispd",
+        "/nonexistent/plxd",
     ]);
 
     assert_eq!(output.status.code(), Some(2), "{output:?}");
@@ -100,13 +100,13 @@ fn an_unknown_log_level_is_a_usage_error() {
 fn service_status_reports_a_fresh_label_as_absent() {
     let temp = temp::temp_dir();
     let data_dir = temp.path().to_str().expect("a UTF-8 temp path");
-    let output = wispd(&[
+    let output = plxd(&[
         "service",
         "status",
         "--data-dir",
         data_dir,
         "--label",
-        "io.github.ryan-stoffel.wisp.wispd.cli-test-status",
+        "io.github.ryan-stoffel.parallax.plxd.cli-test-status",
     ]);
 
     assert!(output.status.success(), "{output:?}");
@@ -124,14 +124,14 @@ fn service_status_reports_a_fresh_label_as_absent() {
 fn service_install_refuses_the_default_label_for_another_data_folder() {
     let temp = temp::temp_dir();
     let data_dir = temp.path().join("data");
-    let output = Command::new(env!("CARGO_BIN_EXE_wispd"))
+    let output = Command::new(env!("CARGO_BIN_EXE_plxd"))
         .args(["service", "install", "--data-dir"])
         .arg(&data_dir)
-        .env_remove("WISPD_LOG")
-        .env_remove("WISPD_DATA_DIR")
-        .env_remove("WISPD_SERVICE_LABEL")
+        .env_remove("PLXD_LOG")
+        .env_remove("PLXD_DATA_DIR")
+        .env_remove("PLXD_SERVICE_LABEL")
         .output()
-        .expect("wispd should run");
+        .expect("plxd should run");
 
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -145,7 +145,7 @@ fn service_install_refuses_the_default_label_for_another_data_folder() {
     );
 }
 
-// `wispd service` on Linux, against a stand-in `systemctl` on `PATH` and a temporary home folder,
+// `plxd service` on Linux, against a stand-in `systemctl` on `PATH` and a temporary home folder,
 // so it needs no user manager and never touches a real one. The stand-in records its arguments,
 // and `show` reports the unit loaded once its file exists, as systemd would.
 #[cfg(target_os = "linux")]
@@ -154,7 +154,7 @@ fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    const LABEL: &str = "io.github.ryan-stoffel.wisp.wispd.cli-test";
+    const LABEL: &str = "io.github.ryan-stoffel.parallax.plxd.cli-test";
     let temp = temp::temp_dir();
     let bin = temp.path().join("bin");
     let home = temp.path().join("home");
@@ -184,18 +184,18 @@ fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
         std::env::var("PATH").unwrap_or_default()
     );
     let service = |command: &str| {
-        let output = Command::new(env!("CARGO_BIN_EXE_wispd"))
+        let output = Command::new(env!("CARGO_BIN_EXE_plxd"))
             .args(["service", command, "--label", LABEL, "--data-dir"])
             .arg(&data)
             .env("PATH", &path)
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
-            .env_remove("WISPD_LOG")
-            .env_remove("WISPD_DATA_DIR")
-            .env_remove("WISPD_SERVICE_LABEL")
+            .env_remove("PLXD_LOG")
+            .env_remove("PLXD_DATA_DIR")
+            .env_remove("PLXD_SERVICE_LABEL")
             .output()
-            .expect("wispd should run");
+            .expect("plxd should run");
         assert!(output.status.success(), "{command}: {output:?}");
         String::from_utf8_lossy(&output.stdout).into_owned()
     };
@@ -208,12 +208,12 @@ fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
     assert!(
         text.contains(&format!(
             "ExecStart=\"{}\" serve\n",
-            env!("CARGO_BIN_EXE_wispd")
+            env!("CARGO_BIN_EXE_plxd")
         )),
         "{text}"
     );
     assert!(
-        text.contains(&format!("WISPD_DATA_DIR={}\"\n", data.display())),
+        text.contains(&format!("PLXD_DATA_DIR={}\"\n", data.display())),
         "{text}"
     );
 

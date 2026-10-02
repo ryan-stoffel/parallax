@@ -1,6 +1,6 @@
-//! `wispd attach`: how the editor reaches wispd, on this machine or over SSH (0007, 0010, 0023).
+//! `plxd attach`: how the editor reaches plxd, on this machine or over SSH (0007, 0010, 0023).
 //!
-//! [`connect`] reaches wispd's socket, or its named pipe on Windows, and starts wispd first if
+//! [`connect`] reaches plxd's socket, or its named pipe on Windows, and starts plxd first if
 //! nothing accepts connections there. [`bridge`] then copies stdin to the connection and the
 //! connection to stdout, byte for byte, with no framing of its own. Over SSH, stdout is the
 //! protocol stream, so `attach` writes nothing else there. Its own messages go to stderr, through
@@ -21,11 +21,11 @@ use crate::logging;
 use crate::paths::DataDir;
 use crate::server::{self, EXIT_ALREADY_RUNNING};
 
-/// `attach` exits with this when it never reached wispd: it couldn't start wispd, the `serve` it
+/// `attach` exits with this when it never reached plxd: it couldn't start plxd, the `serve` it
 /// started stopped, or nothing accepted a connection before the timeout.
 pub const EXIT_UNAVAILABLE: u8 = 4;
 
-/// How long `attach` waits for wispd by default: the editor's liveness window (0007).
+/// How long `attach` waits for plxd by default: the editor's liveness window (0007).
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The longest wait [`connect`] accepts: a day. `--connect-timeout` refuses anything longer, and
@@ -41,25 +41,25 @@ const MAX_RETRY: Duration = Duration::from_millis(500);
 const QUOTED_LOG_BYTES: u64 = 64 * 1024;
 const QUOTED_LINE_CHARS: usize = 300;
 
-/// How [`connect`] reaches wispd.
+/// How [`connect`] reaches plxd.
 #[derive(Clone, Debug)]
 pub struct Options {
-    /// The `wispd` executable that runs `serve`: the running one, except in tests.
+    /// The `plxd` executable that runs `serve`: the running one, except in tests.
     pub program: PathBuf,
-    /// How long to wait for wispd to accept a connection, including the time to start it.
+    /// How long to wait for plxd to accept a connection, including the time to start it.
     pub connect_timeout: Duration,
-    /// The service that starts wispd, if one is installed for the data folder.
+    /// The service that starts plxd, if one is installed for the data folder.
     pub launch_agent: Option<LaunchAgent>,
 }
 
-/// Why [`connect`] could not reach wispd.
+/// Why [`connect`] could not reach plxd.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Unavailable {
     /// The socket's path couldn't be worked out.
-    #[error("could not find wispd's socket: {0}")]
+    #[error("could not find plxd's socket: {0}")]
     SocketPath(#[source] io::Error),
-    /// Connecting failed in a way that starting wispd can't fix, such as a permission error.
+    /// Connecting failed in a way that starting plxd can't fix, such as a permission error.
     #[error("could not connect to {}: {source}", .path.display())]
     Connect {
         /// The socket.
@@ -69,11 +69,11 @@ pub enum Unavailable {
         source: io::Error,
     },
     /// `serve` couldn't be started.
-    #[error("could not start wispd: {0}")]
+    #[error("could not start plxd: {0}")]
     Start(String),
     /// The `serve` that `attach` started stopped before it accepted a connection.
     #[error(
-        "wispd serve stopped before it accepted a connection ({status}){}. Its log is {}",
+        "plxd serve stopped before it accepted a connection ({status}){}. Its log is {}",
         .said.as_ref().map_or_else(String::new, |said| format!(": {said}")),
         .log.display()
     )]
@@ -87,7 +87,7 @@ pub enum Unavailable {
     },
     /// Nothing accepted a connection before the timeout.
     #[error(
-        "nothing accepted a connection at {} within {timeout:?}{}. wispd's log is {}",
+        "nothing accepted a connection at {} within {timeout:?}{}. plxd's log is {}",
         .socket.display(),
         .launch_agent.as_ref().map_or_else(String::new, |command| format!(" after `{command}`")),
         .log.display()
@@ -97,19 +97,19 @@ pub enum Unavailable {
         socket: PathBuf,
         /// How long `attach` waited.
         timeout: Duration,
-        /// The command that `attach` started the service with, if it started wispd that way.
+        /// The command that `attach` started the service with, if it started plxd that way.
         launch_agent: Option<String>,
         /// The log.
         log: PathBuf,
     },
 }
 
-/// Writes `wispd attach: <message>` to stderr.
+/// Writes `plxd attach: <message>` to stderr.
 ///
 /// Unlike `eprintln!`, it doesn't panic when stderr is closed, as it is once an SSH connection
 /// has dropped.
 pub fn report(message: impl fmt::Display) {
-    let _ = writeln!(io::stderr(), "wispd attach: {message}");
+    let _ = writeln!(io::stderr(), "plxd attach: {message}");
 }
 
 /// A connection [`connect`] made: a std socket on Unix, which becomes tokio's inside the runtime,
@@ -121,11 +121,11 @@ pub type Connection = std::os::unix::net::UnixStream;
 #[cfg(windows)]
 pub type Connection = crate::transport::Stream;
 
-/// Connects to wispd's socket for `data_dir`, and starts wispd if nothing accepts connections
+/// Connects to plxd's socket for `data_dir`, and starts plxd if nothing accepts connections
 /// there. On Windows, it must run inside a tokio runtime (not in `block_on`), and the pipe's
 /// server must run as this user (0023).
 ///
-/// wispd is started once. That goes through the service (the `LaunchAgent` on macOS, the systemd
+/// plxd is started once. That goes through the service (the `LaunchAgent` on macOS, the systemd
 /// user unit on Linux) when [`Options::launch_agent`] names one. Otherwise, or if the service
 /// can't be started, it spawns `serve` detached: in a new session (on Windows, a new process
 /// group outside the SSH session's job), with stdin on the null device, stdout and stderr
@@ -133,7 +133,7 @@ pub type Connection = crate::transport::Stream;
 /// [`Options::connect_timeout`] has passed. A `serve` that exits 3, because another one holds the
 /// lock, is started again at the next retry (0009). One that stops any other way ends the wait.
 ///
-/// It never stops a wispd, including one it started.
+/// It never stops a plxd, including one it started.
 ///
 /// # Errors
 ///
@@ -232,11 +232,11 @@ fn try_connect(path: &Path) -> Result<Option<Connection>, Unavailable> {
     }
 }
 
-/// Starts wispd, and watches the `serve` it spawned until a connection works.
+/// Starts plxd, and watches the `serve` it spawned until a connection works.
 struct Starter<'a> {
     data_dir: &'a DataDir,
     options: &'a Options,
-    /// The command that started the service, if wispd was started that way.
+    /// The command that started the service, if plxd was started that way.
     launched: Option<String>,
     /// The `serve` spawned last, until it exits.
     spawned: Option<Spawned>,
@@ -259,7 +259,7 @@ impl Starter<'_> {
                     self.launched = Some(agent.to_string());
                     return Ok(());
                 }
-                Err(error) => report(format_args!("{error}; starting wispd serve instead")),
+                Err(error) => report(format_args!("{error}; starting plxd serve instead")),
             }
         }
         self.spawn()
@@ -321,7 +321,7 @@ impl Starter<'_> {
             Ok(Some(status)) => status,
             Err(error) => {
                 return Err(Unavailable::Start(format!(
-                    "could not check on wispd serve: {error}"
+                    "could not check on plxd serve: {error}"
                 )));
             }
         };
@@ -382,7 +382,7 @@ fn detach(command: &mut std::process::Command, log: &File) -> io::Result<std::pr
     {
         Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.cast_signed()) => {
             report(
-                "this session's job doesn't allow breaking away, so wispd serve will stop when the session ends",
+                "this session's job doesn't allow breaking away, so plxd serve will stop when the session ends",
             );
             command.creation_flags(flags).spawn()
         }
@@ -425,10 +425,10 @@ fn last_line(path: &Path, start: u64) -> Option<String> {
     Some(line.chars().take(QUOTED_LINE_CHARS).collect())
 }
 
-/// Copies `input` to wispd and wispd's bytes to `output`, unchanged, until wispd closes the
+/// Copies `input` to plxd and plxd's bytes to `output`, unchanged, until plxd closes the
 /// connection or `output` closes.
 ///
-/// When `input` ends, it shuts down the connection's write side and keeps copying, so wispd
+/// When `input` ends, it shuts down the connection's write side and keeps copying, so plxd
 /// answers everything it was sent before it closes (0007). A named pipe has no half-close, so on
 /// Windows an empty message stands in for it: `serve`'s pipe is a message pipe, where a
 /// zero-byte write arrives as a zero-byte read, and tokio reads that as the end of the input
@@ -444,16 +444,16 @@ where
     O: AsyncWrite + Unpin,
     S: AsyncRead + AsyncWrite,
 {
-    let (mut from_wispd, mut to_wispd) = tokio::io::split(connection);
+    let (mut from_plxd, mut to_plxd) = tokio::io::split(connection);
     let upstream = async {
-        let copied = tokio::io::copy(&mut input, &mut to_wispd).await;
+        let copied = tokio::io::copy(&mut input, &mut to_plxd).await;
         #[cfg(unix)]
-        let shut_down = to_wispd.shutdown().await;
+        let shut_down = to_plxd.shutdown().await;
         #[cfg(windows)]
-        let shut_down = to_wispd.write(&[]).await.map(drop);
+        let shut_down = to_plxd.write(&[]).await.map(drop);
         copied.and(shut_down)
     };
-    let downstream = tokio::io::copy(&mut from_wispd, &mut output);
+    let downstream = tokio::io::copy(&mut from_plxd, &mut output);
     tokio::pin!(upstream, downstream);
     let mut sending = true;
     loop {
@@ -493,17 +493,17 @@ mod log_tests {
     #[test]
     fn an_error_quotes_the_last_line_the_new_serve_logged() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("wispd.log");
+        let log = dir.path().join("plxd.log");
         fs::write(&log, "an older line\n").unwrap();
         let start = fs::metadata(&log).unwrap().len();
         assert_eq!(last_line(&log, start), None);
 
         fs::write(
             &log,
-            "an older line\nERROR could not start\nwispd: it failed\n\n",
+            "an older line\nERROR could not start\nplxd: it failed\n\n",
         )
         .unwrap();
-        assert_eq!(last_line(&log, start).as_deref(), Some("wispd: it failed"));
+        assert_eq!(last_line(&log, start).as_deref(), Some("plxd: it failed"));
         fs::write(&log, format!("an older line\n{}\n", "x".repeat(1000))).unwrap();
         assert_eq!(last_line(&log, start).map(|line| line.len()), Some(300));
     }
@@ -524,10 +524,10 @@ mod windows_tests {
     // A pipe has no half-close, so this checks the zero-byte write that stands in for one.
     #[tokio::test]
     async fn the_end_of_stdin_ends_the_servers_input_and_the_answer_still_arrives() {
-        let name = format!(r"\\.\pipe\wispd-test-bridge-{}", std::process::id());
+        let name = format!(r"\\.\pipe\plxd-test-bridge-{}", std::process::id());
         let mut pipe = Pipe::create(name.as_ref()).unwrap();
         let client = crate::transport::connect(name.as_ref()).await.unwrap();
-        let mut wispd = pipe.accept().await.unwrap();
+        let mut plxd = pipe.accept().await.unwrap();
         let (mut stdin, input) = tokio::io::duplex(1024);
         let (output, mut stdout) = tokio::io::duplex(1024);
         let bridge = tokio::spawn(bridge(input, output, client));
@@ -535,17 +535,14 @@ mod windows_tests {
         stdin.write_all(b"{\"id\":1}\n").await.unwrap();
         drop(stdin);
         let mut request = Vec::new();
-        timeout(PATIENCE, wispd.read_to_end(&mut request))
+        timeout(PATIENCE, plxd.read_to_end(&mut request))
             .await
-            .expect("wispd reads to the end of the input")
+            .expect("plxd reads to the end of the input")
             .unwrap();
         assert_eq!(request, b"{\"id\":1}\n");
 
-        wispd
-            .write_all(b"{\"id\":1,\"result\":{}}\n")
-            .await
-            .unwrap();
-        drop(wispd);
+        plxd.write_all(b"{\"id\":1,\"result\":{}}\n").await.unwrap();
+        drop(plxd);
         let mut answer = Vec::new();
         timeout(PATIENCE, stdout.read_to_end(&mut answer))
             .await
@@ -563,7 +560,7 @@ mod windows_tests {
     async fn large_bridge_inputs_arrive_byte_for_byte() {
         for size in [64 << 10, 1 << 20] {
             let name = format!(
-                r"\\.\pipe\wispd-test-bridge-large-{}-{size}",
+                r"\\.\pipe\plxd-test-bridge-large-{}-{size}",
                 std::process::id()
             );
             let mut pipe = Pipe::create(name.as_ref()).unwrap();
@@ -626,22 +623,22 @@ mod tests {
     const PATIENCE: Duration = Duration::from_secs(10);
 
     /// A bridge between two pipes, standing in for stdin and stdout, and a socket whose other
-    /// end stands in for wispd.
+    /// end stands in for plxd.
     struct Rig {
         stdin: pipe::Sender,
         stdout: pipe::Receiver,
-        wispd: UnixStream,
+        plxd: UnixStream,
         bridge: JoinHandle<io::Result<()>>,
     }
 
     fn rig() -> Rig {
         let (stdin, input) = pipe::pipe().unwrap();
         let (output, stdout) = pipe::pipe().unwrap();
-        let (socket, wispd) = UnixStream::pair().unwrap();
+        let (socket, plxd) = UnixStream::pair().unwrap();
         Rig {
             stdin,
             stdout,
-            wispd,
+            plxd,
             bridge: tokio::spawn(bridge(input, output, socket)),
         }
     }
@@ -665,7 +662,7 @@ mod tests {
         let Rig {
             mut stdin,
             mut stdout,
-            wispd,
+            plxd,
             bridge,
         } = rig();
         // Larger than every buffer on the way, so both directions must flow at the same time.
@@ -681,8 +678,8 @@ mod tests {
             stdout.read_to_end(&mut got).await.unwrap();
             got
         };
-        let wispd_side = async {
-            let (mut read, mut write) = wispd.into_split();
+        let plxd_side = async {
+            let (mut read, mut write) = plxd.into_split();
             let reads = async {
                 let mut got = Vec::new();
                 read.read_to_end(&mut got).await.unwrap();
@@ -692,18 +689,18 @@ mod tests {
                 write.write_all(&down).await.unwrap();
             };
             let (got, ()) = tokio::join!(reads, writes);
-            // Closing only after the end of the input arrived, as wispd does.
+            // Closing only after the end of the input arrived, as plxd does.
             drop(write);
             got
         };
-        let ((), at_editor, at_wispd) = timeout(PATIENCE, async {
-            tokio::join!(editor_writes, editor_reads, wispd_side)
+        let ((), at_editor, at_plxd) = timeout(PATIENCE, async {
+            tokio::join!(editor_writes, editor_reads, plxd_side)
         })
         .await
         .expect("the copies finish");
 
-        assert!(at_wispd == up, "the bytes to wispd changed");
-        assert!(at_editor == down, "the bytes from wispd changed");
+        assert!(at_plxd == up, "the bytes to plxd changed");
+        assert!(at_editor == down, "the bytes from plxd changed");
         ended(bridge).await.unwrap();
     }
 
@@ -712,24 +709,21 @@ mod tests {
         let Rig {
             mut stdin,
             mut stdout,
-            mut wispd,
+            mut plxd,
             bridge,
         } = rig();
         stdin.write_all(b"{\"id\":1}\n").await.unwrap();
         drop(stdin);
 
         let mut request = Vec::new();
-        timeout(PATIENCE, wispd.read_to_end(&mut request))
+        timeout(PATIENCE, plxd.read_to_end(&mut request))
             .await
-            .expect("wispd reads to the end of the input")
+            .expect("plxd reads to the end of the input")
             .unwrap();
         assert_eq!(request, b"{\"id\":1}\n");
 
-        wispd
-            .write_all(b"{\"id\":1,\"result\":{}}\n")
-            .await
-            .unwrap();
-        drop(wispd);
+        plxd.write_all(b"{\"id\":1,\"result\":{}}\n").await.unwrap();
+        drop(plxd);
         let mut answer = Vec::new();
         timeout(PATIENCE, stdout.read_to_end(&mut answer))
             .await
@@ -740,14 +734,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wispd_closing_ends_the_bridge_while_stdin_is_still_open() {
+    async fn plxd_closing_ends_the_bridge_while_stdin_is_still_open() {
         let Rig {
             stdin,
             mut stdout,
-            wispd,
+            plxd,
             bridge,
         } = rig();
-        drop(wispd);
+        drop(plxd);
         ended(bridge).await.unwrap();
         let mut rest = Vec::new();
         stdout.read_to_end(&mut rest).await.unwrap();
@@ -760,17 +754,17 @@ mod tests {
         let Rig {
             stdin,
             stdout,
-            mut wispd,
+            mut plxd,
             bridge,
         } = rig();
         drop(stdout);
-        // attach notices a closed stdout on its next write, so wispd keeps writing. A child that
+        // attach notices a closed stdout on its next write, so plxd keeps writing. A child that
         // another test spawns may hold the read end for a moment, and absorb a write (#86).
         let event = b"{\"jsonrpc\":\"2.0\",\"method\":\"events/event\"}\n";
         let deadline = tokio::time::Instant::now() + PATIENCE;
         while !bridge.is_finished() {
             assert!(tokio::time::Instant::now() < deadline, "the bridge ends");
-            if wispd.write_all(event).await.is_err() {
+            if plxd.write_all(event).await.is_err() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

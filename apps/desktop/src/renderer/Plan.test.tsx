@@ -9,7 +9,7 @@ import type {
   AgentToolStatus,
   JsonValue,
   LoggedEvent,
-  WispEvent,
+  ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import type { LoaderStyle } from "./Loader";
@@ -176,7 +176,7 @@ test("ExitPlanMode's plan becomes its own row; without a plan it stays a tool ca
   const again = withPlans(items);
   expect(again[0]).toBe(proposed);
   expect(again[2]).toBe(update);
-  // Too large to carry, as wispd cuts an input over 32 KiB.
+  // Too large to carry, as plxd cuts an input over 32 KiB.
   expect(withPlans([exit({ truncated: true, bytes: 40_000 })])[0]!.kind).toBe("tool");
 });
 
@@ -194,8 +194,8 @@ test("the strip's plan is the latest turn's, with the step under way as TodoWrit
   expect(latestPlan([])).toBeUndefined();
 });
 
-// Claude Code 2.1.283's task tools as wispd logs them (RYA-248): the call, and its result's text,
-// which is all wispd keeps of it. Without `output`, the result hasn't arrived.
+// Claude Code 2.1.283's task tools as plxd logs them (RYA-248): the call, and its result's text,
+// which is all plxd keeps of it. Without `output`, the result hasn't arrived.
 const taskCall = (
   key: string,
   name: string,
@@ -227,10 +227,10 @@ const update = (key: string, input: Record<string, string>) =>
       .filter((k) => k !== "taskId")
       .join(", ")}`,
   );
-// wispd's log of a run, rebuilt as useAgentRun does: a call and its result are logged apart.
+// plxd's log of a run, rebuilt as useAgentRun does: a call and its result are logged apart.
 const runId = "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01";
 let seq = 0;
-const at = (event: WispEvent): LoggedEvent => ({ seq: ++seq, time: "", event });
+const at = (event: ParallaxEvent): LoggedEvent => ({ seq: ++seq, time: "", event });
 const output = (...items: AgentOutputItem[]) => at({ kind: "agent.output", runId, items });
 const call = (callId: string, name: string, input: JsonValue, result: string) => [
   output({ kind: "toolCall", callId, name, input }),

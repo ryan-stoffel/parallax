@@ -1,9 +1,9 @@
-//! Starting the per-user service that `wispd service` installs (0010, 0023), as `attach` does
-//! when it finds wispd not running: the `LaunchAgent` on macOS (#61), with `launchctl
+//! Starting the per-user service that `plxd service` installs (0010, 0023), as `attach` does
+//! when it finds plxd not running: the `LaunchAgent` on macOS (#61), with `launchctl
 //! kickstart`, and the systemd user unit on Linux (RYA-18), with `systemctl --user start`.
 //!
 //! The label and file paths are `crate::service`'s. The service under its `DEFAULT_LABEL` serves
-//! the default data folder, which `wispd service install` enforces. Windows has no service yet
+//! the default data folder, which `plxd service install` enforces. Windows has no service yet
 //! (RYA-22), so there `attach` always starts `serve` itself.
 
 use std::fmt;
@@ -41,7 +41,7 @@ pub struct LaunchAgent {
 }
 
 /// The command line, with the program's file name, such as
-/// `launchctl kickstart gui/501/io.github.ryan-stoffel.wisp.wispd`.
+/// `launchctl kickstart gui/501/io.github.ryan-stoffel.parallax.plxd`.
 impl fmt::Display for LaunchAgent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let program = self.program.file_name().unwrap_or(self.program.as_os_str());
@@ -53,7 +53,7 @@ impl fmt::Display for LaunchAgent {
 impl LaunchAgent {
     /// This user's service, if it is installed and serves `data_dir`.
     ///
-    /// The service serves the default data folder, so a `--data-dir` or `WISPD_DATA_DIR` that
+    /// The service serves the default data folder, so a `--data-dir` or `PLXD_DATA_DIR` that
     /// names another folder never starts it. It counts as installed when its plist or unit file
     /// exists.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -155,13 +155,13 @@ mod tests {
     fn the_service_target_is_the_default_label_in_the_gui_domain() {
         assert_eq!(
             super::service_target(501),
-            "gui/501/io.github.ryan-stoffel.wisp.wispd"
+            "gui/501/io.github.ryan-stoffel.parallax.plxd"
         );
     }
 
     #[test]
     fn another_data_folder_never_uses_the_launch_agent() {
-        let dir = DataDir::new("/tmp/wispd-not-the-default").unwrap();
+        let dir = DataDir::new("/tmp/plxd-not-the-default").unwrap();
         assert_eq!(LaunchAgent::installed_for(&dir), None);
     }
 

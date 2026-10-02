@@ -37,14 +37,14 @@ interface NewThreadProps {
     options: RunOptions,
     name?: ThreadName,
   ) => Promise<RpcError | undefined>;
-  /** Whether the host's wispd takes a thread's model, effort, and permission (`runOptions`). */
+  /** Whether the host's plxd takes a thread's model, effort, and permission (`runOptions`). */
   runOptions: boolean;
-  /** Called once wispd has the thread, with a note for it, such as which account it picked. */
+  /** Called once plxd has the thread, with a note for it, such as which account it picked. */
   onStarted: (runId: string, notice?: string) => void;
   disabledReason?: string;
 }
 
-/** One start of a thread. Retrying it reuses its run id, so wispd never makes a second thread (0007). */
+/** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
 interface Attempt {
   runId: string;
   groupId: string;
@@ -62,18 +62,18 @@ export interface AccountOption {
 
 /**
  * The host's accounts a thread or a Project's coordinator can run on: its signed-in Claude Code
- * login, then its Anthropic key accounts. Resolves to wispd's error, for people, when either list
+ * login, then its Anthropic key accounts. Resolves to plxd's error, for people, when either list
  * fails.
  */
 export async function accountOptions(hostId: string): Promise<AccountOption[] | string> {
   const [clis, keys] = await Promise.all([
-    window.wisp.request(hostId, "accounts/list", {}),
-    window.wisp.request(hostId, "accounts/keys/list", {}),
+    window.parallax.request(hostId, "accounts/list", {}),
+    window.parallax.request(hostId, "accounts/keys/list", {}),
   ]);
   if ("error" in clis) return describeError(clis.error);
   if ("error" in keys) return describeError(keys.error);
-  // ponytail: mirrors wispd's backend registry, where only Claude runs workers today. RYA-99 has
-  // wispd report which accounts can run a thread, so this stops hard-coding it.
+  // ponytail: mirrors plxd's backend registry, where only Claude runs workers today. RYA-99 has
+  // plxd report which accounts can run a thread, so this stops hard-coding it.
   return [
     ...clis.result.clis
       .filter((c) => c.cli === "claude" && c.signedIn)
@@ -95,13 +95,13 @@ export async function accountOptions(hostId: string): Promise<AccountOption[] | 
  * since only Claude accounts are offered (`accountOptions`). Undefined when that can't be told.
  */
 export async function defaultBackend(hostId: string, role: Role): Promise<string | undefined> {
-  const defaults = await window.wisp.request(hostId, "accounts/defaults/get", {});
+  const defaults = await window.parallax.request(hostId, "accounts/defaults/get", {});
   if ("error" in defaults) return undefined;
   const choice = defaults.result[role];
   if (!choice) return "claude";
   if (choice.kind === "subscription") return choice.backend;
   if (choice.kind !== "key") return undefined;
-  const keys = await window.wisp.request(hostId, "accounts/keys/list", {});
+  const keys = await window.parallax.request(hostId, "accounts/keys/list", {});
   if ("error" in keys) return undefined;
   const provider = keys.result.accounts.find((k) => k.id === choice.id)?.provider;
   return provider === "anthropic" ? "claude" : provider === "openai" ? "codex" : undefined;
@@ -113,7 +113,7 @@ const noAccounts =
 /**
  * The New Thread screen: a centered composer, and under it where the thread runs. When the host
  * has no usable default account for threads, it picks the only one there is (and says so), or asks
- * which to use, sets it as the default, and retries the same start. wispd never picks one itself, so it never spends
+ * which to use, sets it as the default, and retries the same start. plxd never picks one itself, so it never spends
  * a subscription the user didn't choose.
  */
 export function NewThread({
@@ -129,8 +129,8 @@ export function NewThread({
   onStarted,
   disabledReason,
 }: NewThreadProps) {
-  // ponytail: read as the screen opens, since wispd has no event for a changed default. One
-  // changed elsewhere shows once New Thread opens again. Until then wispd refuses an effort or
+  // ponytail: read as the screen opens, since plxd has no event for a changed default. One
+  // changed elsewhere shows once New Thread opens again. Until then plxd refuses an effort or
   // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
   const [backend, setBackend] = useState<string>();
   useEffect(() => {
@@ -148,7 +148,7 @@ export function NewThread({
   const [picked, setPicked] = useState(0);
   const [choosing, setChoosing] = useState(false);
   const [chooseError, setChooseError] = useState<string>();
-  // The prompt and images of a start in flight. Starting takes wispd a moment (a worktree, a
+  // The prompt and images of a start in flight. Starting takes plxd a moment (a worktree, a
   // worker), so the screen shows them as the thread it opens meanwhile.
   const [starting, setStarting] = useState<{ prompt: string; images: PromptImage[] }>();
   const failed = useRef<Attempt>(undefined);
@@ -208,7 +208,7 @@ export function NewThread({
     option: AccountOption,
     notice?: string,
   ): Promise<string | undefined> => {
-    const set = await window.wisp.request(hostId, "accounts/defaults/set", {
+    const set = await window.parallax.request(hostId, "accounts/defaults/set", {
       role: "worker",
       account: option.account,
     });
@@ -219,7 +219,7 @@ export function NewThread({
   const send = async (prompt: string, options: RunOptions, images: PromptImage[]) => {
     setChoices(undefined);
     const last = failed.current;
-    // wispd refuses a run id reused with other options, so changing one starts afresh. It doesn't
+    // plxd refuses a run id reused with other options, so changing one starts afresh. It doesn't
     // compare images, so this does: a failed send puts back the very same ones.
     const same =
       last &&
@@ -232,7 +232,7 @@ export function NewThread({
         : undefined;
     setStarting({ prompt, images });
     // A retry keeps its name, so the same start is the same request. Images alone name nothing.
-    const name = same?.name ?? (prompt.trim() ? await window.wisp.nameThread(prompt) : {});
+    const name = same?.name ?? (prompt.trim() ? await window.parallax.nameThread(prompt) : {});
     const error = await attemptStart({
       runId: same?.runId ?? uuidv7(),
       groupId: group.id,
@@ -256,7 +256,7 @@ export function NewThread({
 
   const pickRepository = async () => {
     setRepoError(undefined);
-    const path = await window.wisp.pickFolder();
+    const path = await window.parallax.pickFolder();
     if (!path) return;
     const repo = await addRepo(path);
     if (typeof repo === "string") setRepoError(repo);
@@ -347,7 +347,7 @@ export function NewThread({
           backend={runOptions && starting === undefined ? backend : undefined}
           disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
           imageCaps={imageCaps(connection)}
-          // A new thread asks only through a wispd that sends its requests (RYA-196).
+          // A new thread asks only through a plxd that sends its requests (RYA-196).
           manualDenied={
             connection?.status === "connected" && !("approvals" in connection.capabilities)
               ? "host"
@@ -362,7 +362,7 @@ export function NewThread({
             ) : (
               <>
                 <RunTargetMenu hosts={hosts} hostId={hostId} />
-                {/* Placeholder until wispd offers branches. */}
+                {/* Placeholder until plxd offers branches. */}
                 <Picker
                   label="Branch"
                   icon={<GitBranch />}

@@ -2,17 +2,17 @@
 //! items, and store rows to the protocol's runs.
 
 use jiff::Timestamp;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
-use tracing::error;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     AgentApproveResult, AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome,
     AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, AgentTodoItem,
     AgentTodoStatus, AgentToolStatus, ApprovalId, CoordinatorThreadId, DiffSummary, ProjectId,
     RunId,
 };
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+use tracing::error;
 
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::{
@@ -83,11 +83,11 @@ fn status(text: &str) -> AgentStatus {
 
 /// A store row and its worktree as the protocol's run.
 ///
-/// wispd writes only version 7 ids, so a row with another kind of id was written by something
+/// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
 pub(crate) fn agent_run(
-    row: &wisp_store::Run,
-    worktree: Option<&wisp_store::Worktree>,
+    row: &parallax_store::Run,
+    worktree: Option<&parallax_store::Worktree>,
 ) -> Result<AgentRun, ErrorObject> {
     let corrupt = |what: &str| {
         error!(run = %row.id, what, "a stored run has an invalid id");
@@ -144,7 +144,7 @@ pub(super) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
 }
 
 /// The part of a stored run that `agent.updated` reports.
-pub(super) fn run_state(row: &wisp_store::Run) -> AgentRunState {
+pub(super) fn run_state(row: &parallax_store::Run) -> AgentRunState {
     let state = &row.state;
     AgentRunState {
         status: status(&state.status),
@@ -169,7 +169,7 @@ pub(super) fn merge_how_text(how: MergeHow) -> &'static str {
 }
 
 /// A stored accept as the protocol's merge.
-pub(super) fn merge(accept: &wisp_store::RunAccept) -> AgentMerge {
+pub(super) fn merge(accept: &parallax_store::RunAccept) -> AgentMerge {
     AgentMerge {
         commit: accept.commit.clone(),
         into: accept.into.clone(),
@@ -182,7 +182,7 @@ pub(super) fn merge(accept: &wisp_store::RunAccept) -> AgentMerge {
     }
 }
 
-fn diff(state: &wisp_store::RunState) -> Option<DiffSummary> {
+fn diff(state: &parallax_store::RunState) -> Option<DiffSummary> {
     match (
         &state.commit_sha,
         state.files_changed,
@@ -232,7 +232,7 @@ pub(super) fn outcome(outcome: &Outcome) -> (AgentOutcome, &'static str, Option<
             Some(failure.message.clone()),
         ),
         Outcome::Unknown => {
-            let message = "the run ended in a way this wispd does not know".to_owned();
+            let message = "the run ended in a way this plxd does not know".to_owned();
             (
                 AgentOutcome::Failed {
                     failure: AgentFailureKind::Internal,
@@ -405,7 +405,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
     })
 }
 
-/// The transcript item for a permission request that wispd denies at `expires_at` if nobody
+/// The transcript item for a permission request that plxd denies at `expires_at` if nobody
 /// answers it (RYA-222).
 pub(super) fn approval_requested(
     request: &ApprovalRequest,
@@ -455,8 +455,8 @@ pub(super) fn item_bytes(item: &AgentOutputItem) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use parallax_protocol::{AgentOutputItem, AgentToolStatus};
     use serde_json::json;
-    use wisp_protocol::{AgentOutputItem, AgentToolStatus};
 
     use super::{
         MAX_APPROVAL_INPUT_BYTES, MAX_ID_BYTES, MAX_TEXT_ITEM_BYTES, MAX_TODO_LIST_BYTES,

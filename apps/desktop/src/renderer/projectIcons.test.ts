@@ -10,7 +10,7 @@ const pascal = (name: string) =>
     .map((word) => word[0]!.toUpperCase() + word.slice(1))
     .join("");
 
-test("about 150 icons, each under its own Lucide name, which wispd accepts as a key", () => {
+test("about 150 icons, each under its own Lucide name, which plxd accepts as a key", () => {
   expect(projectIcons.length).toBeGreaterThanOrEqual(140);
   expect(projectIcons.length).toBeLessThanOrEqual(160);
   expect(new Set(projectIcons.map((i) => i.name)).size).toBe(projectIcons.length);

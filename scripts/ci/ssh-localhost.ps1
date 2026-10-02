@@ -1,15 +1,15 @@
 # Sets up key-based `ssh localhost` on a disposable GitHub-hosted Windows runner, for #95's
-# check-ssh-attach, through Windows' own OpenSSH server (Win32-OpenSSH), the one wisp's Windows
+# check-ssh-attach, through Windows' own OpenSSH server (Win32-OpenSSH), the one Parallax's Windows
 # hosts run (0023). It starts the image's sshd service, authorizes a throwaway key for the
 # runner's user, and points a `Host localhost` block in ~/.ssh/config at that key and a throwaway
 # known_hosts, as scripts/ci/ssh-localhost does on macOS and Linux. An image without the sshd
 # service (the Windows arm64 one) gets Win32-OpenSSH's pinned MSI instead, since installing the
 # Windows capability there takes longer than the job allows. The ssh client it used goes in
-# WISP_E2E_SSH for the next steps.
+# PLX_E2E_SSH for the next steps.
 #
 # Never runs outside a GitHub-hosted runner, and never fails the build on its own: it writes
-# WISP_E2E_SSH_READY=true or =false plus a reason to <status-file>, and the caller decides whether
-# that is a skip or, with WISP_E2E_REQUIRE_SSH=1, a failure. Readiness is proven by running
+# PLX_E2E_SSH_READY=true or =false plus a reason to <status-file>, and the caller decides whether
+# that is a skip or, with PLX_E2E_REQUIRE_SSH=1, a failure. Readiness is proven by running
 # `ssh localhost`.
 param([Parameter(Mandatory = $true)][string] $StatusFile)
 
@@ -24,8 +24,8 @@ $msi = @{
 }
 
 function Write-Status([string] $Ready, [string] $Reason = '') {
-    $lines = @("WISP_E2E_SSH_READY=$Ready")
-    if ($Reason) { $lines += "WISP_E2E_SSH_REASON=$($Reason -replace '\r?\n', ' ')" }
+    $lines = @("PLX_E2E_SSH_READY=$Ready")
+    if ($Reason) { $lines += "PLX_E2E_SSH_REASON=$($Reason -replace '\r?\n', ' ')" }
     Set-Content -Path $StatusFile -Value $lines -Encoding ascii
 }
 
@@ -54,12 +54,12 @@ try {
     Skip "could not start Windows' sshd: $_"
 }
 
-$state = Join-Path $env:RUNNER_TEMP 'wisp-e2e-ssh'
+$state = Join-Path $env:RUNNER_TEMP 'parallax-e2e-ssh'
 New-Item -ItemType Directory -Force -Path $state | Out-Null
 $identity = Join-Path $state 'id_ed25519'
 $knownHosts = Join-Path $state 'known_hosts'
 Remove-Item -Force -ErrorAction SilentlyContinue $identity, "$identity.pub"
-& "$openssh\ssh-keygen.exe" -t ed25519 -N '' -f $identity -C wisp-e2e-ci -q
+& "$openssh\ssh-keygen.exe" -t ed25519 -N '' -f $identity -C parallax-e2e-ci -q
 if ($LASTEXITCODE -ne 0) { Skip 'ssh-keygen failed' }
 # Win32-OpenSSH refuses a private key that anyone but its owner can read.
 icacls $identity /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
@@ -83,7 +83,7 @@ $sshDir = Join-Path $env:USERPROFILE '.ssh'
 New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
 $slash = { param($path) $path -replace '\\', '/' }
 Add-Content -Path (Join-Path $sshDir 'config') -Encoding ascii -Value @(
-    '# wisp-e2e-ci: throwaway localhost ssh for #95, added by scripts/ci/ssh-localhost.ps1',
+    '# parallax-e2e-ci: throwaway localhost ssh for #95, added by scripts/ci/ssh-localhost.ps1',
     'Host localhost',
     "    IdentityFile $(& $slash $identity)",
     '    IdentitiesOnly yes',
@@ -95,7 +95,7 @@ Add-Content -Path (Join-Path $sshDir 'config') -Encoding ascii -Value @(
 $probe = & "$openssh\ssh.exe" -T -o ConnectTimeout=5 -o ControlPath=none localhost 'echo ready' 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Host "ssh-localhost: ready (Windows OpenSSH in $openssh, port 22)"
-    if ($env:GITHUB_ENV) { Add-Content -Path $env:GITHUB_ENV -Value "WISP_E2E_SSH=$openssh\ssh.exe" }
+    if ($env:GITHUB_ENV) { Add-Content -Path $env:GITHUB_ENV -Value "PLX_E2E_SSH=$openssh\ssh.exe" }
     Write-Status 'true'
 } else {
     Skip "ssh localhost (probe) failed: $probe"

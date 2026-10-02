@@ -24,8 +24,8 @@ const SignInTerminal = lazy(() =>
 
 const themeOptions: { value: ThemePreference; name: string; icon: ReactNode }[] = [
   { value: "system", name: "System", icon: <Monitor /> },
-  { value: "light", name: "Wisp Light", icon: <Sun /> },
-  { value: "dark", name: "Wisp Dark", icon: <Moon /> },
+  { value: "light", name: "Parallax Light", icon: <Sun /> },
+  { value: "dark", name: "Parallax Dark", icon: <Moon /> },
 ];
 
 interface SettingsProps {
@@ -92,10 +92,10 @@ function UpdateSettings() {
   const [channel, setChannel] = useState<UpdateChannel>();
   const [error, setError] = useState<string>();
   useEffect(() => {
-    void window.wisp.updateChannel().then(setChannel);
+    void window.parallax.updateChannel().then(setChannel);
   }, []);
   const choose = async (next: UpdateChannel) => {
-    const failed = await window.wisp.setUpdateChannel(next);
+    const failed = await window.parallax.setUpdateChannel(next);
     setError(failed);
     if (!failed) setChannel(next);
   };
@@ -136,13 +136,13 @@ function HostsSettings({ addingHost }: { addingHost: boolean }) {
   // The host whose form is open: its id, "new", or none.
   const [editing, setEditing] = useState(addingHost ? "new" : undefined);
   const [removeError, setRemoveError] = useState<string>();
-  const remove = async (id: string) => setRemoveError(await window.wisp.removeHost(id));
+  const remove = async (id: string) => setRemoveError(await window.parallax.removeHost(id));
 
   return (
     <>
       <h1 className="mb-1.5 text-xl font-semibold">Hosts</h1>
       <p className="mb-6 text-[13px] text-muted-foreground">
-        Machines your agents run on. Add one you reach over SSH, such as a Mac mini with wispd
+        Machines your agents run on. Add one you reach over SSH, such as a Mac mini with plxd
         installed.
       </p>
       {removeError && (
@@ -207,7 +207,7 @@ function HostForm({ host, onDone }: { host?: Host; onDone: () => void }) {
       name: data.get("name") as string,
       destination: data.get("destination") as string,
     };
-    const failed = await window.wisp.saveHost(input, host?.id);
+    const failed = await window.parallax.saveHost(input, host?.id);
     setSaving(false);
     if (failed) setError(failed);
     else onDone();
@@ -239,7 +239,7 @@ function HostForm({ host, onDone }: { host?: Host; onDone: () => void }) {
           className={field}
         />
         <span className="mt-1 block text-faint-foreground">
-          Anything ssh accepts. wisp uses your ssh config and keys.
+          Anything ssh accepts. Parallax uses your ssh config and keys.
         </span>
       </label>
       {error && (
@@ -263,7 +263,7 @@ function HostForm({ host, onDone }: { host?: Host; onDone: () => void }) {
   );
 }
 
-/** The vendor CLIs wispd detects (0004), by `CliKind`, and where each says how to install it. */
+/** The vendor CLIs plxd detects (0004), by `CliKind`, and where each says how to install it. */
 const cliInfo: Record<string, { name: string; install: string }> = {
   claude: { name: "Claude Code", install: "https://code.claude.com/docs/en/setup" },
   codex: { name: "Codex", install: "https://learn.chatgpt.com/docs/codex/cli" },
@@ -279,12 +279,12 @@ const providerNames: Record<string, string> = {
 const keyProviders: Provider[] = ["anthropic", "openai"];
 
 /**
- * A failed accounts request, for people. A wispd without these methods is too old. A keychain
- * failure shows wispd's message, which names the fix on that host's OS.
+ * A failed accounts request, for people. A plxd without these methods is too old. A keychain
+ * failure shows plxd's message, which names the fix on that host's OS.
  */
 function accountsError(error: RpcError): string {
   if (error.code === ErrorCodes.MethodNotFound)
-    return "Update wispd on this host to manage its accounts here.";
+    return "Update plxd on this host to manage its accounts here.";
   if (error.data?.kind === "keychainUnavailable")
     return `This host's keychain isn't available: ${error.message}.`;
   return describeError(error);
@@ -320,7 +320,7 @@ function ProvidersSettings() {
 }
 
 /**
- * One host's accounts: each CLI wispd detects there, then its API keys, which can be added and
+ * One host's accounts: each CLI plxd detects there, then its API keys, which can be added and
  * removed, each with its usage over `period` and its limits, kept live. Loads once the host is
  * connected; Refresh probes the CLIs again. A CLI that isn't signed in signs in in a terminal
  * under its row (`signingIn`), and the CLIs are probed again when it ends.
@@ -348,7 +348,7 @@ function HostAccounts({
   const { usage } = useUsage(host.id, connected);
   const usageOf = (id: string) => usage && <UsageLines usage={usage.get(id)} period={period} />;
 
-  // `accounts/list` may answer from wispd's cache; `accounts/refresh` always probes again. Keys
+  // `accounts/list` may answer from plxd's cache; `accounts/refresh` always probes again. Keys
   // are listed again too, since another client may have changed them, and shown as soon as they
   // answer: the probe can take seconds, and a list held until then would undo an add or remove
   // made meanwhile.
@@ -356,8 +356,8 @@ function HostAccounts({
     async (method: "accounts/list" | "accounts/refresh") => {
       setChecking(true);
       const [clis, keyList] = await Promise.all([
-        window.wisp.request(host.id, method, {}),
-        window.wisp.request(host.id, "accounts/keys/list", {}).then((answer) => {
+        window.parallax.request(host.id, method, {}),
+        window.parallax.request(host.id, "accounts/keys/list", {}).then((answer) => {
           if ("result" in answer) setKeys(answer.result.accounts);
           return answer;
         }),
@@ -493,7 +493,7 @@ function CliRow({
         {cli.signedIn === false ? (
           "Not signed in"
         ) : (
-          // wispd couldn't tell; its note says why.
+          // plxd couldn't tell; its note says why.
           <span title={cli.note}>Sign-in unknown</span>
         )}
         {info && onSignIn && (
@@ -539,7 +539,9 @@ function KeyRow({
   const [error, setError] = useState<string>();
   const remove = async () => {
     setRemoving(true);
-    const answer = await window.wisp.request(hostId, "accounts/keys/remove", { id: account.id });
+    const answer = await window.parallax.request(hostId, "accounts/keys/remove", {
+      id: account.id,
+    });
     setRemoving(false);
     // Already gone, such as removed by another client: that's what Remove wanted.
     if ("error" in answer && answer.error.data?.kind !== "accountNotFound")
@@ -553,7 +555,7 @@ function KeyRow({
         <span className="block truncate text-[13px] font-medium">{account.label}</span>
         <span className="block truncate text-[12.5px] text-muted-foreground">
           {confirming
-            ? "Remove this key? wisp deletes it from the host's keychain."
+            ? "Remove this key? Parallax deletes it from the host's keychain."
             : `${providerNames[account.provider] ?? account.provider} API key · ${account.maskedKey}`}
         </span>
         {usage}
@@ -596,7 +598,7 @@ function KeyRow({
 
 /**
  * Adds an API key on a host. The key is read from its field once, then the field is cleared:
- * wispd keeps it in the host's keychain and only ever answers with its masked form. `onDone`
+ * plxd keeps it in the host's keychain and only ever answers with its masked form. `onDone`
  * gets the new account, or nothing when cancelled.
  */
 function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAccount) => void }) {
@@ -615,7 +617,7 @@ function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAcc
     };
     keyField.value = "";
     setSaving(true);
-    const answer = await window.wisp.request(hostId, "accounts/keys/add", params);
+    const answer = await window.parallax.request(hostId, "accounts/keys/add", params);
     setSaving(false);
     if ("error" in answer) setError(accountsError(answer.error));
     else onDone(answer.result.account);
@@ -642,7 +644,7 @@ function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAcc
       </label>
       <label className="text-[12.5px] text-muted-foreground">
         Label
-        {/* Within wispd's limits (a label with a non-space, of at most 256 bytes, and a key of at
+        {/* Within plxd's limits (a label with a non-space, of at most 256 bytes, and a key of at
             least 20), so it never answers invalidParams. */}
         <input
           name="label"
@@ -666,7 +668,7 @@ function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAcc
           className={field}
         />
         <span className="mt-1 block text-faint-foreground">
-          Kept in the host's keychain. wisp never shows it again.
+          Kept in the host's keychain. Parallax never shows it again.
         </span>
       </label>
       {error && (

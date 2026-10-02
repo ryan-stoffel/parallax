@@ -15,12 +15,12 @@ vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 48, close()
 let unmount = () => {};
 afterEach(() => act(() => unmount()));
 
-// wispd's caps (RYA-191).
+// plxd's caps (RYA-191).
 const caps: ImageCaps = { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 };
 
 function render(
   onSend: (text: string) => Promise<string | undefined>,
-  // null: a wispd that takes no images.
+  // null: a plxd that takes no images.
   imageCaps: ImageCaps | null = caps,
 ) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -90,10 +90,10 @@ test("Manual says its requests are denied when they can't come to the chat, and 
   };
   expect(shown()).toBe("ManualAsks you before edits and commands.");
   expect(shown("host")).toBe(
-    "ManualAsks before edits and commands. This host's wispd can't show those requests, so they're denied.",
+    "ManualAsks before edits and commands. This host's plxd can't show those requests, so they're denied.",
   );
   expect(shown("run")).toBe(
-    "ManualAsks before edits and commands. This chat started before wisp could show those requests, so they're denied.",
+    "ManualAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
   );
 });
 
@@ -243,8 +243,8 @@ test("a failed send puts the same text and images back, ahead of anything added 
   expect(thumbnails()).toEqual([]);
   type("more");
   await paste(Array.from({ length: 10 }, () => pngFile()));
-  await act(async () => fail("wispd is busy"));
-  expect(alert()).toBe("wispd is busy");
+  await act(async () => fail("plxd is busy"));
+  expect(alert()).toBe("plxd is busy");
   expect(box.querySelector("ul")?.textContent).toBe("first");
   // Still at most 10: the one sent, then the first nine added meanwhile.
   expect(thumbnails()).toHaveLength(10);
@@ -303,7 +303,7 @@ test("text copied from an app with a picture of itself pastes as text", async ()
   expect(box.textContent).toBe("A1\tB1");
 });
 
-test("an image wispd can't take says why and isn't added", async () => {
+test("an image plxd can't take says why and isn't added", async () => {
   const { paste } = render(vi.fn(async () => undefined));
   await paste([new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" })]);
   expect(thumbnails()).toEqual([]);
@@ -314,14 +314,14 @@ test("an image wispd can't take says why and isn't added", async () => {
   expect(alert()).toBe("A message takes at most 10 images.");
 });
 
-test("without wispd's image capability, adding an image says so", async () => {
+test("without plxd's image capability, adding an image says so", async () => {
   const { paste } = render(
     vi.fn(async () => undefined),
     null,
   );
   await paste([pngFile()]);
   expect(thumbnails()).toEqual([]);
-  expect(alert()).toBe("This host's wispd can't take images.");
+  expect(alert()).toBe("This host's plxd can't take images.");
 });
 
 test("a picked image is a thumbnail, and any other file is a chip", async () => {

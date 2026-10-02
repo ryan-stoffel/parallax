@@ -28,11 +28,11 @@ pub fn plist_path(label: &str) -> Result<PathBuf, ServiceError> {
 
 /// Renders the `LaunchAgent` property list for `label`, running `program serve` with
 /// [`DATA_DIR_ENV`] set to `data_dir`'s folder. Both stdout and stderr go to `data_dir`'s
-/// `logs/wispd.log` (0009), which `serve` also logs to, so a panic before its own logger starts
+/// `logs/plxd.log` (0009), which `serve` also logs to, so a panic before its own logger starts
 /// still lands there instead of being lost.
 ///
 /// `KeepAlive.SuccessfulExit` is `false`: launchd restarts `serve` after it exits with a
-/// non-zero status (a crash, or losing the startup race for `wispd.lock`), but not after the
+/// non-zero status (a crash, or losing the startup race for `plxd.lock`), but not after the
 /// exit status of 0 that a clean SIGTERM or SIGINT shutdown produces (`daemon/src/main.rs`), so
 /// a deliberate stop stays stopped.
 #[must_use]
@@ -81,10 +81,10 @@ fn escape_plist_text(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Installs or updates the per-user `LaunchAgent` for `label`, running the current `wispd`
+/// Installs or updates the per-user `LaunchAgent` for `label`, running the current `plxd`
 /// binary's `serve` against `data_dir`.
 ///
-/// Idempotent: run again, for example after wispd moves, to update the plist and restart the
+/// Idempotent: run again, for example after plxd moves, to update the plist and restart the
 /// service with the new one (`bootout` then `bootstrap`, since launchd does not reread a
 /// bootstrapped job's plist on its own).
 ///
@@ -106,7 +106,7 @@ pub fn install(label: &str, data_dir: &DataDir) -> Result<InstallOutcome, Servic
     let uid_target = format!("gui/{uid}");
     if already_loaded {
         // --wait: block until the old `serve` is fully gone, so the bootstrap below can never
-        // race it for `wispd.lock`.
+        // race it for `plxd.lock`.
         run_ok(
             LAUNCHCTL,
             &["bootout", "--wait", &format!("{uid_target}/{label}")],
@@ -199,25 +199,25 @@ mod tests {
 
     #[test]
     fn plist_matches_the_golden_file() {
-        let data_dir = DataDir::new("/Users/ryan/Library/Application Support/wisp").unwrap();
-        let plist = render_plist(DEFAULT_LABEL, Path::new("/usr/local/bin/wispd"), &data_dir);
+        let data_dir = DataDir::new("/Users/ryan/Library/Application Support/parallax").unwrap();
+        let plist = render_plist(DEFAULT_LABEL, Path::new("/usr/local/bin/plxd"), &data_dir);
         let golden = include_str!("../../tests/golden/launchagent.plist");
         assert_eq!(plist, golden);
     }
 
     #[test]
     fn special_characters_in_paths_and_the_label_are_escaped() {
-        let data_dir = DataDir::new("/Users/a&b/wisp").unwrap();
-        let plist = render_plist("a&b<c>", Path::new("/bin/<wispd>"), &data_dir);
+        let data_dir = DataDir::new("/Users/a&b/parallax").unwrap();
+        let plist = render_plist("a&b<c>", Path::new("/bin/<plxd>"), &data_dir);
         assert!(
             plist.contains("<string>a&amp;b&lt;c&gt;</string>"),
             "{plist}"
         );
         assert!(
-            plist.contains("<string>/bin/&lt;wispd&gt;</string>"),
+            plist.contains("<string>/bin/&lt;plxd&gt;</string>"),
             "{plist}"
         );
-        assert!(plist.contains("/Users/a&amp;b/wisp"), "{plist}");
+        assert!(plist.contains("/Users/a&amp;b/parallax"), "{plist}");
     }
 
     #[test]

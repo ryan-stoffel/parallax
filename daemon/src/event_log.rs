@@ -61,11 +61,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 
 use jiff::Timestamp;
+use parallax_protocol::{LogId, ParallaxEvent, ProjectId, RunId};
+use parallax_store::{Store, StoreError, StoredEvent};
 use tokio::sync::{oneshot, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
-use wisp_protocol::{LogId, ProjectId, RunId, WispEvent};
-use wisp_store::{Store, StoreError, StoredEvent};
 
 /// One entry in the log.
 #[derive(Debug)]
@@ -73,7 +73,7 @@ pub(crate) struct Entry {
     pub seq: u64,
     pub time: Timestamp,
     pub project: Option<ProjectId>,
-    pub event: WispEvent,
+    pub event: ParallaxEvent,
     /// The event's JSON size, for the in-memory replay window's byte bound.
     bytes: usize,
 }
@@ -148,7 +148,7 @@ impl Writer {
     fn spawn(db: Store) -> std::io::Result<Self> {
         let (jobs, queue) = mpsc::channel::<WriteJob>();
         let thread = thread::Builder::new()
-            .name("wispd-events".to_owned())
+            .name("plxd-events".to_owned())
             .spawn(move || {
                 while let Ok(job) = queue.recv() {
                     // A panicking job drops its `done` sender, which only fails that one
@@ -221,28 +221,28 @@ impl Drop for Writer {
 }
 
 /// The run an event belongs to, for `agent/events`.
-pub(crate) fn run_of(event: &WispEvent) -> Option<RunId> {
+pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
     match event {
-        WispEvent::AgentStarted { run_id, .. }
-        | WispEvent::AgentUpdated { run_id, .. }
-        | WispEvent::AgentOutput { run_id, .. }
-        | WispEvent::AgentAccountFallback { run_id, .. }
-        | WispEvent::AgentFinished { run_id, .. }
-        | WispEvent::AgentDiffReady { run_id, .. }
-        | WispEvent::AgentAccepted { run_id, .. }
-        | WispEvent::AgentWakeupsPaused { run_id } => Some(*run_id),
-        WispEvent::ProjectCreated { .. }
-        | WispEvent::ProjectUpdated { .. }
-        | WispEvent::ContextChanged { .. }
-        | WispEvent::RepoAdded { .. }
-        | WispEvent::ThreadStarted { .. }
-        | WispEvent::ThreadUpdated { .. }
-        | WispEvent::ThreadDeleted { .. }
-        | WispEvent::Unknown => None,
+        ParallaxEvent::AgentStarted { run_id, .. }
+        | ParallaxEvent::AgentUpdated { run_id, .. }
+        | ParallaxEvent::AgentOutput { run_id, .. }
+        | ParallaxEvent::AgentAccountFallback { run_id, .. }
+        | ParallaxEvent::AgentFinished { run_id, .. }
+        | ParallaxEvent::AgentDiffReady { run_id, .. }
+        | ParallaxEvent::AgentAccepted { run_id, .. }
+        | ParallaxEvent::AgentWakeupsPaused { run_id } => Some(*run_id),
+        ParallaxEvent::ProjectCreated { .. }
+        | ParallaxEvent::ProjectUpdated { .. }
+        | ParallaxEvent::ContextChanged { .. }
+        | ParallaxEvent::RepoAdded { .. }
+        | ParallaxEvent::ThreadStarted { .. }
+        | ParallaxEvent::ThreadUpdated { .. }
+        | ParallaxEvent::ThreadDeleted { .. }
+        | ParallaxEvent::Unknown => None,
     }
 }
 
-fn kind_of(event: &WispEvent) -> String {
+fn kind_of(event: &ParallaxEvent) -> String {
     serde_json::to_value(event)
         .ok()
         .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
@@ -374,7 +374,7 @@ impl EventLog {
         // which is what should happen whenever this log can't actually persist.
         let writer = Writer::spawn(db)?;
         // A second connection, dedicated to `run_events`'s reads, so paging a run's history never
-        // shares a lock with appending (#190). WAL mode (`configure`, in `wisp_store`) lets it
+        // shares a lock with appending (#190). WAL mode (`configure`, in `parallax_store`) lets it
         // read freely alongside the writer thread's own connection.
         let reader = match Store::open(path) {
             Ok(reader) => Some(reader),
@@ -461,7 +461,7 @@ impl EventLog {
         &self,
         time: Timestamp,
         project: Option<ProjectId>,
-        event: WispEvent,
+        event: ParallaxEvent,
     ) -> u64 {
         match &self.writer {
             Some(writer) => writer
@@ -480,7 +480,7 @@ impl EventLog {
         &self,
         time: Timestamp,
         project: Option<ProjectId>,
-        event: WispEvent,
+        event: ParallaxEvent,
     ) -> u64 {
         match &self.writer {
             Some(writer) => writer
@@ -507,7 +507,7 @@ impl EventLog {
         &self,
         time: Timestamp,
         project: Option<ProjectId>,
-        event: WispEvent,
+        event: ParallaxEvent,
     ) -> impl FnOnce(&Store) -> u64 + Send + 'static {
         let inner = Arc::clone(&self.inner);
         let head_watch = self.head_watch.clone();
@@ -533,7 +533,7 @@ impl EventLog {
             };
             if let Err(error) = db.append_event(&stored) {
                 error!(seq, %error, "could not store an event; it is delivered but not kept");
-                // The stored log now has a hole, and a later wispd could give this `seq` out
+                // The stored log now has a hole, and a later plxd could give this `seq` out
                 // again. A new `logId` on the next start makes every client resync instead.
                 if let Err(error) = db.reset_event_log_id() {
                     error!(%error, "could not mark the event log to start over");
@@ -569,7 +569,7 @@ impl EventLog {
         &self,
         time: Timestamp,
         project: Option<ProjectId>,
-        event: WispEvent,
+        event: ParallaxEvent,
     ) -> u64 {
         let bytes = serde_json::to_string(&event).map_or(0, |json| json.len());
         let mut inner = self.inner();
@@ -679,8 +679,8 @@ impl EventLog {
     }
 }
 
-/// A stored event as a log entry. A payload this build can't read, such as a newer wispd's kind,
-/// comes back as `WispEvent::Unknown`, keeping its place in the sequence.
+/// A stored event as a log entry. A payload this build can't read, such as a newer plxd's kind,
+/// comes back as `ParallaxEvent::Unknown`, keeping its place in the sequence.
 fn entry(stored: &StoredEvent) -> Entry {
     Entry {
         seq: stored.seq,
@@ -689,7 +689,7 @@ fn entry(stored: &StoredEvent) -> Entry {
             .project_id
             .and_then(|id| ProjectId::try_from(id).ok()),
         bytes: stored.payload.len(),
-        event: serde_json::from_str(&stored.payload).unwrap_or(WispEvent::Unknown),
+        event: serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown),
     }
 }
 
@@ -699,16 +699,16 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use wisp_protocol::{AgentOutcome, AgentOutputItem, ProjectId, RunId, WispEvent};
+    use parallax_protocol::{AgentOutcome, AgentOutputItem, ParallaxEvent, ProjectId, RunId};
 
     use super::{EventLog, Gone};
 
     fn append(log: &EventLog, project: Option<ProjectId>) -> u64 {
-        log.append_blocking(jiff::Timestamp::now(), project, WispEvent::Unknown)
+        log.append_blocking(jiff::Timestamp::now(), project, ParallaxEvent::Unknown)
     }
 
-    fn finished(run_id: RunId) -> WispEvent {
-        WispEvent::AgentFinished {
+    fn finished(run_id: RunId) -> ParallaxEvent {
+        ParallaxEvent::AgentFinished {
             run_id,
             outcome: AgentOutcome::Cancelled,
         }
@@ -792,7 +792,7 @@ mod tests {
     #[test]
     fn a_stored_log_keeps_its_id_seq_and_events_across_a_reopen() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wispd.sqlite3");
+        let path = dir.path().join("plxd.sqlite3");
         let project = ProjectId::generate();
         let run = RunId::generate();
         let first = open(&path, 2);
@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn replay_skips_nothing_across_a_gap_in_seq() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wispd.sqlite3");
+        let path = dir.path().join("plxd.sqlite3");
         let first = open(&path, 10);
         for _ in 0..4 {
             append(&first, None);
@@ -875,7 +875,7 @@ mod tests {
     #[test]
     fn a_failed_insert_gives_the_log_a_new_id_on_the_next_start() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wispd.sqlite3");
+        let path = dir.path().join("plxd.sqlite3");
         let log = open(&path, 10);
         append(&log, None);
         let id = log.id();
@@ -902,8 +902,8 @@ mod tests {
         assert_eq!(*watcher.borrow_and_update(), 1);
     }
 
-    fn big_output(run_id: RunId, text: &str) -> WispEvent {
-        WispEvent::AgentOutput {
+    fn big_output(run_id: RunId, text: &str) -> ParallaxEvent {
+        ParallaxEvent::AgentOutput {
             run_id,
             items: vec![AgentOutputItem::TextDelta {
                 message_id: None,
@@ -949,7 +949,7 @@ mod tests {
     #[test]
     fn host_retention_below_the_in_memory_retention_is_clamped_up() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wispd.sqlite3");
+        let path = dir.path().join("plxd.sqlite3");
         let run = RunId::generate();
         // Ask for host_retention 1 with retention 3: without the clamp in `EventLog::with`,
         // pruning would keep only the single newest host event, taking seq 3 and 4 down with
@@ -990,7 +990,7 @@ mod tests {
     #[test]
     fn reopening_with_a_small_byte_bound_trims_the_reloaded_window() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wispd.sqlite3");
+        let path = dir.path().join("plxd.sqlite3");
         let run = RunId::generate();
         let one = serde_json::to_string(&big_output(run, &"a".repeat(80)))
             .unwrap()
@@ -1030,7 +1030,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_append_is_not_blocked_by_a_long_page_read() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wispd.sqlite3");
+        let path = dir.path().join("plxd.sqlite3");
         let log = Arc::new(open(&path, 10));
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
@@ -1051,7 +1051,7 @@ mod tests {
 
         let seq = tokio::time::timeout(
             Duration::from_secs(5),
-            log.append(jiff::Timestamp::now(), None, WispEvent::Unknown),
+            log.append(jiff::Timestamp::now(), None, ParallaxEvent::Unknown),
         )
         .await
         .expect("an append waited on a concurrent page read");
@@ -1069,7 +1069,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_aborted_appends_job_still_publishes_so_the_next_one_does_not_collide() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wispd.sqlite3");
+        let path = dir.path().join("plxd.sqlite3");
         let log = Arc::new(open(&path, 10));
 
         // Occupies the writer thread on a plain OS thread (not async: `run_blocking` would panic
@@ -1081,7 +1081,7 @@ mod tests {
             let log = Arc::clone(&log);
             move || {
                 let writer = log.writer.as_ref().expect("a stored log has a writer");
-                writer.run_blocking(move |_db: &wisp_store::Store| {
+                writer.run_blocking(move |_db: &parallax_store::Store| {
                     started_tx.send(()).unwrap();
                     release_rx.recv().unwrap();
                 });
@@ -1092,7 +1092,7 @@ mod tests {
         let aborted = tokio::spawn({
             let log = Arc::clone(&log);
             async move {
-                log.append(jiff::Timestamp::now(), None, WispEvent::Unknown)
+                log.append(jiff::Timestamp::now(), None, ParallaxEvent::Unknown)
                     .await
             }
         });
@@ -1109,7 +1109,7 @@ mod tests {
         occupied.join().unwrap();
 
         let seq = log
-            .append(jiff::Timestamp::now(), None, WispEvent::Unknown)
+            .append(jiff::Timestamp::now(), None, ParallaxEvent::Unknown)
             .await;
         assert_eq!(
             seq, 2,

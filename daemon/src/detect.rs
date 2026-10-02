@@ -1,6 +1,6 @@
 //! Detecting installed vendor CLIs and their sign-in state (#114, decision record 0004).
 //!
-//! wispd never reads a CLI's credential files and never starts a sign-in. It only:
+//! plxd never reads a CLI's credential files and never starts a sign-in. It only:
 //!
 //! - Resolves the binary on the `PATH` it itself uses ([`find_program`], #96), which runs
 //!   nothing.
@@ -9,7 +9,7 @@
 //!
 //! The exact shape of `claude auth status` and `agent status --format json` is undocumented, so
 //! [`apply_json_status`] reads the fields these sources show and tolerates everything else,
-//! mirroring 0007's forward-compatible parsing rule. A field wispd could not read is left `None`
+//! mirroring 0007's forward-compatible parsing rule. A field plxd could not read is left `None`
 //! rather than guessed, and [`DetectedCli::note`] says why when that happens.
 //!
 //! Plan/tier is available for Codex only through its `app-server`'s `account/read`, a JSON-RPC
@@ -22,15 +22,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jiff::Timestamp;
+use parallax_protocol::{AuthKind, CliKind, DetectedCli};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
-use wisp_protocol::{AuthKind, CliKind, DetectedCli};
 
 use crate::backend::process::{Launcher, Output, ProcessSpec, StdinMode, find_program};
 
-/// How long a status command may run before wispd gives up on it.
+/// How long a status command may run before plxd gives up on it.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long an `accounts/list` answer may be served from the cache before a fresh probe runs.
@@ -40,7 +40,7 @@ pub const CACHE_TTL: Duration = Duration::from_secs(30);
 /// `AccountsListResult`/`AccountsRefreshResult`'s shape.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Probe {
-    /// Every CLI wispd knows how to detect, in a stable order (`claude`, `codex`, `cursor`).
+    /// Every CLI plxd knows how to detect, in a stable order (`claude`, `codex`, `cursor`).
     pub clis: Vec<DetectedCli>,
     /// When this probe ran.
     pub checked_at: Timestamp,
@@ -191,7 +191,7 @@ fn probe_spec(program: &str) -> ProcessSpec {
 }
 
 /// Runs `program args` in [`probe_spec`]'s folder, with `launcher`'s scrubbing, stdin closed, and
-/// no output beyond wispd's usual limits. Waits at most `timeout`; on a timeout, the process's
+/// no output beyond plxd's usual limits. Waits at most `timeout`; on a timeout, the process's
 /// group is killed (dropping it does that) and `Err` explains why.
 pub(crate) async fn run(
     launcher: &Launcher,
@@ -260,7 +260,7 @@ fn apply_json_status(detected: &mut DetectedCli, ran: &Ran) {
         fallback_from_exit_code(
             detected,
             ran.exit_code,
-            "output wispd could not parse as JSON",
+            "output plxd could not parse as JSON",
         );
         return;
     };
@@ -391,7 +391,7 @@ async fn probe_codex(launcher: &Launcher, timeout: Duration) -> DetectedCli {
 
 /// Asks a running `codex app-server` for the signed-in account's plan, over one NDJSON
 /// request/response on stdio. Best-effort: any failure, including a malformed reply, is `None`
-/// rather than an error, since a subscription's plan is metadata, not a fact wispd depends on.
+/// rather than an error, since a subscription's plan is metadata, not a fact plxd depends on.
 /// The process is killed once this returns, whether or not it answered in time.
 async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<String> {
     let mut spec = probe_spec("codex");
@@ -461,7 +461,7 @@ mod tests;
 mod windows_tests {
     use std::time::Duration;
 
-    use wisp_protocol::CliKind;
+    use parallax_protocol::CliKind;
 
     use super::CliDetector;
     use crate::backend::process::{Environment, Launcher};

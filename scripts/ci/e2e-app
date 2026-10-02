@@ -1,15 +1,15 @@
 #!/bin/sh
 # Runs the desktop app's end-to-end tests (RYA-16): builds the app, then runs Playwright in
-# apps/desktop/e2e against the wispd at WISPD_PATH. With WISPD_PATH unset it builds wispd with its
+# apps/desktop/e2e against the plxd at PLXD_PATH. With PLXD_PATH unset it builds plxd with its
 # fake backend first (CI passes the rust job's build instead, RYA-25).
 set -eu
 
 cd "$(dirname "$0")/../.."
 set -x
 
-if [ -z "${WISPD_PATH:-}" ]; then
-  cargo build -p wispd --locked --features fake-backend
-  export WISPD_PATH="$PWD/target/debug/wispd"
+if [ -z "${PLXD_PATH:-}" ]; then
+  cargo build -p plxd --locked --features fake-backend
+  export PLXD_PATH="$PWD/target/debug/plxd"
 fi
 
 cd apps/desktop

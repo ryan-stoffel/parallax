@@ -1,4 +1,4 @@
-//! The methods wispd answers, one module per group, routed through `wisp_protocol`'s method
+//! The methods plxd answers, one module per group, routed through `parallax_protocol`'s method
 //! table so every params and result type is the protocol's own.
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
@@ -19,11 +19,8 @@ mod usage;
 use std::future::{Future, ready};
 use std::sync::Arc;
 
-use serde::Serialize;
-use serde_json::Value;
-use tokio_util::sync::CancellationToken;
-use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
-use wisp_protocol::methods::{
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
+use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
     AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges,
@@ -31,7 +28,10 @@ use wisp_protocol::methods::{
     EventsUnsubscribe, HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList,
     ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
 };
-use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
+use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
+use serde::Serialize;
+use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) use defaults::read_defaults;
 pub(crate) use events::{Cursor, Cursors};

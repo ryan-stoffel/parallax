@@ -126,10 +126,10 @@ export function ProjectChat({
 
   let disabledReason: string | undefined;
   if (starting) disabledReason = "Starting the coordinator…";
-  else if (connection?.status === "failed") disabledReason = "Disconnected from wispd";
-  else if (!connected) disabledReason = "Connecting to wispd…";
+  else if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
+  else if (!connected) disabledReason = "Connecting to plxd…";
   else if (!("coordinator" in connection.capabilities))
-    disabledReason = "This host's wispd can't run a Project's coordinator yet";
+    disabledReason = "This host's plxd can't run a Project's coordinator yet";
 
   return (
     <>
@@ -154,7 +154,7 @@ export function ProjectChat({
           answers={answers}
           onAnswer={(a, choice, message) => void answer(a, choice, message)}
           onDismiss={dismiss}
-          disabledReason={connected ? undefined : "Connecting to wispd…"}
+          disabledReason={connected ? undefined : "Connecting to plxd…"}
         />
         <Composer
           newThread
@@ -163,7 +163,7 @@ export function ProjectChat({
           disabledReason={disabledReason}
           tab={tab}
           imageCaps={imageCaps(connection)}
-          // The coordinator asks only through a wispd that sends its requests.
+          // The coordinator asks only through a plxd that sends its requests.
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
         />
       </div>

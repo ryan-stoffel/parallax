@@ -1,7 +1,7 @@
 import { ArrowUp, GitBranch, LoaderCircle, ShieldQuestion, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { AgentRun, WispEvent } from "../protocol/generated/protocol";
+import type { AgentRun, ParallaxEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { backendLogos, statusLooks } from "./Sidebar";
 import { titleOf } from "./threads";
@@ -31,7 +31,7 @@ export interface ProjectAgentsView {
 }
 
 /** Applies one of a Project's events to its runs: a new run joins, and a changed one is replaced. */
-export function applyAgentEvent(runs: AgentRun[], event: WispEvent): AgentRun[] {
+export function applyAgentEvent(runs: AgentRun[], event: ParallaxEvent): AgentRun[] {
   if (!("runId" in event)) return runs;
   const i = runs.findIndex((r) => r.id === event.runId);
   const run = updateRun(runs[i], event);
@@ -43,7 +43,7 @@ export function applyAgentEvent(runs: AgentRun[], event: WispEvent): AgentRun[] 
  * A Project's runs, coordinator included, kept live: `agent/list {project}`, then the Project's
  * events after its `seq`, starting over on `resync`. Empty with no Project, and loads only while
  * `connected`. The permission requests its runs wait on come from the same events, after each
- * running run's log is read once for those from before. With `approvals`, the host's wispd
+ * running run's log is read once for those from before. With `approvals`, the host's plxd
  * advertises them, and a subagent started here forwards its requests (RYA-196, 0031).
  */
 export function useProjectAgents(
@@ -76,7 +76,7 @@ export function useProjectAgents(
     let unsubscribe = () => {};
 
     async function load() {
-      const list = await window.wisp.request(hostId, "agent/list", { project });
+      const list = await window.parallax.request(hostId, "agent/list", { project });
       if (stopped) return;
       if ("error" in list) return setError(list.error.message);
       setRuns(list.result.runs);
@@ -86,7 +86,10 @@ export function useProjectAgents(
       let byRun: ApprovalsByRun = {};
       for (const run of list.result.runs.filter((r) => r.approvals && isRunning(r.status)))
         for (let after = 0, more = true; more;) {
-          const page = await window.wisp.request(hostId, "agent/events", { runId: run.id, after });
+          const page = await window.parallax.request(hostId, "agent/events", {
+            runId: run.id,
+            after,
+          });
           if (stopped) return;
           if ("error" in page) break;
           byRun = trackApprovals(byRun, page.result.events);
@@ -95,7 +98,7 @@ export function useProjectAgents(
         }
       setAsked(byRun);
       const since = { after: list.result.seq, project, logId: list.logId };
-      unsubscribe = window.wisp.subscribe(hostId, since, (message) => {
+      unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
         if (message.type === "error") return setError(message.error.message);
@@ -114,7 +117,7 @@ export function useProjectAgents(
   const start = useCallback(
     async (runId: string, prompt: string) => {
       if (!project) return "No Project is open.";
-      const answer = await window.wisp.request(hostId, "agent/start", {
+      const answer = await window.parallax.request(hostId, "agent/start", {
         runId,
         project,
         prompt,

@@ -1,7 +1,7 @@
 # Recorded from Claude Code 2.1.283 for Linux x64 (CI's pinned SHA-256) on 2026-10-01, run as a worker
 # with WORKER_TOOLS as --tools against a fake Messages API that asked for TaskCreate, then TaskUpdate
 # twice (RYA-248). Changed: the session id is the tests' own, the cwd is shortened, apiKeySource is a
-# subscription's, and init's fields wispd doesn't read are left out. 2.1.283 lists the task tools and
+# subscription's, and init's fields plxd doesn't read are left out. 2.1.283 lists the task tools and
 # not TodoWrite, which it turns off while they are on.
 @read
 {"type":"system","subtype":"init","cwd":"/Users/dev/wt","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68","tools":["Bash","Edit","Glob","Grep","NotebookEdit","Read","TaskCreate","TaskGet","TaskList","TaskUpdate","WebFetch","WebSearch","Write"],"mcp_servers":[],"model":"claude-opus-5-5","permissionMode":"acceptEdits","apiKeySource":"none","claude_code_version":"2.1.283","output_style":"default","agents":["claude","Explore","general-purpose","Plan","statusline-setup"],"uuid":"48b6f7df-4d00-4791-a56a-cb82dca611c7"}

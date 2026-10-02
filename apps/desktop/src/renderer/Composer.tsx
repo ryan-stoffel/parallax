@@ -163,8 +163,8 @@ const hasText = (html: string) =>
 
 /** Manual's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
 const manualDenials = {
-  host: "Asks before edits and commands. This host's wispd can't show those requests, so they're denied.",
-  run: "Asks before edits and commands. This chat started before wisp could show those requests, so they're denied.",
+  host: "Asks before edits and commands. This host's plxd can't show those requests, so they're denied.",
+  run: "Asks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
 };
 
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
@@ -197,7 +197,7 @@ export interface ComposerProps {
   footer?: ReactNode;
   /**
    * The backend the thread runs on: shows the model, effort, and access choices it can honor. A
-   * new thread passes it only when wispd takes run options. Absent (or unknown): no choices, and
+   * new thread passes it only when plxd takes run options. Absent (or unknown): no choices, and
    * none are sent.
    */
   backend?: string;
@@ -212,7 +212,7 @@ export interface ComposerProps {
   /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
   imageCaps?: ImageCaps;
   /**
-   * Why Manual's requests are denied instead of coming to the chat (0031): the host's wispd lacks
+   * Why Manual's requests are denied instead of coming to the chat (0031): the host's plxd lacks
    * `approvals`, or the open run started without them. Absent: they come as approval cards.
    */
   manualDenied?: keyof typeof manualDenials;
@@ -242,7 +242,7 @@ export function Composer({
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
   const [stopping, setStopping] = useState(false);
-  // Files that aren't images, shown as chips; wispd doesn't take them yet.
+  // Files that aren't images, shown as chips; plxd doesn't take them yet.
   const [files, setFiles] = useState<File[]>([]);
   const [images, setImages] = useState<PromptImage[]>([]);
   // Why an image wasn't added, shown by the thumbnails.
@@ -292,7 +292,7 @@ export function Composer({
     const picked = added.filter(isImage);
     setImageError(undefined);
     if (picked.length === 0) return;
-    if (!imageCaps) return setImageError("This host's wispd can't take images.");
+    if (!imageCaps) return setImageError("This host's plxd can't take images.");
     const { maxImages, maxImageBytes, maxTotalBytes } = imageCaps;
     const room = Math.max(0, maxImages - images.length);
     const share = Math.min(maxImageBytes, Math.floor(maxTotalBytes / maxImages));

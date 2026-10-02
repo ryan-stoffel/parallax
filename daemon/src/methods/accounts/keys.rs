@@ -6,28 +6,28 @@
 
 use std::sync::Arc;
 
-use tracing::{error, info};
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     AccountId, AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams,
     AccountsKeysListResult, AccountsKeysRemoveParams, AccountsKeysRemoveResult, ErrorKind,
     Provider,
 };
-use wisp_store::StoreError;
+use parallax_store::StoreError;
+use tracing::{error, info};
 
 use crate::keystore::{KeyStore, KeyStoreError, UNAVAILABLE_MESSAGE};
 use crate::methods::Context;
 use crate::store::{self, account_store_error};
 
-/// The fewest bytes wispd accepts for a key. Every real Anthropic, `OpenAI`, or Cursor key is far
+/// The fewest bytes plxd accepts for a key. Every real Anthropic, `OpenAI`, or Cursor key is far
 /// longer; this also keeps [`mask_key`] from having only a sliver of a short, possibly-fragment
 /// key to work with.
 const MIN_KEY_BYTES: usize = 20;
 
-/// The longest `label` wispd accepts, in bytes.
+/// The longest `label` plxd accepts, in bytes.
 const MAX_LABEL_BYTES: usize = 256;
 
-/// The longest `key` wispd accepts, in bytes.
+/// The longest `key` plxd accepts, in bytes.
 const MAX_KEY_BYTES: usize = 4096;
 
 pub(crate) async fn add(
@@ -51,7 +51,7 @@ pub(crate) async fn add(
         .await
 }
 
-/// The logic behind `accounts/keys/add`, apart from wispd's dedicated store thread, so a test can
+/// The logic behind `accounts/keys/add`, apart from plxd's dedicated store thread, so a test can
 /// run it directly and capture what it logs.
 ///
 /// Idempotent on `id`: if a row already exists with the same `provider`, `label`, and masked key,
@@ -61,7 +61,7 @@ pub(crate) async fn add(
 /// for a key that failed to save; if the store write then fails, the Keychain write is rolled
 /// back, so a failed add never leaves a key with no record behind it either.
 fn add_account(
-    db_store: &mut wisp_store::Store,
+    db_store: &mut parallax_store::Store,
     keys: &dyn KeyStore,
     id: AccountId,
     provider: Provider,
@@ -150,10 +150,10 @@ pub(crate) async fn remove(
         .await
 }
 
-/// The logic behind `accounts/keys/remove`, apart from wispd's dedicated store thread, so a test
+/// The logic behind `accounts/keys/remove`, apart from plxd's dedicated store thread, so a test
 /// can run it directly against a mock `KeyStore`.
 fn remove_account(
-    db_store: &mut wisp_store::Store,
+    db_store: &mut parallax_store::Store,
     keys: &dyn KeyStore,
     id: AccountId,
 ) -> Result<AccountsKeysRemoveResult, ErrorObject> {
@@ -184,7 +184,7 @@ fn remove_account(
 /// something to show.
 fn map_keychain_error(error: &KeyStoreError) -> ErrorObject {
     if error.is_unavailable() {
-        ErrorObject::wisp(ErrorKind::KeychainUnavailable, UNAVAILABLE_MESSAGE)
+        ErrorObject::parallax(ErrorKind::KeychainUnavailable, UNAVAILABLE_MESSAGE)
     } else {
         ErrorObject::internal_error("the keychain failed")
     }
@@ -257,7 +257,7 @@ const MIN_CHARS_TO_REVEAL_SUFFIX: usize = 16;
 /// `sk-ant-api03-...abcd`. Otherwise it is `prefix...`, or `...` alone with no recognized prefix.
 ///
 /// This never reveals more than 4 characters of a key beyond a known public prefix, and never the
-/// whole key, regardless of the key's shape or length. wispd's own `check` already rejects a key
+/// whole key, regardless of the key's shape or length. plxd's own `check` already rejects a key
 /// shorter than [`MIN_KEY_BYTES`], but this function makes no assumption about that.
 pub(crate) fn mask_key(key: &str) -> String {
     let prefix = KNOWN_KEY_PREFIXES
@@ -283,17 +283,17 @@ mod tests {
     use std::io;
     use std::sync::{Arc, Mutex, PoisonError};
 
+    use parallax_protocol::jsonrpc::INVALID_PARAMS;
+    use parallax_protocol::{AccountId, ErrorKind, Provider, RawKey};
+    use parallax_store::Store;
     use tracing_subscriber::fmt::MakeWriter;
-    use wisp_protocol::jsonrpc::INVALID_PARAMS;
-    use wisp_protocol::{AccountId, ErrorKind, Provider, RawKey};
-    use wisp_store::Store;
 
     use super::{add_account, check, mask_key, remove_account};
     use crate::keystore::{KeyStore, MemoryKeyStore};
 
     fn temp_store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("wispd.sqlite3")).unwrap();
+        let store = Store::open(dir.path().join("plxd.sqlite3")).unwrap();
         (dir, store)
     }
 
@@ -385,7 +385,10 @@ mod tests {
         let (_dir, mut db_store) = temp_store();
         let keys = MemoryKeyStore::new();
         let error = remove_account(&mut db_store, &keys, AccountId::generate()).unwrap_err();
-        assert_eq!(error.wisp_data().unwrap().kind, ErrorKind::AccountNotFound);
+        assert_eq!(
+            error.parallax_data().unwrap().kind,
+            ErrorKind::AccountNotFound
+        );
     }
 
     #[test]
@@ -471,7 +474,7 @@ mod tests {
             "sk-ant-averylongthrowawaykeyabcd1234",
         )
         .unwrap_err();
-        assert_eq!(error.wisp_data().unwrap().kind, ErrorKind::IdConflict);
+        assert_eq!(error.parallax_data().unwrap().kind, ErrorKind::IdConflict);
     }
 
     /// Regression test: two different keys can share a mask (same recognized prefix and last 4
@@ -509,7 +512,7 @@ mod tests {
             second_key,
         )
         .unwrap_err();
-        assert_eq!(error.wisp_data().unwrap().kind, ErrorKind::IdConflict);
+        assert_eq!(error.parallax_data().unwrap().kind, ErrorKind::IdConflict);
         assert_eq!(
             keys.get(id).unwrap().as_deref().map(String::as_str),
             Some(first_key),
@@ -524,7 +527,7 @@ mod tests {
         // next `create_account` fails immediately and deterministically: no fault-injecting mock
         // store needed, and nothing to wait out.
         {
-            let raw = rusqlite::Connection::open(dir.path().join("wispd.sqlite3")).unwrap();
+            let raw = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
             raw.execute_batch("DROP TABLE accounts;").unwrap();
         }
         let keys = MemoryKeyStore::new();

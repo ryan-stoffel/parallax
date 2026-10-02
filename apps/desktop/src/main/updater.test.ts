@@ -25,10 +25,10 @@ test("errors read as one line for people", () => {
     }),
   ).toBe("Can't reach GitHub to check for updates.");
   expect(error("HttpError: 403 Forbidden\n{}")).toBe(
-    "GitHub is limiting update checks. wisp will try again.",
+    "GitHub is limiting update checks. Parallax will try again.",
   );
   expect(error("x", { statusCode: 429 })).toBe(
-    "GitHub is limiting update checks. wisp will try again.",
+    "GitHub is limiting update checks. Parallax will try again.",
   );
   // Squirrel.Mac, and electron-updater on Windows.
   expect(error("Code signature at URL file:///… did not pass validation")).toMatch(/signature/);

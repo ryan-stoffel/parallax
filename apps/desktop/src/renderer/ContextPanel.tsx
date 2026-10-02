@@ -12,7 +12,7 @@ import {
 import { useEffect, useState, type ReactNode, type SVGProps } from "react";
 import type { Components } from "react-markdown";
 
-import type { ContextFile, WispEvent } from "../protocol/generated/protocol";
+import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { describeError } from "./errors";
 import { GitHubLogo } from "./logos";
@@ -23,7 +23,7 @@ import { IconButton } from "./ui";
 const board = "notes.md";
 
 /** Applies one of a Project's events to its context files: a changed file joins or replaces its row, by path. */
-function applyContextEvent(files: ContextFile[], event: WispEvent): ContextFile[] {
+function applyContextEvent(files: ContextFile[], event: ParallaxEvent): ContextFile[] {
   if (event.kind !== "context.changed") return files;
   const rest = files.filter((f) => f.path !== event.file.path);
   return [...rest, event.file].sort((a, b) => (a.path < b.path ? -1 : 1));
@@ -45,16 +45,16 @@ function useProjectContext(hostId: string, project: string, connected: boolean) 
     async function load() {
       // ponytail: `context/list` has no `seq` of its own (RYA-187), so subscribe after
       // `agent/list`'s, taken first: a change that lands before the list replays, harmlessly.
-      const position = await window.wisp.request(hostId, "agent/list", { project });
+      const position = await window.parallax.request(hostId, "agent/list", { project });
       if (stopped) return;
       if ("error" in position) return setError(position.error.message);
-      const list = await window.wisp.request(hostId, "context/list", { project });
+      const list = await window.parallax.request(hostId, "context/list", { project });
       if (stopped) return;
       if ("error" in list) return setError(list.error.message);
       setFiles(list.result.files);
       setError(undefined);
       const since = { after: position.result.seq, project, logId: position.logId };
-      unsubscribe = window.wisp.subscribe(hostId, since, (message) => {
+      unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
         if (message.type === "error") return setError(message.error.message);
@@ -250,12 +250,14 @@ function useContent(hostId: string, project: string, file: ContextFile) {
   const [error, setError] = useState<string>();
   useEffect(() => {
     let stopped = false;
-    void window.wisp.request(hostId, "context/read", { project, path: file.path }).then((read) => {
-      if (stopped) return;
-      if ("error" in read) return setError(describeError(read.error));
-      setContent(read.result.content);
-      setError(undefined);
-    });
+    void window.parallax
+      .request(hostId, "context/read", { project, path: file.path })
+      .then((read) => {
+        if (stopped) return;
+        if ("error" in read) return setError(describeError(read.error));
+        setContent(read.result.content);
+        setError(undefined);
+      });
     return () => {
       stopped = true;
     };

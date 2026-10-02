@@ -4,21 +4,21 @@
 use std::os::unix::fs::symlink;
 use std::time::Duration;
 
-use wisp_protocol::jsonrpc::{INVALID_PARAMS, Message, Notification};
-use wisp_protocol::methods::{
+use parallax_protocol::jsonrpc::{INVALID_PARAMS, Message, Notification};
+use parallax_protocol::methods::{
     ContextList, ContextRead, ContextWrite, EventsEvent, EventsSubscribe, NotificationMethod,
     ProjectCreate,
 };
-use wisp_protocol::{
+use parallax_protocol::{
     ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams, ErrorKind,
-    EventsEventParams, EventsSubscribeParams, Project, ProjectId, WispEvent,
+    EventsEventParams, EventsSubscribeParams, ParallaxEvent, Project, ProjectId,
 };
 
-use crate::support::{Client, Wispd, create_params, kind, temp_dir};
+use crate::support::{Client, Plxd, create_params, kind, temp_dir};
 
 async fn project(client: &mut Client, dir: &std::path::Path) -> Project {
     client
-        .call::<ProjectCreate>(create_params(dir, "wisp"))
+        .call::<ProjectCreate>(create_params(dir, "parallax"))
         .await
         .unwrap()
         .project
@@ -52,8 +52,8 @@ async fn next_event(client: &mut Client) -> EventsEventParams {
 #[tokio::test]
 async fn write_read_and_list_round_trip() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
 
     let written = client
@@ -91,8 +91,8 @@ async fn write_read_and_list_round_trip() {
 #[tokio::test]
 async fn a_retry_is_idempotent_and_a_different_write_with_the_same_id_conflicts() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
     let params = write_params(project.id, "notes.md", "hello", None);
 
@@ -111,8 +111,8 @@ async fn a_retry_is_idempotent_and_a_different_write_with_the_same_id_conflicts(
 #[tokio::test]
 async fn a_fresh_id_overwrites_a_paths_previous_content() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
 
     client
@@ -142,8 +142,8 @@ async fn a_fresh_id_overwrites_a_paths_previous_content() {
 #[tokio::test]
 async fn traversal_absolute_hidden_nested_and_bad_extension_paths_are_refused() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
 
     for path in [
@@ -183,8 +183,8 @@ async fn traversal_absolute_hidden_nested_and_bad_extension_paths_are_refused() 
 #[tokio::test]
 async fn reading_a_missing_file_is_context_not_found() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
 
     let error = client
@@ -200,8 +200,8 @@ async fn reading_a_missing_file_is_context_not_found() {
 #[tokio::test]
 async fn context_methods_for_an_unknown_project_are_project_not_found() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let missing = ProjectId::generate();
 
     let error = client
@@ -220,8 +220,8 @@ async fn context_methods_for_an_unknown_project_are_project_not_found() {
 #[tokio::test]
 async fn a_file_over_the_per_file_cap_is_rejected() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
 
     let too_big = "a".repeat(1024 * 1024 + 1);
@@ -243,8 +243,8 @@ async fn a_file_over_the_per_file_cap_is_rejected() {
 #[tokio::test]
 async fn a_pre_existing_symlink_is_refused_for_read_and_write_and_left_untouched() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
     // Ensures the project's context folder exists before this test plants a symlink in it.
     client
@@ -279,12 +279,12 @@ async fn a_pre_existing_symlink_is_refused_for_read_and_write_and_left_untouched
 #[tokio::test]
 async fn concurrent_writes_to_one_path_leave_a_consistent_last_writer() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
 
-    let mut a = Client::ready(&wispd.socket).await;
-    let mut b = Client::ready(&wispd.socket).await;
+    let mut a = Client::ready(&plxd.socket).await;
+    let mut b = Client::ready(&plxd.socket).await;
     let (result_a, result_b) = tokio::join!(
         a.call::<ContextWrite>(write_params(project.id, "notes.md", "from a", Some("a"))),
         b.call::<ContextWrite>(write_params(project.id, "notes.md", "from b", Some("b"))),
@@ -315,11 +315,11 @@ async fn concurrent_writes_to_one_path_leave_a_consistent_last_writer() {
 #[tokio::test]
 async fn a_write_emits_exactly_one_context_changed_event_and_an_agents_own_write_emits_another() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let project = project(&mut client, dir.path()).await;
 
-    let mut watcher = Client::ready(&wispd.socket).await;
+    let mut watcher = Client::ready(&plxd.socket).await;
     watcher
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
@@ -340,27 +340,27 @@ async fn a_write_emits_exactly_one_context_changed_event_and_an_agents_own_write
     let event = next_event(&mut watcher).await;
     assert_eq!(event.project, Some(project.id));
     match event.event {
-        WispEvent::ContextChanged { file } => {
+        ParallaxEvent::ContextChanged { file } => {
             assert_eq!(file.path, "notes.md");
             assert_eq!(file.last_writer.as_deref(), Some("editor"));
         }
         other => panic!("expected context.changed, got {other:?}"),
     }
-    // The write above must not also be reported by the disk watcher: wispd's own write is
+    // The write above must not also be reported by the disk watcher: plxd's own write is
     // suppressed as an echo of the one just reported.
     watcher.stays_quiet(Duration::from_millis(1500)).await;
 
-    // An agent's own write, made directly on disk with no wispd call at all (0005).
+    // An agent's own write, made directly on disk with no plxd call at all (0005).
     let context_dir = dir.path().join("context").join(project.id.to_string());
     std::fs::write(context_dir.join("research.md"), "from an agent").unwrap();
     let event = next_event(&mut watcher).await;
     assert_eq!(event.project, Some(project.id));
     match event.event {
-        WispEvent::ContextChanged { file } => {
+        ParallaxEvent::ContextChanged { file } => {
             assert_eq!(file.path, "research.md");
             assert_eq!(
                 file.last_writer, None,
-                "wispd never made this write, so it has no writer to report"
+                "plxd never made this write, so it has no writer to report"
             );
         }
         other => panic!("expected context.changed, got {other:?}"),

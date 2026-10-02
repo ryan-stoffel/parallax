@@ -1,5 +1,5 @@
 //! What the real-CLI tests share: a fake Messages API on 127.0.0.1 that asks for tool calls, a way
-//! to run Claude Code as wispd runs a worker against it, and the Bash call's output.
+//! to run Claude Code as plxd runs a worker against it, and the Bash call's output.
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
@@ -8,17 +8,17 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use plxd::backend::claude::{TEMP_ENV, arguments, worker_temp};
+use plxd::backend::run_temp::{self, RunTemp};
+use plxd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
+use plxd::paths::DataDir;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use wispd::backend::claude::{TEMP_ENV, arguments, worker_temp};
-use wispd::backend::run_temp::{self, RunTemp};
-use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
-use wispd::paths::DataDir;
 
-/// A worker's request as wispd builds it (0013): a worktree at `worktree` in wispd's data folder
+/// A worker's request as plxd builds it (0013): a worktree at `worktree` in plxd's data folder
 /// `data`, whose repository's git folder is `git_dir`, with `context` writable, and a temp
-/// folder made as wispd makes one (RYA-130). It runs the probe that [`run_worker`]'s fake API
+/// folder made as plxd makes one (RYA-130). It runs the probe that [`run_worker`]'s fake API
 /// asks for. Keep the [`RunTemp`] until the run is over.
 pub fn worker_request(
     home: &Path,
@@ -53,10 +53,10 @@ pub fn worker_request(
     (request, temp)
 }
 
-/// Runs `claude` with the arguments wispd gives `request`, against a fake Messages API whose one
+/// Runs `claude` with the arguments plxd gives `request`, against a fake Messages API whose one
 /// Bash call runs `sh probe.sh` in the worktree. Returns stdout, and stdout with stderr for
 /// failure messages. `env` adds the test's own variables, such as its API key, to the worker's
-/// environment. Like wispd, it gives the CLI the run's temp folder as `CLAUDE_CODE_TMPDIR`, and
+/// environment. Like plxd, it gives the CLI the run's temp folder as `CLAUDE_CODE_TMPDIR`, and
 /// leaves `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` unset for a worker: on Linux it widens the sandbox's
 /// writes (RYA-20).
 pub async fn run_worker(
@@ -68,7 +68,7 @@ pub async fn run_worker(
 ) -> (String, String) {
     let base_url = fake_api(vec![ToolCall::bash("sh probe.sh")]).await;
     let temp = worker_temp(&request.sandbox.as_ref().unwrap().temp).unwrap();
-    // The CLI's own `TMPDIR`, wispd's in a real run.
+    // The CLI's own `TMPDIR`, plxd's in a real run.
     std::fs::create_dir_all(root.join("tmp")).unwrap();
 
     let mut child = tokio::process::Command::new(claude)
@@ -147,7 +147,7 @@ impl ToolCall {
 
 /// Starts a fake Messages API on 127.0.0.1 and returns its base URL. Each turn asks for the next
 /// of `calls`, in order, and the turn that carries the last one's result ends the conversation.
-/// The first call's id is `toolu_01WispProbe`, the next `toolu_01WispProbe1`, and so on.
+/// The first call's id is `toolu_01ParallaxProbe`, the next `toolu_01ParallaxProbe1`, and so on.
 pub async fn fake_api(calls: Vec<ToolCall>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -219,8 +219,8 @@ fn messages(request: &Value, calls: &[ToolCall]) -> String {
     let (block, delta, stop) = match calls.get(answered) {
         Some(call) => {
             let id = match answered {
-                0 => "toolu_01WispProbe".to_owned(),
-                n => format!("toolu_01WispProbe{n}"),
+                0 => "toolu_01ParallaxProbe".to_owned(),
+                n => format!("toolu_01ParallaxProbe{n}"),
             };
             (
                 json!({"type": "tool_use", "id": id, "name": call.name, "input": {}}),
@@ -236,7 +236,7 @@ fn messages(request: &Value, calls: &[ToolCall]) -> String {
     };
     let usage = json!({"input_tokens": 1, "output_tokens": 1});
     let message = json!({
-        "id": "msg_01WispProbe", "type": "message", "role": "assistant",
+        "id": "msg_01ParallaxProbe", "type": "message", "role": "assistant",
         "model": request["model"], "content": [], "stop_reason": null, "stop_sequence": null,
         "usage": usage,
     });

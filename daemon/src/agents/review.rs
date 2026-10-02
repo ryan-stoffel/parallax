@@ -6,12 +6,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentFileParams, AgentFileResult,
     AgentFileSide, AgentFileStatus, ErrorKind, RunId,
 };
-use wisp_store::{Run as RunRow, Worktree};
+use parallax_store::{Run as RunRow, Worktree};
 
 use super::{convert, run_accepted, run_not_found, store, store_error};
 use crate::server::Daemon;
@@ -44,18 +44,16 @@ async fn reviewable(daemon: &Arc<Daemon>, id: RunId) -> Result<(RunRow, Worktree
         )));
     };
     if worktree.git_dir.is_empty() {
-        return Err(ErrorObject::wisp(
+        return Err(ErrorObject::parallax(
             ErrorKind::WorktreeFailed,
-            format!(
-                "run {id}'s worktree has no recorded git folder, so wispd can't read it safely"
-            ),
+            format!("run {id}'s worktree has no recorded git folder, so plxd can't read it safely"),
         ));
     }
     Ok((row, worktree))
 }
 
 fn worktree_failed(error: &WorktreeError) -> ErrorObject {
-    ErrorObject::wisp(ErrorKind::WorktreeFailed, error.to_string())
+    ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string())
 }
 
 fn file_status(status: &ChangeStatus) -> AgentFileStatus {

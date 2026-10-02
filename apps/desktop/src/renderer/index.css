@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Wisp Light and Wisp Dark. The `dark` class on <html> switches them
+/* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
    (theme.ts). Components use only these tokens, never raw colors. Every
    *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
 
@@ -52,7 +52,7 @@
   --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
   --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
   --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
-  /* A Project icon's colors (projectIcons.ts), by the key wispd keeps. Each keeps at least 3:1
+  /* A Project icon's colors (projectIcons.ts), by the key plxd keeps. Each keeps at least 3:1
      on the sidebar, the dialogs, and a selected row, in both themes. */
   --project-red: #dc2626;
   --project-orange: #ea580c;

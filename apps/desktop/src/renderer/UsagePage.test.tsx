@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { WispBridge } from "../preload/bridge";
+import type { ParallaxBridge } from "../preload/bridge";
 import type { UsageHour } from "../protocol/generated/protocol";
 import {
   attribute,
@@ -350,11 +350,11 @@ afterEach(() => act(() => unmount()));
 async function renderPage(
   answers: Record<string, (params: Record<string, unknown>) => unknown>,
 ): Promise<void> {
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     connectionState: async () => ({
       status: "connected",
-      wispd: "0.9.0",
+      plxd: "0.9.0",
       protocol: 1,
       capabilities: {},
     }),
@@ -365,7 +365,7 @@ async function renderPage(
         ? { result: await answer(params), logId: "log" }
         : { error: { code: -32601, message: `no ${method}` } };
     },
-  } as unknown as WispBridge;
+  } as unknown as ParallaxBridge;
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   await act(async () =>
     root.render(<UsagePage hosts={[{ id: "local", name: "This Mac" }]} topBarClassName="" />),

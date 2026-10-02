@@ -1,13 +1,13 @@
 //! Supervising a vendor CLI's process, which every backend shares.
 //!
 //! - **Spawning** goes through `posix_spawn` in `crate::spawn`, so the child holds its three
-//!   pipes and nothing else of wispd's, such as client sockets or the listener (#86). It leads a
-//!   new session and process group, so a terminal that started wispd can't signal it, and
+//!   pipes and nothing else of plxd's, such as client sockets or the listener (#86). It leads a
+//!   new session and process group, so a terminal that started plxd can't signal it, and
 //!   cancelling can reach everything it started. On Windows (0023), it goes through tokio's
 //!   `Command` into a new process group and a job object of its own, which stands in for the
 //!   process group below; `serve` cleared the inherit flag on all its handles at startup, so the
 //!   child gets only its three pipes.
-//! - **The environment is explicit**: a base (wispd's own with the usual install folders on
+//! - **The environment is explicit**: a base (plxd's own with the usual install folders on
 //!   `PATH`, decision 0014; #96 may capture the login shell's instead), minus
 //!   [`ALWAYS_SCRUBBED`] and the backend's scrub list, plus
 //!   [`DATA_DIR_ENV`](crate::paths::DATA_DIR_ENV) from [`DataDir::command`], plus the backend's
@@ -22,9 +22,9 @@
 //!   process that reused the pid. On Windows, a task waits for it and terminates its job.
 //!
 //! **Limit:** a process that leaves the group, with `setsid` or `setpgid`, escapes all of this.
-//! macOS has no way to follow it short of scanning the process table, and wispd doesn't use
+//! macOS has no way to follow it short of scanning the process table, and plxd doesn't use
 //! Linux's ways (a child subreaper or a cgroup). It is reparented to launchd or init, which reaps
-//! it; wispd never waits for it. It can't hold a run open either: once the CLI exits, stdout is
+//! it; plxd never waits for it. It can't hold a run open either: once the CLI exits, stdout is
 //! cut off after [`OutputLimits::drain_after_exit`], though never before what the CLI itself wrote
 //! has been read, and stdin writes stop at a timeout.
 //! Daemons an agent starts on purpose, such as a dev server, therefore outlive the run.
@@ -79,9 +79,9 @@ impl Signal {
     }
 }
 
-/// Variables no process wispd starts inherits: the SSH session that may have started it (#96).
+/// Variables no process plxd starts inherits: the SSH session that may have started it (#96).
 /// That includes its `SSH_AUTH_SOCK`, which stops working when the session ends and which no
-/// agent needs: workers can't push, and wispd makes every commit locally (decision 0014).
+/// agent needs: workers can't push, and plxd makes every commit locally (decision 0014).
 pub const ALWAYS_SCRUBBED: &[&str] = &["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"];
 
 /// The longest stdout line a backend reads by default. Longer ones are skipped and reported. It
@@ -128,7 +128,7 @@ impl Environment {
         Self::default()
     }
 
-    /// wispd's own environment. Windows' variable names are case-insensitive, and some come
+    /// plxd's own environment. Windows' variable names are case-insensitive, and some come
     /// spelled like `Path`, so there every name is upper-cased.
     #[must_use]
     pub fn inherited() -> Self {
@@ -287,7 +287,7 @@ pub enum SpawnError {
     /// On Windows, the program is a batch file, such as an npm `.cmd` shim, and std refused an
     /// argument it can't pass to one safely (0023).
     #[error(
-        "{} is a batch file, which can't be given one of wispd's arguments safely ({source}); \
+        "{} is a batch file, which can't be given one of plxd's arguments safely ({source}); \
          install the CLI's native build instead of its npm package",
         program.display()
     )]
@@ -321,7 +321,7 @@ fn display_dirs(dirs: &[PathBuf]) -> String {
         .join(", ")
 }
 
-/// Starts processes for backends, with wispd's data folder and a base environment.
+/// Starts processes for backends, with plxd's data folder and a base environment.
 #[derive(Clone, Debug)]
 pub struct Launcher {
     data_dir: DataDir,
@@ -329,7 +329,7 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    /// A launcher whose processes start from `base` and reach the wispd that owns `data_dir`.
+    /// A launcher whose processes start from `base` and reach the plxd that owns `data_dir`.
     #[must_use]
     pub fn new(data_dir: DataDir, base: Environment) -> Self {
         Self { data_dir, base }
@@ -341,7 +341,7 @@ impl Launcher {
         &self.base
     }
 
-    /// wispd's data folder.
+    /// plxd's data folder.
     #[must_use]
     pub fn data_dir(&self) -> &DataDir {
         &self.data_dir
@@ -445,7 +445,7 @@ fn start(
         OsStr::new("sh"),
         OsStr::new("-c"),
         OsStr::new(TRAMPOLINE),
-        OsStr::new("wispd-spawn"),
+        OsStr::new("plxd-spawn"),
         spec.cwd.as_os_str(),
         program.as_os_str(),
     ]
@@ -823,7 +823,7 @@ impl Signals {
             });
         } else {
             let _ = std::thread::Builder::new()
-                .name("wispd-cancel".into())
+                .name("plxd-cancel".into())
                 .spawn(move || {
                     std::thread::sleep(policy.grace);
                     let _ = signals.signal_group(Signal::KILL);
@@ -865,7 +865,7 @@ fn reap_in_background(shared: Arc<Shared>) -> oneshot::Receiver<ExitInfo> {
 
     let (tx, rx) = oneshot::channel();
     let spawned = std::thread::Builder::new()
-        .name("wispd-reaper".into())
+        .name("plxd-reaper".into())
         .spawn(move || {
             let pid = shared.pid;
             let exited = loop {
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[cfg(unix)]
     fn launcher(base: Environment) -> Launcher {
-        Launcher::new(DataDir::new("/tmp/wispd-test-data").unwrap(), base)
+        Launcher::new(DataDir::new("/tmp/plxd-test-data").unwrap(), base)
     }
 
     #[cfg(unix)]
@@ -1191,7 +1191,7 @@ mod tests {
         let mut base = base();
         base.set("SSH_CONNECTION", "1.2.3.4 5 6.7.8.9 22")
             .set("SSH_TTY", "/dev/ttys001")
-            .set("VENDOR_TOKEN", "from-wispd")
+            .set("VENDOR_TOKEN", "from-plxd")
             .set("KEPT", "yes")
             .set("OVERRIDDEN", "base");
         let mut spec = sh("/usr/bin/env | /usr/bin/sort");
@@ -1214,7 +1214,7 @@ mod tests {
             "KEPT=yes",
             "OVERRIDDEN=injected",
             "PATH=/usr/bin:/bin",
-            "WISPD_DATA_DIR=/tmp/wispd-test-data",
+            "PLXD_DATA_DIR=/tmp/plxd-test-data",
         ] {
             assert!(vars.contains(expected), "{expected} missing from {vars:?}");
         }
@@ -1276,7 +1276,7 @@ mod tests {
         let mut base = base();
         base.set("PATH", "/nonexistent/bin:relative:/usr/bin");
         let error = launcher(base)
-            .spawn(&ProcessSpec::new("wisp-no-such-cli", "/"))
+            .spawn(&ProcessSpec::new("parallax-no-such-cli", "/"))
             .unwrap_err();
         let SpawnError::NotFound { searched, .. } = &error else {
             panic!("{error:?}");
@@ -1284,7 +1284,7 @@ mod tests {
         assert_eq!(searched.len(), 2);
         assert_eq!(
             error.to_string(),
-            "wisp-no-such-cli was not found; looked in /nonexistent/bin, /usr/bin"
+            "parallax-no-such-cli was not found; looked in /nonexistent/bin, /usr/bin"
         );
         assert!(matches!(
             find_program("relative/sh".as_ref(), None),
@@ -1299,7 +1299,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_bad_working_directory_is_refused() {
-        for cwd in ["relative", "/nonexistent-wisp-dir", "/bin/sh"] {
+        for cwd in ["relative", "/nonexistent-parallax-dir", "/bin/sh"] {
             let error = launcher(base())
                 .spawn(&ProcessSpec::new("sh", cwd))
                 .unwrap_err();
@@ -1595,7 +1595,7 @@ mod windows_tests {
     const PATIENCE: Duration = Duration::from_secs(10);
 
     fn launcher(base: Environment) -> Launcher {
-        let data = std::env::temp_dir().join("wispd-test-data");
+        let data = std::env::temp_dir().join("plxd-test-data");
         Launcher::new(DataDir::new(data).unwrap(), base)
     }
 
@@ -1621,9 +1621,9 @@ mod windows_tests {
     #[tokio::test]
     async fn the_child_gets_its_environment_working_directory_and_exit_code() {
         let dir = tempfile::tempdir().unwrap();
-        let mut spec = cmd("echo %WISP_TEST%& cd& exit 3");
+        let mut spec = cmd("echo %PLX_TEST%& cd& exit 3");
         spec.cwd = dir.path().to_owned();
-        spec.inject.set("WISP_TEST", "set");
+        spec.inject.set("PLX_TEST", "set");
         let mut process = launcher(Environment::inherited()).spawn(&spec).unwrap();
         let (lines, exit) = collect(&mut process).await;
         assert_eq!(exit.info.code, Some(3), "{exit:?}");

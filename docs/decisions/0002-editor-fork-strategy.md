@@ -6,7 +6,7 @@
 
 ## Context
 
-wisp's editor is a stripped-down fork of Code - OSS ([PLAN](../PLAN.md)). The plan names fork upkeep as a top risk. The way the fork is vendored decides that cost for the life of the project.
+Parallax's editor is a stripped-down fork of Code - OSS ([PLAN](../PLAN.md)). The plan names fork upkeep as a top risk. The way the fork is vendored decides that cost for the life of the project.
 
 Upstream facts, as of 2026-09-23:
 
@@ -14,7 +14,7 @@ Upstream facts, as of 2026-09-23:
 - Upstream moves fast. From 1.138.0 to 1.139.0, a single week, 1,478 files changed (+126,090 / -19,285 lines). Over four releases, 1.135.0 to 1.139.0, 4,539 files changed. Most of the churn is in chat, agent sessions, the agent host, and the built-in Copilot extension.
 - `microsoft/vscode` takes about 1.5 GB on GitHub. A depth-1 fetch of 1.139.0 is 62 MB, and the checked-out tree takes 372 MB in 19,055 files.
 
-wisp will change the editor in #9 (branding, Open VSX, telemetry), #10 (stripping the workbench), and #12 (the coordinator chat view), and later for the daemon integration.
+Parallax will change the editor in #9 (branding, Open VSX, telemetry), #10 (stripping the workbench), and #12 (the coordinator chat view), and later for the daemon integration.
 
 ### How other forks do it
 
@@ -31,18 +31,18 @@ The sources point the same way. Small patch stacks land within days of upstream,
 
 ## Options
 
-1. **Full fork.** Upstream's tree and history live in wisp, and upgrades are merges or rebases.
+1. **Full fork.** Upstream's tree and history live in Parallax, and upgrades are merges or rebases.
    - Everyday development is plain: every file is in the repo.
-   - wisp's history gains about 1.5 GB.
+   - Parallax's history gains about 1.5 GB.
    - Each upgrade brings in thousands of upstream file changes, so an upgrade PR cannot really be reviewed.
-   - wisp's own changes can be found only by diffing against upstream or through code markers.
+   - Parallax's own changes can be found only by diffing against upstream or through code markers.
    - Positron, che-code, and openvscode-server show the lag this produces.
 2. **Submodule plus patches.** A gitlink pins upstream, and the patches are still needed.
    - Compared with option 3, it only changes how the pin is stored: a SHA in the gitlink instead of a line in a JSON file. That is harder to review.
    - It adds a submodule checkout step and a detached checkout that is easy to commit to by accident.
-3. **Pinned tag plus a patch series.** wisp commits a pin and its patches, and a script produces the tree.
+3. **Pinned tag plus a patch series.** Parallax commits a pin and its patches, and a script produces the tree.
    - The repo stays small.
-   - The series lists every way wisp differs from upstream.
+   - The series lists every way Parallax differs from upstream.
    - An upgrade PR shows a one-line pin change and the patch refreshes.
    - Editing a patch takes an export step.
    - Changes to a patch are reviewed as diffs of diffs.
@@ -54,10 +54,10 @@ The sources point the same way. Small patch stacks land within days of upstream,
 Option 3: upstream Code - OSS at a pinned tag, plus a patch series applied by one script.
 
 - `editor/upstream.json` pins the repository, tag, and commit. The first pin is 1.139.0 (`2242ebbb54efeeb0129e08e919e7e8d43033cd83`).
-- `editor/patches/NNNN-*.patch` holds wisp's changes in `git format-patch` format, applied in filename order. Each file has a subject and a description of why the change exists. The series starts empty. The first patches belong to #9 and #10.
+- `editor/patches/NNNN-*.patch` holds Parallax's changes in `git format-patch` format, applied in filename order. Each file has a subject and a description of why the change exists. The series starts empty. The first patches belong to #9 and #10.
 - `scripts/editor/prepare` does the following. The tree it produces is ready for upstream's own build (`npm ci`, `npm run electron`, `npm run compile`).
   - It fetches the pinned tag with depth 1 into `editor/vscode/`, and fails if the tag no longer points at the pinned commit.
-  - It applies the series with `git am`, one commit per patch on a local `wisp` branch.
+  - It applies the series with `git am`, one commit per patch on a local `parallax` branch.
   - The committer and dates are fixed, and global git config is ignored, so the same pin and patches produce the same commits on any machine.
   - It refuses to overwrite uncommitted or unexported work in the tree.
 - Patches are commits, not plain `git apply` diffs as in VSCodium. That lets an upgrade use `git rebase`, with three-way merges and normal conflict tools, instead of `.rej` files. `scripts/editor/export-patches` writes the commits back in a canonical format, and `scripts/editor/upgrade <tag>` does the rebase, the pin, and the export. The GitLab Web IDE fork uses the same `format-patch` and `git am` pair.
@@ -74,7 +74,7 @@ Option 3: upstream Code - OSS at a pinned tag, plus a patch series applied by on
 | Path | In git | Why |
 | --- | --- | --- |
 | `editor/upstream.json` | Yes | The pin. An upgrade changes two lines: the tag and the commit. |
-| `editor/patches/` | Yes | wisp's changes, reviewable as text |
+| `editor/patches/` | Yes | Parallax's changes, reviewable as text |
 | `scripts/editor/` | Yes | The tooling |
 | `editor/vscode/` | No, gitignored | Rebuilt from the two above with one command. It takes 372 MB after `prepare` and 7.5 GB after a build, with `node_modules`, `out`, and `.build`. Committing the source would add upstream's churn (1,478 files in one week) to every upgrade PR. |
 
@@ -82,12 +82,12 @@ Option 3: upstream Code - OSS at a pinned tag, plus a patch series applied by on
 
 These keep the series cheap to carry. They come from what broke for the forks above.
 
-1. Prefer, in order: configuration (`product.json`, default settings), new files or a wisp-owned built-in extension, and only then small edits to upstream files.
+1. Prefer, in order: configuration (`product.json`, default settings), new files or a parallax-owned built-in extension, and only then small edits to upstream files.
 2. Change `product.json` with a merge step in `prepare`, not a patch. Upstream edits it often, and VSCodium's branding patch had to be regenerated in 11 of 12 updates. [0008](0008-editor-overlay.md) describes the merge step, `editor/product.json`.
 3. Do not patch `package.json` or lockfiles unless there is no other way.
 4. Strip features by excluding them from the build or from registration, not by deleting upstream files. A deletion patch carries every deleted line and conflicts with every upstream edit to those files.
-5. Keep wisp's features out of upstream's fastest-moving code: chat, sessions, the agent host, and Copilot. The coordinator chat (#12) should be its own contribution, not an edit to upstream's chat.
-6. Give each patch one concern, a subject that starts with its area (`branding:`, `strip:`, `chat:`), and a description of why it exists. The patch files themselves mark what wisp changed, so upstream files need no Positron-style markers.
+5. Keep Parallax's features out of upstream's fastest-moving code: chat, sessions, the agent host, and Copilot. The coordinator chat (#12) should be its own contribution, not an edit to upstream's chat.
+6. Give each patch one concern, a subject that starts with its area (`branding:`, `strip:`, `chat:`), and a description of why it exists. The patch files themselves mark what Parallax changed, so upstream files need no Positron-style markers.
 
 ### Upgrades
 
@@ -99,7 +99,7 @@ The step-by-step procedure is in [editor-upgrade.md](../editor-upgrade.md):
 4. Rebuild and smoke-test.
 5. Commit the pin, the patches, and `.nvmrc`.
 
-Cadence: move to the newest stable release about every four weeks, and within a week when a release fixes an Electron or Chromium security issue. Weekly upgrades would cost more than they return. Only files that wisp patches can conflict, and resolving four weeks of upstream changes to a file at once is no harder than resolving them a week at a time.
+Cadence: move to the newest stable release about every four weeks, and within a week when a release fixes an Electron or Chromium security issue. Weekly upgrades would cost more than they return. Only files that Parallax patches can conflict, and resolving four weeks of upstream changes to a file at once is no harder than resolving them a week at a time.
 
 Time, measured on an M3 Pro with a rehearsal from 1.138.0 to 1.139.0 with three throwaway patches:
 
@@ -113,9 +113,9 @@ Expect about 30 minutes per upgrade with a small series and no conflicts, mostly
 ## Consequences
 
 - Upgrades are reviewable: a pin change plus patch refreshes. Hunk changes in the patches show exactly where a conflict was resolved.
-- The series is the complete list of how wisp differs from upstream, and CI proves on every PR that it still applies.
-- wisp's repo stays small. `check-fork` fetches 62 MB of upstream when it runs, which takes seconds.
+- The series is the complete list of how Parallax differs from upstream, and CI proves on every PR that it still applies.
+- Parallax's repo stays small. `check-fork` fetches 62 MB of upstream when it runs, which takes seconds.
 - Editing the editor takes a round trip: `prepare`, then commit in `editor/vscode`, then `export-patches`, then commit the patch. Code navigation and IDE features need a prepared tree.
-- Changes to a patch are reviewed as diffs of diffs. If #12 or later work adds a lot of new code, move it into a wisp-owned directory or built-in extension that `prepare` copies in, instead of growing patches that add files. `editor/overlay/` is that directory ([0008](0008-editor-overlay.md)).
+- Changes to a patch are reviewed as diffs of diffs. If #12 or later work adds a lot of new code, move it into a parallax-owned directory or built-in extension that `prepare` copies in, instead of growing patches that add files. `editor/overlay/` is that directory ([0008](0008-editor-overlay.md)).
 - When patches exist, the tree's HEAD is a local commit, not an upstream one. It is reproducible from the pin, the overlay, and the series. A packaged build reports it as its commit ([0008](0008-editor-overlay.md)).
 - The built-in extension download (`npm run download-builtin-extensions`) calls the GitHub REST API, which counts against the caller's budget. CI should pass its own `GITHUB_TOKEN`.

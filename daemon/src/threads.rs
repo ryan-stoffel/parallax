@@ -8,30 +8,30 @@
 //! no repo run in, archiving, and deleting.
 //!
 //! Each thread with no repo gets its own scratch repository at `<data folder>/scratch/<run id>`,
-//! so one quick chat can't read another's work. They all belong to wispd's scratch entry, whose
+//! so one quick chat can't read another's work. They all belong to plxd's scratch entry, whose
 //! path is the `scratch` folder, made on first use.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use jiff::Timestamp;
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    ErrorKind, ParallaxEvent, ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId, RunId, Thread,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
+    ThreadStartParams, ThreadStartResult,
+};
+use parallax_store::RepoFields;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
-    ErrorKind, ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId, RunId, Thread,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
-    ThreadStartParams, ThreadStartResult, WispEvent,
-};
-use wisp_store::RepoFields;
 
 use crate::agents::{self, NewRun, NewThread, RunOptions};
 use crate::repo;
 use crate::server::Daemon;
 use crate::worktree::valid_branch_slug;
 
-/// The folder under wispd's data folder that holds threads' scratch repositories.
+/// The folder under plxd's data folder that holds threads' scratch repositories.
 const SCRATCH_DIR: &str = "scratch";
 
 /// The scratch entry's name.
@@ -41,12 +41,12 @@ const MAX_PATH_BYTES: usize = 1024;
 
 async fn store<T: Send + 'static>(
     daemon: &Daemon,
-    job: impl FnOnce(&mut wisp_store::Store) -> Result<T, ErrorObject> + Send + 'static,
+    job: impl FnOnce(&mut parallax_store::Store) -> Result<T, ErrorObject> + Send + 'static,
 ) -> Result<T, ErrorObject> {
     daemon.store.run(&CancellationToken::new(), job).await
 }
 
-fn store_error(error: &wisp_store::StoreError) -> ErrorObject {
+fn store_error(error: &parallax_store::StoreError) -> ErrorObject {
     agents::store_error(error)
 }
 
@@ -55,7 +55,7 @@ fn corrupt(what: &str, id: Uuid) -> ErrorObject {
 }
 
 /// A store row as the protocol's repo entry.
-pub(crate) fn repo_entry(row: wisp_store::Repo) -> Result<Repo, ErrorObject> {
+pub(crate) fn repo_entry(row: parallax_store::Repo) -> Result<Repo, ErrorObject> {
     Ok(Repo {
         id: RepoId::try_from(row.id).map_err(|_| corrupt("repo entry", row.id))?,
         name: row.fields.name,
@@ -66,7 +66,7 @@ pub(crate) fn repo_entry(row: wisp_store::Repo) -> Result<Repo, ErrorObject> {
 }
 
 /// A store row as the protocol's thread.
-pub(crate) fn thread_entry(row: &wisp_store::Thread) -> Result<Thread, ErrorObject> {
+pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, ErrorObject> {
     Ok(Thread {
         id: RunId::try_from(row.id).map_err(|_| corrupt("thread", row.id))?,
         repo: RepoId::try_from(row.repo_id).map_err(|_| corrupt("thread", row.id))?,
@@ -76,7 +76,7 @@ pub(crate) fn thread_entry(row: &wisp_store::Thread) -> Result<Thread, ErrorObje
 }
 
 fn thread_not_found(id: RunId) -> ErrorObject {
-    ErrorObject::wisp(
+    ErrorObject::parallax(
         ErrorKind::ThreadNotFound,
         format!("no thread has run id {id}"),
     )
@@ -84,21 +84,27 @@ fn thread_not_found(id: RunId) -> ErrorObject {
 
 /// The repository a run's scope stands for: a project's, or a repo entry's path. For the scratch
 /// entry it is the folder that holds the scratch repositories.
-pub(crate) fn scope_path(db: &wisp_store::Store, scope: ProjectId) -> Result<String, ErrorObject> {
+pub(crate) fn scope_path(
+    db: &parallax_store::Store,
+    scope: ProjectId,
+) -> Result<String, ErrorObject> {
     if let Some(project) = db.get_project(scope.into()).map_err(|e| store_error(&e))? {
         return Ok(project.repo_path);
     }
     if let Some(repo) = db.get_repo(scope.into()).map_err(|e| store_error(&e))? {
         return Ok(repo.fields.path);
     }
-    Err(ErrorObject::wisp(
+    Err(ErrorObject::parallax(
         ErrorKind::ProjectNotFound,
         format!("no project has id {scope}"),
     ))
 }
 
-/// Whether `scope` is wispd's scratch entry, whose threads have no repository of the user's.
-pub(crate) fn is_scratch(db: &wisp_store::Store, scope: ProjectId) -> Result<bool, ErrorObject> {
+/// Whether `scope` is plxd's scratch entry, whose threads have no repository of the user's.
+pub(crate) fn is_scratch(
+    db: &parallax_store::Store,
+    scope: ProjectId,
+) -> Result<bool, ErrorObject> {
     Ok(db
         .get_repo(scope.into())
         .map_err(|e| store_error(&e))?
@@ -108,7 +114,7 @@ pub(crate) fn is_scratch(db: &wisp_store::Store, scope: ProjectId) -> Result<boo
 /// The scope whose context folder run `run` of `scope` writes notes to: the run's own id for a
 /// thread with no repo, so one quick chat never reads another's notes, and `scope` otherwise.
 pub(crate) fn context_scope(
-    db: &wisp_store::Store,
+    db: &parallax_store::Store,
     scope: ProjectId,
     run: RunId,
 ) -> Result<ProjectId, ErrorObject> {
@@ -124,12 +130,12 @@ pub(crate) fn context_scope(
 pub(crate) async fn existing_thread(
     daemon: &Arc<Daemon>,
     id: RunId,
-) -> Result<wisp_store::Thread, ErrorObject> {
+) -> Result<parallax_store::Thread, ErrorObject> {
     store(daemon, move |db| {
         db.get_thread(id.into())
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| {
-                ErrorObject::wisp(
+                ErrorObject::parallax(
                     ErrorKind::IdConflict,
                     format!("run {id} exists and is not a thread"),
                 )
@@ -139,12 +145,16 @@ pub(crate) async fn existing_thread(
 }
 
 /// Reports a new thread as `thread.started`, a host-level event.
-pub(crate) async fn log_started(daemon: &Daemon, row: &wisp_store::Thread) {
+pub(crate) async fn log_started(daemon: &Daemon, row: &parallax_store::Thread) {
     match thread_entry(row) {
         Ok(thread) => {
             daemon
                 .log
-                .append(thread.created_at, None, WispEvent::ThreadStarted { thread })
+                .append(
+                    thread.created_at,
+                    None,
+                    ParallaxEvent::ThreadStarted { thread },
+                )
                 .await;
         }
         Err(error) => warn!(error = %error.message, "could not report a new thread"),
@@ -202,7 +212,8 @@ pub(crate) async fn add_repo(
 ) -> Result<RepoAddResult, ErrorObject> {
     let RepoAddParams { id, path } = params;
     check_path(&path)?;
-    let not_a_repository = |message: String| ErrorObject::wisp(ErrorKind::NotARepository, message);
+    let not_a_repository =
+        |message: String| ErrorObject::parallax(ErrorKind::NotARepository, message);
     repo::check(Path::new(&path)).map_err(|error| not_a_repository(error.to_string()))?;
     let canonical = Path::new(&path)
         .canonicalize()
@@ -214,7 +225,7 @@ pub(crate) async fn add_repo(
         .unwrap_or_else(|_| daemon.data_dir.root().to_owned());
     if canonical.starts_with(&data_dir) {
         return Err(not_a_repository(format!(
-            "{path} is inside wispd's data folder, which holds wisp's own worktrees, scratch \
+            "{path} is inside plxd's data folder, which holds Parallax's own worktrees, scratch \
              repositories, and notes"
         )));
     }
@@ -239,7 +250,7 @@ pub(crate) async fn add_repo(
             log.append_blocking(
                 repo.created_at,
                 None,
-                WispEvent::RepoAdded { repo: repo.clone() },
+                ParallaxEvent::RepoAdded { repo: repo.clone() },
             );
             info!(repo = %repo.id, path = %repo.path, "registered a repository for threads");
         }
@@ -250,17 +261,17 @@ pub(crate) async fn add_repo(
 
 /// Adds a repo entry, and says whether it is new.
 fn add(
-    db: &mut wisp_store::Store,
+    db: &mut parallax_store::Store,
     id: Uuid,
     fields: &RepoFields,
-) -> Result<(wisp_store::Repo, bool), ErrorObject> {
+) -> Result<(parallax_store::Repo, bool), ErrorObject> {
     let known = db
         .list_repos()
         .map_err(|e| store_error(&e))?
         .into_iter()
         .any(|repo| repo.fields.path == fields.path);
     let repo = db.add_repo(id, fields).map_err(|error| match error {
-        wisp_store::StoreError::IdConflict { id } => ErrorObject::wisp(
+        parallax_store::StoreError::IdConflict { id } => ErrorObject::parallax(
             ErrorKind::IdConflict,
             format!("repo entry {id} exists with another path"),
         ),
@@ -282,8 +293,8 @@ fn scratch_root(daemon: &Daemon) -> Result<PathBuf, ErrorObject> {
         })
 }
 
-/// wispd's scratch entry, made on first use.
-async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<wisp_store::Repo, ErrorObject> {
+/// plxd's scratch entry, made on first use.
+async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<parallax_store::Repo, ErrorObject> {
     let root = scratch_root(daemon)?;
     let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
@@ -298,18 +309,18 @@ async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<wisp_store::Repo, ErrorOb
         let (row, created) = add(db, RepoId::generate().into(), &fields)?;
         if created {
             let repo = repo_entry(row.clone())?;
-            log.append_blocking(repo.created_at, None, WispEvent::RepoAdded { repo });
+            log.append_blocking(repo.created_at, None, ParallaxEvent::RepoAdded { repo });
         }
         Ok(row)
     })
     .await
 }
 
-/// The repo entry a thread starts in: `repo`, or wispd's scratch entry when it names none.
+/// The repo entry a thread starts in: `repo`, or plxd's scratch entry when it names none.
 async fn start_entry(
     daemon: &Arc<Daemon>,
     repo: Option<RepoId>,
-) -> Result<wisp_store::Repo, ErrorObject> {
+) -> Result<parallax_store::Repo, ErrorObject> {
     let Some(id) = repo else {
         return scratch_entry(daemon).await;
     };
@@ -317,7 +328,7 @@ async fn start_entry(
         db.get_repo(id.into())
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| {
-                ErrorObject::wisp(
+                ErrorObject::parallax(
                     ErrorKind::RepoNotFound,
                     format!("no repo entry has id {id}"),
                 )
@@ -370,7 +381,7 @@ pub(crate) async fn start(
                 .init_scratch(&dir)
                 .await
                 .map_err(|error| {
-                    ErrorObject::wisp(
+                    ErrorObject::parallax(
                         ErrorKind::WorktreeFailed,
                         format!("could not make the thread's scratch repository: {error}"),
                     )
@@ -472,14 +483,14 @@ pub(crate) async fn archive(
         let row = db
             .set_thread_archived(run_id.into(), archived)
             .map_err(|error| match error {
-                wisp_store::StoreError::NotFound { .. } => thread_not_found(run_id),
+                parallax_store::StoreError::NotFound { .. } => thread_not_found(run_id),
                 other => store_error(&other),
             })?;
         let thread = thread_entry(&row)?;
         log.append_blocking(
             Timestamp::now(),
             None,
-            WispEvent::ThreadUpdated {
+            ParallaxEvent::ThreadUpdated {
                 thread: thread.clone(),
             },
         );
@@ -502,7 +513,7 @@ pub(crate) async fn delete(
     .await?;
     agents::delete(daemon, run_id).await.map_err(|error| {
         let gone = error
-            .wisp_data()
+            .parallax_data()
             .is_some_and(|data| data.kind == ErrorKind::RunNotFound);
         if gone {
             thread_not_found(run_id)
@@ -520,7 +531,7 @@ pub(crate) async fn delete(
 pub(crate) async fn purge(
     daemon: &Arc<Daemon>,
     run_id: RunId,
-    worktree: Option<wisp_store::Worktree>,
+    worktree: Option<parallax_store::Worktree>,
 ) -> Result<(), ErrorObject> {
     let (thread, scratch) = store(daemon, move |db| {
         let thread = db
@@ -562,7 +573,7 @@ pub(crate) async fn purge(
         .append(
             Timestamp::now(),
             None,
-            WispEvent::ThreadDeleted { run_id, repo },
+            ParallaxEvent::ThreadDeleted { run_id, repo },
         )
         .await;
     info!(run = %run_id, "deleted a thread");
@@ -585,14 +596,19 @@ fn remove_context(daemon: &Daemon, run_id: RunId) {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use wisp_protocol::jsonrpc::INVALID_PARAMS;
+    use parallax_protocol::jsonrpc::INVALID_PARAMS;
 
     use super::check_path;
 
     #[test]
     fn repo_paths_are_absolute_and_plain() {
-        assert!(check_path("/Users/me/src/wisp").is_ok());
-        for path in ["src/wisp", "/Users/me/../wisp", "/Users/me/./wisp", "/a\0b"] {
+        assert!(check_path("/Users/me/src/parallax").is_ok());
+        for path in [
+            "src/parallax",
+            "/Users/me/../parallax",
+            "/Users/me/./parallax",
+            "/a\0b",
+        ] {
             assert_eq!(check_path(path).unwrap_err().code, INVALID_PARAMS, "{path}");
         }
         let long = format!("/{}", "p".repeat(super::MAX_PATH_BYTES));

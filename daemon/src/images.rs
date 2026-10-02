@@ -2,25 +2,25 @@
 //! advertises as the `promptImages` capability's options, and the checks every method that takes
 //! `images` runs before anything is created or sent.
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{ErrorKind, ImageMediaType, PromptImage};
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{ErrorKind, ImageMediaType, PromptImage};
 
 /// The most images one message takes.
 pub(crate) const MAX_IMAGES: usize = 10;
 
 /// The longest one image's `data` may be, in bytes of base64, about 3.75 MiB of image: the most
 /// every Claude platform takes per image, since Anthropic counts its limit on the base64, so an
-/// image wispd takes, Claude takes too.
+/// image plxd takes, Claude takes too.
 pub(crate) const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
 /// The most a message's images' `data` may add up to, in bytes of base64: what fits in one of
-/// 0007's 8 MiB frames beside the longest text wispd takes (1 MiB) and the envelope.
+/// 0007's 8 MiB frames beside the longest text plxd takes (1 MiB) and the envelope.
 pub(crate) const MAX_TOTAL_BYTES: usize = 6 * 1024 * 1024;
 
 /// Checks a message's images against the caps, with `imageTooLarge`, and checks that each is
 /// base64 whose bytes are the file type it names, with `invalidParams`.
 pub(crate) fn check(images: &[PromptImage]) -> Result<(), ErrorObject> {
-    let too_large = |message: String| ErrorObject::wisp(ErrorKind::ImageTooLarge, message);
+    let too_large = |message: String| ErrorObject::parallax(ErrorKind::ImageTooLarge, message);
     if images.len() > MAX_IMAGES {
         return Err(too_large(format!(
             "a message takes at most {MAX_IMAGES} images, not {}",
@@ -99,7 +99,7 @@ pub(crate) fn decode(text: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use wisp_protocol::{ErrorKind, ImageMediaType, PromptImage};
+    use parallax_protocol::{ErrorKind, ImageMediaType, PromptImage};
 
     use super::{MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_BYTES, check, decode};
 
@@ -122,7 +122,10 @@ mod tests {
     }
 
     fn kind(images: &[PromptImage]) -> Option<ErrorKind> {
-        check(images).unwrap_err().wisp_data().map(|data| data.kind)
+        check(images)
+            .unwrap_err()
+            .parallax_data()
+            .map(|data| data.kind)
     }
 
     #[test]
@@ -181,7 +184,7 @@ mod tests {
             image(ImageMediaType::Unknown, PNG),
         ] {
             let error = check(&[bad]).unwrap_err();
-            assert_eq!(error.code, wisp_protocol::jsonrpc::INVALID_PARAMS);
+            assert_eq!(error.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
         }
     }
 }

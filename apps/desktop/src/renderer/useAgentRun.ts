@@ -13,7 +13,7 @@ export interface AgentRunView {
   sent: ReadonlyMap<string, SentMessage>;
   /**
    * Sends a message and its images as the run's next turn, with a new model, effort, or access for
-   * the run if given. Resolves to wispd's error, or why the run couldn't take it, or undefined.
+   * the run if given. Resolves to plxd's error, or why the run couldn't take it, or undefined.
    */
   send: (
     text: string,
@@ -30,7 +30,7 @@ export interface SentMessage {
   images: PromptImage[];
 }
 
-/** A new model, effort, or access for a run, sent only to a wispd that advertises `sendModel`. */
+/** A new model, effort, or access for a run, sent only to a plxd that advertises `sendModel`. */
 export type SendOptions = Pick<AgentSendParams, "model" | "effort" | "permission">;
 
 /**
@@ -52,7 +52,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
     async function load() {
       let t = emptyTranscript;
       // The scope's seq from `agent/list`, taken before the last page is read. The run's
-      // own last seq can be too old for wispd to replay the scope from, which would
+      // own last seq can be too old for plxd to replay the scope from, which would
       // answer every subscribe with another resync. Subscribing after the snapshot is
       // gap-free, since at least one page was read after it.
       let snapshot: number | undefined;
@@ -63,14 +63,14 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         // agent.started, the first event, carries the run's scope: its project, or its
         // thread's repo entry (0017).
         if (snapshot === undefined && t.run) {
-          const list = await window.wisp.request(hostId, "agent/list", {
+          const list = await window.parallax.request(hostId, "agent/list", {
             project: t.run.project,
           });
           if (stopped) return;
           if ("error" in list) return setError(list.error.message);
           snapshot = list.result.seq;
         }
-        const page = await window.wisp.request(hostId, "agent/events", { runId, after: t.seq });
+        const page = await window.parallax.request(hostId, "agent/events", { runId, after: t.seq });
         if (stopped) return;
         if ("error" in page) return setError(page.error.message);
         logId ??= page.logId;
@@ -82,7 +82,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       if (!t.run || snapshot === undefined || logId === undefined) return;
       setTranscript(t);
       setError(undefined);
-      unsubscribe = window.wisp.subscribe(
+      unsubscribe = window.parallax.subscribe(
         hostId,
         { after: Math.max(t.seq, snapshot), project: t.run.project, logId },
         (message) => {
@@ -106,7 +106,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
     async (text: string, options?: SendOptions, images: PromptImage[] = []) => {
       const turnId = uuidv7();
       setSent((prev) => new Map(prev).set(turnId, { text, images }));
-      const answer = await window.wisp.request(hostId, "agent/send", {
+      const answer = await window.parallax.request(hostId, "agent/send", {
         runId,
         turnId,
         text,
@@ -129,7 +129,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
   );
 
   const cancel = useCallback(async () => {
-    const answer = await window.wisp.request(hostId, "agent/cancel", { runId });
+    const answer = await window.parallax.request(hostId, "agent/cancel", { runId });
     return "error" in answer ? answer.error.message : undefined;
   }, [hostId, runId]);
 

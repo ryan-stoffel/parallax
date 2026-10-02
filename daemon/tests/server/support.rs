@@ -1,4 +1,4 @@
-//! Starting servers in temporary folders and talking to them through `wisp_protocol`.
+//! Starting servers in temporary folders and talking to them through `parallax_protocol`.
 //!
 //! Every test gets its own data folder from [`temp_dir`], which keeps socket paths under the OS's
 //! limit and keeps tests away from the real data folder.
@@ -9,21 +9,23 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use parallax_protocol::framing::FrameCodec;
+use parallax_protocol::jsonrpc::{
+    ErrorObject, Message, Notification, Request, RequestId, Response,
+};
+use parallax_protocol::methods::{Initialize, NotificationMethod, RequestMethod};
+use parallax_protocol::{
+    Capabilities, ClientInfo, ErrorKind, InitializeParams, InitializeResult, ProjectCreateParams,
+    ProjectId, ProtocolRange,
+};
+use plxd::paths::DataDir;
+use plxd::server::{Config, Server, Shutdown};
 use rustix::process::{Pid, Signal, kill_process};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};
 use tokio_util::codec::Framed;
-use wisp_protocol::framing::FrameCodec;
-use wisp_protocol::jsonrpc::{ErrorObject, Message, Notification, Request, RequestId, Response};
-use wisp_protocol::methods::{Initialize, NotificationMethod, RequestMethod};
-use wisp_protocol::{
-    Capabilities, ClientInfo, ErrorKind, InitializeParams, InitializeResult, ProjectCreateParams,
-    ProjectId, ProtocolRange,
-};
-use wispd::paths::DataDir;
-use wispd::server::{Config, Server, Shutdown};
 
 #[path = "../common/temp.rs"]
 mod temp;
@@ -41,26 +43,26 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
         .path
 }
 
-/// A `wispd serve` process.
-pub struct Wispd {
+/// A `plxd serve` process.
+pub struct Plxd {
     child: Child,
     pub socket: PathBuf,
 }
 
-impl Wispd {
-    /// Starts `wispd serve --data-dir <data_dir>` and waits until it accepts connections.
+impl Plxd {
+    /// Starts `plxd serve --data-dir <data_dir>` and waits until it accepts connections.
     pub async fn start(data_dir: &Path) -> Self {
         Self::start_with(data_dir, &[], &[]).await
     }
 
-    /// Ready means this wispd answered a handshake, not just that a connect worked: a listener
+    /// Ready means this plxd answered a handshake, not just that a connect worked: a listener
     /// that another test's child inherited can accept connects at the same path and answer
     /// nothing (#86).
     pub async fn start_with(data_dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Self {
         Self::start_at(data_dir, socket_path(data_dir), args, env).await
     }
 
-    /// [`Wispd::start_with`], for a server whose `env` moves its socket to `socket`.
+    /// [`Plxd::start_with`], for a server whose `env` moves its socket to `socket`.
     pub async fn start_at(
         data_dir: &Path,
         socket: PathBuf,
@@ -73,10 +75,10 @@ impl Wispd {
             if answers_handshake(&socket).await {
                 return Self { child, socket };
             }
-            if let Some(status) = child.try_wait().expect("check on wispd") {
-                panic!("wispd exited while starting: {status}");
+            if let Some(status) = child.try_wait().expect("check on plxd") {
+                panic!("plxd exited while starting: {status}");
             }
-            assert!(Instant::now() < deadline, "wispd did not start answering");
+            assert!(Instant::now() < deadline, "plxd did not start answering");
             sleep(Duration::from_millis(10)).await;
         }
     }
@@ -87,11 +89,11 @@ impl Wispd {
 
     pub fn signal(&self, signal: Signal) {
         let pid = Pid::from_raw(i32::try_from(self.child.id()).unwrap()).unwrap();
-        kill_process(pid, signal).expect("signal wispd");
+        kill_process(pid, signal).expect("signal plxd");
     }
 
     pub fn is_running(&mut self) -> bool {
-        self.child.try_wait().expect("check on wispd").is_none()
+        self.child.try_wait().expect("check on plxd").is_none()
     }
 
     /// Waits for the process to exit and returns its status and stderr.
@@ -101,7 +103,7 @@ impl Wispd {
     }
 }
 
-impl Drop for Wispd {
+impl Drop for Plxd {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -133,7 +135,7 @@ fn initialize_params(protocol: ProtocolRange) -> InitializeParams {
     InitializeParams {
         protocol,
         client: ClientInfo {
-            name: "wispd-tests".to_owned(),
+            name: "plxd-tests".to_owned(),
             version: "0.0.0".to_owned(),
             machine_id: None,
         },
@@ -141,7 +143,7 @@ fn initialize_params(protocol: ProtocolRange) -> InitializeParams {
     }
 }
 
-/// Runs `wispd serve` for `data_dir` to completion, for a start that is expected to fail.
+/// Runs `plxd serve` for `data_dir` to completion, for a start that is expected to fail.
 pub async fn run_to_exit(data_dir: &Path, args: &[&str]) -> (ExitStatus, String) {
     let mut child = spawn(data_dir, args, &[]);
     let status = wait(&mut child).await;
@@ -149,28 +151,28 @@ pub async fn run_to_exit(data_dir: &Path, args: &[&str]) -> (ExitStatus, String)
 }
 
 fn spawn(data_dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_wispd"))
+    Command::new(env!("CARGO_BIN_EXE_plxd"))
         .arg("serve")
         .arg("--data-dir")
         .arg(data_dir)
         .args(args)
-        .env_remove("WISPD_LOG")
-        .env_remove("WISPD_DATA_DIR")
+        .env_remove("PLXD_LOG")
+        .env_remove("PLXD_DATA_DIR")
         .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn wispd")
+        .expect("spawn plxd")
 }
 
 async fn wait(child: &mut Child) -> ExitStatus {
     let deadline = Instant::now() + PATIENCE;
     loop {
-        if let Some(status) = child.try_wait().expect("check on wispd") {
+        if let Some(status) = child.try_wait().expect("check on plxd") {
             return status;
         }
-        assert!(Instant::now() < deadline, "wispd did not exit");
+        assert!(Instant::now() < deadline, "plxd did not exit");
         sleep(Duration::from_millis(10)).await;
     }
 }
@@ -274,7 +276,7 @@ impl Client {
         stream.flush().await
     }
 
-    /// Closes the write side, as `wispd attach` does when its stdin ends.
+    /// Closes the write side, as `plxd attach` does when its stdin ends.
     pub async fn close_write(&mut self) {
         self.framed
             .get_mut()
@@ -332,11 +334,11 @@ impl Client {
     }
 }
 
-/// The kind of a wisp error, or a panic for any other error.
+/// The kind of a Parallax error, or a panic for any other error.
 pub fn kind(error: &ErrorObject) -> ErrorKind {
     error
-        .wisp_data()
-        .unwrap_or_else(|| panic!("expected a wisp error, got {error:?}"))
+        .parallax_data()
+        .unwrap_or_else(|| panic!("expected a Parallax error, got {error:?}"))
         .kind
 }
 
@@ -350,7 +352,7 @@ pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
     }
 }
 
-/// Makes `dir/repos/<name>` look like a repository on `main`, as far as wispd checks, and
+/// Makes `dir/repos/<name>` look like a repository on `main`, as far as plxd checks, and
 /// returns its path.
 pub fn repo(dir: &Path, name: &str) -> String {
     let path = dir.join("repos").join(name);
@@ -368,7 +370,7 @@ pub struct WriteLock {
 impl WriteLock {
     pub fn take(data_dir: &Path) -> Self {
         let connection =
-            rusqlite::Connection::open(data_dir.join("wispd.sqlite3")).expect("open the store");
+            rusqlite::Connection::open(data_dir.join("plxd.sqlite3")).expect("open the store");
         connection
             .execute_batch("BEGIN IMMEDIATE")
             .expect("take the write lock");

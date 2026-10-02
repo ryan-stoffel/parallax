@@ -3,19 +3,19 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rustix::process::Signal;
-use wisp_protocol::jsonrpc::{Message, Notification};
-use wisp_protocol::methods::{
+use parallax_protocol::jsonrpc::{Message, Notification};
+use parallax_protocol::methods::{
     EventsSubscribe, EventsUnsubscribe, HostHealth, NotificationMethod, ProjectCreate, ProjectList,
     ProjectUpdate,
 };
-use wisp_protocol::{
+use parallax_protocol::{
     ErrorKind, EventsEventParams, EventsSubscribeParams, EventsUnsubscribeParams, HostHealthParams,
-    Project, ProjectIcon, ProjectId, ProjectListParams, ProjectUpdateParams, SubscriptionId,
-    WispEvent,
+    ParallaxEvent, Project, ProjectIcon, ProjectId, ProjectListParams, ProjectUpdateParams,
+    SubscriptionId,
 };
+use rustix::process::Signal;
 
-use crate::support::{Client, InProcess, Wispd, create_params, kind, temp_dir};
+use crate::support::{Client, InProcess, Plxd, create_params, kind, temp_dir};
 
 async fn create(client: &mut Client, dir: &Path, name: &str) -> Project {
     client
@@ -41,7 +41,7 @@ async fn event(client: &mut Client) -> EventsEventParams {
         Some(Message::Notification(Notification { method, params })) => {
             assert_eq!(
                 method,
-                <wisp_protocol::methods::EventsEvent as NotificationMethod>::NAME
+                <parallax_protocol::methods::EventsEvent as NotificationMethod>::NAME
             );
             serde_json::from_value(params.expect("params")).expect("an event")
         }
@@ -51,7 +51,7 @@ async fn event(client: &mut Client) -> EventsEventParams {
 
 fn created(event: &EventsEventParams) -> &Project {
     match &event.event {
-        WispEvent::ProjectCreated { project } => project,
+        ParallaxEvent::ProjectCreated { project } => project,
         other => panic!("expected project.created, got {other:?}"),
     }
 }
@@ -59,11 +59,11 @@ fn created(event: &EventsEventParams) -> &Project {
 #[tokio::test]
 async fn subscribers_get_the_replay_then_live_events_on_every_connection() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut creator = Client::ready(&wispd.socket).await;
-    let first = create(&mut creator, dir.path(), "wisp").await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut creator = Client::ready(&plxd.socket).await;
+    let first = create(&mut creator, dir.path(), "parallax").await;
 
-    let mut replaying = Client::ready(&wispd.socket).await;
+    let mut replaying = Client::ready(&plxd.socket).await;
     let replay = subscribe(&mut replaying, 0).await;
     let replayed = event(&mut replaying).await;
     assert_eq!(replayed.subscription, replay);
@@ -72,7 +72,7 @@ async fn subscribers_get_the_replay_then_live_events_on_every_connection() {
     assert_eq!(replayed.time, first.created_at);
     assert_eq!(created(&replayed), &first);
 
-    let mut live = Client::ready(&wispd.socket).await;
+    let mut live = Client::ready(&plxd.socket).await;
     let snapshot = live
         .call::<ProjectList>(ProjectListParams {})
         .await
@@ -91,10 +91,10 @@ async fn subscribers_get_the_replay_then_live_events_on_every_connection() {
 #[tokio::test]
 async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut editor = Client::ready(&wispd.socket).await;
-    let project = create(&mut editor, dir.path(), "wisp").await;
-    let mut live = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut editor = Client::ready(&plxd.socket).await;
+    let project = create(&mut editor, dir.path(), "parallax").await;
+    let mut live = Client::ready(&plxd.socket).await;
     let live_subscription = subscribe(&mut live, 1).await;
 
     let edit = ProjectUpdateParams {
@@ -116,7 +116,7 @@ async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
     assert_eq!(delivered.project, None, "project.updated is host-level");
     assert_eq!(
         delivered.event,
-        WispEvent::ProjectUpdated {
+        ParallaxEvent::ProjectUpdated {
             project: updated.clone()
         }
     );
@@ -126,18 +126,18 @@ async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
 
     drop(editor);
     drop(live);
-    wispd.signal(Signal::TERM);
-    assert!(wispd.exit().await.0.success());
+    plxd.signal(Signal::TERM);
+    assert!(plxd.exit().await.0.success());
 
-    let wispd = Wispd::start(dir.path()).await;
-    let mut replaying = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut replaying = Client::ready(&plxd.socket).await;
     subscribe(&mut replaying, 0).await;
     assert_eq!(created(&event(&mut replaying).await), &project);
     let replayed = event(&mut replaying).await;
     assert_eq!(replayed.seq, 2);
     assert_eq!(
         replayed.event,
-        WispEvent::ProjectUpdated { project: updated },
+        ParallaxEvent::ProjectUpdated { project: updated },
         "the stored log replays it like project.created"
     );
     replaying.stays_quiet(Duration::from_millis(200)).await;
@@ -146,13 +146,13 @@ async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
 #[tokio::test]
 async fn a_retried_create_adds_no_event() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
-    let params = create_params(dir.path(), "wisp");
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    let params = create_params(dir.path(), "parallax");
     client.call::<ProjectCreate>(params.clone()).await.unwrap();
     client.call::<ProjectCreate>(params).await.unwrap();
 
-    let mut watcher = Client::ready(&wispd.socket).await;
+    let mut watcher = Client::ready(&plxd.socket).await;
     subscribe(&mut watcher, 0).await;
     assert_eq!(event(&mut watcher).await.seq, 1);
     watcher.stays_quiet(Duration::from_millis(200)).await;
@@ -161,9 +161,9 @@ async fn a_retried_create_adds_no_event() {
 #[tokio::test]
 async fn a_subscription_to_a_missing_project_is_refused() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
-    let project = create(&mut client, dir.path(), "wisp").await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    let project = create(&mut client, dir.path(), "parallax").await;
 
     let error = client
         .call::<EventsSubscribe>(EventsSubscribeParams {
@@ -189,8 +189,8 @@ async fn a_subscription_to_a_missing_project_is_refused() {
 #[tokio::test]
 async fn a_seq_this_log_never_reached_needs_a_resync() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     let error = client
         .call::<EventsSubscribe>(EventsSubscribeParams {
@@ -205,8 +205,8 @@ async fn a_seq_this_log_never_reached_needs_a_resync() {
 #[tokio::test]
 async fn unsubscribing_stops_the_events() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let subscription = subscribe(&mut client, 0).await;
     client
         .call::<EventsUnsubscribe>(EventsUnsubscribeParams { subscription })
@@ -217,8 +217,8 @@ async fn unsubscribing_stops_the_events() {
         .await
         .expect("ending a subscription that doesn't exist succeeds");
 
-    let mut creator = Client::ready(&wispd.socket).await;
-    create(&mut creator, dir.path(), "wisp").await;
+    let mut creator = Client::ready(&plxd.socket).await;
+    create(&mut creator, dir.path(), "parallax").await;
     // The next message is the health answer, so no event came before it.
     client
         .call::<HostHealth>(HostHealthParams {})
@@ -257,8 +257,8 @@ async fn events_older_than_the_retention_need_a_resync() {
 #[tokio::test]
 async fn events_reach_a_subscriber_while_it_is_also_making_requests() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     client
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
@@ -267,7 +267,7 @@ async fn events_reach_a_subscriber_while_it_is_also_making_requests() {
         .await
         .unwrap();
     let create = client
-        .send::<ProjectCreate>(create_params(dir.path(), "wisp"))
+        .send::<ProjectCreate>(create_params(dir.path(), "parallax"))
         .await;
     let mut saw_answer = false;
     let mut saw_event = false;

@@ -1,9 +1,9 @@
-//! The wisp host daemon, `wispd`.
+//! The Parallax host daemon, `plxd`.
 //!
-//! `wispd serve` listens on a per-user Unix socket on macOS and Linux, or a per-user named pipe on
+//! `plxd serve` listens on a per-user Unix socket on macOS and Linux, or a per-user named pipe on
 //! Windows (0023), and speaks the
-//! protocol from the `wisp-protocol` crate (decision record 0007). The editor reaches it through
-//! `wispd attach`, locally or over SSH.
+//! protocol from the `parallax-protocol` crate (decision record 0007). The editor reaches it through
+//! `plxd attach`, locally or over SSH.
 //!
 //! The library holds what the subcommands share:
 //!
@@ -11,8 +11,8 @@
 //!   `attach` both follow.
 //! - [`transport`]: connecting to `serve` as a client, with the peer checks each OS needs.
 //! - [`logging`]: the log file and its level.
-//! - [`server`]: the server behind `wispd serve`.
-//! - [`attach`]: reaching the server and bridging stdio to it, behind `wispd attach`.
+//! - [`server`]: the server behind `plxd serve`.
+//! - [`attach`]: reaching the server and bridging stdio to it, behind `plxd attach`.
 //! - [`backend`]: the interface over the vendor CLIs that run agents (0004), and the process
 //!   supervision they share.
 //! - `context`: each project's shared context folder (0005, #155): `context/list`, `context/read`,
@@ -20,15 +20,15 @@
 //!   `context.changed` events.
 //! - `detect`: detecting which vendor CLIs are installed and signed in, without touching their
 //!   credentials (#114).
-//! - [`mcp`]: `wispd mcp`, the coordinator's wisp tools as an MCP server on stdio, bound to one
+//! - [`mcp`]: `plxd mcp`, the coordinator's Parallax tools as an MCP server on stdio, bound to one
 //!   project and one coordinator thread (#195, 0019).
-//! - [`launch_agent`]: the service that `attach` starts wispd through, when it is installed. On
+//! - [`launch_agent`]: the service that `attach` starts plxd through, when it is installed. On
 //!   Windows there is none yet, so `attach` starts `serve` itself (0023).
 //! - [`service`]: installs, removes, and reports on the per-user service that keeps `serve`
 //!   running: a `LaunchAgent` on macOS (#61), a systemd user unit on Linux (RYA-18). Unix only.
 //! - [`keystore`]: where API keys live: the macOS login Keychain (#117), the Secret Service on
 //!   Linux (RYA-19), and no store yet on Windows.
-//! - [`usage`]: turns backend usage events into `wisp-store` rows (#120).
+//! - [`usage`]: turns backend usage events into `parallax-store` rows (#120).
 //! - `routing`: picks a task's backend and account, forces the coordinator's no-write policy,
 //!   and falls a failed subscription run back to a key account (#119).
 //! - [`worktree`]: creates, inspects, and removes the git worktrees agent runs use (#154).
@@ -37,7 +37,7 @@
 //! - `threads`: normal threads behind `thread/*` and `repo/*` (#110): runs with no coordinator
 //!   that belong to a repo entry, or to a scratch repository for a thread with no repo.
 //! - `images`: the caps and checks for images sent with a prompt or message (RYA-191).
-//! - [`windows`]: every Win32 call wispd makes, and the only module with `unsafe` code. Windows
+//! - [`windows`]: every Win32 call plxd makes, and the only module with `unsafe` code. Windows
 //!   only.
 
 #![warn(missing_docs)]
@@ -71,11 +71,11 @@ pub mod usage;
 pub mod windows;
 pub mod worktree;
 
-/// The file next to a packaged `wispd` that holds its release version (0030). The app's package
-/// step writes it, so one `wispd` build can ship in many app versions.
-pub const VERSION_FILE: &str = "wispd.version";
+/// The file next to a packaged `plxd` that holds its release version (0030). The app's package
+/// step writes it, so one `plxd` build can ship in many app versions.
+pub const VERSION_FILE: &str = "plxd.version";
 
-/// wispd's release version, reported by `wispd --version`, the protocol handshake
+/// plxd's release version, reported by `plxd --version`, the protocol handshake
 /// (`initialize` and `host/version`), and the `LaunchAgent`'s probe.
 ///
 /// It is the first line of [`VERSION_FILE`] next to the running executable, or the crate's own
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn the_version_file_beside_the_executable_wins_when_it_has_one() {
         let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("wispd");
+        let exe = dir.path().join("plxd");
         assert_eq!(stamped_version(&exe), None, "no file");
 
         std::fs::write(dir.path().join(VERSION_FILE), " \n").unwrap();

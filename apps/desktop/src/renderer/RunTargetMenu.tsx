@@ -23,8 +23,8 @@ const workspaces: PickerOption[] = [
 export const hostIcon = (host: Host) => (host.destination ? <Server /> : <Laptop />);
 
 /**
- * Where a thread runs: which of wisp's computers, and in a new worktree or the current checkout.
- * The menu stays open while you pick both. A placeholder: nothing here is sent yet, and wispd
+ * Where a thread runs: which of Parallax's computers, and in a new worktree or the current checkout.
+ * The menu stays open while you pick both. A placeholder: nothing here is sent yet, and plxd
  * starts every thread in a new worktree on the computer that got the request.
  */
 export function RunTargetMenu({ hosts, hostId }: { hosts: Host[]; hostId: string }) {

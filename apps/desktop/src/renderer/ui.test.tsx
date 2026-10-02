@@ -21,7 +21,7 @@ function render(node: React.ReactNode) {
 }
 
 const options: PickerOption[] = [
-  { value: "wisp", label: "wisp" },
+  { value: "parallax", label: "parallax" },
   { value: "ember", label: "ember" },
   { value: "photon", label: "photon" },
 ];
@@ -33,7 +33,7 @@ test("a Picker left to itself shows its first option, even when options arrive a
   render(<Picker label="Workspace" options={[]} />);
   expect(trigger()).toBe("Workspace: none");
   render(<Picker label="Workspace" options={options} />);
-  expect(trigger()).toBe("Workspace: wisp");
+  expect(trigger()).toBe("Workspace: parallax");
   expect(items()[0]!.getAttribute("aria-checked")).toBe("true");
 });
 
@@ -68,7 +68,7 @@ test("Up and Down move between a menu's items, wrapping at the ends", () => {
   press("ArrowUp");
   expect(focused()).toBe("photon");
   press("ArrowDown");
-  expect(focused()).toBe("wisp");
+  expect(focused()).toBe("parallax");
   press("ArrowDown");
   expect(focused()).toBe("ember");
   expect(menu.contains(document.activeElement)).toBe(true);
@@ -85,7 +85,7 @@ test("Up and Down pass a menu's disabled items", () => {
         Browse folders
       </button>
       <button type="button" role="menuitem">
-        wisp
+        parallax
       </button>
     </div>,
   );
@@ -97,7 +97,7 @@ test("Up and Down pass a menu's disabled items", () => {
 
   document.querySelector<HTMLElement>('[role="menuitem"]')!.focus();
   press("ArrowDown");
-  expect(focused()).toBe("wisp");
+  expect(focused()).toBe("parallax");
   press("ArrowUp");
   expect(focused()).toBe("Choose folder…");
 });

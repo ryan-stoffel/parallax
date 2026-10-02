@@ -1,4 +1,4 @@
-//! A project's coordinator chat (RYA-41, decision 0024): a no-write run with wispd's MCP tools
+//! A project's coordinator chat (RYA-41, decision 0024): a no-write run with plxd's MCP tools
 //! bound to the project and to the run's own id as its coordinator thread (0019). The Claude
 //! backend runs it as full Claude Code in its permission mode (0027).
 //!
@@ -11,11 +11,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{AgentRun, ErrorKind, ProjectStartParams, Role, RunId};
+use parallax_store::{RunFields, RunState};
 use tracing::info;
 use uuid::Uuid;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{AgentRun, ErrorKind, ProjectStartParams, Role, RunId};
-use wisp_store::{RunFields, RunState};
 
 use super::actor::Actor;
 use super::convert::{NO_WRITE, RUNNING, STARTING, agent_run, option_name};
@@ -81,7 +81,7 @@ pub(crate) async fn start(
             .map_err(|e| store_error(&e))?
             .is_none()
         {
-            return Err(ErrorObject::wisp(
+            return Err(ErrorObject::parallax(
                 ErrorKind::ProjectNotFound,
                 format!("no project has id {project}"),
             ));
@@ -89,7 +89,7 @@ pub(crate) async fn start(
         if let Some(current) = newest(db, project.into())?
             && (current.state.status == STARTING || current.state.status == RUNNING)
         {
-            return Err(ErrorObject::wisp(
+            return Err(ErrorObject::parallax(
                 ErrorKind::IdConflict,
                 format!(
                     "project {project}'s coordinator, run {}, is running; message it with \
@@ -132,7 +132,7 @@ pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
 /// unless it is starting or running, so one whose session can't be resumed never locks the
 /// project.
 pub(crate) fn coordinator_of(
-    db: &wisp_store::Store,
+    db: &parallax_store::Store,
     project: Uuid,
 ) -> Result<Option<RunId>, ErrorObject> {
     newest(db, project)?
@@ -146,7 +146,10 @@ pub(crate) fn coordinator_of(
 
 /// `project`'s newest no-write run.
 // ponytail: scans the project's runs; a coordinator column on projects if that gets slow.
-fn newest(db: &wisp_store::Store, project: Uuid) -> Result<Option<wisp_store::Run>, ErrorObject> {
+fn newest(
+    db: &parallax_store::Store,
+    project: Uuid,
+) -> Result<Option<parallax_store::Run>, ErrorObject> {
     let runs = db.list_runs(Some(project)).map_err(|e| store_error(&e))?;
     Ok(runs
         .into_iter()

@@ -1,13 +1,13 @@
-//! Turns backend usage events (0004, #113) into `wisp-store` rows (#120).
+//! Turns backend usage events (0004, #113) into `parallax-store` rows (#120).
 //!
-//! [`record_event`] is a plain, synchronous function over `&mut wisp_store::Store`, the same
+//! [`record_event`] is a plain, synchronous function over `&mut parallax_store::Store`, the same
 //! shape [`crate::methods::project`] uses for `project/create`. The runner (`crate::agents`,
 //! #156) calls it once per event through the store's single-thread owner
 //! ([`crate::store::StoreHandle::run`](../store/struct.StoreHandle.html#method.run)), charged to
 //! whichever account the run is on at that point, which changes on `Event::AccountFallback`.
 
 use jiff::Timestamp;
-use wisp_store::{LimitSnapshot, SessionModelUsage, Store, StoreError, UsageDelta};
+use parallax_store::{LimitSnapshot, SessionModelUsage, Store, StoreError, UsageDelta};
 
 use crate::backend::{Event, ModelUsage, RunId};
 
@@ -82,7 +82,7 @@ fn session_total(total: &ModelUsage) -> SessionModelUsage {
 
 #[cfg(test)]
 mod tests {
-    use wisp_store::Store;
+    use parallax_store::Store;
 
     use super::record_event;
     use crate::backend::{
@@ -91,7 +91,7 @@ mod tests {
 
     fn open() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wisp.sqlite3");
+        let path = dir.path().join("parallax.sqlite3");
         let store = Store::open(&path).unwrap();
         (dir, store)
     }

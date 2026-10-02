@@ -1,6 +1,6 @@
 /**
  * A version 7 UUID (RFC 9562): 48 bits of Unix milliseconds, then random bits.
- * wispd requires v7 for every client-generated id, such as `agent/send`'s `turnId` (0007).
+ * plxd requires v7 for every client-generated id, such as `agent/send`'s `turnId` (0007).
  */
 export function uuidv7(now = Date.now()): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));

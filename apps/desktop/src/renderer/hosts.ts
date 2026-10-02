@@ -12,13 +12,13 @@ export const localId = "local";
 export function useHosts(): Host[] {
   const [saved, setSaved] = useState<SshHost[]>([]);
   useEffect(() => {
-    const stop = window.wisp.onHosts(setSaved);
-    void window.wisp.hosts().then(setSaved);
+    const stop = window.parallax.onHosts(setSaved);
+    void window.parallax.hosts().then(setSaved);
     return stop;
   }, []);
   const local = {
     id: localId,
-    name: window.wisp.platform === "darwin" ? "This Mac" : "This computer",
+    name: window.parallax.platform === "darwin" ? "This Mac" : "This computer",
   };
   return [local, ...saved];
 }

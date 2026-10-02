@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use parallax_protocol::{AccountChoice, AccountId, Provider, Role};
 use tempfile::TempDir;
-use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
 
 use super::{
     CodexBackend, WORKER_FEATURES, arguments, worker_overrides, write_images, write_zdotdir,
@@ -30,8 +30,8 @@ use crate::routing::{self, BackendRegistry, Defaults, KeyAccounts};
 const FAKE_CODEX: &str = include_str!("fixtures/fake-codex.sh");
 const THREAD: &str = "01a0eaf8-7c27-7762-a05e-9eae0197d57c";
 const TURN: &str = "01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01";
-const DATA: &str = "/Users/u/Library/Application Support/wisp";
-const CONTEXT: &str = "/Users/u/Library/Application Support/wisp/context/p";
+const DATA: &str = "/Users/u/Library/Application Support/parallax";
+const CONTEXT: &str = "/Users/u/Library/Application Support/parallax/context/p";
 
 fn fixture(name: &str) -> &'static str {
     match name {
@@ -49,10 +49,10 @@ fn fixture(name: &str) -> &'static str {
 /// Inherited variables that could pick Codex's credentials, endpoint, or configuration. None
 /// may reach the CLI.
 const INHERITED_CREDENTIALS: &[(&str, &str)] = &[
-    ("OPENAI_API_KEY", "wisp-test-not-a-key"),
+    ("OPENAI_API_KEY", "parallax-test-not-a-key"),
     ("OPENAI_BASE_URL", "https://example.invalid/v1"),
-    ("CODEX_API_KEY", "wisp-test-not-a-key"),
-    ("CODEX_HOME", "/tmp/wisp-test-inherited-codex-home"),
+    ("CODEX_API_KEY", "parallax-test-not-a-key"),
+    ("CODEX_HOME", "/tmp/parallax-test-inherited-codex-home"),
 ];
 
 /// A fake `codex` on the launcher's `PATH`, in a folder that also holds what it records.
@@ -137,7 +137,7 @@ fn sandbox(cwd: &Path) -> WorkerSandbox {
         cwd,
         Path::new("/Users/u/src/app/.git"),
         Path::new(CONTEXT),
-        Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
+        Path::new("/tmp/parallax-1a2b3c4d/Ab12Cd"),
     )
 }
 
@@ -232,7 +232,7 @@ async fn a_worker_run_maps_the_real_stream_and_holds_codex_to_0013() {
     let events = run(&fake.backend, worker).await;
 
     let call = |item: &str| format!("{TURN}-{item}");
-    let path = "/Users/u/Library/Application Support/wisp/worktrees/app-1a2b/run/hello.txt";
+    let path = "/Users/u/Library/Application Support/parallax/worktrees/app-1a2b/run/hello.txt";
     let session = Event::SessionStarted {
         session_id: THREAD.into(),
         model: None,
@@ -327,10 +327,10 @@ fn assert_worker_invocation(fake: &Fake) {
         "{zdotdir}"
     );
     assert!(!Path::new(zdotdir).exists(), "{zdotdir} outlived the run");
-    assert_eq!(values[0], r#"default_permissions="wisp_worker""#);
+    assert_eq!(values[0], r#"default_permissions="parallax_worker""#);
     let permissions = values[1]
         .strip_prefix(&format!(
-            r#"permissions={{wisp_worker={{extends=":workspace", workspace_roots={{"{CONTEXT}"=true}}, filesystem={{"#
+            r#"permissions={{parallax_worker={{extends=":workspace", workspace_roots={{"{CONTEXT}"=true}}, filesystem={{"#
         ))
         .and_then(|rest| {
             rest.strip_suffix(r#"}, network={enabled=true, domains={"*"="allow"}}}}"#)
@@ -343,7 +343,7 @@ fn assert_worker_invocation(fake: &Fake) {
     let uid = rustix::process::getuid().as_raw();
     expected.extend([
         format!(r#""{DATA}"="deny""#),
-        r#""/tmp/wisp-1a2b3c4d"="deny""#.to_owned(),
+        r#""/tmp/parallax-1a2b3c4d"="deny""#.to_owned(),
         format!(r#""/private/tmp/claude-{uid}"="deny""#),
         r#""/tmp/codex-second-account"="deny""#.to_owned(),
         format!(r#""{cwd_text}/.git"="read""#),
@@ -478,12 +478,12 @@ fn image_files_hold_the_decoded_bytes_in_a_private_folder() {
 async fn an_api_key_account_gets_only_its_key() {
     let fake = Fake::new("worker");
     let mut keyed = request(&fake.root());
-    keyed.account.credential = Credential::ApiKey(ApiKey::new("sk-proj-wisp-test".into()));
+    keyed.account.credential = Credential::ApiKey(ApiKey::new("sk-proj-parallax-test".into()));
     let events = run(&fake.backend, keyed).await;
     assert!(matches!(outcome(&events), Outcome::Completed { .. }));
     assert_eq!(
         fake.env(&["CODEX_API_KEY", "OPENAI_API_KEY", "CODEX_HOME"]),
-        [Some("sk-proj-wisp-test".into()), None, None]
+        [Some("sk-proj-parallax-test".into()), None, None]
     );
     assert!(!fake.argv().iter().any(|arg| arg.contains("sk-proj")));
 }
@@ -625,7 +625,7 @@ fn paths_are_quoted_as_toml_strings() {
 }
 
 /// A worker's `.zshenv`, read by a real zsh whose `~/.zshenv` sets `PATH` outright as
-/// nix-darwin's `/etc/zshenv` does, puts wispd's `PATH` back in front of it and leaves `ZDOTDIR`
+/// nix-darwin's `/etc/zshenv` does, puts plxd's `PATH` back in front of it and leaves `ZDOTDIR`
 /// unset. Only its owner may open the folder, which goes when dropped (RYA-141).
 #[test]
 fn a_worker_s_zdotdir_puts_its_path_back_after_zsh_startup() {
@@ -636,7 +636,7 @@ fn a_worker_s_zdotdir_puts_its_path_back_after_zsh_startup() {
     fs::create_dir(&home).unwrap();
     fs::create_dir(&tools).unwrap();
     fs::write(home.join(".zshenv"), "export PATH=/usr/bin:/bin\n").unwrap();
-    let tool = tools.join("wisp-path-probe");
+    let tool = tools.join("parallax-path-probe");
     fs::write(&tool, "#!/bin/sh\necho found-the-tool\n").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
     let path = format!("{}:/usr/bin:/bin", tools.display());
@@ -652,7 +652,7 @@ fn a_worker_s_zdotdir_puts_its_path_back_after_zsh_startup() {
     let output = std::process::Command::new("/bin/zsh")
         .args([
             "-c",
-            r#"wisp-path-probe; printf '%s\n' "$PATH" "${ZDOTDIR-unset}""#,
+            r#"parallax-path-probe; printf '%s\n' "$PATH" "${ZDOTDIR-unset}""#,
         ])
         .env_clear()
         .env("HOME", &home)

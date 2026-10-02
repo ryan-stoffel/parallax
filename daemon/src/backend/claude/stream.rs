@@ -1,7 +1,7 @@
 //! Turning Claude Code's `stream-json` output into [`Event`]s, one line at a time.
 //!
 //! The shapes follow the Agent SDK's types (0004 [14]) and the headless docs (0004 [11]). Fields
-//! wisp doesn't use are ignored, as 0004 asks, so a newer CLI that adds fields still parses.
+//! Parallax doesn't use are ignored, as 0004 asks, so a newer CLI that adds fields still parses.
 
 use std::collections::HashSet;
 
@@ -47,7 +47,7 @@ const RUN_LIMITS: &[&str] = &[
     "error_max_structured_output_retries",
 ];
 
-/// Message types that carry nothing wisp shows, and are skipped without a log line.
+/// Message types that carry nothing Parallax shows, and are skipped without a log line.
 /// `command_lifecycle` tracks a queued message's fate, which `result` already reports.
 const IGNORED_TYPES: &[&str] = &[
     "auth_status",
@@ -85,7 +85,7 @@ pub(super) enum Step {
     Ask(ApprovalRequest, Ask),
     /// A `control_cancel_request`: the CLI no longer waits for the answer to this request id.
     Withdraw(String),
-    /// A control request wispd doesn't serve, which the driver answers with this error, as the
+    /// A control request plxd doesn't serve, which the driver answers with this error, as the
     /// Agent SDK does, so the CLI never waits on it.
     Refuse {
         /// The request's id.
@@ -130,14 +130,14 @@ pub(super) struct TurnDone {
 pub(super) struct Translator {
     policy: ToolPolicy,
     expected_key_source: &'static str,
-    /// wispd's MCP tools were attached, so a no-write run is a coordinator: full Claude Code in
+    /// plxd's MCP tools were attached, so a no-write run is a coordinator: full Claude Code in
     /// its permission mode (0027), whose `system/init` may list any tool.
     coordinator_tools: bool,
     /// The permission mode a worker or a coordinator asked for, which its `system/init` must
     /// report.
     permission_mode: &'static str,
-    /// The CLI asks wispd before a tool call that would prompt (RYA-222), so its control
-    /// requests are wispd's to answer.
+    /// The CLI asks plxd before a tool call that would prompt (RYA-222), so its control
+    /// requests are plxd's to answer.
     prompts: bool,
     /// A worker's `--tools` named `ExitPlanMode` too (RYA-243), so its `system/init` may list it.
     plan_exit: bool,
@@ -180,7 +180,7 @@ impl Translator {
         }
     }
 
-    /// Checks `system/init` as a coordinator's when wispd's MCP tools were `attached` (0019, 0027).
+    /// Checks `system/init` as a coordinator's when plxd's MCP tools were `attached` (0019, 0027).
     pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
         self.coordinator_tools = attached;
         self
@@ -303,10 +303,10 @@ impl Translator {
             let message = match source {
                 Some(source) => format!(
                     "Claude Code took its credentials from {source:?} instead of the account's \
-                     ({:?}), so wisp stopped it before it could bill that",
+                     ({:?}), so Parallax stopped it before it could bill that",
                     self.expected_key_source
                 ),
-                None => "Claude Code did not say where it took its credentials from, so wisp \
+                None => "Claude Code did not say where it took its credentials from, so Parallax \
                          stopped it"
                     .to_owned(),
             };
@@ -374,7 +374,7 @@ impl Translator {
             };
             let message = format!(
                 "Claude Code reported {reported} in {run} instead of {expected:?}. It forces \
-                 \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on{danger}. wispd doesn't \
+                 \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on{danger}. plxd doesn't \
                  set it for this run, so check the env block of Claude Code's managed settings",
                 expected = self.permission_mode,
             );
@@ -591,7 +591,7 @@ impl Translator {
         let (Some(request), Some("can_use_tool")) = (request, subtype) else {
             let subtype = subtype.unwrap_or("untyped");
             return vec![refuse(format!(
-                "wispd doesn't answer {subtype} control requests"
+                "plxd doesn't answer {subtype} control requests"
             ))];
         };
         // A permission request follows the model's turn, so it can't come before init.
@@ -693,7 +693,7 @@ fn violation(failure: FailureKind, message: String) -> Step {
 fn unverified() -> Step {
     violation(
         FailureKind::UnexpectedApiKey,
-        "Claude Code answered before it reported its credentials, so wisp stopped it".into(),
+        "Claude Code answered before it reported its credentials, so Parallax stopped it".into(),
     )
 }
 

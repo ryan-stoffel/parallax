@@ -3,7 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { SubscriptionMessage, WispBridge } from "../preload/bridge";
+import type { SubscriptionMessage, ParallaxBridge } from "../preload/bridge";
 import type { ContextFile } from "../protocol/generated/protocol";
 import { ContextPanel } from "./ContextPanel";
 import { SidePanel } from "./SidePanel";
@@ -15,7 +15,7 @@ const file = (path: string, modifiedAt: string): ContextFile => ({ path, size: 1
 let files: ContextFile[];
 let contents: Record<string, string>;
 let listeners: Set<(message: SubscriptionMessage) => void>;
-const subscribe = vi.fn<WispBridge["subscribe"]>((_host, _params, listener) => {
+const subscribe = vi.fn<ParallaxBridge["subscribe"]>((_host, _params, listener) => {
   listeners.add(listener);
   return () => listeners.delete(listener);
 });
@@ -33,11 +33,11 @@ beforeEach(() => {
   listeners = new Set();
   files = [];
   contents = {};
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     request,
     subscribe,
-  } as Partial<WispBridge> as WispBridge;
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};

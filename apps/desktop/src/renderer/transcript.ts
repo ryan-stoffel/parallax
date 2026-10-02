@@ -12,7 +12,7 @@ import type {
   ImageId,
   JsonValue,
   LoggedEvent,
-  WispEvent,
+  ParallaxEvent,
 } from "../protocol/generated/protocol";
 
 /** One row of the transcript. `key` is stable across re-renders; `at` is when it began. */
@@ -20,8 +20,8 @@ export type Item = ItemBody & { at?: string };
 
 type ItemBody =
   /**
-   * `text` is null for a follow-up logged by a wispd from before it recorded the text. `wake` marks
-   * a turn wispd sent a coordinator itself, when runs it started finished (0025). `images` are the
+   * `text` is null for a follow-up logged by a plxd from before it recorded the text. `wake` marks
+   * a turn plxd sent a coordinator itself, when runs it started finished (0025). `images` are the
    * ids of the images sent with it, for `agent/image` (RYA-193).
    */
   | {
@@ -37,7 +37,7 @@ type ItemBody =
   | { kind: "reasoning"; key: string; text: string }
   /**
    * `status` is absent until its result arrives; `name` is null for a result with no call.
-   * `subagent` is the first line of the prompt of the subagent a coordinator's wispd tool names.
+   * `subagent` is the first line of the prompt of the subagent a coordinator's plxd tool names.
    */
   | {
       kind: "tool";
@@ -120,7 +120,7 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
         });
         break;
       case "agent.finished":
-        // A request still waiting ends with the run, as when wispd stopped without resolving it.
+        // A request still waiting ends with the run, as when plxd stopped without resolving it.
         items.forEach((item, i) => {
           if (item.kind === "approval" && !item.resolved)
             items[i] = { ...item, resolved: { decision: "withdrawn", by: "stop", at: time } };
@@ -145,7 +145,7 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
 }
 
 /** A run as `event` leaves it: `agent.started` sets it, and `agent.updated` and fallbacks change it. */
-export function updateRun(run: AgentRun | undefined, event: WispEvent): AgentRun | undefined {
+export function updateRun(run: AgentRun | undefined, event: ParallaxEvent): AgentRun | undefined {
   switch (event.kind) {
     case "agent.started":
       return event.run;
@@ -160,7 +160,7 @@ export function updateRun(run: AgentRun | undefined, event: WispEvent): AgentRun
 }
 
 // ponytail: copies the item list per event and scans back for matches; fine for
-// thousands of items, since wispd coalesces output every 50 ms.
+// thousands of items, since plxd coalesces output every 50 ms.
 function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: string) {
   const last = items.at(-1);
   // The assistant message a text item continues: same vendor id, or the partial one just before.
@@ -222,7 +222,7 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
       break;
     case "toolCall": {
       const { callId, name, input } = item;
-      const runId = name?.startsWith(wispdTools)
+      const runId = name?.startsWith(plxdTools)
         ? (input as { runId?: unknown } | null | undefined)?.runId
         : undefined;
       const subagent = typeof runId === "string" ? subagentTitle(items, runId) : undefined;
@@ -317,7 +317,7 @@ export function trackApprovals(
   let next = byRun;
   for (const logged of events) {
     const { event } = logged;
-    let kept: Extract<WispEvent, { kind: "agent.output" | "agent.finished" }>;
+    let kept: Extract<ParallaxEvent, { kind: "agent.output" | "agent.finished" }>;
     if (event.kind === "agent.output") {
       const items = event.items.filter(
         (i) => i.kind === "approvalRequested" || i.kind === "approvalResolved",
@@ -336,19 +336,18 @@ export function trackApprovals(
   return next;
 }
 
-/** The prefix of a coordinator's wispd tools as Claude Code names them (0019), `mcp__wispd__spawn_agent`. */
-export const wispdTools = "mcp__wispd__";
+/** The prefix of a coordinator's plxd tools as Claude Code names them (0019), `mcp__plxd__spawn_agent`. */
+export const plxdTools = "mcp__plxd__";
 
 /**
- * The first line of subagent `runId`'s prompt, from the newest earlier wispd tool answer that
+ * The first line of subagent `runId`'s prompt, from the newest earlier plxd tool answer that
  * lists it: spawn_agent's, message_agent's, or cancel_agent's run, agent_status's `run`, or
  * list_agents' `runs`.
  */
 function subagentTitle(items: Item[], runId: string): string | undefined {
   type Summary = { runId?: unknown; prompt?: unknown };
   for (const x of items.toReversed()) {
-    if (x.kind !== "tool" || !x.name?.startsWith(wispdTools) || !x.output?.includes(runId))
-      continue;
+    if (x.kind !== "tool" || !x.name?.startsWith(plxdTools) || !x.output?.includes(runId)) continue;
     try {
       const answer = JSON.parse(x.output) as Summary & { run?: Summary; runs?: Summary[] };
       const run = [answer, answer.run, ...(answer.runs ?? [])].find((r) => r?.runId === runId);
@@ -432,13 +431,13 @@ export function accountLabel(accountId: string): string {
 const failures: Record<AgentFailureKind, string> = {
   notSignedIn: "not signed in",
   rateLimited: "rate limited",
-  policyViolation: "stopped by wisp's safety check",
+  policyViolation: "stopped by Parallax's safety check",
   unexpectedApiKey: "found an unexpected API key",
   vendorError: "the provider returned an error",
   crashed: "the CLI crashed",
   spawnFailed: "the CLI didn't start",
-  commitFailed: "wisp couldn't commit its changes",
-  internal: "something went wrong in wispd",
+  commitFailed: "Parallax couldn't commit its changes",
+  internal: "something went wrong in plxd",
 };
 
 /** Why a run failed or moved accounts, for people. */

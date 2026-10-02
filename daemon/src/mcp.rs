@@ -1,43 +1,45 @@
-//! `wispd mcp`: the coordinator's wisp tools, as an MCP server on stdio (#195, decision 0019).
+//! `plxd mcp`: the coordinator's Parallax tools, as an MCP server on stdio (#195, decision 0019).
 //!
-//! The coordinator's CLI launches it with `--project` and `--coordinator-thread`, which wispd
+//! The coordinator's CLI launches it with `--project` and `--coordinator-thread`, which plxd
 //! writes into the CLI's `--mcp-config` ([`crate::backend::CoordinatorTools`]). Those bind every
 //! tool to one project and one thread: no tool takes either as an argument, and tool arguments
 //! reject fields they don't know, so the model can't pick another project's runs or context.
 //!
-//! MCP's stdio transport is JSON-RPC 2.0 as newline-delimited JSON, the same framing as wispd's
-//! own protocol (0007), so both sides use `wisp_protocol`'s codec and envelope. Each tool call
-//! opens its own connection to wispd's socket, initializes, and makes one or two calls, so the
-//! server needs no heartbeat and outlives a wispd restart between calls. It never starts wispd:
-//! the coordinator it serves is wispd's own child.
+//! MCP's stdio transport is JSON-RPC 2.0 as newline-delimited JSON, the same framing as plxd's
+//! own protocol (0007), so both sides use `parallax_protocol`'s codec and envelope. Each tool call
+//! opens its own connection to plxd's socket, initializes, and makes one or two calls, so the
+//! server needs no heartbeat and outlives a plxd restart between calls. It never starts plxd:
+//! the coordinator it serves is plxd's own child.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use futures_util::{SinkExt, StreamExt};
+use parallax_protocol::framing::{FrameCodec, FrameError};
+use parallax_protocol::jsonrpc::{
+    ErrorObject, INVALID_REQUEST, Message, Request, RequestId, Response,
+};
+use parallax_protocol::methods::{
+    AgentCancel, AgentDiff, AgentEvents, AgentList, AgentSend, AgentStart, ContextList,
+    ContextRead, ContextWrite, Initialize, ProjectList, RequestMethod,
+};
+use parallax_protocol::{
+    AccountChoice, AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
+    AgentListParams, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRun, AgentSendParams,
+    AgentStartParams, Capabilities, ClientInfo, ContextListParams, ContextReadParams,
+    ContextWriteId, ContextWriteParams, CoordinatorThreadId, InitializeParams, ParallaxEvent,
+    ProjectId, ProjectListParams, ProtocolRange, RunId, TurnId,
+};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
-use wisp_protocol::framing::{FrameCodec, FrameError};
-use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Message, Request, RequestId, Response};
-use wisp_protocol::methods::{
-    AgentCancel, AgentDiff, AgentEvents, AgentList, AgentSend, AgentStart, ContextList,
-    ContextRead, ContextWrite, Initialize, ProjectList, RequestMethod,
-};
-use wisp_protocol::{
-    AccountChoice, AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
-    AgentListParams, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRun, AgentSendParams,
-    AgentStartParams, Capabilities, ClientInfo, ContextListParams, ContextReadParams,
-    ContextWriteId, ContextWriteParams, CoordinatorThreadId, InitializeParams, ProjectId,
-    ProjectListParams, ProtocolRange, RunId, TurnId, WispEvent,
-};
 
 use crate::transport::{self, Stream};
 
 /// The server's name in the coordinator's `--mcp-config`, which prefixes its tools' names there.
-pub const SERVER: &str = "wispd";
+pub const SERVER: &str = "plxd";
 
 /// Every tool the server offers.
 pub const TOOLS: &[&str] = &[
@@ -55,14 +57,14 @@ pub const TOOLS: &[&str] = &[
 /// `--allowedTools`, so they run without asking in every permission mode (0027). Claude Code's
 /// todo tools follow them there (`backend::claude::TODO_TOOLS`, RYA-249).
 pub const ALLOWED_TOOLS: &[&str] = &[
-    "mcp__wispd__spawn_agent",
-    "mcp__wispd__list_agents",
-    "mcp__wispd__agent_status",
-    "mcp__wispd__message_agent",
-    "mcp__wispd__cancel_agent",
-    "mcp__wispd__agent_diff",
-    "mcp__wispd__read_context",
-    "mcp__wispd__write_context",
+    "mcp__plxd__spawn_agent",
+    "mcp__plxd__list_agents",
+    "mcp__plxd__agent_status",
+    "mcp__plxd__message_agent",
+    "mcp__plxd__cancel_agent",
+    "mcp__plxd__agent_diff",
+    "mcp__plxd__read_context",
+    "mcp__plxd__write_context",
 ];
 
 /// The longest line the server reads from the CLI. A longer one gets an error and ends the
@@ -75,7 +77,7 @@ pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 /// The longest shared context path, in bytes.
 pub const MAX_PATH_BYTES: usize = 255;
 
-/// The largest shared context file, in bytes: wispd's own per-file cap (0005).
+/// The largest shared context file, in bytes: plxd's own per-file cap (0005).
 pub const MAX_CONTEXT_BYTES: usize = 1024 * 1024;
 
 /// The most text one tool result carries, in bytes. The rest is cut, with a note.
@@ -94,7 +96,7 @@ const MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-
 /// What one server is bound to.
 #[derive(Clone, Debug)]
 pub struct Binding {
-    /// wispd's socket.
+    /// plxd's socket.
     pub socket: PathBuf,
     /// The only project the tools reach.
     pub project: ProjectId,
@@ -107,19 +109,19 @@ pub struct Binding {
 ///
 /// # Errors
 ///
-/// When wispd can't be reached or doesn't know the project, when a line is longer than
+/// When plxd can't be reached or doesn't know the project, when a line is longer than
 /// [`MAX_MESSAGE_BYTES`], or when reading or writing fails.
 pub async fn run(
     binding: &Binding,
     input: impl AsyncRead + Unpin,
     output: impl AsyncWrite + Unpin,
 ) -> Result<(), String> {
-    let mut wispd = Wispd::open(&binding.socket).await?;
-    let projects = wispd.call::<ProjectList>(ProjectListParams {}).await?;
+    let mut plxd = Plxd::open(&binding.socket).await?;
+    let projects = plxd.call::<ProjectList>(ProjectListParams {}).await?;
     if !projects.projects.iter().any(|p| p.id == binding.project) {
-        return Err(format!("wispd has no project {}", binding.project));
+        return Err(format!("plxd has no project {}", binding.project));
     }
-    drop(wispd);
+    drop(plxd);
     serve(binding, input, output).await
 }
 
@@ -404,8 +406,8 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
         "spawn_agent" => {
             let args: SpawnArgs = parse(arguments)?;
             check_text("prompt", &args.prompt, MAX_TEXT_BYTES)?;
-            let mut wispd = Wispd::open(&binding.socket).await?;
-            let run = wispd
+            let mut plxd = Plxd::open(&binding.socket).await?;
+            let run = plxd
                 .call::<AgentStart>(AgentStartParams {
                     run_id: RunId::generate(),
                     project: binding.project,
@@ -417,7 +419,7 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     effort: None,
                     permission: None,
                     images: Vec::new(),
-                    // wispd gives the run its coordinator's (0031).
+                    // plxd gives the run its coordinator's (0031).
                     approvals: false,
                 })
                 .await?
@@ -426,16 +428,16 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
         }
         "list_agents" => {
             let NoArgs {} = parse(arguments)?;
-            let mut wispd = Wispd::open(&binding.socket).await?;
-            let runs = project_runs(binding, &mut wispd).await?;
+            let mut plxd = Plxd::open(&binding.socket).await?;
+            let runs = project_runs(binding, &mut plxd).await?;
             let runs: Vec<Value> = runs.iter().map(|run| summary(binding, run)).collect();
             Ok(pretty(&json!({"runs": runs})))
         }
         "agent_status" => {
             let RunArgs { run_id } = parse(arguments)?;
-            let mut wispd = Wispd::open(&binding.socket).await?;
-            let run = bound_run(binding, &mut wispd, run_id).await?;
-            let last_output = last_output(&mut wispd, run_id).await?;
+            let mut plxd = Plxd::open(&binding.socket).await?;
+            let run = bound_run(binding, &mut plxd, run_id).await?;
+            let last_output = last_output(&mut plxd, run_id).await?;
             Ok(pretty(&json!({
                 "run": summary(binding, &run),
                 "lastOutput": last_output.map(|text| tail(&text, LAST_OUTPUT_BYTES)),
@@ -444,9 +446,9 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
         "message_agent" => {
             let MessageArgs { run_id, text } = parse(arguments)?;
             check_text("text", &text, MAX_TEXT_BYTES)?;
-            let mut wispd = Wispd::open(&binding.socket).await?;
-            bound_run(binding, &mut wispd, run_id).await?;
-            let run = wispd
+            let mut plxd = Plxd::open(&binding.socket).await?;
+            bound_run(binding, &mut plxd, run_id).await?;
+            let run = plxd
                 .call::<AgentSend>(AgentSendParams {
                     run_id,
                     turn_id: TurnId::generate(),
@@ -462,9 +464,9 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
         }
         "cancel_agent" => {
             let RunArgs { run_id } = parse(arguments)?;
-            let mut wispd = Wispd::open(&binding.socket).await?;
-            bound_run(binding, &mut wispd, run_id).await?;
-            let run = wispd
+            let mut plxd = Plxd::open(&binding.socket).await?;
+            bound_run(binding, &mut plxd, run_id).await?;
+            let run = plxd
                 .call::<AgentCancel>(AgentCancelParams { run_id })
                 .await?
                 .run;
@@ -472,9 +474,9 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
         }
         "agent_diff" => {
             let RunArgs { run_id } = parse(arguments)?;
-            let mut wispd = Wispd::open(&binding.socket).await?;
-            bound_run(binding, &mut wispd, run_id).await?;
-            let diff = wispd.call::<AgentDiff>(AgentDiffParams { run_id }).await?;
+            let mut plxd = Plxd::open(&binding.socket).await?;
+            bound_run(binding, &mut plxd, run_id).await?;
+            let diff = plxd.call::<AgentDiff>(AgentDiffParams { run_id }).await?;
             Ok(render_diff(&diff))
         }
         _ => context_tool(binding, name, arguments).await,
@@ -485,11 +487,11 @@ async fn context_tool(binding: &Binding, name: &str, arguments: Value) -> Result
     match name {
         "read_context" => {
             let ReadContextArgs { path } = parse(arguments)?;
-            let mut wispd = Wispd::open(&binding.socket).await?;
+            let mut plxd = Plxd::open(&binding.socket).await?;
             let project = binding.project;
             match path {
                 None => {
-                    let files = wispd
+                    let files = plxd
                         .call::<ContextList>(ContextListParams { project })
                         .await?
                         .files;
@@ -497,7 +499,7 @@ async fn context_tool(binding: &Binding, name: &str, arguments: Value) -> Result
                 }
                 Some(path) => {
                     check_text("path", &path, MAX_PATH_BYTES)?;
-                    let read = wispd
+                    let read = plxd
                         .call::<ContextRead>(ContextReadParams { project, path })
                         .await?;
                     Ok(read.content)
@@ -510,8 +512,8 @@ async fn context_tool(binding: &Binding, name: &str, arguments: Value) -> Result
             if content.len() > MAX_CONTEXT_BYTES {
                 return Err(format!("content must be at most {MAX_CONTEXT_BYTES} bytes"));
             }
-            let mut wispd = Wispd::open(&binding.socket).await?;
-            let file = wispd
+            let mut plxd = Plxd::open(&binding.socket).await?;
+            let file = plxd
                 .call::<ContextWrite>(ContextWriteParams {
                     id: ContextWriteId::generate(),
                     project: binding.project,
@@ -549,8 +551,8 @@ fn summary(binding: &Binding, run: &AgentRun) -> Value {
 
 /// The bound project's runs, without its coordinator (0024): the model never sees or steers its
 /// own run, which would message itself.
-async fn project_runs(binding: &Binding, wispd: &mut Wispd) -> Result<Vec<AgentRun>, String> {
-    let mut runs = wispd
+async fn project_runs(binding: &Binding, plxd: &mut Plxd) -> Result<Vec<AgentRun>, String> {
+    let mut runs = plxd
         .call::<AgentList>(AgentListParams {
             project: Some(binding.project),
         })
@@ -563,12 +565,8 @@ async fn project_runs(binding: &Binding, wispd: &mut Wispd) -> Result<Vec<AgentR
 /// Run `run_id`, if it belongs to the bound project: the binding check every tool that takes a
 /// run id makes before it touches the run. Another project's run gets the same answer as one
 /// that doesn't exist.
-async fn bound_run(
-    binding: &Binding,
-    wispd: &mut Wispd,
-    run_id: RunId,
-) -> Result<AgentRun, String> {
-    project_runs(binding, wispd)
+async fn bound_run(binding: &Binding, plxd: &mut Plxd, run_id: RunId) -> Result<AgentRun, String> {
+    project_runs(binding, plxd)
         .await?
         .into_iter()
         .find(|run| run.id == run_id)
@@ -579,11 +577,11 @@ async fn bound_run(
 /// ended.
 // ponytail: pages through the run's whole event history on every call; add a from-the-end page
 // to agent/events if long runs make agent_status slow.
-async fn last_output(wispd: &mut Wispd, run_id: RunId) -> Result<Option<String>, String> {
+async fn last_output(plxd: &mut Plxd, run_id: RunId) -> Result<Option<String>, String> {
     let mut after = 0;
     let mut last = None;
     loop {
-        let page = wispd
+        let page = plxd
             .call::<AgentEvents>(AgentEventsParams {
                 run_id,
                 after,
@@ -592,7 +590,7 @@ async fn last_output(wispd: &mut Wispd, run_id: RunId) -> Result<Option<String>,
             .await?;
         for logged in &page.events {
             match &logged.event {
-                WispEvent::AgentOutput { items, .. } => {
+                ParallaxEvent::AgentOutput { items, .. } => {
                     for item in items {
                         match item {
                             AgentOutputItem::Text { text, .. }
@@ -603,7 +601,7 @@ async fn last_output(wispd: &mut Wispd, run_id: RunId) -> Result<Option<String>,
                         }
                     }
                 }
-                WispEvent::AgentFinished { outcome, .. } => match outcome {
+                ParallaxEvent::AgentFinished { outcome, .. } => match outcome {
                     AgentOutcome::Completed { result: Some(text) } => last = Some(text.clone()),
                     AgentOutcome::Failed { message, .. } => last = Some(message.clone()),
                     _ => {}
@@ -654,41 +652,40 @@ fn render_diff(diff: &AgentDiffResult) -> String {
     text
 }
 
-/// One connection to wispd: `initialize`d, then calls in order.
-struct Wispd {
+/// One connection to plxd: `initialize`d, then calls in order.
+struct Plxd {
     framed: Framed<Stream, FrameCodec>,
     next_id: i64,
 }
 
-/// Errors from wispd are its message: the model reads them, and nothing matches on them.
-impl Wispd {
+/// Errors from plxd are its message: the model reads them, and nothing matches on them.
+impl Plxd {
     async fn open(socket: &Path) -> Result<Self, String> {
         let stream = transport::connect(socket)
             .await
-            .map_err(|error| format!("could not reach wispd at {}: {error}", socket.display()))?;
-        let mut wispd = Self {
+            .map_err(|error| format!("could not reach plxd at {}: {error}", socket.display()))?;
+        let mut plxd = Self {
             framed: Framed::new(stream, FrameCodec::new()),
             next_id: 0,
         };
-        wispd
-            .call::<Initialize>(InitializeParams {
-                protocol: ProtocolRange::SUPPORTED,
-                client: ClientInfo {
-                    name: "wispd mcp".to_owned(),
-                    version: crate::version().to_owned(),
-                    machine_id: None,
-                },
-                capabilities: Capabilities::default(),
-            })
-            .await?;
-        Ok(wispd)
+        plxd.call::<Initialize>(InitializeParams {
+            protocol: ProtocolRange::SUPPORTED,
+            client: ClientInfo {
+                name: "plxd mcp".to_owned(),
+                version: crate::version().to_owned(),
+                machine_id: None,
+            },
+            capabilities: Capabilities::default(),
+        })
+        .await?;
+        Ok(plxd)
     }
 
     async fn call<M: RequestMethod>(&mut self, params: M::Params) -> Result<M::Result, String> {
         self.next_id += 1;
         let id = RequestId::Number(self.next_id);
         let lost =
-            |error: &dyn std::fmt::Display| format!("the connection to wispd failed: {error}");
+            |error: &dyn std::fmt::Display| format!("the connection to plxd failed: {error}");
         self.framed
             .send(&Request::new::<M>(id.clone(), params))
             .await
@@ -698,7 +695,7 @@ impl Wispd {
                 .framed
                 .next()
                 .await
-                .ok_or_else(|| lost(&"wispd closed it"))?
+                .ok_or_else(|| lost(&"plxd closed it"))?
                 .map_err(|error| lost(&error))?;
             match Message::from_frame(&frame) {
                 Ok(Message::Response(response)) if response.id.as_ref() == Some(&id) => {

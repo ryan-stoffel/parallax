@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
     AgentApproveResult, AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
     AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams, AgentListParams,
@@ -17,7 +17,7 @@ use wisp_protocol::{
 use super::Context;
 use crate::{agents, images};
 
-/// The longest prompt or message wispd takes, in bytes. It goes on the CLI's stdin, never in
+/// The longest prompt or message plxd takes, in bytes. It goes on the CLI's stdin, never in
 /// argv, and into the event log.
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 
@@ -27,7 +27,7 @@ const MAX_DENIAL_BYTES: usize = 64 * 1024;
 /// The longest pull request title GitHub takes, in characters.
 const MAX_PR_TITLE_CHARS: usize = 256;
 
-/// The longest pull request body wispd passes on, in bytes: GitHub's limit is 65,536 characters.
+/// The longest pull request body plxd passes on, in bytes: GitHub's limit is 65,536 characters.
 const MAX_PR_BODY_BYTES: usize = 64 * 1024;
 
 const DEFAULT_EVENTS_LIMIT: u32 = 500;
@@ -305,7 +305,7 @@ pub(crate) async fn events(
         })
         .await?;
     if !exists {
-        return Err(ErrorObject::wisp(
+        return Err(ErrorObject::parallax(
             ErrorKind::RunNotFound,
             format!("no agent run has id {run_id}"),
         ));
@@ -334,11 +334,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use parallax_protocol::framing::MAX_FRAME_BYTES;
+    use parallax_protocol::jsonrpc::Response;
+    use parallax_protocol::{AgentEventsParams, AgentOutputItem, ParallaxEvent, ProjectId, RunId};
+    use parallax_store::{RunFields, RunState};
     use tokio_util::sync::CancellationToken;
-    use wisp_protocol::framing::MAX_FRAME_BYTES;
-    use wisp_protocol::jsonrpc::Response;
-    use wisp_protocol::{AgentEventsParams, AgentOutputItem, ProjectId, RunId, WispEvent};
-    use wisp_store::{RunFields, RunState};
 
     use super::{Context, MAX_EVENTS_PAGE_BYTES, events};
     use crate::server::Daemon;
@@ -386,7 +386,7 @@ mod tests {
                 .append(
                     jiff::Timestamp::now(),
                     Some(project),
-                    WispEvent::AgentOutput {
+                    ParallaxEvent::AgentOutput {
                         run_id,
                         items: vec![AgentOutputItem::Text {
                             message_id: None,

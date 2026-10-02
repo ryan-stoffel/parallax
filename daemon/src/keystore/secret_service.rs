@@ -9,14 +9,14 @@ use std::thread;
 
 use keyring_core::api::CredentialStoreApi;
 use keyring_core::{Entry, Error};
-use wisp_protocol::AccountId;
+use parallax_protocol::AccountId;
 use zbus_secret_service_keyring_store::Store;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::{KeyStore, KeyStoreError, SERVICE};
 
 /// The label shown for an item in a keyring app such as Seahorse, as on macOS.
-const ITEM_LABEL: &str = "wisp API key";
+const ITEM_LABEL: &str = "Parallax API key";
 
 impl From<Error> for KeyStoreError {
     // `NoStorageAccess` is a locked collection, a dismissed unlock prompt, or no default
@@ -37,7 +37,7 @@ pub struct SecretServiceStore {
 }
 
 impl SecretServiceStore {
-    /// The real wisp service, [`SERVICE`].
+    /// The real Parallax service, [`SERVICE`].
     #[must_use]
     pub const fn new() -> Self {
         Self { service: SERVICE }
@@ -112,7 +112,7 @@ mod tests {
     use std::io;
 
     use keyring_core::Error;
-    use wisp_protocol::AccountId;
+    use parallax_protocol::AccountId;
 
     use super::SecretServiceStore;
     use crate::keystore::{KeyStore, KeyStoreError};
@@ -129,7 +129,7 @@ mod tests {
     // must not panic inside the test's tokio runtime.
     #[tokio::test]
     async fn a_call_from_a_tokio_task_does_not_panic() {
-        let store = SecretServiceStore::with_service("io.github.ryan-stoffel.wisp.unit-test");
+        let store = SecretServiceStore::with_service("io.github.ryan-stoffel.parallax.unit-test");
         match store.get(AccountId::generate()) {
             Ok(None) => {}
             Ok(Some(_)) => panic!("a random account has no key"),

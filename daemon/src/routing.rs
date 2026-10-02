@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
+use parallax_protocol::{AccountChoice, AccountId, Provider, Role};
 
 use crate::backend::key_account::{self, KeyAccountError};
 use crate::backend::{
@@ -33,7 +33,7 @@ use crate::backend::{
 };
 use crate::keystore::KeyStore;
 
-/// Every backend wispd can route to, by the provider whose credentials it takes (0004: a backend
+/// Every backend plxd can route to, by the provider whose credentials it takes (0004: a backend
 /// takes both a subscription login and a key account for the same provider).
 #[derive(Clone, Default)]
 pub struct BackendRegistry {

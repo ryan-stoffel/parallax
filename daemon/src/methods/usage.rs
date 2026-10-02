@@ -1,17 +1,17 @@
 //! `usage/get` and `usage/history`.
 
 use jiff::{ToSpan, Zoned};
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     AccountRuns, AccountUsage, UsageGetParams, UsageGetResult, UsageHistoryParams,
     UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod,
 };
-use wisp_store::{LimitSnapshot, Store, StoreError};
+use parallax_store::{LimitSnapshot, Store, StoreError};
 
 use super::Context;
 use crate::store::store_error;
 
-/// Every account wispd has recorded usage or limits for, with today's and this week's sums
+/// Every account plxd has recorded usage or limits for, with today's and this week's sums
 /// (local time on this host) and the latest limit windows.
 pub(crate) async fn get(
     context: &Context,
@@ -101,7 +101,7 @@ fn usage_history(
     Ok(UsageHistoryResult { hours, runs })
 }
 
-fn usage_period(summary: wisp_store::UsageSummary) -> UsagePeriod {
+fn usage_period(summary: parallax_store::UsageSummary) -> UsagePeriod {
     UsagePeriod {
         input_tokens: summary.input_tokens,
         output_tokens: summary.output_tokens,
@@ -135,14 +135,14 @@ fn local_bounds(now: &Zoned) -> Result<(jiff::Timestamp, jiff::Timestamp), jiff:
 #[cfg(test)]
 mod tests {
     use jiff::civil::date;
+    use parallax_store::{LimitSnapshot, Store, UsageDelta};
     use uuid::Uuid;
-    use wisp_store::{LimitSnapshot, Store, UsageDelta};
 
     use super::{local_bounds, usage_history, usage_report};
 
     fn open() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wisp.sqlite3");
+        let path = dir.path().join("parallax.sqlite3");
         let store = Store::open(&path).unwrap();
         (dir, store)
     }
@@ -306,7 +306,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             history.hours,
-            [wisp_protocol::UsageHour {
+            [parallax_protocol::UsageHour {
                 hour: "2026-09-29T19:00:00Z".parse().unwrap(),
                 account_id: "codex-work".to_owned(),
                 model: None,
@@ -319,7 +319,7 @@ mod tests {
         );
         assert_eq!(
             history.runs,
-            [wisp_protocol::AccountRuns {
+            [parallax_protocol::AccountRuns {
                 account_id: "codex-work".to_owned(),
                 runs: 1,
             }]

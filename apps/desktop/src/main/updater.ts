@@ -26,7 +26,7 @@ export function updateError(error: Error & { code?: string; statusCode?: number 
   const { message, code = "", statusCode } = error;
   if (offline.test(message)) return "Can't reach GitHub to check for updates.";
   if (statusCode === 403 || statusCode === 429 || rateLimited.test(message))
-    return "GitHub is limiting update checks. wisp will try again.";
+    return "GitHub is limiting update checks. Parallax will try again.";
   if (code === "ERR_UPDATER_INVALID_SIGNATURE" || /code signature/i.test(message))
     return "The update's signature doesn't match this app's, so it can't be installed.";
   if (noUpdateFile.includes(code)) return "The newest release has no update for this computer.";
@@ -38,7 +38,7 @@ export function updateError(error: Error & { code?: string; statusCode?: number 
 /**
  * The packaged app's updater (RYA-68): checks the channel's GitHub releases (see
  * `updaterSettings`) through the `app-update.yml` electron-builder packs, downloads what it finds
- * in the background, and installs it when Update is clicked or wisp quits. `publish` gets what the
+ * in the background, and installs it when Update is clicked or Parallax quits. `publish` gets what the
  * Update button shows on every change. Nothing is checked until `follow` names a channel; then it
  * checks every 20 s, and on `checkSoon` at most every 10 s, while nothing is downloaded yet. A
  * channel change checks at once, and the button keeps offering a download already waiting. The
@@ -67,7 +67,7 @@ export function startUpdater(publish: (state: UpdateState) => void) {
   // version replaces it or Squirrel.Mac rejects it. `note` is the latest check's line.
   const show = (note?: string) =>
     publish({
-      ...(downloaded !== undefined && { ready: `wisp ${downloaded} to install` }),
+      ...(downloaded !== undefined && { ready: `Parallax ${downloaded} to install` }),
       ...(note !== undefined && { note }),
     });
 
@@ -76,7 +76,7 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     if (version === downloaded) return;
     // Its download replaces the one waiting.
     downloaded = undefined;
-    show(`Downloading wisp ${version}…`);
+    show(`Downloading Parallax ${version}…`);
   });
   autoUpdater.on("update-not-available", () => show());
   autoUpdater.on("update-downloaded", ({ version }) => {
@@ -115,13 +115,13 @@ export function startUpdater(publish: (state: UpdateState) => void) {
       if (downloaded) {
         // After the answer reaches the window.
         setTimeout(() => autoUpdater.quitAndInstall(), 100);
-        return `Restarting to install wisp ${downloaded}…`;
+        return `Restarting to install Parallax ${downloaded}…`;
       }
       checkedAt = Date.now();
       try {
         const result = await autoUpdater.checkForUpdates();
         if (!result?.isUpdateAvailable) return "Up to date";
-        return `Downloading wisp ${result.updateInfo.version}…`;
+        return `Downloading Parallax ${result.updateInfo.version}…`;
       } catch (error) {
         return updateError(error as Error);
       }

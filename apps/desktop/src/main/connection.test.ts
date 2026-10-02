@@ -14,11 +14,11 @@ type Message = Record<string, unknown> & {
   params?: Record<string, unknown>;
 };
 
-// Real wire messages from wisp-protocol's samples.
+// Real wire messages from parallax-protocol's samples.
 const sample = (name: string) =>
   JSON.parse(
     readFileSync(
-      new URL(`../../../../crates/wisp-protocol/samples/v1/${name}`, import.meta.url),
+      new URL(`../../../../crates/parallax-protocol/samples/v1/${name}`, import.meta.url),
       "utf8",
     ),
   ) as Message[];
@@ -26,7 +26,7 @@ const initialized = sample("handshake.json")[1]!["result"] as Record<string, unk
 const incompatible = sample("handshake-incompatible.json")[1]!["error"];
 const resyncRequired = sample("resync.json")[1]!["error"];
 
-/** A `wispd attach` child whose stdio is driven synchronously by the test. */
+/** A `plxd attach` child whose stdio is driven synchronously by the test. */
 class FakeChild extends EventEmitter {
   sent: Message[] = [];
   stdin = Object.assign(new EventEmitter(), {
@@ -36,7 +36,7 @@ class FakeChild extends EventEmitter {
   stderr = new EventEmitter();
   kill = vi.fn(() => true);
 
-  /** Sends lines from wispd, all in one chunk. */
+  /** Sends lines from plxd, all in one chunk. */
   reply(...messages: object[]) {
     const lines = messages.map((message) => `${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
     this.stdout.emit("data", Buffer.from(lines.join("")));
@@ -83,21 +83,21 @@ beforeEach(() => {
   children = [];
   spawned = [];
   states = [];
-  located = "/bin/wispd";
+  located = "/bin/plxd";
 });
 afterEach(() => {
   vi.useRealTimers();
 });
 
-test("handshakes, then heartbeats, and reconnects when wispd goes silent", () => {
+test("handshakes, then heartbeats, and reconnects when plxd goes silent", () => {
   connect();
   expect(child().request("initialize").params).toMatchObject({
     protocol: { min: PROTOCOL_VERSION, max: PROTOCOL_VERSION },
-    client: { name: "wisp", version: "0.0.1" },
+    client: { name: "parallax", version: "0.0.1" },
   });
   expect(state()).toEqual({ status: "connecting" });
   child().handshake();
-  expect(state()).toEqual({ status: "connected", wispd: "0.1.0", protocol: 1, capabilities: {} });
+  expect(state()).toEqual({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
 
   vi.advanceTimersByTime(30_000);
   const health = child().request("host/health");
@@ -121,8 +121,8 @@ test("an incompatible protocol stops retrying until retry()", () => {
   child().reply({ id: child().request("initialize").id, error: incompatible });
   expect(state()).toMatchObject({
     status: "failed",
-    // Its version rides along, so a packaged app can replace an old wispd (hosts.ts).
-    error: { reason: "incompatibleProtocol", wispd: "0.1.0" },
+    // Its version rides along, so a packaged app can replace an old plxd (hosts.ts).
+    error: { reason: "incompatibleProtocol", plxd: "0.1.0" },
     retrying: false,
   });
   vi.advanceTimersByTime(60_000);
@@ -153,11 +153,11 @@ test("not found fails without spawning anything", () => {
 test("reports attach's exit code and stderr, and backs off from 1 s to 10 s", () => {
   expect([0, 1, 2, 3, 4, 5].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 10_000, 10_000]);
   connect();
-  child().stderr.emit("data", Buffer.from("wispd attach: timed out\n"));
+  child().stderr.emit("data", Buffer.from("plxd attach: timed out\n"));
   child().emit("close", 4, null);
   expect(state()).toMatchObject({
     status: "failed",
-    error: { reason: "exited", exitCode: 4, stderr: "wispd attach: timed out" },
+    error: { reason: "exited", exitCode: 4, stderr: "plxd attach: timed out" },
     retrying: true,
   });
   vi.advanceTimersByTime(999);
@@ -225,7 +225,7 @@ test("a subscribe after a new logId, with a seq from the old log, resyncs", asyn
   expect(snapshot).toEqual({ result: { projects: [], seq: 40 }, logId: "log-1" });
   if (!("result" in snapshot)) return;
 
-  // wispd starts over with a fresh log before the renderer subscribes.
+  // plxd starts over with a fresh log before the renderer subscribes.
   child().emit("close", 0, null);
   vi.advanceTimersByTime(1000);
   child().handshake("log-2");
@@ -238,7 +238,7 @@ test("a subscribe after a new logId, with a seq from the old log, resyncs", asyn
 test("an SSH host runs attach through ssh with 0022's options", () => {
   connect("mini");
   expect(spawned.map((argv) => argv.join(" "))).toEqual([
-    "ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- mini wispd attach",
+    "ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- mini plxd attach",
   ]);
   child().handshake();
   expect(state()).toMatchObject({ status: "connected" });
@@ -311,12 +311,12 @@ test("ssh failures read as what to do", () => {
   });
   expect(ssh(255, denied, "win32").message).toContain("start the ssh-agent service");
 
-  const notOnPath = "wispd isn't on mini's PATH for ssh commands.";
-  expect(ssh(127, "zsh:1: command not found: wispd")).toMatchObject({
+  const notOnPath = "plxd isn't on mini's PATH for ssh commands.";
+  expect(ssh(127, "zsh:1: command not found: plxd")).toMatchObject({
     reason: "notFound",
     message: expect.stringContaining(notOnPath),
   });
-  const cmd = "'wispd' is not recognized as an internal or external command,";
+  const cmd = "'plxd' is not recognized as an internal or external command,";
   expect(ssh(1, cmd).message).toContain(notOnPath);
 
   const unknown = "ssh: Could not resolve hostname mini: nodename nor servname provided";
@@ -328,7 +328,7 @@ test("ssh failures read as what to do", () => {
     "Couldn't reach mini. Check that it's on and accepts ssh.",
   );
   // attach's own exit on the host keeps its meaning.
-  expect(ssh(4, "wispd attach: timed out").message).toBe(
-    "wispd couldn't be reached or started on mini",
+  expect(ssh(4, "plxd attach: timed out").message).toBe(
+    "plxd couldn't be reached or started on mini",
   );
 });
