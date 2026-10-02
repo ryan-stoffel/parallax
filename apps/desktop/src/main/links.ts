@@ -11,3 +11,17 @@ export function isOpenableExternally(url: string): boolean {
 export function isReload(url: string, currentUrl: string): boolean {
   return url === currentUrl;
 }
+
+/** Whether the side panel's browser (Browser.tsx) may show a page: only http and https. */
+export function isBrowsable(url: string): boolean {
+  const protocol = URL.parse(url)?.protocol;
+  return protocol === "http:" || protocol === "https:";
+}
+
+/**
+ * Whether a page may navigate to `url`: the side panel's browser, to any page it may show; the
+ * app's own pages, only to reload.
+ */
+export function mayNavigate(url: string, currentUrl: string, inBrowser: boolean): boolean {
+  return inBrowser ? isBrowsable(url) : isReload(url, currentUrl);
+}

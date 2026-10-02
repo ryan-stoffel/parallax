@@ -380,6 +380,7 @@ export function App() {
         onExpandedChange={setPanelExpanded}
         leading={expanded && showSidebar}
         topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
+        remoteHost={host.id === localId ? undefined : host.name}
         agents={
           project && (
             <AgentsPanel
