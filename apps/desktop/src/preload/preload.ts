@@ -101,10 +101,7 @@ const bridge: ParallaxBridge = {
     );
     return () => ipcRenderer.removeListener("parallax:profile", forward);
   },
-  signInWith: (provider) => ipcRenderer.invoke("parallax:signInWith", provider),
-  signInWithEmail: (email, password) =>
-    ipcRenderer.invoke("parallax:signInWithEmail", email, password),
-  signUp: (account) => ipcRenderer.invoke("parallax:signUp", account),
+  signIn: (create) => ipcRenderer.invoke("parallax:signIn", create),
   signOut: () => ipcRenderer.invoke("parallax:signOut"),
 };
 

@@ -7,13 +7,11 @@ import {
   useId,
   useRef,
   useState,
-  type ComponentType,
   type KeyboardEvent,
   type ReactNode,
-  type SVGProps,
 } from "react";
 
-import type { OAuthProvider, RpcError, ThemePreference } from "../preload/bridge";
+import type { RpcError, ThemePreference } from "../preload/bridge";
 import {
   ErrorCodes,
   type AccountUsage,
@@ -26,7 +24,6 @@ import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
-import { AppleLogo, GitHubLogo, GoogleLogo } from "./logos";
 import { backends, models } from "./models";
 import { Avatar, useProfile } from "./profile";
 import { age, backendLogos } from "./Sidebar";
@@ -100,50 +97,20 @@ export function Settings({ section, theme, onThemeChange }: SettingsProps) {
   );
 }
 
-const oauthProviders: {
-  id: OAuthProvider;
-  name: string;
-  Logo: ComponentType<SVGProps<SVGSVGElement>>;
-}[] = [
-  { id: "github", name: "GitHub", Logo: GitHubLogo },
-  { id: "google", name: "Google", Logo: GoogleLogo },
-  { id: "apple", name: "Apple", Logo: AppleLogo },
-];
-
 /**
- * Settings > Account: the Parallax account (0037) and Sign out, or while signed out, sign in or
- * create one with a provider or an email and password.
+ * Settings > Account: the Parallax account (0037) and Sign out, or while signed out, Sign in and
+ * Create an account, which open the sign-in page in the browser.
  */
 function AccountSettings() {
   const profile = useProfile();
-  const [creating, setCreating] = useState(false);
   const [note, setNote] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  // Only the latest action's answer shows: a replaced browser sign-in answers "cancelled" late.
+  // Only the latest sign-in's answer shows: a replaced one answers "cancelled" late.
   const latest = useRef(0);
-  const run = async (action: Promise<string | undefined>, waiting?: string) => {
+  const signIn = async (create: boolean) => {
     const n = ++latest.current;
-    setNote(waiting);
-    setBusy(!waiting);
-    const answer = await action;
-    if (n !== latest.current) return;
-    setNote(answer);
-    setBusy(false);
-  };
-  const submit = (form: HTMLFormElement) => {
-    // Text inputs' values are strings.
-    const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
-    const { email = "", password = "" } = data;
-    void run(
-      creating
-        ? window.parallax.signUp({
-            firstName: data["firstName"] ?? "",
-            lastName: data["lastName"] ?? "",
-            email,
-            password,
-          })
-        : window.parallax.signInWithEmail(email, password),
-    );
+    setNote("Finish signing in in your browser.");
+    const answer = await window.parallax.signIn(create);
+    if (n === latest.current) setNote(answer);
   };
 
   if (profile === undefined) return null;
@@ -176,81 +143,24 @@ function AccountSettings() {
           </div>
         </Section>
       ) : (
-        <Section title={creating ? "Create a Parallax account" : "Sign in to Parallax"}>
-          <div className="flex flex-col gap-2 border-b border-border px-4 py-3.5">
-            {oauthProviders.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() =>
-                  void run(window.parallax.signInWith(p.id), "Finish signing in in your browser.")
-                }
-                className="flex items-center justify-center gap-2 rounded-md border border-border px-3 py-1.5 text-[13px] hover:bg-hover"
-              >
-                <p.Logo className="size-4" />
-                Continue with {p.name}
-              </button>
-            ))}
-          </div>
-          <form
-            aria-label={creating ? "Create account" : "Sign in with email"}
-            onSubmit={(e) => {
-              e.preventDefault();
-              submit(e.currentTarget);
-            }}
-            className="flex flex-col gap-3 px-4 py-3.5"
-          >
-            {creating && (
-              <div className="flex gap-3">
-                <label className="flex-1 text-[12.5px] text-muted-foreground">
-                  First name
-                  <input name="firstName" required autoComplete="given-name" className={field} />
-                </label>
-                <label className="flex-1 text-[12.5px] text-muted-foreground">
-                  Last name
-                  <input name="lastName" required autoComplete="family-name" className={field} />
-                </label>
-              </div>
-            )}
-            <label className="text-[12.5px] text-muted-foreground">
-              Email
-              <input name="email" type="email" required autoComplete="email" className={field} />
-            </label>
-            <label className="text-[12.5px] text-muted-foreground">
-              Password
-              <input
-                name="password"
-                type="password"
-                required
-                autoComplete={creating ? "new-password" : "current-password"}
-                className={field}
-              />
-            </label>
-            {note && (
-              <p role="status" className="text-[12.5px] text-muted-foreground">
-                {note}
-              </p>
-            )}
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setCreating(!creating);
-                  setNote(undefined);
-                }}
-                className={quietButton}
-              >
-                {creating ? "I have an account" : "Create an account"}
+        <Section title="Sign in to Parallax">
+          <div className={settingRow}>
+            <p role="status" className="text-[12.5px] text-muted-foreground">
+              {note ?? "Sign in with GitHub, Google, Apple, or email in your browser."}
+            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              <button type="button" onClick={() => void signIn(true)} className={quietButton}>
+                Create an account
               </button>
               <button
-                type="submit"
-                disabled={busy}
-                className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+                type="button"
+                onClick={() => void signIn(false)}
+                className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90"
               >
-                {creating ? "Create account" : "Sign in"}
+                Sign in
               </button>
             </div>
-          </form>
+          </div>
         </Section>
       )}
     </>
