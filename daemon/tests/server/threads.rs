@@ -32,6 +32,8 @@ use tokio::time::Instant;
 
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
+mod files;
+
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)

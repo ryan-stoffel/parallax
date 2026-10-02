@@ -5,6 +5,8 @@
 //! `agent.diffReady` reported, against the commit its worktree was created from. `agent/diff`
 //! lists the files that differ, with a unified diff each. `agent/file` reads one file on either
 //! side, so a client can show it in a diff editor, for a local or a remote host alike (#67).
+//! Behind the `files` capability (RYA-296), `agent/files` lists one folder of the run's files on
+//! disk, and `agent/file`'s `working` side reads one, so a client can browse them.
 //! `agent/accept` merges the run's commit into the project repository's current branch on the
 //! host and removes the run's worktree and branch. `agent/requestChanges` sends the run a
 //! follow-up, as `agent/send` does. `agent/openPr`, behind the `openPr` capability (RYA-168),
@@ -122,6 +124,9 @@ pub enum AgentFileSide {
     Base,
     /// The run's latest commit.
     Head,
+    /// The file as it is on disk now, in the run's worktree, or for a Current checkout thread,
+    /// its repository's checkout (RYA-296). Behind the `files` capability.
+    Working,
     /// A side this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -154,8 +159,10 @@ pub struct AgentFileResult {
     pub path: String,
     /// The side as asked.
     pub side: AgentFileSide,
-    /// The commit it was read from.
-    pub commit: String,
+    /// The commit it was read from. Absent for the `working` side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub commit: Option<String>,
     /// Whether the file exists on that side. An added file has no base side, and a deleted file
     /// no head side.
     pub exists: bool,
@@ -171,6 +178,62 @@ pub struct AgentFileResult {
     pub content: Option<String>,
     /// Whether it is over `agent/file`'s size cap, so `content` is absent.
     pub too_large: bool,
+}
+
+/// Params of `agent/files` (RYA-296): one folder of a run's worktree, or for a Current checkout
+/// thread, its repository's checkout.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFilesParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The folder, relative to the run's folder, by `agent/file`'s path rules. Absent means the
+    /// run's folder itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub path: Option<String>,
+}
+
+/// What a folder entry is. Symlinks are never followed.
+///
+/// A newer plxd may send a kind this version does not know; treat it as a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentEntryKind {
+    /// A regular file.
+    File,
+    /// A folder.
+    Dir,
+    /// A symlink. `agent/file`'s `working` side reads its target.
+    Symlink,
+    /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// One entry of a folder, from `agent/files`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentEntry {
+    /// Its name in the folder.
+    pub name: String,
+    /// What it is.
+    pub kind: AgentEntryKind,
+    /// Its size in bytes, for a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub size: Option<u64>,
+}
+
+/// Result of `agent/files`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFilesResult {
+    /// The folder's entries by name, without `.git` or anything git ignores.
+    pub entries: Vec<AgentEntry>,
+    /// Whether `entries` was cut short because the folder holds more than one answer lists.
+    pub truncated: bool,
 }
 
 /// How `agent/accept` brought a run's commit into the project's branch.

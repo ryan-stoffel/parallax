@@ -10,10 +10,11 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
     AgentApproveResult, AgentCancelParams, AgentCommitParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentGitStatusParams,
-    AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult,
-    AgentPolicy, AgentPushParams, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
-    AgentStartParams, ErrorKind, GitStatus, LoggedEvent, PromptImage, RunId,
+    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams,
+    AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
+    AgentOpenPrParams, AgentOpenPrResult, AgentPolicy, AgentPushParams, AgentRequestChangesParams,
+    AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind, GitStatus, LoggedEvent,
+    PromptImage, RunId,
 };
 
 use super::Context;
@@ -211,6 +212,13 @@ pub(crate) async fn file(
     params: AgentFileParams,
 ) -> Result<AgentFileResult, ErrorObject> {
     agents::review::file(&context.daemon, params).await
+}
+
+pub(crate) async fn files(
+    context: &Context,
+    params: AgentFilesParams,
+) -> Result<AgentFilesResult, ErrorObject> {
+    agents::review::files(&context.daemon, params).await
 }
 
 pub(crate) async fn accept(
