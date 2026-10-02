@@ -30,7 +30,6 @@ import { imageUrl, readImage, type ImageCaps } from "./images";
 import { ModelMenu } from "./ModelMenu";
 import { backendOf, backends, models, type Model, type Provider, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
-import type { SentMessage } from "./useAgentRun";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
@@ -172,6 +171,12 @@ const manualDenials = {
 export const tabItem =
   "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
 
+/** A prompt for Stop to put back: its text, then its images once they load. */
+export interface Unanswered {
+  text: string;
+  images: () => Promise<PromptImage[]>;
+}
+
 export interface ComposerProps {
   /** Whether it starts a new thread, which only changes its hint. */
   newThread?: boolean;
@@ -194,7 +199,7 @@ export interface ComposerProps {
    */
   onStop?: () => Promise<string | undefined>;
   /** The run's latest prompt while nothing answers it yet, which a Stop that works puts back. */
-  unanswered?: SentMessage;
+  unanswered?: Unanswered;
   /** Why sending is off right now, shown in place of the box's hint. */
   disabledReason?: string;
   /** The tab tucked under the box: where the thread runs, or an open run's status. */
@@ -403,7 +408,11 @@ export function Composer({
       // ponytail: its formatting shows as typed Markdown, until the box parses Markdown.
       editor.commands.focus("start");
       editor.view.pasteText(editor.isEmpty ? back.text : `${back.text}\n`);
-      setImages((added) => [...back.images, ...added].slice(0, imageCaps?.maxImages));
+      void back
+        .images()
+        .then((images) =>
+          setImages((added) => [...images, ...added].slice(0, imageCaps?.maxImages)),
+        );
     }
   };
 

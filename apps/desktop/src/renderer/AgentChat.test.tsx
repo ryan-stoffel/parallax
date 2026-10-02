@@ -530,7 +530,8 @@ const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
  * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as plxd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
  * plxd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
- * default), and `agent/openPr` answers `prUrl`. `connect` changes the connection's state.
+ * default), `agent/openPr` answers `prUrl`, and `agent/image` a tiny PNG. `connect` changes the
+ * connection's state.
  */
 function fakeBridge(
   seq: number,
@@ -552,6 +553,8 @@ function fakeBridge(
     if (method === "agent/send")
       return { result: { run: { ...sampleRun, status: "running", ...sent } }, logId: "log-1" };
     if (method === "agent/openPr") return { result: { url: prUrl }, logId: "log-1" };
+    if (method === "agent/image")
+      return { result: { mediaType: "image/png", data: "AAAA" }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
     return { result: { events: rest.slice(0, 2), more: rest.length > 2 }, logId: "log-1" };
@@ -700,6 +703,29 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   expect(sends()).toHaveLength(2);
   expect(sends()[1]![2]).toMatchObject({ text: "Also mention the tests." });
   expect(sendAgain()).toBeUndefined();
+});
+
+test("Stop puts a first prompt's images back too, fetched from plxd by id", async () => {
+  const { request, emit } = fakeBridge(2);
+  await renderChat();
+  // The first turn's turnStarted brings its images' ids, before the agent says anything.
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "turnStarted", images: ["i-1"] }] },
+    },
+  });
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  await settle();
+  expect(request).toHaveBeenCalledWith("local", "agent/image", { runId, imageId: "i-1" });
+  expect(document.querySelector<HTMLImageElement>('img[alt="Image 1"]')!.src).toBe(
+    "data:image/png;base64,AAAA",
+  );
 });
 
 test("a follow-up Stop puts back in the box offers no Send again once plxd drops it", async () => {

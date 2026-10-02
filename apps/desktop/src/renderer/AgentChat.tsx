@@ -60,7 +60,7 @@ import {
   type Asked,
   type ToolLook,
 } from "./Approval";
-import { Composer, tabItem } from "./Composer";
+import { Composer, tabItem, type Unanswered } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
@@ -298,8 +298,8 @@ export function AgentChat({
     [rows, sent],
   );
   // The latest prompt while nothing from the agent follows it, which Stop puts back in the box:
-  // its text, and its images when they were sent from here.
-  const unanswered = useMemo<(SentMessage & { turnId?: string }) | undefined>(() => {
+  // its text, and its images: at hand when sent from here, or fetched from plxd by id on Stop.
+  const unanswered = useMemo<(Unanswered & { turnId?: string }) | undefined>(() => {
     const at = rows.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
     const row = rows[at];
     if ((row?.kind !== "user" && row?.kind !== "pending") || (row.kind === "user" && row.wake))
@@ -309,10 +309,19 @@ export function AgentChat({
     const mine = row.kind === "user" && row.turnId ? sent.get(row.turnId) : undefined;
     const text = row.text ?? mine?.text;
     if (text == null) return undefined;
-    const images = (row.kind === "pending" ? row.images : mine?.images) ?? [];
+    const atHand = (row.kind === "pending" ? row.images : mine?.images) ?? [];
+    const ids = row.kind === "user" && !mine ? (row.images ?? []) : [];
+    const images = async () => {
+      const got = await Promise.all(
+        ids.map((imageId) =>
+          window.parallax.request(hostId, "agent/image", { runId, imageId }).catch(() => undefined),
+        ),
+      );
+      return [...atHand, ...got.flatMap((a) => (a && "result" in a ? [a.result] : []))];
+    };
     // Only one still on its way can be dropped, and so offer Send again.
     return { text, images, turnId: row.kind === "pending" ? row.turnId : undefined };
-  }, [rows, sent]);
+  }, [rows, sent, hostId, runId]);
   // A stopped prompt goes back in the box, so if plxd drops it, it offers no Send again too.
   const stop = async () => {
     const back = unanswered;
