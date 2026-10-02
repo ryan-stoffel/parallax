@@ -294,6 +294,20 @@ export function AgentChat({
       }),
     [rows, sent],
   );
+  // The latest prompt while nothing from the agent follows it, which Stop puts back in the box:
+  // its text, and its images when they were sent from here.
+  const unanswered = useMemo<SentMessage | undefined>(() => {
+    const at = rows.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
+    const row = rows[at];
+    if ((row?.kind !== "user" && row?.kind !== "pending") || (row.kind === "user" && row.wake))
+      return undefined;
+    if (!rows.slice(at + 1).every((r) => ["notice", "end", "session"].includes(r.kind)))
+      return undefined;
+    const mine = row.kind === "user" && row.turnId ? sent.get(row.turnId) : undefined;
+    const text = row.text ?? mine?.text;
+    if (text == null) return undefined;
+    return { text, images: (row.kind === "pending" ? row.images : mine?.images) ?? [] };
+  }, [rows, sent]);
 
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
@@ -404,6 +418,7 @@ export function AgentChat({
           onSend={sendText}
           history={history}
           onStop={isRunning(run?.status) ? cancel : undefined}
+          unanswered={unanswered}
           disabledReason={disabledReason}
           tab={
             tab ??
@@ -717,7 +732,7 @@ export const RowView = memo(function RowView({
       // Images sent from here are at hand; the log's come from plxd by id.
       const images = row.kind === "pending" ? row.images : (sent?.images ?? row.images);
       return (
-        <div className="flex flex-col items-end gap-1.5">
+        <div className="group/prompt flex flex-col items-end gap-1.5">
           {images && images.length > 0 && (
             <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
               {images.map((image, i) => (
@@ -732,6 +747,7 @@ export const RowView = memo(function RowView({
               {text ?? <span className="text-muted-foreground italic">Follow-up message</span>}
             </div>
           )}
+          <PromptMeta at={row.kind === "user" ? row.at : undefined} text={text} />
         </div>
       );
     }
@@ -1385,15 +1401,50 @@ export function MarkdownText({ text, components }: { text: string; components?: 
   );
 }
 
-function CodeBlock({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLPreElement>(null);
+/** Copies text to the clipboard. `copied` is true for a moment after, for a Copied check. */
+function useCopy() {
   const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard.writeText(ref.current?.textContent ?? "").then(() => {
+  const copy = (text: string) =>
+    void navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
-  };
+  return [copied, copy] as const;
+}
+
+/** Under a prompt, on hover or focus: when it was sent, and Copy for its text. */
+function PromptMeta({ at, text }: { at?: string; text?: string | null }) {
+  const [copied, copy] = useCopy();
+  return (
+    <div className="flex h-6 items-center gap-1 text-[12px] text-faint-foreground opacity-0 group-focus-within/prompt:opacity-100 group-hover/prompt:opacity-100">
+      {at && <time dateTime={at}>{sentAt(at)}</time>}
+      {text && (
+        <button
+          type="button"
+          aria-label={copied ? "Copied" : "Copy message"}
+          onClick={() => copy(text)}
+          className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+        >
+          {copied ? <Check /> : <Copy />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** "3:04 PM" today, and "Sep 25, 3:04 PM" before. */
+function sentAt(at: string) {
+  const date = new Date(at);
+  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString([], time)
+    : date.toLocaleString([], { month: "short", day: "numeric", ...time });
+}
+
+function CodeBlock({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLPreElement>(null);
+  const [copied, copyText] = useCopy();
+  const copy = () => copyText(ref.current?.textContent ?? "");
   return (
     <div className="group/code relative">
       <pre
