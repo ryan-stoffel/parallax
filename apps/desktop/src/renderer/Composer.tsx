@@ -336,7 +336,7 @@ export interface ComposerProps {
    * Where the `/` and `@` menus' lists come from, on a plxd with `composerMenus`: the host, and
    * the thread's run or repo entry, whose folder they're read in. The commands are the CLI's that
    * the message goes to, fetched on the first `/` and kept while the app runs; the files need a run
-   * or repo, and are fetched on the first `@`. Absent: no menus.
+   * or repo, and are fetched again on each new `@`. Absent: no menus.
    */
   menus?: { hostId: string; repo?: string; runId?: string };
 }
@@ -480,9 +480,10 @@ export function Composer({
       live = false;
     };
   }, [wantsCommands, commandsKey, hostId, target, repo, runId]);
-  const hasPaths = paths?.key === pathsKey;
+  // Each new `@` lists them again, so files the agent made show up; the last list shows meanwhile.
+  const pathsAt = wantsPaths ? trigger.from : undefined;
   useEffect(() => {
-    if (!wantsPaths || hasPaths || hostId === undefined) return;
+    if (pathsAt === undefined || hostId === undefined || pathsKey === undefined) return;
     let live = true;
     void window.parallax
       .request(hostId, "repo/files", { repo, runId })
@@ -490,9 +491,9 @@ export function Composer({
     return () => {
       live = false;
     };
-  }, [wantsPaths, hasPaths, pathsKey, hostId, repo, runId]);
+  }, [pathsAt, pathsKey, hostId, repo, runId]);
   const loadedCommands = commands && commands.key === commandsKey ? commands.list : undefined;
-  const loadedPaths = paths && hasPaths ? paths.list : undefined;
+  const loadedPaths = paths && paths.key === pathsKey ? paths.list : undefined;
 
   // Puts `text` where the trigger is, as typed text, which Markdown leaves alone.
   const replaceTrigger = (at: Trigger, text: string) =>

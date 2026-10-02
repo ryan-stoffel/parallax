@@ -80,7 +80,7 @@ pub async fn list(mut probe: CommandsProbe, limit: Duration) -> Result<Vec<Agent
         .unwrap_or_else(|_| Err(format!("it didn't list them within {limit:?}")))
 }
 
-/// Claude Code's answer to `initialize`: every command it [`shown`].
+/// Claude Code's answer to `initialize`: every command [`shown`] keeps.
 #[must_use]
 pub fn claude(message: &Value) -> Parsed {
     if message["type"] != "control_response" {

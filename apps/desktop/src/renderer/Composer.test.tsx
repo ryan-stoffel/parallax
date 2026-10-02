@@ -548,7 +548,7 @@ test("/model opens the composer's model picker instead of reaching the CLI (PLX-
   expect(onSend).not.toHaveBeenCalled();
 });
 
-test("@ lists the thread's files, fetched on the first @, and inserts @path (PLX-359)", async () => {
+test("@ lists the thread's files, fetched again on each new @, and inserts @path (PLX-359)", async () => {
   const { box, type, press, runId } = await withMenus(async () => undefined);
   expect(request).not.toHaveBeenCalled();
   await type("see @main");
@@ -556,6 +556,21 @@ test("@ lists the thread's files, fetched on the first @, and inserts @path (PLX
   expect(options()).toEqual(["src/main.rs"]);
   await press("Enter");
   expect(box.textContent).toBe("see @src/main.rs ");
+
+  // A file the agent made since: the last list shows until the new one arrives.
+  let answer: (files: string[]) => void = () => {};
+  request.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = (files) => resolve({ logId: "log-1", result: { files, truncated: false } });
+      }),
+  );
+  await type("and @src/");
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(options()).toEqual(["src/lib.rs", "src/main.rs"]);
+  expect(loadingRow()).toBeUndefined();
+  await act(async () => answer(["src/lib.rs", "src/main.rs", "src/new.rs"]));
+  expect(options()).toEqual(["src/lib.rs", "src/main.rs", "src/new.rs"]);
 });
 
 test("Esc closes the menu, Enter then sends, and a plxd without composerMenus shows none (PLX-359)", async () => {
