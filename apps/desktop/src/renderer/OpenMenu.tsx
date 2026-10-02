@@ -7,7 +7,8 @@ import { appShortcut, menuButton, menuItem, menuPanel, moveFocus, shortcut } fro
 
 const STORAGE_KEY = "parallax.openTarget";
 
-const icons: Record<OpenTarget, ReactNode> = {
+// Each target's mark, shown where main has no app icon for it (anywhere but macOS).
+const marks: Record<OpenTarget, ReactNode> = {
   cursor: <CursorLogo />,
   vscode: <VSCodeLogo />,
   files: <FolderOpen />,
@@ -30,6 +31,14 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
   const menu = useRef<HTMLDivElement>(null);
   const [targets, setTargets] = useState<OpenTarget[]>([]);
   const [chosen, setChosen] = useState(() => localStorage.getItem(STORAGE_KEY));
+  const [appIcons, setAppIcons] = useState<Partial<Record<OpenTarget, string>>>({});
+  useEffect(() => {
+    void window.parallax.openTargetIcons().then(setAppIcons);
+  }, []);
+  const icon = (target: OpenTarget) => {
+    const src = appIcons[target];
+    return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks[target];
+  };
   useEffect(() => {
     let live = true;
     void window.parallax.openTargets(hostId).then((found) => live && setTargets(found));
@@ -74,7 +83,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
           title={folder ? `Open in ${nameOf(current)} (${shortcut("Alt+O")})` : undefined}
           className={`${menuButton} rounded-r-none pr-2.5`}
         >
-          {icons[current]}
+          {icon(current)}
           Open
         </button>
         <button
@@ -108,7 +117,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
             onClick={() => choose(t)}
             className={`${menuItem} [&_svg]:size-4`}
           >
-            {icons[t]}
+            {icon(t)}
             <span className="flex-1">{nameOf(t)}</span>
             {t === current && (
               <span className="text-[11.5px] text-faint-foreground">{shortcut("Alt+O")}</span>

@@ -17,6 +17,7 @@ const bridge: Partial<ParallaxBridge> = {
   hosts: async () => [],
   onHosts: () => () => {},
   openTargets: async () => [],
+  openTargetIcons: async () => ({}),
   onProfile: () => () => {},
 };
 window.parallax = bridge as ParallaxBridge;
