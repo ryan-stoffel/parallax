@@ -124,7 +124,10 @@ export function ProfilePage({
   };
 
   // The card's parallax: it tilts toward the pointer and its layers shift by their depth, nearer
-  // ones more, through two CSS variables from -1 to 1, so moving the pointer never re-renders.
+  // ones more, through two CSS variables from -1 to 1, so moving the pointer never re-renders. The
+  // pointer is measured against a box around the card that never moves: the tilted card's own box
+  // would shift under it, which would change the tilt, and near an edge, leave and re-enter it.
+  const still = useRef<HTMLDivElement>(null);
   const tilt = (e: PointerEvent<HTMLDivElement>) => {
     if (sharing || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const r = e.currentTarget.getBoundingClientRect();
@@ -132,8 +135,8 @@ export function ProfilePage({
     e.currentTarget.style.setProperty("--tilt-y", String(((e.clientY - r.top) / r.height) * 2 - 1));
   };
   const untilt = () => {
-    card.current?.style.setProperty("--tilt-x", "0");
-    card.current?.style.setProperty("--tilt-y", "0");
+    still.current?.style.setProperty("--tilt-x", "0");
+    still.current?.style.setProperty("--tilt-y", "0");
   };
 
   return (
@@ -147,86 +150,86 @@ export function ProfilePage({
       ))}
       <div ref={scroller} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         <div className="@container mx-auto max-w-3xl px-2 pt-2 pb-16">
-          <div
-            ref={card}
-            onPointerMove={tilt}
-            onPointerLeave={untilt}
-            data-still={sharing === "capturing" || undefined}
-            style={{
-              transform:
-                "perspective(1000px) rotateX(calc(var(--tilt-y, 0) * -2deg)) rotateY(calc(var(--tilt-x, 0) * 2deg))",
-            }}
-            className="group rounded-2xl border border-border bg-surface px-6 pt-6 pb-7 transition-transform duration-300 ease-out data-still:transition-none"
-          >
-            <header style={depth(10)} className={`flex items-center gap-4 ${layer}`}>
-              {profile ? (
-                <Avatar profile={profile} size={60} />
-              ) : (
-                <span className="grid size-15 shrink-0 place-items-center rounded-full bg-selected text-muted-foreground [&_svg]:size-7">
-                  <CircleUser />
-                </span>
-              )}
-              <div className="min-w-0 flex-1">
-                <h1 className="truncate text-xl font-semibold">
-                  {profile ? profile.name || profile.email : profile === null && "Your profile"}
-                </h1>
-                {profile?.name && (
-                  <p className="truncate text-[13px] text-muted-foreground">{profile.email}</p>
-                )}
-                <p className="mt-0.5 truncate text-[12.5px] text-faint-foreground">
-                  {activity.since
-                    ? `Building since ${monthYear.format(activity.since)}`
-                    : "No agents yet"}
-                  {repos > 0 && ` · ${repos} ${repos === 1 ? "repository" : "repositories"}`}
-                  {hosts.length > 1 && ` · ${hosts.length} hosts`}
-                </p>
-              </div>
-              {sharing === "capturing" ? (
-                <span className="flex items-center gap-1.5 font-brand text-[15px] font-semibold">
-                  <ParallaxMark className="size-5" />
-                  Parallax
-                </span>
-              ) : (
-                <div className="flex shrink-0 items-center gap-2">
-                  <button type="button" onClick={() => void share()} className={quietButton}>
-                    {sharing === "copied" ? <Check /> : <Link />}
-                    {sharing === "copied"
-                      ? "Copied"
-                      : sharing === "failed"
-                        ? "Couldn't copy"
-                        : "Share"}
-                  </button>
-                  {profile === null ? (
-                    <button
-                      type="button"
-                      onClick={onOpenAccount}
-                      className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90"
-                    >
-                      Sign in
-                    </button>
-                  ) : (
-                    <button type="button" onClick={onOpenAccount} className={quietButton}>
-                      <Pencil />
-                      Edit
-                    </button>
-                  )}
-                </div>
-              )}
-            </header>
-
-            <dl
-              style={depth(6)}
-              className={`mt-8 grid grid-cols-2 gap-y-6 @lg:grid-cols-4 ${layer}`}
+          <div ref={still} onPointerMove={tilt} onPointerLeave={untilt}>
+            <div
+              ref={card}
+              data-still={sharing === "capturing" || undefined}
+              style={{
+                transform:
+                  "perspective(1000px) rotateX(calc(var(--tilt-y, 0) * -1.5deg)) rotateY(calc(var(--tilt-x, 0) * 1.5deg))",
+              }}
+              className="group rounded-2xl border border-border bg-surface px-6 pt-6 pb-7 transition-transform duration-150 ease-out data-still:transition-none"
             >
-              <Stat label="Agents" value={activity.agents.toLocaleString("en")} />
-              <Stat label="Pull requests" value={activity.pullRequests.toLocaleString("en")} />
-              <Stat label="Longest streak" value={activity.longest} unit="d" />
-              <Stat label="Current streak" value={activity.current} unit="d" />
-            </dl>
+              <header style={depth(6)} className={`flex items-center gap-4 ${layer}`}>
+                {profile ? (
+                  <Avatar profile={profile} size={60} />
+                ) : (
+                  <span className="grid size-15 shrink-0 place-items-center rounded-full bg-selected text-muted-foreground [&_svg]:size-7">
+                    <CircleUser />
+                  </span>
+                )}
+                <div className="min-w-0 flex-1">
+                  <h1 className="truncate text-xl font-semibold">
+                    {profile ? profile.name || profile.email : profile === null && "Your profile"}
+                  </h1>
+                  {profile?.name && (
+                    <p className="truncate text-[13px] text-muted-foreground">{profile.email}</p>
+                  )}
+                  <p className="mt-0.5 truncate text-[12.5px] text-faint-foreground">
+                    {activity.since
+                      ? `Building since ${monthYear.format(activity.since)}`
+                      : "No agents yet"}
+                    {repos > 0 && ` · ${repos} ${repos === 1 ? "repository" : "repositories"}`}
+                    {hosts.length > 1 && ` · ${hosts.length} hosts`}
+                  </p>
+                </div>
+                {sharing === "capturing" ? (
+                  <span className="flex items-center gap-1.5 font-brand text-[15px] font-semibold">
+                    <ParallaxMark className="size-5" />
+                    Parallax
+                  </span>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button type="button" onClick={() => void share()} className={quietButton}>
+                      {sharing === "copied" ? <Check /> : <Link />}
+                      {sharing === "copied"
+                        ? "Copied"
+                        : sharing === "failed"
+                          ? "Couldn't copy"
+                          : "Share"}
+                    </button>
+                    {profile === null ? (
+                      <button
+                        type="button"
+                        onClick={onOpenAccount}
+                        className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90"
+                      >
+                        Sign in
+                      </button>
+                    ) : (
+                      <button type="button" onClick={onOpenAccount} className={quietButton}>
+                        <Pencil />
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                )}
+              </header>
 
-            <div style={depth(3)} className={layer}>
-              <Heatmap activity={activity} now={now} />
-              <Hours hours={activity.hours} />
+              <dl
+                style={depth(4)}
+                className={`mt-8 grid grid-cols-2 gap-y-6 @lg:grid-cols-4 ${layer}`}
+              >
+                <Stat label="Agents" value={activity.agents.toLocaleString("en")} />
+                <Stat label="Pull requests" value={activity.pullRequests.toLocaleString("en")} />
+                <Stat label="Longest streak" value={activity.longest} unit="d" />
+                <Stat label="Current streak" value={activity.current} unit="d" />
+              </dl>
+
+              <div style={depth(2)} className={layer}>
+                <Heatmap activity={activity} now={now} />
+                <Hours hours={activity.hours} />
+              </div>
             </div>
           </div>
 
@@ -257,7 +260,7 @@ const depth = (px: number) => ({
   transform: `translate(calc(var(--tilt-x, 0) * ${px}px), calc(var(--tilt-y, 0) * ${px}px))`,
 });
 /** Eases the tilt, but not while Share lays the card flat for its picture. */
-const layer = "transition-transform duration-300 ease-out group-data-still:transition-none";
+const layer = "transition-transform duration-150 ease-out group-data-still:transition-none";
 
 /**
  * Agents started in each hour of the day as bars, the busiest in the accent, and what that hour
