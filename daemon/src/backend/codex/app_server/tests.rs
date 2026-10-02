@@ -240,9 +240,9 @@ fn assert_manual_writes(dir: &TempDir) {
 }
 
 #[tokio::test]
-async fn a_resumed_thread_without_approvals_declines_what_codex_asks() {
+async fn a_resumed_thread_without_approvals_never_asks_and_declines_what_codex_does() {
     let (dir, backend) = fake(include_str!("../fixtures/app-server-resume.jsonl"));
-    let mut request = request(AgentPermission::Bypass);
+    let mut request = request(AgentPermission::Manual);
     request.approvals = false;
     request.context_window = Some(872_000);
     request.fast = Some(true);
@@ -292,7 +292,7 @@ async fn a_resumed_thread_without_approvals_declines_what_codex_asks() {
     assert_eq!(
         written[2]["params"],
         json!({"threadId": "t-0", "excludeTurns": true, "cwd": "/", "approvalPolicy": "never",
-               "sandbox": "danger-full-access", "model": "gpt-6-sol",
+               "sandbox": "workspace-write", "model": "gpt-6-sol",
                "config": {"model_context_window": 872_000}, "serviceTier": "priority"})
     );
     assert_eq!(

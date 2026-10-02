@@ -22,9 +22,10 @@
 //! (`mcpServer/elicitation/request`). With [`RunRequest::approvals`], each is an
 //! [`Event::ApprovalRequested`], and [`Run::answer`](super::super::Run::answer)'s answer is the
 //! request's JSON-RPC response ([`translate::answer_response`]). `serverRequest/resolved` for a
-//! request still waiting, or app-server exiting, withdraws it. Without `approvals`, plxd declines
-//! each request at once, as headless Claude Code denies what would prompt. Codex's other requests
-//! get a JSON-RPC error, so it never waits on plxd.
+//! request still waiting, or app-server exiting, withdraws it. Without `approvals`, the thread
+//! runs with approval policy `never` inside the mode's sandbox, so its commands run sandboxed
+//! without asking, and plxd declines any request that still comes. Codex's other requests get a
+//! JSON-RPC error, so it never waits on plxd.
 //!
 //! # Credentials
 //!
@@ -118,7 +119,12 @@ pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started,
                 .into(),
         ));
     };
-    let (approval_policy, sandbox, reviewer) = mode(request.permission)?;
+    let (mut approval_policy, sandbox, mut reviewer) = mode(request.permission)?;
+    // A client that can't show a request: Codex's own sandbox holds the thread, and nothing asks,
+    // as a Claude thread without `approvals` keeps its sandbox (0034).
+    if !request.approvals {
+        (approval_policy, reviewer) = ("never", None);
+    }
     let effort = request.effort.map(effort_level).transpose()?;
     if let Some(model) = &request.model {
         check_argument("model", model)?;

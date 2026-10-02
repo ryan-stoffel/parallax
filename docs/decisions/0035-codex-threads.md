@@ -16,7 +16,7 @@ A Codex thread ran through the worker backend: `codex exec` with `--ignore-user-
 
 A run with `RunRequest.thread` on the Codex backend runs `codex app-server` in the run's cwd, with no arguments beyond `app-server`. It loads the user's `config.toml`, rules, `AGENTS.md` files, skills, hooks, plugins, and MCP servers, as `codex` in a terminal does. Workers that a coordinator spawns keep `codex exec` and 0013 unchanged, and stay refused until RYA-145.
 
-The driver sends `initialize` and `initialized`, then `thread/start`, or `thread/resume {threadId, excludeTurns: true}` for a run that resumes an earlier one's thread id. Either carries only the cwd, the mode's `approvalPolicy`, `sandbox`, and `approvalsReviewer` ([Modes](#modes)), and the model. The prompt is the first `turn/start`, as the user wrote it, with its images as `localImage` files and the effort. Each follow-up `Run::send` takes is a later `turn/start` in the same process, sent once the turn before it has completed. Once no turn and no approval request is outstanding, stdin closes and app-server exits, which ends the run, and `agent/send` resumes the thread in a new run.
+The driver sends `initialize` and `initialized`, then `thread/start`, or `thread/resume {threadId, excludeTurns: true}` for a run that resumes an earlier one's thread id. Either carries only the cwd, the mode's `approvalPolicy`, `sandbox`, and `approvalsReviewer` ([Modes](#modes)), the model, the context window as `config.model_context_window`, and fast mode as `serviceTier` `priority`, as exec takes them (RYA-281). The prompt is the first `turn/start`, as the user wrote it, with its images as `localImage` files and the effort. Each follow-up `Run::send` takes is a later `turn/start` in the same process, sent once the turn before it has completed. Once no turn and no approval request is outstanding, stdin closes and app-server exits, which ends the run, and `agent/send` resumes the thread in a new run.
 
 ### Modes
 
@@ -46,7 +46,7 @@ With `approvals` (0031), each request is an `approvalRequested` item:
 - `alwaysAllow` is the command, and `always` answers `acceptForSession`, which lasts as long as the app-server process. plxd never answers `acceptWithExecpolicyAmendment`, which Codex offers and which writes a rule to the user's rules file.
 - Codex takes no edited input, so an allow whose input differs from the request's is sent as `decline`.
 - `serverRequest/resolved` for a request still waiting, or app-server exiting, withdraws it.
-- Without `approvals`, plxd answers `decline` at once, so a client that can't answer never leaves Codex waiting. Codex's other requests (`item/tool/requestUserInput`, `item/tool/call`, token refreshes, and the legacy v1 approvals) get a JSON-RPC error.
+- Without `approvals`, a thread runs with approval policy `never` inside its mode's sandbox, as a Claude thread without them keeps its sandbox (0034): its commands run sandboxed without asking, and plxd answers `decline` to any request that still comes, so a client that can't answer never leaves Codex waiting. Codex's other requests (`item/tool/requestUserInput`, `item/tool/call`, token refreshes, and the legacy v1 approvals) get a JSON-RPC error.
 
 ### Events
 
