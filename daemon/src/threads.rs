@@ -12,8 +12,8 @@
 //! path is the `scratch` folder, made on first use.
 //!
 //! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,
-//! on the branch the user has out, and plxd leaves its changes there uncommitted. A thread with
-//! no repo has no checkout, so it can't ask for one.
+//! on the branch the user has out or the one `checkoutRef` switches it to, and plxd leaves its
+//! changes there uncommitted. A thread with no repo has no checkout, so it can't ask for one.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -22,9 +22,9 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ErrorKind, ParallaxEvent, ProjectIcon, ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId,
-    RepoUpdateParams, RepoUpdateResult, RunId, Thread, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteResult, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult,
+    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, RunId, Thread,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 use parallax_store::RepoFields;
 use tokio_util::sync::CancellationToken;
@@ -32,6 +32,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::agents::{self, NewRun, NewThread, RunOptions};
+use crate::backend::check_argument;
 use crate::repo;
 use crate::server::Daemon;
 use crate::worktree::valid_branch_slug;
@@ -349,6 +350,34 @@ async fn start_entry(
     .await
 }
 
+/// A thread with no repo's scratch repository, under its scratch entry: made unless the run id is
+/// `taken`. `None` for a repo entry.
+async fn scratch_dir(
+    daemon: &Daemon,
+    entry: &parallax_store::Repo,
+    run_id: RunId,
+    taken: bool,
+) -> Result<Option<PathBuf>, ErrorObject> {
+    if !entry.fields.scratch {
+        return Ok(None);
+    }
+    let dir = PathBuf::from(&entry.fields.path).join(run_id.to_string());
+    if !taken {
+        daemon
+            .agents
+            .worktrees()
+            .init_scratch(&dir)
+            .await
+            .map_err(|error| {
+                ErrorObject::parallax(
+                    ErrorKind::WorktreeFailed,
+                    format!("could not make the thread's scratch repository: {error}"),
+                )
+            })?;
+    }
+    Ok(Some(dir))
+}
+
 /// `thread/start`: see the module documentation. Idempotent on the run id.
 pub(crate) async fn start(
     daemon: Arc<Daemon>,
@@ -362,10 +391,14 @@ pub(crate) async fn start(
         model,
         effort,
         permission,
+        context_window,
+        fast,
         branch_slug,
         images,
         approvals,
         checkout,
+        base,
+        checkout_ref,
     } = params;
     if let Some(slug) = &branch_slug
         && !valid_branch_slug(slug)
@@ -375,6 +408,7 @@ pub(crate) async fn start(
              with no leading or trailing hyphen",
         ));
     }
+    let git_ref = git_ref(checkout, base, checkout_ref)?;
     let entry = start_entry(&daemon, repo).await?;
     if checkout && entry.fields.scratch {
         return Err(ErrorObject::invalid_params(
@@ -390,25 +424,7 @@ pub(crate) async fn start(
             .map_err(|e| store_error(&e))
     })
     .await?;
-    let scratch = if entry.fields.scratch {
-        let dir = PathBuf::from(&entry.fields.path).join(run_id.to_string());
-        if !taken {
-            daemon
-                .agents
-                .worktrees()
-                .init_scratch(&dir)
-                .await
-                .map_err(|error| {
-                    ErrorObject::parallax(
-                        ErrorKind::WorktreeFailed,
-                        format!("could not make the thread's scratch repository: {error}"),
-                    )
-                })?;
-        }
-        Some(dir)
-    } else {
-        None
-    };
+    let scratch = scratch_dir(&daemon, &entry, run_id, taken).await?;
     let new = NewRun {
         run_id,
         scope,
@@ -420,12 +436,15 @@ pub(crate) async fn start(
             model,
             effort,
             permission,
+            context_window,
+            fast,
         },
         approvals,
         thread: Some(NewThread {
             scratch: scratch.clone(),
             branch_slug,
             checkout,
+            git_ref,
         }),
     };
     let created = match agents::create(Arc::clone(&daemon), new).await {
@@ -447,6 +466,42 @@ pub(crate) async fn start(
         thread: thread_entry(thread)?,
         run: created.run,
     })
+}
+
+/// The ref a thread starts from: `base` for a worktree, `checkoutRef` with `checkout`, checked as
+/// a git argument.
+fn git_ref(
+    checkout: bool,
+    base: Option<String>,
+    checkout_ref: Option<String>,
+) -> Result<Option<String>, ErrorObject> {
+    let (reference, what) = match (checkout, base, checkout_ref) {
+        (true, Some(_), _) => return Err(ErrorObject::invalid_params("base is not for checkout")),
+        (false, _, Some(_)) => {
+            return Err(ErrorObject::invalid_params("checkoutRef needs checkout"));
+        }
+        (true, None, reference) => (reference, "checkoutRef"),
+        (false, reference, None) => (reference, "base"),
+    };
+    if let Some(reference) = &reference {
+        check_argument(what, reference).map_err(|e| ErrorObject::invalid_params(e.to_string()))?;
+    }
+    Ok(reference)
+}
+
+/// `repo/refs`: the branches of repo entry `repo`'s repository.
+pub(crate) async fn refs(
+    daemon: &Arc<Daemon>,
+    params: RepoRefsParams,
+) -> Result<RepoRefsResult, ErrorObject> {
+    let entry = start_entry(daemon, Some(params.repo)).await?;
+    let refs = daemon
+        .agents
+        .worktrees()
+        .refs(Path::new(&entry.fields.path))
+        .await
+        .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))?;
+    Ok(RepoRefsResult { refs })
 }
 
 /// Removes a scratch repository made for a `thread/start` that didn't create its run.

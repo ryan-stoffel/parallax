@@ -49,6 +49,7 @@ pub(crate) async fn start(
         model,
         effort,
         permission,
+        ..RunOptions::default()
     };
     let mut fields = RunFields {
         project_id: project.into(),
@@ -60,6 +61,8 @@ pub(crate) async fn start(
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
+        context_window: None,
+        fast: None,
         approvals,
         checkout: false,
     };

@@ -5,8 +5,9 @@
 //!
 //! A new session is `codex exec --json --ignore-user-config --ignore-rules <overrides> -` and a
 //! resumed one is `codex exec resume --json --ignore-user-config --ignore-rules <overrides>
-//! <thread id> -`, both in the run's cwd, with `-m` for the model and `-c
-//! model_reasoning_effort` for the effort. The prompt goes on stdin,
+//! <thread id> -`, both in the run's cwd, with `-m` for the model, `-c
+//! model_reasoning_effort` for the effort, `-c model_context_window` for the context window, and
+//! `-c service_tier` for fast mode. The prompt goes on stdin,
 //! which then closes: `codex exec` runs one turn and exits, so the backend takes no follow-ups,
 //! and 0014's `agent/send` resumes the thread instead.
 //!
@@ -126,6 +127,10 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
+/// The context windows a worker may ask for, in tokens: codex-cli 0.159.3's catalog gives its
+/// models 272k by default, and all but `gpt-5.5` up to 872k through `-c model_context_window`.
+const CONTEXT_WINDOWS: &[u32] = &[272_000, 872_000];
+
 /// The worker permissions Codex maps: only `edit`. `codex exec` has no plan mode.
 const PERMISSIONS: &[AgentPermission] = &[AgentPermission::Edit];
 
@@ -160,8 +165,8 @@ impl CodexBackend {
 ///
 /// [`StartError::Invalid`] if the model or the resume id could be read as an option, if an
 /// image's path has a comma, or if the worker has no usable [`WorkerSandbox`].
-/// [`StartError::Unsupported`] for a no-write run, a permission other than `edit`, or an effort
-/// this version doesn't know.
+/// [`StartError::Unsupported`] for a no-write run, a permission other than `edit`, an effort
+/// this version doesn't know, or a context window not in [`CONTEXT_WINDOWS`].
 pub fn arguments(
     request: &RunRequest,
     zdotdir: Option<&Path>,
@@ -206,6 +211,19 @@ pub fn arguments(
             "-c".into(),
             format!(r#"model_reasoning_effort="{level}""#).into(),
         ]);
+    }
+    if let Some(tokens) = request.context_window {
+        if !CONTEXT_WINDOWS.contains(&tokens) {
+            return Err(StartError::Unsupported(format!(
+                "Codex has no {tokens}-token context window"
+            )));
+        }
+        args.extend(["-c".into(), format!("model_context_window={tokens}").into()]);
+    }
+    if let Some(fast) = request.fast {
+        // The catalog's tier named "Fast" is `priority`.
+        let tier = if fast { "priority" } else { "default" };
+        args.extend(["-c".into(), format!(r#"service_tier="{tier}""#).into()]);
     }
     if let Some(model) = &request.model {
         check_argument("model", model)?;
@@ -419,6 +437,14 @@ impl Backend for CodexBackend {
 
     fn permissions(&self) -> &'static [AgentPermission] {
         PERMISSIONS
+    }
+
+    fn context_windows(&self) -> &'static [u32] {
+        CONTEXT_WINDOWS
+    }
+
+    fn fast_mode(&self) -> bool {
+        true
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {

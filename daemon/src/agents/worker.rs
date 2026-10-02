@@ -524,6 +524,8 @@ mod tests {
                 model: None,
                 effort: None,
                 permission: None,
+                context_window: None,
+                fast: None,
                 coordinator_tools: None,
                 approvals: false,
             })

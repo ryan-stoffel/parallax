@@ -195,6 +195,8 @@ fn request(cwd: &Path) -> RunRequest {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         coordinator_tools: None,
         approvals: false,
     }
@@ -771,6 +773,59 @@ fn every_run_s_one_settings_keep_its_task_list_its_own() {
             "{args:?}"
         );
     }
+}
+
+/// Fast mode goes in every run's one `--settings`, the only place headless Claude Code takes it.
+#[test]
+fn fast_mode_is_set_in_every_run_s_settings() {
+    let cwd = Path::new("/Users/u/wt");
+    let mut worker = request(cwd);
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(cwd));
+    let bypass = RunRequest {
+        permission: Some(AgentPermission::Bypass),
+        ..worker.clone()
+    };
+    for base in [request(cwd), worker, bypass, coordinator(cwd)] {
+        for fast in [None, Some(true), Some(false)] {
+            let args: Vec<String> = super::arguments(&RunRequest {
+                fast,
+                ..base.clone()
+            })
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+            let at = args.iter().position(|arg| arg == "--settings").unwrap();
+            let settings: Value = serde_json::from_str(&args[at + 1]).unwrap();
+            assert_eq!(settings.get("fastMode").and_then(Value::as_bool), fast);
+        }
+    }
+}
+
+/// A 200k context window caps a native 1M model with `CLAUDE_CODE_DISABLE_1M_CONTEXT`; 1M is
+/// those models' default, and any other size is refused.
+#[tokio::test]
+async fn a_200k_context_window_disables_1m_context() {
+    let fake = Fake::new("read-only");
+    let cwd = fake.root();
+    let other = RunRequest {
+        context_window: Some(500_000),
+        ..request(&cwd)
+    };
+    assert!(matches!(
+        fake.backend.start(other),
+        Err(StartError::Unsupported(_))
+    ));
+    let capped = RunRequest {
+        context_window: Some(200_000),
+        ..request(&cwd)
+    };
+    run(&fake, capped).await;
+    assert!(
+        fake.env()
+            .contains(&"CLAUDE_CODE_DISABLE_1M_CONTEXT=1".to_owned())
+    );
 }
 
 #[test]

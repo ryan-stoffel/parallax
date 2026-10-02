@@ -1,7 +1,7 @@
 //! The M3 runner (#156, decision 0014): runs a worker end to end.
 //!
 //! `agent/start` resolves the worker's account through routing (#119), refuses a worker plxd
-//! can't sandbox (0013) or a model, effort, or permission its backend can't honor (RYA-97),
+//! can't sandbox (0013) or a run option its backend can't honor (RYA-97),
 //! creates the run's worktree (#154), records the run, and starts the
 //! backend in the worktree with the project's shared context folder (#155) writable. From then
 //! on one [`actor`] task per run owns it: it streams the backend's events into the event log as
@@ -25,9 +25,10 @@
 //! ([`wake`]).
 //!
 //! A thread started with `checkout` has no worktree either: it runs in its repo entry's own
-//! checkout, on the branch the user has out, in the same worker sandbox with that checkout as its
-//! cwd. plxd never commits it, since the checkout can hold the user's own uncommitted work, so its
-//! changes stay there for the user to review, and it has no diff to accept or open a PR from.
+//! checkout, on the branch the user has out or the one `checkoutRef` switches it to first, in the
+//! same worker sandbox with that checkout as its cwd. plxd never commits it, since the checkout
+//! can hold the user's own uncommitted work, so its changes stay there for the user to review, and
+//! it has no diff to accept or open a PR from.
 
 mod actor;
 mod approvals;
@@ -60,7 +61,7 @@ use uuid::Uuid;
 use self::actor::{Actor, Command};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
-use self::convert::{STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
+use self::convert::{RUNNING, STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
 use self::worker::{StoredKeyAccounts, ThreadFolder, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
@@ -394,11 +395,13 @@ pub(crate) struct RunOptions {
     pub model: Option<String>,
     pub effort: Option<AgentEffort>,
     pub permission: Option<AgentPermission>,
+    pub context_window: Option<u32>,
+    pub fast: Option<bool>,
 }
 
 impl RunOptions {
     /// Refuses, with `unsupportedOption`, a model name that can't be a CLI argument, or an
-    /// effort or permission that `backend` doesn't map.
+    /// effort, permission, context window, or fast mode that `backend` doesn't map.
     fn check(&self, backend: &dyn Backend) -> Result<(), ErrorObject> {
         let refuse = |detail: String| ErrorObject::parallax(ErrorKind::UnsupportedOption, detail);
         let name = backend.name();
@@ -423,6 +426,18 @@ impl RunOptions {
             let permission = option_name(permission).unwrap_or_default();
             return Err(refuse(format!(
                 "the {name} backend can't run with permission {permission}"
+            )));
+        }
+        if let Some(tokens) = self.context_window
+            && !backend.context_windows().contains(&tokens)
+        {
+            return Err(refuse(format!(
+                "the {name} backend can't run with a {tokens}-token context window"
+            )));
+        }
+        if self.fast.is_some() && !backend.fast_mode() {
+            return Err(refuse(format!(
+                "the {name} backend can't run in or out of fast mode"
             )));
         }
         Ok(())
@@ -450,6 +465,40 @@ fn routing_error(error: &RoutingError) -> ErrorObject {
             ErrorObject::invalid_params("account must be a subscription or a key")
         }
     }
+}
+
+/// Switches the checkout at `repo_path`, `project`'s (a thread's repo entry), to `reference`.
+/// Refuses, with `worktreeFailed`, while another thread runs in it, since the switch would move
+/// that thread's work to a branch it never chose.
+async fn switch_checkout(
+    daemon: &Daemon,
+    project: ProjectId,
+    repo_path: &Path,
+    reference: &str,
+) -> Result<(), ErrorObject> {
+    let busy = store(daemon, move |db| {
+        db.list_runs(Some(project.into()))
+            .map(|runs| {
+                runs.iter().any(|run| {
+                    run.fields.checkout && [STARTING, RUNNING].contains(&run.state.status.as_str())
+                })
+            })
+            .map_err(|e| store_error(&e))
+    })
+    .await?;
+    if busy {
+        return Err(ErrorObject::parallax(
+            ErrorKind::WorktreeFailed,
+            "another thread is running in this checkout; switching its branch would move that \
+             thread's work",
+        ));
+    }
+    daemon
+        .agents
+        .worktrees
+        .switch(repo_path, reference)
+        .await
+        .map_err(|error| worktree_failed(&error))
 }
 
 fn worktree_failed(error: &WorktreeError) -> ErrorObject {
@@ -486,7 +535,8 @@ async fn existing(
             ErrorKind::IdConflict,
             format!(
                 "run {run_id} exists with a different project, prompt, account, policy, \
-                 coordinator thread, model, effort, permission, or approvals"
+                 coordinator thread, model, effort, permission, context window, fast mode, or \
+                 approvals"
             ),
         ));
     }
@@ -503,9 +553,10 @@ async fn create_worktree(
     thread: Option<&NewThread>,
 ) -> Result<(CreatedWorktree, PathBuf, PathBuf), ErrorObject> {
     let branch_slug = thread.and_then(|thread| thread.branch_slug.as_deref());
+    let base = thread.and_then(|thread| thread.git_ref.as_deref());
     let created = agents
         .worktrees
-        .create_named(repo_path, run_id, None, branch_slug)
+        .create_named(repo_path, run_id, base, branch_slug)
         .await
         .map_err(|error| worktree_failed(&error))?;
     let paths = async {
@@ -670,6 +721,8 @@ pub(crate) async fn start(
         model,
         effort,
         permission,
+        context_window,
+        fast,
         images,
         approvals,
         ..
@@ -685,6 +738,8 @@ pub(crate) async fn start(
             model,
             effort,
             permission,
+            context_window,
+            fast,
         },
         approvals,
         thread: None,
@@ -719,6 +774,9 @@ pub(crate) struct NewThread {
     pub branch_slug: Option<String>,
     /// Work in the repo entry's own checkout instead of a worktree. Never set with `scratch`.
     pub checkout: bool,
+    /// The ref the worktree starts from, or with `checkout`, the ref the checkout switches to
+    /// first. Already checked.
+    pub git_ref: Option<String>,
 }
 
 /// A created run, and its thread row for a normal thread.
@@ -754,6 +812,8 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
+        context_window: options.context_window,
+        fast: options.fast,
         approvals,
         checkout: thread.as_ref().is_some_and(|thread| thread.checkout),
     };
@@ -776,6 +836,9 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         None => scope_path,
     };
     let (created, (cwd, git_common_dir)) = if fields.checkout {
+        if let Some(reference) = thread.as_ref().and_then(|thread| thread.git_ref.as_deref()) {
+            switch_checkout(&daemon, project, Path::new(&repo_path), reference).await?;
+        }
         (None, checkout_paths(agents, Path::new(&repo_path)).await?)
     } else {
         let (created, worktree_path, git_common_dir) =
@@ -937,6 +1000,8 @@ pub(crate) async fn send(
         model,
         effort,
         permission,
+        context_window,
+        fast,
         account,
         images,
     } = params;
@@ -944,6 +1009,8 @@ pub(crate) async fn send(
         model,
         effort,
         permission,
+        context_window,
+        fast,
     };
     ask(&daemon, run_id, |reply| Command::Send {
         turn_id,
@@ -1099,6 +1166,8 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                                 model: run.model,
                                 effort: run.effort,
                                 permission: run.permission,
+                                context_window: run.context_window,
+                                fast: run.fast,
                                 updated_at: run.updated_at,
                             },
                         },

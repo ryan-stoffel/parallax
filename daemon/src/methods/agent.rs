@@ -270,6 +270,8 @@ pub(crate) async fn request_changes(
             model: None,
             effort: None,
             permission: None,
+            context_window: None,
+            fast: None,
             account: None,
             images: Vec::new(),
         },
@@ -366,6 +368,8 @@ mod tests {
                     model: None,
                     effort: None,
                     permission: None,
+                    context_window: None,
+                    fast: None,
                     approvals: false,
                     checkout: false,
                 };

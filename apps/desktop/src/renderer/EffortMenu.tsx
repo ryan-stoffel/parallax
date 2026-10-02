@@ -1,29 +1,18 @@
-import { Brain, ChevronDown, Flame, Rocket, Sprout, Zap, type LucideIcon } from "lucide-react";
+import { ChevronDown, Zap } from "lucide-react";
 import { useId, type CSSProperties } from "react";
 
 import type { AgentEffort } from "../protocol/generated/protocol";
-import { menuButton, menuPanel } from "./ui";
+import type { Provider } from "./models";
+import { menuButton, menuPanel, Picker } from "./ui";
 
-// Each level plxd takes, its icon, a line about it, and how long (in seconds) a stripe takes to
-// cross the fill.
-const levels: {
-  value: AgentEffort;
-  name: string;
-  Icon: LucideIcon;
-  blurb: string;
-  speed: number;
-}[] = [
-  { value: "low", name: "Low", Icon: Sprout, blurb: "A little thought first", speed: 3 },
-  { value: "medium", name: "Medium", Icon: Brain, blurb: "Thinks it over", speed: 2 },
-  { value: "high", name: "High", Icon: Flame, blurb: "Digs in on the hard parts", speed: 1.3 },
-  {
-    value: "xhigh",
-    name: "Extra high",
-    Icon: Rocket,
-    blurb: "Takes its time on the hardest parts",
-    speed: 0.8,
-  },
-  { value: "max", name: "Max", Icon: Zap, blurb: "Everything it's got", speed: 0.4 },
+// Each level plxd takes, a line about it, and how long (in seconds) a stripe takes to cross the
+// fill.
+const levels: { value: AgentEffort; name: string; blurb: string; speed: number }[] = [
+  { value: "low", name: "Low", blurb: "A little thought first", speed: 3 },
+  { value: "medium", name: "Medium", blurb: "Thinks it over", speed: 2 },
+  { value: "high", name: "High", blurb: "Digs in on the hard parts", speed: 1.3 },
+  { value: "xhigh", name: "Extra high", blurb: "Takes its time on the hardest parts", speed: 0.8 },
+  { value: "max", name: "Max", blurb: "Everything it's got", speed: 0.4 },
 ];
 const last = levels.length - 1;
 // The thumb's center travels from one radius in to one radius short of the far end, as the
@@ -33,31 +22,62 @@ const at = (i: number) => `calc(${thumb} / 2 + (100% - ${thumb}) * ${i / last})`
 // A little overshoot, so the thumb and fill spring into place together.
 const spring = "duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]";
 
+/** A context window's size, such as `200K` or `1M`. */
+const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
+
+// What each provider calls fast mode, and its two settings.
+const fastNames: Record<Provider, { label: string; on: string; off: string }> = {
+  Claude: { label: "Fast mode", on: "On", off: "Off" },
+  Codex: { label: "Speed", on: "Fast", off: "Standard" },
+};
+
 /**
- * The reasoning picker: a button showing the effort that opens a slider with a stop for each
- * level. Stripes in the fill speed up with the level, and Max shimmers and glows (index.css).
+ * The reasoning picker: a button showing the effort, the context window, and a bolt in fast mode,
+ * that opens a slider with a stop for each level. Stripes in the fill speed up with the level,
+ * and Max shimmers and glows (index.css). Below it, the context window is a choice when the model
+ * offers more than one, and fast mode when the model has it (`fastMode`, by its provider's name
+ * for it).
  */
 export function EffortMenu({
   value,
   onChange,
+  contexts = [],
+  context,
+  onContext,
+  fastMode,
+  fast = false,
+  onFast,
 }: {
   value: AgentEffort;
   onChange: (value: AgentEffort) => void;
+  /** The context windows the model offers, in tokens. */
+  contexts?: number[];
+  /** The chosen context window. Absent: none is shown. */
+  context?: number;
+  onContext?: (tokens: number) => void;
+  /** The model's provider, when it has fast mode. */
+  fastMode?: Provider;
+  fast?: boolean;
+  onFast?: (fast: boolean) => void;
 }) {
   const id = useId();
   const level = levels.findIndex((l) => l.value === value);
-  const { name, Icon, blurb, speed } = levels[level]!;
+  const { name, blurb, speed } = levels[level]!;
   const full = level === last;
+  const label = context === undefined ? name : `${name} · ${tokens(context)}`;
+  const names = fastMode && fastNames[fastMode];
+  const row = "mt-4 flex items-center justify-between gap-2 text-[13px] text-muted-foreground";
   return (
     <>
       <button
         type="button"
         popoverTarget={id}
         aria-haspopup="dialog"
-        aria-label={`Reasoning effort: ${name}`}
+        aria-label={`Reasoning effort: ${label}${fast ? ", fast" : ""}`}
         className={menuButton}
       >
-        {name}
+        {fast && <Zap aria-hidden className="fill-current text-orange-500" />}
+        {label}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <div
@@ -65,20 +85,11 @@ export function EffortMenu({
         popover="auto"
         className={`${menuPanel()} w-80 p-4 ${full ? "effort-full" : ""}`}
       >
-        <div className="mb-4 flex items-center gap-3">
-          <span
-            key={level}
-            aria-hidden
-            className={`effort-icon grid size-9 shrink-0 place-items-center rounded-full [&_svg]:size-4.5 ${full ? "bg-amber-500/15 text-amber-500" : "bg-accent/15 text-accent"}`}
-          >
-            <Icon />
-          </span>
-          <div className="min-w-0">
-            <div className="text-[14px]">
-              Reasoning <span className="text-muted-foreground">{name}</span>
-            </div>
-            <div className="truncate text-[12px] text-faint-foreground">{blurb}</div>
+        <div className="mb-4 min-w-0">
+          <div className="text-[14px]">
+            Reasoning <span className="text-muted-foreground">{name}</span>
           </div>
+          <div className="truncate text-[12px] text-faint-foreground">{blurb}</div>
         </div>
         <div
           className="relative"
@@ -128,6 +139,36 @@ export function EffortMenu({
             </span>
           ))}
         </div>
+        {/* One context window is no choice, so there's nothing to show. */}
+        {context !== undefined && contexts.length > 1 && (
+          <div className={row}>
+            Context window
+            <Picker
+              label="Context window"
+              value={String(context)}
+              onChange={(v) => onContext?.(Number(v))}
+              options={contexts.map((n) => ({ value: String(n), label: tokens(n) }))}
+              align="end"
+              panelClassName="min-w-28"
+            />
+          </div>
+        )}
+        {names && (
+          <div className={row}>
+            {names.label}
+            <Picker
+              label={names.label}
+              value={fast ? "on" : "off"}
+              onChange={(v) => onFast?.(v === "on")}
+              options={[
+                { value: "on", label: names.on },
+                { value: "off", label: names.off },
+              ]}
+              align="end"
+              panelClassName="min-w-28"
+            />
+          </div>
+        )}
       </div>
     </>
   );

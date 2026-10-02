@@ -67,6 +67,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "thread/delete": true,
   "thread/update": true,
   "repo/update": true,
+  "repo/refs": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */

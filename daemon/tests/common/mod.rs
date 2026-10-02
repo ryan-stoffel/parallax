@@ -47,6 +47,8 @@ pub fn worker_request(
         model: Some("claude-sonnet-4-6".into()),
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         coordinator_tools: None,
         approvals: false,
     };

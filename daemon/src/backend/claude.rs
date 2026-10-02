@@ -4,7 +4,8 @@
 //!
 //! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json` in
 //! the run's cwd, plus the policy's flags, `--model`, `--effort`, and `--resume <session id>`
-//! (0004 [10]):
+//! (0004 [10]). Fast mode is `fastMode` in the run's one `--settings`, and a 200k context window
+//! is [`DISABLE_1M_ENV`]:
 //!
 //! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
 //!   also keeps the file tools out of Claude Code's shared temp folder (RYA-176). As a second
@@ -345,6 +346,14 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
+/// The context windows a run may ask for, in tokens. Claude Code 2.1.286 runs Opus 5.5, Fable
+/// 5.1, and Sonnet 5 with 1M by default, which [`DISABLE_1M_ENV`] caps at 200k; Haiku 4.5 has
+/// only 200k. So 1M passes nothing.
+const CONTEXT_WINDOWS: &[u32] = &[200_000, 1_000_000];
+
+/// Set to `1` for a run that asks for a 200k context window.
+const DISABLE_1M_ENV: &str = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
+
 /// Claude Code's permission modes, in the order its own picker lists them (0027).
 const PERMISSIONS: &[AgentPermission] = &[
     AgentPermission::Auto,
@@ -565,13 +574,20 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
+    // Headless Claude Code turns fast mode on only when the flag settings opt in.
+    let settings = |mut settings: Value| -> OsString {
+        if let Some(fast) = request.fast {
+            settings["fastMode"] = fast.into();
+        }
+        settings.to_string().into()
+    };
     if request.policy == ToolPolicy::NoWrite && !coordinator {
         if request.permission.is_some() {
             return Err(StartError::Invalid(
                 "a no-write run takes no permission; its mode is fixed (0004)".into(),
             ));
         }
-        args.extend(["--settings".into(), no_write_settings().to_string().into()]);
+        args.extend(["--settings".into(), settings(no_write_settings())]);
     } else {
         let mode = permission_mode(request.permission)?;
         args.extend(["--permission-mode".into(), mode.into()]);
@@ -600,8 +616,8 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
                 Credential::Subscription { config_home } => config_home.as_deref(),
                 Credential::ApiKey(_) => None,
             };
-            let settings = worker_settings(sandbox, &request.cwd, config_home);
-            args.extend(["--settings".into(), settings.to_string().into()]);
+            let worker = worker_settings(sandbox, &request.cwd, config_home);
+            args.extend(["--settings".into(), settings(worker)]);
         }
         for dir in &sandbox.writable {
             args.extend(["--add-dir".into(), dir.into()]);
@@ -610,8 +626,8 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     if coordinator || bypass {
         // Full Claude Code loads the user's and the project's settings, whose `env` could share
         // its task list, so it gets `--settings` only for this (RYA-251).
-        let settings = serde_json::json!({"env": settings_env()});
-        args.extend(["--settings".into(), settings.to_string().into()]);
+        let env = serde_json::json!({"env": settings_env()});
+        args.extend(["--settings".into(), settings(env)]);
     }
     if let Some(model) = &request.model {
         check_argument("model", model)?;
@@ -832,6 +848,14 @@ impl Backend for ClaudeBackend {
         PERMISSIONS
     }
 
+    fn context_windows(&self) -> &'static [u32] {
+        CONTEXT_WINDOWS
+    }
+
+    fn fast_mode(&self) -> bool {
+        true
+    }
+
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         // Images alone are a message too (RYA-202), as a resumed run's may be.
         if request.prompt.is_empty() && request.images.is_empty() {
@@ -857,6 +881,17 @@ impl Backend for ClaudeBackend {
         }
         if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
             spec.inject.set(SCRUB_ENV, "1");
+        }
+        match request.context_window {
+            None | Some(1_000_000) => {}
+            Some(200_000) => {
+                spec.inject.set(DISABLE_1M_ENV, "1");
+            }
+            Some(tokens) => {
+                return Err(StartError::Unsupported(format!(
+                    "Claude Code has no {tokens}-token context window"
+                )));
+            }
         }
         let env_file = match self.launcher.base().get("PATH") {
             Some(path) if request.policy == ToolPolicy::WorkspaceWrite => {

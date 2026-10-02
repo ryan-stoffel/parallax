@@ -6,6 +6,10 @@ import type { AgentPermission, ThreadStartParams } from "../protocol/generated/p
 //   its baked-in model catalog. `--model` takes these as they are.
 // - codex-cli 0.157.1: the slugs ~/.codex/models_cache.json lists (visibility "list"), which
 //   `-m` takes.
+// Context windows and fast mode, checked on Claude Code 2.1.286 and codex-cli 0.159.3: Claude's
+// models but Haiku run 1M natively and can be capped at 200K, and only Opus 5.5 has fast mode.
+// Codex's catalog gives every model 272K by default and all but GPT-5.5 up to 872K, and every one
+// the Fast service tier.
 // Cursor has no plxd backend, so it has no models here.
 
 export type Provider = "Claude" | "Codex";
@@ -16,18 +20,45 @@ export interface Model {
   name: string;
   provider: Provider;
   isNew?: boolean;
+  /** The context windows it offers, in tokens, its default first. */
+  contexts: number[];
+  /** Whether it has fast mode. */
+  fast?: boolean;
 }
 
+const claude1M = [1_000_000, 200_000];
+const codex872K = [272_000, 872_000];
+
 export const models: Model[] = [
-  { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "Claude", isNew: true },
-  { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "Claude" },
-  { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "Claude" },
-  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "Claude" },
-  { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "Codex", isNew: true },
-  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "Codex" },
-  { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "Codex" },
-  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "Codex" },
-  { id: "gpt-5.5", name: "GPT-5.5", provider: "Codex" },
+  {
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
+    provider: "Claude",
+    isNew: true,
+    contexts: claude1M,
+    fast: true,
+  },
+  { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "Claude", contexts: claude1M },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "Claude", contexts: claude1M },
+  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "Claude", contexts: [200_000] },
+  {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    provider: "Codex",
+    isNew: true,
+    contexts: codex872K,
+    fast: true,
+  },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "Codex", contexts: codex872K, fast: true },
+  {
+    id: "gpt-5.6-terra",
+    name: "GPT-5.6 Terra",
+    provider: "Codex",
+    contexts: codex872K,
+    fast: true,
+  },
+  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "Codex", contexts: codex872K, fast: true },
+  { id: "gpt-5.5", name: "GPT-5.5", provider: "Codex", contexts: [272_000], fast: true },
 ];
 
 /**
@@ -54,7 +85,11 @@ export const backendOf = (provider: Provider) =>
   Object.keys(backends).find((b) => backends[b]!.provider === provider)!;
 
 /**
- * What a new thread's run asks of its CLI, sent only to a plxd that advertises `runOptions`. An
- * open run's message adds the account it moves to, for another provider's model (`sendAccount`).
+ * What a new thread's run asks of its CLI, sent only to a plxd that advertises `runOptions`, and
+ * its context window and fast mode only to one that advertises `contextAndFast`. An open run's
+ * message adds the account it moves to, for another provider's model (`sendAccount`).
  */
-export type RunOptions = Pick<ThreadStartParams, "model" | "effort" | "permission" | "account">;
+export type RunOptions = Pick<
+  ThreadStartParams,
+  "model" | "effort" | "permission" | "contextWindow" | "fast" | "account"
+>;

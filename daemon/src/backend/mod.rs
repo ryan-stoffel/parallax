@@ -83,6 +83,18 @@ pub trait Backend: Send + Sync {
     fn permissions(&self) -> &'static [AgentPermission] {
         &[]
     }
+
+    /// The [`RunRequest::context_window`] sizes this backend maps to its CLI. None by default,
+    /// like [`Backend::efforts`].
+    fn context_windows(&self) -> &'static [u32] {
+        &[]
+    }
+
+    /// Whether this backend maps [`RunRequest::fast`] to its CLI. Not by default, like
+    /// [`Backend::efforts`].
+    fn fast_mode(&self) -> bool {
+        false
+    }
 }
 
 /// A started run: its control handle and its events.
@@ -171,6 +183,11 @@ pub struct RunRequest {
     /// How a worker may act inside its sandbox, or [`AgentPermission::Edit`]. Only a value in
     /// [`Backend::permissions`], and only for a [`ToolPolicy::WorkspaceWrite`] run.
     pub permission: Option<AgentPermission>,
+    /// The model's context window in tokens, or the CLI's default. Only a size in
+    /// [`Backend::context_windows`].
+    pub context_window: Option<u32>,
+    /// Fast mode on or off, or the CLI's default. Only for a backend with [`Backend::fast_mode`].
+    pub fast: Option<bool>,
     /// plxd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
     /// Routing drops them for every other role, and a backend refuses them on a worker.
     pub coordinator_tools: Option<CoordinatorTools>,

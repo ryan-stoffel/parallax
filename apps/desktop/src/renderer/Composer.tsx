@@ -202,11 +202,14 @@ export interface ComposerProps {
    */
   backend?: string;
   /**
-   * An open run's model, effort, and access (an unset one is the CLI's default). They start from
-   * the run's, and only one that differs from it is sent. Another provider's model moves the run
-   * to that provider's subscription: all three go, with the account.
+   * An open run's model, effort, access, context window, and fast mode (an unset one is the CLI's
+   * default). They start from the run's, and only one that differs from it is sent. Another
+   * provider's model moves the run to that provider's subscription: all of them go, with the
+   * account.
    */
-  started?: Pick<AgentRun, "model" | "effort" | "permission">;
+  started?: Pick<AgentRun, "model" | "effort" | "permission" | "contextWindow" | "fast">;
+  /** Whether the host's plxd takes a context window and fast mode (`contextAndFast`). */
+  contextAndFast?: boolean;
   /** Providers an open run can't move to, by why, whose models it doesn't offer. */
   unavailable?: Partial<Record<Provider, string>>;
   /** Why the model, effort, and access can't change right now, which turns them off. */
@@ -236,6 +239,7 @@ export function Composer({
   footer,
   backend,
   started,
+  contextAndFast,
   unavailable,
   optionsDisabled,
   imageCaps,
@@ -254,6 +258,8 @@ export function Composer({
   const [pickedModel, setModel] = useState<Model>();
   const [pickedEffort, setEffort] = useState<AgentEffort>();
   const [pickedPermission, setPermission] = useState<AgentPermission>();
+  const [pickedContext, setContext] = useState<number>();
+  const [pickedFast, setFast] = useState<boolean>();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const run = backend === undefined ? undefined : backends[backend];
   const runModels = models.filter((m) => m.provider === run?.provider);
@@ -267,6 +273,7 @@ export function Composer({
       id: started.model ?? "",
       name: started.model ?? "Default model",
       provider: run.provider,
+      contexts: [],
     });
   const model = choices.find((m) => m === pickedModel) ?? startedModel ?? runModels[0];
   // Where the message goes: the run's backend, or the one that runs the picked model.
@@ -278,12 +285,27 @@ export function Composer({
   const effort = pickedEffort ?? startedEffort;
   const wanted = pickedPermission ?? startedPermission;
   const permission = permissions.includes(wanted) ? wanted : "edit";
+  // The model's context windows and fast mode, on a plxd that takes them. One the model doesn't
+  // offer falls back to its default, and fast mode to off.
+  const contexts = (contextAndFast && model?.contexts) || [];
+  const startedContext = started?.contextWindow ?? startedModel?.contexts[0];
+  const wantedContext = pickedContext ?? startedContext;
+  const context =
+    wantedContext !== undefined && contexts.includes(wantedContext) ? wantedContext : contexts[0];
+  const hasFast = !!contextAndFast && !!model?.fast;
+  const startedFast = started?.fast ?? false;
+  const fast = hasFast && (pickedFast ?? startedFast);
+  const speed = {
+    ...(context !== undefined && { contextWindow: context }),
+    ...(hasFast && { fast }),
+  };
   let options: RunOptions = {};
   if (run && started && model && target !== backend)
     options = {
       model: model.id,
       effort,
       permission,
+      ...speed,
       account: { kind: "subscription", backend: target! },
     };
   else if (run && started)
@@ -291,8 +313,10 @@ export function Composer({
       ...(model && model !== startedModel && { model: model.id }),
       ...(effort !== startedEffort && { effort }),
       ...(permission !== startedPermission && { permission }),
+      ...(context !== undefined && context !== startedContext && { contextWindow: context }),
+      ...(hasFast && fast !== startedFast && { fast }),
     };
-  else if (run) options = { ...(model && { model: model.id }), effort, permission };
+  else if (run) options = { ...(model && { model: model.id }), effort, permission, ...speed };
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
   const empty = text.trim() === "" && images.length === 0;
@@ -544,7 +568,16 @@ export function Composer({
                     {divider}
                   </>
                 )}
-                <EffortMenu value={effort} onChange={setEffort} />
+                <EffortMenu
+                  value={effort}
+                  onChange={setEffort}
+                  contexts={contexts}
+                  context={context}
+                  onContext={setContext}
+                  fastMode={hasFast ? model!.provider : undefined}
+                  fast={fast}
+                  onFast={setFast}
+                />
                 {/* One permission is no choice, so there's nothing to show. */}
                 {permissions.length > 1 && (
                   <>

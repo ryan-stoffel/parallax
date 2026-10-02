@@ -40,10 +40,10 @@ use crate::{
     HostVersionParams, HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
     ProjectCreateResult, ProjectListParams, ProjectListResult, ProjectStartParams,
     ProjectUpdateParams, ProjectUpdateResult, PromptImage, RepoAddParams, RepoAddResult,
-    RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult,
+    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams,
+    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadListParams,
+    ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -239,6 +239,9 @@ method_table! {
         /// it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
         /// `projectEdit` capability, like `Project.icon`.
         ProjectUpdate = "project/update": ProjectUpdateParams => ProjectUpdateResult;
+        /// `repo/refs`: a repo entry's local and remote-tracking branches, for picking the ref a
+        /// thread starts from. Gated on the `repoRefs` capability.
+        RepoRefs = "repo/refs": RepoRefsParams => RepoRefsResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -317,6 +320,7 @@ mod tests {
                 "thread/delete",
                 "project/start",
                 "project/update",
+                "repo/refs",
                 "$/cancelRequest",
                 "events/event",
             ]
