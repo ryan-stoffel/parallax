@@ -195,9 +195,9 @@ pub struct RunRequest {
     /// call asks through [`Event::ApprovalRequested`] and [`Run::answer`]. Without it, the CLI
     /// runs as it did before, denying what would prompt.
     pub approvals: bool,
-    /// A normal thread's run (0017), which the user talks to directly: Claude Code runs it as
-    /// full Claude Code in every mode, with no worker sandbox (0034). A coordinator's subagents
-    /// leave it false.
+    /// A normal thread's run (0017), which the user talks to directly. With [`Self::approvals`],
+    /// Claude Code runs it as full Claude Code in every mode, with no worker sandbox (0034);
+    /// without, it keeps the sandbox. A coordinator's subagents leave it false.
     pub thread: bool,
 }
 

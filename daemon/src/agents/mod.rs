@@ -24,8 +24,8 @@
 //! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
 //! ([`wake`]).
 //!
-//! A normal thread's run is full Claude Code in every mode, with no worker sandbox, and its first
-//! message is the user's own (0034). A thread started with `checkout` has no worktree either: it
+//! A normal thread's run is full Claude Code in every mode, with no worker sandbox, when its
+//! client answers permission requests, and its first message is the user's own (0034). A thread started with `checkout` has no worktree either: it
 //! runs in its repo entry's own checkout, on the branch the user has out or the one `checkoutRef`
 //! switches it to first. plxd never commits it, since the checkout can hold the user's own
 //! uncommitted work, so its changes stay there for the user to review, and it has no diff to
@@ -168,7 +168,8 @@ pub(super) struct Prepared {
 /// Where a run's CLI starts, and what that needs.
 pub(super) enum Place {
     /// A worker, in its worktree, inside the worker sandbox (0013), which needs these folders.
-    /// A normal thread is placed the same way, but runs as full Claude Code (`thread`, 0034).
+    /// A normal thread is placed the same way (`thread`), and with `approvals` runs as full
+    /// Claude Code instead (0034).
     Worker {
         home: PathBuf,
         data_dir: PathBuf,
