@@ -30,9 +30,9 @@ use parallax_protocol::methods::{
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
     AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus,
     AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart,
-    ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, GithubStatus,
-    GithubStatusParams, HostHealth, HostVersion, Initialize, PrAct, PrDiff, PrView, ProjectCreate,
-    ProjectDelete, ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
+    ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, GithubStatusGet,
+    HostHealth, HostVersion, Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete,
+    ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
