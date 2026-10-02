@@ -157,7 +157,8 @@ export function Actions({
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!canRun || document.querySelector("dialog[open]")) return;
+      // The app's own shortcuts win over a keybinding saved before they were taken.
+      if (!canRun || appShortcut(e) || document.querySelector("dialog[open]")) return;
       const keybinding = keybindingOf(e);
       const action = keybinding && actions.find((a) => a.keybinding === keybinding);
       if (!action) return;
