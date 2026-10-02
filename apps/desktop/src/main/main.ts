@@ -15,13 +15,14 @@ import { savedHost, startHosts } from "./hosts";
 import { isOpenableExternally, isReload } from "./links";
 import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
-import { startUpdater } from "./updater";
+import { isNightly, startUpdater } from "./updater";
 
-// The app menu's About, Hide, and Quit items show the app's name. userData stays in the
-// package-named folder, because `Parallax` would share plxd's `parallax` data folder on a
-// case-insensitive disk.
+// The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
+// one, as its bundle's name does (scripts/ci/package-app). userData stays in the package-named
+// folder, because `Parallax` would share plxd's `parallax` data folder on a case-insensitive disk,
+// and so both builds share it.
 app.setPath("userData", app.getPath("userData"));
-app.setName("Parallax");
+app.setName(isNightly(app.getVersion()) ? "Parallax (Nightly)" : "Parallax");
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
 const devServerUrl = app.isPackaged ? undefined : process.env["PLX_DEV_SERVER_URL"];
@@ -90,8 +91,8 @@ ipcMain.handle("parallax:updateState", () => updateState);
 const updater = app.isPackaged ? startUpdater(publishUpdate) : undefined;
 const updatable = updater !== undefined || process.send !== undefined;
 
-// Installs or checks for a release, or asks scripts/dev.mjs to move the checkout to the update
-// channel's branch and rebuild, and resolves to the one-line answer.
+// Installs, downloads, or checks for a release, or asks scripts/dev.mjs to move the checkout to
+// the update channel's branch and rebuild, and resolves to the one-line answer.
 ipcMain.handle(
   "parallax:update",
   () =>
@@ -189,9 +190,9 @@ nativeTheme.on("updated", () => {
 });
 
 void app.whenReady().then(() => {
-  // Tells the updater, or scripts/dev.mjs, which channel to check and follow, now and on each
-  // change.
-  startHosts((channel) => (updater ? updater.follow(channel) : process.send?.({ channel })));
+  startHosts();
+  // Under `pnpm dev`, Update follows develop, the nightly channel's branch (scripts/channels.mjs).
+  if (!updater) process.send?.({ channel: "nightly" });
   // The end-to-end tests launch the app on CI machines, where a 490 MB download isn't wanted.
   if (!process.env["PLX_NO_NAMER"]) namer.warm();
   createWindow();

@@ -33,9 +33,6 @@ const bridge: ParallaxBridge = {
     return () => ipcRenderer.removeListener("parallax:updateState", forward);
   },
 
-  updateChannel: () => ipcRenderer.invoke("parallax:updateChannel"),
-  setUpdateChannel: (channel) => ipcRenderer.invoke("parallax:setUpdateChannel", channel),
-
   nameThread: (prompt) => ipcRenderer.invoke("parallax:nameThread", prompt),
 
   request: (hostId, method, params) =>

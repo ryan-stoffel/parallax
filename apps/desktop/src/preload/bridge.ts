@@ -14,14 +14,6 @@ import type {
 export const THEME_PREFERENCES = ["system", "dark", "light"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
-/**
- * The Updates setting: nightly follows every push to develop, release only released code (main).
- * A packaged app takes the channel's GitHub releases (0028); under `pnpm dev`, the branch that
- * scripts/channels.mjs names.
- */
-export const UPDATE_CHANNELS = ["nightly", "release"] as const;
-export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
-
 /** Where the top bar's Open button opens a folder: an editor, or the OS's file manager. */
 export const OPEN_TARGETS = ["cursor", "vscode", "files"] as const;
 export type OpenTarget = (typeof OPEN_TARGETS)[number];
@@ -41,9 +33,11 @@ export interface ParallaxBridge {
    */
   updatable: boolean;
   /**
-   * Packaged: installs the downloaded release and relaunches, or else checks now. Under `pnpm
-   * dev`: moves the checkout to the update channel's branch and rebuilds what changed; the app
-   * then reloads itself. Resolves to one line for people, such as "Up to date" or why it failed.
+   * Packaged: installs the downloaded release and relaunches, else downloads the available one,
+   * else checks now. A packaged app follows its own build's channel (0028): a nightly follows
+   * nightly releases, any other build Latest. Under `pnpm dev`: moves the checkout to develop and
+   * rebuilds what changed; the app then reloads itself. Resolves to one line for people, such as
+   * "Up to date" or why it failed.
    */
   update(): Promise<string>;
   /**
@@ -51,13 +45,6 @@ export interface ParallaxBridge {
    * while `updatable`. Returns the unsubscribe function.
    */
   onUpdateState(listener: (state: UpdateState) => void): () => void;
-  /** The saved update channel; nightly until one is chosen. */
-  updateChannel(): Promise<UpdateChannel>;
-  /**
-   * Saves the update channel, which takes effect at once. Resolves to an error for people, or
-   * undefined.
-   */
-  setUpdateChannel(channel: UpdateChannel): Promise<string | undefined>;
 
   /**
    * Names a new thread from its first prompt, with a model that runs on this computer. Resolves
@@ -135,6 +122,13 @@ export interface ParallaxBridge {
 
 /** What the sidebar's Update button shows. */
 export type UpdateState = {
+  /**
+   * A packaged app's newer release: its version, its notes as plain lines, and its GitHub page.
+   * `update` downloads it.
+   */
+  available?: { version: string; notes: string; url: string };
+  /** The download's percent, 0 to 100, while it runs. */
+  progress?: number;
   /** What `update` would install, such as "3 commits to apply"; undefined while nothing is. */
   ready?: string;
   /** One line on the button about the last check, such as a download or an error. */

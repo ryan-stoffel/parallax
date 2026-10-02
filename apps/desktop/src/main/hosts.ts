@@ -5,13 +5,11 @@ import path from "node:path";
 
 import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
 import {
-  UPDATE_CHANNELS,
   type ConnectionState,
   type RendererMethod,
   type RpcResponse,
   type SshHost,
   type SubscribeParams,
-  type UpdateChannel,
 } from "../preload/bridge";
 import { Connection, sshCommand } from "./connection";
 import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
@@ -82,10 +80,9 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 
 /**
  * Connects to the local plxd, as host id `local`, and to every saved SSH host at once, and
- * serves the `window.parallax` calls that reach plxd or edit the hosts and the update channel.
- * `onUpdateChannel` gets the channel at start and whenever it's saved.
+ * serves the `window.parallax` calls that reach plxd or edit the hosts.
  */
-export function startHosts(onUpdateChannel: (channel: UpdateChannel) => void): void {
+export function startHosts(): void {
   addConnection("local", () => {
     const plxd = localPlxd();
     return plxd === undefined ? undefined : [plxd, "attach"];
@@ -101,18 +98,6 @@ export function startHosts(onUpdateChannel: (channel: UpdateChannel) => void): v
   ipcMain.handle("parallax:hosts", () => settings.hosts);
   ipcMain.handle("parallax:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
   ipcMain.handle("parallax:removeHost", (_event, id: unknown) => removeHost(id));
-
-  const channel = () => settings.updateChannel ?? "nightly";
-  onUpdateChannel(channel());
-  ipcMain.handle("parallax:updateChannel", channel);
-  ipcMain.handle("parallax:setUpdateChannel", (_event, next: unknown) => {
-    // Unlike `ssh`, the renderer may set this, to one of the two channels.
-    const chosen = UPDATE_CHANNELS.find((c) => c === next);
-    if (!chosen) return "invalid update channel";
-    const error = saveSettings({ ...settings, updateChannel: chosen });
-    if (!error) onUpdateChannel(chosen);
-    return error;
-  });
 
   // Answers `{error}` rather than throwing, so a bad call reads like any failed request.
   ipcMain.handle(

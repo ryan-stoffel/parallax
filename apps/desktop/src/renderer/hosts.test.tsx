@@ -46,8 +46,6 @@ beforeEach(() => {
     onHosts: () => () => {},
     openTargets: async () => [],
     saveHost,
-    // Settings opens on General, which shows the update channel.
-    updateChannel: async () => "nightly",
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 

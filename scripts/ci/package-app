@@ -21,6 +21,14 @@ set -x
 
 version=${PLX_VERSION:-0.0.0-local}
 
+# A nightly build is named "Parallax (Nightly)" and has its own icon (RYA-286). Its appId stays
+# the standard build's, so installed nightlies still take its updates: Squirrel.Mac requires the
+# same bundle id.
+set --
+case $version in
+  *-nightly*) set -- "-c.productName=Parallax (Nightly)" -c.mac.icon=../../design/icon/icns/Parallax-nightly.icns ;;
+esac
+
 # plxd is built for the runner's own arch. Linux ships the static musl build (0023).
 host=$(rustc -vV | sed -n 's/^host: //p')
 arch=${host%%-*}
@@ -60,4 +68,4 @@ node --version
 pnpm --version
 pnpm install --frozen-lockfile
 pnpm build
-pnpm exec electron-builder --publish never "$builder_arch" -c.extraMetadata.version="$version"
+pnpm exec electron-builder --publish never "$builder_arch" -c.extraMetadata.version="$version" "$@"

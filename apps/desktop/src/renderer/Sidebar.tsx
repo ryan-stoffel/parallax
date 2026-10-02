@@ -11,7 +11,6 @@ import {
   CircleCheck,
   CirclePause,
   CircleSlash,
-  Download,
   Ellipsis,
   FileDiff,
   Folder,
@@ -23,7 +22,6 @@ import {
   ListFilter,
   LoaderCircle,
   PanelLeft,
-  RefreshCw,
   Search,
   Server,
   Settings,
@@ -42,7 +40,6 @@ import {
   type ToggleEvent,
 } from "react";
 
-import type { UpdateState } from "../preload/bridge";
 import type {
   AgentRun,
   AgentStatus,
@@ -73,6 +70,7 @@ import { iconColors, iconLook } from "./projectIcons";
 import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import { IconButton, menuItem, menuPanel, moveFocus, openOnContextMenu, TopBar } from "./ui";
+import { UpdateButton } from "./Update";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
@@ -696,65 +694,21 @@ function RepoFilterMenu({
   );
 }
 
-/**
- * The footer's buttons: Settings, Usage, and Update when `updatable`, which shows a download
- * icon with a dot while an update is ready to install: a downloaded release, or under `pnpm dev`
- * the commits the channel's branch has. Its label carries the updater's note, such as an error.
- */
+/** The footer's buttons: Settings, Usage, and Update when `updatable` (Update.tsx). */
 function Footer({
   onOpenSettings,
   onOpenUsage,
 }: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {
-  // "Updating…" while Update runs, then its answer until the next click.
-  const [update, setUpdate] = useState<string>();
-  const updating = update === "Updating…";
-  const [state, setState] = useState<UpdateState>({});
-  useEffect(
-    () => (window.parallax.updatable ? window.parallax.onUpdateState(setState) : undefined),
-    [],
-  );
-  const ready = state.ready !== undefined && !updating;
-  const runUpdate = async () => {
-    setUpdate("Updating…");
-    setUpdate(await window.parallax.update());
-  };
   return (
-    <>
-      {update && (
-        <p role="status" className="px-2 py-1 text-[12px] text-muted-foreground">
-          {update}
-        </p>
-      )}
-      <div className="flex items-center gap-1">
-        <IconButton label="Settings" keys="," onClick={() => onOpenSettings("general")}>
-          <Settings />
-        </IconButton>
-        <IconButton label="Usage" onClick={onOpenUsage}>
-          <ChartNoAxesColumn />
-        </IconButton>
-        {window.parallax.updatable && (
-          <span className="ml-auto">
-            <IconButton
-              label={ready ? `Update ready: ${state.ready}` : (state.note ?? "Update Parallax")}
-              disabled={updating}
-              onClick={() => void runUpdate()}
-            >
-              {ready ? (
-                <span className="relative grid">
-                  <Download />
-                  <span
-                    aria-hidden
-                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-accent"
-                  />
-                </span>
-              ) : (
-                <RefreshCw className={updating ? "animate-spin" : undefined} />
-              )}
-            </IconButton>
-          </span>
-        )}
-      </div>
-    </>
+    <div className="flex items-center gap-1">
+      <IconButton label="Settings" keys="," onClick={() => onOpenSettings("general")}>
+        <Settings />
+      </IconButton>
+      <IconButton label="Usage" onClick={onOpenUsage}>
+        <ChartNoAxesColumn />
+      </IconButton>
+      {window.parallax.updatable && <UpdateButton />}
+    </div>
   );
 }
 
