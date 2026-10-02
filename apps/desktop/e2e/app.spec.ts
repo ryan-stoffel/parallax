@@ -187,6 +187,22 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
   expect(await sent.evaluate(width)).toBe(2000);
 });
 
+test("the usage period picker shows its choice on each provider (RYA-284)", async () => {
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Providers" }).click();
+  // Every provider's pane stays mounted, so a radio group shared across them would leave only the
+  // last pane's checked.
+  for (const name of ["Claude Code", "Codex"]) {
+    await page.getByRole("tab", { name: new RegExp(`^${name}`) }).click();
+    const panel = page.getByRole("tabpanel");
+    await expect(panel.getByRole("radio", { name: "Today" })).toBeChecked();
+    await panel.getByText("This week", { exact: true }).click();
+    await expect(panel.getByRole("radio", { name: "This week" })).toBeChecked();
+    await panel.getByText("Today", { exact: true }).click();
+  }
+  await page.getByRole("button", { name: "Back to app" }).click();
+});
+
 test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();

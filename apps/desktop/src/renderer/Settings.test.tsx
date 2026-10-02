@@ -176,6 +176,24 @@ test("a sign-in stays open while another tab is chosen", async () => {
   expect(section("Codex sign-in terminal")).toBe(terminal);
 });
 
+test("opening a sign-in closes the other one, since the window runs one terminal", async () => {
+  answers["accounts/list"] = () => ({
+    result: {
+      checkedAt: "2026-09-28T12:00:00Z",
+      clis: [
+        { cli: "claude", installed: true, signedIn: false },
+        { cli: "codex", installed: true, signedIn: false },
+      ],
+    },
+  });
+  await renderSettings();
+  await click(button(pane(), "Sign in"));
+  await click(tab("Codex"));
+  await click(button(pane(), "Sign in"));
+  const terminals = [...document.querySelectorAll('[aria-label$="sign-in terminal"]')];
+  expect(terminals.map((t) => t.getAttribute("aria-label"))).toEqual(["Codex sign-in terminal"]);
+});
+
 test("keys still show when the CLIs can't be checked", async () => {
   answers["accounts/list"] = () => ({ error: { code: -32000, message: "probe failed" } });
   await renderSettings();

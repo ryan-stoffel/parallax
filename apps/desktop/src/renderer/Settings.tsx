@@ -381,6 +381,8 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
   const [selected, setSelected] = useState<CliKind>("claude");
+  // The one sign-in terminal: main runs one per window.
+  const [signingIn, setSigningIn] = useState<CliKind>();
   const [period, setPeriod] = useState<Period>("today");
   // By account id: a subscription's is its CLI's kind, the backend that runs it (0012).
   const { usage } = useUsage(host.id, connected);
@@ -529,6 +531,8 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
                 id={`${tabs}-${cli.cli}-pane`}
                 tabId={`${tabs}-${cli.cli}`}
                 hidden={cli !== current}
+                signingIn={signingIn === cli.cli}
+                onSignIn={(open) => setSigningIn(open ? cli.cli : undefined)}
                 hostId={host.id}
                 cli={cli}
                 usage={usage}
@@ -555,6 +559,8 @@ function ProviderPane({
   id,
   tabId,
   hidden,
+  signingIn,
+  onSignIn,
   hostId,
   cli,
   usage,
@@ -567,6 +573,10 @@ function ProviderPane({
   id: string;
   tabId: string;
   hidden: boolean;
+  /** Whether this CLI's sign-in terminal is open. */
+  signingIn: boolean;
+  /** Opens its sign-in terminal, closing any other, or closes it. */
+  onSignIn: (open: boolean) => void;
   hostId: string;
   cli: DetectedCli;
   usage?: ReadonlyMap<string, AccountUsage>;
@@ -576,7 +586,6 @@ function ProviderPane({
   onKeys: (update: (keys?: KeyAccount[]) => KeyAccount[] | undefined) => void;
   onSignedIn: () => void;
 }) {
-  const [signingIn, setSigningIn] = useState(false);
   const [adding, setAdding] = useState(false);
   const info = cliInfo[cli.cli];
   const name = info?.name ?? cli.cli;
@@ -603,7 +612,7 @@ function ProviderPane({
       <button
         type="button"
         aria-label={`Sign in to ${name}`}
-        onClick={() => setSigningIn(true)}
+        onClick={() => onSignIn(true)}
         className={`${quietButton} -my-1 shrink-0`}
       >
         Sign in
@@ -645,7 +654,7 @@ function ProviderPane({
               cli={cli.cli}
               name={name}
               onExit={onSignedIn}
-              onClose={() => setSigningIn(false)}
+              onClose={() => onSignIn(false)}
             />
           </Suspense>
         )}
