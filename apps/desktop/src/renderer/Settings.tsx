@@ -1,9 +1,19 @@
-import { ArrowUpRight, Monitor, Moon, Plus, Sun } from "lucide-react";
-import { Fragment, lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
+import { ArrowUpRight, Monitor, Moon, Plus, RefreshCw, Sun } from "lucide-react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import type { RpcError, ThemePreference, UpdateChannel } from "../preload/bridge";
 import {
   ErrorCodes,
+  type AccountUsage,
   type CliKind,
   type DetectedCli,
   type KeyAccount,
@@ -12,8 +22,10 @@ import {
 import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
-import { useHosts, type Host } from "./hosts";
-import { segment, Segmented } from "./ui";
+import { localId, useHosts, type Host } from "./hosts";
+import { backends, models } from "./models";
+import { age, backendLogos } from "./Sidebar";
+import { IconButton, segment, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
 import { uuidv7 } from "./uuidv7";
 
@@ -38,7 +50,9 @@ interface SettingsProps {
 export function Settings({ section, theme, onThemeChange }: SettingsProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-2xl px-8 pt-6 pb-16">
+      <div
+        className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" ? "max-w-4xl" : "max-w-2xl"}`}
+      >
         {section === "general" ? (
           <>
             <h1 className="mb-6 text-xl font-semibold">General</h1>
@@ -261,20 +275,28 @@ function HostForm({ host, onDone }: { host?: Host; onDone: () => void }) {
   );
 }
 
-/** The vendor CLIs plxd detects (0004), by `CliKind`, and where each says how to install it. */
-const cliInfo: Record<string, { name: string; install: string }> = {
-  claude: { name: "Claude Code", install: "https://code.claude.com/docs/en/setup" },
-  codex: { name: "Codex", install: "https://learn.chatgpt.com/docs/codex/cli" },
+/**
+ * The vendor CLIs plxd detects (0004), by `CliKind`: where each says how to install it, and the
+ * provider its API keys are for. Not Cursor's: 0004 rules out `CURSOR_API_KEY` as a fallback.
+ */
+const cliInfo: Record<string, { name: string; install: string; keyProvider?: Provider }> = {
+  claude: {
+    name: "Claude Code",
+    install: "https://code.claude.com/docs/en/setup",
+    keyProvider: "anthropic",
+  },
+  codex: {
+    name: "Codex",
+    install: "https://learn.chatgpt.com/docs/codex/cli",
+    keyProvider: "openai",
+  },
   cursor: { name: "Cursor", install: "https://cursor.com/docs/cli/installation" },
 };
 
 const providerNames: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
-  cursor: "Cursor",
 };
-/** The providers a key can be added for. Not Cursor: 0004 rules out `CURSOR_API_KEY` as a fallback. */
-const keyProviders: Provider[] = ["anthropic", "openai"];
 
 /**
  * A failed accounts request, for people. A plxd without these methods is too old. A keychain
@@ -288,63 +310,83 @@ function accountsError(error: RpcError): string {
   return describeError(error);
 }
 
-/** Settings > Providers: each host's vendor CLIs and API keys, with each one's usage. */
+/** A CLI's state in a few words: "Signed in · Max", "Not signed in", "Not installed". */
+function cliStatus(cli: DetectedCli): string {
+  if (!cli.installed) return "Not installed";
+  if (cli.signedIn === false) return "Not signed in";
+  // plxd couldn't tell; its note says why.
+  if (cli.signedIn !== true) return "Sign-in unknown";
+  // Plans come as the vendor writes them, such as Claude's "max".
+  const plan = cli.plan && cli.plan[0]!.toUpperCase() + cli.plan.slice(1);
+  return plan ? `Signed in · ${plan}` : "Signed in";
+}
+
+const statusDot = (cli: DetectedCli) =>
+  !cli.installed ? "bg-faint-foreground" : cli.signedIn ? "bg-added" : "bg-warning";
+
+/** "Checked just now", "Checked 12m ago". */
+function checkedLabel(checkedAt: string): string {
+  const ago = age(checkedAt);
+  return ago === "now" ? "Checked just now" : `Checked ${ago} ago`;
+}
+
+/**
+ * Settings > Providers: one host's vendor CLIs as a list, and the chosen one's account, usage,
+ * API keys, and models. With more than one host, a picker chooses which.
+ */
 function ProvidersSettings() {
   const hosts = useHosts();
-  // The one sign-in terminal, across every host: the app runs one per window.
-  const [signIn, setSignIn] = useState<{ hostId: string; cli: CliKind }>();
-  const [period, setPeriod] = useState<Period>("today");
+  const [hostId, setHostId] = useState(localId);
+  const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
+  const picker = hosts.length > 1 && (
+    <label className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+      on
+      <select
+        aria-label="Host"
+        value={host.id}
+        onChange={(e) => setHostId(e.target.value)}
+        className="rounded-md bg-transparent py-0.5 pr-1 font-medium text-foreground hover:bg-hover"
+      >
+        {hosts.map((h) => (
+          <option key={h.id} value={h.id}>
+            {h.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
   return (
     <>
-      <div className="mb-1.5 flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Providers</h1>
-        <Segmented label="Usage period" options={periods} value={period} onChange={setPeriod} />
-      </div>
+      <h1 className="mb-1.5 text-xl font-semibold">Providers</h1>
       <p className="mb-6 text-[13px] text-muted-foreground">
         The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
         API key as a fallback.
       </p>
-      {hosts.map((h) => (
-        <HostAccounts
-          key={h.id}
-          host={h}
-          period={period}
-          signingIn={signIn?.hostId === h.id ? signIn.cli : undefined}
-          onSignIn={(cli) => setSignIn(cli && { hostId: h.id, cli })}
-        />
-      ))}
+      <HostProviders key={host.id} host={host} picker={picker} />
     </>
   );
 }
 
 /**
- * One host's accounts: each CLI plxd detects there, then its API keys, which can be added and
- * removed, each with its usage over `period` and its limits, kept live. Loads once the host is
- * connected; Refresh probes the CLIs again. A CLI that isn't signed in signs in in a terminal
- * under its row (`signingIn`), and the CLIs are probed again when it ends.
+ * One host's providers: each CLI plxd detects there as a tab, and the chosen one's pane. Loads
+ * once the host is connected; Refresh probes the CLIs again. Usage over the chosen period and
+ * limits are kept live.
  */
-function HostAccounts({
-  host,
-  period,
-  signingIn,
-  onSignIn,
-}: {
-  host: Host;
-  period: Period;
-  signingIn?: CliKind;
-  /** Opens a CLI's sign-in terminal, or closes it with undefined. */
-  onSignIn: (cli?: CliKind) => void;
-}) {
+function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
   const [detected, setDetected] = useState<DetectedCli[]>();
+  const [checkedAt, setCheckedAt] = useState<string>();
   const [keys, setKeys] = useState<KeyAccount[]>();
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [selected, setSelected] = useState<CliKind>("claude");
+  // The one sign-in terminal: main runs one per window.
+  const [signingIn, setSigningIn] = useState<CliKind>();
+  const [period, setPeriod] = useState<Period>("today");
   // By account id: a subscription's is its CLI's kind, the backend that runs it (0012).
   const { usage } = useUsage(host.id, connected);
-  const usageOf = (id: string) => usage && <UsageLines usage={usage.get(id)} period={period} />;
+  const tabs = useId();
 
   // `accounts/list` may answer from plxd's cache; `accounts/refresh` always probes again. Keys
   // are listed again too, since another client may have changed them, and shown as soon as they
@@ -361,7 +403,10 @@ function HostAccounts({
         }),
       ]);
       setChecking(false);
-      if ("result" in clis) setDetected(clis.result.clis);
+      if ("result" in clis) {
+        setDetected(clis.result.clis);
+        setCheckedAt(clis.result.checkedAt);
+      }
       const failed = "error" in clis ? clis.error : "error" in keyList ? keyList.error : undefined;
       setError(failed && accountsError(failed));
     },
@@ -371,151 +416,311 @@ function HostAccounts({
     if (connected) void load("accounts/list");
   }, [connected, load]);
 
-  const refresh = (
-    <button
-      type="button"
-      disabled={!connected || checking}
-      onClick={() => void load("accounts/refresh")}
-      className={`${quietButton} -my-1 disabled:opacity-50`}
-    >
-      Refresh
-    </button>
-  );
+  const current = detected?.find((c) => c.cli === selected) ?? detected?.[0];
+  // Up and Down move between the tabs, wrapping at the ends, and choose the one they reach.
+  const moveTab = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    if (!step || !detected || !current) return;
+    e.preventDefault();
+    const i = detected.indexOf(current);
+    const next = detected[(i + step + detected.length) % detected.length]!;
+    setSelected(next.cli);
+    document.getElementById(`${tabs}-${next.cli}`)?.focus();
+  };
 
   return (
-    <Section title={host.name} action={refresh}>
-      {!connected ? (
-        <p className={`${settingRow} text-muted-foreground`}>
-          {connection ? statusLabel(connection) : "Connecting…"}
+    <>
+      <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
+        {picker || <span />}
+        <div className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
+          {checking ? "Checking…" : checkedAt && checkedLabel(checkedAt)}
+          <IconButton
+            label="Refresh"
+            disabled={!connected || checking}
+            onClick={() => void load("accounts/refresh")}
+          >
+            <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
+          </IconButton>
+        </div>
+      </div>
+      {error && (
+        <p role="alert" className="mb-3 text-[12.5px] text-danger">
+          {error}
         </p>
-      ) : (
-        <>
-          {error && (
-            <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
-              {error}
-            </p>
-          )}
-          {!detected && !error && (
-            <p className={`${settingRow} text-muted-foreground`}>Checking…</p>
-          )}
-          {detected?.map((cli) => (
-            <Fragment key={cli.cli}>
-              <CliRow
-                cli={cli}
-                usage={cli.installed && usageOf(cli.cli)}
-                onSignIn={signingIn === cli.cli ? undefined : () => onSignIn(cli.cli)}
-              />
-              {signingIn === cli.cli && (
-                <Suspense>
-                  <SignInTerminal
-                    hostId={host.id}
-                    cli={cli.cli}
-                    name={cliInfo[cli.cli]?.name ?? cli.cli}
-                    onExit={() => void load("accounts/refresh")}
-                    onClose={() => onSignIn(undefined)}
-                  />
-                </Suspense>
-              )}
-            </Fragment>
-          ))}
-          {keys?.map((account) => (
-            <KeyRow
-              key={account.id}
-              hostId={host.id}
-              account={account}
-              usage={usageOf(account.id)}
-              onRemoved={() => setKeys((all) => all?.filter((k) => k.id !== account.id))}
-            />
-          ))}
-          {keys &&
-            (adding ? (
-              <KeyForm
-                hostId={host.id}
-                onDone={(account) => {
-                  setAdding(false);
-                  if (account) setKeys((all) => [...(all ?? []), account]);
-                }}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setAdding(true)}
-                className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-              >
-                <Plus aria-hidden />
-                Add API key
-              </button>
-            ))}
-        </>
       )}
-    </Section>
+      {!connected || !current ? (
+        <>
+          <p className="mb-8 rounded-xl border border-border bg-surface px-4 py-3 text-[13px] text-muted-foreground">
+            {!connected
+              ? connection
+                ? statusLabel(connection)
+                : "Connecting…"
+              : error
+                ? "Couldn't check this host's CLIs."
+                : "Checking…"}
+          </p>
+          {/* The CLIs failed but the keys answered: they can still be seen and removed. */}
+          {connected && !!keys?.length && (
+            <Section title="API keys">
+              {keys.map((account) => (
+                <KeyRow
+                  key={account.id}
+                  hostId={host.id}
+                  account={account}
+                  usage={usage && <UsageLines usage={usage.get(account.id)} period={period} />}
+                  onRemoved={() => setKeys((all) => all?.filter((k) => k.id !== account.id))}
+                />
+              ))}
+            </Section>
+          )}
+        </>
+      ) : (
+        // Stacked until there's room for the list beside the pane.
+        <div className="@container">
+          <div className="grid gap-6 @2xl:grid-cols-[15rem_minmax(0,1fr)] @2xl:items-start">
+            <div
+              role="tablist"
+              aria-label="Providers"
+              aria-orientation="vertical"
+              onKeyDown={moveTab}
+              className="flex flex-col gap-0.5 rounded-xl border border-border bg-surface p-1"
+            >
+              {detected!.map((cli) => {
+                const Logo = backendLogos[cli.cli];
+                const on = cli === current;
+                return (
+                  <button
+                    key={cli.cli}
+                    id={`${tabs}-${cli.cli}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    aria-controls={`${tabs}-${cli.cli}-pane`}
+                    tabIndex={on ? 0 : -1}
+                    onClick={() => setSelected(cli.cli)}
+                    className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-hover aria-selected:bg-selected"
+                  >
+                    {Logo && <Logo className="mt-0.5 size-4 shrink-0" />}
+                    <span className="min-w-0">
+                      <span className="flex items-baseline gap-2">
+                        <span className="shrink-0 text-[13px] font-medium">
+                          {cliInfo[cli.cli]?.name ?? cli.cli}
+                        </span>
+                        {cli.version && (
+                          <span className="truncate font-mono text-[11.5px] text-faint-foreground">
+                            {cli.version}
+                          </span>
+                        )}
+                      </span>
+                      <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+                        <span
+                          aria-hidden
+                          className={`size-1.5 shrink-0 rounded-full ${statusDot(cli)}`}
+                        />
+                        {cliStatus(cli)}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {/* Every pane stays mounted, so a sign-in outlives a switch to another tab. */}
+            {detected!.map((cli) => (
+              <ProviderPane
+                key={cli.cli}
+                id={`${tabs}-${cli.cli}-pane`}
+                tabId={`${tabs}-${cli.cli}`}
+                hidden={cli !== current}
+                signingIn={signingIn === cli.cli}
+                onSignIn={(open) => setSigningIn(open ? cli.cli : undefined)}
+                hostId={host.id}
+                cli={cli}
+                usage={usage}
+                period={period}
+                onPeriod={setPeriod}
+                keys={keys}
+                onKeys={setKeys}
+                onSignedIn={() => void load("accounts/refresh")}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
 /**
- * A detected CLI: its version and plan, its `usage` lines, and whether it's signed in, or where
- * to install it. A known CLI that isn't signed in offers Sign in, while `onSignIn` is given.
+ * A CLI's pane, `hidden` unless its tab is chosen: its account, with Sign in (in a terminal under it, after which the CLIs
+ * are probed again with `onSignedIn`) or Install; its usage over `period`; the API keys for its
+ * provider, which can be added and removed; and the models Parallax runs on it.
  */
-function CliRow({
+function ProviderPane({
+  id,
+  tabId,
+  hidden,
+  signingIn,
+  onSignIn,
+  hostId,
   cli,
   usage,
-  onSignIn,
+  period,
+  onPeriod,
+  keys,
+  onKeys,
+  onSignedIn,
 }: {
+  id: string;
+  tabId: string;
+  hidden: boolean;
+  /** Whether this CLI's sign-in terminal is open. */
+  signingIn: boolean;
+  /** Opens its sign-in terminal, closing any other, or closes it. */
+  onSignIn: (open: boolean) => void;
+  hostId: string;
   cli: DetectedCli;
-  usage?: ReactNode;
-  onSignIn?: () => void;
+  usage?: ReadonlyMap<string, AccountUsage>;
+  period: Period;
+  onPeriod: (period: Period) => void;
+  keys?: KeyAccount[];
+  onKeys: (update: (keys?: KeyAccount[]) => KeyAccount[] | undefined) => void;
+  onSignedIn: () => void;
 }) {
+  const [adding, setAdding] = useState(false);
   const info = cliInfo[cli.cli];
-  // Plans come as the vendor writes them, such as Claude's "max".
-  const plan = cli.plan && cli.plan[0]!.toUpperCase() + cli.plan.slice(1);
-  const details = cli.installed
-    ? [cli.version, plan].filter(Boolean).join(" · ") || "Installed"
-    : "Not installed";
-  let status: ReactNode;
+  const name = info?.name ?? cli.cli;
+  const Logo = backendLogos[cli.cli];
+  const keyProvider = info?.keyProvider;
+  const provider = backends[cli.cli]?.provider;
+  const offered = provider ? models.filter((m) => m.provider === provider) : [];
+
+  let action: ReactNode;
   if (!cli.installed)
-    status = info && (
+    action = info && (
       <a
         href={info.install}
         target="_blank"
         rel="noreferrer"
-        className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
+        className={`${quietButton} flex shrink-0 items-center gap-1 [&_svg]:size-3.5`}
       >
         Install
         <ArrowUpRight aria-hidden />
       </a>
     );
-  else if (cli.signedIn === true) status = <span className="text-foreground">Signed in</span>;
-  else {
-    status = (
-      <span className="flex items-center gap-2">
-        {cli.signedIn === false ? (
-          "Not signed in"
-        ) : (
-          // plxd couldn't tell; its note says why.
-          <span title={cli.note}>Sign-in unknown</span>
-        )}
-        {info && onSignIn && (
-          <button
-            type="button"
-            aria-label={`Sign in to ${info.name}`}
-            onClick={onSignIn}
-            className={`${quietButton} -my-1`}
-          >
-            Sign in
-          </button>
-        )}
-      </span>
+  else if (cli.signedIn !== true && info && !signingIn)
+    action = (
+      <button
+        type="button"
+        aria-label={`Sign in to ${name}`}
+        onClick={() => onSignIn(true)}
+        className={`${quietButton} -my-1 shrink-0`}
+      >
+        Sign in
+      </button>
     );
-  }
 
   return (
-    <div className={settingRow}>
-      <div className="min-w-0">
-        <span className="block truncate text-[13px] font-medium">{info?.name ?? cli.cli}</span>
-        <span className="block truncate text-[12.5px] text-muted-foreground">{details}</span>
-        {usage}
+    <div id={id} role="tabpanel" aria-labelledby={tabId} hidden={hidden} className="min-w-0">
+      <div className="mb-5 flex items-center gap-2.5">
+        {Logo && <Logo className="size-5 shrink-0" />}
+        <h2 className="text-[15px] font-semibold">{name}</h2>
+        {cli.version && (
+          <span className="ml-auto truncate font-mono text-[12px] text-muted-foreground">
+            {cli.version}
+          </span>
+        )}
       </div>
-      <span className="shrink-0 text-[12.5px] text-muted-foreground">{status}</span>
+      <Section title="Account">
+        <div className={settingRow}>
+          <div className="min-w-0">
+            <span className="block truncate text-[13px] font-medium">{cliStatus(cli)}</span>
+            {!cli.installed ? (
+              <span className="block truncate text-[12.5px] text-muted-foreground">
+                Install {name} on this host, then refresh.
+              </span>
+            ) : (
+              cli.signedIn === undefined &&
+              cli.note && (
+                <span className="block text-[12.5px] text-muted-foreground">{cli.note}</span>
+              )
+            )}
+          </div>
+          {action}
+        </div>
+        {signingIn && (
+          <Suspense>
+            <SignInTerminal
+              hostId={hostId}
+              cli={cli.cli}
+              name={name}
+              onExit={onSignedIn}
+              onClose={() => onSignIn(false)}
+            />
+          </Suspense>
+        )}
+      </Section>
+      {usage && (
+        <Section
+          title="Usage"
+          action={
+            <Segmented label="Usage period" options={periods} value={period} onChange={onPeriod} />
+          }
+        >
+          <div className={settingRow}>
+            <div className="min-w-0">
+              <UsageLines usage={usage.get(cli.cli)} period={period} />
+            </div>
+          </div>
+        </Section>
+      )}
+      {keyProvider && keys && (
+        <Section title={`${providerNames[keyProvider]} API keys`}>
+          {keys
+            .filter((k) => k.provider === keyProvider)
+            .map((account) => (
+              <KeyRow
+                key={account.id}
+                hostId={hostId}
+                account={account}
+                usage={usage && <UsageLines usage={usage.get(account.id)} period={period} />}
+                onRemoved={() => onKeys((all) => all?.filter((k) => k.id !== account.id))}
+              />
+            ))}
+          {adding ? (
+            <KeyForm
+              hostId={hostId}
+              provider={keyProvider}
+              onDone={(account) => {
+                setAdding(false);
+                if (account) onKeys((all) => [...(all ?? []), account]);
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+            >
+              <Plus aria-hidden />
+              Add API key
+            </button>
+          )}
+        </Section>
+      )}
+      <Section title="Models">
+        {offered.length ? (
+          offered.map((m) => (
+            <div key={m.id} className={settingRow}>
+              <span className="truncate text-[13px]">{m.name}</span>
+              <span className="truncate font-mono text-[12px] text-faint-foreground">{m.id}</span>
+            </div>
+          ))
+        ) : (
+          <p className={`${settingRow} text-[12.5px] text-muted-foreground`}>
+            Parallax doesn't run {name} models yet.
+          </p>
+        )}
+      </Section>
     </div>
   );
 }
@@ -595,11 +800,19 @@ function KeyRow({
 }
 
 /**
- * Adds an API key on a host. The key is read from its field once, then the field is cleared:
+ * Adds an API key for `provider` on a host. The key is read from its field once, then the field is cleared:
  * plxd keeps it in the host's keychain and only ever answers with its masked form. `onDone`
  * gets the new account, or nothing when cancelled.
  */
-function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAccount) => void }) {
+function KeyForm({
+  hostId,
+  provider,
+  onDone,
+}: {
+  hostId: string;
+  provider: Provider;
+  onDone: (account?: KeyAccount) => void;
+}) {
   // One id while the form is open, so sending it again can't store the key twice (0007).
   const [id] = useState(uuidv7);
   const [error, setError] = useState<string>();
@@ -609,7 +822,7 @@ function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAcc
     const keyField = form.elements.namedItem("key") as HTMLInputElement;
     const params = {
       id,
-      provider: data.get("provider") as Provider,
+      provider,
       label: data.get("label") as string,
       key: keyField.value,
     };
@@ -630,16 +843,6 @@ function KeyForm({ hostId, onDone }: { hostId: string; onDone: (account?: KeyAcc
       }}
       className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
     >
-      <label className="text-[12.5px] text-muted-foreground">
-        Provider
-        <select name="provider" className={field}>
-          {keyProviders.map((p) => (
-            <option key={p} value={p}>
-              {providerNames[p]}
-            </option>
-          ))}
-        </select>
-      </label>
       <label className="text-[12.5px] text-muted-foreground">
         Label
         {/* Within plxd's limits (a label with a non-space, of at most 256 bytes, and a key of at

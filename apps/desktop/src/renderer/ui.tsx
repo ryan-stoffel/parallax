@@ -59,6 +59,8 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   disabled?: boolean;
 }) {
+  // Its own radio group, even when another control on the page has the same label.
+  const name = useId();
   return (
     <fieldset
       aria-label={label}
@@ -69,7 +71,7 @@ export function Segmented<T extends string>({
         <label key={o.value} className={segment}>
           <input
             type="radio"
-            name={label}
+            name={name}
             value={o.value}
             checked={value === o.value}
             onChange={() => onChange(o.value)}
