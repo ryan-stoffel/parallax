@@ -27,15 +27,8 @@ import {
 } from "react";
 
 import { browserUrl } from "./Browser";
-import {
-  appShortcut,
-  IconButton,
-  menuButton,
-  menuItem,
-  menuPanel,
-  moveFocus,
-  type KeyPress,
-} from "./ui";
+import { editingKeys, formatKeybinding, keybindingOf, modifiers } from "./keybindings";
+import { appShortcut, IconButton, menuButton, menuItem, menuPanel, moveFocus } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
 /** A saved command for a repository, run from the top bar in the thread's terminal drawer. */
@@ -100,34 +93,6 @@ function writeActions(hostId: string, repoId: string, actions: RepoAction[]) {
   } catch {
     // Storage is off: the change lasts until the window closes.
   }
-}
-
-const modifiers = ["Control", "Alt", "Shift", "Meta", "AltGraph"];
-
-/**
- * The keybinding a press makes, as its modifiers then its key's code, e.g. "Ctrl+Shift+KeyT".
- * Undefined for a lone modifier, for a press without Cmd or Ctrl, which would type, and off macOS
- * for AltGr, which arrives as Ctrl+Alt and types characters (as in `appShortcut`).
- */
-export function keybindingOf(e: KeyPress): string | undefined {
-  if (modifiers.includes(e.key) || !(e.metaKey || e.ctrlKey)) return undefined;
-  if (window.parallax.platform !== "darwin" && e.getModifierState("AltGraph")) return undefined;
-  const held = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta"];
-  return [...held.filter(Boolean), e.code].join("+");
-}
-
-// Cmd or Ctrl with these sends a message, or copies, pastes, cuts, undoes, or selects all.
-const editingKeys = ["Enter", "NumpadEnter", "KeyC", "KeyV", "KeyX", "KeyZ", "KeyA"];
-
-const macSymbols: Record<string, string> = { Ctrl: "⌃", Alt: "⌥", Shift: "⇧", Meta: "⌘" };
-
-/** A keybinding as the OS writes it: "⌃⇧T" on macOS, "Ctrl+Shift+T" elsewhere. */
-export function formatKeybinding(keybinding: string): string {
-  const parts = keybinding.split("+");
-  const key = parts.pop()!.replace(/^(Key|Digit)/, "");
-  return window.parallax.platform === "darwin"
-    ? parts.map((p) => macSymbols[p]).join("") + key
-    : [...parts, key].join("+");
 }
 
 /**

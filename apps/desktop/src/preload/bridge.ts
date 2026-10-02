@@ -25,6 +25,13 @@ export interface ParallaxBridge {
   version(): Promise<string>;
   /** Sets Electron's `nativeTheme.themeSource`, so native UI matches the app's theme. */
   setThemeSource(preference: ThemePreference): void;
+  /**
+   * Sets the Dock icon on macOS, or the windows' icon elsewhere, to a PNG data: URL drawn in the
+   * Appearance preset's colors. Null puts the app's own icon back on macOS.
+   */
+  setAppIcon(png: string | null): void;
+  /** Zooms this window's page, 1 being 100%: Settings > Appearance's text size. */
+  setZoom(factor: number): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
   /**
@@ -83,6 +90,13 @@ export interface ParallaxBridge {
   hosts(): Promise<SshHost[]>;
   /** Every later change to the saved hosts. Returns the unsubscribe function. */
   onHosts(listener: (hosts: SshHost[]) => void): () => void;
+  /**
+   * This computer's name in Parallax: the one the user gave it, else the computer's own, such as
+   * "macbook". Calls `listener` now and on every change. Returns the unsubscribe function.
+   */
+  onLocalName(listener: (name: string) => void): () => void;
+  /** Renames this computer in Parallax; an empty name puts the computer's own back. */
+  renameLocal(name: string): Promise<string | undefined>;
   /** Adds a host, or edits the one with `id`. Resolves to an error for people, or undefined. */
   saveHost(host: HostInput, id?: string): Promise<string | undefined>;
   /**
@@ -135,7 +149,18 @@ export interface ParallaxBridge {
   signIn(create: boolean): Promise<string | undefined>;
   /** Signs out on this computer. */
   signOut(): Promise<void>;
+
+  /** What Parallax keeps on this computer, with sizes. Takes a moment: it walks the folders. */
+  storage(): Promise<StorageItem[]>;
+  /** Opens a storage item's folder in the file manager. */
+  showFolder(id: StorageItemId): Promise<void>;
+  /** Clears the app's web cache. Nothing the user made is in it. */
+  clearCache(): Promise<void>;
 }
+
+export type StorageItemId = "history" | "worktrees" | "logs" | "app" | "cache";
+/** Something Parallax keeps on this computer: its folder, and its size in bytes. */
+export type StorageItem = { id: StorageItemId; name: string; folder: string; bytes: number };
 
 /** The signed-in Parallax account, as the app shows it. `picture` is a data: URL. */
 export type Profile = { name: string; email: string; picture?: string };

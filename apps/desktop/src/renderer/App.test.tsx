@@ -16,6 +16,12 @@ const bridge: Partial<ParallaxBridge> = {
   onConnectionState: () => () => {},
   hosts: async () => [],
   onHosts: () => () => {},
+  onLocalName: (listener: (name: string) => void) => {
+    listener("This Mac");
+    return () => {};
+  },
+  setZoom: () => {},
+  setAppIcon: () => {},
   openTargets: async () => [],
   openTargetIcons: async () => ({}),
   onProfile: () => () => {},

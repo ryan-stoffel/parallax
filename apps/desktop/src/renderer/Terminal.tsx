@@ -5,7 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import type { TerminalTarget } from "../preload/bridge";
-import { isTerminalToggle, rowShortcut } from "./ui";
+import { appShortcut, rowShortcut } from "./ui";
 
 /**
  * An xterm.js terminal showing main's terminal `id`, which it opens on `target` when it mounts and
@@ -47,10 +47,12 @@ export function TerminalView({
         cursor: color("--foreground"),
       };
     };
+    // The code font from Settings > Appearance comes first.
+    const codeFont = getComputedStyle(element).getPropertyValue("--code-font").trim();
     const term = new Terminal({
-      // Last, the bundled Nerd Font icons (index.css), for the glyphs no system font has.
-      fontFamily:
-        'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"',
+      // The code font from Settings > Appearance first, and last the bundled Nerd Font icons
+      // (index.css), for the glyphs no system font has.
+      fontFamily: `${codeFont && `${codeFont}, `}ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"`,
       fontSize: 12,
       cursorBlink: true,
       theme: theme(),
@@ -59,19 +61,18 @@ export function TerminalView({
     term.loadAddon(fit);
     // Links go to main, which opens https ones in the browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri)));
-    // Ctrl+Shift+` reaches the app, which toggles the terminal drawer with it. Outside macOS,
-    // Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac, and Ctrl+J and Ctrl+1 to
-    // Ctrl+9 reach the app, which toggles the terminal drawer and opens a sidebar row with them.
+    // The terminal's toggle (keybindings.ts) reaches the app, which toggles the terminal drawer
+    // with it. Outside macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac,
+    // and Ctrl+1 to Ctrl+9 reach the app, which opens a sidebar row with them.
     term.attachCustomKeyEventHandler(
       (e) =>
-        !isTerminalToggle(e) &&
+        appShortcut(e) !== "terminal" &&
         (window.parallax.platform === "darwin" ||
           e.type !== "keydown" ||
           !e.ctrlKey ||
           !(
             e.key === "v" ||
             (e.key === "c" && term.hasSelection()) ||
-            e.code === "KeyJ" ||
             rowShortcut(e) !== undefined
           )),
     );

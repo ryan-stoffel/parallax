@@ -1,4 +1,4 @@
-import { ArrowUpRight, Monitor, Moon, Plus, RefreshCw, Sun } from "lucide-react";
+import { ArrowUpRight, Plus, RefreshCw } from "lucide-react";
 import {
   lazy,
   Suspense,
@@ -24,10 +24,28 @@ import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
-import { backends, models } from "./models";
+import { backends, models, setCliEnabled, useDisabledClis } from "./models";
 import { Avatar, useProfile } from "./profile";
 import { age, backendLogos } from "./Sidebar";
-import { IconButton, segment, Segmented } from "./ui";
+import { AppearanceSettings } from "./settings/AppearanceSettings";
+import { ConnectionSettings } from "./settings/ConnectionSettings";
+import { GeneralSettings } from "./settings/GeneralSettings";
+import { KeybindSettings } from "./settings/KeybindSettings";
+import {
+  dangerButton,
+  field,
+  HostPicker,
+  PageTitle,
+  primaryButton,
+  quietButton,
+  Section,
+  settingRow,
+  StatusDot,
+  Switch,
+} from "./settings/parts";
+import { SourceControlSettings } from "./settings/SourceControlSettings";
+import { StorageSettings } from "./settings/StorageSettings";
+import { IconButton, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
 import { uuidv7 } from "./uuidv7";
 
@@ -35,12 +53,6 @@ import { uuidv7 } from "./uuidv7";
 const SignInTerminal = lazy(() =>
   import("./SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
 );
-
-const themeOptions: { value: ThemePreference; name: string; icon: ReactNode }[] = [
-  { value: "system", name: "System", icon: <Monitor /> },
-  { value: "light", name: "Parallax Light", icon: <Sun /> },
-  { value: "dark", name: "Parallax Dark", icon: <Moon /> },
-];
 
 interface SettingsProps {
   section: SettingsSection;
@@ -53,44 +65,24 @@ export function Settings({ section, theme, onThemeChange }: SettingsProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div
-        className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" ? "max-w-4xl" : "max-w-2xl"}`}
+        className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" ? "max-w-5xl" : "max-w-3xl"}`}
       >
         {section === "account" ? (
           <AccountSettings />
         ) : section === "general" ? (
-          <>
-            <h1 className="mb-6 text-xl font-semibold">General</h1>
-            <Section title="Appearance">
-              <fieldset className="flex items-center justify-between gap-6 px-4 py-3.5">
-                <legend className="float-left">
-                  <span className="block text-[13px] font-medium">Theme</span>
-                  <span className="block text-[12.5px] text-muted-foreground">
-                    Follows your system unless you pick one.
-                  </span>
-                </legend>
-                <div className="flex gap-0.5 rounded-lg border border-border p-0.5">
-                  {themeOptions.map((opt) => (
-                    <label key={opt.value} className={segment}>
-                      <input
-                        type="radio"
-                        name="theme"
-                        value={opt.value}
-                        checked={theme === opt.value}
-                        onChange={() => onThemeChange(opt.value)}
-                        className="sr-only"
-                      />
-                      {opt.icon}
-                      {opt.name}
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-            </Section>
-          </>
-        ) : section === "hosts" ? (
-          <HostsSettings />
-        ) : (
+          <GeneralSettings />
+        ) : section === "appearance" ? (
+          <AppearanceSettings theme={theme} onThemeChange={onThemeChange} />
+        ) : section === "keybinds" ? (
+          <KeybindSettings />
+        ) : section === "providers" ? (
           <ProvidersSettings />
+        ) : section === "sourceControl" ? (
+          <SourceControlSettings />
+        ) : section === "storage" ? (
+          <StorageSettings />
+        ) : (
+          <ConnectionSettings />
         )}
       </div>
     </div>
@@ -167,144 +159,6 @@ function AccountSettings() {
   );
 }
 
-const settingRow =
-  "flex items-center justify-between gap-4 border-border px-4 py-3 not-last:border-b";
-const quietButton =
-  "rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground";
-
-/** Settings > Hosts: this computer, then the SSH hosts, which can be added, edited, and removed. */
-function HostsSettings() {
-  const hosts = useHosts();
-  // The host whose form is open: its id, "new", or none.
-  const [editing, setEditing] = useState<string>();
-  const [removeError, setRemoveError] = useState<string>();
-  const remove = async (id: string) => setRemoveError(await window.parallax.removeHost(id));
-
-  return (
-    <>
-      <h1 className="mb-1.5 text-xl font-semibold">Hosts</h1>
-      <p className="mb-6 text-[13px] text-muted-foreground">
-        Machines your agents run on. Add one you reach over SSH, such as a Mac mini with plxd
-        installed.
-      </p>
-      {removeError && (
-        <p role="alert" className="mb-3 text-[12.5px] text-danger">
-          {removeError}
-        </p>
-      )}
-      <Section title="Hosts">
-        {hosts.map((h) =>
-          editing === h.id ? (
-            <HostForm key={h.id} host={h} onDone={() => setEditing(undefined)} />
-          ) : (
-            <div key={h.id} className={settingRow}>
-              <div className="min-w-0">
-                <span className="block truncate text-[13px] font-medium">{h.name}</span>
-                <span className="block truncate text-[12.5px] text-muted-foreground">
-                  {h.destination ?? "This computer"}
-                </span>
-              </div>
-              {h.destination && (
-                <div className="flex shrink-0 gap-1">
-                  <button type="button" className={quietButton} onClick={() => setEditing(h.id)}>
-                    Edit
-                  </button>
-                  <button type="button" className={quietButton} onClick={() => void remove(h.id)}>
-                    Remove
-                  </button>
-                </div>
-              )}
-            </div>
-          ),
-        )}
-        {editing === "new" ? (
-          <HostForm onDone={() => setEditing(undefined)} />
-        ) : (
-          <button
-            type="button"
-            onClick={() => setEditing("new")}
-            className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-          >
-            <Plus aria-hidden />
-            Add host
-          </button>
-        )}
-      </Section>
-    </>
-  );
-}
-
-const field =
-  "mt-1 block w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] placeholder:text-faint-foreground";
-
-/** Adds a host, or edits `host`. `onDone` runs once it's saved or cancelled. */
-function HostForm({ host, onDone }: { host?: Host; onDone: () => void }) {
-  const [error, setError] = useState<string>();
-  const [saving, setSaving] = useState(false);
-  const save = async (form: HTMLFormElement) => {
-    // Text inputs' values are strings.
-    const data = new FormData(form);
-    setSaving(true);
-    const input = {
-      name: data.get("name") as string,
-      destination: data.get("destination") as string,
-    };
-    const failed = await window.parallax.saveHost(input, host?.id);
-    setSaving(false);
-    if (failed) setError(failed);
-    else onDone();
-  };
-
-  return (
-    <form
-      aria-label={host ? `Edit ${host.name}` : "Add host"}
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save(e.currentTarget);
-      }}
-      className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
-    >
-      <label className="text-[12.5px] text-muted-foreground">
-        Name
-        <input name="name" defaultValue={host?.name} placeholder="Mac mini" className={field} />
-      </label>
-      <label className="text-[12.5px] text-muted-foreground">
-        SSH destination
-        <input
-          name="destination"
-          required
-          defaultValue={host?.destination}
-          placeholder="mac-mini, or me@192.168.1.20"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          className={field}
-        />
-        <span className="mt-1 block text-faint-foreground">
-          Anything ssh accepts. Parallax uses your ssh config and keys.
-        </span>
-      </label>
-      {error && (
-        <p role="alert" className="text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
-      <div className="flex justify-end gap-2">
-        <button type="button" onClick={onDone} className={quietButton}>
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={saving}
-          className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
-        >
-          {host ? "Save" : "Add host"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
 /**
  * The vendor CLIs plxd detects (0004), by `CliKind`: where each says how to install it, and the
  * provider its API keys are for. Not Cursor's: 0004 rules out `CURSOR_API_KEY` as a fallback.
@@ -351,8 +205,7 @@ function cliStatus(cli: DetectedCli): string {
   return plan ? `Signed in · ${plan}` : "Signed in";
 }
 
-const statusDot = (cli: DetectedCli) =>
-  !cli.installed ? "bg-faint-foreground" : cli.signedIn ? "bg-added" : "bg-warning";
+const cliTone = (cli: DetectedCli) => (!cli.installed ? "off" : cli.signedIn ? "on" : "warn");
 
 /** "Checked just now", "Checked 12m ago". */
 function checkedLabel(checkedAt: string): string {
@@ -368,30 +221,13 @@ function ProvidersSettings() {
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
-  const picker = hosts.length > 1 && (
-    <label className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-      on
-      <select
-        aria-label="Host"
-        value={host.id}
-        onChange={(e) => setHostId(e.target.value)}
-        className="rounded-md bg-transparent py-0.5 pr-1 font-medium text-foreground hover:bg-hover"
-      >
-        {hosts.map((h) => (
-          <option key={h.id} value={h.id}>
-            {h.name}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
+  const picker = <HostPicker hosts={hosts} value={host.id} onChange={setHostId} />;
   return (
     <>
-      <h1 className="mb-1.5 text-xl font-semibold">Providers</h1>
-      <p className="mb-6 text-[13px] text-muted-foreground">
+      <PageTitle title="Providers">
         The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
-        API key as a fallback.
-      </p>
+        API key as a fallback. Turn one off to hide its models on this computer.
+      </PageTitle>
       <HostProviders key={host.id} host={host} picker={picker} />
     </>
   );
@@ -417,6 +253,7 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
   // By account id: a subscription's is its CLI's kind, the backend that runs it (0012).
   const { usage } = useUsage(host.id, connected);
   const tabs = useId();
+  const off = useDisabledClis();
 
   // `accounts/list` may answer from plxd's cache; `accounts/refresh` always probes again. Keys
   // are listed again too, since another client may have changed them, and shown as soon as they
@@ -461,7 +298,7 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
   return (
     <>
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
-        {picker || <span />}
+        {picker}
         <div className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
           {checking ? "Checking…" : checkedAt && checkedLabel(checkedAt)}
           <IconButton
@@ -507,7 +344,7 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
       ) : (
         // Stacked until there's room for the list beside the pane.
         <div className="@container">
-          <div className="grid gap-6 @2xl:grid-cols-[15rem_minmax(0,1fr)] @2xl:items-start">
+          <div className="grid gap-6 @2xl:grid-cols-[17rem_minmax(0,1fr)] @2xl:items-start">
             <div
               role="tablist"
               aria-label="Providers"
@@ -518,39 +355,46 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
               {detected!.map((cli) => {
                 const Logo = backendLogos[cli.cli];
                 const on = cli === current;
+                const name = cliInfo[cli.cli]?.name ?? cli.cli;
+                const enabled = !off.includes(cli.cli);
                 return (
-                  <button
+                  // The switch sits beside the tab, not in it: a button can't hold a button.
+                  <div
                     key={cli.cli}
-                    id={`${tabs}-${cli.cli}`}
-                    type="button"
-                    role="tab"
-                    aria-selected={on}
-                    aria-controls={`${tabs}-${cli.cli}-pane`}
-                    tabIndex={on ? 0 : -1}
-                    onClick={() => setSelected(cli.cli)}
-                    className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-hover aria-selected:bg-selected"
+                    className={`flex items-center gap-2 rounded-lg pr-3 hover:bg-hover ${on ? "bg-selected" : ""}`}
                   >
-                    {Logo && <Logo className="mt-0.5 size-4 shrink-0" />}
-                    <span className="min-w-0">
-                      <span className="flex items-baseline gap-2">
-                        <span className="shrink-0 text-[13px] font-medium">
-                          {cliInfo[cli.cli]?.name ?? cli.cli}
+                    <button
+                      id={`${tabs}-${cli.cli}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      aria-controls={`${tabs}-${cli.cli}-pane`}
+                      tabIndex={on ? 0 : -1}
+                      onClick={() => setSelected(cli.cli)}
+                      className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg py-2.5 pl-3 text-left ${enabled ? "" : "opacity-60"}`}
+                    >
+                      {Logo && <Logo className="mt-0.5 size-4 shrink-0" />}
+                      <span className="min-w-0">
+                        <span className="flex items-baseline gap-2">
+                          <span className="shrink-0 text-[13px] font-medium">{name}</span>
+                          {cli.version && (
+                            <span className="truncate font-mono text-[11.5px] text-faint-foreground">
+                              {cli.version}
+                            </span>
+                          )}
                         </span>
-                        {cli.version && (
-                          <span className="truncate font-mono text-[11.5px] text-faint-foreground">
-                            {cli.version}
-                          </span>
-                        )}
+                        <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+                          <StatusDot tone={enabled ? cliTone(cli) : "off"} />
+                          {enabled ? cliStatus(cli) : "Off"}
+                        </span>
                       </span>
-                      <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
-                        <span
-                          aria-hidden
-                          className={`size-1.5 shrink-0 rounded-full ${statusDot(cli)}`}
-                        />
-                        {cliStatus(cli)}
-                      </span>
-                    </span>
-                  </button>
+                    </button>
+                    <Switch
+                      label={`Use ${name}`}
+                      checked={enabled}
+                      onChange={(next) => setCliEnabled(cli.cli, next)}
+                    />
+                  </div>
                 );
               })}
             </div>
@@ -623,6 +467,7 @@ function ProviderPane({
   const keyProvider = info?.keyProvider;
   const provider = backends[cli.cli]?.provider;
   const offered = provider ? models.filter((m) => m.provider === provider) : [];
+  const enabled = !useDisabledClis().includes(cli.cli);
 
   let action: ReactNode;
   if (!cli.installed)
@@ -655,11 +500,17 @@ function ProviderPane({
         {Logo && <Logo className="size-5 shrink-0" />}
         <h2 className="text-[15px] font-semibold">{name}</h2>
         {cli.version && (
-          <span className="ml-auto truncate font-mono text-[12px] text-muted-foreground">
+          <span className="truncate font-mono text-[12px] text-muted-foreground">
             {cli.version}
           </span>
         )}
       </div>
+      {!enabled && (
+        <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-[12.5px] text-muted-foreground">
+          Off on this computer: new threads and model menus leave out {name}'s models. Threads
+          already on {name} keep running.
+        </p>
+      )}
       <Section title="Account">
         <div className={settingRow}>
           <div className="min-w-0">
@@ -689,6 +540,33 @@ function ProviderPane({
           </Suspense>
         )}
       </Section>
+      {cli.installed && (
+        <Section title="Runtime">
+          <div className={settingRow}>
+            <div className="min-w-0">
+              <span className="block text-[13px] font-medium">Binary</span>
+              <span className="block text-[12.5px] text-muted-foreground">
+                The {name} CLI plxd found on this host's PATH, which runs your agents.
+              </span>
+            </div>
+            <span
+              className="max-w-[50%] truncate font-mono text-[12px] text-muted-foreground"
+              title={cli.path}
+            >
+              {cli.path ?? "Unknown"}
+            </span>
+          </div>
+          {/* A newer plxd may send kinds this doesn't know, which say nothing here. */}
+          {(cli.authKind === "subscription" || cli.authKind === "apiKey") && (
+            <div className={settingRow}>
+              <span className="text-[13px] font-medium">Signed in with</span>
+              <span className="text-[12.5px] text-muted-foreground">
+                {cli.authKind === "subscription" ? "A subscription" : "An API key"}
+              </span>
+            </div>
+          )}
+        </Section>
+      )}
       {usage && (
         <Section
           title="Usage"
@@ -806,7 +684,7 @@ function KeyRow({
               type="button"
               disabled={removing}
               onClick={() => void remove()}
-              className="rounded-md bg-red-600 px-2.5 py-1 text-[12.5px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
+              className={dangerButton}
             >
               Remove
             </button>
@@ -911,35 +789,10 @@ function KeyForm({
         <button type="button" onClick={() => onDone()} className={quietButton}>
           Cancel
         </button>
-        <button
-          type="submit"
-          disabled={saving}
-          className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
-        >
+        <button type="submit" disabled={saving} className={primaryButton}>
           Add key
         </button>
       </div>
     </form>
-  );
-}
-
-/** A titled card of settings rows. `action` sits at the end of the title's line. */
-function Section({
-  title,
-  action,
-  children,
-}: {
-  title: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section aria-label={title} className="mb-8">
-      <div className="mb-2 flex items-center justify-between gap-4">
-        <h2 className="text-[12.5px] font-medium text-muted-foreground">{title}</h2>
-        {action}
-      </div>
-      <div className="rounded-xl border border-border bg-surface">{children}</div>
-    </section>
   );
 }

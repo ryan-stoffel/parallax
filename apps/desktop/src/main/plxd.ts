@@ -40,14 +40,17 @@ export function findPlxd(lookup: PlxdLookup): string | undefined {
 }
 
 /**
- * plxd's data folder on macOS and Linux, as `DataDir::default_location` finds it
- * (daemon/src/paths.rs): `PLXD_DATA_DIR`, else `~/Library/Application Support/parallax` on macOS, and
- * `$XDG_DATA_HOME/parallax` (when absolute) or `~/.local/share/parallax` on Linux.
+ * plxd's data folder, as `DataDir::default_location` finds it (daemon/src/paths.rs):
+ * `PLXD_DATA_DIR`, else `~/Library/Application Support/parallax` on macOS,
+ * `%LOCALAPPDATA%\parallax` on Windows, and `$XDG_DATA_HOME/parallax` (when absolute) or
+ * `~/.local/share/parallax` on Linux.
  */
 export function dataDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string {
   const override = env["PLXD_DATA_DIR"];
   if (override) return override;
   if (platform === "darwin") return path.join(home, "Library/Application Support/parallax");
+  if (platform === "win32")
+    return path.join(env["LOCALAPPDATA"] ?? path.join(home, "AppData", "Local"), "parallax");
   const xdg = env["XDG_DATA_HOME"];
   return path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(home, ".local/share"), "parallax");
 }

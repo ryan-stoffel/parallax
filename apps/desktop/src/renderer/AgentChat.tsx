@@ -1028,7 +1028,7 @@ function Musing() {
   const [tick, setTick] = useState(() => Math.floor(Date.now() / musingMs));
   const [first] = useState(tick);
   useEffect(() => {
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (document.documentElement.classList.contains("reduce-motion")) return;
     const timer = setTimeout(
       () => setTick(Math.max(tick + 1, Math.floor(Date.now() / musingMs))),
       musingMs - (Date.now() % musingMs),

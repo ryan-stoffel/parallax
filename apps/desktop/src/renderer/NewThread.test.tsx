@@ -80,6 +80,12 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => [],
     onHosts: () => () => {},
+    onLocalName: (listener: (name: string) => void) => {
+      listener("This Mac");
+      return () => {};
+    },
+    setZoom: () => {},
+    setAppIcon: () => {},
     openTargets: async () => [],
     openTargetIcons: async () => ({}),
   } as Partial<ParallaxBridge> as ParallaxBridge;

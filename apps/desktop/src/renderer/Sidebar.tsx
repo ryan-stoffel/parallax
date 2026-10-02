@@ -20,9 +20,12 @@ import {
   FolderPlus,
   GitBranch,
   GitMerge,
+  HardDrive,
+  Keyboard,
   Laptop,
   ListFilter,
   LoaderCircle,
+  Palette,
   PanelLeftClose,
   Plus,
   Search,
@@ -117,22 +120,15 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
       <TopBar className="traffic-light-inset">
         <IconButton
           label="Hide sidebar"
-          keys="S"
+          command="sidebar"
           aria-expanded
           aria-controls="sidebar"
           onClick={onClose}
         >
           <PanelLeftClose />
         </IconButton>
-        <button
-          type="button"
-          onClick={onNewThread}
-          className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-[14px] font-semibold tracking-tight text-foreground hover:bg-hover"
-        >
-          <ParallaxMark className="size-5" />
-          Parallax
-        </button>
-        <IconButton label="New thread" keys="N" onClick={onNewThread}>
+  Palette,
+  PanelLeftClose,
           <SquarePen />
         </IconButton>
       </TopBar>
@@ -851,7 +847,7 @@ function Footer({
       >
         {profile ? <Avatar profile={profile} size={22} /> : <CircleUser />}
       </IconButton>
-      <IconButton label="Settings" keys="," onClick={() => onOpenSettings("general")}>
+      <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
       </IconButton>
       <IconButton label="Usage" onClick={onOpenUsage}>
@@ -1449,17 +1445,21 @@ export function age(time: string, now = Date.now()): string {
   return days < 7 ? `${days}d` : `${Math.floor(days / 7)}w`;
 }
 
-/** Each Settings section's name, in the nav's order. */
-export const settingsNames: Record<SettingsSection, string> = {
-  account: "Account",
-  general: "General",
-  hosts: "Hosts",
-  providers: "Providers",
-};
-const sections = Object.entries(settingsNames).map(([id, name]) => ({
-  id: id as SettingsSection,
-  name,
-}));
+/** Each Settings section's name and icon, in the nav's order. */
+const sections: { id: SettingsSection; name: string; Icon: LucideIcon }[] = [
+  { id: "account", name: "Account", Icon: CircleUser },
+  { id: "general", name: "General", Icon: Settings },
+  { id: "appearance", name: "Appearance", Icon: Palette },
+  { id: "keybinds", name: "Keybinds", Icon: Keyboard },
+  { id: "providers", name: "Providers", Icon: Bot },
+  { id: "sourceControl", name: "Source control", Icon: GitBranch },
+  { id: "storage", name: "Storage", Icon: HardDrive },
+  { id: "connections", name: "Connections", Icon: Server },
+];
+export const settingsNames = Object.fromEntries(sections.map((s) => [s.id, s.name])) as Record<
+  SettingsSection,
+  string
+>;
 
 /** The sidebar while Settings is open. */
 export function SettingsNav({
@@ -1485,6 +1485,7 @@ export function SettingsNav({
           onClick={() => onSection(s.id)}
           className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
         >
+          <s.Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           {s.name}
         </button>
       ))}

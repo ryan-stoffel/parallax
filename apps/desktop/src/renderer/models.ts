@@ -1,4 +1,5 @@
 import type { AgentPermission, ThreadStartParams } from "../protocol/generated/protocol";
+import { stored } from "./stored";
 
 // The models each worker backend's CLI took on 2026-09-29, and what to send for each. A
 // placeholder until plxd reports them per host. Sources:
@@ -147,3 +148,16 @@ export type RunOptions = Pick<
   ThreadStartParams,
   "model" | "effort" | "permission" | "contextWindow" | "fast" | "account"
 >;
+
+const disabled = stored<string[]>("parallax.disabledProviders", [], (raw, fallback) =>
+  Array.isArray(raw) ? raw.filter((c): c is string => typeof c === "string") : fallback,
+);
+
+/** The CLIs turned off in Settings > Providers, by `CliKind`, kept current. */
+export const useDisabledClis = disabled.use;
+
+/** Turns a CLI's provider on or off for new threads and model menus on this computer. */
+export const setCliEnabled = (cli: string, on: boolean) =>
+  disabled.set(
+    on ? disabled.get().filter((c) => c !== cli) : [...new Set([...disabled.get(), cli])],
+  );

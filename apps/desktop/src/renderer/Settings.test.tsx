@@ -7,6 +7,7 @@ import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge
 import type { SettingsSection } from "./App";
 import { models } from "./models";
 import { Settings } from "./Settings";
+import { appShortcut } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -70,6 +71,12 @@ beforeEach(() => {
     onConnectionState: () => () => {},
     hosts: async () => [mini],
     onHosts: () => () => {},
+    onLocalName: (listener: (name: string) => void) => {
+      listener("This Mac");
+      return () => {};
+    },
+    setZoom: () => {},
+    setAppIcon: () => {},
     request: request as unknown as ParallaxBridge["request"],
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
@@ -355,4 +362,95 @@ test("shows each account's usage and limits for the chosen period, and keeps the
   await settle();
   expect(calls("usage/get")).toHaveLength(2);
   expect(rows("Usage")[0]).toContain("5-hour limit reached · resets in 2 h");
+});
+
+test("a provider's switch turns it off on this computer, and back on", async () => {
+  await renderSettings();
+  const toggle = () =>
+    document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Use Codex"]')!;
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
+  await click(toggle());
+  expect(tabs()[1]).toBe("Codex0.156.1Off");
+  expect(JSON.parse(localStorage.getItem("parallax.disabledProviders")!)).toEqual(["codex"]);
+  await click(toggle());
+  expect(tabs()[1]).toBe("Codex0.156.1Not signed in");
+});
+
+test("a shortcut can be added, refused when another command has it, removed, and reset", async () => {
+  await renderSettings("keybinds");
+  const row = () => button(document.body, "Reset all").closest("section")!;
+  const press = async (init: KeyboardEventInit) => {
+    const input = document.querySelector<HTMLInputElement>(
+      '[aria-label="New shortcut for Open Usage"]',
+    )!;
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init })),
+    );
+  };
+  await click(
+    document.querySelector<HTMLButtonElement>('[aria-label="Add a shortcut to Open Usage"]')!,
+  );
+  await press({ key: "s", code: "KeyS", metaKey: true });
+  expect(row().querySelector('[role="alert"]')!.textContent).toBe(
+    "⌘S already runs Toggle sidebar.",
+  );
+  await press({ key: "y", code: "KeyY", metaKey: true });
+  const usage = (init: KeyboardEventInit) => appShortcut(new KeyboardEvent("keydown", init));
+  expect(usage({ code: "KeyY", metaKey: true })).toBe("usage");
+
+  await click(
+    document.querySelector<HTMLButtonElement>('[aria-label="Remove ⌥⌘U from Open Usage"]')!,
+  );
+  expect(usage({ code: "KeyU", metaKey: true, altKey: true })).toBeUndefined();
+  await click(button(row(), "Reset all"));
+  expect(usage({ code: "KeyU", metaKey: true, altKey: true })).toBe("usage");
+  expect(usage({ code: "KeyY", metaKey: true })).toBeUndefined();
+});
+
+test("Source control shows the host's GitHub CLI and its account", async () => {
+  states["local"] = {
+    status: "connected",
+    plxd: "0.1.0",
+    protocol: 1,
+    capabilities: { githubStatus: {} },
+  };
+  answers["github/status"] = () => ({
+    result: { installed: true, version: "2.100.0", signedIn: true, account: "ryan", checkedAt: "" },
+  });
+  await renderSettings("sourceControl");
+  expect(rows("Hosting")).toEqual(["GitHubgh 2.100.0Signed in as @ryan"]);
+  states["local"] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} };
+});
+
+test("Storage deletes only a host's archived threads, after asking", async () => {
+  window.parallax.storage = async () => [];
+  answers["thread/list"] = () => ({
+    result: {
+      repos: [],
+      threads: [
+        { id: "t-old", repo: "r", archived: true, createdAt: "" },
+        { id: "t-live", repo: "r", createdAt: "" },
+      ],
+    },
+  });
+  answers["thread/delete"] = () => ({ result: {} });
+  await renderSettings("storage");
+  const archived = section("Archived threads");
+  expect(archived.textContent).toContain("1 archived thread");
+  await click(button(archived, "Delete all"));
+  expect(calls("thread/delete")).toEqual([]);
+  await click(button(archived, "Delete all"));
+  expect(calls("thread/delete")).toEqual([{ host: "local", params: { runId: "t-old" } }]);
+});
+
+test("Connections renames this computer", async () => {
+  const renameLocal = vi.fn(async () => undefined);
+  window.parallax.renameLocal = renameLocal;
+  await renderSettings("connections");
+  await click(document.querySelector<HTMLButtonElement>('[aria-label="Rename this computer"]')!);
+  const input = document.querySelector<HTMLInputElement>('[aria-label="Computer name"]')!;
+  expect(input.value).toBe("This Mac");
+  input.value = "macbook";
+  await act(async () => input.form!.requestSubmit());
+  expect(renameLocal).toHaveBeenCalledWith("macbook");
 });

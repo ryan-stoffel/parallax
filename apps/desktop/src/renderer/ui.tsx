@@ -12,6 +12,8 @@ import {
   type ToggleEvent,
 } from "react";
 
+import { commandOf, keybindingOf, useShortcutLabel, type Command } from "./keybindings";
+
 /**
  * A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere, and
  * "Shift+N" is "⌘⇧N" on macOS.
@@ -28,49 +30,15 @@ export type KeyPress = Pick<
 >;
 
 /**
- * The app's own shortcut `e` presses, if any: Mod+S the sidebar, Mod+Alt+B the side panel, Mod+J
- * or Ctrl+Shift+` (Ctrl on macOS too) the terminal, Mod+N the new thread picker, Mod+Shift+N a new
- * thread with no repo, Mod+1 to Mod+9 a sidebar row (`rowShortcut`), Mod+, Settings, Mod+Alt+O
- * Open, and Mod+Alt+U Usage. App, ThreadList, and OpenMenu act on
- * them, and a repository action's keybinding can't be one.
+ * The app's own shortcut `e` presses, if any: a command's binding (keybindings.ts), or Mod+1 to
+ * Mod+9 a sidebar row (`rowShortcut`), which can't be rebound. App, ThreadList, and OpenMenu act
+ * on them, and a repository action's keybinding can't be one.
  */
-export function appShortcut(
-  e: KeyPress,
-):
-  | "sidebar"
-  | "panel"
-  | "terminal"
-  | "newThread"
-  | "noRepoThread"
-  | "row"
-  | "settings"
-  | "open"
-  | "usage"
-  | undefined {
-  if (isTerminalToggle(e)) return "terminal";
-  const mac = window.parallax.platform === "darwin";
-  if (!(mac ? e.metaKey : e.ctrlKey)) return undefined;
-  // Off macOS, AltGr arrives as Ctrl+Alt and types characters we must not eat. (macOS may report
-  // Option as AltGraph, and uses Cmd anyway.)
-  if (!mac && e.getModifierState("AltGraph")) return undefined;
-  if (e.altKey) {
-    if (e.code === "KeyB") return "panel";
-    if (e.shiftKey) return undefined;
-    if (e.code === "KeyO") return "open";
-    if (e.code === "KeyU") return "usage";
-    return undefined;
-  }
-  if (e.code === "KeyS" && !e.shiftKey) return "sidebar";
-  if (e.code === "KeyJ") return "terminal";
-  if (e.code === "KeyN") return e.shiftKey ? "noRepoThread" : "newThread";
+export function appShortcut(e: KeyPress): Command | "row" | undefined {
   if (rowShortcut(e) !== undefined) return "row";
-  if (e.key === ",") return "settings";
-  return undefined;
+  const keybinding = keybindingOf(e);
+  return keybinding ? commandOf(keybinding) : undefined;
 }
-
-/** Whether `e` is Ctrl+Shift+`, which toggles the terminal on every OS. */
-export const isTerminalToggle = (e: KeyPress) =>
-  e.code === "Backquote" && e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
 
 /** The 0-based row Mod+1 to Mod+9 picks, from the digit `e` presses with Mod and nothing else. */
 export function rowShortcut(e: KeyPress): number | undefined {
@@ -111,20 +79,21 @@ export function RowBadge({ index }: { index: number }) {
 }
 
 /**
- * A square, icon-only toolbar button. `label` is its accessible name and tooltip; `aria-pressed`
- * shows it on.
+ * A square, icon-only toolbar button. `label` is its accessible name and tooltip, with
+ * `command`'s current shortcut; `aria-pressed` shows it on.
  */
 export function IconButton({
   label,
-  keys,
+  command,
   children,
   ...props
-}: { label: string; keys?: string } & ButtonHTMLAttributes<HTMLButtonElement>) {
+}: { label: string; command?: Command } & ButtonHTMLAttributes<HTMLButtonElement>) {
+  const keys = useShortcutLabel(command);
   return (
     <button
       type="button"
       aria-label={label}
-      title={keys ? `${label} (${shortcut(keys)})` : label}
+      title={keys ? `${label} (${keys})` : label}
       className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
       {...props}
     >
@@ -135,7 +104,7 @@ export function IconButton({
 
 /** A segmented control's option: a label around a visually hidden radio. */
 export const segment =
-  "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
+  "flex items-center gap-1.5 rounded-md whitespace-nowrap px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
 
 /**
  * A row of radios drawn as one segmented control, named by `label`. Disabled, it stays in place

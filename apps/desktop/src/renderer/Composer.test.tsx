@@ -8,6 +8,7 @@ import type { ParallaxBridge } from "../preload/bridge";
 import type { PromptImage } from "../protocol/generated/protocol";
 import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
+import { setCliEnabled } from "./models";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The model menu's items are in the DOM either way.
@@ -587,4 +588,25 @@ test("Esc closes the menu, Enter then sends, and a plxd without composerMenus sh
   await typeAgain("/");
   expect(request).not.toHaveBeenCalled();
   expect(options()).toEqual([]);
+});
+
+test("a provider turned off in Settings leaves the menu, and a new thread starts on the next", async () => {
+  setCliEnabled("claude", false);
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend, caps, { newThread: true, backend: "claude" });
+  const menu = document.getElementById(
+    document.querySelector('[aria-label="Model: GPT-6.1 Sol"]')!.getAttribute("popovertarget")!,
+  )!;
+  expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Claude"]')!.disabled).toBe(true);
+  type("Hello");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "Hello",
+    expect.objectContaining({
+      model: "gpt-6.1-sol",
+      account: { kind: "subscription", backend: "codex" },
+    }),
+    [],
+  );
+  setCliEnabled("claude", true);
 });
