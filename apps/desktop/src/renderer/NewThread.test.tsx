@@ -426,17 +426,15 @@ describe("with plxd's run options", () => {
     ]);
   });
 
-  test("New Thread offers Cursor's models but not Codex's, which plxd can't run as a thread yet", async () => {
+  test("New Thread offers Codex's and Cursor's models", async () => {
     await renderApp();
     const menu = document.getElementById(
       control("Model: Claude Opus 5.5")!.getAttribute("popovertarget")!,
     )!;
     const rail = (name: string) =>
       menu.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
-    expect(rail("Codex").disabled).toBe(true);
+    expect(rail("Codex").disabled).toBe(false);
     expect(rail("Cursor").disabled).toBe(false);
-    const listed = [...menu.querySelectorAll('[role="menuitemradio"]')].map((m) => m.textContent);
-    expect(listed.some((m) => m?.includes("GPT-6 Astra"))).toBe(false);
   });
 
   test("an OpenAI key default offers Codex's models and no plan", async () => {
@@ -446,7 +444,10 @@ describe("with plxd's run options", () => {
     });
     await renderApp();
     expect(control("Model: GPT-6 Astra")).not.toBeNull();
-    expect(document.querySelector('main [aria-label^="Access"]')).toBeNull();
+    const access = control("Access: Accept Edits")!;
+    const menu = document.getElementById(access.getAttribute("popovertarget")!)!;
+    expect(menu.textContent).toContain("Bypass Permissions");
+    expect(menu.textContent).not.toContain("Plan");
 
     await send("Tidy the README");
     expect(calls("thread/start")).toEqual([
