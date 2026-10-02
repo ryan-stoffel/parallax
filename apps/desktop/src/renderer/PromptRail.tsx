@@ -21,8 +21,8 @@ export function plainText(markdown: string): string {
 }
 
 /**
- * A bar for each of the user's prompts, down the transcript's left edge. The one being read is
- * longer and brighter. Hovering or focusing a bar shows its prompt
+ * A bar for each of the user's prompts, down the transcript's left edge. While the rail is hovered
+ * or focused, the one being read is longer and brighter. Hovering or focusing a bar shows its prompt
  * and the start of the reply beside it, and clicking it scrolls back to that prompt.
  */
 export function PromptRail({
@@ -48,7 +48,7 @@ export function PromptRail({
     <div
       ref={rail}
       onMouseLeave={() => setShown(undefined)}
-      className="absolute top-1/2 left-1 z-10 flex max-h-[70%] -translate-y-1/2"
+      className="group/rail absolute top-1/2 left-1 z-10 flex max-h-[70%] -translate-y-1/2"
     >
       <nav
         aria-label="Prompts"
@@ -69,7 +69,9 @@ export function PromptRail({
           >
             <span
               className={`h-0.5 rounded-full transition-[width,background-color] group-hover:w-4 group-hover:bg-foreground group-focus-visible:w-4 group-focus-visible:bg-foreground ${
-                at === current ? "w-4 bg-foreground" : "w-2.5 bg-faint-foreground/60"
+                at === current
+                  ? "w-2.5 bg-faint-foreground/60 group-focus-within/rail:w-4 group-focus-within/rail:bg-foreground group-hover/rail:w-4 group-hover/rail:bg-foreground"
+                  : "w-2.5 bg-faint-foreground/60"
               }`}
             />
           </button>
