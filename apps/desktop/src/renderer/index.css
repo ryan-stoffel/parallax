@@ -45,6 +45,14 @@
   --warning: #d97706;
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
   --added: #15803d;
+  /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
+  --code: #f7f7f8;
+  --syntax-keyword: #cf222e;
+  --syntax-string: #0a3069;
+  --syntax-number: #0550ae;
+  --syntax-title: #8250df;
+  --syntax-type: #953800;
+  --syntax-comment: #6e7781;
   --working: var(--accent);
   /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
      each mixed into the surface so they stay opaque. Both modes compute from their own surface,
@@ -89,6 +97,13 @@
   --danger: #ff8f8a;
   --warning: #f59e0b;
   --added: #4ade80;
+  --code: #151515;
+  --syntax-keyword: #ff7b72;
+  --syntax-string: #a5d6ff;
+  --syntax-number: #79c0ff;
+  --syntax-title: #d2a8ff;
+  --syntax-type: #ffa657;
+  --syntax-comment: #8b949e;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
   --project-red: #f87171;
   --project-orange: #fb923c;
@@ -125,6 +140,7 @@
   --color-danger: var(--danger);
   --color-warning: var(--warning);
   --color-added: var(--added);
+  --color-code: var(--code);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -207,10 +223,14 @@ body {
 .markdown :is(h1, h2, h3, h4) {
   font-weight: 600;
   line-height: 1.3;
-  margin-top: 1.25em;
+  letter-spacing: -0.01em;
+  margin-top: 1.4em;
+}
+.markdown > :is(h1, h2, h3, h4):first-child {
+  margin-top: 0;
 }
 .markdown h1 {
-  font-size: 1.3em;
+  font-size: 1.35em;
 }
 .markdown h2 {
   font-size: 1.15em;
@@ -228,7 +248,20 @@ body {
   list-style: decimal;
 }
 .markdown li + li {
-  margin-top: 0.25em;
+  margin-top: 0.3em;
+}
+.markdown li::marker {
+  color: var(--faint-foreground);
+}
+/* GitHub's task lists: the checkbox in the bullet's place. */
+.markdown .contains-task-list {
+  list-style: none;
+  padding-left: 0.1em;
+}
+.markdown .task-list-item input {
+  margin: 0 0.55em 0 0;
+  vertical-align: -0.1em;
+  accent-color: var(--accent);
 }
 .markdown a {
   color: var(--accent);
@@ -238,28 +271,89 @@ body {
   text-decoration: underline;
 }
 .markdown blockquote {
-  border-left: 2px solid var(--border);
+  border-left: 3px solid color-mix(in oklab, var(--foreground) 18%, transparent);
   padding-left: 0.9em;
   color: var(--muted-foreground);
 }
 .markdown :not(pre) > code {
-  border-radius: 4px;
-  background: var(--selected);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--code);
   padding: 0.1em 0.35em;
-  font-size: 0.88em;
+  font-family: var(--font-mono);
+  font-size: 0.86em;
 }
+/* A table scrolls on its own, in a rounded box, with its header on a fill. */
 .markdown table {
   display: block;
+  width: max-content;
+  max-width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
 }
 .markdown :is(th, td) {
-  border: 1px solid var(--border);
-  padding: 0.3em 0.7em;
+  padding: 0.4em 0.8em;
   text-align: left;
+}
+.markdown th {
+  background: var(--hover);
+  font-weight: 600;
+}
+.markdown tr:not(:last-child) > td,
+.markdown th {
+  border-bottom: 1px solid var(--border);
+}
+.markdown :is(th, td) + :is(th, td) {
+  border-left: 1px solid var(--border);
 }
 .markdown hr {
   border-color: var(--border);
+  margin-block: 1.5em;
+}
+
+/* Code highlighted by rehype-highlight (AgentChat.tsx), in GitHub's colors for each theme. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-meta .hljs-keyword,
+.hljs-doctag {
+  color: var(--syntax-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string {
+  color: var(--syntax-string);
+}
+.hljs-number,
+.hljs-literal,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-meta,
+.hljs-operator {
+  color: var(--syntax-number);
+}
+.hljs-title,
+.hljs-section {
+  color: var(--syntax-title);
+}
+.hljs-type,
+.hljs-built_in,
+.hljs-symbol,
+.hljs-name,
+.hljs-tag {
+  color: var(--syntax-type);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--syntax-comment);
+  font-style: italic;
 }
 
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
@@ -274,8 +368,8 @@ body {
 }
 .composer-input pre {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--sidebar);
+  border-radius: 12px;
+  background: var(--code);
   padding: 0.75rem;
   font-family: var(--font-mono);
   font-size: 12.5px;
