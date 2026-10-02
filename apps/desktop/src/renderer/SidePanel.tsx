@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
+import { Browser } from "./Browser";
 import { IconButton, TopBar } from "./ui";
 
 interface Surface {
@@ -21,9 +22,11 @@ interface Surface {
   icon: LucideIcon;
   /** The letter that opens it from the list. */
   key: string;
-  /** Its empty state, or absent while it isn't built. */
+  /** Its empty state, or absent while it isn't built or has a view of its own. */
   empty?: { title: string; hint: string };
 }
+
+const isBuilt = (s: Surface) => !!s.empty || s.name === "Browser";
 
 const surfaces: Surface[] = [
   {
@@ -56,7 +59,8 @@ const surfaces: Surface[] = [
  * a view keeps its state behind another. The top bar keeps the hide button where the main pane
  * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
  * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents` and
- * `context` are those views, such as a Project's, in place of their empty states.
+ * `context` are those views, such as a Project's, in place of their empty states. `remoteHost` is
+ * the open host's name when it's an SSH host.
  */
 export function SidePanel({
   open,
@@ -67,6 +71,7 @@ export function SidePanel({
   topBarClassName = "",
   agents,
   context,
+  remoteHost,
 }: {
   open: boolean;
   onClose: () => void;
@@ -76,6 +81,7 @@ export function SidePanel({
   topBarClassName?: string;
   agents?: ReactNode;
   context?: ReactNode;
+  remoteHost?: string;
 }) {
   // The open views in tab order, and the one shown; with none shown, the list is.
   const [tabs, setTabs] = useState<Surface[]>([]);
@@ -97,7 +103,9 @@ export function SidePanel({
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
   };
   const viewOf = (s: Surface) =>
-    s.name === "Agents" && agents ? (
+    s.name === "Browser" ? (
+      <Browser remoteHost={remoteHost} />
+    ) : s.name === "Agents" && agents ? (
       agents
     ) : s.name === "Context" && context ? (
       context
@@ -117,7 +125,7 @@ export function SidePanel({
       // From the list, a view's letter opens it while focus is in the panel.
       onKeyDown={(e) => {
         if (active || e.metaKey || e.ctrlKey || e.altKey) return;
-        const next = surfaces.find((s) => s.empty && s.key === e.key.toUpperCase());
+        const next = surfaces.find((s) => isBuilt(s) && s.key === e.key.toUpperCase());
         if (!next) return;
         e.preventDefault();
         openView(next);
@@ -197,9 +205,9 @@ export function SidePanel({
               <li key={s.name}>
                 <button
                   type="button"
-                  disabled={!s.empty}
-                  title={s.empty ? undefined : "Not built yet"}
-                  aria-keyshortcuts={s.empty ? s.key : undefined}
+                  disabled={!isBuilt(s)}
+                  title={isBuilt(s) ? undefined : "Not built yet"}
+                  aria-keyshortcuts={isBuilt(s) ? s.key : undefined}
                   onClick={() => openView(s)}
                   className="group flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] enabled:hover:bg-hover disabled:text-faint-foreground"
                 >
