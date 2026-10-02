@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell } from "electron";
 import path from "node:path";
 
 import { THEME_PREFERENCES, type OpenTarget, type UpdateState } from "../preload/bridge";
@@ -12,7 +12,7 @@ import {
 } from "./editors";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { savedHost, startHosts } from "./hosts";
-import { isOpenableExternally, isReload } from "./links";
+import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
 import { isNightly, startUpdater } from "./updater";
@@ -44,6 +44,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // The side panel's browser (Browser.tsx). `will-attach-webview` below guards it.
+      webviewTag: true,
       // The preload reads it, so `window.parallax.updatable` is a plain value.
       additionalArguments: updatable ? ["--parallax-updatable"] : [],
     },
@@ -54,17 +56,40 @@ function createWindow() {
   else void win.loadFile(path.join(__dirname, "../renderer/index.html"));
 }
 
-// No page may navigate, except to reload itself, or open windows. Https links go to the
-// system browser. `webContents.reload()` (the menu's Reload) never emits `will-navigate`.
+// The side panel's browser's session: persistent, and apart from the app's.
+const browserPartition = "persist:browser";
+
+// No page of the app's may navigate, except to reload itself, or open windows. Https links go to
+// the system browser. `webContents.reload()` (the menu's Reload) never emits `will-navigate`. The
+// side panel's browser, a webview, may go to any http or https page, and loads the windows its
+// pages open in itself.
 app.on("web-contents-created", (_event, contents) => {
+  const inBrowser = contents.getType() === "webview";
   contents.on("will-navigate", (event) => {
-    if (isReload(event.url, contents.getURL())) return;
+    if (mayNavigate(event.url, contents.getURL(), inBrowser)) return;
     event.preventDefault();
-    if (isOpenableExternally(event.url)) void shell.openExternal(event.url);
+    if (!inBrowser && isOpenableExternally(event.url)) void shell.openExternal(event.url);
   });
   contents.setWindowOpenHandler(({ url }) => {
-    if (isOpenableExternally(url)) void shell.openExternal(url);
+    // The view shows a load's error, so the rejection needs no handling here.
+    if (inBrowser) {
+      if (isBrowsable(url)) contents.loadURL(url).catch(() => {});
+    } else if (isOpenableExternally(url)) void shell.openExternal(url);
     return { action: "deny" };
+  });
+  // A webview may show only an http or https page, in the browser's session, with no preload or
+  // Node, so its pages never reach `window.parallax`.
+  contents.on("will-attach-webview", (event, webPreferences, params) => {
+    if (!isBrowsable(params["src"] ?? "")) return event.preventDefault();
+    delete webPreferences.preload;
+    Object.assign(webPreferences, {
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      partition: browserPartition,
+    });
   });
   // Electron has no context menu of its own. Right-click offers the Edit menu's actions: all of
   // them in a text box, Copy on selected text.
@@ -190,6 +215,10 @@ nativeTheme.on("updated", () => {
 });
 
 void app.whenReady().then(() => {
+  // Pages in the side panel's browser get no camera, microphone, notifications, and the like.
+  const browserSession = session.fromPartition(browserPartition);
+  browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));
+  browserSession.setPermissionCheckHandler(() => false);
   startHosts();
   // Under `pnpm dev`, Update follows develop, the nightly channel's branch (scripts/channels.mjs).
   if (!updater) process.send?.({ channel: "nightly" });

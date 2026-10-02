@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { isOpenableExternally, isReload } from "./links";
+import { isOpenableExternally, isReload, mayNavigate } from "./links";
 
 test("only https links open in the system browser", () => {
   expect(isOpenableExternally("https://github.com/ryan-stoffel/parallax")).toBe(true);
@@ -29,4 +29,16 @@ test("only a reload of the current page may navigate", () => {
   ]) {
     expect(isReload(url, page), url).toBe(false);
   }
+});
+
+test("the side panel's browser may go to any http or https page, the app's pages only reload", () => {
+  const app = "file:///Applications/parallax.app/Contents/Resources/app/dist/renderer/index.html";
+  for (const url of ["http://localhost:5173/", "https://example.com/a?b=1"]) {
+    expect(mayNavigate(url, "http://localhost:5173/", true), url).toBe(true);
+    expect(mayNavigate(url, app, false), url).toBe(false);
+  }
+  for (const url of ["file:///etc/passwd", "javascript:alert(1)", "parallax://x", "not a url"]) {
+    expect(mayNavigate(url, "http://localhost:5173/", true), url).toBe(false);
+  }
+  expect(mayNavigate(app, app, false)).toBe(true);
 });
