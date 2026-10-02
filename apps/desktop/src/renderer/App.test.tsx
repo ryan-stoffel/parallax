@@ -18,6 +18,9 @@ const bridge: Partial<ParallaxBridge> = {
   openTargets: async () => [],
 };
 window.parallax = bridge as ParallaxBridge;
+// happy-dom has no popovers.
+HTMLElement.prototype.showPopover = () => {};
+HTMLElement.prototype.hidePopover = () => {};
 
 let unmount = () => {};
 afterEach(() => {
@@ -80,27 +83,68 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
 
   let answer: (text: string) => void = () => {};
   let publish: (state: UpdateState) => void = () => {};
+  const update = vi.fn(() => new Promise<string>((resolve) => (answer = resolve)));
   Object.assign(bridge, {
     updatable: true,
-    update: () => new Promise<string>((resolve) => (answer = resolve)),
+    update,
     onUpdateState: (listener: (state: UpdateState) => void) => {
       publish = listener;
       return () => {};
     },
   });
   renderApp();
-  // A background check's note, such as a download or an error, is the button's label.
+  // A background check's note, such as an error, is the button's label.
   act(() => publish({ note: "Can't reach GitHub to check for updates." }));
   expect(button("Can't reach GitHub to check for updates.")).not.toBeNull();
+  // Under `pnpm dev`, a click takes develop's commits, with the answer in the popover.
   act(() => publish({ ready: "3 commits to apply" }));
   act(() => button("Update ready: 3 commits to apply")!.click());
-  // The connection's status line shares the footer.
   const status = () =>
-    [...document.querySelectorAll('#sidebar [role="status"]')].map((s) => s.textContent);
-  expect(status()).toContain("Updating…");
+    document.querySelector('#sidebar [aria-label="Update"] [role="status"]')?.textContent;
+  expect(status()).toBe("Updating…");
   expect(button("Update Parallax")!.disabled).toBe(true);
   await act(async () => answer("Updated to abc1234"));
   act(() => publish({}));
-  expect(status()).toContain("Updated to abc1234");
+  expect(status()).toBe("Updated to abc1234");
   expect(button("Update Parallax")!.disabled).toBe(false);
+});
+
+test("a packaged app's release shows its notes and download in a popover, then asks to restart", () => {
+  const button = (name: string) =>
+    document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
+  let publish: (state: UpdateState) => void = () => {};
+  const update = vi.fn(async () => "");
+  Object.assign(bridge, {
+    updatable: true,
+    update,
+    onUpdateState: (listener: (state: UpdateState) => void) => {
+      publish = listener;
+      return () => {};
+    },
+  });
+  renderApp();
+  const available = {
+    version: "2610.10205.13230-nightly",
+    notes: "• feat: a thing (RYA-1)",
+    url: "https://github.com/ryan-stoffel/parallax/releases/tag/v2610.10205.13230-nightly",
+  };
+  act(() => publish({ available }));
+  // Nothing downloads until the click.
+  expect(update).not.toHaveBeenCalled();
+  act(() => button("Update available: Parallax 2610.10205.13230-nightly")!.click());
+  expect(update).toHaveBeenCalledOnce();
+  const popover = document.querySelector('#sidebar [aria-label="Update"]')!;
+  expect(popover.textContent).toContain("Parallax 2610.10205.13230-nightly");
+  expect(popover.textContent).toContain("• feat: a thing (RYA-1)");
+  expect(popover.querySelector("a")!.href).toBe(available.url);
+
+  act(() => publish({ available, progress: 42 }));
+  expect(popover.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("42");
+
+  const restart = document.querySelector('button[value="restart"]')!.closest("dialog")!;
+  expect(restart.open).toBe(false);
+  act(() => publish({ available, ready: `Parallax ${available.version} to install` }));
+  expect(restart.open).toBe(true);
+  act(() => restart.querySelector<HTMLButtonElement>('button[value="restart"]')!.click());
+  expect(update).toHaveBeenCalledTimes(2);
 });
