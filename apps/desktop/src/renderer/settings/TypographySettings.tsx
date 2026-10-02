@@ -93,7 +93,7 @@ export function TypographySettings() {
           contentEditable
           suppressContentEditableWarning
           spellCheck={false}
-          className={`${preview} code-lines bg-sidebar px-4 py-3 font-mono text-[12px] leading-relaxed`}
+          className={`${preview} code-lines bg-code px-4 py-3 font-mono text-[12px] leading-relaxed`}
         >
           <span className="text-project-yellow">VITE v7.1.1</span> ready in{" "}
           <b className="text-foreground">1.24s</b>
@@ -183,7 +183,7 @@ function DiffPreview() {
     <div
       aria-label="Diff preview"
       role="group"
-      className={`${preview} code-scroll overflow-hidden bg-sidebar font-mono text-[12px] leading-6`}
+      className={`${preview} code-scroll overflow-hidden bg-code font-mono text-[12px] leading-6`}
     >
       <div className="flex items-center gap-2 px-4 py-2 font-sans text-[13px]">
         <span
