@@ -187,12 +187,28 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
   expect(await sent.evaluate(width)).toBe(2000);
 });
 
+test("the usage period picker shows its choice on each provider (RYA-284)", async () => {
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Providers" }).click();
+  // Every provider's pane stays mounted, so a radio group shared across them would leave only the
+  // last pane's checked.
+  for (const name of ["Claude Code", "Codex"]) {
+    await page.getByRole("tab", { name: new RegExp(`^${name}`) }).click();
+    const panel = page.getByRole("tabpanel");
+    await expect(panel.getByRole("radio", { name: "Today" })).toBeChecked();
+    await panel.getByText("This week", { exact: true }).click();
+    await expect(panel.getByRole("radio", { name: "This week" })).toBeChecked();
+    await panel.getByText("Today", { exact: true }).click();
+  }
+  await page.getByRole("button", { name: "Back to app" }).click();
+});
+
 test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();
-  const host = page.getByRole("region", { name: /^This (Mac|computer)$/ });
-  const codex = (row: RegExp) => host.locator("div").filter({ hasText: row });
-  await expect(codex(/^CodexInstalledNo usage todayNot signed inSign in$/)).toBeVisible();
+  const codex = page.getByRole("tab", { name: /^Codex/ });
+  await codex.click();
+  await expect(codex).toHaveText("CodexNot signed in");
   await page.getByRole("button", { name: "Sign in to Codex" }).click();
 
   const terminal = page.getByRole("group", { name: "Codex sign-in terminal" });
@@ -201,7 +217,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await page.keyboard.press("Enter");
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
   // The sign-in's end ran accounts/refresh, which found the fake signed in.
-  await expect(codex(/^CodexInstalledNo usage todaySigned in$/)).toBeVisible();
+  await expect(codex).toHaveText("CodexSigned in");
 });
 
 test("creates a project on a repository it adds, and opens it (RYA-166)", async () => {
