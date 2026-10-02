@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, useEffect, useRef } from "react";
+import { act, useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
@@ -210,7 +210,7 @@ test("without a folder, actions can't run", () => {
 test("a command waits for the drawer's shell to start, then runs in it", async () => {
   const folder: ThreadFolder = { key: "local/t1", hostId: "local", path: "/wt/t1", threadId: "t1" };
   const drawer = (open: boolean) => (
-    <TerminalDrawer open={open} folder={folder} deleted={() => false} />
+    <TerminalDrawer open={open} folder={folder} deleted={() => false} onClose={() => {}} />
   );
   render(drawer(false));
   runInDrawer(folder, "pnpm test");
@@ -229,6 +229,57 @@ test("a command waits for the drawer's shell to start, then runs in it", async (
   act(() => button("Restart").click());
   expect(terminalInput).toHaveBeenCalledTimes(3);
   expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t1", "pnpm build\r");
+});
+
+test("each drawer tab runs its own shell, and closing the last closes the drawer", () => {
+  const folder: ThreadFolder = { key: "local/t2", hostId: "local", path: "/wt/t2", threadId: "t2" };
+  function Drawer() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Show
+        </button>
+        <TerminalDrawer
+          open={open}
+          folder={folder}
+          deleted={() => false}
+          onClose={() => setOpen(false)}
+        />
+      </>
+    );
+  }
+  const tabs = () =>
+    [...document.querySelectorAll('[aria-label="Terminals"] li > button:first-child')].map((b) =>
+      b.getAttribute("aria-current") ? `[${b.textContent}]` : b.textContent,
+    );
+  const drawer = () => document.getElementById("terminal-drawer")!;
+  render(<Drawer />);
+  expect(tabs()).toEqual(["[Terminal 1]"]);
+
+  // A command runs in the shown tab.
+  act(() => button("New terminal").click());
+  expect(tabs()).toEqual(["Terminal 1", "[Terminal 2]"]);
+  runInDrawer(folder, "ls");
+  expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t2:2", "ls\r");
+  act(() => button("Terminal 1").click());
+  runInDrawer(folder, "pwd");
+  expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t2", "pwd\r");
+
+  // Closing the shown tab shows the next; closing the last hides the drawer.
+  act(() => button("Close Terminal 1").click());
+  expect(tabs()).toEqual(["[Terminal 2]"]);
+  act(() => button("Close Terminal 2").click());
+  expect(drawer().hidden).toBe(true);
+  act(() => button("Show").click());
+  expect(tabs()).toEqual(["[Terminal 1]"]);
+
+  // Its X hides it and keeps its tabs.
+  act(() => button("New terminal").click());
+  act(() => button("Hide terminal").click());
+  expect(drawer().hidden).toBe(true);
+  act(() => button("Show").click());
+  expect(tabs()).toEqual(["Terminal 1", "[Terminal 2]"]);
 });
 
 test("a preview opens the side panel's Browser view at its URL", () => {
