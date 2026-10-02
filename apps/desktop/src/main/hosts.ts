@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -20,6 +21,7 @@ import {
   loginCommand,
   openTerminal,
   resizeTerminal,
+  shellCommand,
   writeTerminal,
   type Command,
 } from "./terminal";
@@ -154,24 +156,33 @@ export function startHosts(): void {
   ipcMain.handle("parallax:connectionState", (_event, hostId: unknown) => connection(hostId).state);
   ipcMain.handle("parallax:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
-  // A window's sign-in terminal (terminal.ts). The renderer names the host and the CLI; only
-  // main decides what runs.
+  // A window's terminals (terminal.ts), by an id it picks: a CLI's sign-in, or a shell in a
+  // thread's folder. The renderer names the host and the CLI or folder; only main decides what runs.
   ipcMain.handle(
     "parallax:openTerminal",
-    (event, hostId: unknown, cli: unknown, cols: unknown, rows: unknown) => {
-      if (typeof hostId !== "string" || !isCliKind(cli) || !isSize(cols) || !isSize(rows)) {
+    (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {
+      if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      return openTerminal(event.sender, () => signInCommand(hostId, cli), cols, rows);
+      const { hostId, cli, path } = target;
+      if (typeof hostId !== "string") return "invalid terminal";
+      if (isCliKind(cli)) {
+        return openTerminal(event.sender, id, () => signInCommand(hostId, cli), cols, rows);
+      }
+      if (typeof path !== "string") return "invalid terminal";
+      return openTerminal(event.sender, id, () => folderCommand(hostId, path), cols, rows);
     },
   );
-  ipcMain.on("parallax:terminalInput", (event, data: unknown) => {
-    if (typeof data === "string") writeTerminal(event.sender, data);
+  ipcMain.on("parallax:terminalInput", (event, id: unknown, data: unknown) => {
+    if (isTerminalId(id) && typeof data === "string") writeTerminal(event.sender, id, data);
   });
-  ipcMain.on("parallax:resizeTerminal", (event, cols: unknown, rows: unknown) => {
-    if (isSize(cols) && isSize(rows)) resizeTerminal(event.sender, cols, rows);
+  ipcMain.on("parallax:resizeTerminal", (event, id: unknown, cols: unknown, rows: unknown) => {
+    if (isTerminalId(id) && isSize(cols) && isSize(rows))
+      resizeTerminal(event.sender, id, cols, rows);
   });
-  ipcMain.on("parallax:closeTerminal", (event) => closeTerminal(event.sender));
+  ipcMain.on("parallax:closeTerminal", (event, id: unknown) => {
+    if (isTerminalId(id)) closeTerminal(event.sender, id);
+  });
 
   powerMonitor.on("resume", () => {
     for (const each of connections.values()) each.heartbeat();
@@ -203,6 +214,20 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
 /** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
 export const savedHost = (id: string): SshHost | undefined =>
   settings.hosts.find((h) => h.id === id);
+
+/**
+ * What opens a shell in `folder` on a host: here, if it's still a folder; on an SSH host, over
+ * ssh as the host's connection is. Resolves to an error for people.
+ */
+async function folderCommand(hostId: string, folder: string): Promise<Command | string> {
+  if (!connections.has(hostId)) return "That host isn't in Parallax anymore.";
+  const saved = settings.hosts.find((h) => h.id === hostId);
+  if (saved)
+    return shellCommand(folder, { destination: saved.destination, ssh: settings.ssh ?? "ssh" });
+  const isFolder =
+    path.isAbsolute(folder) && (await stat(folder).catch(() => undefined))?.isDirectory();
+  return isFolder ? shellCommand(folder) : `${folder} isn't a folder on this computer anymore.`;
+}
 
 /** The local `plxd` binary (plxd.ts). */
 const localPlxd = () =>
@@ -316,6 +341,10 @@ function connection(hostId: unknown): Connection {
   if (!found) throw new Error(`unknown host: ${String(hostId)}`);
   return found;
 }
+
+/** A terminal's id, which its window picks. */
+const isTerminalId = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.length <= 500;
 
 /** A terminal's width or height, in character cells. */
 const isSize = (value: unknown): value is number =>

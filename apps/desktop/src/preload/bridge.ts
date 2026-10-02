@@ -92,24 +92,25 @@ export interface ParallaxBridge {
   removeHost(id: string): Promise<string | undefined>;
 
   /**
-   * Opens this window's terminal, running `cli`'s own sign-in on a host (0004), in place of any
-   * terminal it had. Resolves to an error for people, or undefined once it runs. The app only
-   * passes on what's typed and printed; it never reads or keeps it.
+   * Opens this window's terminal `id`, in place of any terminal it had with that id: `cli`'s own
+   * sign-in on a host (0004), or the user's login shell in a host's folder. Resolves to an error
+   * for people, or undefined once it runs. The app only passes on what's typed and printed; it
+   * never reads or keeps it. A window's terminals end when it reloads or closes.
    */
   openTerminal(
-    hostId: string,
-    cli: CliKind,
+    id: string,
+    target: TerminalTarget,
     cols: number,
     rows: number,
   ): Promise<string | undefined>;
-  /** Types into the terminal. */
-  terminalInput(data: string): void;
-  /** Resizes the terminal, in character cells. */
-  resizeTerminal(cols: number, rows: number): void;
-  /** Ends the terminal, killing what runs in it. */
-  closeTerminal(): void;
-  /** What the terminal prints, then its exit. Returns the unsubscribe function. */
-  onTerminal(listener: (message: TerminalMessage) => void): () => void;
+  /** Types into terminal `id`, or runs a command in it with a trailing "\r". */
+  terminalInput(id: string, data: string): void;
+  /** Resizes terminal `id`, in character cells. */
+  resizeTerminal(id: string, cols: number, rows: number): void;
+  /** Ends terminal `id`, killing what runs in it. */
+  closeTerminal(id: string): void;
+  /** What terminal `id` prints, then its exit. Returns the unsubscribe function. */
+  onTerminal(id: string, listener: (message: TerminalMessage) => void): () => void;
 
   /**
    * Where `openFolder` can open a folder on a host: the editors this computer has, and the file
@@ -134,6 +135,9 @@ export type UpdateState = {
   /** One line on the button about the last check, such as a download or an error. */
   note?: string;
 };
+
+/** What a terminal runs: a CLI's sign-in on a host, or a shell in a folder on a host. */
+export type TerminalTarget = { hostId: string; cli: CliKind } | { hostId: string; path: string };
 
 export type TerminalMessage = { type: "data"; data: string } | { type: "exit"; exitCode: number };
 
