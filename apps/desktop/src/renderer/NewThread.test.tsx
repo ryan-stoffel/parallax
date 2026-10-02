@@ -546,6 +546,18 @@ describe("the ref picker", () => {
     ]);
   });
 
+  test("a new worktree's ref never becomes the checkout's switch", async () => {
+    capabilities = { checkout: {}, repoRefs: {} };
+    await renderApp();
+    await choose("Ref", "origin/develop");
+    await choose("Runs on", "Current checkoutRight in the repository, on the branch you have out.");
+    expect(button("Select ref")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([
+      { runId: expect.any(String), prompt: "Fix it", repo: parallax.id, checkout: true },
+    ]);
+  });
+
   test("a plxd without repoRefs shows no ref picker", async () => {
     await renderApp();
     expect(document.querySelector('main [role="menu"][aria-label="Ref"]')).toBeNull();

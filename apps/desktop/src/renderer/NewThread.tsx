@@ -174,9 +174,13 @@ export function NewThread({
     group.id !== noRepo &&
     connection?.status === "connected" &&
     "repoRefs" in connection.capabilities;
-  // The picked ref, kept with its repository so picking another repository drops it.
-  const [pickedRef, setPickedRef] = useState<{ groupId: string; ref: string }>();
-  const gitRef = refsAvailable && pickedRef?.groupId === group.id ? pickedRef.ref : undefined;
+  // The picked ref, kept with its repository and workspace, so picking another drops it: a new
+  // worktree's base never becomes a checkout's switch.
+  const [pickedRef, setPickedRef] = useState<{ groupId: string; checkout: boolean; ref: string }>();
+  const gitRef =
+    refsAvailable && pickedRef?.groupId === group.id && pickedRef.checkout === checkout
+      ? pickedRef.ref
+      : undefined;
 
   // Focus the chosen account when the chooser opens, so a screen reader announces it.
   const chooser = useRef<HTMLFieldSetElement>(null);
@@ -407,7 +411,7 @@ export function NewThread({
                     repo={group.id}
                     checkout={checkout}
                     value={gitRef}
-                    onChange={(ref) => setPickedRef({ groupId: group.id, ref })}
+                    onChange={(ref) => setPickedRef({ groupId: group.id, checkout, ref })}
                   />
                 )}
               </>

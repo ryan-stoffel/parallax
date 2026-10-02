@@ -61,7 +61,7 @@ use uuid::Uuid;
 use self::actor::{Actor, Command};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
-use self::convert::{STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
+use self::convert::{RUNNING, STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
 use self::worker::{StoredKeyAccounts, ThreadFolder, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
@@ -467,6 +467,40 @@ fn routing_error(error: &RoutingError) -> ErrorObject {
     }
 }
 
+/// Switches the checkout at `repo_path`, `project`'s (a thread's repo entry), to `reference`.
+/// Refuses, with `worktreeFailed`, while another thread runs in it, since the switch would move
+/// that thread's work to a branch it never chose.
+async fn switch_checkout(
+    daemon: &Daemon,
+    project: ProjectId,
+    repo_path: &Path,
+    reference: &str,
+) -> Result<(), ErrorObject> {
+    let busy = store(daemon, move |db| {
+        db.list_runs(Some(project.into()))
+            .map(|runs| {
+                runs.iter().any(|run| {
+                    run.fields.checkout && [STARTING, RUNNING].contains(&run.state.status.as_str())
+                })
+            })
+            .map_err(|e| store_error(&e))
+    })
+    .await?;
+    if busy {
+        return Err(ErrorObject::parallax(
+            ErrorKind::WorktreeFailed,
+            "another thread is running in this checkout; switching its branch would move that \
+             thread's work",
+        ));
+    }
+    daemon
+        .agents
+        .worktrees
+        .switch(repo_path, reference)
+        .await
+        .map_err(|error| worktree_failed(&error))
+}
+
 fn worktree_failed(error: &WorktreeError) -> ErrorObject {
     ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string())
 }
@@ -803,11 +837,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
     };
     let (created, (cwd, git_common_dir)) = if fields.checkout {
         if let Some(reference) = thread.as_ref().and_then(|thread| thread.git_ref.as_deref()) {
-            agents
-                .worktrees
-                .switch(Path::new(&repo_path), reference)
-                .await
-                .map_err(|error| worktree_failed(&error))?;
+            switch_checkout(&daemon, project, Path::new(&repo_path), reference).await?;
         }
         (None, checkout_paths(agents, Path::new(&repo_path)).await?)
     } else {

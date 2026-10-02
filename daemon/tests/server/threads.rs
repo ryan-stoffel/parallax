@@ -1085,6 +1085,39 @@ async fn a_checkout_thread_switches_to_the_ref_it_picks_but_never_over_changes()
     assert_eq!(client.list().await.threads.len(), 1);
 }
 
+/// A `checkoutRef` never switches a checkout another thread is running in, which would move that
+/// thread's work to a branch it never chose.
+#[tokio::test]
+async fn a_checkout_thread_never_switches_under_a_running_one() {
+    let host = Host::start(fake(hang()));
+    let path = real_repo(host.work.path(), "app");
+    git(&path, &["branch", "-q", "other"]);
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+    client
+        .call::<ThreadStart>(ThreadStartParams {
+            checkout: true,
+            ..start_params(Some(repo.id), "Keep working")
+        })
+        .await
+        .unwrap();
+    runs.until(updated_to(AgentStatus::Running)).await;
+
+    let refused = client
+        .call::<ThreadStart>(ThreadStartParams {
+            checkout: true,
+            checkout_ref: Some("other".to_owned()),
+            ..start_params(Some(repo.id), "Switch away")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::WorktreeFailed);
+    assert_eq!(git(&path, &["branch", "--show-current"]), "main");
+    assert_eq!(client.list().await.threads.len(), 1);
+}
+
 /// RYA-97, RYA-222: a thread's model, effort, permission, and approvals reach its backend when it
 /// starts and when it resumes, come back on its run, and count for `thread/start`'s idempotency.
 /// What the backend can't honor is refused before anything is made.
