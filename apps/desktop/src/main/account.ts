@@ -8,8 +8,9 @@ import { serveSignIn, type Answer, type SignInPage } from "./loopback";
 
 // The Supabase project that holds Parallax accounts (0037). Both values are public: the key only
 // names the project. PLX_SUPABASE_URL and PLX_SUPABASE_KEY point a dev build at another project.
-const SUPABASE_URL = process.env["PLX_SUPABASE_URL"] ?? "";
-const SUPABASE_KEY = process.env["PLX_SUPABASE_KEY"] ?? "";
+const SUPABASE_URL = process.env["PLX_SUPABASE_URL"] ?? "https://hkfrqrikselgxhoswgtk.supabase.co";
+const SUPABASE_KEY =
+  process.env["PLX_SUPABASE_KEY"] ?? "sb_publishable_YYLxUEvqEOWBt000SGDoiA_i5_vhanC";
 const notSetUp = "Accounts aren't set up in this build yet.";
 
 /**
