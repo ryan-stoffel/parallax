@@ -89,6 +89,28 @@ test("stops the thread", async () => {
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
 });
 
+test("opens a terminal in the thread's folder, kept while hidden (RYA-295)", async () => {
+  const listed = (await page.evaluate(`window.parallax.request("local", "agent/list", {})`)) as {
+    result: { runs: { prompt: string; branch?: string }[] };
+  };
+  const branch = listed.result.runs.find((r) => r.prompt === "Tidy up the README")!.branch!;
+  await page.getByRole("button", { name: "Show terminal" }).click();
+  const terminal = page.getByRole("group", { name: "Terminal", exact: true });
+  await terminal.click();
+  // The worktree's branch, from git, which runs the same in every shell.
+  await page.keyboard.type("git branch --show-current\r");
+  await expect(terminal).toContainText(branch);
+
+  // Mod+J hides it from inside the terminal, and shows it again with the same session.
+  await page.keyboard.press("ControlOrMeta+j");
+  await expect(terminal).toBeHidden();
+  await page.keyboard.press("ControlOrMeta+j");
+  await expect(terminal).toContainText(branch);
+  await terminal.click();
+  await page.keyboard.press("ControlOrMeta+j");
+  await expect(terminal).toBeHidden();
+});
+
 // Runs the Edit menu's Copy or Paste as its Cmd/Ctrl+C or V does, which a synthetic keypress can't.
 const edit = (command: "copy" | "paste") =>
   app.evaluate(({ BrowserWindow }, command) => {
