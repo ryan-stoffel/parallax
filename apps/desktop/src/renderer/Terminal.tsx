@@ -48,7 +48,9 @@ export function TerminalView({
       };
     };
     const term = new Terminal({
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+      // Last, the bundled Nerd Font icons (index.css), for the glyphs no system font has.
+      fontFamily:
+        'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"',
       fontSize: 12,
       cursorBlink: true,
       theme: theme(),
@@ -90,8 +92,14 @@ export function TerminalView({
     const themes = new MutationObserver(() => (term.options.theme = theme()));
     themes.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     let live = true;
-    void window.parallax
-      .openTerminal(id, opened.current, term.cols, term.rows)
+    // The shell starts once the Nerd Font icons have loaded: xterm.js measures a glyph's width
+    // once, so an icon drawn before its font arrives would stay a cell off.
+    void document.fonts
+      .load('12px "Symbols Nerd Font Mono"', "\ue0a0")
+      .catch(() => {})
+      .then(() =>
+        live ? window.parallax.openTerminal(id, opened.current, term.cols, term.rows) : undefined,
+      )
       .then((error) => live && (error ? ended(error) : began()));
     term.focus();
 
