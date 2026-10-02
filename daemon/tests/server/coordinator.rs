@@ -6,14 +6,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::methods::{
-    AgentCancel, AgentEvents, AgentSend, AgentStart, ProjectList, ProjectStart,
+    AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, EventsSubscribe, HostHealth,
+    ProjectDelete, ProjectList, ProjectStart, RepoAdd,
 };
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentEventsParams, AgentOutputItem, AgentPermission,
-    AgentPolicy, AgentRun, AgentSendParams, AgentStartParams, AgentStatus, CoordinatorThreadId,
-    ErrorKind, ParallaxEvent, ProjectId, ProjectListParams, ProjectStartParams, Provider, RunId,
-    TurnId,
+    AccountChoice, AgentCancelParams, AgentEventsParams, AgentListParams, AgentOutputItem,
+    AgentPermission, AgentPolicy, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
+    CoordinatorThreadId, ErrorKind, EventsEventParams, EventsSubscribeParams, HostHealthParams,
+    ParallaxEvent, ProjectDeleteParams, ProjectDeleteResult, ProjectId, ProjectListParams,
+    ProjectStartParams, Provider, RepoAddParams, RepoId, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
@@ -22,7 +25,7 @@ use plxd::routing::BackendRegistry;
 use uuid::Uuid;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params,
+    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params, real_repo,
     send_params, subscribe, text, until, updated_to,
 };
 use crate::support::{PATIENCE, kind, temp_dir};
@@ -660,5 +663,151 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
         "{}",
         wake.prompt
     );
+    host.server.stop().await;
+}
+
+fn subscribe_host(after: u64) -> EventsSubscribeParams {
+    EventsSubscribeParams {
+        after,
+        project: None,
+    }
+}
+
+async fn delete(client: &mut Conn, project: ProjectId) -> Result<ProjectDeleteResult, ErrorObject> {
+    client
+        .call::<ProjectDelete>(ProjectDeleteParams { project })
+        .await
+}
+
+async fn runs_of(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
+    let params = AgentListParams {
+        project: Some(project),
+    };
+    client.call::<AgentList>(params).await.unwrap().runs
+}
+
+fn deleted(project: ProjectId) -> impl FnMut(&EventsEventParams) -> bool {
+    move |event| matches!(&event.event, ParallaxEvent::ProjectDeleted { project: id } if *id == project)
+}
+
+/// PLX-338: deleting a project stops its coordinator and the subagent it started, and removes
+/// their runs, events, worktree, and branch, its context folder, and the project itself, which
+/// `project.deleted` tells every client, then and on replay.
+#[tokio::test]
+async fn deleting_a_project_stops_its_agents_and_removes_everything() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let backends = roles(
+        vec![init("worker-1"), text("Working"), Step::Hang],
+        vec![vec![init("coordinator-1"), Step::Hang]],
+        &seen,
+    );
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let repo = PathBuf::from(&project.repo_path);
+    let context = host.dir.path().join("context").join(project.id.to_string());
+    assert!(context.is_dir());
+    client
+        .call::<EventsSubscribe>(subscribe_host(0))
+        .await
+        .unwrap();
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    let worker = spawn(&mut client, &coordinator, "Build it.").await;
+    let mut running = vec![coordinator.id, worker];
+    until(&mut client, |event| {
+        if let ParallaxEvent::AgentUpdated { run_id, state } = &event.event
+            && state.status == AgentStatus::Running
+        {
+            running.retain(|run| run != run_id);
+        }
+        running.is_empty()
+    })
+    .await;
+    let run = runs_of(&mut client, project.id)
+        .await
+        .into_iter()
+        .find(|run| run.id == worker)
+        .unwrap();
+    let worktree = PathBuf::from(run.worktree_path.unwrap());
+    let branch = run.branch.unwrap();
+    assert!(worktree.is_dir());
+
+    delete(&mut client, project.id).await.unwrap();
+    until(&mut client, deleted(project.id)).await;
+    let health = client
+        .call::<HostHealth>(HostHealthParams {})
+        .await
+        .unwrap();
+    assert_eq!(health.running_agents, 0, "both agents were stopped");
+    let projects = client
+        .call::<ProjectList>(ProjectListParams {})
+        .await
+        .unwrap()
+        .projects;
+    assert!(projects.is_empty());
+    assert!(runs_of(&mut client, project.id).await.is_empty());
+    for run_id in [coordinator.id, worker] {
+        let events = client
+            .call::<AgentEvents>(AgentEventsParams {
+                run_id,
+                after: 0,
+                limit: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(kind(&events), ErrorKind::RunNotFound);
+    }
+    assert!(!worktree.exists(), "the worktree is removed");
+    let branches = git(&repo, &["branch", "--list", &branch]);
+    assert!(branches.is_empty(), "the branch is removed: {branches}");
+    assert!(!context.exists(), "the project's notes are removed");
+    assert!(repo.join("README.md").is_file(), "the repository stays");
+
+    let mut replay = host.client().await;
+    replay
+        .call::<EventsSubscribe>(subscribe_host(0))
+        .await
+        .unwrap();
+    until(&mut replay, deleted(project.id)).await;
+
+    let again = delete(&mut client, project.id).await.unwrap_err();
+    assert_eq!(kind(&again), ErrorKind::ProjectNotFound);
+    host.server.stop().await;
+}
+
+/// PLX-338: only a project can be deleted. An unknown id and a repo entry's id, which its
+/// threads' runs use as their project id, both fail with `projectNotFound`.
+#[tokio::test]
+async fn deleting_an_unknown_project_or_a_repo_entry_fails() {
+    let host = Host::start(temp_dir(), fake(Vec::new()));
+    let mut client = host.client().await;
+    let work = temp_dir();
+    let entry = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: real_repo(work.path()).to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    let scope = ProjectId::try_from(Uuid::from(entry.id)).unwrap();
+    for project in [ProjectId::generate(), scope] {
+        let error = delete(&mut client, project).await.unwrap_err();
+        assert_eq!(kind(&error), ErrorKind::ProjectNotFound, "{project}");
+    }
+    let listed = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: entry.path.clone(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    assert_eq!(listed.id, entry.id, "the repo entry stays");
     host.server.stop().await;
 }

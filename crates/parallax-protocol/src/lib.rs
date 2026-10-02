@@ -97,8 +97,9 @@ pub use host::{
 };
 pub use id::InvalidId;
 pub use project::{
-    Project, ProjectCreateParams, ProjectCreateResult, ProjectIcon, ProjectId, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
+    Project, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,

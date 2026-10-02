@@ -233,6 +233,7 @@ pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
         | ParallaxEvent::AgentWakeupsPaused { run_id } => Some(*run_id),
         ParallaxEvent::ProjectCreated { .. }
         | ParallaxEvent::ProjectUpdated { .. }
+        | ParallaxEvent::ProjectDeleted { .. }
         | ParallaxEvent::ContextChanged { .. }
         | ParallaxEvent::RepoAdded { .. }
         | ParallaxEvent::RepoUpdated { .. }
