@@ -1,4 +1,4 @@
-import { Folder, GitBranch, House, LoaderCircle, Plus } from "lucide-react";
+import { Folder, House, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError, ThreadName } from "../preload/bridge";
@@ -10,6 +10,7 @@ import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { imageCaps } from "./images";
 import type { RunOptions } from "./models";
+import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { noRepo, type ThreadGroup } from "./threads";
 import { Picker } from "./ui";
@@ -36,6 +37,7 @@ interface NewThreadProps {
     images: PromptImage[],
     options: RunOptions,
     checkout: boolean,
+    gitRef: string | undefined,
     name?: ThreadName,
   ) => Promise<RpcError | undefined>;
   /** Whether the host's plxd takes a thread's model, effort, and permission (`runOptions`). */
@@ -53,6 +55,8 @@ interface Attempt {
   images: PromptImage[];
   options: RunOptions;
   checkout: boolean;
+  /** The picked ref: the worktree's base, or the branch the checkout switches to. */
+  gitRef?: string;
   name: ThreadName;
 }
 
@@ -165,6 +169,14 @@ export function NewThread({
         ? "needs a newer plxd"
         : undefined;
   const checkout = workspace === "checkout" && !checkoutUnavailable;
+  // Only a plxd with `repoRefs` lists refs or starts from one, and only a repository has them.
+  const refsAvailable =
+    group.id !== noRepo &&
+    connection?.status === "connected" &&
+    "repoRefs" in connection.capabilities;
+  // The picked ref, kept with its repository so picking another repository drops it.
+  const [pickedRef, setPickedRef] = useState<{ groupId: string; ref: string }>();
+  const gitRef = refsAvailable && pickedRef?.groupId === group.id ? pickedRef.ref : undefined;
 
   // Focus the chosen account when the chooser opens, so a screen reader announces it.
   const chooser = useRef<HTMLFieldSetElement>(null);
@@ -188,6 +200,7 @@ export function NewThread({
       attempt.images,
       attempt.options,
       attempt.checkout,
+      attempt.gitRef,
       attempt.name,
     );
     failed.current = error ? attempt : undefined;
@@ -241,7 +254,8 @@ export function NewThread({
       last.images.length === images.length &&
       last.images.every((image, i) => image === images[i]) &&
       JSON.stringify(last.options) === JSON.stringify(options) &&
-      last.checkout === checkout
+      last.checkout === checkout &&
+      last.gitRef === gitRef
         ? last
         : undefined;
     setStarting({ prompt, images });
@@ -254,6 +268,7 @@ export function NewThread({
       images,
       options,
       checkout,
+      gitRef,
       name,
     });
     // On success the app opens the thread instead.
@@ -360,6 +375,9 @@ export function NewThread({
           onSend={send}
           // Hidden while starting, as the opened thread's composer has none.
           backend={runOptions && starting === undefined ? backend : undefined}
+          contextAndFast={
+            connection?.status === "connected" && "contextAndFast" in connection.capabilities
+          }
           disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
           imageCaps={imageCaps(connection)}
           // A new thread asks only through a plxd that sends its requests (RYA-196).
@@ -383,18 +401,15 @@ export function NewThread({
                   onWorkspaceChange={setWorkspace}
                   checkoutUnavailable={checkoutUnavailable}
                 />
-                {/* Placeholder until plxd offers branches. */}
-                <Picker
-                  label="Branch"
-                  icon={<GitBranch />}
-                  align="end"
-                  search="Search branches…"
-                  panelClassName="w-72"
-                  options={[
-                    { value: "develop", label: "develop", hint: "current" },
-                    { value: "main", label: "main" },
-                  ]}
-                />
+                {refsAvailable && (
+                  <RefMenu
+                    hostId={hostId}
+                    repo={group.id}
+                    checkout={checkout}
+                    value={gitRef}
+                    onChange={(ref) => setPickedRef({ groupId: group.id, ref })}
+                  />
+                )}
               </>
             )
           }

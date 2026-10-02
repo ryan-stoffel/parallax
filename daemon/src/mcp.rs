@@ -418,6 +418,8 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     model: None,
                     effort: None,
                     permission: None,
+                    context_window: None,
+                    fast: None,
                     images: Vec::new(),
                     // plxd gives the run its coordinator's (0031).
                     approvals: false,
@@ -456,6 +458,8 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     model: None,
                     effort: None,
                     permission: None,
+                    context_window: None,
+                    fast: None,
                     account: None,
                     images: Vec::new(),
                 })

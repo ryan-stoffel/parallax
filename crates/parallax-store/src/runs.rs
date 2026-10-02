@@ -7,8 +7,9 @@ use crate::worktree::insert_worktree;
 use crate::{Store, Worktree, WorktreeFields, timestamp};
 
 /// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only model,
-/// effort, and permission change after the run is created, through `agent/send` (RYA-161,
-/// RYA-163), and the backend, when `agent/send` moves the run to another backend's account.
+/// effort, permission, context window, and fast mode change after the run is created, through
+/// `agent/send` (RYA-161, RYA-163), and the backend, when `agent/send` moves the run to another
+/// backend's account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFields {
     pub project_id: Uuid,
@@ -24,6 +25,10 @@ pub struct RunFields {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub permission: Option<String>,
+    /// The context window in tokens and fast mode the run asked for, each `None` for the CLI's
+    /// default.
+    pub context_window: Option<u32>,
+    pub fast: Option<bool>,
     /// Whether the run forwards its CLI's permission requests to the client (RYA-222, decision
     /// 0031). Fixed when the run is created.
     pub approvals: bool,
@@ -79,7 +84,7 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
-                       approvals, checkout";
+                       approvals, checkout, context_window, fast";
 
 struct RawRun {
     id: String,
@@ -108,6 +113,8 @@ struct RawRun {
     permission: Option<String>,
     approvals: bool,
     checkout: bool,
+    context_window: Option<u32>,
+    fast: Option<bool>,
 }
 
 impl RawRun {
@@ -139,6 +146,8 @@ impl RawRun {
             permission: row.get(23)?,
             approvals: row.get(24)?,
             checkout: row.get(25)?,
+            context_window: row.get(26)?,
+            fast: row.get(27)?,
         })
     }
 
@@ -173,6 +182,8 @@ impl RawRun {
                 model: self.model,
                 effort: self.effort,
                 permission: self.permission,
+                context_window: self.context_window,
+                fast: self.fast,
                 approvals: self.approvals,
                 checkout: self.checkout,
             },
@@ -282,54 +293,26 @@ impl Store {
         update(&self.conn, id, state)
     }
 
-    /// Replaces run `id`'s model, effort, and permission (RYA-161, RYA-163), and returns the
-    /// updated row.
+    /// Replaces run `id`'s backend, model, effort, permission, context window, and fast mode with
+    /// those of `fields` (RYA-161, RYA-163), and returns the updated row. Its other fields never
+    /// change.
     ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no run has `id`, or a database error.
-    pub fn set_run_options(
-        &self,
-        id: Uuid,
-        model: Option<&str>,
-        effort: Option<&str>,
-        permission: Option<&str>,
-    ) -> Result<Run, StoreError> {
-        let changed = self.conn.execute(
-            "UPDATE runs SET model = ?2, effort = ?3, permission = ?4, updated_at = ?5
-             WHERE id = ?1",
-            params![id.to_string(), model, effort, permission, timestamp::now()],
-        )?;
-        if changed == 0 {
-            return Err(StoreError::NotFound { id });
-        }
-        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
-    }
-
-    /// Moves run `id` to `backend`, with its model, effort, and permission there, and returns the
-    /// updated row.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::NotFound`] if no run has `id`, or a database error.
-    pub fn move_run(
-        &self,
-        id: Uuid,
-        backend: &str,
-        model: Option<&str>,
-        effort: Option<&str>,
-        permission: Option<&str>,
-    ) -> Result<Run, StoreError> {
+    pub fn set_run_options(&self, id: Uuid, fields: &RunFields) -> Result<Run, StoreError> {
         let changed = self.conn.execute(
             "UPDATE runs SET backend = ?2, model = ?3, effort = ?4, permission = ?5,
-                             updated_at = ?6
+                             context_window = ?6, fast = ?7, updated_at = ?8
              WHERE id = ?1",
             params![
                 id.to_string(),
-                backend,
-                model,
-                effort,
-                permission,
+                fields.backend,
+                fields.model,
+                fields.effort,
+                fields.permission,
+                fields.context_window,
+                fields.fast,
                 timestamp::now()
             ],
         )?;
@@ -402,9 +385,10 @@ pub(crate) fn insert_run(
         "INSERT INTO runs (id, project_id, prompt, requested_account, policy, backend,
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
-                           coordinator_thread, model, effort, permission, approvals, checkout)
+                           coordinator_thread, model, effort, permission, approvals, checkout,
+                           context_window, fast)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
-                 ?17, ?18, ?19, ?20, ?21)
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -428,6 +412,8 @@ pub(crate) fn insert_run(
             fields.permission,
             fields.approvals,
             fields.checkout,
+            fields.context_window,
+            fields.fast,
         ],
     )?;
     if inserted == 0 {

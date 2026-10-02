@@ -384,6 +384,7 @@ export function AgentChat({
           }
           backend={run?.backend}
           started={run}
+          contextAndFast={connected && "contextAndFast" in connection.capabilities}
           unavailable={unavailable}
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}

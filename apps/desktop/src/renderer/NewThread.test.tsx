@@ -405,6 +405,26 @@ describe("with plxd's run options", () => {
     expect(retry!["runId"]).not.toBe(refused!["runId"]);
   });
 
+  test("on a plxd that takes them, New Thread sends the context window and fast mode", async () => {
+    capabilities = { runOptions: {}, contextAndFast: {} };
+    await renderApp();
+    expect(control("Reasoning effort: High · 1M")).not.toBeNull();
+    await pick("200K");
+    await send("Tidy the README");
+    expect(calls("thread/start")).toEqual([
+      {
+        runId: expect.any(String),
+        repo: parallax.id,
+        prompt: "Tidy the README",
+        model: "claude-opus-5-5",
+        effort: "high",
+        permission: "edit",
+        contextWindow: 200_000,
+        fast: false,
+      },
+    ]);
+  });
+
   test("an OpenAI key default offers Codex's models and no plan", async () => {
     answers["accounts/defaults/get"] = () => ({ result: { worker: { kind: "key", id: "k-1" } } });
     answers["accounts/keys/list"] = () => ({
@@ -474,6 +494,63 @@ test("Current checkout starts a thread in the repository itself, with no branch 
   expect(calls("thread/start")).toEqual([
     { runId: expect.any(String), prompt: "Fix it", repo: parallax.id, checkout: true },
   ]);
+});
+
+describe("the ref picker", () => {
+  beforeEach(() => {
+    answers["repo/refs"] = () => ({
+      result: {
+        refs: [
+          { name: "develop", default: true, current: true },
+          { name: "feature", worktree: true },
+          { name: "origin/develop", remote: true },
+        ],
+      },
+    });
+    answers["thread/start"] = (p) => ({
+      result: {
+        thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
+        run: run(p["runId"] as string, "Fix it"),
+      },
+    });
+  });
+
+  test("a new worktree starts from the checkout's branch, or from the ref picked", async () => {
+    capabilities = { repoRefs: {} };
+    await renderApp();
+    expect(button("From develop")).toBeDefined();
+    await choose("Ref", "origin/develop");
+    expect(button("From origin/develop")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([
+      { runId: expect.any(String), prompt: "Fix it", repo: parallax.id, base: "origin/develop" },
+    ]);
+  });
+
+  test("the current checkout switches to the ref picked first", async () => {
+    capabilities = { checkout: {}, repoRefs: {} };
+    await renderApp();
+    await choose("Runs on", "Current checkoutRight in the repository, on the branch you have out.");
+    expect(button("Select ref")).toBeDefined();
+    await choose("Ref", "featureworktree");
+    expect(button("feature")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([
+      {
+        runId: expect.any(String),
+        prompt: "Fix it",
+        repo: parallax.id,
+        checkout: true,
+        checkoutRef: "feature",
+      },
+    ]);
+  });
+
+  test("a plxd without repoRefs shows no ref picker", async () => {
+    await renderApp();
+    expect(document.querySelector('main [role="menu"][aria-label="Ref"]')).toBeNull();
+    expect(calls("repo/refs")).toEqual([]);
+  });
 });
 
 test("Current checkout can't be picked without a repo, or from a plxd that would make a worktree anyway", async () => {

@@ -34,7 +34,10 @@ export interface SentMessage {
  * A new model, effort, or access for a run, sent only to a plxd that advertises `sendModel`, and
  * a new account, perhaps another provider's, only to one that advertises `sendAccount`.
  */
-export type SendOptions = Pick<AgentSendParams, "model" | "effort" | "permission" | "account">;
+export type SendOptions = Pick<
+  AgentSendParams,
+  "model" | "effort" | "permission" | "contextWindow" | "fast" | "account"
+>;
 
 /**
  * One run's transcript, kept live: pages through `agent/events`, then subscribes
