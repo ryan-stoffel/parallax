@@ -874,10 +874,12 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| run_not_found(id))?;
         let worktree = db.get_worktree(id.into()).map_err(|e| store_error(&e))?;
-        // Only an accepted run has lost its worktree, and a coordinator never had one (0024).
+        // Only an accepted run has lost its worktree, and a coordinator or a checkout thread
+        // never had one (0024).
         if worktree.is_none()
             && row.state.status != convert::ACCEPTED
             && row.fields.policy != convert::NO_WRITE
+            && !row.fields.checkout
         {
             return Err(ErrorObject::internal_error(format!(
                 "run {id} has no recorded worktree"

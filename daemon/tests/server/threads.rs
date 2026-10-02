@@ -225,6 +225,19 @@ impl Host {
     fn data(&self) -> PathBuf {
         self.dir.path().canonicalize().unwrap()
     }
+
+    /// Stops plxd and starts a new one on the same data folder.
+    async fn restart(self, backends: BackendRegistry) -> Self {
+        let Self { dir, work, server } = self;
+        server.stop().await;
+        let mut config = InProcess::config(dir.path());
+        config.backends = Some(backends);
+        Self {
+            dir,
+            work,
+            server: InProcess::start(config),
+        }
+    }
 }
 
 struct Conn {
@@ -465,6 +478,7 @@ async fn a_thread_in_the_current_checkout_works_on_the_branch_the_user_has_out()
     assert_eq!(kind(&conflict), ErrorKind::IdConflict);
 
     let events = runs.until(updated_to(AgentStatus::Completed)).await;
+    let seen = events.last().unwrap().seq;
     assert!(
         !events
             .iter()
@@ -498,7 +512,12 @@ async fn a_thread_in_the_current_checkout_works_on_the_branch_the_user_has_out()
     assert!(!host.data().join("worktrees").join("app").exists());
     assert_eq!(git(&path, &["branch", "--list", "parallax/*"]), "");
 
-    // A message resumes it in the same checkout.
+    // After a restart, a message resumes it in the same checkout.
+    drop((client, runs));
+    let host = host.restart(fake(editing())).await;
+    let mut client = host.client().await;
+    let mut runs = host.client().await;
+    runs.subscribe(seen, Some(scope(repo.id))).await;
     std::fs::remove_file(path.join("NOTES.md")).unwrap();
     client
         .call::<AgentSend>(message(params.run_id, "Write them again"))
