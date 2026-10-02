@@ -1,7 +1,8 @@
-import { Check, Search } from "lucide-react";
+import { Check, ImageUp, Search } from "lucide-react";
 import { useId, useRef, useState, type KeyboardEvent, type Ref, type ToggleEvent } from "react";
 
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
+import { imageUrl, readIcon } from "./images";
 import { defaultIcon, iconColors, iconLook, projectIcons } from "./projectIcons";
 import { menuPanel } from "./ui";
 
@@ -21,6 +22,9 @@ const steps: Partial<Record<string, number>> = {
  * at `value` each time it opens and keeps its own pick from then on. Every pick, a color or an
  * icon, calls `onPick` with both, since an icon replaces the whole icon (0032), and the picker
  * stays open so both can be set. Arrow keys move in the grid, Enter picks, and Escape closes.
+ * With `maxImageBytes`, where the host keeps icon images (0038), Upload image beside the search box
+ * picks an image file instead, shown selected on that button. A glyph or color picked after it
+ * replaces it, and a file that can't be used says why in the picker.
  */
 export function IconPicker({
   ref,
@@ -28,6 +32,7 @@ export function IconPicker({
   value,
   onPick,
   align = "start",
+  maxImageBytes,
 }: {
   ref?: Ref<HTMLDivElement>;
   id: string;
@@ -36,6 +41,8 @@ export function IconPicker({
   onPick: (icon: ProjectIconValue) => void;
   /** `center`: centered under what opened it. */
   align?: "start" | "center";
+  /** The host's `iconImages` cap, or none where its plxd keeps no icon images. */
+  maxImageBytes?: number;
 }) {
   const colorGroup = useId();
   const searchBox = useRef<HTMLInputElement>(null);
@@ -44,6 +51,8 @@ export function IconPicker({
   const [open, setOpen] = useState(false);
   const [pick, setPick] = useState(value ?? defaultIcon);
   const [query, setQuery] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [uploadError, setUploadError] = useState<string>();
 
   const q = query.trim().toLowerCase();
   const shown = q
@@ -53,12 +62,19 @@ export function IconPicker({
   const tabStop = shown.find((i) => i.name === pick.name) ?? shown[0];
 
   const choose = (next: ProjectIconValue) => {
+    setUploadError(undefined);
     setPick(next);
     onPick(next);
   };
   // The accent is no color at all.
   const withColor = (color?: string) => (color ? { name: pick.name, color } : { name: pick.name });
   const withGlyph = (name: string) => (pick.color ? { name, color: pick.color } : { name });
+  // An image keeps the glyph and color under it, for an app that doesn't draw images (0038).
+  const upload = async (file: File) => {
+    const image = await readIcon(file, maxImageBytes!);
+    if (typeof image === "string") setUploadError(image);
+    else choose({ ...withColor(pick.color), image });
+  };
 
   const moveInGrid = (e: KeyboardEvent<HTMLElement>) => {
     const step = steps[e.key];
@@ -82,6 +98,7 @@ export function IconPicker({
         if (e.newState !== "open") return;
         setPick(value ?? defaultIcon);
         setQuery("");
+        setUploadError(undefined);
         setOpen(true);
       }}
       onToggle={(e: ToggleEvent<HTMLDivElement>) => {
@@ -116,10 +133,50 @@ export function IconPicker({
               }}
               className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
             />
+            {maxImageBytes !== undefined && (
+              <>
+                <button
+                  type="button"
+                  aria-label="Upload image"
+                  title="Upload image"
+                  aria-pressed={!!pick.image}
+                  onClick={() => fileInput.current?.click()}
+                  className="-my-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected [&_svg]:size-4"
+                >
+                  {pick.image ? (
+                    <img
+                      alt=""
+                      src={imageUrl(pick.image)}
+                      className="size-4 rounded-[22%] object-cover"
+                    />
+                  ) : (
+                    <ImageUp aria-hidden />
+                  )}
+                </button>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  hidden
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  onChange={(e) => {
+                    const file = e.currentTarget.files?.[0];
+                    // Cleared, so picking the same file again reads it again.
+                    e.currentTarget.value = "";
+                    if (file) void upload(file);
+                  }}
+                />
+              </>
+            )}
           </label>
+          {uploadError && (
+            <p role="alert" className="px-3 pt-2 text-[12.5px] text-danger">
+              {uploadError}
+            </p>
+          )}
           <fieldset aria-label="Color" className="flex justify-between px-3 pt-3 pb-1">
             {iconColors.map((c) => {
-              const checked = pick.color === c.key;
+              // An image has no color of its own.
+              const checked = !pick.image && pick.color === c.key;
               return (
                 <label
                   key={c.label}
@@ -160,7 +217,7 @@ export function IconPicker({
                   key={i.name}
                   type="button"
                   role="option"
-                  aria-selected={i.name === pick.name}
+                  aria-selected={!pick.image && i.name === pick.name}
                   aria-label={i.label}
                   title={i.label}
                   tabIndex={i === tabStop ? 0 : -1}

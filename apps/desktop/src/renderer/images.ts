@@ -1,5 +1,6 @@
 // Images sent with a message (RYA-193, decision 0026): read from a pasted, dropped, or picked
-// file into what plxd takes, and fetched back for the transcript.
+// file into what plxd takes, and fetched back for the transcript. Also a Project's or repo's
+// icon image (PLX-341, decision 0038).
 import type { ConnectionState } from "../preload/bridge";
 import type { ImageMediaType, PromptImage } from "../protocol/generated/protocol";
 
@@ -76,6 +77,53 @@ async function fit(
     if (image.data.length <= maxBytes) return image;
   }
   return "That image is too large to send.";
+}
+
+/** The `iconImages` cap on an icon image's base64 (0038). Undefined while the host isn't connected, or when its plxd keeps no icon images. */
+export function iconImageBytes(connection?: ConnectionState): number | undefined {
+  const max =
+    connection?.status === "connected"
+      ? connection.capabilities["iconImages"]?.["maxBytes"]
+      : undefined;
+  return typeof max === "number" ? max : undefined;
+}
+
+// An icon image's edge: crisp at the largest icon drawn, Create Project's 32 px, at 4x.
+const iconEdge = 128;
+
+/**
+ * `file` as a Project's or repo's icon image (PLX-341, 0038): its center cropped square and
+ * redrawn as a 128 px WebP, which keeps any transparency (a GIF keeps its first frame). Resolves to
+ * why not, for people, when it isn't an image plxd takes, can't be read, or is over `maxBytes`.
+ */
+export async function readIcon(file: Blob, maxBytes: number): Promise<PromptImage | string> {
+  if (!mediaTypes.includes(file.type)) return "Only PNG, JPEG, GIF, and WebP images can be used.";
+  let bitmap: ImageBitmap | undefined;
+  try {
+    bitmap = await createImageBitmap(file);
+    const side = Math.min(bitmap.width, bitmap.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = iconEdge;
+    const context = canvas.getContext("2d")!;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      bitmap,
+      (bitmap.width - side) / 2,
+      (bitmap.height - side) / 2,
+      side,
+      side,
+      0,
+      0,
+      iconEdge,
+      iconEdge,
+    );
+    const image = fromDataUrl(canvas.toDataURL("image/webp", 0.9));
+    return image.data.length <= maxBytes ? image : "That image is too large for an icon.";
+  } catch {
+    return "That image couldn't be read.";
+  } finally {
+    bitmap?.close();
+  }
 }
 
 function dataUrlOf(file: Blob): Promise<string> {

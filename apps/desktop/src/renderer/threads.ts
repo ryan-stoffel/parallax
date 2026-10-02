@@ -260,6 +260,8 @@ export interface ThreadsView {
   attention: boolean;
   /** Whether the host's plxd renames Projects and sets their icons (`projectEdit`, 0032). */
   editable: boolean;
+  /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
+  iconImageBytes?: number;
   /**
    * Marks a thread seen, or snoozes it until a time (a past one ends the snooze). Resolves to an
    * error message, or undefined.
@@ -287,12 +289,19 @@ export type CoordinatorOptions = Pick<
  * Project's own events for its runs and their permission requests (0033), starting over on
  * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
  * `approvals`, the threads and coordinators started here forward their permission requests
- * (RYA-196, 0031); `attention` and `editable` are passed through for the sidebar.
+ * (RYA-196, 0031); `attention`, `editable`, and `iconImageBytes` are passed through for the sidebar.
  */
 export function useThreads(
   hostId: string,
   connected: boolean,
-  { approvals = false, attention = false, editable = false } = {},
+  {
+    approvals = false,
+    attention = false,
+    editable = false,
+    iconImageBytes,
+  }: Partial<Pick<ThreadsView, "attention" | "editable" | "iconImageBytes">> & {
+    approvals?: boolean;
+  } = {},
 ): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
@@ -543,6 +552,7 @@ export function useThreads(
       error,
       attention,
       editable,
+      iconImageBytes,
       update,
       updateRepo,
       addRepo,
@@ -558,6 +568,7 @@ export function useThreads(
       error,
       attention,
       editable,
+      iconImageBytes,
       update,
       updateRepo,
       addRepo,
