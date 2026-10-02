@@ -312,7 +312,8 @@ export function AgentChat({
           )}
         </div>
       )}
-      <div className="mx-auto w-full max-w-3xl px-6 pb-5">
+      {/* A column the window bounds, so a pinned card's preview gives way to a grown composer. */}
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
         {/* Requests waiting on the user, pinned so they can't scroll away. */}
         <PinnedApprovals
           asked={asked}

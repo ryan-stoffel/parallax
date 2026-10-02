@@ -573,7 +573,11 @@ function Context({ request }: { request: ApprovalRequest }) {
 }
 
 // The most of the window a pinned card's preview, or a pinned plan opened in full, takes before it
-// scrolls, so the card's buttons and the composer stay in view.
+// scrolls, so the card's buttons and the composer stay in view. Where a grown composer leaves less
+// room, it gives way further: the chat's bottom block is a column bounded by the window, and each
+// frame down to the preview may shrink (`min-h-0`) while the header, buttons, and composer don't.
+// In a window too short even for those, the card's own box scrolls, so nothing spills onto the
+// composer or out of the card's border.
 const pinnedMaxHeight = "45vh";
 
 const quietButton =
@@ -602,8 +606,6 @@ interface CardProps {
   state?: AnswerState;
   onAnswer: (choice: Choice, message?: string) => void;
   onDismiss: () => void;
-  /** Says when its Deny note opens or closes, so the queue keeps it in place meanwhile. */
-  onNoting: (open: boolean) => void;
   /** Why answering is off right now, such as a lost connection. */
   disabledReason?: string;
   /** Renders a plan's Markdown, as the transcript does. */
@@ -620,7 +622,6 @@ function Answers({
   rulesId,
   onAnswer,
   onDismiss,
-  onNoting,
   disabledReason,
 }: {
   plan: boolean;
@@ -629,14 +630,9 @@ function Answers({
   rulesId: string;
   onAnswer: (choice: Choice, message?: string) => void;
   onDismiss: () => void;
-  onNoting: (open: boolean) => void;
   disabledReason?: string;
 }) {
   const [denying, setDenying] = useState(false);
-  const noting = (open: boolean) => {
-    setDenying(open);
-    onNoting(open);
-  };
   const [note, setNote] = useState("");
   const noteRef = useRef<HTMLInputElement>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
@@ -676,7 +672,7 @@ function Answers({
           onKeyDown={(e) => {
             if (e.key !== "Escape" || busy) return;
             e.preventDefault();
-            noting(false);
+            setDenying(false);
             requestAnimationFrame(() => denyRef.current?.focus());
           }}
           className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
@@ -685,7 +681,7 @@ function Answers({
           type="button"
           disabled={busy}
           onClick={() => {
-            noting(false);
+            setDenying(false);
             requestAnimationFrame(() => denyRef.current?.focus());
           }}
           className={quietButton}
@@ -704,7 +700,7 @@ function Answers({
         type="button"
         disabled={off}
         title={disabledReason}
-        onClick={() => noting(true)}
+        onClick={() => setDenying(true)}
         className={quietButton}
       >
         {label("deny", deny)}
@@ -772,7 +768,6 @@ function ApprovalCard({
   state,
   onAnswer,
   onDismiss,
-  onNoting,
   disabledReason,
   focusRef,
 }: CardProps) {
@@ -789,7 +784,7 @@ function ApprovalCard({
       tabIndex={-1}
       aria-labelledby={titleId}
       aria-describedby={statusId}
-      className="rounded-xl border border-border bg-surface focus-visible:outline-none"
+      className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface focus-visible:outline-none"
     >
       <div className="flex items-center gap-2 px-4 pt-3 text-[13px]">
         <tool.Icon aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
@@ -848,7 +843,6 @@ function ApprovalCard({
           rulesId={rulesId}
           onAnswer={onAnswer}
           onDismiss={onDismiss}
-          onNoting={onNoting}
           disabledReason={disabledReason}
         />
       </div>
@@ -870,7 +864,6 @@ function PlanApprovalCard({
   state,
   onAnswer,
   onDismiss,
-  onNoting,
   disabledReason,
   markdown,
   focusRef,
@@ -886,7 +879,7 @@ function PlanApprovalCard({
       tabIndex={-1}
       aria-label="Plan approval"
       aria-describedby={statusId}
-      className="rounded-xl focus-visible:outline-none"
+      className="flex min-h-0 flex-col rounded-xl focus-visible:outline-none"
     >
       <ProposedPlan
         id={asked.approval.key}
@@ -914,7 +907,6 @@ function PlanApprovalCard({
               rulesId=""
               onAnswer={onAnswer}
               onDismiss={onDismiss}
-              onNoting={onNoting}
               disabledReason={disabledReason}
             />
           </>
@@ -935,14 +927,27 @@ function PlanApprovalCard({
   );
 }
 
+// How long a new card ignores a pointer's clicks after it shows, in ms.
+const freshMs = 300;
+
 /**
  * The pinned card's frame, keyed by request so each one rises into place. As it leaves the page,
  * it says whether focus was in it, so the next card or the composer can take it (`onLeave`). Focus
  * on the body counts, as when the button pressed turned off while its answer went.
+ *
+ * A card that takes another's place under a pointer would take a click meant for that one, so it
+ * ignores a pointer's clicks until the pointer hovers over it, moving with no button down, or a
+ * finger touches it. A card swapped in under a still mouse or a hovering pen gets no pointermove,
+ * and a move during the press (a click's drift, a pen's pressure) doesn't count, since the press
+ * began on the card before it. It also ignores them for `freshMs` after it shows, about the time
+ * it takes to see the change. A key's click (`detail` 0) always goes, since a new card's focus
+ * starts on its frame, never on a button, and nothing looks turned off meanwhile.
  */
 function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [leave] = useState(() => onLeave);
+  const moved = useRef(false);
+  const [shownAt] = useState(() => performance.now());
   useLayoutEffect(() => {
     const el = ref.current!;
     return () => {
@@ -951,7 +956,23 @@ function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNod
     };
   }, [leave]);
   return (
-    <div ref={ref} className="approval-in space-y-1.5">
+    <div
+      ref={ref}
+      onPointerMove={(e) => {
+        if (e.buttons === 0) moved.current = true;
+      }}
+      // A touch is a fresh contact, which can't have been meant for another card. A pen can hover
+      // as a mouse does, so like a mouse it moves first.
+      onPointerDown={(e) => {
+        if (e.pointerType === "touch") moved.current = true;
+      }}
+      onClickCapture={(e) => {
+        if (e.detail === 0 || (moved.current && e.timeStamp - shownAt >= freshMs)) return;
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      className="approval-in flex min-h-0 flex-col space-y-1.5"
+    >
       {children}
     </div>
   );
@@ -960,11 +981,11 @@ function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNod
 /**
  * The requests waiting on the user, pinned over the composer so they can't scroll away: the oldest
  * as a card, with its place in the queue, and the next in its place once it's answered. The card
- * stays while its answer is on the way or its Deny note is open, even if an older request arrives,
- * as a Project's other runs' can once their logs are read. Another run's names the run. A new card
- * takes focus only from nothing, or from the card just answered, never from someone typing; once
- * the last goes, focus that was in it returns by `returnFocus`. A polite status says what came,
- * how it was answered, and when more wait.
+ * on screen stays for as long as it waits: requests that arrive after it queue behind it, older or
+ * not, as a Project's other runs' can once their logs are read. Another run's names the run. A new
+ * card takes focus only from nothing, or from the card just answered, never from someone typing;
+ * once the last goes, focus that was in it returns by `returnFocus`. A polite status says what
+ * came, how it was answered, and when more wait.
  */
 export function ApprovalQueue({
   asked,
@@ -985,16 +1006,13 @@ export function ApprovalQueue({
   disabledReason?: string;
   returnFocus?: () => void;
 }) {
-  // The card on screen, and whether its Deny note is open.
-  const [shown, setShown] = useState<{ id?: string; noting: boolean }>({ noting: false });
-  const held =
-    shown.id !== undefined && (shown.noting || answers.get(shown.id)?.state === "answering")
-      ? asked.find((a) => a.approval.request.approvalId === shown.id)
-      : undefined;
+  // The card on screen, which stays first while it's in the queue.
+  const [shown, setShown] = useState<string>();
+  const held = asked.find((a) => a.approval.request.approvalId === shown);
   const queue = held ? [held, ...asked.filter((a) => a !== held)] : asked;
   const head = queue[0];
   const key = head?.approval.request.approvalId;
-  if (key !== shown.id) setShown({ id: key, noting: false });
+  if (key !== shown) setShown(key);
   const card = useRef<HTMLDivElement>(null);
   // Whether focus was in the card that just went (`Pinned`), so the next one or the composer
   // takes it.
@@ -1012,11 +1030,15 @@ export function ApprovalQueue({
   }, [key, returnFocus]);
 
   // What the status says: how the last card was answered, then what the next one asks, or how
-  // many wait once more do.
-  const [said, setSaid] = useState<{ key?: string; head?: Asked; count: number; text: string }>({
-    count: 0,
-    text: "",
-  });
+  // many wait once more do. Every other thing it says ends in a zero-width space, so the region
+  // still changes, and is read again, when it says what it said before, as 2 waiting, 1, then 2.
+  const [said, setSaid] = useState<{
+    key?: string;
+    head?: Asked;
+    count: number;
+    text: string;
+    times: number;
+  }>({ count: 0, text: "", times: 0 });
   if (said.key !== key) {
     const parts: string[] = [];
     const answered = said.head && answers.get(said.head.approval.request.approvalId);
@@ -1031,12 +1053,15 @@ export function ApprovalQueue({
       const place = queue.length > 1 ? `, 1 of ${queue.length}` : "";
       parts.push(`Approval needed${from}${place}: ${what}.`);
     }
-    setSaid({ key, head, count: queue.length, text: parts.join(" ") });
+    setSaid({ key, head, count: queue.length, text: parts.join(" "), times: said.times + 1 });
   } else if (said.count !== queue.length)
     setSaid({
       ...said,
       count: queue.length,
-      ...(queue.length > said.count && { text: `${queue.length} requests waiting.` }),
+      ...(queue.length > said.count && {
+        text: `${queue.length} requests waiting.`,
+        times: said.times + 1,
+      }),
     });
 
   const state = head && answers.get(head.approval.request.approvalId);
@@ -1048,8 +1073,6 @@ export function ApprovalQueue({
     state,
     onAnswer: (choice: Choice, message?: string) => onAnswer(head, choice, message),
     onDismiss: () => onDismiss(head),
-    onNoting: (noting: boolean) =>
-      setShown((prev) => (prev.id === key ? { ...prev, noting } : prev)),
     disabledReason,
     markdown,
     focusRef: card,
@@ -1058,10 +1081,10 @@ export function ApprovalQueue({
     <>
       {/* Always on the page, so a screen reader hears what changes in it. */}
       <p aria-live="polite" aria-atomic="true" className="sr-only">
-        {said.text}
+        {said.text && said.text + (said.times % 2 ? "\u200b" : "")}
       </p>
       {head && props && (
-        <section aria-label="Approval requests" className="mb-3">
+        <section aria-label="Approval requests" className="mb-3 flex min-h-0 flex-col">
           <Pinned key={key} onLeave={leave}>
             {head.from && (
               <p className="flex min-w-0 items-center gap-1.5 px-1 text-[12px] text-muted-foreground">
