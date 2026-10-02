@@ -4,8 +4,8 @@ import type { AgentPermission, ThreadStartParams } from "../protocol/generated/p
 // placeholder until plxd reports them per host. Sources:
 // - Claude Code 2.1.283: the full names its aliases (opus, fable, sonnet, haiku) resolve to in
 //   its baked-in model catalog. `--model` takes these as they are.
-// - codex-cli 0.157.1: the slugs ~/.codex/models_cache.json lists (visibility "list"), which
-//   `-m` takes.
+// - codex-cli 0.159.3: the slugs ~/.codex/models_cache.json listed (visibility "list") on
+//   2026-10-02, which `-m` takes.
 // - Cursor Agent 2026.10.01-14929f9: a model of each family `agent models` listed on 2026-10-01,
 //   by the ids `--model` takes, effort included (0036).
 // Context windows and fast mode, checked on Claude Code 2.1.286 and codex-cli 0.159.3: Claude's
@@ -44,8 +44,32 @@ export const models: Model[] = [
   { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "Claude", contexts: claude1M },
   { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "Claude", contexts: [200_000] },
   {
+    id: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
+    provider: "Codex",
+    isNew: true,
+    contexts: codex872K,
+    fast: true,
+  },
+  {
     id: "gpt-6-astra",
     name: "GPT-6 Astra",
+    provider: "Codex",
+    isNew: true,
+    contexts: codex872K,
+    fast: true,
+  },
+  {
+    id: "gpt-6-sol",
+    name: "GPT-6 Sol",
+    provider: "Codex",
+    isNew: true,
+    contexts: codex872K,
+    fast: true,
+  },
+  {
+    id: "gpt-6-luna",
+    name: "GPT-6 Luna",
     provider: "Codex",
     isNew: true,
     contexts: codex872K,
