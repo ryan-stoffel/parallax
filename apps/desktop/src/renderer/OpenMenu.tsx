@@ -22,7 +22,7 @@ const nameOf = (target: OpenTarget) => {
 
 /**
  * The top bar's Open split button. The main part opens `folder` on the host with the last target
- * chosen, also on Mod+O; the chevron lists the targets main found, and choosing one opens with it
+ * chosen, also on Mod+Alt+O; the chevron lists the targets main found, and choosing one opens with it
  * and keeps it. Disabled while there's no folder, and absent while nothing can open one.
  */
 export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }) {
@@ -71,7 +71,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
           onClick={() => open(current)}
           aria-label={`Open in ${nameOf(current)}`}
           // Unset without a folder, so the wrapper's tooltip says why it's disabled.
-          title={folder ? `Open in ${nameOf(current)} (${shortcut("O")})` : undefined}
+          title={folder ? `Open in ${nameOf(current)} (${shortcut("Alt+O")})` : undefined}
           className={`${menuButton} rounded-r-none pr-2.5`}
         >
           {icons[current]}
@@ -111,7 +111,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
             {icons[t]}
             <span className="flex-1">{nameOf(t)}</span>
             {t === current && (
-              <span className="text-[11.5px] text-faint-foreground">{shortcut("O")}</span>
+              <span className="text-[11.5px] text-faint-foreground">{shortcut("Alt+O")}</span>
             )}
           </button>
         ))}
