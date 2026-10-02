@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 
-// Provider and source logos, from LobeHub's icon set (@lobehub/icons-static-svg). Each is a
-// 24×24 glyph that sizes like a lucide icon; Claude keeps its brand color, the others take
+// Provider and source logos, mostly from LobeHub's icon set (@lobehub/icons-static-svg). Each
+// sizes like a lucide icon; Claude and Google keep their brand colors, the others take
 // currentColor.
 
 type LogoProps = SVGProps<SVGSVGElement>;
