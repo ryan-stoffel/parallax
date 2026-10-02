@@ -86,6 +86,15 @@ function overSsh(ssh: SshTarget, remote: string, options: string[], platform: st
   };
 }
 
+/**
+ * What a terminal's program runs with: `env`, plus a UTF-8 `LANG` if `env` sets no locale, as when
+ * launchd starts the app. In the C locale, zsh counts each byte of a character like a prompt's
+ * U+E0A0 as a column, so its line editor draws in the wrong place.
+ */
+export function terminalEnv(env = process.env): NodeJS.ProcessEnv {
+  return env["LC_ALL"] || env["LC_CTYPE"] || env["LANG"] ? env : { ...env, LANG: "en_US.UTF-8" };
+}
+
 /** `path` as the host's shell reads it: bare if it can be, else quoted for cmd.exe or POSIX. */
 function quote(path: string): string {
   if (/^[\w./\\:-]+$/.test(path)) return path;
@@ -134,7 +143,7 @@ export async function openTerminal(
       name: "xterm-256color",
       ...session.size,
       cwd: found.cwd ?? os.homedir(),
-      env: process.env,
+      env: terminalEnv(),
     });
     session.pty = pty;
     pty.onData((data) => send({ type: "data", data }));
