@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactNode, type ToggleEvent } 
 
 import type { OpenTarget } from "../preload/bridge";
 import { CursorLogo, VSCodeLogo } from "./logos";
-import { menuButton, menuItem, menuPanel, moveFocus, shortcut } from "./ui";
+import { appShortcut, menuButton, menuItem, menuPanel, moveFocus, shortcut } from "./ui";
 
 const STORAGE_KEY = "parallax.openTarget";
 
@@ -44,8 +44,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
   };
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const mod = window.parallax.platform === "darwin" ? e.metaKey : e.ctrlKey;
-      if (!mod || e.code !== "KeyO" || e.altKey || e.shiftKey || !current) return;
+      if (appShortcut(e) !== "open" || !current) return;
       e.preventDefault();
       open(current);
     };

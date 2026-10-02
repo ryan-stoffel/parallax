@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -453,4 +455,37 @@ test("starts a thread in the repository's current checkout, on its branch, with 
 
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(transcript.getByText("Stopped")).toBeVisible();
+});
+
+test("saves a repository action and runs it in the drawer, opening its preview (PLX-299)", async () => {
+  const server = createServer((_req, res) => res.end("<h1>Preview works</h1>"));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const preview = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  // Actions belong to a repository: the open thread is quill's, from the test above.
+  await page.getByRole("button", { name: "Add action" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add action" });
+  await dialog.getByRole("textbox", { name: "Name" }).fill("Git version");
+  const keys = dialog.getByRole("textbox", { name: "Keybinding" });
+  await keys.press("ControlOrMeta+b");
+  await expect(dialog.getByRole("alert")).toContainText("one of Parallax's shortcuts");
+  await keys.press("ControlOrMeta+Shift+k");
+  await dialog.getByRole("textbox", { name: "Command" }).fill("git --version");
+  await dialog.getByRole("textbox", { name: "Preview URL (optional)" }).fill(preview);
+  await dialog.getByRole("checkbox", { name: "Open preview when this action runs" }).check();
+  await page.screenshot({ path: test.info().outputPath("action-dialog.png") });
+  await dialog.getByRole("button", { name: "Save action" }).click();
+  await page.screenshot({ path: test.info().outputPath("action-top-bar.png") });
+
+  // The drawer opens and runs it, and the side panel's Browser shows the preview.
+  await page.getByRole("button", { name: "Git version" }).click();
+  const terminal = page.getByRole("group", { name: "Terminal", exact: true });
+  await expect(terminal).toContainText("git version ");
+  await expect(page.getByRole("textbox", { name: "Address" })).toHaveValue(preview);
+  await page.screenshot({ path: test.info().outputPath("action-running.png") });
+
+  // Its keybinding runs it again.
+  await page.getByRole("log", { name: "Transcript" }).click();
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await expect(terminal).toContainText(/git version [\s\S]*git version /);
+  server.close();
 });
