@@ -1,17 +1,47 @@
-import { autoUpdater } from "electron-updater";
+import { app } from "electron";
+import { autoUpdater, type UpdateInfo } from "electron-updater";
 
-import type { UpdateChannel, UpdateState } from "../preload/bridge";
+import type { UpdateState } from "../preload/bridge";
+
+/** Whether this build is a nightly (0030): its version's prerelease identifier is `nightly`. */
+export const isNightly = (version: string) => version.includes("-nightly");
 
 /**
- * electron-updater's settings for a channel (0028). Nightly takes the newest GitHub prerelease
- * whose version's first prerelease identifier is `nightly`, from its `nightly*.yml`; Standard the
- * release marked Latest, from its `latest*.yml`, and may go back to it from a newer nightly.
+ * electron-updater's settings for the build's own channel (0028). A nightly takes the newest
+ * GitHub prerelease whose version's first prerelease identifier is `nightly`, from its
+ * `nightly*.yml`; any other build the release marked Latest, from its `latest*.yml`.
  */
-export function updaterSettings(channel: UpdateChannel) {
-  return channel === "nightly"
-    ? { channel: "nightly", allowPrerelease: true, allowDowngrade: false }
-    : { channel: "latest", allowPrerelease: false, allowDowngrade: true };
+export function updaterSettings(version: string) {
+  const nightly = isNightly(version);
+  return {
+    channel: nightly ? "nightly" : "latest",
+    allowPrerelease: nightly,
+    allowDowngrade: false,
+  };
 }
+
+const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" };
+
+/**
+ * A release's notes as plain text, one line per paragraph or list item. electron-updater reads
+ * them from GitHub's releases feed as HTML. The "Full Changelog" line is left out: the update's
+ * popover links the release instead.
+ */
+export function notesText(notes: UpdateInfo["releaseNotes"]): string {
+  const html = typeof notes === "string" ? notes : (notes ?? []).map((n) => n.note).join("\n");
+  return html
+    .replace(/<li>/g, "• ")
+    .replace(/<\/(p|li|h\d)>|<br\s*\/?>/g, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&(amp|lt|gt|quot|#39);/g, (_, name: string) => entities[name]!)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("Full Changelog"))
+    .join("\n");
+}
+
+const releasePage = (version: string) =>
+  `https://github.com/ryan-stoffel/parallax/releases/tag/v${version}`;
 
 // Chromium's errors for a request that never reached GitHub.
 const offline =
@@ -36,14 +66,13 @@ export function updateError(error: Error & { code?: string; statusCode?: number 
 }
 
 /**
- * The packaged app's updater (RYA-68): checks the channel's GitHub releases (see
- * `updaterSettings`) through the `app-update.yml` electron-builder packs, downloads what it finds
- * in the background, and installs it when Update is clicked or Parallax quits. `publish` gets what the
- * Update button shows on every change. Nothing is checked until `follow` names a channel; then it
- * checks every 20 s, and on `checkSoon` at most every 10 s, while nothing is downloaded yet. A
- * channel change checks at once, and the button keeps offering a download already waiting. The
- * checks read github.com's releases feed and download URLs, not the REST API, so they spend no
- * API quota (RYA-211).
+ * The packaged app's updater (RYA-68, RYA-286): checks the build's channel (see `updaterSettings`)
+ * through the `app-update.yml` electron-builder packs. A newer release shows on the Update button
+ * with its notes; `update` downloads it, publishing the progress, and once it's downloaded
+ * installs it, which also happens when Parallax quits. `publish` gets what the Update button
+ * shows on every change. It checks at start, every 20 s, and on `checkSoon` at most every 10 s,
+ * until a download starts. The checks read github.com's releases feed and download URLs, not the
+ * REST API, so they spend no API quota (RYA-211).
  */
 export function startUpdater(publish: (state: UpdateState) => void) {
   // Updates replace the AppImage file; an unpacked Linux build has nothing to replace.
@@ -51,36 +80,54 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     process.platform === "linux" && !process.env["APPIMAGE"]
       ? "Updates work only in the AppImage."
       : undefined;
-  // The version downloaded and ready to install.
+  // The newest release found, the download's percent while it runs, and the version downloaded
+  // and ready to install.
+  let available: UpdateState["available"];
+  let progress: number | undefined;
   let downloaded: string | undefined;
-  let following = false;
   let checkedAt = 0;
 
   const check = () => {
-    if (!following || unsupported) return;
+    if (unsupported || progress !== undefined || downloaded) return;
     checkedAt = Date.now();
     // Its errors also reach the "error" event below.
     autoUpdater.checkForUpdates().catch(() => {});
   };
 
-  // The button keeps offering a downloaded update, since it installs on quit, until another
-  // version replaces it or Squirrel.Mac rejects it. `note` is the latest check's line.
+  // `note` is the latest check's or download's line.
   const show = (note?: string) =>
     publish({
+      ...(available && { available }),
+      ...(progress !== undefined && { progress }),
       ...(downloaded !== undefined && { ready: `Parallax ${downloaded} to install` }),
       ...(note !== undefined && { note }),
     });
 
-  // autoDownload and autoInstallOnAppQuit are electron-updater's defaults.
-  autoUpdater.on("update-available", ({ version }) => {
-    if (version === downloaded) return;
-    // Its download replaces the one waiting.
-    downloaded = undefined;
-    show(`Downloading Parallax ${version}…`);
+  // Setting `channel` also sets allowDowngrade, so the settings go in this order.
+  const settings = updaterSettings(app.getVersion());
+  autoUpdater.channel = settings.channel;
+  autoUpdater.allowPrerelease = settings.allowPrerelease;
+  autoUpdater.allowDowngrade = settings.allowDowngrade;
+  // Downloads wait for a click. autoInstallOnAppQuit, the default, installs a download on quit.
+  autoUpdater.autoDownload = false;
+  autoUpdater.on("update-available", ({ version, releaseNotes }) => {
+    // A check that was in flight when a download started doesn't replace what's downloading.
+    if (version === available?.version || progress !== undefined || downloaded) return;
+    available = { version, notes: notesText(releaseNotes), url: releasePage(version) };
+    show();
   });
-  autoUpdater.on("update-not-available", () => show());
+  autoUpdater.on("update-not-available", () => {
+    if (progress !== undefined || downloaded) return;
+    available = undefined;
+    show();
+  });
+  autoUpdater.on("download-progress", ({ percent }) => {
+    progress = Math.floor(percent);
+    show();
+  });
   autoUpdater.on("update-downloaded", ({ version }) => {
     downloaded = version;
+    progress = undefined;
     show();
   });
   autoUpdater.on("error", (error: Error) => {
@@ -90,26 +137,18 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     show(updateError(error));
   });
   if (unsupported) publish({ note: unsupported });
-  // A downloaded update waits for a click or quit; checking again would fetch it again.
-  setInterval(() => downloaded ?? check(), 20_000);
+  void app.whenReady().then(check);
+  setInterval(check, 20_000);
 
   return {
-    /** Takes the channel's settings and checks at once, also at start. */
-    follow(channel: UpdateChannel) {
-      // Setting `channel` also sets allowDowngrade, so the settings go in this order.
-      const settings = updaterSettings(channel);
-      autoUpdater.channel = settings.channel;
-      autoUpdater.allowPrerelease = settings.allowPrerelease;
-      autoUpdater.allowDowngrade = settings.allowDowngrade;
-      following = true;
-      if (!unsupported) show();
-      check();
-    },
     /** A window came to the front. */
     checkSoon() {
-      if (downloaded === undefined && Date.now() - checkedAt > 10_000) check();
+      if (Date.now() - checkedAt > 10_000) check();
     },
-    /** The Update button: installs what's downloaded, else checks now. Resolves to one line. */
+    /**
+     * The Update button: installs what's downloaded, else downloads what's available, else checks
+     * now. Resolves to one line.
+     */
     async update(): Promise<string> {
       if (unsupported) return unsupported;
       if (downloaded) {
@@ -117,11 +156,23 @@ export function startUpdater(publish: (state: UpdateState) => void) {
         setTimeout(() => autoUpdater.quitAndInstall(), 100);
         return `Restarting to install Parallax ${downloaded}…`;
       }
+      if (available) {
+        if (progress === undefined) {
+          progress = 0;
+          show();
+          // A failed download ends here, after the "error" event; a failed check doesn't.
+          autoUpdater.downloadUpdate().catch((error: Error) => {
+            progress = undefined;
+            show(updateError(error));
+          });
+        }
+        return `Downloading Parallax ${available.version}…`;
+      }
       checkedAt = Date.now();
       try {
         const result = await autoUpdater.checkForUpdates();
         if (!result?.isUpdateAvailable) return "Up to date";
-        return `Downloading Parallax ${result.updateInfo.version}…`;
+        return `Parallax ${result.updateInfo.version} is available`;
       } catch (error) {
         return updateError(error as Error);
       }

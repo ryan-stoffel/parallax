@@ -207,7 +207,8 @@ jobs:
       # notarize runs it.
       - name: Verify the app's signature
         if: runner.os == 'macOS'
-        run: codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/Parallax.app
+        # Parallax.app, or Parallax (Nightly).app for a nightly.
+        run: codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/*.app
 
       # Straight from the runner to plan's draft, then publishes it: the first build done makes the
       # release visible. A dry run on workflow_dispatch.
@@ -341,6 +342,7 @@ jobs:
           # What a fresh download meets: Gatekeeper on the dmg, then on the app inside.
           spctl --assess --type open --context context:primary-signature --verbose "${dmg[0]}"
           hdiutil attach "${dmg[0]}" -nobrowse -readonly -mountpoint "$RUNNER_TEMP/parallax"
-          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/parallax/Parallax.app"
-          spctl --assess --type execute --verbose "$RUNNER_TEMP/parallax/Parallax.app"
+          app=("$RUNNER_TEMP"/parallax/*.app)
+          codesign --verify --deep --strict --verbose=2 "${app[0]}"
+          spctl --assess --type execute --verbose "${app[0]}"
           hdiutil detach "$RUNNER_TEMP/parallax"
