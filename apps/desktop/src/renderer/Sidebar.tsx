@@ -22,7 +22,7 @@ import {
   Laptop,
   ListFilter,
   LoaderCircle,
-  PanelLeft,
+  PanelLeftClose,
   Search,
   Server,
   Settings,
@@ -66,7 +66,7 @@ import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
 import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
-import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
+import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
 import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
@@ -97,7 +97,8 @@ interface SidebarProps {
 
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
- * spot the main pane shows it while this column is hidden, then the app's name.
+ * spot the main pane shows it while this column is hidden, then the app's mark and name, which
+ * open a new thread.
  */
 export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) {
   return (
@@ -115,9 +116,16 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
           aria-controls="sidebar"
           onClick={onClose}
         >
-          <PanelLeft />
+          <PanelLeftClose />
         </IconButton>
-        <span className="flex-1 text-[13px] font-bold text-muted-foreground">Parallax</span>
+        <button
+          type="button"
+          onClick={onNewThread}
+          className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-[14px] font-semibold tracking-tight text-foreground hover:bg-hover"
+        >
+          <ParallaxMark className="size-5" />
+          Parallax
+        </button>
         <IconButton label="New thread" keys="N" onClick={onNewThread}>
           <SquarePen />
         </IconButton>
