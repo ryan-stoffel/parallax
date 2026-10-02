@@ -6,6 +6,7 @@ import { AgentChat } from "./AgentChat";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
 import { ContextPanel } from "./ContextPanel";
+import { GitMenu } from "./GitMenu";
 import { NewThread } from "./NewThread";
 import { localId, useHosts } from "./hosts";
 import { OpenMenu } from "./OpenMenu";
@@ -313,6 +314,13 @@ export function App() {
                         : undefined
                   }
                 />
+                {selection.kind === "thread" && (
+                  <GitMenu
+                    key={`${host.id}/${selection.threadId}`}
+                    hostId={host.id}
+                    run={threads.state.runs[selection.threadId]}
+                  />
+                )}
                 {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
                 {!panelOpen && (
                   <IconButton

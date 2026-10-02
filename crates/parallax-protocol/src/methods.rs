@@ -30,20 +30,21 @@ use crate::{
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
-    AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams,
-    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult,
-    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams,
-    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
-    ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, HostHealthParams, HostHealthResult,
-    HostVersionParams, HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
-    ProjectCreateResult, ProjectListParams, ProjectListResult, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult, PromptImage, RepoAddParams, RepoAddResult,
-    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams,
-    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadListParams,
-    ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentCommitParams, AgentDiffParams,
+    AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult,
+    AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams,
+    AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
+    AgentStartParams, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
+    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
+    HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams,
+    InitializeResult, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
+    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
+    RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -205,6 +206,13 @@ method_table! {
         /// a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
         /// `openPr` capability.
         AgentOpenPr = "agent/openPr": AgentOpenPrParams => AgentOpenPrResult;
+        /// `agent/gitStatus`: the git state of a run's folder (RYA-298). Gated on the `git`
+        /// capability, like `agent/commit` and `agent/push`.
+        AgentGitStatus = "agent/gitStatus": AgentGitStatusParams => GitStatus;
+        /// `agent/commit`: stages everything in a finished run's folder and commits it.
+        AgentCommit = "agent/commit": AgentCommitParams => GitStatus;
+        /// `agent/push`: pushes a finished run's branch to `origin`, setting its upstream.
+        AgentPush = "agent/push": AgentPushParams => GitStatus;
         /// `agent/approve`: answers a run's permission request, from its `approvalRequested`
         /// item, by allowing or denying the tool call (RYA-222, decision 0031). Idempotent on the
         /// request. Gated on the `approvals` capability.
@@ -310,6 +318,9 @@ mod tests {
                 "agent/accept",
                 "agent/requestChanges",
                 "agent/openPr",
+                "agent/gitStatus",
+                "agent/commit",
+                "agent/push",
                 "agent/approve",
                 "thread/list",
                 "repo/add",
