@@ -225,6 +225,11 @@ export type ParallaxRequests = {
 	 * `projectEdit` capability, like `Project.icon`.
 	 */
 	"project/update": { params: ProjectUpdateParams, result: ProjectUpdateResult },
+	/**
+	 * `repo/refs`: a repo entry's local and remote-tracking branches, for picking the ref a
+	 * thread starts from. Gated on the `repoRefs` capability.
+	 */
+	"repo/refs": { params: RepoRefsParams, result: RepoRefsResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1183,6 +1188,18 @@ export type AgentStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
+	 * The context window in tokens, one the backend offers: Claude Code's `200000` or
+	 * `1000000`, Codex's `272000` or `872000`. Absent means the CLI's default. Send it and
+	 * `fast` only to a plxd that advertises `contextAndFast`. The run keeps both when it
+	 * resumes, and a retry must repeat them.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off: Claude Code's fast mode, or Codex's priority service tier. Absent
+	 * means the CLI's default.
+	 */
+	fast?: boolean,
+	/**
 	 * The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
 	 * `coordinatorThread`, the coordinator's mode when it spawns the run.
 	 */
@@ -1343,6 +1360,14 @@ export type AgentRun = {
 	 */
 	effort?: AgentEffort,
 	/**
+	 * Its context window in tokens, as `model`. Absent means the CLI's default.
+	 */
+	contextWindow?: number,
+	/**
+	 * Whether it runs in fast mode, as `model`. Absent means the CLI's default.
+	 */
+	fast?: boolean,
+	/**
 	 * Its permission, as `model`. Absent means `edit`.
 	 */
 	permission?: AgentPermission,
@@ -1437,12 +1462,22 @@ export type AgentSendParams = {
 	 */
 	permission?: AgentPermission,
 	/**
+	 * A new context window, as `effort`, but sent only to a plxd that advertises
+	 * `contextAndFast`.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `contextWindow`.
+	 */
+	fast?: boolean,
+	/**
 	 * A new account for the run and every later resume, sent only to a plxd that advertises
 	 * `sendAccount`, and waiting for a running CLI as `model` does. On the run's backend, the
 	 * session resumes on it. On another backend, the session can't move, so plxd starts a new
 	 * one there in the run's worktree, whose first message carries the conversation so far
 	 * before this one: the run keeps its id, transcript, and worktree, and takes the new
-	 * backend, with `model`, and the run's effort and permission where the backend maps them.
+	 * backend, with `model`, and the run's effort, permission, context window, and fast mode where
+	 * the backend maps them.
 	 * Absent, or the run's own, changes nothing.
 	 */
 	account?: AccountChoice,
@@ -2004,6 +2039,16 @@ export type AgentRunState = {
 	 */
 	effort?: AgentEffort,
 	/**
+	 * Its context window in tokens, which `agent/send` can change. Absent means the CLI's
+	 * default.
+	 */
+	contextWindow?: number,
+	/**
+	 * Whether it runs in fast mode, which `agent/send` can change. Absent means the CLI's
+	 * default.
+	 */
+	fast?: boolean,
+	/**
 	 * Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
 	 */
 	permission?: AgentPermission,
@@ -2527,6 +2572,14 @@ export type ThreadStartParams = {
 	 */
 	permission?: AgentPermission,
 	/**
+	 * The context window in tokens, as `agent/start` takes it.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `agent/start` takes it.
+	 */
+	fast?: boolean,
+	/**
 	 * Names the worktree's branch `parallax/<branchSlug>`: lowercase letters, digits, and hyphens,
 	 * no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
 	 * the run's short id after it. Absent names it `parallax/<short run id>`. Not part of what makes
@@ -2548,6 +2601,20 @@ export type ThreadStartParams = {
 	 * make a worktree.
 	 */
 	checkout?: boolean,
+	/**
+	 * The ref the new worktree starts from, such as `develop` or `origin/develop`. Absent means
+	 * the repo's `HEAD`. Not with `checkout`. Behind the `repoRefs` capability, like
+	 * `checkoutRef`. Not part of what makes a retry with the same run id conflict.
+	 */
+	base?: string,
+	/**
+	 * With `checkout`, the branch to switch the checkout to before the agent starts, as
+	 * `git switch` does: a remote-tracking ref such as `origin/foo` switches to the local `foo`,
+	 * made to track it if missing. Never forced: when git refuses, such as over local changes
+	 * it would overwrite, the start fails with git's reason. Absent switches nothing. Not part of
+	 * what makes a retry with the same run id conflict, and a retry switches nothing.
+	 */
+	checkoutRef?: string,
 };
 
 /**
@@ -2752,6 +2819,56 @@ export type ProjectUpdateResult = {
 	 * The project as it stands after the update.
 	 */
 	project: Project,
+};
+
+/**
+ * Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an
+ * unknown entry.
+ */
+export type RepoRefsParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Result of `repo/refs`.
+ */
+export type RepoRefsResult = {
+	/**
+	 * Its local and remote-tracking branches, `origin/HEAD` left out: the default branch first,
+	 * then the most recently committed first.
+	 */
+	refs: Array<RepoRef>,
+};
+
+/**
+ * A branch in a repository, as `repo/refs` lists it.
+ */
+export type RepoRef = {
+	/**
+	 * Its short name: `develop`, or `origin/develop` for a remote-tracking branch.
+	 */
+	name: string,
+	/**
+	 * True for a remote-tracking branch.
+	 */
+	remote?: boolean,
+	/**
+	 * True for the default branch `origin/HEAD` names: its local branch, or the remote-tracking
+	 * one when there is no local one.
+	 */
+	default?: boolean,
+	/**
+	 * True for the branch the repository's checkout has out.
+	 */
+	current?: boolean,
+	/**
+	 * True for a branch checked out in another worktree, a thread's included, which the checkout
+	 * can't switch to.
+	 */
+	worktree?: boolean,
 };
 
 /**

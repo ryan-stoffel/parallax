@@ -21,6 +21,8 @@ fn fields(project_id: Uuid) -> RunFields {
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         permission: None,
+        context_window: None,
+        fast: None,
         approvals: false,
         checkout: false,
     }
@@ -92,6 +94,31 @@ fn a_run_keeps_whether_it_works_in_the_current_checkout() {
         .unwrap();
     assert!(store.get_run(checkout).unwrap().unwrap().fields.checkout);
     assert!(!store.get_run(worktree).unwrap().unwrap().fields.checkout);
+}
+
+/// A run keeps its context window and fast mode, and `set_run_options` replaces them with its
+/// backend and other options.
+#[test]
+fn a_run_keeps_its_context_window_and_fast_mode() {
+    let (_dir, store) = open();
+    let (project, id) = (Uuid::now_v7(), Uuid::now_v7());
+    let asked = RunFields {
+        context_window: Some(1_000_000),
+        fast: Some(true),
+        ..fields(project)
+    };
+    store.create_run(id, &asked, &starting()).unwrap();
+    assert_eq!(store.get_run(id).unwrap().unwrap().fields, asked);
+    let moved = RunFields {
+        backend: "codex".to_owned(),
+        model: Some("gpt-5.5".to_owned()),
+        context_window: Some(272_000),
+        fast: Some(false),
+        ..asked
+    };
+    let row = store.set_run_options(id, &moved).unwrap();
+    assert_eq!(row.fields, moved);
+    assert_eq!(store.get_run(id).unwrap().unwrap().fields, moved);
 }
 
 #[test]

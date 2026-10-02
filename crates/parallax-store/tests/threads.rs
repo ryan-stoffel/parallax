@@ -29,6 +29,8 @@ fn run_fields(repo: Uuid) -> RunFields {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         approvals: false,
         checkout: false,
     }

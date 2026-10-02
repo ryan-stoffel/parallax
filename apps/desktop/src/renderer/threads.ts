@@ -212,8 +212,9 @@ export interface ThreadsView {
   /**
    * Starts a thread in a group with `prompt` and its `images`, with `options` sent as they are, and
    * its branch and title from `name`. With `checkout`, it works in the repository's own checkout
-   * instead of a new worktree, so it gets no branch. Reuse `runId`, with the same options and
-   * `checkout`, to retry. Resolves to plxd's error, or undefined.
+   * instead of a new worktree, so it gets no branch. `gitRef` is the ref the worktree starts from,
+   * or with `checkout`, the branch the checkout switches to first. Reuse `runId`, with the same
+   * options, `checkout`, and `gitRef`, to retry. Resolves to plxd's error, or undefined.
    */
   start: (
     runId: string,
@@ -222,6 +223,7 @@ export interface ThreadsView {
     images: PromptImage[],
     options: RunOptions,
     checkout: boolean,
+    gitRef: string | undefined,
     name?: ThreadName,
   ) => Promise<RpcError | undefined>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
@@ -408,6 +410,7 @@ export function useThreads(
       images: PromptImage[],
       options: RunOptions,
       checkout: boolean,
+      gitRef: string | undefined,
       name?: ThreadName,
     ) => {
       const answer = await window.parallax.request(hostId, "thread/start", {
@@ -418,6 +421,7 @@ export function useThreads(
         ...options,
         // The checkout keeps its own branch, so a name gives it none.
         ...(checkout ? { checkout } : name?.slug && { branchSlug: name.slug }),
+        ...(gitRef && (checkout ? { checkoutRef: gitRef } : { base: gitRef })),
         ...(approvals && { approvals }),
       });
       if ("error" in answer) return answer.error;

@@ -245,6 +245,14 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
+    /// Its context window in tokens, as `model`. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Whether it runs in fast mode, as `model`. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// Its permission, as `model`. Absent means `edit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -299,6 +307,16 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
+    /// Its context window in tokens, which `agent/send` can change. Absent means the CLI's
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Whether it runs in fast mode, which `agent/send` can change. Absent means the CLI's
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -652,6 +670,18 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
+    /// The context window in tokens, one the backend offers: Claude Code's `200000` or
+    /// `1000000`, Codex's `272000` or `872000`. Absent means the CLI's default. Send it and
+    /// `fast` only to a plxd that advertises `contextAndFast`. The run keeps both when it
+    /// resumes, and a retry must repeat them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Fast mode on or off: Claude Code's fast mode, or Codex's priority service tier. Absent
+    /// means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
     /// `coordinatorThread`, the coordinator's mode when it spawns the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -713,12 +743,22 @@ pub struct AgentSendParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// A new context window, as `effort`, but sent only to a plxd that advertises
+    /// `contextAndFast`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Fast mode on or off, as `contextWindow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// A new account for the run and every later resume, sent only to a plxd that advertises
     /// `sendAccount`, and waiting for a running CLI as `model` does. On the run's backend, the
     /// session resumes on it. On another backend, the session can't move, so plxd starts a new
     /// one there in the run's worktree, whose first message carries the conversation so far
     /// before this one: the run keeps its id, transcript, and worktree, and takes the new
-    /// backend, with `model`, and the run's effort and permission where the backend maps them.
+    /// backend, with `model`, and the run's effort, permission, context window, and fast mode where
+    /// the backend maps them.
     /// Absent, or the run's own, changes nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

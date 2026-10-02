@@ -69,9 +69,10 @@ pub enum ErrorKind {
     /// A run named no account, and its role has no default (0012). Set one with
     /// `accounts/defaults/set`, then retry with the same run id.
     NoDefaultAccount,
-    /// The run's backend can't honor a `model`, `effort`, or `permission` that `agent/start` or
-    /// `thread/start` asked for, or the model's name can't be passed to its CLI (RYA-97). Nothing
-    /// was created. The message names the option, the value, and the backend.
+    /// The run's backend can't honor a `model`, `effort`, `permission`, `contextWindow`, or
+    /// `fast` that `agent/start` or `thread/start` asked for, or the model's name can't be passed
+    /// to its CLI (RYA-97). Nothing was created. The message names the option, the value, and the
+    /// backend.
     UnsupportedOption,
     /// `agent/openPr` refused before pushing anything: the run is still running, it has no commit
     /// beyond its base, or it is a thread with no repo, which has no `origin` (RYA-168).

@@ -9,7 +9,7 @@
 //! answered in time, and logs how each one ended, including when a cancel, a stop, or the CLI's
 //! exit ends it first.
 //!
-//! A message that changes what its CLI runs with (its model, effort, permission, or account)
+//! A message that changes what its CLI runs with (its model, another run option, or account)
 //! can't reach a CLI that's running, so it waits in a queue, with every message sent after it,
 //! until that CLI exits; then each goes to a new CLI process in turn. A new account on another
 //! backend moves the run there: the session can't follow, so a new one starts in the same place,
@@ -75,7 +75,7 @@ pub(super) enum Command {
         text: String,
         /// The message's images, already checked (RYA-191).
         images: Vec<PromptImage>,
-        /// A new model, effort, or permission for the run (RYA-161, RYA-163).
+        /// New options for the run (RYA-161, RYA-163).
         options: RunOptions,
         /// A new account for the run, perhaps on another backend.
         account: Option<AccountChoice>,
@@ -842,7 +842,7 @@ impl Actor {
         self.resume(turn_id, text, images, changes, account).await
     }
 
-    /// Of `options`, the model, effort, and permission that differ from the run's.
+    /// Of `options`, those that differ from the run's.
     fn changes(&self, options: RunOptions) -> RunOptions {
         let fields = &self.row.fields;
         RunOptions {
@@ -851,6 +851,10 @@ impl Actor {
             permission: options
                 .permission
                 .filter(|&p| option_name(p) != fields.permission),
+            context_window: options
+                .context_window
+                .filter(|&w| Some(w) != fields.context_window),
+            fast: options.fast.filter(|&f| Some(f) != fields.fast),
         }
     }
 
@@ -927,7 +931,7 @@ impl Actor {
     }
 
     /// Starts a new CLI process for the run with `text` and `images`, after storing `changes` to
-    /// its model, effort, and permission, which the new process runs with. It resumes the run's
+    /// its options, which the new process runs with. It resumes the run's
     /// vendor session, on `account` if that's another of the same backend's. On another backend's
     /// account, or with no session to resume, a new session starts, told the conversation so far.
     async fn resume(
@@ -1043,17 +1047,17 @@ impl Actor {
         self.snapshot()
     }
 
-    /// Stores `changes` to the run's model, effort, and permission, checked against `backend`.
-    /// When `backend` isn't the run's, moves the run to it, where another vendor's model can't
-    /// carry over but the effort and permission can if `backend` maps them, and returns the
-    /// run's fields from before the move.
+    /// Stores `changes` to the run's options, checked against `backend`. When `backend` isn't the
+    /// run's, moves the run to it, where another vendor's model can't carry over but the other
+    /// options can if `backend` maps them, and returns the run's fields from before the move.
     async fn store_options(
         &mut self,
         backend: &dyn Backend,
         changes: RunOptions,
     ) -> Result<Option<parallax_store::RunFields>, ErrorObject> {
         let fields = &self.row.fields;
-        if backend.name() != fields.backend {
+        let moving = backend.name() != fields.backend;
+        let updated = if moving {
             let effort = fields.effort.as_deref().and_then(option_value);
             let permission = fields.permission.as_deref().and_then(option_value);
             let options = RunOptions {
@@ -1064,48 +1068,49 @@ impl Actor {
                 permission: changes
                     .permission
                     .or(permission.filter(|permission| backend.permissions().contains(permission))),
+                context_window: changes.context_window.or(fields
+                    .context_window
+                    .filter(|tokens| backend.context_windows().contains(tokens))),
+                fast: changes.fast.or(fields.fast.filter(|_| backend.fast_mode())),
             };
             options.check(backend)?;
-            let (id, name) = (self.row.id, backend.name().to_owned());
-            let row = store(&self.daemon, move |db| {
-                db.move_run(
-                    id,
-                    &name,
-                    options.model.as_deref(),
-                    options.effort.and_then(option_name).as_deref(),
-                    options.permission.and_then(option_name).as_deref(),
-                )
-                .map_err(|error| store_error(&error))
-            })
-            .await?;
-            return Ok(Some(std::mem::replace(&mut self.row.fields, row.fields)));
-        }
-        if changes == RunOptions::default() {
-            return Ok(None);
-        }
-        changes.check(backend)?;
+            parallax_store::RunFields {
+                backend: backend.name().to_owned(),
+                model: options.model,
+                effort: options.effort.and_then(option_name),
+                permission: options.permission.and_then(option_name),
+                context_window: options.context_window,
+                fast: options.fast,
+                ..fields.clone()
+            }
+        } else {
+            if changes == RunOptions::default() {
+                return Ok(None);
+            }
+            changes.check(backend)?;
+            parallax_store::RunFields {
+                model: changes.model.or(fields.model.clone()),
+                effort: changes
+                    .effort
+                    .and_then(option_name)
+                    .or(fields.effort.clone()),
+                permission: changes
+                    .permission
+                    .and_then(option_name)
+                    .or(fields.permission.clone()),
+                context_window: changes.context_window.or(fields.context_window),
+                fast: changes.fast.or(fields.fast),
+                ..fields.clone()
+            }
+        };
         let id = self.row.id;
-        let model = changes.model.clone().or(fields.model.clone());
-        let effort = changes
-            .effort
-            .and_then(option_name)
-            .or(fields.effort.clone());
-        let permission = changes
-            .permission
-            .and_then(option_name)
-            .or(fields.permission.clone());
         let row = store(&self.daemon, move |db| {
-            db.set_run_options(
-                id,
-                model.as_deref(),
-                effort.as_deref(),
-                permission.as_deref(),
-            )
-            .map_err(|error| store_error(&error))
+            db.set_run_options(id, &updated)
+                .map_err(|error| store_error(&error))
         })
         .await?;
-        self.row.fields = row.fields;
-        Ok(None)
+        let before = std::mem::replace(&mut self.row.fields, row.fields);
+        Ok(moving.then_some(before))
     }
 
     /// What a CLI needs to resume `session_id`: it, and the usage it has reported so far.
@@ -1130,14 +1135,8 @@ impl Actor {
         };
         let id = self.row.id;
         let moved = store(&self.daemon, move |db| {
-            db.move_run(
-                id,
-                &fields.backend,
-                fields.model.as_deref(),
-                fields.effort.as_deref(),
-                fields.permission.as_deref(),
-            )
-            .map_err(|error| store_error(&error))
+            db.set_run_options(id, &fields)
+                .map_err(|error| store_error(&error))
         })
         .await;
         match moved {
@@ -1325,6 +1324,8 @@ impl Actor {
             model: self.row.fields.model.clone(),
             effort: self.row.fields.effort.as_deref().and_then(option_value),
             permission: self.row.fields.permission.as_deref().and_then(option_value),
+            context_window: self.row.fields.context_window,
+            fast: self.row.fields.fast,
             coordinator_tools: tools,
             approvals: self.row.fields.approvals,
         };
@@ -1983,6 +1984,8 @@ mod tests {
                 model: None,
                 effort: None,
                 permission: None,
+                context_window: None,
+                fast: None,
                 approvals: false,
                 checkout: false,
             },

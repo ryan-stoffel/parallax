@@ -1,18 +1,19 @@
 //! `thread/list`, `repo/add`, `thread/start`, `thread/archive`, and `thread/delete` (#110),
-//! behind the `threads` capability, and `thread/update` and `repo/update` (0033), behind
-//! `threadAttention`. The logic is [`crate::threads`].
+//! behind the `threads` capability, `thread/update` and `repo/update` (0033), behind
+//! `threadAttention`, and `repo/refs`, behind `repoRefs`. The logic is [`crate::threads`].
 
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::methods::{
-    RepoAdd, RepoUpdate, RequestMethod, ThreadArchive, ThreadDelete, ThreadList, ThreadStart,
-    ThreadUpdate,
+    RepoAdd, RepoRefs, RepoUpdate, RequestMethod, ThreadArchive, ThreadDelete, ThreadList,
+    ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
-    RepoAddParams, RepoAddResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams,
-    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadListParams,
-    ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
+    RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult,
 };
 use serde_json::Value;
 
@@ -36,6 +37,7 @@ pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Val
         ThreadUpdate::NAME => handle::<ThreadUpdate, _, _>(request, |p| update(context, p)).await,
         RepoUpdate::NAME => handle::<RepoUpdate, _, _>(request, |p| update_repo(context, p)).await,
         ThreadDelete::NAME => handle::<ThreadDelete, _, _>(request, |p| delete(context, p)).await,
+        RepoRefs::NAME => handle::<RepoRefs, _, _>(request, |p| refs(context, p)).await,
         other => Err(ErrorObject::method_not_found(other)),
     }
 }
@@ -76,6 +78,10 @@ async fn update(
     params: ThreadUpdateParams,
 ) -> Result<ThreadUpdateResult, ErrorObject> {
     threads::update(&context.daemon, params).await
+}
+
+async fn refs(context: &Context, params: RepoRefsParams) -> Result<RepoRefsResult, ErrorObject> {
+    threads::refs(&context.daemon, params).await
 }
 
 async fn update_repo(

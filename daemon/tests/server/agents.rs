@@ -119,6 +119,8 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         images: Vec::new(),
         approvals: false,
     }
@@ -132,6 +134,8 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         account: None,
         images: Vec::new(),
     }

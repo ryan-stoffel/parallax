@@ -138,10 +138,14 @@ fn thread(repo: Option<RepoId>) -> ThreadStartParams {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         branch_slug: None,
         images: Vec::new(),
         approvals: false,
         checkout: false,
+        base: None,
+        checkout_ref: None,
     }
 }
 

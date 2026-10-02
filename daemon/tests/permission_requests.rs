@@ -108,6 +108,8 @@ fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
         model: Some("claude-sonnet-4-6".into()),
         effort: None,
         permission: Some(AgentPermission::Manual),
+        context_window: None,
+        fast: None,
         coordinator_tools: Some(CoordinatorTools {
             program: PathBuf::from(env!("CARGO_BIN_EXE_plxd")),
             data_dir: data.to_owned(),

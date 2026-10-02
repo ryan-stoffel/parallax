@@ -1,0 +1,76 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "repo/refs",
+    "params": { "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "refs": [
+        { "name": "develop", "default": true },
+        { "name": "feature/settings", "current": true },
+        { "name": "parallax/fix-flaky-test", "worktree": true },
+        { "name": "origin/develop", "remote": true }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/start",
+    "params": {
+      "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5ed",
+      "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+      "prompt": "Fix the flaky attach test.",
+      "base": "origin/develop"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "thread": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5ed",
+        "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+        "createdAt": "2026-10-01T12:00:01Z"
+      },
+      "run": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5ed",
+        "project": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+        "prompt": "Fix the flaky attach test.",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "parallax/2a3b4c5d",
+        "worktreePath": "/Users/me/Library/Application Support/parallax/worktrees/app-5e6f7a8b/01a0f755-f200-74dd-8cfc-06d0b225c5ed",
+        "createdAt": "2026-10-01T12:00:01Z",
+        "updatedAt": "2026-10-01T12:00:02Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "thread/start",
+    "params": {
+      "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5ee",
+      "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+      "prompt": "Tidy the README.",
+      "checkout": true,
+      "checkoutRef": "origin/feature/docs"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32000,
+      "message": "`git switch feature/docs` in /Users/me/src/app failed: error: Your local changes to the following files would be overwritten by checkout:\n\tREADME.md",
+      "data": { "kind": "worktreeFailed" }
+    }
+  }
+]

@@ -3,9 +3,11 @@
 //!
 //! [`WorktreeManager`] runs every git command through [`Launcher`], the same process supervisor
 //! backends use: an explicit, scrubbed environment and a timeout per call, so a hung or
-//! credential-prompting git can never block plxd. Only one call changes the project repo's own
+//! credential-prompting git can never block plxd. Only two calls change the project repo's own
 //! working tree: [`WorktreeManager::accept`] (#157), when the user accepts a run, and it refuses
-//! rather than touch uncommitted changes (see `review`). Otherwise `worktree add`, `worktree
+//! rather than touch uncommitted changes (see `review`), and [`WorktreeManager::switch`], when a
+//! Current checkout thread starts on a ref the user picked, which git refuses likewise (see
+//! `refs`). Otherwise `worktree add`, `worktree
 //! remove`, and `worktree prune` only touch `.git/worktrees` metadata and refs, and `status`,
 //! `rev-parse`, and `diff` are read-only.
 //!
@@ -30,7 +32,7 @@
 //!
 //! [`WorktreeManager::create`] resolves `base` to a concrete commit once, at creation, so a later
 //! [`WorktreeManager::diff`] is never compared against a ref that has since moved. When the caller
-//! leaves `base` unset (today's only case: the repo's current branch `HEAD`), creation never
+//! leaves `base` unset (the repo's current branch `HEAD`), creation never
 //! refuses over the repo's own working tree (#257): an untracked file was never going to be in a
 //! fresh worktree anyway, and a tracked, uncommitted change simply isn't included either, the same
 //! as checking out any other commit. [`CreatedWorktree::base_dirty`] flags the latter case — the
@@ -93,6 +95,7 @@
 //! tracks closing it.
 
 mod pull_request;
+mod refs;
 mod review;
 mod scratch;
 #[cfg(all(test, unix))]

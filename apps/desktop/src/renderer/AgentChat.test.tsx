@@ -18,6 +18,8 @@ import { Composer } from "./Composer";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers. Menus are in the DOM either way.
+HTMLElement.prototype.hidePopover = () => {};
 // happy-dom lays nothing out. Give the transcript a tall viewport and each row a
 // small height, so the virtualized list renders every row.
 Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
@@ -855,6 +857,39 @@ test("an open thread's composer picks within its provider and sends only what ch
     { model: "claude-sonnet-5", effort: "low" },
     [],
   );
+});
+
+test("on a plxd that takes them, an open thread's context window and fast mode send only what changed", async () => {
+  const onSend = vi.fn(async () => undefined);
+  render(
+    <Composer
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "high", contextWindow: 1_000_000 }}
+      contextAndFast
+      onSend={onSend}
+    />,
+  );
+  const effort = () => document.querySelector('[aria-label^="Reasoning effort: "]')!;
+  expect(effort().getAttribute("aria-label")).toBe("Reasoning effort: High · 1M");
+  const choose = (menu: string, option: string) =>
+    act(() =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          `[role="menu"][aria-label="${menu}"] [role="menuitemradio"]`,
+        ),
+      ]
+        .find((o) => o.textContent === option)!
+        .click(),
+    );
+  choose("Context window", "200K");
+  choose("Fast mode", "On");
+  expect(effort().textContent).toBe("High · 200K");
+  expect(effort().getAttribute("aria-label")).toBe("Reasoning effort: High · 200K, fast");
+  type("Quicker");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
+  );
+  expect(onSend).toHaveBeenCalledWith("Quicker", { contextWindow: 200_000, fast: true }, []);
 });
 
 test("another provider's model moves an open thread there, with every option and the account", async () => {

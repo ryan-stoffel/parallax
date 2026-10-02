@@ -104,10 +104,10 @@ pub use review::{
     AgentRequestChangesParams,
 };
 pub use thread::{
-    Repo, RepoAddParams, RepoAddResult, RepoId, RepoUpdateParams, RepoUpdateResult, Thread,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult,
+    Repo, RepoAddParams, RepoAddResult, RepoId, RepoRef, RepoRefsParams, RepoRefsResult,
+    RepoUpdateParams, RepoUpdateResult, Thread, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
     AccountRuns, AccountUsage, UsageGetParams, UsageGetResult, UsageHistoryParams,

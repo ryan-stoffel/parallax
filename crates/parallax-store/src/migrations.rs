@@ -298,6 +298,13 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE repos ADD COLUMN icon_name TEXT;
         ALTER TABLE repos ADD COLUMN icon_color TEXT;",
     },
+    // A run's context window in tokens and whether it runs in fast mode, each NULL for the CLI's
+    // default. Kept and passed again, as `model` is.
+    Migration {
+        version: 20,
+        sql: "ALTER TABLE runs ADD COLUMN context_window INTEGER;
+        ALTER TABLE runs ADD COLUMN fast INTEGER;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

@@ -199,6 +199,14 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// The context window in tokens, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Fast mode on or off, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// Names the worktree's branch `parallax/<branchSlug>`: lowercase letters, digits, and hyphens,
     /// no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
     /// the run's short id after it. Absent names it `parallax/<short run id>`. Not part of what makes
@@ -218,6 +226,64 @@ pub struct ThreadStartParams {
     /// make a worktree.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkout: bool,
+    /// The ref the new worktree starts from, such as `develop` or `origin/develop`. Absent means
+    /// the repo's `HEAD`. Not with `checkout`. Behind the `repoRefs` capability, like
+    /// `checkoutRef`. Not part of what makes a retry with the same run id conflict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base: Option<String>,
+    /// With `checkout`, the branch to switch the checkout to before the agent starts, as
+    /// `git switch` does: a remote-tracking ref such as `origin/foo` switches to the local `foo`,
+    /// made to track it if missing. Never forced: when git refuses, such as over local changes
+    /// it would overwrite, the start fails with git's reason. Absent switches nothing. Not part of
+    /// what makes a retry with the same run id conflict, and a retry switches nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checkout_ref: Option<String>,
+}
+
+/// Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an
+/// unknown entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoRefsParams {
+    /// The entry's id.
+    pub repo: RepoId,
+}
+
+/// Result of `repo/refs`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoRefsResult {
+    /// Its local and remote-tracking branches, `origin/HEAD` left out: the default branch first,
+    /// then the most recently committed first.
+    pub refs: Vec<RepoRef>,
+}
+
+/// A branch in a repository, as `repo/refs` lists it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a branch, not states of one thing"
+)]
+pub struct RepoRef {
+    /// Its short name: `develop`, or `origin/develop` for a remote-tracking branch.
+    pub name: String,
+    /// True for a remote-tracking branch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote: bool,
+    /// True for the default branch `origin/HEAD` names: its local branch, or the remote-tracking
+    /// one when there is no local one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    /// True for the branch the repository's checkout has out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
+    /// True for a branch checked out in another worktree, a thread's included, which the checkout
+    /// can't switch to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worktree: bool,
 }
 
 /// Result of `thread/start`.
