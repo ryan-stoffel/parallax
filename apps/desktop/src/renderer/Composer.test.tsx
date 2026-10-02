@@ -174,6 +174,22 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
+test("insert adds its text after what's typed, as the PR view's Ask a question does", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  const draw = (insert?: string) =>
+    act(() => root.render(<Composer onSend={onSend} insert={insert} />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  draw();
+  const box = document.querySelector<TiptapEditorHTMLElement>('[role="textbox"]')!;
+  act(() => void box.editor!.commands.setContent("About"));
+  draw("https://github.com/me/app/pull/42 ");
+  expect(box.textContent).toBe("About https://github.com/me/app/pull/42 ");
+});
+
 test("typed text that only looks like Markdown is sent as typed", async () => {
   const onSend = vi.fn(async () => undefined);
   const { box, type, press } = render(onSend);
