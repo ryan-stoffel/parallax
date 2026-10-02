@@ -32,7 +32,7 @@ What a row asks of the user, from its run, its waiting permission requests, and 
 | Failed | As Done, for a failed run | "Failed" |
 | Settled | Otherwise | The age |
 
-- Opening a thread with news, or clicking **Settle**, marks it seen. So does a thread that finishes while it is open. A Project row shows Needs you or Working from all its runs, and has no Done state.
+- Opening a thread with news marks it seen. So does a thread that finishes while it is open. A Project row shows Needs you or Working from all its runs, and has no Done state.
 - Animations move only `transform` and `opacity`, and stop under `prefers-reduced-motion`.
 - Each repo and Project gets its own event subscription for its runs and their permission requests, so status is live with no hover. The app stamps a run's `updatedAt` with the event's time.
 
