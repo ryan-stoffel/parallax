@@ -111,7 +111,8 @@ export function startUpdater(publish: (state: UpdateState) => void) {
   // Downloads wait for a click. autoInstallOnAppQuit, the default, installs a download on quit.
   autoUpdater.autoDownload = false;
   autoUpdater.on("update-available", ({ version, releaseNotes }) => {
-    if (version === available?.version) return;
+    // A check that was in flight when a download started doesn't replace what's downloading.
+    if (version === available?.version || progress !== undefined || downloaded) return;
     available = { version, notes: notesText(releaseNotes), url: releasePage(version) };
     show();
   });
@@ -132,7 +133,6 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     // Squirrel.Mac's own errors (they carry an NSError `domain`), such as a signature it rejects,
     // mean the download won't install. A failed check leaves it waiting.
     if ("domain" in error) downloaded = undefined;
-    progress = undefined;
     show(updateError(error));
   });
   if (unsupported) publish({ note: unsupported });
@@ -159,8 +159,11 @@ export function startUpdater(publish: (state: UpdateState) => void) {
         if (progress === undefined) {
           progress = 0;
           show();
-          // Its errors reach the "error" event above.
-          autoUpdater.downloadUpdate().catch(() => {});
+          // A failed download ends here, after the "error" event; a failed check doesn't.
+          autoUpdater.downloadUpdate().catch((error: Error) => {
+            progress = undefined;
+            show(updateError(error));
+          });
         }
         return `Downloading Parallax ${available.version}…`;
       }
