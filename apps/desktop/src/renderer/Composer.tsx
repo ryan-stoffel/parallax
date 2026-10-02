@@ -211,7 +211,8 @@ export interface ComposerProps {
   started?: Pick<AgentRun, "model" | "effort" | "permission" | "contextWindow" | "fast">;
   /** Whether the host's plxd takes a context window and fast mode (`contextAndFast`). */
   contextAndFast?: boolean;
-  /** Providers an open run can't move to, by why, whose models it doesn't offer. */
+  /** Providers the thread can't run on, by why, whose models it doesn't offer: those an open run
+   * can't move to, or a new thread can't start on. */
   unavailable?: Partial<Record<Provider, string>>;
   /** Why the model, effort, and access can't change right now, which turns them off. */
   optionsDisabled?: string;

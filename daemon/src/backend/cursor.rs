@@ -398,9 +398,8 @@ impl Driver {
                     Some(Output::Exited(exit)) => break Some(exit),
                     None => break None,
                 },
-                // Answers before follow-ups: the CLI is waiting on them.
                 answer = self.answers.recv(), if answers_open => match answer {
-                    Some(answer) => self.answer(answer),
+                    Some(answer) => self.answer(answer).await,
                     None => answers_open = false,
                 },
                 follow_up = self.control.recv(), if control_open => match follow_up {
@@ -506,10 +505,9 @@ impl Driver {
                     self.emit(Event::Notice { detail: message }).await;
                     return;
                 }
-                // The session or a turn failed: the run ends with it.
-                if let Request::Prompt(prompt) = &request
-                    && !prompt.started
-                {
+                // The session or a turn failed: the run ends with it. Every prompt's turn has
+                // started by now, an approved plan's build on the plan's turn.
+                if let Request::Prompt(prompt) = &request {
                     let result = None;
                     let turn_id = prompt.turn_id;
                     self.emit(Event::TurnFinished { turn_id, result }).await;
@@ -596,8 +594,10 @@ impl Driver {
         self.request("session/set_mode", &params, Request::Mode);
     }
 
-    /// Writes `answer` to the CLI, if it still waits on the request.
-    fn answer(&mut self, answer: Answer) {
+    /// Writes `answer` to the CLI, if it still waits on the request. A denial that interrupts
+    /// also cancels the turn, and withdraws every other request it waits on, answered `cancelled`
+    /// as ACP has a client do after `session/cancel`.
+    async fn answer(&mut self, answer: Answer) {
         let Some(ask) = self.asks.remove(&answer.approval_id) else {
             return;
         };
@@ -654,6 +654,13 @@ impl Driver {
         }
         if interrupt && let Some(session) = self.session.clone() {
             self.write(&json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session}}));
+            for (approval_id, ask) in std::mem::take(&mut self.asks) {
+                let outcome = json!({"outcome": "cancelled"});
+                self.write(
+                    &json!({"jsonrpc": "2.0", "id": ask.id, "result": {"outcome": outcome}}),
+                );
+                self.emit(Event::ApprovalWithdrawn { approval_id }).await;
+            }
         }
     }
 

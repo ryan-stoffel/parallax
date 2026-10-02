@@ -30,6 +30,9 @@ fn fixture(name: &str) -> &'static str {
         "plan" => include_str!("fixtures/plan.jsonl"),
         "resume" => include_str!("fixtures/resume.jsonl"),
         "not-signed-in" => include_str!("fixtures/not-signed-in.jsonl"),
+        "cancel" => include_str!("fixtures/cancel.jsonl"),
+        "interrupt" => include_str!("fixtures/interrupt.jsonl"),
+        "plan-denied" => include_str!("fixtures/plan-denied.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -426,6 +429,97 @@ async fn an_approved_plan_is_built_in_the_same_turn() {
         ],
         "the build goes on as the plan's turn"
     );
+}
+
+#[tokio::test]
+async fn a_denied_plan_is_rejected_with_the_users_reason_and_keeps_planning() {
+    let fake = Fake::new("plan-denied");
+    let mut request = fake.request();
+    request.permission = Some(AgentPermission::Plan);
+    let deny = |_: &str| Decision::Deny {
+        message: "Use three sections instead".into(),
+        interrupt: false,
+    };
+    let events = run(&fake, request, deny, None).await;
+
+    let stdin = fake.stdin();
+    assert_eq!(
+        stdin[4],
+        json!({"jsonrpc": "2.0", "id": 0, "result": {"outcome": {"outcome": "rejected", "reason": "Use three sections instead"}}})
+    );
+    assert_eq!(stdin.len(), 5, "no switch to agent mode, and no build");
+    assert_eq!(
+        status_of(&events, "tool_6d56f15f-9285-4e66-8f3a-de596a50152"),
+        Some(&ToolStatus::Denied)
+    );
+    let turn = Some(TURN.parse().unwrap());
+    assert_eq!(
+        turns(&events),
+        [
+            &Event::TurnStarted { turn_id: turn },
+            &Event::TurnFinished {
+                turn_id: turn,
+                result: Some("Planning three sections instead.".into())
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_interrupting_denial_cancels_the_turn_and_withdraws_the_other_request() {
+    let fake = Fake::new("interrupt");
+    let started = fake.backend.start(fake.request()).unwrap();
+    let mut events = started.events;
+    let mut asked = Vec::new();
+    while asked.len() < 2 {
+        if let Event::ApprovalRequested(request) = next(&mut events).await {
+            asked.push(request.approval_id);
+        }
+    }
+    let deny = Decision::Deny {
+        message: "Stopped.".into(),
+        interrupt: true,
+    };
+    started
+        .run
+        .answer(Answer {
+            approval_id: asked[0],
+            decision: deny,
+        })
+        .unwrap();
+    let mut rest = Vec::new();
+    while !rest.last().is_some_and(Event::is_terminal) {
+        rest.push(next(&mut events).await);
+    }
+
+    let stdin = fake.stdin();
+    assert_eq!(stdin[3]["result"]["outcome"]["optionId"], "reject-once");
+    assert_eq!(stdin[4]["method"], "session/cancel");
+    assert_eq!(
+        stdin[5],
+        json!({"jsonrpc": "2.0", "id": 1, "result": {"outcome": {"outcome": "cancelled"}}})
+    );
+    assert!(rest.contains(&Event::ApprovalWithdrawn {
+        approval_id: asked[1]
+    }));
+    assert!(
+        rest.iter()
+            .any(|event| matches!(event, Event::TurnFinished { .. }))
+    );
+}
+
+#[tokio::test]
+async fn cancel_stops_cursor_mid_turn() {
+    let fake = Fake::new("cancel");
+    let started = fake.backend.start(fake.request()).unwrap();
+    let mut events = started.events;
+    while !matches!(next(&mut events).await, Event::TextDelta { .. }) {}
+    started.run.cancel();
+    let mut rest = Vec::new();
+    while !rest.last().is_some_and(Event::is_terminal) {
+        rest.push(next(&mut events).await);
+    }
+    assert_eq!(outcome(&rest), &Outcome::Cancelled);
 }
 
 #[tokio::test]

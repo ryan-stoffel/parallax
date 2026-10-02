@@ -79,19 +79,27 @@ export const models: Model[] = [
  * The plxd backends a thread can run on, by name (`AccountChoice`'s `backend`): whose models
  * they take, the permissions they map, whether they can run a Project's coordinator, and whether
  * they map efforts: every one but Cursor, whose model ids carry the effort (RYA-97, RYA-38, 0036).
+ * `threads: false` marks one plxd refuses a thread on (Codex until RYA-282), which New Thread
+ * doesn't offer.
  * ponytail: mirrors plxd's `Backend::permissions`, `Backend::efforts`, and
  * `Capabilities::coordinator`, which it doesn't report yet (RYA-154).
  */
 export const backends: Record<
   string,
-  { provider: Provider; permissions: AgentPermission[]; coordinator: boolean; efforts?: false }
+  {
+    provider: Provider;
+    permissions: AgentPermission[];
+    coordinator: boolean;
+    efforts?: false;
+    threads?: false;
+  }
 > = {
   claude: {
     provider: "Claude",
     permissions: ["auto", "manual", "edit", "plan", "bypass"],
     coordinator: true,
   },
-  codex: { provider: "Codex", permissions: ["edit"], coordinator: false },
+  codex: { provider: "Codex", permissions: ["edit"], coordinator: false, threads: false },
   cursor: {
     provider: "Cursor",
     permissions: ["edit", "plan", "bypass"],

@@ -9,7 +9,7 @@ import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { imageCaps } from "./images";
-import type { RunOptions } from "./models";
+import { backends, type Provider, type RunOptions } from "./models";
 import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { noRepo, type ThreadGroup } from "./threads";
@@ -111,6 +111,19 @@ export async function defaultBackend(hostId: string, role: Role): Promise<string
   if ("error" in keys) return undefined;
   const provider = keys.result.accounts.find((k) => k.id === choice.id)?.provider;
   return provider === "anthropic" ? "claude" : provider === "openai" ? "codex" : undefined;
+}
+
+/**
+ * The providers New Thread doesn't offer, by why: those whose backend plxd refuses a thread on,
+ * other than the host's default's, which it always offered.
+ */
+function noThreads(backend?: string): Partial<Record<Provider, string>> {
+  const own = backend === undefined ? undefined : backends[backend]?.provider;
+  return Object.fromEntries(
+    Object.values(backends)
+      .filter((b) => b.threads === false && b.provider !== own)
+      .map((b) => [b.provider, `${b.provider} can't run a thread yet.`]),
+  );
 }
 
 const noAccounts =
@@ -377,6 +390,7 @@ export function NewThread({
         <Composer
           newThread
           onSend={send}
+          unavailable={noThreads(backend)}
           // Hidden while starting, as the opened thread's composer has none.
           backend={runOptions && starting === undefined ? backend : undefined}
           contextAndFast={
