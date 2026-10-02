@@ -354,7 +354,7 @@ function contextComponents(files: ContextFile[], onOpen: (path: string) => void)
             type="button"
             disabled={!files.some((f) => f.path === path)}
             onClick={() => onOpen(path)}
-            className="text-accent underline underline-offset-2 disabled:text-faint-foreground disabled:no-underline"
+            className="text-accent underline-offset-2 hover:underline disabled:text-faint-foreground disabled:no-underline"
           >
             <MarkdownMark className={inlineIcon} />
             {children}

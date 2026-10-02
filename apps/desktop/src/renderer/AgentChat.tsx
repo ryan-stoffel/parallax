@@ -65,6 +65,7 @@ import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
+import { GitHubLogo, LinearLogo } from "./logos";
 import { backendOf, backends, models, type Provider, type RunOptions } from "./models";
 import {
   latestPlan,
@@ -1389,15 +1390,35 @@ function inputText(input: JsonValue): string {
   return typeof input === "string" ? input : JSON.stringify(input, null, 2);
 }
 
+/** The icon before a web link, as T3 Code shows one: its site's logo, or a globe (PLX-330). */
+export function linkIcon(href?: string) {
+  let host;
+  try {
+    const url = new URL(href ?? "");
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    host = url.hostname;
+  } catch {
+    return undefined;
+  }
+  const on = (site: string) => host === site || host.endsWith(`.${site}`);
+  return on("github.com") ? GitHubLogo : on("linear.app") ? LinearLogo : Globe;
+}
+
 // Agent output is untrusted: no raw HTML (no rehype-raw), and react-markdown's
 // default urlTransform drops javascript: and other unsafe links. Links open in
 // a new window, which main hands to the system browser, https only.
 const markdownComponents: Components = {
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => {
+    const Icon = linkIcon(href);
+    return (
+      <a href={href} target="_blank" rel="noreferrer">
+        {Icon && (
+          <Icon aria-hidden className="mr-1 inline size-3.5 align-[-0.15em] text-foreground" />
+        )}
+        {children}
+      </a>
+    );
+  },
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   // Never load images: a link with the alt text, which opens externally like any link.
   img: ({ src, alt }) => (
