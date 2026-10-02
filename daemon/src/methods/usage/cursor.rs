@@ -57,13 +57,20 @@ pub(super) async fn daily(
     let mut events = Vec::new();
     for page in 1..=MAX_PAGES {
         let answer = fetch(launcher, &cookie, start, end, page).await?;
-        let more = answer.usage_events_display.len() == PAGE_SIZE;
+        let fetched = answer.usage_events_display.len();
         events.extend(answer.usage_events_display);
-        if !more || events.len() as u64 >= answer.total_usage_events_count {
+        if last_page(fetched, events.len(), answer.total_usage_events_count) {
             break;
         }
     }
     Ok(rows(events, zone))
+}
+
+/// Whether paging is done after a page of `fetched` events, with `collected` in all: on an empty
+/// page, or once `total`, when the API says it, is in. Not on a short page: the API may cap the
+/// page size below what plxd asked for.
+fn last_page(fetched: usize, collected: usize, total: Option<u64>) -> bool {
+    fetched == 0 || total.is_some_and(|total| collected as u64 >= total)
 }
 
 /// Cursor desktop's state database, where it keeps its sign-in.
@@ -137,8 +144,7 @@ fn user_id(token: &str) -> Option<String> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Page {
-    #[serde(default)]
-    total_usage_events_count: u64,
+    total_usage_events_count: Option<u64>,
     #[serde(default)]
     usage_events_display: Vec<Event>,
 }
@@ -192,7 +198,8 @@ async fn fetch(
     ));
     let home = std::env::home_dir().filter(|home| home.is_absolute() && home.is_dir());
     let mut spec = ProcessSpec::new("curl", home.unwrap_or_else(|| PathBuf::from("/")));
-    spec.args = vec!["-K".into(), "-".into()];
+    // `-q` first, so no `.curlrc` applies: one with `trace-ascii` would write the cookie to disk.
+    spec.args = vec!["-q".into(), "-K".into(), "-".into()];
     spec.stdin = StdinMode::Piped;
     let ran = run_spec(launcher, &spec, config.as_bytes(), PAGE_TIMEOUT)
         .await
@@ -274,7 +281,7 @@ mod tests {
     use jiff::tz::TimeZone;
     use parallax_protocol::{CliKind, UsageDay};
 
-    use super::{Page, rows, user_id};
+    use super::{Page, last_page, rows, user_id};
 
     #[test]
     fn the_user_id_comes_from_the_tokens_subject() {
@@ -282,6 +289,15 @@ mod tests {
         let token = "e30.eyJzdWIiOiJhdXRoMHx1c2VyXzAxQUJDIiwiZXhwIjoxfQ.sig";
         assert_eq!(user_id(token).as_deref(), Some("user_01ABC"));
         assert_eq!(user_id("not-a-jwt"), None);
+    }
+
+    #[test]
+    fn paging_ends_on_an_empty_page_or_the_total_not_a_short_page() {
+        // No total, and fewer events than asked for: the API may cap the page size.
+        assert!(!last_page(100, 100, None));
+        assert!(last_page(0, 100, None));
+        assert!(!last_page(100, 100, Some(250)));
+        assert!(last_page(50, 250, Some(250)));
     }
 
     #[test]
