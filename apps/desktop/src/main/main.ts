@@ -87,6 +87,7 @@ app.on("web-contents-created", (_event, contents) => {
       nodeIntegrationInSubFrames: false,
       contextIsolation: true,
       sandbox: true,
+      webSecurity: true,
       partition: browserPartition,
     });
   });
@@ -215,9 +216,9 @@ nativeTheme.on("updated", () => {
 
 void app.whenReady().then(() => {
   // Pages in the side panel's browser get no camera, microphone, notifications, and the like.
-  session
-    .fromPartition(browserPartition)
-    .setPermissionRequestHandler((_c, _p, grant) => grant(false));
+  const browserSession = session.fromPartition(browserPartition);
+  browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));
+  browserSession.setPermissionCheckHandler(() => false);
   startHosts();
   // Under `pnpm dev`, Update follows develop, the nightly channel's branch (scripts/channels.mjs).
   if (!updater) process.send?.({ channel: "nightly" });
