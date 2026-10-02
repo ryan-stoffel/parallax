@@ -986,7 +986,7 @@ function RowHead({
 }) {
   return (
     <span
-      className={`flex w-full items-center gap-1.5 text-[12px] text-faint-foreground ${clearOfActions ? "group-has-[:focus-visible]/row:pr-30 group-hover/row:pr-30" : ""}`}
+      className={`flex w-full items-center gap-1.5 text-[12px] text-faint-foreground ${clearOfActions ? "group-has-[:focus-visible]/row:pr-32 group-hover/row:pr-32" : ""}`}
     >
       <RepoIcon repo={repo} />
       <span className="min-w-0 truncate">{repo && !repo.scratch ? repo.name : "No repo"}</span>
@@ -1004,9 +1004,8 @@ function RowHead({
 /**
  * A thread's row (0033): its repo and status (what it asks of the user, or how long ago it was
  * prompted), its title, then its branch, diff, and provider. Resting on it shows its card;
- * hovering or focusing it swaps the status for Snooze, Archive, and
- * more actions, which also open by right-clicking the row: native popovers, so Escape and clicking
- * away close them.
+ * hovering or focusing it swaps the status for Snooze, Archive, and more actions, which also open
+ * by right-clicking the row: native popovers, so Escape and clicking away close them.
  */
 function ThreadRow({
   thread,
