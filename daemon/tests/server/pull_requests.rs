@@ -55,6 +55,29 @@ fn view(run_id: RunId, url: &str) -> PrViewParams {
     }
 }
 
+/// `pr/view`, `pr/diff`, and `pr/act` each refuse a URL run `run_id` never linked.
+async fn refuses_unlinked(client: &mut Conn, run_id: RunId) {
+    let refused = client
+        .call::<PrView>(view(run_id, "https://github.com/me/app/pull/3"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS);
+    let refused = client
+        .call::<PrDiff>(view(run_id, "https://github.com/me/app/pull/3"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS);
+    let refused = client
+        .call::<PrAct>(PrActParams {
+            run_id,
+            url: "--help".to_owned(),
+            action: PrAction::Close,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS);
+}
+
 /// A turn that opens pull requests the way each backend reports a shell command.
 fn opening() -> Vec<Step> {
     let mut steps = vec![init("s")];
@@ -130,28 +153,13 @@ async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_vie
         ("diff --git a/README.md b/README.md\n", false)
     );
 
-    // A URL the run never linked never reaches gh.
     let before = tools.log().len();
-    let refused = client
-        .call::<PrView>(view(run_id, "https://github.com/me/app/pull/3"))
-        .await
-        .unwrap_err();
-    assert_eq!(refused.code, INVALID_PARAMS);
-    let refused = client
-        .call::<PrDiff>(view(run_id, "https://github.com/me/app/pull/3"))
-        .await
-        .unwrap_err();
-    assert_eq!(refused.code, INVALID_PARAMS);
-    let refused = client
-        .call::<PrAct>(PrActParams {
-            run_id,
-            url: "--help".to_owned(),
-            action: PrAction::Close,
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(refused.code, INVALID_PARAMS);
-    assert_eq!(tools.log().len(), before);
+    refuses_unlinked(&mut client, run_id).await;
+    assert_eq!(
+        tools.log().len(),
+        before,
+        "a URL the run never linked never reaches gh"
+    );
 
     for action in [
         PrAction::Merge,
