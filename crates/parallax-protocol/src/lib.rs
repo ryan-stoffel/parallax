@@ -45,6 +45,7 @@ mod id;
 pub mod jsonrpc;
 pub mod methods;
 mod project;
+mod pull_request;
 mod review;
 mod thread;
 pub mod typescript;
@@ -98,6 +99,10 @@ pub use id::InvalidId;
 pub use project::{
     Project, ProjectCreateParams, ProjectCreateResult, ProjectIcon, ProjectId, ProjectListParams,
     ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
+};
+pub use pull_request::{
+    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrMergeMethod, PrMergeState, PrState,
+    PrViewParams, PullRequest,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,

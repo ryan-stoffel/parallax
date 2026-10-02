@@ -55,6 +55,9 @@ pub struct RunState {
     pub deletions: Option<u64>,
     /// How `agent/accept` merged the run, once it did (#157).
     pub accept: Option<RunAccept>,
+    /// The web URLs of the pull requests linked to the run, oldest first (PLX-318). None holds a
+    /// newline, since the column stores them one per line.
+    pub pull_requests: Vec<String>,
 }
 
 /// What `agent/accept` did for a run (#157).
@@ -84,7 +87,7 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
-                       approvals, checkout, context_window, fast";
+                       approvals, checkout, context_window, fast, pull_requests";
 
 struct RawRun {
     id: String,
@@ -115,6 +118,7 @@ struct RawRun {
     checkout: bool,
     context_window: Option<u32>,
     fast: Option<bool>,
+    pull_requests: String,
 }
 
 impl RawRun {
@@ -148,6 +152,7 @@ impl RawRun {
             checkout: row.get(25)?,
             context_window: row.get(26)?,
             fast: row.get(27)?,
+            pull_requests: row.get(28)?,
         })
     }
 
@@ -197,6 +202,7 @@ impl RawRun {
                 insertions: self.insertions,
                 deletions: self.deletions,
                 accept,
+                pull_requests: self.pull_requests.lines().map(str::to_owned).collect(),
             },
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
@@ -349,7 +355,8 @@ fn update(conn: &Connection, id: Uuid, state: &RunState) -> Result<Run, StoreErr
         "UPDATE runs SET status = ?2, account_id = ?3, session_id = ?4, error = ?5,
                          commit_sha = ?6, files_changed = ?7, insertions = ?8,
                          deletions = ?9, updated_at = ?10, accept_id = ?11,
-                         merge_commit = ?12, merge_into = ?13, merge_how = ?14
+                         merge_commit = ?12, merge_into = ?13, merge_how = ?14,
+                         pull_requests = ?15
          WHERE id = ?1",
         params![
             id.to_string(),
@@ -366,6 +373,7 @@ fn update(conn: &Connection, id: Uuid, state: &RunState) -> Result<Run, StoreErr
             accept.map(|accept| accept.commit.as_str()),
             accept.map(|accept| accept.into.as_str()),
             accept.map(|accept| accept.how.as_str()),
+            state.pull_requests.join("\n"),
         ],
     )?;
     if changed == 0 {

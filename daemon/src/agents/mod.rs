@@ -50,7 +50,8 @@ use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
     AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun,
     AgentRunState, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind,
-    GitStatus, ImageMediaType, ParallaxEvent, ProjectId, PromptImage, Role, RunId, TurnId,
+    GitStatus, ImageMediaType, ParallaxEvent, PrActParams, PrViewParams, ProjectId, PromptImage,
+    PullRequest, Role, RunId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
@@ -68,7 +69,7 @@ use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument, codex, cursor};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
-use crate::worktree::{CreatedWorktree, WorktreeError, WorktreeManager};
+use crate::worktree::{CreatedWorktree, PrError, WorktreeError, WorktreeManager};
 
 /// How long a stopping plxd waits for its runs to record that they were interrupted.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
@@ -1152,6 +1153,74 @@ pub(crate) async fn open_pr(
     Ok(AgentOpenPrResult { url })
 }
 
+/// `pr/view` (PLX-318): one of a run's linked pull requests, read with `gh`. Not through the
+/// run's actor, so a slow GitHub never holds up a running agent.
+pub(crate) async fn view_pr(
+    daemon: Arc<Daemon>,
+    params: PrViewParams,
+) -> Result<PullRequest, ErrorObject> {
+    let PrViewParams { run_id, url } = params;
+    linked(&daemon, run_id, &url).await?;
+    daemon
+        .agents
+        .worktrees
+        .view_pr(&url)
+        .await
+        .map_err(|error| pr_error(&error))
+}
+
+/// `pr/act` (PLX-318): does an action to one of a run's linked pull requests with `gh`, as
+/// `pr/view` reads one.
+pub(crate) async fn act_pr(
+    daemon: Arc<Daemon>,
+    params: PrActParams,
+) -> Result<PullRequest, ErrorObject> {
+    let PrActParams {
+        run_id,
+        url,
+        action,
+    } = params;
+    linked(&daemon, run_id, &url).await?;
+    let acted = daemon
+        .agents
+        .worktrees
+        .act_pr(&url, action)
+        .await
+        .map_err(|error| pr_error(&error))?;
+    info!(run = %run_id, %url, ?action, "acted on a pull request");
+    Ok(acted)
+}
+
+/// Refuses `url` unless it is linked to run `run_id`, so a client can't make plxd run `gh` on
+/// any other argument.
+async fn linked(daemon: &Daemon, run_id: RunId, url: &str) -> Result<(), ErrorObject> {
+    let url = url.to_owned();
+    store(daemon, move |db| {
+        let row = db
+            .get_run(run_id.into())
+            .map_err(|e| store_error(&e))?
+            .ok_or_else(|| run_not_found(run_id))?;
+        if row.state.pull_requests.contains(&url) {
+            Ok(())
+        } else {
+            Err(ErrorObject::invalid_params(format!(
+                "{url} is not a pull request linked to run {run_id}"
+            )))
+        }
+    })
+    .await
+}
+
+/// A failed `gh` or push as the protocol's error.
+pub(super) fn pr_error(error: &PrError) -> ErrorObject {
+    let kind = match error {
+        PrError::Push(_) => ErrorKind::PushFailed,
+        PrError::GhUnavailable(_) => ErrorKind::GhUnavailable,
+        PrError::Gh(_) => ErrorKind::PrFailed,
+    };
+    ErrorObject::parallax(kind, error.to_string())
+}
+
 /// `agent/gitStatus`, `agent/commit`, and `agent/push`: through the run's actor (RYA-298).
 pub(crate) async fn git(
     daemon: Arc<Daemon>,
@@ -1217,6 +1286,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                                 permission: run.permission,
                                 context_window: run.context_window,
                                 fast: run.fast,
+                                pull_requests: run.pull_requests,
                                 updated_at: run.updated_at,
                             },
                         },

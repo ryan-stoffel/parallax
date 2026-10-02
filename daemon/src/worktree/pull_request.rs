@@ -4,10 +4,19 @@
 //! branch to `origin` with [`WorktreeManager::push`], setting its upstream. Then `gh`, with its own
 //! sign-in, returns the branch's open pull request, or opens one against the GitHub repository's
 //! default branch. `gh` is found on the same `PATH` as every other tool plxd runs.
+//!
+//! [`WorktreeManager::view_pr`] and [`WorktreeManager::act_pr`] read and change a run's linked pull
+//! request by its URL (PLX-318), in plxd's temp folder rather than any checkout, and
+//! [`github_pr_urls`] finds the pull requests an agent's `gh pr create` printed.
 
 use std::ffi::OsString;
 use std::path::Path;
 
+use jiff::Timestamp;
+use parallax_protocol::{
+    PrAction, PrCheck, PrCheckState, PrComment, PrMergeMethod, PrMergeState, PrState, PullRequest,
+};
+use serde::Deserialize;
 use tokio::time::timeout;
 
 use super::folder::NETWORK_TIMEOUT;
@@ -16,6 +25,12 @@ use crate::backend::process::{ProcessSpec, SpawnError, StdinMode};
 
 /// `gh`'s exit code when it isn't signed in.
 const GH_AUTH_REQUIRED: i32 = 4;
+
+/// What `pr/view` asks `gh pr view` for: everything [`PullRequest`] has.
+const VIEW_FIELDS: &str = "--json=number,title,url,state,isDraft,author,updatedAt,baseRefName,\
+                           headRefName,changedFiles,additions,deletions,body,comments,reviews,\
+                           reviewRequests,labels,statusCheckRollup,mergeStateStatus,\
+                           autoMergeRequest";
 
 /// Why [`WorktreeManager::open_pr`] failed. Each message says what to do, with the command's
 /// stderr.
@@ -86,6 +101,39 @@ impl WorktreeManager {
             .ok_or_else(|| PrError::Gh("gh pr create printed no pull request URL".to_owned()))
     }
 
+    /// Pull request `url` as GitHub has it now.
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed, or its answer can't be read.
+    pub async fn view_pr(&self, url: &str) -> Result<PullRequest, PrError> {
+        let viewed = self
+            .gh(&std::env::temp_dir(), &["pr", "view", url, VIEW_FIELDS])
+            .await?;
+        parse_view(&viewed)
+    }
+
+    /// Does `action` to pull request `url` and returns it as it is after.
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed, such as for a merge GitHub
+    /// refuses.
+    pub async fn act_pr(&self, url: &str, action: PrAction) -> Result<PullRequest, PrError> {
+        let args: &[&str] = match action {
+            PrAction::Merge => &["pr", "merge", url, "--merge"],
+            PrAction::Squash => &["pr", "merge", url, "--squash"],
+            PrAction::AutoMerge => &["pr", "merge", url, "--auto", "--merge"],
+            PrAction::DisableAutoMerge => &["pr", "merge", url, "--disable-auto"],
+            PrAction::Draft => &["pr", "ready", url, "--undo"],
+            PrAction::Ready => &["pr", "ready", url],
+            PrAction::Close => &["pr", "close", url],
+            PrAction::Unknown => return Err(PrError::Gh("unknown pull request action".to_owned())),
+        };
+        self.gh(&std::env::temp_dir(), args).await?;
+        self.view_pr(url).await
+    }
+
     /// Runs `gh args` in `repo_root` and returns its stdout, turning a missing `gh`, a sign-in
     /// it needs, and any other failure into a [`PrError`].
     async fn gh(&self, repo_root: &Path, args: &[&str]) -> Result<String, PrError> {
@@ -138,6 +186,234 @@ struct Listed {
     is_cross_repository: bool,
 }
 
+/// Every `https://github.com/<owner>/<repo>/pull/<n>` in `text`, in order, such as the one
+/// `gh pr create` prints.
+#[must_use]
+pub fn github_pr_urls(text: &str) -> Vec<String> {
+    const PREFIX: &str = "https://github.com/";
+    let name = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    text.match_indices(PREFIX)
+        .filter_map(|(at, _)| {
+            let mut parts = text[at + PREFIX.len()..].splitn(4, '/');
+            let (owner, repo) = (parts.next()?, parts.next()?);
+            if parts.next()? != "pull" {
+                return None;
+            }
+            let tail = parts.next()?;
+            let digits = tail
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(tail.len());
+            let ends = !tail[digits..].starts_with(|c: char| c.is_ascii_alphanumeric());
+            (name(owner) && name(repo) && digits > 0 && ends)
+                .then(|| format!("{PREFIX}{owner}/{repo}/pull/{}", &tail[..digits]))
+        })
+        .collect()
+}
+
+/// `gh pr view --json`'s answer, with only what [`PullRequest`] needs.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Viewed {
+    number: u64,
+    title: String,
+    url: String,
+    state: String,
+    is_draft: bool,
+    author: Option<Login>,
+    updated_at: Timestamp,
+    base_ref_name: String,
+    head_ref_name: String,
+    changed_files: u64,
+    additions: u64,
+    deletions: u64,
+    body: String,
+    #[serde(default)]
+    comments: Vec<Comment>,
+    #[serde(default)]
+    reviews: Vec<Comment>,
+    #[serde(default)]
+    review_requests: Vec<Requested>,
+    #[serde(default)]
+    labels: Vec<Label>,
+    #[serde(default)]
+    status_check_rollup: Option<Vec<Check>>,
+    merge_state_status: String,
+    auto_merge_request: Option<AutoMerge>,
+}
+
+#[derive(Deserialize)]
+struct Login {
+    login: String,
+}
+
+/// A comment, or a review, whose time is `submittedAt` and is absent while it is pending.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Comment {
+    author: Option<Login>,
+    body: String,
+    #[serde(alias = "submittedAt")]
+    created_at: Option<Timestamp>,
+}
+
+/// A user, by `login`, or a team, by `name`.
+#[derive(Deserialize)]
+struct Requested {
+    login: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Label {
+    name: String,
+}
+
+/// A GitHub Actions job (`name`, `status`, `conclusion`, `detailsUrl`) or another CI's status
+/// (`context`, `state`, `targetUrl`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Check {
+    name: Option<String>,
+    context: Option<String>,
+    status: Option<String>,
+    conclusion: Option<String>,
+    state: Option<String>,
+    details_url: Option<String>,
+    target_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoMerge {
+    merge_method: String,
+}
+
+/// `gh pr view --json`'s answer as a [`PullRequest`].
+fn parse_view(json: &str) -> Result<PullRequest, PrError> {
+    let viewed: Viewed = serde_json::from_str(json)
+        .map_err(|error| PrError::Gh(format!("could not read gh pr view's answer: {error}")))?;
+    // A deleted account is GitHub's `ghost`.
+    let login = |author: Option<Login>| author.map_or_else(|| "ghost".to_owned(), |a| a.login);
+    let mut comments: Vec<PrComment> = viewed
+        .comments
+        .into_iter()
+        .chain(viewed.reviews)
+        .filter(|comment| !comment.body.trim().is_empty())
+        .filter_map(|comment| {
+            Some(PrComment {
+                created_at: comment.created_at?,
+                author: login(comment.author),
+                body: comment.body,
+            })
+        })
+        .collect();
+    comments.sort_by_key(|comment| comment.created_at);
+    let checks: Vec<PrCheck> = viewed
+        .status_check_rollup
+        .unwrap_or_default()
+        .into_iter()
+        .map(check)
+        .collect();
+    let any = |state| checks.iter().any(|check| check.state == state);
+    let checks_state = (!checks.is_empty()).then(|| {
+        if any(PrCheckState::Failed) {
+            PrCheckState::Failed
+        } else if any(PrCheckState::Pending) {
+            PrCheckState::Pending
+        } else {
+            PrCheckState::Passed
+        }
+    });
+    Ok(PullRequest {
+        number: viewed.number,
+        title: viewed.title,
+        // `https://github.com/<owner>/<name>/pull/<n>`.
+        repo: viewed
+            .url
+            .split('/')
+            .skip(3)
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("/"),
+        url: viewed.url,
+        state: match viewed.state.as_str() {
+            "OPEN" => PrState::Open,
+            "CLOSED" => PrState::Closed,
+            "MERGED" => PrState::Merged,
+            _ => PrState::Unknown,
+        },
+        draft: viewed.is_draft,
+        author: login(viewed.author),
+        updated_at: viewed.updated_at,
+        base_branch: viewed.base_ref_name,
+        head_branch: viewed.head_ref_name,
+        changed_files: viewed.changed_files,
+        additions: viewed.additions,
+        deletions: viewed.deletions,
+        body: viewed.body,
+        comments,
+        review_requests: viewed
+            .review_requests
+            .into_iter()
+            .filter_map(|requested| requested.login.or(requested.name))
+            .collect(),
+        labels: viewed.labels.into_iter().map(|label| label.name).collect(),
+        checks,
+        checks_state,
+        merge_state: match viewed.merge_state_status.as_str() {
+            "CLEAN" => Some(PrMergeState::Clean),
+            "UNSTABLE" => Some(PrMergeState::Unstable),
+            "HAS_HOOKS" => Some(PrMergeState::HasHooks),
+            "BEHIND" => Some(PrMergeState::Behind),
+            "BLOCKED" => Some(PrMergeState::Blocked),
+            "DIRTY" => Some(PrMergeState::Dirty),
+            "DRAFT" => Some(PrMergeState::Draft),
+            _ => None,
+        },
+        auto_merge: viewed
+            .auto_merge_request
+            .map(|auto| match auto.merge_method.as_str() {
+                "MERGE" => PrMergeMethod::Merge,
+                "SQUASH" => PrMergeMethod::Squash,
+                "REBASE" => PrMergeMethod::Rebase,
+                _ => PrMergeMethod::Unknown,
+            }),
+    })
+}
+
+/// One of `statusCheckRollup`'s checks. A job is done once its `status` is `COMPLETED`, and a
+/// status once its `state` isn't `PENDING` or `EXPECTED`; until then it has no conclusion.
+fn check(check: Check) -> PrCheck {
+    let done = match (&check.status, &check.state) {
+        (Some(status), _) => status == "COMPLETED",
+        (None, Some(state)) => !matches!(state.as_str(), "PENDING" | "EXPECTED"),
+        (None, None) => false,
+    };
+    let conclusion = done
+        .then(|| check.conclusion.filter(|c| !c.is_empty()).or(check.state))
+        .flatten()
+        .map(|conclusion| conclusion.to_lowercase());
+    PrCheck {
+        name: check.name.or(check.context).unwrap_or_default(),
+        state: match conclusion.as_deref() {
+            None => PrCheckState::Pending,
+            Some("success" | "neutral") => PrCheckState::Passed,
+            Some("skipped") => PrCheckState::Skipped,
+            Some(_) => PrCheckState::Failed,
+        },
+        conclusion,
+        url: check
+            .details_url
+            .or(check.target_url)
+            .filter(|url| !url.is_empty()),
+    }
+}
+
 /// `url` without its userinfo (`https://user:token@host/path` becomes `https://host/path`), so a
 /// credential kept in the remote's URL never reaches `gh`'s argv. An scp-like `git@host:path`
 /// stays as it is: it can't hold a password.
@@ -154,7 +430,164 @@ fn without_userinfo(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::without_userinfo;
+    use parallax_protocol::{PrCheckState, PrMergeMethod, PrMergeState, PrState};
+    use serde_json::json;
+
+    use super::{github_pr_urls, parse_view, without_userinfo};
+
+    #[test]
+    fn pull_request_urls_are_found_in_what_gh_printed() {
+        assert_eq!(
+            github_pr_urls(
+                "Creating pull request for x into main in me/app\n\n\
+                 https://github.com/me/app/pull/12\n\
+                 already exists: https://github.com/my-org/app.js/pull/7/files, and \
+                 (https://github.com/me/app/pull/3)."
+            ),
+            [
+                "https://github.com/me/app/pull/12",
+                "https://github.com/my-org/app.js/pull/7",
+                "https://github.com/me/app/pull/3",
+            ]
+        );
+        for none in [
+            "https://github.com/me/app/issues/12",
+            "https://github.com/me/app/pull/",
+            "https://github.com/me/app/pull/12abc",
+            "https://github.com/me/a pp/pull/12",
+            "https://gitlab.com/me/app/pull/12",
+        ] {
+            assert!(github_pr_urls(none).is_empty(), "{none}");
+        }
+    }
+
+    /// An open draft's `gh pr view --json` answer, with every kind of comment and check.
+    fn answer() -> serde_json::Value {
+        json!({
+            "number": 42,
+            "title": "Add a README",
+            "url": "https://github.com/me/app/pull/42",
+            "state": "OPEN",
+            "isDraft": true,
+            "author": {"id": "U_1", "is_bot": false, "login": "me", "name": "Me"},
+            "updatedAt": "2026-10-02T12:10:00Z",
+            "baseRefName": "main",
+            "headRefName": "parallax/add-readme",
+            "changedFiles": 1,
+            "additions": 12,
+            "deletions": 2,
+            "body": "Explains the build.",
+            "comments": [
+                {"author": {"login": "bot"}, "body": "Deployed.", "createdAt": "2026-10-02T12:09:00Z"},
+                {"author": null, "body": "First!", "createdAt": "2026-10-02T12:01:00Z"}
+            ],
+            "reviews": [
+                {"author": {"login": "rev"}, "body": "Mention Node.", "state": "COMMENTED",
+                 "submittedAt": "2026-10-02T12:05:00Z"},
+                {"author": {"login": "rev"}, "body": "", "state": "APPROVED",
+                 "submittedAt": "2026-10-02T12:06:00Z"},
+                {"author": {"login": "rev"}, "body": "Draft note", "state": "PENDING",
+                 "submittedAt": null}
+            ],
+            "reviewRequests": [
+                {"__typename": "User", "login": "rev"},
+                {"__typename": "Team", "name": "docs", "slug": "me/docs"}
+            ],
+            "labels": [{"id": "L_1", "name": "docs", "color": "0075ca", "description": ""}],
+            "statusCheckRollup": [
+                {"__typename": "CheckRun", "name": "build", "status": "COMPLETED",
+                 "conclusion": "SUCCESS", "detailsUrl": "https://github.com/me/app/runs/1",
+                 "workflowName": "CI"},
+                {"__typename": "CheckRun", "name": "test", "status": "IN_PROGRESS",
+                 "conclusion": "", "detailsUrl": ""},
+                {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED",
+                 "conclusion": "SKIPPED", "detailsUrl": ""},
+                {"__typename": "StatusContext", "context": "deploy", "state": "FAILURE",
+                 "targetUrl": "https://deploy.example/1"}
+            ],
+            "mergeStateStatus": "BLOCKED",
+            "autoMergeRequest": {"mergeMethod": "SQUASH", "enabledBy": {"login": "me"}}
+        })
+    }
+
+    #[test]
+    fn gh_pr_view_s_answer_becomes_a_pull_request() {
+        let pr = parse_view(&answer().to_string()).unwrap();
+        assert_eq!(pr.repo, "me/app");
+        assert_eq!(pr.state, PrState::Open);
+        assert!(pr.draft);
+        assert_eq!(pr.author, "me");
+        assert_eq!(
+            (pr.base_branch.as_str(), pr.head_branch.as_str()),
+            ("main", "parallax/add-readme")
+        );
+        assert_eq!((pr.changed_files, pr.additions, pr.deletions), (1, 12, 2));
+        let comments: Vec<_> = pr
+            .comments
+            .iter()
+            .map(|c| (c.author.as_str(), c.body.as_str()))
+            .collect();
+        assert_eq!(
+            comments,
+            [
+                ("ghost", "First!"),
+                ("rev", "Mention Node."),
+                ("bot", "Deployed.")
+            ],
+            "oldest first, with reviews that say something and aren't pending"
+        );
+        assert_eq!(pr.review_requests, ["rev", "docs"]);
+        assert_eq!(pr.labels, ["docs"]);
+        let checks: Vec<_> = pr
+            .checks
+            .iter()
+            .map(|c| {
+                (
+                    c.name.as_str(),
+                    c.state,
+                    c.conclusion.as_deref(),
+                    c.url.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            checks,
+            [
+                (
+                    "build",
+                    PrCheckState::Passed,
+                    Some("success"),
+                    Some("https://github.com/me/app/runs/1")
+                ),
+                ("test", PrCheckState::Pending, None, None),
+                ("lint", PrCheckState::Skipped, Some("skipped"), None),
+                (
+                    "deploy",
+                    PrCheckState::Failed,
+                    Some("failure"),
+                    Some("https://deploy.example/1")
+                ),
+            ]
+        );
+        assert_eq!(pr.checks_state, Some(PrCheckState::Failed));
+        assert_eq!(pr.merge_state, Some(PrMergeState::Blocked));
+        assert_eq!(pr.auto_merge, Some(PrMergeMethod::Squash));
+    }
+
+    #[test]
+    fn a_merged_pull_request_with_no_checks_has_no_rolled_up_or_merge_state() {
+        let mut merged = answer();
+        merged["state"] = json!("MERGED");
+        merged["statusCheckRollup"] = json!(null);
+        merged["mergeStateStatus"] = json!("UNKNOWN");
+        merged["autoMergeRequest"] = json!(null);
+        let pr = parse_view(&merged.to_string()).unwrap();
+        assert_eq!(pr.state, PrState::Merged);
+        assert_eq!(
+            (pr.checks_state, pr.merge_state, pr.auto_merge),
+            (None, None, None)
+        );
+    }
 
     #[test]
     fn a_remote_url_loses_its_userinfo() {
