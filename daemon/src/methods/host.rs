@@ -108,6 +108,8 @@ pub(crate) fn initialize(
 /// Current checkout thread.
 /// `files` (RYA-296): `agent/files`, and `agent/file`'s `working` side, which an older plxd
 /// would refuse, to browse a run's folder.
+/// `pullRequests` (PLX-318): `pr/view` and `pr/act`, and `pullRequests` on `AgentRun` and
+/// `agent.updated`, which an older plxd never fills.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -128,6 +130,7 @@ fn capabilities_advertised() -> Capabilities {
         ("openPr".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
+        ("pullRequests".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("sendAccount".to_owned(), serde_json::Map::new()),

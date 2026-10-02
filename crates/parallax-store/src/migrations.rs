@@ -305,6 +305,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE runs ADD COLUMN context_window INTEGER;
         ALTER TABLE runs ADD COLUMN fast INTEGER;",
     },
+    // The web URLs of the pull requests linked to a run (PLX-318), oldest first, one per line.
+    // Empty for every run before, which had none linked.
+    Migration {
+        version: 21,
+        sql: "ALTER TABLE runs ADD COLUMN pull_requests TEXT NOT NULL DEFAULT '';",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

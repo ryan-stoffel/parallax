@@ -267,6 +267,11 @@ pub struct AgentRun {
     /// Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkout: bool,
+    /// The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
+    /// `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
+    /// `pullRequests` capability. Absent means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<String>,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -321,6 +326,9 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// Its linked pull requests, as `AgentRun.pullRequests` (PLX-318). Absent means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<String>,
     /// When it changed, in RFC 3339 UTC.
     pub updated_at: Timestamp,
 }

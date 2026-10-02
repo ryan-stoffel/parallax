@@ -1,0 +1,195 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 9,
+      "time": "2026-10-02T12:00:05Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.updated",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "state": {
+          "status": "running",
+          "accountId": "claude",
+          "pullRequests": ["https://github.com/me/app/pull/42"],
+          "updatedAt": "2026-10-02T12:00:05Z"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/list",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "runs": [
+        {
+          "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+          "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+          "prompt": "Add a README, then open a pull request.",
+          "policy": "workspaceWrite",
+          "status": "completed",
+          "backend": "claude",
+          "accountId": "claude",
+          "pullRequests": ["https://github.com/me/app/pull/42"],
+          "createdAt": "2026-10-02T12:00:00Z",
+          "updatedAt": "2026-10-02T12:00:09Z"
+        }
+      ],
+      "seq": 10
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "pr/view",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "url": "https://github.com/me/app/pull/42"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "number": 42,
+      "title": "Add a README",
+      "url": "https://github.com/me/app/pull/42",
+      "repo": "me/app",
+      "state": "open",
+      "draft": false,
+      "author": "me",
+      "updatedAt": "2026-10-02T12:10:00Z",
+      "baseBranch": "main",
+      "headBranch": "parallax/add-readme",
+      "changedFiles": 1,
+      "additions": 12,
+      "deletions": 0,
+      "body": "Explains how to build the app.",
+      "comments": [
+        {
+          "author": "reviewer",
+          "body": "Mention the Node version.",
+          "createdAt": "2026-10-02T12:08:00Z"
+        }
+      ],
+      "reviewRequests": ["reviewer", "docs-team"],
+      "labels": ["docs"],
+      "checks": [
+        {
+          "name": "build",
+          "state": "passed",
+          "conclusion": "success",
+          "url": "https://github.com/me/app/actions/runs/1/job/2"
+        },
+        {
+          "name": "test",
+          "state": "pending"
+        }
+      ],
+      "checksState": "pending",
+      "mergeState": "blocked"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "pr/view",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "url": "https://github.com/someone/else/pull/1"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32602,
+      "message": "Invalid params: https://github.com/someone/else/pull/1 is not a pull request linked to run 01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "pr/act",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "url": "https://github.com/me/app/pull/42",
+      "action": "autoMerge"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "number": 42,
+      "title": "Add a README",
+      "url": "https://github.com/me/app/pull/42",
+      "repo": "me/app",
+      "state": "open",
+      "draft": false,
+      "author": "me",
+      "updatedAt": "2026-10-02T12:11:00Z",
+      "baseBranch": "main",
+      "headBranch": "parallax/add-readme",
+      "changedFiles": 1,
+      "additions": 12,
+      "deletions": 0,
+      "body": "Explains how to build the app.",
+      "comments": [],
+      "reviewRequests": [],
+      "labels": [],
+      "checks": [],
+      "mergeState": "blocked",
+      "autoMerge": "merge"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "pr/act",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "url": "https://github.com/me/app/pull/42",
+      "action": "squash"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32000,
+      "message": "`gh pr merge` failed: X Pull request me/app#42 is not mergeable: the base branch policy prohibits the merge.",
+      "data": {
+        "kind": "prFailed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "pr/view",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "url": "https://github.com/me/app/pull/42"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "error": {
+      "code": -32000,
+      "message": "GitHub CLI isn't signed in on the host; run `gh auth login` there: To get started with GitHub CLI, please run:  gh auth login",
+      "data": {
+        "kind": "ghUnavailable"
+      }
+    }
+  }
+]
