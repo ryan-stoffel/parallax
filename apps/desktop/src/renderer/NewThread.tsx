@@ -358,7 +358,7 @@ export function NewThread({
               ?
             </h1>
             {group.id !== noRepo && (
-              <div className="mb-5 text-center">
+              <div className="relative z-20 mb-9 text-center">
                 {/* Its shortcut, Mod+Shift+N, shows under it on hover or focus. */}
                 <button
                   type="button"
@@ -375,7 +375,7 @@ export function NewThread({
                   or start without a repo
                   <kbd
                     aria-hidden
-                    className="pointer-events-none invisible absolute top-full left-1/2 z-10 mt-1.5 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-[12px] text-muted-foreground group-hover:visible group-focus-visible:visible"
+                    className="pointer-events-none invisible absolute top-full left-1/2 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-[12px] text-muted-foreground group-hover:visible group-focus-visible:visible"
                   >
                     {shortcut("Shift+N")}
                   </kbd>
