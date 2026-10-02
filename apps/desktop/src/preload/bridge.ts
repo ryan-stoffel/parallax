@@ -34,6 +34,8 @@ export interface ParallaxBridge {
   setZoom(factor: number): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
+  /** Copies a picture of this window's `rect`, in CSS pixels, to the clipboard. */
+  copyPicture(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /**
    * Whether `update` can run: in a packaged app, which installs releases (RYA-68), or under
    * `pnpm dev`, from a checkout (RYA-204).

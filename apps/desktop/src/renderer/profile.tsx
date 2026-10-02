@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { Profile } from "../preload/bridge";
+import type { AgentRun } from "../protocol/generated/protocol";
 
 /** The signed-in Parallax account (0037), kept current. Null when signed out, undefined until known. */
 export function useProfile(): Profile | null | undefined {
@@ -38,4 +39,84 @@ export function Avatar({ profile, size }: { profile: Profile; size: number }) {
       {initials(profile)}
     </span>
   );
+}
+
+/** `at`'s local day, as "2026-10-02". */
+export function dayKey(at: number): string {
+  const d = new Date(at);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+/** The local day after `key`'s, by calendar, so a DST change never skips or repeats one. */
+function nextDay(key: string): string {
+  const [y, m, d] = key.split("-").map(Number) as [number, number, number];
+  return dayKey(new Date(y, m - 1, d + 1).getTime());
+}
+
+/** What the Profile page shows of the agents every host has run. */
+export interface Activity {
+  /** Agents started on each local day, by `dayKey`. Days with none are left out. */
+  days: Map<string, number>;
+  agents: number;
+  /** Pull requests linked to the agents (PLX-318). */
+  pullRequests: number;
+  /** The most consecutive days with an agent started. */
+  longest: number;
+  /** The consecutive days with one, ending today, or yesterday while today has none yet. */
+  current: number;
+  busiest?: { day: string; agents: number };
+  /** When the first agent started. */
+  since?: number;
+  /** Each backend and model by how many agents ran it, most first. No `model` is the CLI's default. */
+  models: { backend: string; model?: string; agents: number }[];
+}
+
+/** The activity of `runs`, by local day, with `now` as today. */
+export function activityOf(runs: AgentRun[], now: number): Activity {
+  const days = new Map<string, number>();
+  const models = new Map<string, Activity["models"][number]>();
+  let pullRequests = 0;
+  let since: number | undefined;
+  for (const run of runs) {
+    const at = Date.parse(run.createdAt);
+    const day = dayKey(at);
+    days.set(day, (days.get(day) ?? 0) + 1);
+    pullRequests += run.pullRequests?.length ?? 0;
+    since = Math.min(since ?? at, at);
+    const id = `${run.backend}/${run.model ?? ""}`;
+    const model = models.get(id) ?? { backend: run.backend, model: run.model, agents: 0 };
+    model.agents++;
+    models.set(id, model);
+  }
+
+  let longest = 0;
+  let streak = 0;
+  let busiest: Activity["busiest"];
+  let previous: string | undefined;
+  for (const day of [...days.keys()].sort()) {
+    streak = previous && day === nextDay(previous) ? streak + 1 : 1;
+    longest = Math.max(longest, streak);
+    previous = day;
+    const agents = days.get(day)!;
+    if (!busiest || agents >= busiest.agents) busiest = { day, agents };
+  }
+  let current = 0;
+  const day = new Date(now);
+  if (!days.has(dayKey(day.getTime()))) day.setDate(day.getDate() - 1);
+  while (days.has(dayKey(day.getTime()))) {
+    current++;
+    day.setDate(day.getDate() - 1);
+  }
+
+  return {
+    days,
+    agents: runs.length,
+    pullRequests,
+    longest,
+    current,
+    busiest,
+    since,
+    models: [...models.values()].sort((a, b) => b.agents - a.agents),
+  };
 }

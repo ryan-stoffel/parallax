@@ -1,6 +1,8 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   Menu,
@@ -177,6 +179,17 @@ ipcMain.handle("parallax:pickFolder", async (event) => {
     ? dialog.showOpenDialog(win, options)
     : dialog.showOpenDialog(options));
   return canceled ? null : (filePaths[0] ?? null);
+});
+
+// The Profile page's Share: a picture of part of the asking window, onto the clipboard.
+ipcMain.handle("parallax:copyPicture", async (event, rect: unknown) => {
+  const { x, y, width, height } = (rect ?? {}) as Record<string, unknown>;
+  const sides = [x, y, width, height];
+  if (!sides.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)) return;
+  const [left, top, w, h] = (sides as number[]).map(Math.round) as [number, number, number, number];
+  const picture = await event.sender.capturePage({ x: left, y: top, width: w, height: h });
+  const png = new Blob([picture.toPNG()], { type: "image/png" });
+  await clipboard.write([new ClipboardItem({ "image/png": png })]);
 });
 
 // The top bar's Open button (editors.ts). The renderer names the host, target, and folder; main
