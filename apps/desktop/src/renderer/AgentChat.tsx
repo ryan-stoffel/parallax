@@ -1390,9 +1390,6 @@ function inputText(input: JsonValue): string {
   return typeof input === "string" ? input : JSON.stringify(input, null, 2);
 }
 
-// Agent output is untrusted: no raw HTML (no rehype-raw), and react-markdown's
-// default urlTransform drops javascript: and other unsafe links. Links open in
-// a new window, which main hands to the system browser, https only.
 /** The icon before a web link, as T3 Code shows one: its site's logo, or a globe (PLX-330). */
 export function linkIcon(href?: string) {
   let host;
@@ -1407,6 +1404,9 @@ export function linkIcon(href?: string) {
   return on("github.com") ? GitHubLogo : on("linear.app") ? LinearLogo : Globe;
 }
 
+// Agent output is untrusted: no raw HTML (no rehype-raw), and react-markdown's
+// default urlTransform drops javascript: and other unsafe links. Links open in
+// a new window, which main hands to the system browser, https only.
 const markdownComponents: Components = {
   a: ({ href, children }) => {
     const Icon = linkIcon(href);
