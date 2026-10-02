@@ -1,5 +1,6 @@
 //! Git in the folder a run works in (RYA-298): the status `agent/gitStatus` reads, the commit
-//! `agent/commit` makes, and the push `agent/push` and `agent/openPr` make.
+//! `agent/commit` makes, the push `agent/push` and `agent/openPr` make, and the files
+//! `repo/files` lists (PLX-359).
 //!
 //! A run's folder is its worktree, which every call reaches pinned and hardened (#166), or a
 //! Current checkout thread's checkout, the user's own, which calls reach through the hookless
@@ -144,6 +145,34 @@ impl WorktreeManager {
         Ok(Some(Commit {
             sha: sha.trim().to_owned(),
         }))
+    }
+
+    /// The files in `folder` that git tracks, or that are untracked and not ignored, as paths
+    /// relative to it, in git's order: for `repo/files` (PLX-359).
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    pub async fn files(&self, folder: RunFolder<'_>) -> Result<Vec<String>, WorktreeError> {
+        let output = self
+            .folder_git_ok(
+                folder,
+                &[
+                    "ls-files",
+                    "-z",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                ],
+            )
+            .await?;
+        // `-z` paths are NUL-separated and never quoted; the run's output ends with a newline.
+        Ok(output
+            .trim_end_matches('\n')
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned)
+            .collect())
     }
 
     /// The branch `repo_path`'s checkout has out, or `None` on a detached HEAD.

@@ -327,7 +327,7 @@ async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<parallax_store::Repo, Err
 }
 
 /// The repo entry a thread starts in: `repo`, or plxd's scratch entry when it names none.
-async fn start_entry(
+pub(crate) async fn start_entry(
     daemon: &Arc<Daemon>,
     repo: Option<RepoId>,
 ) -> Result<parallax_store::Repo, ErrorObject> {

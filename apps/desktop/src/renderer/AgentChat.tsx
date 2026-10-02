@@ -464,6 +464,9 @@ export function AgentChat({
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
           insert={compose && !compose.send ? compose.text : undefined}
+          menus={
+            connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
+          }
         />
       </div>
     </>

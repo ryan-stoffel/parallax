@@ -1,13 +1,14 @@
 //! `thread/list`, `repo/add`, `thread/start`, `thread/archive`, and `thread/delete` (#110),
 //! behind the `threads` capability, `thread/update` and `repo/update` (0033), behind
 //! `threadAttention`, and `repo/refs`, behind `repoRefs`. The logic is [`crate::threads`].
+//! `repo/files` is `composer.rs`'s, behind `composerMenus`.
 
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::methods::{
-    RepoAdd, RepoRefs, RepoUpdate, RequestMethod, ThreadArchive, ThreadDelete, ThreadList,
-    ThreadStart, ThreadUpdate,
+    RepoAdd, RepoFiles, RepoRefs, RepoUpdate, RequestMethod, ThreadArchive, ThreadDelete,
+    ThreadList, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
@@ -38,6 +39,9 @@ pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Val
         RepoUpdate::NAME => handle::<RepoUpdate, _, _>(request, |p| update_repo(context, p)).await,
         ThreadDelete::NAME => handle::<ThreadDelete, _, _>(request, |p| delete(context, p)).await,
         RepoRefs::NAME => handle::<RepoRefs, _, _>(request, |p| refs(context, p)).await,
+        RepoFiles::NAME => {
+            handle::<RepoFiles, _, _>(request, |p| super::composer::files(context, p)).await
+        }
         other => Err(ErrorObject::method_not_found(other)),
     }
 }

@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
+import type { ParallaxBridge } from "../preload/bridge";
 import type { PromptImage } from "../protocol/generated/protocol";
 import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
@@ -429,4 +430,161 @@ test("a recalled prompt sends as it was first sent, Markdown and all (PLX-325)",
   await press("ArrowUp");
   await press("Enter");
   expect(onSend).toHaveBeenCalledWith(prompt, {}, []);
+});
+
+// plxd's lists for the `/` and `@` menus (PLX-359): Claude's own `model` is the composer's.
+const commandsResult = {
+  logId: "log-1",
+  result: {
+    commands: ["ponytail:ponytail-help", "model", "review", "code-review"].map((name) => ({
+      text: `/${name}`,
+      name,
+      description: `About ${name}`,
+    })),
+  },
+};
+const request = vi.fn(async (_host: string, method: string, _params?: unknown) =>
+  method === "agent/commands"
+    ? commandsResult
+    : {
+        logId: "log-1",
+        result: { files: ["README.md", "src/lib.rs", "src/main.rs"], truncated: false },
+      },
+);
+const settle = async () => {
+  for (let i = 0; i < 5; i++) await act(async () => {});
+};
+// The composer keeps each CLI's commands while the app runs, so each test gets its own run.
+let runs = 0;
+const withMenus = async (
+  onSend: (text: string) => Promise<string | undefined>,
+  props: Partial<ComposerProps> = {},
+) => {
+  request.mockClear();
+  window.parallax = { platform: "darwin", request } as Partial<ParallaxBridge> as ParallaxBridge;
+  const runId = `run-${++runs}`;
+  const composer = render(onSend, caps, {
+    backend: "claude",
+    menus: { hostId: "local", runId },
+    ...props,
+  });
+  await settle();
+  // Typing settles too, for the lists fetched on the first `/` or `@`.
+  const type = async (text: string) => {
+    composer.type(text);
+    await settle();
+  };
+  return { ...composer, type, runId };
+};
+const options = () =>
+  [...document.querySelectorAll('[role="option"]')].map((o) => o.firstChild?.textContent);
+const highlighted = () => document.querySelector('[aria-selected="true"]')?.firstChild?.textContent;
+const loadingRow = () => document.querySelector('[role="listbox"] [role="status"]')?.textContent;
+
+test("/ lists the composer's commands, then the CLI's, filtered as typed, and picks with the keyboard (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = await withMenus(onSend);
+  await type("/");
+  expect(options()).toEqual([
+    "/model",
+    "/effort",
+    "/permissions",
+    "/ponytail:ponytail-help",
+    "/review",
+    "/code-review",
+  ]);
+  // Names that start with it, then names that contain it.
+  await type("rev");
+  expect(options()).toEqual(["/review", "/code-review"]);
+  expect(highlighted()).toBe("/review");
+  await press("ArrowDown");
+  expect(highlighted()).toBe("/code-review");
+  await press("Tab");
+  expect(box.textContent).toBe("/code-review ");
+  expect(options()).toEqual([]);
+  await type("the diff");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("/code-review the diff", expect.anything(), []);
+});
+
+test("commands are fetched on the first /, once per host, backend, and run, with a loading row meanwhile (PLX-359)", async () => {
+  let answer: (result: typeof commandsResult) => void = () => {};
+  request.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+  const { type, runId } = await withMenus(async () => undefined);
+  expect(request).not.toHaveBeenCalled();
+  await type("/");
+  expect(request).toHaveBeenCalledExactlyOnceWith("local", "agent/commands", {
+    backend: "claude",
+    runId,
+  });
+  // The composer's own commands show at once.
+  expect(options()).toEqual(["/model", "/effort", "/permissions"]);
+  expect(loadingRow()).toBe("Loading commands…");
+  await act(async () => answer(commandsResult));
+  expect(options()).toHaveLength(6);
+  expect(loadingRow()).toBeUndefined();
+  act(() => unmount());
+
+  // Opening the thread again lists them without starting the CLI.
+  request.mockClear();
+  const again = await withMenus(async () => undefined, {
+    menus: { hostId: "local", runId },
+  });
+  await again.type("/");
+  expect(request).not.toHaveBeenCalled();
+  expect(options()).toHaveLength(6);
+});
+
+test("/model opens the composer's model picker instead of reaching the CLI (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = await withMenus(onSend);
+  const opened = vi.fn();
+  document.querySelector('[aria-label^="Model:"]')!.addEventListener("click", opened);
+  await type("/mod");
+  expect(options()).toEqual(["/model"]);
+  await press("Enter");
+  expect(opened).toHaveBeenCalledOnce();
+  expect(box.textContent).toBe("");
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+test("@ lists the thread's files, fetched again on each new @, and inserts @path (PLX-359)", async () => {
+  const { box, type, press, runId } = await withMenus(async () => undefined);
+  expect(request).not.toHaveBeenCalled();
+  await type("see @main");
+  expect(request).toHaveBeenCalledExactlyOnceWith("local", "repo/files", { runId });
+  expect(options()).toEqual(["src/main.rs"]);
+  await press("Enter");
+  expect(box.textContent).toBe("see @src/main.rs ");
+
+  // A file the agent made since: the last list shows until the new one arrives.
+  let answer: (files: string[]) => void = () => {};
+  request.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = (files) => resolve({ logId: "log-1", result: { files, truncated: false } });
+      }),
+  );
+  await type("and @src/");
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(options()).toEqual(["src/lib.rs", "src/main.rs"]);
+  expect(loadingRow()).toBeUndefined();
+  await act(async () => answer(["src/lib.rs", "src/main.rs", "src/new.rs"]));
+  expect(options()).toEqual(["src/lib.rs", "src/main.rs", "src/new.rs"]);
+});
+
+test("Esc closes the menu, Enter then sends, and a plxd without composerMenus shows none (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = await withMenus(onSend);
+  await type("/rev");
+  await press("Escape");
+  expect(options()).toEqual([]);
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("/rev", expect.anything(), []);
+  act(() => unmount());
+
+  const { type: typeAgain } = await withMenus(onSend, { menus: undefined });
+  await typeAgain("/");
+  expect(request).not.toHaveBeenCalled();
+  expect(options()).toEqual([]);
 });

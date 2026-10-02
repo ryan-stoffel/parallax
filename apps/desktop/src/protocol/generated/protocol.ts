@@ -271,6 +271,16 @@ export type ParallaxRequests = {
 	 * Gated on the `projectDelete` capability.
 	 */
 	"project/delete": { params: ProjectDeleteParams, result: ProjectDeleteResult },
+	/**
+	 * `agent/commands`: a CLI's own slash commands and skills, for the composer's `/` menu
+	 * (PLX-359). Gated on the `composerMenus` capability, like `repo/files`.
+	 */
+	"agent/commands": { params: AgentCommandsParams, result: AgentCommandsResult },
+	/**
+	 * `repo/files`: a thread's files that git tracks or doesn't ignore, capped, for the
+	 * composer's `@` menu.
+	 */
+	"repo/files": { params: RepoFilesParams, result: RepoFilesResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -3357,6 +3367,88 @@ export type ProjectDeleteParams = {
  * Result of `project/delete`.
  */
 export type ProjectDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `agent/commands`: lists what a thread on `backend` takes as a command, by asking the
+ * CLI itself, started as a thread on the user's own login would be. Fails with an internal error
+ * when the CLI can't start or doesn't answer in time.
+ */
+export type AgentCommandsParams = {
+	/**
+	 * The backend, such as `claude`, `codex`, or `cursor`.
+	 */
+	backend: string,
+	/**
+	 * The repo entry whose checkout the CLI runs in, without `runId`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The run whose folder the CLI runs in.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `agent/commands`.
+ */
+export type AgentCommandsResult = {
+	/**
+	 * In the CLI's own order. Empty for a backend that lists none.
+	 */
+	commands: Array<AgentCommand>,
+};
+
+/**
+ * One command or skill a CLI takes in a message.
+ */
+export type AgentCommand = {
+	/**
+	 * What goes in the message to run it: `/name` for Claude Code and Cursor, `$name` for Codex.
+	 */
+	text: string,
+	/**
+	 * Its name, without the `/` or `$`.
+	 */
+	name: string,
+	/**
+	 * What it does, possibly empty.
+	 */
+	description: string,
+	/**
+	 * What its arguments look like, such as `[lite|full|ultra]`.
+	 */
+	argumentHint?: string,
+};
+
+/**
+ * Params of `repo/files`: a thread's tracked and untracked files that git doesn't ignore, from
+ * the run's folder, else the repo entry's checkout. Fails with `worktreeFailed` when git fails
+ * there, such as outside a repository.
+ */
+export type RepoFilesParams = {
+	/**
+	 * The repo entry, without `runId`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The run.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `repo/files`.
+ */
+export type RepoFilesResult = {
+	/**
+	 * Paths relative to the folder, with `/` separators, in git's order, up to a cap.
+	 */
+	files: Array<string>,
+	/**
+	 * Whether there were more than the cap.
+	 */
+	truncated: boolean,
+};
 
 /**
  * Params of `$/cancelRequest`.
