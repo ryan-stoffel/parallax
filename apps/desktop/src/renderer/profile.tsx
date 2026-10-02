@@ -68,8 +68,8 @@ export interface Activity {
   busiest?: { day: string; agents: number };
   /** When the first agent started. */
   since?: number;
-  /** The most agents started within one hour, and when the first of them started. */
-  peak?: { agents: number; at: number };
+  /** Agents started in each local hour of the day, midnight first. */
+  hours: number[];
   /** Each backend and model by how many agents ran it, most first. No `model` is the CLI's default. */
   models: { backend: string; model?: string; agents: number }[];
 }
@@ -78,10 +78,12 @@ export interface Activity {
 export function activityOf(runs: AgentRun[], now: number): Activity {
   const days = new Map<string, number>();
   const models = new Map<string, Activity["models"][number]>();
+  const hours = Array.from({ length: 24 }, () => 0);
   let pullRequests = 0;
   let since: number | undefined;
   for (const run of runs) {
     const at = Date.parse(run.createdAt);
+    hours[new Date(at).getHours()]!++;
     const day = dayKey(at);
     days.set(day, (days.get(day) ?? 0) + 1);
     pullRequests += run.pullRequests?.length ?? 0;
@@ -103,16 +105,6 @@ export function activityOf(runs: AgentRun[], now: number): Activity {
     const agents = days.get(day)!;
     if (!busiest || agents >= busiest.agents) busiest = { day, agents };
   }
-  // ponytail: agents started within an hour stand in for agents running at once, since a run's
-  // end isn't kept: `updatedAt` moves with every follow-up.
-  const starts = runs.map((r) => Date.parse(r.createdAt)).sort((a, b) => a - b);
-  let peak: Activity["peak"];
-  for (let first = 0, last = 0; last < starts.length; last++) {
-    while (starts[last]! - starts[first]! >= 3_600_000) first++;
-    const agents = last - first + 1;
-    if (!peak || agents > peak.agents) peak = { agents, at: starts[first]! };
-  }
-
   let current = 0;
   const day = new Date(now);
   if (!days.has(dayKey(day.getTime()))) day.setDate(day.getDate() - 1);
@@ -129,7 +121,15 @@ export function activityOf(runs: AgentRun[], now: number): Activity {
     current,
     busiest,
     since,
-    peak,
+    hours,
     models: [...models.values()].sort((a, b) => b.agents - a.agents),
   };
+}
+
+/** What a busiest hour of the day, 0 to 23, says about when someone builds. */
+export function rhythmOf(hour: number): string {
+  if (hour >= 5 && hour < 12) return "Early bird";
+  if (hour >= 12 && hour < 18) return "Afternoon builder";
+  if (hour >= 18 && hour < 22) return "Evening builder";
+  return "Night owl";
 }

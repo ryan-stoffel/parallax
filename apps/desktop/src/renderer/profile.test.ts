@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { AgentRun } from "../protocol/generated/protocol";
-import { activityOf, dayKey, initials } from "./profile";
+import { activityOf, dayKey, initials, rhythmOf } from "./profile";
 
 test("initials are the first and last names' first letters, or the email's", () => {
   expect(initials({ name: "Ryan Thomas Stoffel", email: "r@x.dev" })).toBe("RS");
@@ -57,11 +57,20 @@ test("models are counted per backend and model, most first, and pull requests su
   expect(dayKey(new Date(2026, 0, 5, 23, 59).getTime())).toBe("2026-01-05");
 });
 
-test("the peak is the most agents started within one hour", () => {
-  const at = (h: number, m: number) =>
-    ({ backend: "claude", createdAt: new Date(2026, 9, 2, h, m).toISOString() }) as AgentRun;
-  const a = activityOf([at(9, 0), at(9, 40), at(9, 59), at(10, 0), at(10, 30), at(14, 0)], 0);
-  // 9:00, 9:40, and 9:59 fit in an hour, and so do 9:40, 9:59, 10:00, and 10:30.
-  expect(a.peak).toEqual({ agents: 4, at: Date.parse(at(9, 40).createdAt) });
-  expect(activityOf([], 0).peak).toBeUndefined();
+test("hours count agents by local hour, and the busiest hour names the rhythm", () => {
+  const at = (h: number) =>
+    ({ backend: "claude", createdAt: new Date(2026, 9, 2, h, 30).toISOString() }) as AgentRun;
+  const { hours } = activityOf([at(23), at(23), at(0), at(9)], 0);
+  expect(hours).toHaveLength(24);
+  expect([hours[0], hours[9], hours[23]]).toEqual([1, 1, 2]);
+  expect([4, 5, 11, 12, 17, 18, 21, 22].map(rhythmOf)).toEqual([
+    "Night owl",
+    "Early bird",
+    "Early bird",
+    "Afternoon builder",
+    "Afternoon builder",
+    "Evening builder",
+    "Evening builder",
+    "Night owl",
+  ]);
 });

@@ -1,12 +1,21 @@
 import { Check, CircleUser, Link, Pencil } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 
 import type { UsageHour } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { ParallaxMark } from "./logos";
 import { backends, models } from "./models";
-import { activityOf, Avatar, dayKey, useProfile, type Activity } from "./profile";
+import { activityOf, Avatar, dayKey, rhythmOf, useProfile, type Activity } from "./profile";
 import { backendLogos } from "./Sidebar";
 import type { ThreadsView } from "./threads";
 import { Breadcrumb, TopBar } from "./ui";
@@ -25,6 +34,7 @@ const shortDay = new Intl.DateTimeFormat("en", {
 });
 const monthName = new Intl.DateTimeFormat("en", { month: "short" });
 const monthDay = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
+const hourName = new Intl.DateTimeFormat("en", { hour: "numeric" });
 
 const quietButton =
   "flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
@@ -88,7 +98,8 @@ export function ProfilePage({
     const el = card.current;
     if (!el || !scroller.current || sharing) return;
     el.scrollIntoView({ block: "nearest" });
-    // The buttons give way to the brand mark for the picture, drawn before it's taken.
+    // The buttons give way to the brand mark, and the card lies flat, for the picture.
+    untilt();
     setSharing("capturing");
     let done: "copied" | "failed" = "failed";
     try {
@@ -112,6 +123,19 @@ export function ProfilePage({
     setTimeout(() => setSharing(undefined), 2000);
   };
 
+  // The card's parallax: it tilts toward the pointer and its layers shift by their depth, nearer
+  // ones more, through two CSS variables from -1 to 1, so moving the pointer never re-renders.
+  const tilt = (e: PointerEvent<HTMLDivElement>) => {
+    if (sharing || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    e.currentTarget.style.setProperty("--tilt-x", String(((e.clientX - r.left) / r.width) * 2 - 1));
+    e.currentTarget.style.setProperty("--tilt-y", String(((e.clientY - r.top) / r.height) * 2 - 1));
+  };
+  const untilt = () => {
+    card.current?.style.setProperty("--tilt-x", "0");
+    card.current?.style.setProperty("--tilt-y", "0");
+  };
+
   return (
     <>
       <TopBar className={topBarClassName}>
@@ -121,10 +145,20 @@ export function ProfilePage({
       {hosts.map((h) => (
         <HostUsage key={h.id} host={h} since={since} onLoad={onUsage} />
       ))}
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         <div className="@container mx-auto max-w-3xl px-2 pt-2 pb-16">
-          <div ref={card} className="rounded-2xl bg-background px-6 pt-6 pb-7">
-            <header className="flex items-center gap-4">
+          <div
+            ref={card}
+            onPointerMove={tilt}
+            onPointerLeave={untilt}
+            data-still={sharing === "capturing" || undefined}
+            style={{
+              transform:
+                "perspective(1000px) rotateX(calc(var(--tilt-y, 0) * -2deg)) rotateY(calc(var(--tilt-x, 0) * 2deg))",
+            }}
+            className="group rounded-2xl border border-border bg-surface px-6 pt-6 pb-7 transition-transform duration-300 ease-out data-still:transition-none"
+          >
+            <header style={depth(10)} className={`flex items-center gap-4 ${layer}`}>
               {profile ? (
                 <Avatar profile={profile} size={60} />
               ) : (
@@ -180,15 +214,20 @@ export function ProfilePage({
               )}
             </header>
 
-            <dl className="mt-8 grid grid-cols-2 gap-y-6 @lg:grid-cols-4">
+            <dl
+              style={depth(6)}
+              className={`mt-8 grid grid-cols-2 gap-y-6 @lg:grid-cols-4 ${layer}`}
+            >
               <Stat label="Agents" value={activity.agents.toLocaleString("en")} />
               <Stat label="Pull requests" value={activity.pullRequests.toLocaleString("en")} />
               <Stat label="Longest streak" value={activity.longest} unit="d" />
               <Stat label="Current streak" value={activity.current} unit="d" />
             </dl>
 
-            {activity.peak && <Peak {...activity.peak} />}
-            <Heatmap activity={activity} now={now} />
+            <div style={depth(3)} className={layer}>
+              <Heatmap activity={activity} now={now} />
+              <Hours hours={activity.hours} />
+            </div>
           </div>
 
           <div className="px-6">
@@ -213,68 +252,47 @@ function Stat({ label, value, unit }: { label: string; value: ReactNode; unit?: 
   );
 }
 
-/** How many circles the peak draws at most; more say so with a count after them. */
-const FAN = 12;
+/** How far a card layer at `px` shifts toward the pointer at the card's edge. */
+const depth = (px: number) => ({
+  transform: `translate(calc(var(--tilt-x, 0) * ${px}px), calc(var(--tilt-y, 0) * ${px}px))`,
+});
+/** Eases the tilt, but not while Share lays the card flat for its picture. */
+const layer = "transition-transform duration-300 ease-out group-data-still:transition-none";
 
 /**
- * The most agents started within an hour, drawn as the mark's circles, blue and coral by turns.
- * They fan out from one when the page opens, then each pair's overlap fills in the mark's
- * overlap color.
+ * Agents started in each hour of the day as bars, the busiest in the accent, and what that hour
+ * says about when someone builds.
  */
-function Peak({ agents, at }: { agents: number; at: number }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => setOpen(true));
-    return () => cancelAnimationFrame(frame);
-  }, []);
-  const shown = Math.min(agents, FAN);
-  const r = 15;
-  const step = 19;
-  // Where two neighbors' edges cross, above and below the midpoint between their centers.
-  const h = Math.sqrt(r * r - (step / 2) ** 2);
-  const lens = `M${r + step / 2},${r - h} A${r},${r} 0 0 1 ${r + step / 2},${r + h} A${r},${r} 0 0 1 ${r + step / 2},${r - h}Z`;
-  const move = (i: number) => ({
-    transform: `translateX(${open ? i * step : 0}px)`,
-    transitionDelay: `${i * 35}ms`,
-  });
+function Hours({ hours }: { hours: number[] }) {
+  const max = Math.max(...hours);
+  if (!max) return null;
+  const busiest = hours.indexOf(max);
+  const at = (hour: number) => hourName.format(new Date(2000, 0, 1, hour));
   return (
-    <div className="mt-8 flex items-center justify-between gap-6 rounded-xl border border-border bg-surface px-5 py-4">
-      <div className="min-w-0">
-        <p className="text-[12.5px] font-medium text-muted-foreground">Most at once</p>
-        <p className="mt-1.5 text-2xl tabular-nums">
-          {agents}
-          <span className="text-muted-foreground"> {agents === 1 ? "agent" : "agents"}</span>
-        </p>
-        <p className="mt-1 text-[12.5px] text-faint-foreground">
-          Started within an hour, {shortDay.format(at)}
+    <section aria-label="When you build" className="mt-8">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <h2 className="text-[12.5px] font-medium text-muted-foreground">When you build</h2>
+        <p className="text-[12.5px] text-muted-foreground">
+          <span className="font-medium text-foreground">{rhythmOf(busiest)}</span> · busiest around{" "}
+          {at(busiest)}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <svg aria-hidden width={2 * r + (shown - 1) * step} height={2 * r}>
-          {Array.from({ length: shown }, (_, i) => (
-            <circle
-              key={i}
-              cx={r}
-              cy={r}
-              r={r}
-              style={move(i)}
-              className={`motion-safe:transition-transform motion-safe:duration-700 motion-safe:ease-out ${i % 2 ? "fill-mark-coral" : "fill-mark-blue"}`}
-            />
-          ))}
-          {Array.from({ length: shown - 1 }, (_, i) => (
-            <path
-              key={i}
-              d={lens}
-              style={{ ...move(i), opacity: open ? 1 : 0, transitionDelay: `${500 + i * 35}ms` }}
-              className="fill-mark-overlap motion-safe:transition-opacity motion-safe:duration-300"
-            />
-          ))}
-        </svg>
-        {agents > FAN && (
-          <span className="text-[12.5px] text-muted-foreground tabular-nums">+{agents - FAN}</span>
-        )}
+      <div className="flex h-14 items-end gap-1">
+        {hours.map((agents, hour) => (
+          <div
+            key={hour}
+            title={`${agents} ${agents === 1 ? "agent" : "agents"} at ${at(hour)}`}
+            style={{ height: `${Math.max(8, (agents / max) * 100)}%` }}
+            className={`flex-1 rounded-sm ${hour === busiest ? "bg-accent" : agents ? "bg-accent/40" : "bg-selected"}`}
+          />
+        ))}
       </div>
-    </div>
+      <div className="mt-1.5 grid grid-cols-4 text-[11px] text-faint-foreground">
+        {[0, 6, 12, 18].map((hour) => (
+          <span key={hour}>{at(hour)}</span>
+        ))}
+      </div>
+    </section>
   );
 }
 
