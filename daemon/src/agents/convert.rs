@@ -134,7 +134,7 @@ pub(crate) fn agent_run(
 }
 
 /// An effort's or a permission's protocol name, such as `high`, as the runs table stores it.
-pub(super) fn option_name(value: impl Serialize) -> Option<String> {
+pub(crate) fn option_name(value: impl Serialize) -> Option<String> {
     serde_json::to_value(value)
         .ok()?
         .as_str()
@@ -143,7 +143,7 @@ pub(super) fn option_name(value: impl Serialize) -> Option<String> {
 
 /// A stored effort or permission, back from its protocol name: `Unknown` for a name this version
 /// doesn't know.
-pub(super) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
+pub(crate) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
     serde_json::from_value(Value::String(name.to_owned())).ok()
 }
 

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, ParallaxEvent, ProjectIcon, ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId,
+    ErrorKind, ParallaxEvent, ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId,
     RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, RunId, Thread,
     ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
     ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
@@ -67,10 +67,7 @@ pub(crate) fn repo_entry(row: parallax_store::Repo) -> Result<Repo, ErrorObject>
         name: row.fields.name,
         path: row.fields.path,
         scratch: row.fields.scratch,
-        icon: row.icon.map(|icon| ProjectIcon {
-            name: icon.name,
-            color: icon.color,
-        }),
+        icon: row.icon.map(crate::store::protocol_icon),
         created_at: row.created_at,
     })
 }
@@ -635,10 +632,7 @@ pub(crate) async fn update_repo(
     let RepoUpdateParams { repo, icon } = params;
     crate::methods::project::check_icon(&icon)?;
     let log = Arc::clone(&daemon.log);
-    let stored = parallax_store::ProjectIcon {
-        name: icon.name,
-        color: icon.color,
-    };
+    let stored = crate::store::stored_icon(icon);
     store(daemon, move |db| {
         let (row, changed) =
             db.set_repo_icon(repo.into(), &stored)

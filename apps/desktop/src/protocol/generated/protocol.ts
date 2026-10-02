@@ -496,7 +496,8 @@ export type Project = {
 
 /**
  * A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
- * name. plxd stores them as the client sent them and never reads them.
+ * name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
+ * them and never reads them.
  */
 export type ProjectIcon = {
 	/**
@@ -509,7 +510,36 @@ export type ProjectIcon = {
 	 * `-`. Absent means the app's accent.
 	 */
 	color?: string,
+	/**
+	 * An uploaded image the app draws instead of the glyph, behind the `iconImages` capability
+	 * (0038). Its `data` is at most the capability's `maxBytes` of base64, or the request fails
+	 * with `imageTooLarge`. Absent means no image, so an icon sent without one clears it.
+	 */
+	image?: PromptImage,
 };
+
+/**
+ * An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
+ * decision 0026). The CLI gets it beside the text, never as a file name or path in it. A
+ * project's or repo's icon image has the same shape (0038).
+ */
+export type PromptImage = {
+	/**
+	 * Its file type, which its bytes must match.
+	 */
+	mediaType: ImageMediaType,
+	/**
+	 * The image file's bytes, in standard base64 with padding.
+	 */
+	data: string,
+};
+
+/**
+ * An image's file type (RYA-191): the four that Claude and Codex both take.
+ *
+ * A newer peer may send a type this version does not know; treat it as unknown.
+ */
+export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
 /**
  * A project's id: a version 7 UUID that the client generates once and sends again on every
@@ -1289,28 +1319,6 @@ export type AgentPolicy = "workspaceWrite" | "noWrite";
  * through its Parallax tools carry it, so a client can tell them from runs it started itself.
  */
 export type CoordinatorThreadId = string;
-
-/**
- * An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
- * decision 0026). The CLI gets it beside the text, never as a file name or path in it.
- */
-export type PromptImage = {
-	/**
-	 * Its file type, which its bytes must match.
-	 */
-	mediaType: ImageMediaType,
-	/**
-	 * The image file's bytes, in standard base64 with padding.
-	 */
-	data: string,
-};
-
-/**
- * An image's file type (RYA-191): the four that Claude and Codex both take.
- *
- * A newer peer may send a type this version does not know; treat it as unknown.
- */
-export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
 /**
  * Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.

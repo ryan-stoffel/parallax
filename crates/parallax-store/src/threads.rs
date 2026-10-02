@@ -3,6 +3,7 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
+use crate::project::{icon_columns, icon_from_row};
 use crate::runs::insert_run;
 use crate::worktree::insert_worktree;
 use crate::{ProjectIcon, Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
@@ -42,7 +43,8 @@ pub struct Thread {
     pub last_prompt_at: Timestamp,
 }
 
-const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, icon_name, icon_color";
+const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
+    icon_name, icon_color, icon_image_type, icon_image_data";
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at)";
 
@@ -50,18 +52,13 @@ const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snooze
 type RawRepo = (String, String, String, bool, String, Option<ProjectIcon>);
 
 fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
-    let icon_name: Option<String> = row.get(5)?;
-    let icon_color: Option<String> = row.get(6)?;
     Ok((
         row.get(0)?,
         row.get(1)?,
         row.get(2)?,
         row.get(3)?,
         row.get(4)?,
-        icon_name.map(|name| ProjectIcon {
-            name,
-            color: icon_color,
-        }),
+        icon_from_row(row, 5)?,
     ))
 }
 
@@ -339,9 +336,11 @@ impl Store {
         if before.icon.as_ref() == Some(icon) {
             return Ok((before, false));
         }
+        let (name, color, image_type, image_data) = icon_columns(Some(icon));
         self.conn.execute(
-            "UPDATE repos SET icon_name = ?2, icon_color = ?3 WHERE id = ?1",
-            params![key, icon.name, icon.color],
+            "UPDATE repos SET icon_name = ?2, icon_color = ?3, icon_image_type = ?4, \
+             icon_image_data = ?5 WHERE id = ?1",
+            params![key, name, color, image_type, image_data],
         )?;
         let repo = fetch_repo(&self.conn, "id = ?1", &key)?.ok_or(StoreError::NotFound { id })?;
         Ok((repo, true))

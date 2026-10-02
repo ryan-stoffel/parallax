@@ -1,6 +1,7 @@
 //! Images sent with a prompt or message (RYA-191, decision 0026): their caps, which `initialize`
 //! advertises as the `promptImages` capability's options, and the checks every method that takes
-//! `images` runs before anything is created or sent.
+//! `images` runs before anything is created or sent. Also an icon's image (PLX-339, decision
+//! 0038), whose cap `initialize` advertises as the `iconImages` capability's `maxBytes`.
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{ErrorKind, ImageMediaType, PromptImage};
@@ -16,6 +17,11 @@ pub(crate) const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 /// The most a message's images' `data` may add up to, in bytes of base64: what fits in one of
 /// 0007's 8 MiB frames beside the longest text plxd takes (1 MiB) and the envelope.
 pub(crate) const MAX_TOTAL_BYTES: usize = 6 * 1024 * 1024;
+
+/// The longest an icon image's `data` may be, in bytes of base64: room for the 128 px square WebP
+/// the app sends, small enough that `project.updated` and `repo.updated` stay small in the event
+/// log.
+pub(crate) const MAX_ICON_BYTES: usize = 64 * 1024;
 
 /// Checks a message's images against the caps, with `imageTooLarge`, and checks that each is
 /// base64 whose bytes are the file type it names, with `invalidParams`.
@@ -34,22 +40,44 @@ pub(crate) fn check(images: &[PromptImage]) -> Result<(), ErrorObject> {
                 image.data.len()
             )));
         }
-        let Some(bytes) = decode(&image.data) else {
-            return Err(ErrorObject::invalid_params(format!(
-                "image {n}'s data is not standard base64 with padding"
-            )));
-        };
-        if !is_type(image.media_type, &bytes) {
-            return Err(ErrorObject::invalid_params(format!(
-                "image {n} is not a PNG, JPEG, GIF, or WebP file of its mediaType"
-            )));
-        }
+        check_data(&format!("image {n}"), image)?;
     }
     let total: usize = images.iter().map(|image| image.data.len()).sum();
     if total > MAX_TOTAL_BYTES {
         return Err(too_large(format!(
             "a message's images are {total} bytes of base64; they must be at most \
              {MAX_TOTAL_BYTES} in all"
+        )));
+    }
+    Ok(())
+}
+
+/// Checks an icon's image against [`MAX_ICON_BYTES`], with `imageTooLarge`, and as [`check`]
+/// checks a message's images, with `invalidParams`.
+pub(crate) fn check_icon(image: &PromptImage) -> Result<(), ErrorObject> {
+    if image.data.len() > MAX_ICON_BYTES {
+        return Err(ErrorObject::parallax(
+            ErrorKind::ImageTooLarge,
+            format!(
+                "icon.image is {} bytes of base64; it must be at most {MAX_ICON_BYTES}",
+                image.data.len()
+            ),
+        ));
+    }
+    check_data("icon.image", image)
+}
+
+/// Checks that `image`, named `what` in the error, is base64 whose bytes are the file type it
+/// names, with `invalidParams`.
+fn check_data(what: &str, image: &PromptImage) -> Result<(), ErrorObject> {
+    let Some(bytes) = decode(&image.data) else {
+        return Err(ErrorObject::invalid_params(format!(
+            "{what}'s data is not standard base64 with padding"
+        )));
+    };
+    if !is_type(image.media_type, &bytes) {
+        return Err(ErrorObject::invalid_params(format!(
+            "{what} is not a PNG, JPEG, GIF, or WebP file of its mediaType"
         )));
     }
     Ok(())
@@ -101,7 +129,9 @@ pub(crate) fn decode(text: &str) -> Option<Vec<u8>> {
 mod tests {
     use parallax_protocol::{ErrorKind, ImageMediaType, PromptImage};
 
-    use super::{MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_BYTES, check, decode};
+    use super::{
+        MAX_ICON_BYTES, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_BYTES, check, check_icon, decode,
+    };
 
     /// A 1x1 PNG.
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -174,6 +204,24 @@ mod tests {
             ]),
             Some(ErrorKind::ImageTooLarge)
         );
+    }
+
+    #[test]
+    fn an_icon_image_is_capped_at_max_icon_bytes_and_checked_like_a_prompts() {
+        check_icon(&image(ImageMediaType::Png, PNG)).unwrap();
+        check_icon(&png_of(MAX_ICON_BYTES)).unwrap();
+        let error = check_icon(&png_of(MAX_ICON_BYTES + 4)).unwrap_err();
+        assert_eq!(
+            error.parallax_data().map(|data| data.kind),
+            Some(ErrorKind::ImageTooLarge)
+        );
+        for bad in [
+            image(ImageMediaType::Png, "not base64"),
+            image(ImageMediaType::Webp, PNG),
+        ] {
+            let error = check_icon(&bad).unwrap_err();
+            assert_eq!(error.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
+        }
     }
 
     #[test]
