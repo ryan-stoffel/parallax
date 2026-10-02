@@ -323,11 +323,11 @@ test("a finished thread opens on its prompt with no loader while its transcript 
 
 test("the link under the heading switches New Thread to No Repo, showing its shortcut", async () => {
   await renderApp();
-  const link = button("or start without a repo⌘⇧N")!;
-  expect(link.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+N");
+  const link = button("or start without a repo⇧⌘N")!;
+  expect(link.getAttribute("aria-keyshortcuts")).toBe("Shift+Meta+N");
   act(() => link.click());
   expect(heading()).toBe("What should we work on without a repo?");
-  expect(button("or start without a repo⌘⇧N")).toBeUndefined();
+  expect(button("or start without a repo⇧⌘N")).toBeUndefined();
 });
 
 test("No Repo starts a thread with no repo", async () => {

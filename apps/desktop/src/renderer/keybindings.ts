@@ -64,6 +64,10 @@ export function formatKeybinding(keybinding: string): string {
     : [...parts, key].join("+");
 }
 
+/** A keybinding as `aria-keyshortcuts` writes it: "Meta+Shift+KeyN" is "Meta+Shift+N". */
+export const ariaKeyshortcut = (keybinding: string) =>
+  keybinding.replace(/^Ctrl\b/, "Control").replace(/(Key|Digit)(\w)$/, "$2");
+
 // Cmd or Ctrl with these sends a message, or copies, pastes, cuts, undoes, or selects all.
 export const editingKeys = ["Enter", "NumpadEnter", "KeyC", "KeyV", "KeyX", "KeyZ", "KeyA"];
 
