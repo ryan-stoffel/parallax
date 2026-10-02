@@ -143,6 +143,12 @@ pub struct ThreadStartParams {
     /// Forward the agent's permission requests to the client, as `agent/start` takes it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
+    /// Work in the repo entry's own checkout, on whatever branch it has out, instead of in a new
+    /// worktree: the agent's changes land there, uncommitted, and `branchSlug` is ignored. Needs a
+    /// `repo`. Behind the `checkout` capability, since an older plxd would silently ignore it and
+    /// make a worktree.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checkout: bool,
 }
 
 /// Result of `thread/start`.

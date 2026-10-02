@@ -9,6 +9,7 @@ import {
   Ellipsis,
   FilePlus,
   FileText,
+  Folder,
   FolderGit2,
   GitBranch,
   GitPullRequest,
@@ -1295,16 +1296,23 @@ function CodeBlock({ children }: { children: ReactNode }) {
 }
 
 /**
- * An open run in the composer's tab: that it runs in a worktree, and the worktree's branch,
- * followed by `children`, such as Open PR.
+ * An open run in the composer's tab: that it runs in a worktree, and the worktree's branch, or in
+ * the repository's own checkout, followed by `children`, such as Open PR.
  */
 export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode }) {
   return (
     <>
-      <span className={tabItem}>
-        <FolderGit2 aria-hidden />
-        Worktree
-      </span>
+      {run.checkout ? (
+        <span className={tabItem}>
+          <Folder aria-hidden />
+          Current checkout
+        </span>
+      ) : (
+        <span className={tabItem}>
+          <FolderGit2 aria-hidden />
+          Worktree
+        </span>
+      )}
       <span className="flex min-w-0 items-center">
         {run.branch && (
           <span className={tabItem} title="Worktree branch">

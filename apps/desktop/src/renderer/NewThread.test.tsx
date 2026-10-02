@@ -459,6 +459,47 @@ test("a thread starts on the branch its prompt was named for, and takes the name
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
 });
 
+test("Current checkout starts a thread in the repository itself, with no branch of its own", async () => {
+  capabilities = { checkout: {} };
+  nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Fix it"),
+    },
+  });
+  await renderApp();
+  expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
+  await choose("Runs on", "Current checkoutRight in the repository, on the branch you have out.");
+  expect(control("Runs on: This Mac, Current checkout")).not.toBeNull();
+  await send("Fix it");
+  expect(calls("thread/start")).toEqual([
+    { runId: expect.any(String), prompt: "Fix it", repo: parallax.id, checkout: true },
+  ]);
+});
+
+test("Current checkout can't be picked without a repo, or from a plxd that would make a worktree anyway", async () => {
+  const checkoutOption = () =>
+    [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        'main [role="menu"][aria-label="Runs on"] [role="menuitemradio"]',
+      ),
+    ].find((b) => b.textContent?.startsWith("Current checkout"))!;
+  await renderApp();
+  expect(checkoutOption().disabled).toBe(true);
+  expect(checkoutOption().textContent).toContain("needs a newer plxd");
+  act(() => unmount());
+
+  capabilities = { checkout: {} };
+  await renderApp();
+  expect(checkoutOption().disabled).toBe(false);
+  await act(async () => checkoutOption().click());
+  await choose("Repository", "No Repo");
+  expect(checkoutOption().disabled).toBe(true);
+  expect(checkoutOption().textContent).toContain("needs a repo");
+  expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
+});
+
 test("a thread can start with an image alone, titled Image, and nothing to name it by", async () => {
   capabilities = {
     promptImages: { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 },

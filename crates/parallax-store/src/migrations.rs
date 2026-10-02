@@ -279,6 +279,13 @@ const MIGRATIONS: &[Migration] = &[
         version: 17,
         sql: "ALTER TABLE runs ADD COLUMN approvals INTEGER NOT NULL DEFAULT 0;",
     },
+    // Whether a thread runs in its repository's own checkout instead of a worktree of its own,
+    // as the Workspace menu's "Current checkout" asks. 0 for every run before, which all got a
+    // worktree.
+    Migration {
+        version: 18,
+        sql: "ALTER TABLE runs ADD COLUMN checkout INTEGER NOT NULL DEFAULT 0;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
