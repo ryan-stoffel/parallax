@@ -769,6 +769,21 @@ describe("a host with no usable default account for threads", () => {
     expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   });
 
+  test("Continue after Cmd+Enter opens the thread, so the prompt can't start it twice", async () => {
+    accounts([cli("claude", true)], [key("Work", "anthropic")]);
+    await renderApp();
+    act(() => void composer().editor!.commands.setContent("Tidy the README"));
+    await act(async () => {
+      composer().dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+      );
+    });
+    await settle();
+    await act(async () => button("Continue")!.click());
+    await settle();
+    expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
+  });
+
   test("a default naming a removed key account asks again", async () => {
     failure = "accountNotFound";
     accounts([cli("claude", true)], [key("Work", "anthropic")]);
@@ -856,4 +871,68 @@ test("an open thread deleted by another client goes back to New Thread", async (
   );
   await settle();
   expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
+});
+
+describe("keyboard shortcuts (PLX-316)", () => {
+  // A key press at `target`, or the window's focused element.
+  const key = (init: KeyboardEventInit, target: EventTarget = document.activeElement ?? window) =>
+    act(async () => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+    });
+  const picker = () =>
+    document.querySelector<HTMLDialogElement>('dialog[aria-label="New thread in"]')!;
+
+  test("Cmd+Enter starts a thread in the background and leaves New Thread open for the next", async () => {
+    answers["thread/start"] = (p) => ({
+      result: {
+        thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+        run: run(p["runId"] as string, "Tidy the README"),
+      },
+    });
+    await renderApp();
+    act(() => void composer().editor!.commands.setContent("Tidy the README"));
+    await key({ key: "Enter", metaKey: true }, composer());
+    await settle();
+
+    expect(calls("thread/start")).toEqual([
+      { runId: expect.any(String), repo: parallax.id, prompt: "Tidy the README" },
+    ]);
+    expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
+    expect(heading()).toBe("What should we build in parallax?");
+    expect(composer().textContent).toBe("");
+    expect(threadRow("Tidy the README")).toBeDefined();
+  });
+
+  test("Cmd+N picks the new thread's repository, and Cmd+Shift+N opens one with no repo", async () => {
+    await renderApp();
+    await key({ key: "n", code: "KeyN", metaKey: true, shiftKey: true });
+    expect(heading()).toBe("What should we work on without a repo?");
+
+    await key({ key: "n", code: "KeyN", metaKey: true });
+    expect(picker().open).toBe(true);
+    const options = [...picker().querySelectorAll('[role="option"]')];
+    expect(options.map((o) => o.textContent)).toEqual([
+      "parallax" + "This Mac · /src/parallax" + "⌘1",
+      "No repo" + "⌘2",
+    ]);
+    await key({ key: "1", code: "Digit1", metaKey: true }, picker().querySelector("input")!);
+    await settle();
+    expect(picker().open).toBe(false);
+    expect(heading()).toBe("What should we build in parallax?");
+  });
+
+  test("holding Cmd numbers the sidebar's rows, and Cmd+1 opens the first", async () => {
+    await renderApp();
+    const status = () =>
+      threadRow("Fix the flaky test")!.querySelector("[data-status]")!.textContent;
+    expect(status()).not.toBe("⌘1");
+    await key({ key: "Meta", metaKey: true }, window);
+    expect(status()).toBe("⌘1");
+    await key({ key: "1", code: "Digit1", metaKey: true }, window);
+    expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta" }));
+    });
+    expect(status()).not.toBe("⌘1");
+  });
 });
