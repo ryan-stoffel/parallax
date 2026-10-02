@@ -117,6 +117,7 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     show();
   });
   autoUpdater.on("update-not-available", () => {
+    if (progress !== undefined || downloaded) return;
     available = undefined;
     show();
   });
