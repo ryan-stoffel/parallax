@@ -95,6 +95,8 @@ pub(crate) fn initialize(
 /// items, which `agent/approve` answers, instead of denying what would prompt.
 /// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
 /// and `project/create`, which an older plxd would silently drop.
+/// `iconImages` (PLX-339, 0038): `image` on a project's or repo entry's `icon`, which an older
+/// plxd would silently drop. Its option `maxBytes` is the cap on the image's base64 `data`.
 /// `threadAttention` (RYA-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
 /// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
 /// `checkout`: `thread/start` takes `checkout`, to work in the repo's own checkout instead of a
@@ -129,6 +131,10 @@ fn capabilities_advertised() -> Capabilities {
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
+        (
+            "iconImages".to_owned(),
+            serde_json::Map::from_iter([("maxBytes".to_owned(), images::MAX_ICON_BYTES.into())]),
+        ),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),

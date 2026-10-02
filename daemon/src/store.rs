@@ -18,15 +18,18 @@ use std::thread::{self, JoinHandle};
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AccountId, ErrorKind, KeyAccount, Project, ProjectCreateParams, ProjectIcon,
-    ProjectId, ProjectUpdateParams, Provider, Role, RunId, StoreState,
+    AccountChoice, AccountId, ErrorKind, ImageMediaType, KeyAccount, Project, ProjectCreateParams,
+    ProjectIcon, ProjectId, ProjectUpdateParams, PromptImage, Provider, Role, RunId, StoreState,
 };
-use parallax_store::{AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError};
+use parallax_store::{
+    AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError, StoredImage,
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use crate::agents::convert::{option_name, option_value};
 use crate::repo;
 
 const QUEUED: u8 = 0;
@@ -221,10 +224,27 @@ pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
     )
 }
 
-fn stored_icon(icon: ProjectIcon) -> parallax_store::ProjectIcon {
+/// A protocol icon as the store keeps it, a project's or a repo entry's alike.
+pub(crate) fn stored_icon(icon: ProjectIcon) -> parallax_store::ProjectIcon {
     parallax_store::ProjectIcon {
         name: icon.name,
         color: icon.color,
+        image: icon.image.map(|image| StoredImage {
+            media_type: option_name(image.media_type).unwrap_or_default(),
+            data: image.data,
+        }),
+    }
+}
+
+/// A stored icon as the protocol's, a project's or a repo entry's alike.
+pub(crate) fn protocol_icon(icon: parallax_store::ProjectIcon) -> ProjectIcon {
+    ProjectIcon {
+        name: icon.name,
+        color: icon.color,
+        image: icon.image.map(|image| PromptImage {
+            media_type: option_value(&image.media_type).unwrap_or(ImageMediaType::Unknown),
+            data: image.data,
+        }),
     }
 }
 
@@ -244,10 +264,7 @@ pub(crate) fn project(
     Ok(Project {
         id,
         name: row.name,
-        icon: row.icon.map(|icon| ProjectIcon {
-            name: icon.name,
-            color: icon.color,
-        }),
+        icon: row.icon.map(protocol_icon),
         branch: repo::branch(Path::new(&row.repo_path)),
         repo_path: row.repo_path,
         coordinator,
@@ -422,8 +439,8 @@ mod tests {
 
     use parallax_protocol::jsonrpc::{INTERNAL_ERROR, PLX_ERROR, REQUEST_CANCELLED};
     use parallax_protocol::{
-        AccountId, ErrorKind, ProjectCreateParams, ProjectIcon, ProjectId, ProjectUpdateParams,
-        Provider, StoreState,
+        AccountId, ErrorKind, ImageMediaType, ProjectCreateParams, ProjectIcon, ProjectId,
+        ProjectUpdateParams, PromptImage, Provider, StoreState,
     };
     use parallax_store::StoreError;
     use tokio_util::sync::CancellationToken;
@@ -442,6 +459,10 @@ mod tests {
             icon: Some(parallax_store::ProjectIcon {
                 name: "rocket".to_owned(),
                 color: Some("green".to_owned()),
+                image: Some(parallax_store::StoredImage {
+                    media_type: "image/webp".to_owned(),
+                    data: "UklGRg==".to_owned(),
+                }),
             }),
             created_at: "2026-09-24T12:00:00.5Z".parse().unwrap(),
             updated_at: "2026-09-24T12:00:01Z".parse().unwrap(),
@@ -460,6 +481,10 @@ mod tests {
             Some(ProjectIcon {
                 name: "rocket".to_owned(),
                 color: Some("green".to_owned()),
+                image: Some(PromptImage {
+                    media_type: ImageMediaType::Webp,
+                    data: "UklGRg==".to_owned(),
+                }),
             })
         );
         assert_eq!(mapped.created_at, row(id.into()).created_at);
@@ -468,6 +493,10 @@ mod tests {
         let icon = ProjectIcon {
             name: "star".to_owned(),
             color: None,
+            image: Some(PromptImage {
+                media_type: ImageMediaType::Png,
+                data: "iVBORw==".to_owned(),
+            }),
         };
         let params = ProjectCreateParams {
             id,
@@ -484,6 +513,10 @@ mod tests {
         let stored = parallax_store::ProjectIcon {
             name: "star".to_owned(),
             color: None,
+            image: Some(parallax_store::StoredImage {
+                media_type: "image/png".to_owned(),
+                data: "iVBORw==".to_owned(),
+            }),
         };
         assert_eq!(fields.icon.as_ref(), Some(&stored));
 

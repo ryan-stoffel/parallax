@@ -1,5 +1,6 @@
 use parallax_store::{
-    RepoFields, RunFields, RunState, Store, StoreError, StoredEvent, StoredImage, WorktreeFields,
+    ProjectIcon, RepoFields, RunFields, RunState, Store, StoreError, StoredEvent, StoredImage,
+    WorktreeFields,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -89,6 +90,40 @@ fn a_path_has_one_repo_entry_whatever_id_asks_for_it() {
     assert_eq!(store.list_repos().unwrap(), vec![repo.clone(), other]);
     assert_eq!(store.get_repo(first).unwrap(), Some(repo));
     assert_eq!(store.scratch_repo().unwrap(), None);
+}
+
+/// A repo entry's icon replaces whole, image included (decision records
+/// 0033 and 0038), and reads back from get and list.
+#[test]
+fn a_repo_icon_with_an_image_round_trips_and_an_icon_without_one_clears_it() {
+    let (_dir, mut store) = open();
+    let id = Uuid::now_v7();
+    store
+        .add_repo(id, &repo_fields("/Users/me/src/parallax"))
+        .unwrap();
+    let glyph = ProjectIcon {
+        name: "flame".to_owned(),
+        color: Some("orange".to_owned()),
+        image: None,
+    };
+    let with_image = ProjectIcon {
+        image: Some(StoredImage {
+            media_type: "image/webp".to_owned(),
+            data: "UklGRg==".to_owned(),
+        }),
+        ..glyph.clone()
+    };
+
+    let (repo, changed) = store.set_repo_icon(id, &with_image).unwrap();
+    assert!(changed);
+    assert_eq!(repo.icon, Some(with_image.clone()));
+    assert_eq!(store.list_repos().unwrap(), [repo]);
+    assert!(!store.set_repo_icon(id, &with_image).unwrap().1);
+
+    let (cleared, changed) = store.set_repo_icon(id, &glyph).unwrap();
+    assert!(changed);
+    assert_eq!(cleared.icon, Some(glyph));
+    assert_eq!(store.get_repo(id).unwrap(), Some(cleared));
 }
 
 #[test]

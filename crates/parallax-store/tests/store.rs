@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use parallax_store::{
     AccountFields, ProjectEdit, ProjectFields, ProjectIcon, Store, StoreError, StoredEvent,
-    UsageDelta, WorktreeFields,
+    StoredImage, UsageDelta, WorktreeFields,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -28,6 +28,7 @@ fn icon(name: &str, color: Option<&str>) -> ProjectIcon {
     ProjectIcon {
         name: name.to_string(),
         color: color.map(str::to_string),
+        image: None,
     }
 }
 
@@ -246,6 +247,49 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
         store.get_project(id).expect("get").expect("the project"),
         recolored,
         "the update was stored"
+    );
+}
+
+/// An icon's image (PLX-339, decision record 0038) is stored with it, read
+/// back by get and list, and cleared by an icon sent without one.
+#[test]
+fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let with_image = ProjectIcon {
+        image: Some(StoredImage {
+            media_type: "image/webp".to_string(),
+            data: "UklGRg==".to_string(),
+        }),
+        ..icon("rocket", Some("green"))
+    };
+    let created = store
+        .create_project(
+            id,
+            &ProjectFields {
+                icon: Some(with_image.clone()),
+                ..sample_fields()
+            },
+        )
+        .expect("create");
+    assert_eq!(created.icon, Some(with_image.clone()));
+    assert_eq!(store.list_projects().expect("list"), [created]);
+
+    let (cleared, changed) = store
+        .update_project(
+            id,
+            &ProjectEdit {
+                name: None,
+                icon: Some(icon("rocket", Some("green"))),
+            },
+        )
+        .expect("an icon without an image");
+    assert!(changed, "the icon is replaced whole, so its image goes");
+    assert_eq!(cleared.icon, Some(icon("rocket", Some("green"))));
+    assert_eq!(
+        store.get_project(id).expect("get").expect("the project"),
+        cleared
     );
 }
 
@@ -568,7 +612,9 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             "created_at",
             "updated_at",
             "icon_name",
-            "icon_color"
+            "icon_color",
+            "icon_image_type",
+            "icon_image_data"
         ]
     );
     let version: i64 = conn
@@ -577,12 +623,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 21,
+        version, 22,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
          #257), 13 (run options, RYA-97), 14 (wakes, RYA-178), 15 (images, RYA-191), 16 \
-         (project icons, RYA-227), 17 (approvals, RYA-222), 18 (checkout runs), 19 (thread          attention, RYA-270), 20 (context window and fast mode), and 21 (linked pull requests, PLX-318) also apply"
+         (project icons, RYA-227), 17 (approvals, RYA-222), 18 (checkout runs), 19 (thread          attention, RYA-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), and 22 (icon images, PLX-339) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -707,12 +753,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 21,
+        version, 22,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, RYA-97), 14 (wakes, \
          RYA-178), 15 (images, RYA-191), 16 (project icons, RYA-227), 17 (approvals, \
-         RYA-222), 18 (checkout runs), 19 (thread attention, RYA-270), 20 (context window          and fast mode), and 21 (linked pull requests, PLX-318) also apply"
+         RYA-222), 18 (checkout runs), 19 (thread attention, RYA-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), and 22 (icon images, PLX-339) also apply"
     );
 }
 

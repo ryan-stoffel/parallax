@@ -90,7 +90,8 @@ pub enum ErrorKind {
     PrFailed,
     /// An image in `images` is over the per-image cap, or a message's images are over the
     /// per-message cap or count, which `promptImages`' options give (RYA-191). The message says
-    /// which. Nothing was sent.
+    /// which. Nothing was sent. `project/create`, `project/update`, and `repo/update` also return
+    /// it when `icon.image` is over `iconImages`' `maxBytes` (PLX-339, 0038); nothing changed.
     ImageTooLarge,
     /// No image of the run has the given id (RYA-191).
     ImageNotFound,
