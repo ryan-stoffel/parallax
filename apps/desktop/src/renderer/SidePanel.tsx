@@ -53,7 +53,12 @@ const surfaces: Surface[] = [
     key: "T",
     empty: { title: "No folder here", hint: "A thread's terminal opens in its folder." },
   },
-  { name: "Files", icon: FolderTree, key: "F" },
+  {
+    name: "Files",
+    icon: FolderTree,
+    key: "F",
+    empty: { title: "No thread open", hint: "Open a thread to browse its folder." },
+  },
   { name: "Browser", icon: Globe, key: "B" },
 ];
 
@@ -63,10 +68,10 @@ const surfaces: Surface[] = [
  * while focus is in the panel and the ones not built yet are dimmed. Open tabs stay mounted, so
  * a view keeps its state behind another. The top bar keeps the hide button where the main pane
  * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
- * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents` and
- * `context` are those views, such as a Project's, in place of their empty states. `remoteHost` is
- * the open host's name when it's an SSH host. `terminal` draws the Terminal view, told whether
- * it's shown and given its empty state.
+ * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents`,
+ * `context`, and `files` are those views, such as a Project's, in place of their empty states.
+ * `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal view,
+ * told whether it's shown and given its empty state.
  */
 export function SidePanel({
   open,
@@ -79,6 +84,7 @@ export function SidePanel({
   context,
   remoteHost,
   terminal,
+  files,
 }: {
   open: boolean;
   onClose: () => void;
@@ -90,6 +96,7 @@ export function SidePanel({
   context?: ReactNode;
   remoteHost?: string;
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
+  files?: ReactNode;
 }) {
   // The open views in tab order, and the one shown; with none shown, the list is.
   const [tabs, setTabs] = useState<Surface[]>([]);
@@ -126,6 +133,8 @@ export function SidePanel({
       context
     ) : s.name === "Terminal" && terminal ? (
       terminal(open && s === active, emptyOf(s))
+    ) : s.name === "Files" && files ? (
+      files
     ) : (
       emptyOf(s)
     );

@@ -151,9 +151,16 @@ export type ParallaxRequests = {
 	"agent/diff": { params: AgentDiffParams, result: AgentDiffResult },
 	/**
 	 * `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
-	 * size-capped, for a diff editor.
+	 * size-capped, for a diff editor. Its `working` side, behind the `files` capability,
+	 * reads the file on disk now.
 	 */
 	"agent/file": { params: AgentFileParams, result: AgentFileResult },
+	/**
+	 * `agent/files`: one folder of a run's worktree, or a Current checkout thread's
+	 * checkout, without `.git` or what git ignores, for browsing (RYA-296). Gated on the
+	 * `files` capability.
+	 */
+	"agent/files": { params: AgentFilesParams, result: AgentFilesResult },
 	/**
 	 * `agent/accept`: merges a run's commit into the project repository's current branch on
 	 * the host, fast-forward when possible, then removes its worktree and branch. Never
@@ -2293,7 +2300,7 @@ export type AgentFileParams = {
  *
  * A newer client may send a side this version does not know; plxd refuses it.
  */
-export type AgentFileSide = "base" | "head";
+export type AgentFileSide = "base" | "head" | "working";
 
 /**
  * Result of `agent/file`.
@@ -2308,9 +2315,9 @@ export type AgentFileResult = {
 	 */
 	side: AgentFileSide,
 	/**
-	 * The commit it was read from.
+	 * The commit it was read from. Absent for the `working` side.
 	 */
-	commit: string,
+	commit?: string,
 	/**
 	 * Whether the file exists on that side. An added file has no base side, and a deleted file
 	 * no head side.
@@ -2331,6 +2338,61 @@ export type AgentFileResult = {
 	 */
 	tooLarge: boolean,
 };
+
+/**
+ * Params of `agent/files` (RYA-296): one folder of a run's worktree, or for a Current checkout
+ * thread, its repository's checkout.
+ */
+export type AgentFilesParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The folder, relative to the run's folder, by `agent/file`'s path rules. Absent means the
+	 * run's folder itself.
+	 */
+	path?: string,
+};
+
+/**
+ * Result of `agent/files`.
+ */
+export type AgentFilesResult = {
+	/**
+	 * The folder's entries by name, without `.git` or anything git ignores.
+	 */
+	entries: Array<AgentEntry>,
+	/**
+	 * Whether `entries` was cut short because the folder holds more than one answer lists.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * One entry of a folder, from `agent/files`.
+ */
+export type AgentEntry = {
+	/**
+	 * Its name in the folder.
+	 */
+	name: string,
+	/**
+	 * What it is.
+	 */
+	kind: AgentEntryKind,
+	/**
+	 * Its size in bytes, for a file.
+	 */
+	size?: number,
+};
+
+/**
+ * What a folder entry is. Symlinks are never followed.
+ *
+ * A newer plxd may send a kind this version does not know; treat it as a file.
+ */
+export type AgentEntryKind = "file" | "dir" | "symlink";
 
 /**
  * Params of `agent/accept`.

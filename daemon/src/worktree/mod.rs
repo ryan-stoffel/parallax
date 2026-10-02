@@ -979,6 +979,23 @@ impl WorktreeManager {
         args: &[&str],
         limit: Duration,
     ) -> Result<GitOutput, WorktreeError> {
+        let process = self.launcher.spawn(&self.git_spec(cwd, args))?;
+        let Ok(collected) = timeout(limit, collect(process, cwd, args)).await else {
+            return Err(WorktreeError::Timeout {
+                cwd: cwd.to_owned(),
+                args: owned_args(args),
+                timeout: limit,
+            });
+        };
+        let (stdout, exit) = collected?;
+        Ok(GitOutput {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            exit,
+        })
+    }
+
+    /// The process spec [`WorktreeManager::run_git`] runs.
+    fn git_spec(&self, cwd: &Path, args: &[&str]) -> ProcessSpec {
         let mut spec = ProcessSpec::new("git", cwd);
         spec.args = ["-c", NO_HOOKS]
             .iter()
@@ -992,20 +1009,7 @@ impl WorktreeManager {
         spec.inject.set("GIT_TERMINAL_PROMPT", "0");
         spec.stdin = StdinMode::Null;
         spec.limits.max_line_bytes = self.max_git_line_bytes;
-
-        let process = self.launcher.spawn(&spec)?;
-        let Ok(collected) = timeout(limit, collect(process, cwd, args)).await else {
-            return Err(WorktreeError::Timeout {
-                cwd: cwd.to_owned(),
-                args: owned_args(args),
-                timeout: limit,
-            });
-        };
-        let (stdout, exit) = collected?;
-        Ok(GitOutput {
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            exit,
-        })
+        spec
     }
 
     /// Like [`WorktreeManager::run_git`], but a non-zero exit becomes [`WorktreeError::GitFailed`]

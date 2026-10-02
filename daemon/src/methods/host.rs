@@ -106,6 +106,8 @@ pub(crate) fn initialize(
 /// them.
 /// `git` (RYA-298): `agent/gitStatus`, `agent/commit`, and `agent/push`, and `agent/openPr` on a
 /// Current checkout thread.
+/// `files` (RYA-296): `agent/files`, and `agent/file`'s `working` side, which an older plxd
+/// would refuse, to browse a run's folder.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -121,6 +123,7 @@ fn capabilities_advertised() -> Capabilities {
         ("checkout".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
+        ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),

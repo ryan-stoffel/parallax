@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use tokio::io::AsyncWriteExt as _;
 use tokio::time::timeout;
 use tracing::warn;
 
@@ -32,7 +33,7 @@ use super::{
     ChangeStatus, ChangedFile, DiffStat, NO_DIFF_DRIVERS, WorktreeError, WorktreeManager,
     changed_file, collect, describe_failure, owned_args,
 };
-use crate::backend::process::Output;
+use crate::backend::process::{Output, StdinMode};
 use crate::json::escaped_len as json_len;
 
 /// The largest file [`WorktreeManager::read_blob`] returns: 4 MiB, which base64 turns into about
@@ -472,6 +473,71 @@ impl WorktreeManager {
             size,
             content: Some(bytes),
         }))
+    }
+
+    /// Which of `paths`, relative to `work_tree`, git ignores (`git check-ignore`), for
+    /// `agent/files` (RYA-296). A tracked path is never ignored. With `git_dir`, a worker's
+    /// worktree, git runs pinned and hardened like every call there (#166); without, `work_tree`
+    /// is the user's own checkout, read with their own config. The paths go in on stdin, so a
+    /// long folder never meets a command-line limit.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], [`WorktreeError::Spawn`], or
+    /// [`WorktreeError::Io`].
+    pub async fn ignored(
+        &self,
+        work_tree: &Path,
+        git_dir: Option<&Path>,
+        paths: &[String],
+    ) -> Result<HashSet<String>, WorktreeError> {
+        if paths.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let args = ["check-ignore", "-z", "--stdin"];
+        let mut spec = match git_dir {
+            Some(git_dir) => self.worktree_spec(work_tree, git_dir, &args).await?,
+            None => self.git_spec(work_tree, &args),
+        };
+        spec.stdin = StdinMode::Piped;
+        spec.limits.max_line_bytes = self.max_git_line_bytes;
+        let mut process = self.launcher.spawn(&spec)?;
+        // `./` keeps a name such as `:!x` from reading as pathspec magic, which check-ignore
+        // refuses.
+        let input: Vec<u8> = paths
+            .iter()
+            .flat_map(|path| [b"./", path.as_bytes(), b"\0"].concat())
+            .collect();
+        let run = async {
+            if let Some(mut stdin) = process.take_stdin() {
+                // A write error means git exited early; its exit status says why.
+                let _ = stdin.write_all(&input).await;
+            }
+            collect(process, work_tree, &args).await
+        };
+        let Ok(collected) = timeout(self.timeout, run).await else {
+            return Err(WorktreeError::Timeout {
+                cwd: work_tree.to_owned(),
+                args: owned_args(&args),
+                timeout: self.timeout,
+            });
+        };
+        let (stdout, exit) = collected?;
+        // 0: some are ignored, 1: none are.
+        if !matches!(exit.info.code, Some(0 | 1)) {
+            return Err(WorktreeError::GitFailed {
+                cwd: work_tree.to_owned(),
+                args: owned_args(&args),
+                detail: exit.stderr_tail,
+            });
+        }
+        // `collect` ends the one NUL-separated line with `\n`.
+        let stdout = String::from_utf8_lossy(stdout.strip_suffix(b"\n").unwrap_or(&stdout));
+        Ok(stdout
+            .split('\0')
+            .filter_map(|path| path.strip_prefix("./"))
+            .map(str::to_owned)
+            .collect())
     }
 
     /// Merges `commit` into the current branch of `repo_path`'s checkout: see the module
