@@ -468,7 +468,7 @@ test("saves a repository action and runs it in the drawer, opening its preview (
   const dialog = page.getByRole("dialog", { name: "Add action" });
   await dialog.getByRole("textbox", { name: "Name" }).fill("Git version");
   const keys = dialog.getByRole("textbox", { name: "Keybinding" });
-  await keys.press("ControlOrMeta+b");
+  await keys.press("ControlOrMeta+s");
   await expect(dialog.getByRole("alert")).toContainText("one of Parallax's shortcuts");
   await keys.press("ControlOrMeta+Shift+k");
   await dialog.getByRole("textbox", { name: "Command" }).fill("git --version");
