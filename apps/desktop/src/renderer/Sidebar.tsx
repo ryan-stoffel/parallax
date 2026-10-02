@@ -1,11 +1,12 @@
 import {
+  AlarmClock,
+  Archive,
   ArchiveRestore,
   ArrowLeft,
   Bot,
   ChartNoAxesColumn,
   Check,
   ChevronDown,
-  ChevronRight,
   CircleAlert,
   CircleCheck,
   CirclePause,
@@ -14,19 +15,19 @@ import {
   Ellipsis,
   FileDiff,
   Folder,
-  FolderOpen,
+  FolderKanban,
   FolderPlus,
   GitBranch,
   GitMerge,
-  House,
   Laptop,
+  ListFilter,
   LoaderCircle,
   PanelLeft,
-  Plus,
   RefreshCw,
   Search,
   Server,
   Settings,
+  SquareDashed,
   SquarePen,
   type LucideIcon,
 } from "lucide-react";
@@ -47,24 +48,35 @@ import type {
   AgentStatus,
   Project,
   ProjectIcon as ProjectIconValue,
+  Repo,
   Thread,
 } from "../protocol/generated/protocol";
 import type { Selection, SettingsSection } from "./App";
-import { ConnectionStatus, StatusDot, statusLabel, useConnection } from "./ConnectionStatus";
+import { clock } from "./Approval";
+import { AddRepositoryDialog } from "./AddRepositoryDialog";
+import {
+  attentionOf,
+  initials,
+  lastPrompt,
+  projectAttention,
+  snoozeChoices,
+  snoozed,
+  type Attention,
+} from "./attention";
+import { AttentionBadge } from "./AttentionMark";
+import { ConnectionStatus } from "./ConnectionStatus";
 import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
-import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
-import { iconLook } from "./projectIcons";
-import { groupOf, groupThreads, noRepo, type ProjectChange, type ThreadsView } from "./threads";
-import { accountLabel, statusLabel as runStatusLabel } from "./transcript";
+import { iconColors, iconLook } from "./projectIcons";
+import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
+import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import { IconButton, menuItem, menuPanel, moveFocus, openOnContextMenu, TopBar } from "./ui";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
 const current = "bg-selected text-foreground";
-const heading = "text-[11.5px] font-medium text-faint-foreground";
 
 interface SidebarProps {
   open: boolean;
@@ -105,19 +117,25 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
   );
 }
 
-interface ThreadListProps {
-  hosts: Host[];
-  /** The open host, whose Projects and threads show under its row. */
+/** A host and its threads and Projects, as the sidebar merges them. */
+export interface HostThreads {
   host: Host;
-  onHostChange: (hostId: string) => void;
+  view: ThreadsView;
+}
+
+interface ThreadListProps {
+  /** Every host's list, this computer first. */
+  hosts: HostThreads[];
+  /** The open host: where a new Project goes by default, and whose connection the footer shows. */
+  host: Host;
   selection: Selection;
-  onSelect: (selection: Selection) => void;
+  /** Opens something on `hostId`, which becomes the open host. */
+  onSelect: (hostId: string, selection: Selection) => void;
   /** Opens a Project, on another host by opening that host first. */
   onOpenProject: (hostId: string, projectId: string) => void;
-  onOpenSettings: (section: SettingsSection, addHost?: boolean) => void;
-  threads: ThreadsView;
+  onOpenSettings: (section: SettingsSection) => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
-  onDelete: (thread: Thread) => Promise<string | undefined>;
+  onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
 }
 
 /**
@@ -135,242 +153,243 @@ export function ProjectIcon({
   return <Icon aria-hidden className={`${color} ${className}`} />;
 }
 
+/**
+ * A repo's icon: the one the user chose, in a Project's shape (0033), or else its initials on a
+ * tile in a color picked from its name. No Repo is a dashed square.
+ */
+export function RepoIcon({ repo }: { repo?: Repo }) {
+  if (!repo || repo.scratch)
+    return <SquareDashed aria-hidden className="size-4 shrink-0 text-faint-foreground" />;
+  if (repo.icon) return <ProjectIcon icon={repo.icon} className="size-4 shrink-0" />;
+  const palette = iconColors.slice(1);
+  let hash = 0;
+  for (let i = 0; i < repo.name.length; i++) hash = (hash * 31 + repo.name.charCodeAt(i)) | 0;
+  const color = palette[Math.abs(hash) % palette.length]!.text;
+  return (
+    <span
+      aria-hidden
+      className={`grid size-4 shrink-0 place-items-center rounded-[4px] bg-current/15 text-[8.5px] leading-none font-bold ${color}`}
+    >
+      {/* Drawn from the attribute, so the tile adds nothing to the text around it. */}
+      <span data-initials={initials(repo.name)} className="before:content-[attr(data-initials)]" />
+    </span>
+  );
+}
+
 // How long a pointer rests on a thread before its card shows. Moving to another thread while
 // one shows switches at once.
 const cardDelay = 450;
 
+/** The Repos filter's choice: every repo, No Repo's threads, or one repo by host and id. */
+type RepoFilter = "all" | "none" | `${string}/${string}`;
+const filterKey = "parallax:repoFilter";
+
+function readFilter(): RepoFilter {
+  try {
+    return (localStorage.getItem(filterKey) as RepoFilter | null) ?? "all";
+  } catch {
+    return "all";
+  }
+}
+
+/** One row of the list: a thread, or a Project, with its host and what it asks of the user. */
+type Item = (
+  | { kind: "thread"; thread: Thread }
+  | { kind: "project"; project: Project; runs: AgentRun[] }
+) & {
+  key: string;
+  host: Host;
+  view: ThreadsView;
+  repo?: Repo;
+  attention: Attention;
+  /** When it was last prompted, for the order. */
+  at: string;
+};
+
 /**
- * Search, then the hosts: the open one shows its Projects (one row each) and its repositories
- * with their threads, and Archived sits under the list. Resting on a thread shows a card with
- * where and how it runs.
+ * Search and the Repos filter, then every host's threads and Projects in one list, the most
+ * recently prompted first (0033). A row shows its repo, how long ago it was prompted or what it
+ * asks of the user, its title, branch, and provider. Snoozed and Archived threads sit under the
+ * list. Resting on a thread shows a card with where and how it runs.
  */
 export function ThreadList({
   hosts,
   host,
-  onHostChange,
   selection,
   onSelect,
   onOpenProject,
   onOpenSettings,
-  threads,
   onDelete,
 }: ThreadListProps) {
   const newProject = useRef<HTMLDialogElement>(null);
   const addRepositoryDialog = useRef<HTMLDialogElement>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
-  const [toDelete, setToDelete] = useState<Thread>();
+  const [toDelete, setToDelete] = useState<{ hostId: string; thread: Thread }>();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
-  const [projectError, setProjectError] = useState<string>();
   const [query, setQuery] = useState("");
-  // Renaming a Project and choosing its icon need a plxd with `projectEdit` (0032).
-  const connection = useConnection(host.id);
-  const editable = connection?.status === "connected" && "projectEdit" in connection.capabilities;
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const [card, setCard] = useState<{ thread: Thread; top: number; left: number }>();
+  const [filter, setFilterState] = useState<RepoFilter>(readFilter);
+  const setFilter = (next: RepoFilter) => {
+    setFilterState(next);
+    try {
+      localStorage.setItem(filterKey, next);
+    } catch {
+      // Storage is off: the filter lasts until the window closes.
+    }
+  };
+  const [card, setCard] = useState<{ item: Item; top: number; left: number }>();
   const cardTimer = useRef<number>(undefined);
-  // Repositories listed again since the card opened, so sweeping across rows lists each once.
-  const refreshed = useRef(new Set<string>());
-  const { groups, archived } = groupThreads(threads.state);
-  const title = (t: Thread) => threads.state.titles[t.id] ?? "Thread";
+  // Snoozes end on time even with nothing else changing.
+  const now = useMinute();
 
+  const open = hosts.find((h) => h.host.id === host.id)?.view;
+  const many = hosts.length > 1;
   const q = query.trim().toLowerCase();
-  const matches = (text: string) => !q || text.toLowerCase().includes(q);
-  // Most recently active first, as threads are newest first.
-  const shownProjects = threads.state.projects
-    .filter((p) => matches(p.name))
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const shownGroups = groups
-    .map((g) => ({ ...g, threads: g.threads.filter((t) => matches(title(t))) }))
-    .filter((g) => !q || g.threads.length > 0);
-  const shownArchived = archived.filter((t) => matches(title(t)));
 
-  const showCard = (thread: Thread, row: HTMLElement) => {
+  const items: Item[] = hosts.flatMap(({ host: h, view }) => {
+    const { state } = view;
+    const repoOf = (id: string) => state.repos.find((r) => r.id === id);
+    const threads = state.threads.map((t): Item => {
+      const run = state.runs[t.id];
+      return {
+        kind: "thread",
+        thread: t,
+        key: `${h.id}/${t.id}`,
+        host: h,
+        view,
+        repo: repoOf(t.repo),
+        attention: attentionOf(t, run, asksOf(state, t.id)),
+        at: lastPrompt(t),
+      };
+    });
+    const projects = state.projects.map((p): Item => {
+      const runs = Object.values(state.runs).filter((r) => r.project === p.id);
+      return {
+        kind: "project",
+        project: p,
+        runs,
+        key: `${h.id}/${p.id}`,
+        host: h,
+        view,
+        repo: state.repos.find((r) => r.path === p.repoPath),
+        attention: projectAttention(runs, (id) => asksOf(state, id)),
+        at: p.updatedAt,
+      };
+    });
+    return [...threads, ...projects];
+  });
+
+  const titleOf = (item: Item) =>
+    item.kind === "project"
+      ? item.project.name
+      : (item.view.state.titles[item.thread.id] ?? "Thread");
+  const inFilter = (item: Item) =>
+    filter === "all" ||
+    (filter === "none"
+      ? !item.repo || item.repo.scratch
+      : filter === `${item.host.id}/${item.repo?.id}`);
+  const shown = items
+    .filter((i) => inFilter(i) && (!q || titleOf(i).toLowerCase().includes(q)))
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, i.attention, now);
+  const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
+  const listed = shown.filter((i) => !isArchived(i) && !isSnoozed(i));
+  const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
+  const archived = shown.filter(isArchived);
+
+  const showCard = (item: Item, row: HTMLElement) => {
     window.clearTimeout(cardTimer.current);
-    const open = () => {
+    const place = () => {
       const rect = row.getBoundingClientRect();
       // A little clear of the sidebar, and kept on screen: it is at most about 15rem tall.
       const edge = (row.closest("#sidebar") ?? row).getBoundingClientRect().right;
-      setCard({ thread, top: Math.min(rect.top, window.innerHeight - 248), left: edge + 12 });
-      if (!refreshed.current.has(thread.repo)) {
-        refreshed.current.add(thread.repo);
-        threads.refresh(thread.repo);
-      }
+      setCard({ item, top: Math.min(rect.top, window.innerHeight - 248), left: edge + 12 });
     };
-    if (card) open();
-    // A card that shows after the delay starts afresh; moving between rows keeps the set.
-    else
-      cardTimer.current = window.setTimeout(() => {
-        refreshed.current.clear();
-        open();
-      }, cardDelay);
+    if (card) place();
+    else cardTimer.current = window.setTimeout(place, cardDelay);
   };
   const hideCard = () => {
     window.clearTimeout(cardTimer.current);
     setCard(undefined);
   };
 
-  const threadRow = (t: Thread) => (
-    <ThreadRow
-      key={t.id}
-      thread={t}
-      title={title(t)}
-      run={threads.state.runs[t.id]}
-      selected={selection.kind === "thread" && selection.threadId === t.id}
-      onOpen={() => onSelect({ kind: "thread", threadId: t.id })}
-      onArchive={async () => setActionError(await threads.archive(t.id, !t.archived))}
-      onDelete={() => {
-        setToDelete(t);
-        setDeleteError(undefined);
-        deleteDialog.current?.showModal();
-      }}
-      onRest={(row) => showCard(t, row)}
-      onLeave={hideCard}
-    />
-  );
+  const row = (item: Item) => {
+    const selected =
+      item.host.id === host.id &&
+      (item.kind === "thread"
+        ? selection.kind === "thread" && selection.threadId === item.thread.id
+        : selection.kind === "project" && selection.projectId === item.project.id);
+    if (item.kind === "project")
+      return (
+        <ProjectRow
+          key={item.key}
+          project={item.project}
+          repo={item.repo}
+          runs={item.runs}
+          attention={item.attention}
+          host={many ? item.host : undefined}
+          selected={selected}
+          editable={item.view.editable}
+          onOpen={() => onSelect(item.host.id, { kind: "project", projectId: item.project.id })}
+          onUpdate={async (change) =>
+            setActionError(await item.view.updateProject(item.project.id, change))
+          }
+        />
+      );
+    const { thread: t, view } = item;
+    return (
+      <ThreadRow
+        key={item.key}
+        thread={t}
+        title={titleOf(item)}
+        run={view.state.runs[t.id]}
+        repo={item.repo}
+        attention={item.attention}
+        selected={selected}
+        snoozable={view.attention}
+        onOpen={() => onSelect(item.host.id, { kind: "thread", threadId: t.id })}
+        onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
+        onSettle={async () => setActionError(await view.update(t.id, { seen: true }))}
+        onSnooze={async (until) =>
+          setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
+        }
+        onDelete={() => {
+          setToDelete({ hostId: item.host.id, thread: t });
+          setDeleteError(undefined);
+          deleteDialog.current?.showModal();
+        }}
+        onRest={(el) => showCard(item, el)}
+        onLeave={hideCard}
+      />
+    );
+  };
 
   const addRepository = async () => {
     const path = await window.parallax.pickFolder();
-    if (!path) return;
-    const repo = await threads.addRepo(path);
+    if (!path || !open) return;
+    const repo = await open.addRepo(path);
     if (typeof repo === "string") return setActionError(repo);
     setActionError(undefined);
-    onSelect({ kind: "new", groupId: repo.id });
+    onSelect(host.id, { kind: "new", groupId: repo.id });
   };
 
   const confirmDelete = async () => {
     if (!toDelete) return;
     setDeleting(true);
     // A running thread's agent is stopped first, so this can take a moment.
-    const error = await onDelete(toDelete);
+    const error = await onDelete(toDelete.hostId, toDelete.thread);
     setDeleting(false);
     if (error) setDeleteError(error);
     else deleteDialog.current?.close();
   };
 
-  const cardGroup = card && groups.find((g) => g.id === groupOf(threads.state, card.thread));
-
-  // The open host's Projects and repositories, under its row.
-  const openHost = (
-    <div className="pb-3">
-      {(!q || shownProjects.length > 0) && (
-        <section aria-labelledby="projects-heading" className="mt-2">
-          <header className="flex items-center justify-between pr-0.5 pl-2">
-            <h2 id="projects-heading" className={heading}>
-              Projects
-            </h2>
-            <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
-              <Plus />
-            </IconButton>
-          </header>
-          <ul>
-            {shownProjects.map((p) => (
-              <ProjectRow
-                key={p.id}
-                project={p}
-                selected={selection.kind === "project" && selection.projectId === p.id}
-                editable={editable}
-                onOpen={() => onSelect({ kind: "project", projectId: p.id })}
-                onUpdate={async (change) =>
-                  setProjectError(await threads.updateProject(p.id, change))
-                }
-              />
-            ))}
-          </ul>
-          {projectError && (
-            <p role="alert" className="px-2 pb-1 text-[12px] text-danger">
-              {projectError}
-            </p>
-          )}
-        </section>
-      )}
-
-      <section aria-labelledby="repositories-heading" className="mt-4">
-        <header className="flex items-center justify-between pr-0.5 pl-2">
-          <h2 id="repositories-heading" className={heading}>
-            Repositories
-          </h2>
-          <IconButton
-            label="Add repository"
-            onClick={() => addRepositoryDialog.current?.showModal()}
-          >
-            <FolderPlus />
-          </IconButton>
-        </header>
-        {(threads.error ?? actionError) && (
-          <p role="alert" className="px-2 pb-1 text-[12px] text-danger">
-            {threads.error ?? actionError}
-          </p>
-        )}
-        {shownGroups.map((g) => {
-          // A search shows every match, collapsed or not.
-          const open = !!q || !collapsed.has(g.id);
-          const Icon = g.id === noRepo ? House : open ? FolderOpen : Folder;
-          const Chevron = open ? ChevronDown : ChevronRight;
-          return (
-            <div key={g.id} className="mb-1">
-              {/* Clicking shows or hides its threads; hovering swaps the icon for a chevron
-                  and shows New thread, lined up with the header's buttons. */}
-              <div className="group/repo relative">
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() =>
-                    setCollapsed((prev) => {
-                      const next = new Set(prev);
-                      if (!next.delete(g.id)) next.add(g.id);
-                      return next;
-                    })
-                  }
-                  className={`${row} pr-9 text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0`}
-                >
-                  <Icon
-                    aria-hidden
-                    className="group-has-[:focus-visible]/repo:hidden group-hover/repo:hidden"
-                  />
-                  <Chevron
-                    aria-hidden
-                    className="hidden group-has-[:focus-visible]/repo:block group-hover/repo:block"
-                  />
-                  <span className="truncate">{g.name}</span>
-                </button>
-                <div className="absolute top-1/2 right-0.5 -translate-y-1/2 opacity-0 group-has-[:focus-visible]/repo:opacity-100 group-hover/repo:opacity-100">
-                  <IconButton
-                    label={`New thread in ${g.name}`}
-                    onClick={() => onSelect({ kind: "new", groupId: g.id })}
-                  >
-                    <SquarePen />
-                  </IconButton>
-                </div>
-              </div>
-              {open &&
-                (g.threads.length > 0 ? (
-                  <ul>{g.threads.map(threadRow)}</ul>
-                ) : (
-                  g.id !== noRepo && (
-                    <p className="py-1 pl-7.5 text-[12.5px] text-faint-foreground">
-                      No threads yet
-                    </p>
-                  )
-                ))}
-            </div>
-          );
-        })}
-        {q &&
-          shownGroups.length === 0 &&
-          shownProjects.length === 0 &&
-          shownArchived.length === 0 && (
-            <p className="px-2 py-1 text-[12.5px] text-faint-foreground">Nothing matches</p>
-          )}
-      </section>
-    </div>
-  );
+  const errors = [...new Set([actionError, ...hosts.map((h) => h.view.error)].filter(Boolean))];
 
   return (
     <>
-      <div className="px-2">
-        <label className="flex items-center gap-2 rounded-lg bg-hover px-2.5 py-1.5 focus-within:outline-2 focus-within:outline-ring">
+      <div className="flex items-center gap-1 px-2">
+        <label className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover px-2.5 py-1.5 focus-within:outline-2 focus-within:outline-ring">
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
             type="search"
@@ -382,60 +401,53 @@ export function ThreadList({
             className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </label>
+        <RepoFilterMenu hosts={hosts} filter={filter} onFilter={setFilter} many={many} />
+        <IconButton label="Add repository" onClick={() => addRepositoryDialog.current?.showModal()}>
+          <FolderPlus />
+        </IconButton>
+        <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
+          <FolderKanban />
+        </IconButton>
       </div>
-      <div onScroll={hideCard} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <header className="mt-3 flex items-center justify-between pr-0.5 pl-2">
-          <h2 id="hosts-heading" className={heading}>
-            Hosts
-          </h2>
-          <IconButton label="Add host" onClick={() => onOpenSettings("hosts", true)}>
-            <Plus />
-          </IconButton>
-        </header>
-        <ul aria-labelledby="hosts-heading">
-          {hosts.map((h) => (
-            <li key={h.id}>
-              <HostRow host={h} open={h.id === host.id} onOpen={() => onHostChange(h.id)} />
-              {h.id === host.id && openHost}
-            </li>
-          ))}
+      <div onScroll={hideCard} className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {errors.map((e) => (
+          <p key={e} role="alert" className="px-2 pb-1 text-[12px] text-danger">
+            {e}
+          </p>
+        ))}
+        <ul aria-label="Threads and Projects" className="flex flex-col gap-0.5">
+          {listed.map(row)}
         </ul>
+        {listed.length === 0 && (
+          <p className="px-2 py-1 text-[12.5px] text-faint-foreground">
+            {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
+          </p>
+        )}
       </div>
-      {shownArchived.length > 0 && (
-        // Pinned under the list, like a drawer: the threads you're done with.
-        <details className="group/archived max-h-[40%] shrink-0 overflow-y-auto px-2 pb-1">
-          <summary className="flex cursor-default list-none items-center gap-3 rounded-md px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-            <span>
-              Archived <span className="text-faint-foreground">({shownArchived.length})</span>
-            </span>
-            <span aria-hidden className="h-px flex-1 bg-border" />
-            <ChevronDown
-              aria-hidden
-              className="size-4 shrink-0 transition-transform group-open/archived:rotate-180"
-            />
-          </summary>
-          <ul>{shownArchived.map(threadRow)}</ul>
-        </details>
-      )}
+      <Drawer label="Snoozed" items={snoozedItems} row={row} />
+      <Drawer label="Archived" items={archived} row={row} />
       {card && (
         <ThreadCard
-          title={title(card.thread)}
-          run={threads.state.runs[card.thread.id]}
+          title={titleOf(card.item)}
+          run={
+            card.item.kind === "thread" ? card.item.view.state.runs[card.item.thread.id] : undefined
+          }
           repo={{
-            name: cardGroup?.name ?? "No Repo",
-            icon: cardGroup && cardGroup.id !== noRepo ? <FolderOpen /> : <House />,
+            name: card.item.repo && !card.item.repo.scratch ? card.item.repo.name : "No Repo",
+            icon: <RepoIcon repo={card.item.repo} />,
           }}
-          host={host}
+          host={card.item.host}
+          snoozedUntil={card.item.kind === "thread" ? card.item.thread.snoozedUntil : undefined}
           top={card.top}
           left={card.left}
         />
       )}
       <NewProjectDialog
         ref={newProject}
-        hosts={hosts}
+        hosts={hosts.map((h) => h.host)}
         hostId={host.id}
-        repos={threads.state.repos}
-        create={threads.createProject}
+        repos={open?.state.repos ?? []}
+        create={open?.createProject ?? (async () => "Not connected")}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
       <AddRepositoryDialog
@@ -453,8 +465,13 @@ export function ThreadList({
             Delete this thread?
           </h2>
           <p className="mt-1.5 text-[13px] text-muted-foreground">
-            “{toDelete && title(toDelete)}” goes for good, with its transcript, worktree, and
-            branch.
+            “
+            {toDelete &&
+              (hosts.find((h) => h.host.id === toDelete.hostId)?.view.state.titles[
+                toDelete.thread.id
+              ] ??
+                "Thread")}
+            ” goes for good, with its transcript, worktree, and branch.
           </p>
           {deleteError && (
             <p role="alert" className="mt-2 text-[12.5px] text-danger">
@@ -482,8 +499,200 @@ export function ThreadList({
       </dialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <Footer onOpenSettings={onOpenSettings} onOpenUsage={() => onSelect({ kind: "usage" })} />
+        <Footer
+          onOpenSettings={onOpenSettings}
+          onOpenUsage={() => onSelect(host.id, { kind: "usage" })}
+        />
       </div>
+    </>
+  );
+}
+
+/** `Date.now()`, again each minute. */
+function useMinute() {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+
+/** A drawer pinned under the list, such as Snoozed or Archived, shown while it holds any rows. */
+function Drawer<T>({
+  label,
+  items,
+  row,
+}: {
+  label: string;
+  items: T[];
+  row: (item: T) => ReactNode;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <details className="group/drawer max-h-[40%] shrink-0 overflow-y-auto px-2 pb-1">
+      <summary className="flex cursor-default list-none items-center gap-3 rounded-md px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <span>
+          {label} <span className="text-faint-foreground">({items.length})</span>
+        </span>
+        <span aria-hidden className="h-px flex-1 bg-border" />
+        <ChevronDown
+          aria-hidden
+          className="size-4 shrink-0 transition-transform group-open/drawer:rotate-180"
+        />
+      </summary>
+      <ul className="flex flex-col gap-0.5">{items.map(row)}</ul>
+    </details>
+  );
+}
+
+/**
+ * The Repos filter (0033): a searchable menu of All repos, No repo, and each host's repositories,
+ * each with its icon. Where the repo's plxd keeps icons, its gear opens the icon picker.
+ */
+function RepoFilterMenu({
+  hosts,
+  filter,
+  onFilter,
+  many,
+}: {
+  hosts: HostThreads[];
+  filter: RepoFilter;
+  onFilter: (filter: RepoFilter) => void;
+  many: boolean;
+}) {
+  const menuId = useId();
+  const pickerId = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const picker = useRef<HTMLDivElement>(null);
+  const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState<{ view: ThreadsView; repo: Repo }>();
+  const q = query.trim().toLowerCase();
+  const repos = hosts.flatMap(({ host, view }) =>
+    view.state.repos
+      .filter((r) => !r.scratch && (!q || r.name.toLowerCase().includes(q)))
+      .map((repo) => ({ host, view, repo })),
+  );
+  const current = repos.find((r) => filter === `${r.host.id}/${r.repo.id}`);
+  const choose = (next: RepoFilter) => {
+    onFilter(next);
+    menu.current?.hidePopover();
+  };
+  const check = (on: boolean) => (
+    <Check aria-hidden className={`ml-auto ${on ? "" : "invisible"}`} />
+  );
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`Repos: ${current?.repo.name ?? (filter === "none" ? "No repo" : "All repos")}`}
+        title="Filter by repo"
+        aria-pressed={filter !== "all"}
+        popoverTarget={menuId}
+        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
+      >
+        {current ? (
+          <RepoIcon repo={current.repo} />
+        ) : filter === "none" ? (
+          <SquareDashed />
+        ) : (
+          <ListFilter />
+        )}
+      </button>
+      <div
+        ref={menu}
+        id={menuId}
+        popover="auto"
+        role="menu"
+        aria-label="Repos"
+        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+          if (e.newState === "open") e.currentTarget.querySelector("input")?.focus();
+          else setQuery("");
+        }}
+        onKeyDown={moveFocus}
+        className={`${menuPanel("end")} w-64 p-1`}
+      >
+        <label className="mb-1 flex items-center gap-2 border-b border-border px-2 py-1.5">
+          <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+          <input
+            aria-label="Search repos"
+            placeholder="Search repos…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+          />
+        </label>
+        {!q && (
+          <>
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={filter === "all"}
+              className={menuItem}
+              onClick={() => choose("all")}
+            >
+              <Folder aria-hidden />
+              All repos
+              {check(filter === "all")}
+            </button>
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={filter === "none"}
+              className={menuItem}
+              onClick={() => choose("none")}
+            >
+              <SquareDashed aria-hidden />
+              No repo
+              {check(filter === "none")}
+            </button>
+          </>
+        )}
+        {repos.map(({ host, view, repo }) => {
+          const key = `${host.id}/${repo.id}` as const;
+          return (
+            <div key={key} className="group/repo relative">
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={filter === key}
+                className={`${menuItem} pr-8`}
+                onClick={() => choose(key)}
+              >
+                <RepoIcon repo={repo} />
+                <span className="min-w-0 truncate">{repo.name}</span>
+                {many && <span className="shrink-0 text-faint-foreground">{host.name}</span>}
+                {check(filter === key)}
+              </button>
+              {view.attention && (
+                <button
+                  type="button"
+                  aria-label={`Change ${repo.name}'s icon`}
+                  title="Change icon"
+                  onClick={(e) => {
+                    setEditing({ view, repo });
+                    picker.current?.showPopover({ source: e.currentTarget });
+                  }}
+                  className="absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-md text-faint-foreground opacity-0 group-hover/repo:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5"
+                >
+                  <Settings />
+                </button>
+              )}
+            </div>
+          );
+        })}
+        {q && repos.length === 0 && (
+          <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No repos match</p>
+        )}
+      </div>
+      {/* Each pick saves at once; the picker stays open for the next. */}
+      <IconPicker
+        ref={picker}
+        id={pickerId}
+        value={editing?.repo.icon}
+        onPick={(icon) => editing && void editing.view.updateRepo(editing.repo.id, icon)}
+      />
     </>
   );
 }
@@ -550,40 +759,29 @@ function Footer({
   );
 }
 
-/** A host's row: its name and a status dot. The open host's error is in the footer. */
-function HostRow({ host, open, onOpen }: { host: Host; open: boolean; onOpen: () => void }) {
-  const state = useConnection(host.id);
-  const Icon = host.destination ? Server : Laptop;
-  const status = state && statusLabel(state);
-  return (
-    <button
-      type="button"
-      aria-expanded={open}
-      onClick={onOpen}
-      title={state?.status === "failed" ? state.error.message : status}
-      className={`${row} font-medium ${open ? "text-foreground" : "text-muted-foreground"}`}
-    >
-      <Icon aria-hidden className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1 truncate">{host.name}</span>
-      <StatusDot state={state} />
-      {status && <span className="sr-only">{status}</span>}
-    </button>
-  );
-}
-
 /**
- * A Project's row: its icon, name, and age. Where its host's plxd can edit Projects, hovering or
- * focusing it swaps the age for its actions, which also open by right-clicking the row: Rename,
+ * A Project's row, one for its whole coordinator and subagents (0033): its repo, then what its
+ * runs ask of the user or its age, its icon and name, and how many agents it has run. Where its
+ * host's plxd can edit Projects, hovering or focusing it swaps the age for its actions, which also open by right-clicking the row: Rename,
  * which edits the name in place, and Change icon, which opens the icon picker under the row's icon.
  */
 function ProjectRow({
   project,
+  repo,
+  runs,
+  attention,
+  host,
   selected,
   editable,
   onOpen,
   onUpdate,
 }: {
   project: Project;
+  repo?: Repo;
+  runs: AgentRun[];
+  attention: Attention;
+  /** Its host, named when there is more than one. */
+  host?: Host;
   selected: boolean;
   editable: boolean;
   onOpen: () => void;
@@ -635,7 +833,7 @@ function ProjectRow({
 
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
   return (
-    <li className="group/row relative">
+    <li data-kind="project" className="group/row relative">
       {renaming !== undefined ? (
         <div
           className={`${row} ${selected ? current : ""} outline-2 -outline-offset-2 outline-ring`}
@@ -665,29 +863,44 @@ function ProjectRow({
           aria-current={selected ? "page" : undefined}
           onClick={onOpen}
           onContextMenu={editable ? (e) => openOnContextMenu(e, actions.current) : undefined}
-          className={`${row} ${selected ? current : "text-foreground/80"}`}
+          className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left hover:bg-hover ${selected ? current : ""}`}
         >
-          <span ref={iconSpot} className="grid shrink-0 place-items-center">
-            {icon}
-          </span>
-          <span className="min-w-0 flex-1 truncate">{saving ?? project.name}</span>
-          <span
-            className={`shrink-0 text-[11.5px] text-faint-foreground ${editable ? "group-has-[:focus-visible]/row:hidden group-hover/row:hidden" : ""}`}
-          >
-            {age(project.updatedAt)}
-          </span>
-          {/* Holds the actions button's room while it shows, so a long name ends before it. */}
-          {editable && (
+          <RowHead
+            repo={repo}
+            host={host}
+            status={
+              attention === "settled" ? (
+                age(project.updatedAt)
+              ) : (
+                <AttentionBadge
+                  attention={attention}
+                  count={runs.filter((r) => isRunning(r.status)).length}
+                />
+              )
+            }
+            hideStatus={editable}
+          />
+          <span className="flex w-full items-center gap-1.5">
+            <span ref={iconSpot} data-project-icon className="grid shrink-0 place-items-center">
+              {icon}
+            </span>
             <span
-              aria-hidden
-              className="hidden w-4.5 shrink-0 group-has-[:focus-visible]/row:block group-hover/row:block"
-            />
+              data-title
+              className={`min-w-0 flex-1 truncate text-[13px] ${selected ? "text-foreground" : "text-foreground/80"}`}
+            >
+              {saving ?? project.name}
+            </span>
+          </span>
+          {runs.length > 0 && (
+            <span className="text-[11.5px] text-faint-foreground">
+              {runs.length} {runs.length === 1 ? "agent" : "agents"}
+            </span>
           )}
         </button>
       )}
       {editable && renaming === undefined && (
         <>
-          <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
+          <div className="absolute top-1 right-1 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
             <button
               ref={actions}
               type="button"
@@ -754,18 +967,55 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 };
 
 /**
- * A thread's row: its title and age (or Failed), then its branch, diff, and provider. Resting
- * on it shows its card; hovering or focusing it swaps the age for Archive and more actions,
- * which also open by right-clicking the row: a native popover, so Escape and clicking away
- * close it.
+ * A row's first line: its repo's icon and name (and host, when there are several), then `status`:
+ * what it asks of the user, or how long ago it was prompted. With `hideStatus`, hovering or
+ * focusing the row hides the status for the row's actions.
+ */
+function RowHead({
+  repo,
+  host,
+  status,
+  hideStatus = true,
+}: {
+  repo?: Repo;
+  host?: Host;
+  status: ReactNode;
+  hideStatus?: boolean;
+}) {
+  return (
+    <span className="flex w-full items-center gap-1.5 text-[12px] text-faint-foreground">
+      <RepoIcon repo={repo} />
+      <span className="min-w-0 truncate">{repo && !repo.scratch ? repo.name : "No repo"}</span>
+      {host && <span className="shrink-0 truncate">· {host.name}</span>}
+      <span
+        data-status
+        className={`ml-auto shrink-0 text-[11.5px] ${hideStatus ? "group-has-[:focus-visible]/row:invisible group-hover/row:invisible" : ""}`}
+      >
+        {status}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A thread's row (0033): its repo and status (what it asks of the user, or how long ago it was
+ * prompted), its title, then its branch, diff, and provider. Resting on it shows its card;
+ * hovering or focusing it swaps the status for Snooze, Settle (while it has news) or Archive, and
+ * more actions, which also open by right-clicking the row: native popovers, so Escape and clicking
+ * away close them.
  */
 function ThreadRow({
   thread,
   title,
   run,
+  repo,
+  attention,
   selected,
+  snoozable,
   onOpen,
   onArchive,
+  onSettle,
+  onSnooze,
   onDelete,
   onRest,
   onLeave,
@@ -773,31 +1023,56 @@ function ThreadRow({
   thread: Thread;
   title: string;
   run?: AgentRun;
+  repo?: Repo;
+  attention: Attention;
   selected: boolean;
+  /** Whether its plxd keeps seen and snooze state (`threadAttention`). */
+  snoozable: boolean;
   onOpen: () => void;
   onArchive: () => void;
+  onSettle: () => void;
+  onSnooze: (until: Date) => void;
   onDelete: () => void;
   onRest: (row: HTMLElement) => void;
   onLeave: () => void;
 }) {
   const menuId = useId();
+  const snoozeId = useId();
   const menu = useRef<HTMLDivElement>(null);
+  const snoozeMenu = useRef<HTMLDivElement>(null);
   const actions = useRef<HTMLButtonElement>(null);
+  const [custom, setCustom] = useState("");
   const choose = (action: () => void) => () => {
     menu.current?.hidePopover();
+    snoozeMenu.current?.hidePopover();
     onLeave();
     action();
   };
   const Logo = run?.backend ? backendLogos[run.backend] : undefined;
   const hasDetails = !!(run?.branch || run?.diff || Logo);
-  const archiveLabel = (
+  // Settle while it has news, Archive otherwise.
+  const settle = snoozable && (attention === "done" || attention === "failed");
+  const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
+  const mainLabel = settle ? (
     <>
-      {thread.archived ? <ArchiveRestore aria-hidden /> : <Check aria-hidden />}
+      <Check aria-hidden />
+      Settle
+    </>
+  ) : (
+    <>
+      {thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
       {thread.archived ? "Unarchive" : "Archive"}
     </>
   );
+  const status =
+    attention === "settled" ? (
+      age(lastPrompt(thread))
+    ) : (
+      <AttentionBadge attention={attention} since={lastPrompt(thread)} />
+    );
   return (
     <li
+      data-kind="thread"
       className="group/row relative"
       onMouseEnter={(e) => onRest(e.currentTarget)}
       onMouseLeave={onLeave}
@@ -807,44 +1082,24 @@ function ThreadRow({
         aria-current={selected ? "page" : undefined}
         onClick={onOpen}
         onContextMenu={(e) => {
-          e.preventDefault();
           onLeave();
-          actions.current?.click();
+          openOnContextMenu(e, actions.current);
         }}
-        className={`flex w-full flex-col gap-0.5 rounded-lg py-1.5 pr-2 pl-7.5 text-left hover:bg-hover ${selected ? current : ""}`}
+        className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left hover:bg-hover ${selected ? current : ""}`}
       >
-        <span className="flex w-full items-center gap-2">
-          <span
-            className={`min-w-0 flex-1 truncate text-[13px] ${selected ? "text-foreground" : "text-foreground/80"}`}
-          >
-            {title}
-          </span>
-          <span className="shrink-0 text-[11.5px] text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden">
-            {run?.status === "failed" ? (
-              <span className="flex items-center gap-1 text-danger">
-                <CircleAlert aria-hidden className="size-3.5" />
-                Failed
-              </span>
-            ) : (
-              age(thread.createdAt)
-            )}
-          </span>
-          {/* An invisible copy of the actions below, holding their width while they show, so a
-              long title ends in an ellipsis before them. pr-7.5 is Archive's right padding, the
-              gap, and the actions button. */}
-          <span
-            aria-hidden
-            className="invisible hidden shrink-0 items-center gap-1 pr-7.5 pl-1.5 text-[11.5px] group-has-[:focus-visible]/row:flex group-hover/row:flex [&_svg]:size-3.5"
-          >
-            {archiveLabel}
-          </span>
+        <RowHead repo={repo} status={status} />
+        <span
+          data-title
+          className={`w-full truncate text-[13px] ${selected || attention !== "settled" ? "text-foreground" : "text-foreground/70"}`}
+        >
+          {title}
         </span>
         {hasDetails && (
           <span className="flex w-full items-center gap-2 text-[11.5px] text-faint-foreground">
             <span className="min-w-0 flex-1 truncate">{run?.branch}</span>
             {run?.diff && (
               <span className="shrink-0 tabular-nums">
-                <span className="text-emerald-500">+{run.diff.insertions}</span>{" "}
+                <span className="text-added">+{run.diff.insertions}</span>{" "}
                 <span className="text-danger">−{run.diff.deletions}</span>
               </span>
             )}
@@ -853,15 +1108,28 @@ function ThreadRow({
         )}
       </button>
       <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
+        {snoozable && (
+          <button
+            type="button"
+            aria-label={snoozedNow ? "Snoozed" : "Snooze"}
+            title={snoozedNow ? `Snoozed until ${clock(thread.snoozedUntil!)}` : "Snooze"}
+            popoverTarget={snoozeId}
+            onClick={onLeave}
+            className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          >
+            <AlarmClock />
+          </button>
+        )}
         <button
           type="button"
           onClick={() => {
             onLeave();
-            onArchive();
+            if (settle) onSettle();
+            else onArchive();
           }}
           className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
-          {archiveLabel}
+          {mainLabel}
         </button>
         <button
           ref={actions}
@@ -874,6 +1142,70 @@ function ThreadRow({
           <Ellipsis />
         </button>
       </div>
+      {snoozable && (
+        <div
+          ref={snoozeMenu}
+          id={snoozeId}
+          popover="auto"
+          role="menu"
+          aria-label="Snooze"
+          onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+            if (e.newState === "open")
+              e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+          }}
+          onKeyDown={moveFocus}
+          className={`${menuPanel("end")} min-w-56 p-1`}
+        >
+          {snoozeChoices().map((c) => (
+            <button
+              key={c.label}
+              type="button"
+              role="menuitem"
+              className={menuItem}
+              onClick={choose(() => onSnooze(c.until))}
+            >
+              {c.label}
+              <span className="ml-auto text-[12px] text-faint-foreground tabular-nums">
+                {c.label.startsWith("In") ? clock(c.until.toISOString()) : when(c.until)}
+              </span>
+            </button>
+          ))}
+          <div className="my-1 h-px bg-border" />
+          <form
+            className="flex items-center gap-1 px-1 py-0.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const until = new Date(custom);
+              if (!Number.isNaN(until.getTime())) choose(() => onSnooze(until))();
+            }}
+          >
+            <input
+              type="datetime-local"
+              aria-label="Snooze until"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              className="min-w-0 flex-1 rounded-md bg-hover px-1.5 py-1 text-[12px] [color-scheme:inherit]"
+            />
+            <button
+              type="submit"
+              disabled={!custom}
+              className="rounded-md px-2 py-1 text-[12px] hover:bg-hover disabled:opacity-50"
+            >
+              Custom
+            </button>
+          </form>
+          {snoozedNow && (
+            <button
+              type="button"
+              role="menuitem"
+              className={menuItem}
+              onClick={choose(() => onSnooze(new Date()))}
+            >
+              Unsnooze
+            </button>
+          )}
+        </div>
+      )}
       <div
         ref={menu}
         id={menuId}
@@ -903,6 +1235,11 @@ function ThreadRow({
   );
 }
 
+/** A day and time a snooze ends, as its menu writes it: "Mon 9:00 AM". */
+function when(date: Date): string {
+  return date.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
 /** A run's status as its icon and color, in a thread's card and the Agents list. */
 export const statusLooks: Partial<Record<AgentStatus, { Icon: LucideIcon; color: string }>> = {
   starting: { Icon: LoaderCircle, color: "text-emerald-500 [&_svg]:animate-spin" },
@@ -923,6 +1260,7 @@ function ThreadCard({
   run,
   repo,
   host,
+  snoozedUntil,
   top,
   left,
 }: {
@@ -930,6 +1268,7 @@ function ThreadCard({
   run?: AgentRun;
   repo: { name: string; icon: ReactNode };
   host: Host;
+  snoozedUntil?: string;
   top: number;
   left: number;
 }) {
@@ -968,9 +1307,15 @@ function ThreadCard({
             <FileDiff />
             <span className="tabular-nums">
               {run.diff.files} {run.diff.files === 1 ? "file" : "files"}{" "}
-              <span className="text-emerald-500">+{run.diff.insertions}</span>{" "}
+              <span className="text-added">+{run.diff.insertions}</span>{" "}
               <span className="text-danger">−{run.diff.deletions}</span>
             </span>
+          </li>
+        )}
+        {snoozedUntil && Date.parse(snoozedUntil) > Date.now() && (
+          <li>
+            <AlarmClock />
+            <span className="truncate">Snoozed until {clock(snoozedUntil)}</span>
           </li>
         )}
         {run && look && (

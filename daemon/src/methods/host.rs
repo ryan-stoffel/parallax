@@ -95,6 +95,8 @@ pub(crate) fn initialize(
 /// of denying what would prompt.
 /// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
 /// and `project/create`, which an older plxd would silently drop.
+/// `threadAttention` (RYA-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
+/// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
 /// `checkout`: `thread/start` takes `checkout`, to work in the repo's own checkout instead of a
 /// new worktree, and `AgentRun` reports it; an older plxd would silently make a worktree.
 fn capabilities_advertised() -> Capabilities {
@@ -118,6 +120,7 @@ fn capabilities_advertised() -> Capabilities {
         ("sendAccount".to_owned(), serde_json::Map::new()),
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),
+        ("threadAttention".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
     ]))
 }

@@ -40,9 +40,10 @@ use crate::{
     HostVersionParams, HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
     ProjectCreateResult, ProjectListParams, ProjectListResult, ProjectStartParams,
     ProjectUpdateParams, ProjectUpdateResult, PromptImage, RepoAddParams, RepoAddResult,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -220,6 +221,12 @@ method_table! {
         ThreadStart = "thread/start": ThreadStartParams => ThreadStartResult;
         /// `thread/archive`: archives a normal thread or brings it back.
         ThreadArchive = "thread/archive": ThreadArchiveParams => ThreadArchiveResult;
+        /// `thread/update`: marks a normal thread seen or snoozes it (0033). Gated on the
+        /// `threadAttention` capability.
+        ThreadUpdate = "thread/update": ThreadUpdateParams => ThreadUpdateResult;
+        /// `repo/update`: sets a repo entry's icon (0033). Gated on the `threadAttention`
+        /// capability.
+        RepoUpdate = "repo/update": RepoUpdateParams => RepoUpdateResult;
         /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;
@@ -305,6 +312,8 @@ mod tests {
                 "repo/add",
                 "thread/start",
                 "thread/archive",
+                "thread/update",
+                "repo/update",
                 "thread/delete",
                 "project/start",
                 "project/update",

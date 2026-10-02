@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { SshHost } from "../preload/bridge";
 
@@ -16,9 +16,12 @@ export function useHosts(): Host[] {
     void window.parallax.hosts().then(setSaved);
     return stop;
   }, []);
-  const local = {
-    id: localId,
-    name: window.parallax.platform === "darwin" ? "This Mac" : "This computer",
-  };
-  return [local, ...saved];
+  // The same array until the saved hosts change, so lists built from it can be kept.
+  return useMemo(() => {
+    const local = {
+      id: localId,
+      name: window.parallax.platform === "darwin" ? "This Mac" : "This computer",
+    };
+    return [local, ...saved];
+  }, [saved]);
 }

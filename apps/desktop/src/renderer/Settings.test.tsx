@@ -83,11 +83,7 @@ afterEach(() => {
 
 async function renderSettings(name: SettingsSection = "providers") {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() =>
-    root.render(
-      <Settings section={name} addingHost={false} theme="system" onThemeChange={() => {}} />,
-    ),
-  );
+  act(() => root.render(<Settings section={name} theme="system" onThemeChange={() => {}} />));
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
