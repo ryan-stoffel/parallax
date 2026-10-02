@@ -421,3 +421,12 @@ test("Up and Down recall the thread's earlier prompts until one is edited (PLX-3
   await press("ArrowUp");
   expect(shown()).toBe("second\nline two!");
 });
+
+test("a recalled prompt sends as it was first sent, Markdown and all (PLX-325)", async () => {
+  const prompt = "**all** of `it`\n- one\n- two";
+  const onSend = vi.fn(async () => undefined);
+  const { press } = render(onSend, caps, { history: [prompt] });
+  await press("ArrowUp");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(prompt, {}, []);
+});
