@@ -36,6 +36,7 @@ beforeEach(() => {
   saveHost.mockReset();
   states = { local: connected, [mini.id]: untrusted };
   window.parallax = {
+    onProfile: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async (hostId) => states[hostId]!,

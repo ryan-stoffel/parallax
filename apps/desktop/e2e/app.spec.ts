@@ -61,7 +61,9 @@ test.afterEach(async () => {
 test.afterAll(() => close(launched));
 
 test("connects to plxd", async () => {
-  await expect(page.getByRole("status").filter({ hasText: "Connected · plxd" })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(`window.parallax.connectionState("local").then((s) => s.status)`))
+    .toBe("connected");
 });
 
 test("starts a thread and shows the agent's output", async () => {
