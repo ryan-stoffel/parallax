@@ -71,7 +71,8 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
           disabled={!folder}
           onClick={() => open(current)}
           aria-label={`Open in ${nameOf(current)}`}
-          title={`Open in ${nameOf(current)} (${shortcut("O")})`}
+          // Unset without a folder, so the wrapper's tooltip says why it's disabled.
+          title={folder ? `Open in ${nameOf(current)} (${shortcut("O")})` : undefined}
           className={`${menuButton} rounded-r-none pr-2.5`}
         >
           {icons[current]}

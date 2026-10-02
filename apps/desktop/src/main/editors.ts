@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 
 import type { OpenTarget } from "../preload/bridge";
@@ -73,6 +73,10 @@ export const isFolderPath = (value: unknown): value is string =>
   typeof value === "string" &&
   (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) &&
   !/\p{Cc}/u.test(value);
+
+/** Whether `folder` is a directory on this computer, and not a file that opening would run. */
+export const isDirectory = (folder: string): boolean =>
+  statSync(folder, { throwIfNoEntry: false })?.isDirectory() ?? false;
 
 /** Starts `command` on its own, without a shell. Resolves to an error for people, or undefined. */
 export function launch({

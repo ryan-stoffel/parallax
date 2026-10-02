@@ -1,9 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
-import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { THEME_PREFERENCES, type OpenTarget, type UpdateState } from "../preload/bridge";
-import { detectEditors, editorCommand, isFolderPath, launch, type Editor } from "./editors";
+import {
+  detectEditors,
+  editorCommand,
+  isDirectory,
+  isFolderPath,
+  launch,
+  type Editor,
+} from "./editors";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { savedHost, startHosts } from "./hosts";
 import { isOpenableExternally, isReload } from "./links";
@@ -150,8 +156,9 @@ ipcMain.handle(
     if (!isFolderPath(folder) || !openTargets(hostId).some((t) => t === target)) return;
     const destination = savedHost(hostId as string)?.destination;
     let error: string | undefined;
-    if (target === "files") error = (await shell.openPath(folder)) || undefined;
-    else if (!destination && !existsSync(folder)) error = "That folder isn't there anymore.";
+    // A local folder must be one: `shell.openPath` would run an executable file.
+    if (!destination && !isDirectory(folder)) error = "That folder isn't there anymore.";
+    else if (target === "files") error = (await shell.openPath(folder)) || undefined;
     else {
       const program = installedEditors()[target as Editor]!;
       error = await launch(editorCommand(program, folder, destination));
