@@ -64,7 +64,7 @@ pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
 use self::convert::{RUNNING, STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
 use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
-use crate::backend::{Backend, ToolPolicy, check_argument, cursor};
+use crate::backend::{Backend, ToolPolicy, check_argument, codex, cursor};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
 use crate::worktree::{CreatedWorktree, WorktreeError, WorktreeManager};
@@ -363,9 +363,11 @@ pub(super) async fn prepare(
         };
         return Ok((prepared, repo_path));
     }
-    // A Cursor thread is full Cursor Agent, with no worker sandbox to check (0036); Cursor runs
-    // nothing else, so a coordinator's subagent on it is refused here.
-    if !(thread && resolved.backend().name() == cursor::NAME) {
+    // A Codex or Cursor thread is full Codex or Cursor Agent, with no worker sandbox to check
+    // (0035, 0036). Cursor runs nothing else, so a coordinator's subagent on it is refused here,
+    // and a Codex worker is still refused (RYA-153).
+    let full = [codex::PROGRAM, cursor::NAME].contains(&resolved.backend().name());
+    if !(thread && full) {
         worker::check_backend(resolved.backend())?;
     }
     if let Some(cli) = worker::cli_of(resolved.backend()) {

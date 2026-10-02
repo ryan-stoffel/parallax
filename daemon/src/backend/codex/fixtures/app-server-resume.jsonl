@@ -1,0 +1,17 @@
+# A resumed Bypass thread whose client answers no approval requests: plxd declines the one Codex
+# sends, and refuses a request it doesn't serve.
+<
+{"id":1,"result":{"userAgent":"plxd/0.159.3","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-0","sessionId":"t-0","preview":"Earlier","ephemeral":false,"modelProvider":"openai","model":"gpt-6-sol","status":{"type":"idle"},"turns":[]},"model":"gpt-6-sol","modelProvider":"openai","cwd":"/repo","approvalPolicy":"never","sandbox":{"type":"dangerFullAccess"},"reasoningEffort":"high"}}
+<
+{"id":3,"result":{"turn":{"id":"u-3","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}
+{"method":"item/started","params":{"item":{"type":"fileChange","id":"exec-p","changes":[{"path":"/repo/notes.txt","kind":{"type":"add"},"diff":"one\n"}],"status":"inProgress"},"threadId":"t-0","turnId":"u-3","startedAtMs":1790919499541}}
+{"method":"item/fileChange/requestApproval","id":0,"params":{"threadId":"t-0","turnId":"u-3","itemId":"exec-p","startedAtMs":1790919499543,"reason":null,"grantRoot":null}}
+<
+{"method":"item/tool/requestUserInput","id":1,"params":{"threadId":"t-0","turnId":"u-3","itemId":"q","questions":[],"isBlocking":true,"autoResolutionMs":null}}
+<
+{"method":"item/completed","params":{"item":{"type":"fileChange","id":"exec-p","changes":[{"path":"/repo/notes.txt","kind":{"type":"add"},"diff":"one\n"}],"status":"declined"},"threadId":"t-0","turnId":"u-3","completedAtMs":1790919499544}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"t-0","turnId":"u-3","tokenUsage":{"total":{"totalTokens":1500,"inputTokens":1300,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":200,"reasoningOutputTokens":0},"last":{"totalTokens":500,"inputTokens":300,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":200,"reasoningOutputTokens":0},"modelContextWindow":258400}}}
+{"method":"turn/completed","params":{"threadId":"t-0","turn":{"id":"u-3","items":[],"itemsView":"summary","status":"completed","error":null,"startedAt":1790919494,"completedAt":1790919501,"durationMs":7424}}}

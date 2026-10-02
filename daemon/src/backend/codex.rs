@@ -1,5 +1,8 @@
-//! The Codex backend: runs the user's own signed-in `codex` CLI headless for workers (0004,
-//! RYA-38).
+//! The Codex backend: runs the user's own signed-in `codex` CLI headless (0004, RYA-38).
+//!
+//! A normal thread (`RunRequest::thread`, 0017) runs on `codex app-server` as full Codex, with the
+//! user's own configuration, follow-ups, and approval requests: see [`app_server`] and 0035.
+//! Everything below is about a worker, which a coordinator spawns, on `codex exec`.
 //!
 //! # The command
 //!
@@ -21,7 +24,7 @@
 //! the model, so the model sees plxd's temp path, never the user's file name, which plxd never
 //! gets.
 //!
-//! Only workers run on Codex so far: the coordinator's no-write mode is RYA-39. A worker is held
+//! A coordinator doesn't run on Codex: its no-write mode is RYA-39. A worker is held
 //! to 0013 by Codex's own sandbox (Seatbelt on macOS), configured entirely by
 //! [`worker_overrides`]:
 //!
@@ -72,6 +75,7 @@
 //! `SIGINT` interrupts Codex's turn, and exec then exits 1; the process group is killed if it is
 //! still running after the grace period.
 
+pub mod app_server;
 mod stream;
 #[cfg(all(test, target_os = "macos"))]
 mod tests;
@@ -127,12 +131,9 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
-/// The context windows a worker may ask for, in tokens: codex-cli 0.159.3's catalog gives its
-/// models 272k by default, and all but `gpt-5.5` up to 872k through `-c model_context_window`.
+/// The context windows a run may ask for, in tokens: codex-cli 0.159.3's catalog gives its
+/// models 272k by default, and all but `gpt-5.5` up to 872k through `model_context_window`.
 const CONTEXT_WINDOWS: &[u32] = &[272_000, 872_000];
-
-/// The worker permissions Codex maps: only `edit`. `codex exec` has no plan mode.
-const PERMISSIONS: &[AgentPermission] = &[AgentPermission::Edit];
 
 /// Prefixes of inherited variables no run gets: `OpenAI`'s and Codex's credentials, endpoints,
 /// and configuration (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_API_KEY`, `CODEX_HOME`, ...).
@@ -195,18 +196,7 @@ pub fn arguments(
         ));
     }
     if let Some(effort) = request.effort {
-        let level = match effort {
-            AgentEffort::Low => "low",
-            AgentEffort::Medium => "medium",
-            AgentEffort::High => "high",
-            AgentEffort::Xhigh => "xhigh",
-            AgentEffort::Max => "max",
-            AgentEffort::Unknown => {
-                return Err(StartError::Unsupported(
-                    "Codex has no such reasoning effort".into(),
-                ));
-            }
-        };
+        let level = effort_level(effort)?;
         args.extend([
             "-c".into(),
             format!(r#"model_reasoning_effort="{level}""#).into(),
@@ -246,6 +236,26 @@ pub fn arguments(
     }
     args.push("-".into());
     Ok(args)
+}
+
+/// Codex's `model_reasoning_effort` for `effort`.
+///
+/// # Errors
+///
+/// [`StartError::Unsupported`] for an effort this version doesn't know.
+pub fn effort_level(effort: AgentEffort) -> Result<&'static str, StartError> {
+    Ok(match effort {
+        AgentEffort::Low => "low",
+        AgentEffort::Medium => "medium",
+        AgentEffort::High => "high",
+        AgentEffort::Xhigh => "xhigh",
+        AgentEffort::Max => "max",
+        AgentEffort::Unknown => {
+            return Err(StartError::Unsupported(
+                "Codex has no such reasoning effort".into(),
+            ));
+        }
+    })
 }
 
 /// The `-c` overrides that hold a worker in `cwd` to 0013 (see the module docs). Each sets one
@@ -420,7 +430,8 @@ impl Backend for CodexBackend {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            follow_ups: false,
+            // A thread's run takes them (`app_server`); a worker's `codex exec` doesn't.
+            follow_ups: true,
             resume: true,
             coordinator: false,
             reports_cost: false,
@@ -435,8 +446,10 @@ impl Backend for CodexBackend {
         EFFORTS
     }
 
+    /// A thread's modes ([`app_server::mode`]). A worker on `codex exec` takes only `edit`, and
+    /// is refused anyway until RYA-145 (RYA-153).
     fn permissions(&self) -> &'static [AgentPermission] {
-        PERMISSIONS
+        app_server::PERMISSIONS
     }
 
     fn context_windows(&self) -> &'static [u32] {
@@ -448,6 +461,9 @@ impl Backend for CodexBackend {
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        if request.thread {
+            return app_server::start(&self.launcher, request);
+        }
         if request.prompt.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
