@@ -7,8 +7,10 @@ import {
   useId,
   useRef,
   useState,
+  type ComponentType,
   type KeyboardEvent,
   type ReactNode,
+  type SVGProps,
 } from "react";
 
 import type { OAuthProvider, RpcError, ThemePreference } from "../preload/bridge";
@@ -24,6 +26,7 @@ import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
+import { AppleLogo, GitHubLogo, GoogleLogo } from "./logos";
 import { backends, models } from "./models";
 import { Avatar, useProfile } from "./profile";
 import { age, backendLogos } from "./Sidebar";
@@ -97,10 +100,14 @@ export function Settings({ section, theme, onThemeChange }: SettingsProps) {
   );
 }
 
-const oauthProviders: { id: OAuthProvider; name: string }[] = [
-  { id: "github", name: "GitHub" },
-  { id: "google", name: "Google" },
-  { id: "apple", name: "Apple" },
+const oauthProviders: {
+  id: OAuthProvider;
+  name: string;
+  Logo: ComponentType<SVGProps<SVGSVGElement>>;
+}[] = [
+  { id: "github", name: "GitHub", Logo: GitHubLogo },
+  { id: "google", name: "Google", Logo: GoogleLogo },
+  { id: "apple", name: "Apple", Logo: AppleLogo },
 ];
 
 /**
@@ -178,8 +185,9 @@ function AccountSettings() {
                 onClick={() =>
                   void run(window.parallax.signInWith(p.id), "Finish signing in in your browser.")
                 }
-                className="rounded-md border border-border px-3 py-1.5 text-[13px] hover:bg-hover"
+                className="flex items-center justify-center gap-2 rounded-md border border-border px-3 py-1.5 text-[13px] hover:bg-hover"
               >
+                <p.Logo className="size-4" />
                 Continue with {p.name}
               </button>
             ))}
