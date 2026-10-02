@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
+import { Globe } from "lucide-react";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
@@ -13,8 +14,9 @@ import type {
   AgentToolStatus,
   LoggedEvent,
 } from "../protocol/generated/protocol";
-import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
+import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
+import { GitHubLogo, LinearLogo } from "./logos";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -1521,4 +1523,15 @@ test("scrolled up from the end, Scroll to end shows over the transcript, and goe
   });
   expect(end()).toBeUndefined();
   scrollTo.mockRestore();
+});
+
+test("a web link gets its site's logo, or a globe, and other links none (PLX-330)", () => {
+  expect(linkIcon("https://github.com/ryan-stoffel/parallax/pull/470")).toBe(GitHubLogo);
+  expect(linkIcon("https://gist.github.com/x")).toBe(GitHubLogo);
+  expect(linkIcon("https://linear.app/ryanstoffel/issue/PLX-330")).toBe(LinearLogo);
+  expect(linkIcon("https://notgithub.com/x")).toBe(Globe);
+  expect(linkIcon("http://localhost:5173")).toBe(Globe);
+  expect(linkIcon("mailto:a@b.c")).toBeUndefined();
+  expect(linkIcon("archived.md")).toBeUndefined();
+  expect(linkIcon(undefined)).toBeUndefined();
 });
