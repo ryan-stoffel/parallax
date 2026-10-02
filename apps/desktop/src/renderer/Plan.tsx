@@ -1,6 +1,7 @@
-// The agent's plan (RYA-220): its checklist as a card with progress, a strip over the composer
-// while the run goes, and Claude Code's proposed plan. The checklist comes from plxd, as for
-// TodoWrite, or from Claude Code's task tools (RYA-248). Pure helpers first, then the components.
+// The agent's plan (RYA-220): its checklist as lines in the transcript, a strip over the
+// composer with its card while the run goes, and Claude Code's proposed plan. The checklist comes
+// from plxd, as for TodoWrite, or from Claude Code's task tools (RYA-248). Pure helpers first,
+// then the components.
 import { Ban, ChevronDown, ChevronUp, CircleX, ClipboardList, ListChecks } from "lucide-react";
 import {
   memo,
@@ -25,15 +26,14 @@ type Todo = Extract<Item, { kind: "todo" }>;
 type Tool = Extract<Item, { kind: "tool" }>;
 
 /**
- * A turn's plan, in place of its first checklist: the turn's latest checklist, so the card
- * updates in place. `latest` marks the last turn's, the only one that can still be in progress.
+ * A turn's plan, in place of its first checklist: the turn's latest checklist, so its line
+ * updates in place.
  */
 export interface PlanRow {
   kind: "plan";
   key: string;
   at?: string;
   items: AgentTodoItem[];
-  latest?: boolean;
 }
 
 /** A later checklist in the turn, with the one before it, so its line can say what changed. */
@@ -145,7 +145,7 @@ const checklists = new WeakMap<Item, Todo>();
  * The transcript with Claude Code's task tools as checklists (RYA-248). Claude Code 2.1.283 keeps
  * its plan with TaskCreate and TaskUpdate in place of TodoWrite, one step per call, in a list that
  * lasts the session, across turns and resumes. So after each call that changes it, the whole list
- * goes in as a checklist, as plxd puts one after TodoWrite, and the plan card and strip read it
+ * goes in as a checklist, as plxd puts one after TodoWrite, and the plan lines and strip read it
  * the same way. A list whose every step is done is put away when the next turn starts, as Claude
  * Code's own view of it is; a step a later TaskUpdate reopens comes back. The session rows go: a
  * new session, as an account fallback starts with ids from 1 again, starts a new list, and clears
@@ -206,7 +206,7 @@ const taskReads = ["TaskList", "TaskGet"];
  * stands for it, unless it failed, and so does a task tool's call (`withTaskLists`); TaskList and
  * TaskGet go unless they failed. `ExitPlanMode` becomes a proposed plan row, out of the work
  * around it. User rows split turns, and so does a proposed plan: the work that carries it out gets
- * its own card, under it.
+ * its own plan, under it.
  */
 export function withPlans<R extends { kind: string; key: string }>(
   transcript: readonly (Item | R)[],
@@ -257,7 +257,7 @@ export function withPlans<R extends { kind: string; key: string }>(
         const update = cached && cached.previous === last ? cached : { ...item, previous: last };
         updates.set(item, update);
         out.push(update);
-        // A cleared checklist leaves the card on the last plan it had.
+        // A cleared checklist leaves the plan on the last list it had.
         if (item.items.length > 0) plan.items = item.items;
       }
       last = item.items;
@@ -265,7 +265,6 @@ export function withPlans<R extends { kind: string; key: string }>(
     }
     out.push(row);
   });
-  if (plan) plan.latest = true;
   return out;
 }
 
@@ -375,7 +374,7 @@ function ProgressBar({
 /**
  * A checklist as a plan: "Plan", how many steps are done, a progress bar, and each step in its
  * state. A step under way shows `loader` while the run goes (`live`). A step the card showed
- * unfinished draws its check as it finishes; one done before then, as on scrolling back, or that
+ * unfinished draws its check as it finishes; one done before then, as on opening it, or that
  * comes done, as a renamed one, just shows it.
  */
 export const PlanCard = memo(function PlanCard({
@@ -504,17 +503,23 @@ function Check({ draw }: { draw: boolean }) {
 }
 
 /**
- * One line for a later update to the turn's plan, in the work it came in: what changed, such as
- * "Finished: Add tests". The full list is the turn's plan card.
+ * One line for the turn's plan in the transcript: where it was made, with how many steps are
+ * done, and each later update with what changed, such as "Finished: Add tests". The full list is
+ * the strip's card, over the composer.
  */
-export function PlanUpdateLine({ item }: { item: PlanUpdate }) {
-  const changes = item.previous ? planChanges(item.previous, item.items) : "";
+export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
+  const made = item.kind === "plan";
+  const changes = made
+    ? `${doneCount(item.items)} of ${item.items.length} done`
+    : item.previous
+      ? planChanges(item.previous, item.items)
+      : "";
   return (
     // Indented past a tool call's chevron, so its icon lines up with theirs.
     <p className="flex min-w-0 items-center gap-2 py-0.5 pl-5.5 text-[13px]">
       <ListChecks aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
       <span className="shrink-0 font-medium">
-        {item.items.length === 0 ? "Cleared the plan" : "Updated the plan"}
+        {made ? "Made a plan" : item.items.length === 0 ? "Cleared the plan" : "Updated the plan"}
       </span>
       {changes && (
         <span className="truncate text-muted-foreground" title={changes}>
