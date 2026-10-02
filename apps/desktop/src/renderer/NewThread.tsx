@@ -317,7 +317,7 @@ export function NewThread({
                 type="button"
                 popoverTarget={repoMenu}
                 aria-haspopup="menu"
-                className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground"
+                className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
               >
                 {group.id === noRepo ? "without a repo" : group.name}
               </button>
