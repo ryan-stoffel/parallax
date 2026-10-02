@@ -1469,6 +1469,8 @@ test("a bar beside the transcript for each prompt shows it and its reply, and sc
   ]);
   // Scrolled to the end, the latest prompt is the one being read.
   expect(bars.map((b) => b.getAttribute("aria-current"))).toEqual([null, "true"]);
+  // Only a hovered or focused bar stands out, not the one being read.
+  expect(bars[1]!.firstElementChild!.className).toBe(bars[0]!.firstElementChild!.className);
 
   act(() => bars[0]!.focus());
   const card = document.querySelector('nav[aria-label="Prompts"] + [aria-hidden]')!;
