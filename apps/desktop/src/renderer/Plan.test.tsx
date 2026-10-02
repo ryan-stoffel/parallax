@@ -18,7 +18,7 @@ import {
   PlanCard,
   planChanges,
   PlanStrip,
-  PlanUpdateLine,
+  PlanLine,
   ProposedPlan,
   withPlans,
   withTaskLists,
@@ -82,7 +82,7 @@ test("a turn's first checklist becomes its plan, showing the turn's latest; late
   // Each TodoWrite call goes, as its checklist stands for it.
   expect(rows.map((r) => r.kind)).toEqual(["user", "plan", "tool", "todo", "todo"]);
   // Where the first one was, with the latest.
-  expect(rows[1]).toMatchObject({ kind: "plan", key: "t1", items: third, latest: true });
+  expect(rows[1]).toMatchObject({ kind: "plan", key: "t1", items: third });
   expect((rows[3] as PlanUpdate).previous).toBe(first);
   expect((rows[4] as PlanUpdate).previous).toBe(second);
 });
@@ -112,10 +112,6 @@ test("a proposed plan starts afresh, so the work that carries it out gets its ow
     ["plan", "t2"],
     ["todo", "t3"],
   ]);
-  expect(rows.filter((r): r is PlanRow => r.kind === "plan").map((p) => p.latest)).toEqual([
-    undefined,
-    true,
-  ]);
   // The strip, too: nothing until the work after it writes a list.
   expect(latestPlan([user("u1"), todo("t1", during), exit])).toBeUndefined();
   expect(latestPlan([user("u1"), todo("t1", during), exit, todo("t2", after)])).toEqual({
@@ -123,7 +119,7 @@ test("a proposed plan starts afresh, so the work that carries it out gets its ow
   });
 });
 
-test("user rows split turns: each turn has its own plan, and only the last can be in progress", () => {
+test("user rows split turns: each turn has its own plan", () => {
   const rows = withPlans([
     user("u1"),
     todo("t1", steps("inProgress")),
@@ -132,10 +128,7 @@ test("user rows split turns: each turn has its own plan, and only the last can b
     todo("t2", steps("pending")),
   ]);
   const plans = rows.filter((r): r is PlanRow => r.kind === "plan");
-  expect(plans.map((p) => [p.key, p.latest])).toEqual([
-    ["t1", undefined],
-    ["t2", true],
-  ]);
+  expect(plans.map((p) => p.key)).toEqual(["t1", "t2"]);
   // Rows of other kinds, such as a message on its way, pass through.
   const pending = { kind: "pending" as const, key: "p" };
   expect(withPlans([user("u1"), pending])).toEqual([user("u1"), pending]);
@@ -262,7 +255,6 @@ test("Claude Code's task tools build the plan: a step for each TaskCreate, chang
   expect(rows[1]).toMatchObject({
     key: "c1:tasks",
     items: [step("Add tests", "completed"), step("Run all the checks", "inProgress")],
-    latest: true,
   });
   const lines = rows
     .filter((r): r is PlanUpdate => r.kind === "todo")
@@ -369,12 +361,12 @@ test("the task list lasts across turns, and a finished one is put away when the 
     // A step taken up again comes back, in its place.
     update("p5", { taskId: "1", status: "in_progress" }),
   ]);
-  expect(plans(rows).map((p) => [p.key, p.items, p.latest])).toEqual([
-    ["c1:tasks", [step("Add tests", "inProgress"), step("Run the checks", "pending")], undefined],
-    ["p2:tasks", [step("Add tests", "completed"), step("Run the checks", "completed")], undefined],
-    ["c3:tasks", [step("Ship it", "pending")], undefined],
-    ["p4:tasks", [step("Ship it", "completed")], undefined],
-    ["p5:tasks", [step("Add tests", "inProgress")], true],
+  expect(plans(rows).map((p) => [p.key, p.items])).toEqual([
+    ["c1:tasks", [step("Add tests", "inProgress"), step("Run the checks", "pending")]],
+    ["p2:tasks", [step("Add tests", "completed"), step("Run the checks", "completed")]],
+    ["c3:tasks", [step("Ship it", "pending")]],
+    ["p4:tasks", [step("Ship it", "completed")]],
+    ["p5:tasks", [step("Add tests", "inProgress")]],
   ]);
   // The strip: a turn whose list hasn't changed yet has none.
   expect(latestPlan([user("u1"), create("c1", "1", "Add tests"), user("u2")])).toBeUndefined();
@@ -597,7 +589,7 @@ test("a finished list stays put away through updates that don't reopen a step (R
   ] as const)
     expect(
       plans(withPlans([...finished, update("p2", { taskId: "1", status })])).at(-1),
-    ).toMatchObject({ key: "p2:tasks", items: [step("Add tests", state)], latest: true });
+    ).toMatchObject({ key: "p2:tasks", items: [step("Add tests", state)] });
 });
 
 test("a task list's checklists, and their update lines, keep their objects while unchanged", () => {
@@ -655,9 +647,11 @@ test("an update says what changed", () => {
   expect(planChanges(before, [...before])).toBe("");
 });
 
-test("an update is one line: Updated the plan, and what changed", () => {
+test("a plan is one line: Made a plan and its progress, then Updated the plan and what changed", () => {
+  render(<PlanLine item={{ kind: "plan", key: "p", items: steps("completed", "inProgress") }} />);
+  expect(document.body.textContent).toBe("Made a plan1 of 2 done");
   render(
-    <PlanUpdateLine
+    <PlanLine
       item={{
         kind: "todo",
         key: "t",
@@ -667,7 +661,7 @@ test("an update is one line: Updated the plan, and what changed", () => {
     />,
   );
   expect(document.body.textContent).toBe("Updated the planFinished: Step 1 · Started: Step 2");
-  render(<PlanUpdateLine item={{ kind: "todo", key: "t", items: [], previous: steps("done") }} />);
+  render(<PlanLine item={{ kind: "todo", key: "t", items: [], previous: steps("done") }} />);
   expect(document.body.textContent).toBe("Cleared the planRemoved: Step 1");
 });
 
