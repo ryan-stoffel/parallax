@@ -24,12 +24,12 @@
 //! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
 //! ([`wake`]).
 //!
-//! A normal thread's run is full Claude Code in every mode, with no worker sandbox, when its
-//! client answers permission requests, and its first message is the user's own (0034). A thread started with `checkout` has no worktree either: it
-//! runs in its repo entry's own checkout, on the branch the user has out or the one `checkoutRef`
-//! switches it to first. plxd never commits it, since the checkout can hold the user's own
-//! uncommitted work, so its changes stay there for the user to review, and it has no diff to
-//! accept or open a PR from.
+//! A normal thread's run is full Claude Code in every mode, with no worker sandbox, when its client
+//! answers permission requests, and its first message is the user's own (0034). A thread started
+//! with `checkout` has no worktree either: it runs in its repo entry's own checkout, on the branch
+//! the user has out or the one `checkoutRef` switches it to first. plxd never commits it, since the
+//! checkout can hold the user's own uncommitted work, so its changes stay there for the user to
+//! review, and it has no diff to accept or open a PR from.
 
 mod actor;
 mod approvals;

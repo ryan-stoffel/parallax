@@ -20,13 +20,13 @@
 //!   terminal. As a second check, a coordinator whose `system/init` reports another permission
 //!   mode fails with [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
-//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
-//!   each writable folder. A normal thread in any mode whose client answers permission
-//!   requests (0034), and a worker in [`AgentPermission::Bypass`] (0027), are full Claude Code
-//!   instead, as on the user's own machine ([`unsandboxed`]): only the permission mode, `--allowedTools` with [`TODO_TOOLS`],
-//!   `--add-dir`, and `--settings` with only [`settings_env`], with no sandbox, so the user's
-//!   settings, `CLAUDE.md` files, skills, plugins, hooks, subagents, and MCP servers all load,
-//!   and its `system/init` may list any tool. Otherwise:
+//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for each
+//!   writable folder. A normal thread in any mode whose client answers permission requests (0034),
+//!   and a worker in [`AgentPermission::Bypass`] (0027), are full Claude Code instead, as on the
+//!   user's own machine ([`unsandboxed`]): only the permission mode, `--allowedTools` with
+//!   [`TODO_TOOLS`], `--add-dir`, and `--settings` with only [`settings_env`], with no sandbox, so
+//!   the user's settings, `CLAUDE.md` files, skills, plugins, hooks, subagents, and MCP servers all
+//!   load, and its `system/init` may list any tool. Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
