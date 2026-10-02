@@ -9,8 +9,24 @@ import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers. The model menu's items are in the DOM either way.
+HTMLElement.prototype.hidePopover = () => {};
 // happy-dom decodes no images. Every image is small enough to send as it is.
 vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 48, close() {} }));
+// The composer's image reads, so a test can wait for them: happy-dom reads a file on two chained
+// timers, which a fixed wait races when the event loop stalls (PLX-277).
+const reads = vi.hoisted(() => [] as Promise<unknown>[]);
+vi.mock(import("./images"), async (importOriginal) => {
+  const images = await importOriginal();
+  return {
+    ...images,
+    readImage: (...args) => {
+      const read = images.readImage(...args);
+      reads.push(read);
+      return read;
+    },
+  };
+});
 
 let unmount = () => {};
 afterEach(() => act(() => unmount()));
@@ -65,8 +81,8 @@ function render(
   return { box, type, press, paste };
 }
 
-// Waits out reading the added files, which happy-dom does on a timer.
-const read = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+// Waits for the added files to be read and shown.
+const read = () => act(() => Promise.all(reads.splice(0)));
 
 // A 1×1 PNG, and what's sent for it.
 const png =
