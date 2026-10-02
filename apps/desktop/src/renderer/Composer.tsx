@@ -17,7 +17,7 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model"
 import { EditorContent, markInputRule, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   AgentEffort,
@@ -225,6 +225,11 @@ export interface ComposerProps {
    * `approvals`, or the open run started without them. Absent: they come as approval cards.
    */
   manualDenied?: keyof typeof manualDenials;
+  /**
+   * Text to add at the end of the box, which takes focus, such as a pull request's URL. Each new
+   * value is added once.
+   */
+  insert?: string;
 }
 
 /**
@@ -250,6 +255,7 @@ export function Composer({
   optionsDisabled,
   imageCaps,
   manualDenied,
+  insert,
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
@@ -471,6 +477,17 @@ export function Composer({
       },
     },
   });
+
+  useEffect(() => {
+    if (!insert) return;
+    // A space apart from what's typed.
+    const space = editor.isEmpty || /\s$/.test(editor.getText()) ? "" : " ";
+    editor
+      .chain()
+      .focus("end")
+      .insertContent(space + insert)
+      .run();
+  }, [insert, editor]);
 
   const stop = async () => {
     setStopping(true);

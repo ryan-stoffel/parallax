@@ -132,6 +132,10 @@ export function AgentChat({
   tab,
   startOver,
   others,
+  pullRequests,
+  onPrOpened,
+  compose,
+  onComposed,
 }: {
   hostId: string;
   runId: string;
@@ -162,6 +166,16 @@ export function AgentChat({
    * runs' are in each of its chats (RYA-196).
    */
   others?: readonly Asked[];
+  /** The run tab's link to its linked pull requests (PLX-319), in place of Open PR. */
+  pullRequests?: ReactNode;
+  /** Opens the pull request Open PR opened, in place of linking to it. */
+  onPrOpened?: (url: string) => void;
+  /**
+   * A message from outside the chat, such as the PR view's: sent, or put in the composer to finish.
+   * `onComposed` says it's taken, so each one is taken once.
+   */
+  compose?: { text: string; send: boolean };
+  onComposed?: () => void;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -187,6 +201,11 @@ export function AgentChat({
     },
     [send],
   );
+  useEffect(() => {
+    if (!compose) return;
+    if (compose.send) void send(compose.text).then((failed) => setResendError(failed?.message));
+    onComposed?.();
+  }, [compose, send, onComposed]);
   const unsent = useMemo(
     () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
     [sent, resent],
@@ -378,7 +397,10 @@ export function AgentChat({
             tab ??
             (run && (
               <RunTab run={run}>
-                {canOpenPr && <OpenPr hostId={hostId} run={run} onError={setPrError} />}
+                {pullRequests ||
+                  (canOpenPr && (
+                    <OpenPr hostId={hostId} run={run} onError={setPrError} onOpened={onPrOpened} />
+                  ))}
               </RunTab>
             ))
           }
@@ -389,6 +411,7 @@ export function AgentChat({
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
+          insert={compose && !compose.send ? compose.text : undefined}
         />
       </div>
     </>
@@ -1381,7 +1404,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
 
 /**
  * An open run in the composer's tab: that it runs in a worktree, and the worktree's branch, or in
- * the repository's own checkout, followed by `children`, such as Open PR.
+ * the repository's own checkout, with `children`, such as Open PR, before the branch.
  */
 export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode }) {
   return (
@@ -1398,13 +1421,13 @@ export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode 
         </span>
       )}
       <span className="flex min-w-0 items-center">
+        {children}
         {run.branch && (
           <span className={tabItem} title={`Worktree branch: ${run.branch}`}>
             <GitBranch aria-hidden />
             <span className="truncate">{run.branch}</span>
           </span>
         )}
-        {children}
       </span>
     </>
   );
@@ -1412,17 +1435,19 @@ export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode 
 
 /**
  * Open PR: plxd pushes the run's branch and opens a pull request titled like the thread, then
- * this links to it, in the browser. It unmounts while the run works, so after another turn the
- * button is back, to push the new commit to the same pull request.
+ * this links to it, in the browser, or hands it to `onOpened`. It unmounts while the run works, so
+ * after another turn the button is back, to push the new commit to the same pull request.
  */
 function OpenPr({
   hostId,
   run,
   onError,
+  onOpened,
 }: {
   hostId: string;
   run: AgentRun;
   onError: (error?: string) => void;
+  onOpened?: (url: string) => void;
 }) {
   const [url, setUrl] = useState<string>();
   const [opening, setOpening] = useState(false);
@@ -1450,6 +1475,7 @@ function OpenPr({
     });
     setOpening(false);
     if ("error" in answer) onError(describeError(answer.error));
+    else if (onOpened) onOpened(answer.result.url);
     else setUrl(answer.result.url);
   };
   return (
