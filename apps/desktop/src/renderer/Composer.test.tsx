@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { PromptImage } from "../protocol/generated/protocol";
-import { Composer } from "./Composer";
+import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -22,9 +22,12 @@ function render(
   onSend: (text: string) => Promise<string | undefined>,
   // null: a plxd that takes no images.
   imageCaps: ImageCaps | null = caps,
+  props: Partial<ComposerProps> = {},
 ) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<Composer onSend={onSend} imageCaps={imageCaps ?? undefined} />));
+  act(() =>
+    root.render(<Composer onSend={onSend} imageCaps={imageCaps ?? undefined} {...props} />),
+  );
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
@@ -94,6 +97,34 @@ test("Manual says its requests are denied when they can't come to the chat, and 
   );
   expect(shown("run")).toBe(
     "ManualAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
+  );
+});
+
+test("a new thread's Cursor model starts it on Cursor, which takes no effort (0036)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend, caps, { newThread: true, backend: "claude" });
+  const control = (label: string) => document.querySelector(`[aria-label="${label}"]`);
+  const effort = () => document.querySelector('[aria-label^="Reasoning effort"]');
+  expect(effort()).not.toBeNull();
+  const menu = document.getElementById(
+    control("Model: Claude Opus 5.5")!.getAttribute("popovertarget")!,
+  )!;
+  act(() => menu.querySelector<HTMLButtonElement>('button[aria-label="Cursor"]')!.click());
+  const composer = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((m) =>
+    m.textContent?.startsWith("Composer 2.5 Fast"),
+  )!;
+  await act(async () => composer.click());
+  expect(effort()).toBeNull();
+  type("Hello");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "Hello",
+    {
+      model: "composer-2.5-fast",
+      permission: "edit",
+      account: { kind: "subscription", backend: "cursor" },
+    },
+    [],
   );
 });
 

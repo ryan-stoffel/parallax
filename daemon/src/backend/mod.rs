@@ -19,6 +19,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod cursor;
 pub mod event;
 pub mod fake;
 pub mod key_account;
@@ -446,8 +447,8 @@ pub struct Capabilities {
     /// Its runs report limit windows.
     pub rate_limits: bool,
     /// It enforces the worker sandbox (0013) for a [`ToolPolicy::WorkspaceWrite`] run on this
-    /// OS, so M3's runner may start workers on it. Cursor joins once RYA-40 implements its part
-    /// of 0013.
+    /// OS, so M3's runner may start workers on it. Cursor never does: it runs only threads
+    /// (0036).
     pub worker_sandbox: bool,
 }
 

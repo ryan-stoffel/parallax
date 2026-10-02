@@ -426,6 +426,19 @@ describe("with plxd's run options", () => {
     ]);
   });
 
+  test("New Thread offers Cursor's models but not Codex's, which plxd can't run as a thread yet", async () => {
+    await renderApp();
+    const menu = document.getElementById(
+      control("Model: Claude Opus 5.5")!.getAttribute("popovertarget")!,
+    )!;
+    const rail = (name: string) =>
+      menu.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+    expect(rail("Codex").disabled).toBe(true);
+    expect(rail("Cursor").disabled).toBe(false);
+    const listed = [...menu.querySelectorAll('[role="menuitemradio"]')].map((m) => m.textContent);
+    expect(listed.some((m) => m?.includes("GPT-6 Astra"))).toBe(false);
+  });
+
   test("an OpenAI key default offers Codex's models and no plan", async () => {
     answers["accounts/defaults/get"] = () => ({ result: { worker: { kind: "key", id: "k-1" } } });
     answers["accounts/keys/list"] = () => ({
