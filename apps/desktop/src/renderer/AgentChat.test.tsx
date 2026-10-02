@@ -75,7 +75,21 @@ test("a message on its way to the agent shows at full strength", () => {
     />,
   );
   expect(document.body.textContent).toBe("And this?");
-  expect(document.querySelector('[class*="opacity"]')).toBeNull();
+  expect(document.querySelector(".bg-selected")!.className).not.toContain("opacity");
+});
+
+test("a prompt shows when it was sent and copies its text, on hover", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  row({ kind: "user", key: "a", text: "Fix the build", at: "2026-09-25T12:00:00Z" });
+  const time = document.querySelector("time")!;
+  expect(time.dateTime).toBe("2026-09-25T12:00:00Z");
+  expect(time.parentElement!.className).toContain("group-hover/prompt:opacity-100");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Copy message"]')!.click(),
+  );
+  expect(writeText).toHaveBeenCalledWith("Fix the build");
+  expect(document.querySelector('button[aria-label="Copied"]')).not.toBeNull();
 });
 
 test("a user message shows its text, or a neutral label when the log has none", () => {
@@ -749,6 +763,31 @@ test("Stop cancels, and a failed cancel says why and allows another try", async 
   expect(document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.disabled).toBe(
     false,
   );
+});
+
+test("Stop or Esc before the agent answers puts the prompt back in the box, but not after", async () => {
+  const prompt = "Add a README that explains how to build the app.";
+  const stopButton = () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!;
+  fakeBridge(2); // started, with nothing from the agent yet
+  await renderChat();
+  await act(async () => stopButton().click());
+  expect(composer().textContent).toBe(prompt);
+  act(() => unmount());
+
+  fakeBridge(2);
+  await renderChat();
+  await act(
+    async () =>
+      void composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+  );
+  expect(composer().textContent).toBe(prompt);
+  act(() => unmount());
+
+  const { request } = fakeBridge(4); // the agent has replied
+  await renderChat();
+  await act(async () => stopButton().click());
+  expect(request).toHaveBeenCalledWith("local", "agent/cancel", { runId });
+  expect(composer().textContent).toBe("");
 });
 
 test("a finished run opens a pull request titled like its thread, then links to it", async () => {

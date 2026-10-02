@@ -30,6 +30,7 @@ import { imageUrl, readImage, type ImageCaps } from "./images";
 import { ModelMenu } from "./ModelMenu";
 import { backendOf, backends, models, type Model, type Provider, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
+import type { SentMessage } from "./useAgentRun";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
@@ -188,9 +189,12 @@ export interface ComposerProps {
   onSendInBackground?: ComposerProps["onSend"];
   /**
    * While set, an empty box shows Stop instead of Send. Resolves to an error message.
-   * Stop stays pending until the caller drops `onStop`, when the run stops.
+   * Stop stays pending until the caller drops `onStop`, when the run stops. Esc in the box stops
+   * too.
    */
   onStop?: () => Promise<string | undefined>;
+  /** The run's latest prompt while nothing answers it yet, which a Stop that works puts back. */
+  unanswered?: SentMessage;
   /** Why sending is off right now, shown in place of the box's hint. */
   disabledReason?: string;
   /** The tab tucked under the box: where the thread runs, or an open run's status. */
@@ -248,6 +252,7 @@ export function Composer({
   onSend,
   onSendInBackground,
   onStop,
+  unanswered,
   disabledReason,
   tab,
   footer,
@@ -385,6 +390,23 @@ export function Composer({
     }
   };
 
+  const stop = async () => {
+    const back = unanswered;
+    setStopping(true);
+    setError(undefined);
+    const failed = await onStop?.();
+    if (failed) {
+      setStopping(false);
+      setError(failed);
+    } else if (back && !editor.isDestroyed) {
+      // Back ahead of anything typed meanwhile, as plain lines: they send as the same Markdown.
+      // ponytail: its formatting shows as typed Markdown, until the box parses Markdown.
+      editor.commands.focus("start");
+      editor.view.pasteText(editor.isEmpty ? back.text : `${back.text}\n`);
+      setImages((added) => [...back.images, ...added].slice(0, imageCaps?.maxImages));
+    }
+  };
+
   const placeholder =
     disabledReason ??
     (newThread
@@ -432,6 +454,10 @@ export function Composer({
             .setContent(next < history.length ? { type: "doc", content: lines } : "")
             .focus("end")
             .run();
+          return true;
+        }
+        if (event.key === "Escape" && showStop && !stopping && !event.isComposing) {
+          void stop();
           return true;
         }
         if (event.key !== "Enter" || event.isComposing) return false;
@@ -518,16 +544,6 @@ export function Composer({
       .insertContent(space + insert)
       .run();
   }, [insert, editor]);
-
-  const stop = async () => {
-    setStopping(true);
-    setError(undefined);
-    const failed = await onStop?.();
-    if (failed) {
-      setStopping(false);
-      setError(failed);
-    }
-  };
 
   return (
     <div className="w-full">
