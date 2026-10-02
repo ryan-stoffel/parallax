@@ -82,22 +82,33 @@ export function ProfilePage({
   );
 
   const card = useRef<HTMLDivElement>(null);
-  const [sharing, setSharing] = useState<"capturing" | "copied">();
+  const scroller = useRef<HTMLDivElement>(null);
+  const [sharing, setSharing] = useState<"capturing" | "copied" | "failed">();
   const share = async () => {
     const el = card.current;
-    if (!el || sharing) return;
+    if (!el || !scroller.current || sharing) return;
     el.scrollIntoView({ block: "nearest" });
     // The buttons give way to the brand mark for the picture, drawn before it's taken.
     setSharing("capturing");
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const r = el.getBoundingClientRect();
-    await window.parallax.copyPicture({
-      x: Math.max(0, r.x),
-      y: Math.max(0, r.y),
-      width: r.width,
-      height: r.height,
-    });
-    setSharing("copied");
+    let done: "copied" | "failed" = "failed";
+    try {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      // Only what shows: a card taller than the page is cut off where the page is.
+      const r = el.getBoundingClientRect();
+      const view = scroller.current.getBoundingClientRect();
+      const top = Math.max(r.top, view.top);
+      const bottom = Math.min(r.bottom, view.bottom);
+      await window.parallax.copyPicture({
+        x: r.left,
+        y: top,
+        width: r.width,
+        height: bottom - top,
+      });
+      done = "copied";
+    } catch {
+      // Said on the button, below.
+    }
+    setSharing(done);
     setTimeout(() => setSharing(undefined), 2000);
   };
 
@@ -110,7 +121,7 @@ export function ProfilePage({
       {hosts.map((h) => (
         <HostUsage key={h.id} host={h} since={since} onLoad={onUsage} />
       ))}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
         <div className="@container mx-auto max-w-3xl px-2 pt-2 pb-16">
           <div ref={card} className="rounded-2xl bg-background px-6 pt-6 pb-7">
             <header className="group flex items-center gap-4">
@@ -147,7 +158,11 @@ export function ProfilePage({
                 <div className="flex shrink-0 items-center gap-2">
                   <button type="button" onClick={() => void share()} className={quietButton}>
                     {sharing === "copied" ? <Check /> : <Link />}
-                    {sharing === "copied" ? "Copied" : "Share"}
+                    {sharing === "copied"
+                      ? "Copied"
+                      : sharing === "failed"
+                        ? "Couldn't copy"
+                        : "Share"}
                   </button>
                   {profile === null ? (
                     <button
@@ -235,7 +250,10 @@ function Heatmap({ activity, now }: { activity: Activity; now: number }) {
   today.setHours(0, 0, 0, 0);
   const start = new Date(today);
   start.setDate(start.getDate() - start.getDay() - (WEEKS - 1) * 7);
-  const max = activity.busiest?.agents ?? 1;
+  // The year's busiest day, which the shades are relative to.
+  const first = dayKey(start.getTime());
+  let max = 1;
+  for (const [day, agents] of activity.days) if (day >= first) max = Math.max(max, agents);
 
   const dots: ReactNode[] = [];
   const months: ReactNode[] = [];
@@ -248,7 +266,7 @@ function Heatmap({ activity, now }: { activity: Activity; now: number }) {
       const agents = activity.days.get(key) ?? 0;
       // A square root, so one big day leaves the others visible.
       const shade = agents && shades[Math.ceil(Math.sqrt(agents / max) * 4) - 1];
-      // A month's name over the week of its 1st, but the first and last weeks', where it won't fit.
+      // A month's name over the week of its 1st, but the first week's and the last two's, where it won't fit.
       if (date.getDate() === 1 && week > 0 && week < WEEKS - 2)
         months.push(
           <text key={key} x={LEFT + week * CELL} y={9}>
@@ -276,7 +294,7 @@ function Heatmap({ activity, now }: { activity: Activity; now: number }) {
         viewBox={`0 0 ${LEFT + WEEKS * CELL} ${TOP + 7 * CELL}`}
         className="w-full fill-faint-foreground text-[9px]"
         role="img"
-        aria-label={`Agents started each day for the past year: ${activity.agents} in all`}
+        aria-label="Agents started each day for the past year"
       >
         {months}
         {(["M", "W", "F"] as const).map((d, i) => (
