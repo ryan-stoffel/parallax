@@ -483,12 +483,12 @@ function DiffFileView({
         </label>
       </div>
       {!shut && (
-        <div className="overflow-x-auto pb-2 font-mono text-[12px] leading-5">
+        <div className="pb-2 font-mono text-[12px] leading-5">
           {file.binary && <p className="px-3 text-faint-foreground">Binary file not shown</p>}
           {file.lines.map((line, i) => (
-            <div key={i} className={`flex min-w-max ${lineLook[line.op]}`}>
+            <div key={i} className={`flex ${lineLook[line.op]}`}>
               {line.op === "@" ? (
-                <span className="px-3">{line.text}</span>
+                <span className="min-w-0 px-3 break-all whitespace-pre-wrap">{line.text}</span>
               ) : (
                 <>
                   <span
@@ -512,7 +512,9 @@ function DiffFileView({
                   {line.op !== " " && (
                     <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
                   )}
-                  <span className="pr-3 whitespace-pre">{line.text || " "}</span>
+                  <span className="min-w-0 pr-3 break-all whitespace-pre-wrap">
+                    {line.text || " "}
+                  </span>
                 </>
               )}
             </div>
