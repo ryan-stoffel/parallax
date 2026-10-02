@@ -10,6 +10,13 @@ import { Settings } from "./Settings";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+// xterm.js needs a real canvas; the stand-in only marks where the terminal is.
+vi.mock("./SignInTerminal", () => ({
+  SignInTerminal: ({ name }: { name: string }) => (
+    <div role="group" aria-label={`${name} sign-in terminal`} />
+  ),
+}));
+
 const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
 const states: Record<string, ConnectionState> = {
   local: { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} },
@@ -95,7 +102,10 @@ async function renderSettings(name: SettingsSection = "providers") {
 const settle = async () => {
   for (let i = 0; i < 10; i++) await act(async () => {});
 };
-const section = (name: string) => document.querySelector<HTMLElement>(`[aria-label="${name}"]`)!;
+// The first match outside a hidden tab panel.
+const visible = (selector: string) =>
+  [...document.querySelectorAll<HTMLElement>(selector)].find((e) => !e.closest("[hidden]"))!;
+const section = (name: string) => visible(`[aria-label="${name}"]`);
 const rows = (name: string) =>
   [...section(name).querySelectorAll(":scope > div:last-child > div")].map((r) => r.textContent);
 const button = (within: Element, name: string) =>
@@ -105,7 +115,7 @@ const tab = (name: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) =>
     t.textContent?.startsWith(name),
   )!;
-const pane = () => document.querySelector<HTMLElement>('[role="tabpanel"]')!;
+const pane = () => visible('[role="tabpanel"]');
 // The Work key's row.
 const work = () =>
   [...section("Anthropic API keys").querySelectorAll("div")].find((d) =>
@@ -126,7 +136,7 @@ test("lists the host's CLIs, and shows the chosen one's account, API keys, and m
   expect(tab("Claude Code").getAttribute("aria-selected")).toBe("true");
   expect(pane().getAttribute("aria-labelledby")).toBe(tab("Claude Code").id);
   expect(rows("Account")).toEqual(["Signed in · Max"]);
-  expect(rows("Anthropic API keys")).toEqual(["WorkAPI key · sk-ant-...abcdRemove"]);
+  expect(rows("Anthropic API keys")).toEqual(["WorkAnthropic API key · sk-ant-...abcdRemove"]);
   expect(rows("Models")).toEqual(
     models.filter((m) => m.provider === "Claude").map((m) => m.name + m.id),
   );
@@ -151,6 +161,26 @@ test("lists the host's CLIs, and shows the chosen one's account, API keys, and m
   expect(install.href).toBe("https://cursor.com/docs/cli/installation");
   expect(install.target).toBe("_blank");
   expect(request.mock.calls.every(([host]) => host === "local")).toBe(true);
+});
+
+test("a sign-in stays open while another tab is chosen", async () => {
+  await renderSettings();
+  await click(tab("Codex"));
+  await click(button(pane(), "Sign in"));
+  const terminal = section("Codex sign-in terminal");
+  expect(terminal).toBeDefined();
+
+  await click(tab("Claude Code"));
+  expect(terminal.closest("[hidden]")).not.toBeNull();
+  await click(tab("Codex"));
+  expect(section("Codex sign-in terminal")).toBe(terminal);
+});
+
+test("keys still show when the CLIs can't be checked", async () => {
+  answers["accounts/list"] = () => ({ error: { code: -32000, message: "probe failed" } });
+  await renderSettings();
+  expect(tabs()).toEqual([]);
+  expect(rows("API keys")).toEqual(["WorkAnthropic API key · sk-ant-...abcdRemove"]);
 });
 
 test("the host picker shows another host's state", async () => {
@@ -207,7 +237,7 @@ test("adds a key, clearing it from its field after each try, and never gets it b
   expect(retry).toEqual(first);
   expect(first!.params).toMatchObject({ provider: "openai", label: "Personal", key: secret });
   expect(document.querySelector("form")).toBeNull();
-  expect(rows("OpenAI API keys")).toEqual(["PersonalAPI key · sk-proj-...cdefRemove"]);
+  expect(rows("OpenAI API keys")).toEqual(["PersonalOpenAI API key · sk-proj-...cdefRemove"]);
   expect(document.body.innerHTML).not.toContain("THE-SECRET");
 });
 
@@ -295,14 +325,16 @@ test("shows each account's usage and limits for the chosen period, and keeps the
   expect(rows("Usage")).toEqual([
     "1.2K tokens today, about $0.505-hour limit · 12% used · resets in 2 h",
   ]);
-  expect(rows("Anthropic API keys")).toEqual(["WorkAPI key · sk-ant-...abcdNo usage todayRemove"]);
+  expect(rows("Anthropic API keys")).toEqual([
+    "WorkAnthropic API key · sk-ant-...abcdNo usage todayRemove",
+  ]);
 
   await click(section("Usage period").querySelector<HTMLInputElement>('[value="week"]')!);
   expect(rows("Usage")).toEqual([
     "42K tokens this week, about $0.905-hour limit · 12% used · resets in 2 h",
   ]);
   expect(rows("Anthropic API keys")).toEqual([
-    "WorkAPI key · sk-ant-...abcd3M tokens this weekRemove",
+    "WorkAnthropic API key · sk-ant-...abcd3M tokens this weekRemove",
   ]);
   await click(tab("Codex"));
   expect(rows("Usage")).toEqual(["No usage this week"]);

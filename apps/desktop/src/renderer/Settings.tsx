@@ -447,15 +447,31 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
         </p>
       )}
       {!connected || !current ? (
-        <p className="rounded-xl border border-border bg-surface px-4 py-3 text-[13px] text-muted-foreground">
-          {!connected
-            ? connection
-              ? statusLabel(connection)
-              : "Connecting…"
-            : error
-              ? "Couldn't check this host's CLIs."
-              : "Checking…"}
-        </p>
+        <>
+          <p className="mb-8 rounded-xl border border-border bg-surface px-4 py-3 text-[13px] text-muted-foreground">
+            {!connected
+              ? connection
+                ? statusLabel(connection)
+                : "Connecting…"
+              : error
+                ? "Couldn't check this host's CLIs."
+                : "Checking…"}
+          </p>
+          {/* The CLIs failed but the keys answered: they can still be seen and removed. */}
+          {connected && !!keys?.length && (
+            <Section title="API keys">
+              {keys.map((account) => (
+                <KeyRow
+                  key={account.id}
+                  hostId={host.id}
+                  account={account}
+                  usage={usage && <UsageLines usage={usage.get(account.id)} period={period} />}
+                  onRemoved={() => setKeys((all) => all?.filter((k) => k.id !== account.id))}
+                />
+              ))}
+            </Section>
+          )}
+        </>
       ) : (
         // Stacked until there's room for the list beside the pane.
         <div className="@container">
@@ -477,7 +493,7 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
                     type="button"
                     role="tab"
                     aria-selected={on}
-                    aria-controls={`${tabs}-pane`}
+                    aria-controls={`${tabs}-${cli.cli}-pane`}
                     tabIndex={on ? 0 : -1}
                     onClick={() => setSelected(cli.cli)}
                     className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-hover aria-selected:bg-selected"
@@ -506,19 +522,23 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
                 );
               })}
             </div>
-            <ProviderPane
-              key={current.cli}
-              id={`${tabs}-pane`}
-              tabId={`${tabs}-${current.cli}`}
-              hostId={host.id}
-              cli={current}
-              usage={usage}
-              period={period}
-              onPeriod={setPeriod}
-              keys={keys}
-              onKeys={setKeys}
-              onSignedIn={() => void load("accounts/refresh")}
-            />
+            {/* Every pane stays mounted, so a sign-in outlives a switch to another tab. */}
+            {detected!.map((cli) => (
+              <ProviderPane
+                key={cli.cli}
+                id={`${tabs}-${cli.cli}-pane`}
+                tabId={`${tabs}-${cli.cli}`}
+                hidden={cli !== current}
+                hostId={host.id}
+                cli={cli}
+                usage={usage}
+                period={period}
+                onPeriod={setPeriod}
+                keys={keys}
+                onKeys={setKeys}
+                onSignedIn={() => void load("accounts/refresh")}
+              />
+            ))}
           </div>
         </div>
       )}
@@ -527,13 +547,14 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
 }
 
 /**
- * The chosen CLI's pane: its account, with Sign in (in a terminal under it, after which the CLIs
+ * A CLI's pane, `hidden` unless its tab is chosen: its account, with Sign in (in a terminal under it, after which the CLIs
  * are probed again with `onSignedIn`) or Install; its usage over `period`; the API keys for its
  * provider, which can be added and removed; and the models Parallax runs on it.
  */
 function ProviderPane({
   id,
   tabId,
+  hidden,
   hostId,
   cli,
   usage,
@@ -545,6 +566,7 @@ function ProviderPane({
 }: {
   id: string;
   tabId: string;
+  hidden: boolean;
   hostId: string;
   cli: DetectedCli;
   usage?: ReadonlyMap<string, AccountUsage>;
@@ -589,7 +611,7 @@ function ProviderPane({
     );
 
   return (
-    <div id={id} role="tabpanel" aria-labelledby={tabId} className="min-w-0">
+    <div id={id} role="tabpanel" aria-labelledby={tabId} hidden={hidden} className="min-w-0">
       <div className="mb-5 flex items-center gap-2.5">
         {Logo && <Logo className="size-5 shrink-0" />}
         <h2 className="text-[15px] font-semibold">{name}</h2>
@@ -728,7 +750,7 @@ function KeyRow({
         <span className="block truncate text-[12.5px] text-muted-foreground">
           {confirming
             ? "Remove this key? Parallax deletes it from the host's keychain."
-            : `API key · ${account.maskedKey}`}
+            : `${providerNames[account.provider] ?? account.provider} API key · ${account.maskedKey}`}
         </span>
         {usage}
         {error && (
