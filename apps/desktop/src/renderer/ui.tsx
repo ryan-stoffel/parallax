@@ -50,11 +50,12 @@ export function appShortcut(
   if (!mac && e.getModifierState("AltGraph")) return undefined;
   if (e.altKey) {
     if (e.code === "KeyB") return "panel";
+    if (e.shiftKey) return undefined;
     if (e.code === "KeyO") return "open";
     if (e.code === "KeyU") return "usage";
     return undefined;
   }
-  if (e.code === "KeyS") return "sidebar";
+  if (e.code === "KeyS" && !e.shiftKey) return "sidebar";
   if (e.code === "KeyJ") return "terminal";
   if (e.code === "KeyN") return e.shiftKey ? "noRepoThread" : "newThread";
   if (rowShortcut(e) !== undefined) return "row";

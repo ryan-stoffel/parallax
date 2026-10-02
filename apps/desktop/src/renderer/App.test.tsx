@@ -104,6 +104,9 @@ test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not M
   expect(press({ code: "KeyO", metaKey: true, altKey: true })).toBe("open");
   expect(press({ code: "KeyO", metaKey: true })).toBeUndefined();
   expect(press({ code: "KeyB", metaKey: true })).toBeUndefined();
+  // With Shift they're free for repository actions.
+  expect(press({ code: "KeyS", metaKey: true, shiftKey: true })).toBeUndefined();
+  expect(press({ code: "KeyO", metaKey: true, altKey: true, shiftKey: true })).toBeUndefined();
 });
 
 test("the footer's Usage opens the Usage page, and Update shows when it's ready and its answer", async () => {
