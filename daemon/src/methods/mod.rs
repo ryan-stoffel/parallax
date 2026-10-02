@@ -3,7 +3,7 @@
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
-//! `projectEdit`: `project/update` in `project.rs`; PLX-318 `pullRequests`: `pr.rs`), and `host.rs`
+//! `projectEdit`: `project/update` in `project.rs`; PLX-318 `pullRequests` and PLX-328 `prDiff`: `pr.rs`), and `host.rs`
 //! advertises the capability in `initialize`.
 
 mod accounts;
@@ -27,7 +27,7 @@ use parallax_protocol::methods::{
     AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus, AgentImage,
     AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart, ContextList,
     ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
-    Initialize, PrAct, PrView, ProjectCreate, ProjectList, ProjectStart, ProjectUpdate,
+    Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectList, ProjectStart, ProjectUpdate,
     RequestMethod, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
@@ -120,6 +120,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         PrView::NAME => handle::<PrView, _, _>(&request, |p| pr::view(&context, p)).await,
         PrAct::NAME => handle::<PrAct, _, _>(&request, |p| pr::act(&context, p)).await,
+        PrDiff::NAME => handle::<PrDiff, _, _>(&request, |p| pr::diff(&context, p)).await,
         name if thread::handles(name) => thread::dispatch(&context, &request).await,
         EventsSubscribe::NAME => {
             let subscribed = match request.params() {

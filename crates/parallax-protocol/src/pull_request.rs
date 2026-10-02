@@ -3,7 +3,8 @@
 //! plxd links a pull request to a run when `agent/openPr` returns it, and when the run's agent
 //! opens one itself with `gh pr create`; `AgentRun.pullRequests` lists them. `pr/view` reads one
 //! from GitHub and `pr/act` merges, drafts, or closes it, each with `gh` on the host, as the user.
-//! Both take only a URL linked to the run.
+//! Behind the `prDiff` capability (PLX-328), `pr/diff` reads its unified diff. Each takes only a
+//! URL linked to the run.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use ts_rs::TS;
 
 use crate::RunId;
 
-/// Params of `pr/view`.
+/// Params of `pr/view`, and of `pr/diff`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PrViewParams {
@@ -172,6 +173,62 @@ pub struct PrComment {
     pub created_at: Timestamp,
 }
 
+/// A review's verdict.
+///
+/// A newer plxd may send a verdict this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PrReviewState {
+    /// Approved.
+    Approved,
+    /// Asked for changes.
+    ChangesRequested,
+    /// Commented without a verdict.
+    Commented,
+    /// Dismissed.
+    Dismissed,
+    /// A verdict this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// A submitted review: who, what verdict, and when. Its text, if any, is also in `comments`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrReview {
+    /// Its author's login.
+    pub author: String,
+    /// Its verdict.
+    pub state: PrReviewState,
+    /// When it was submitted, in RFC 3339 UTC.
+    pub submitted_at: Timestamp,
+}
+
+/// A commit on a pull request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCommit {
+    /// Its full hash.
+    pub oid: String,
+    /// Its message's first line.
+    pub headline: String,
+    /// Its first author's login, or name when they have no GitHub account.
+    pub author: String,
+    /// When it was committed, in RFC 3339 UTC.
+    pub committed_at: Timestamp,
+}
+
+/// Result of `pr/diff`: a pull request's changes as one unified diff, as `gh pr diff` prints it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrDiffResult {
+    /// Its unified diff, a `diff --git` section per file.
+    pub diff: String,
+    /// Whether `diff` was cut short, at a line's end, at plxd's size cap.
+    pub truncated: bool,
+}
+
 /// A pull request as GitHub has it now: the result of `pr/view` and `pr/act`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -217,6 +274,28 @@ pub struct PullRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub checks_state: Option<PrCheckState>,
+    /// When it was opened, in RFC 3339 UTC. Absent from a plxd without `prDiff`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub created_at: Option<Timestamp>,
+    /// When it was closed or merged, in RFC 3339 UTC. Absent while it is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub closed_at: Option<Timestamp>,
+    /// When it was merged, in RFC 3339 UTC. Absent unless it is merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub merged_at: Option<Timestamp>,
+    /// Who merged it. Absent unless it is merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub merged_by: Option<String>,
+    /// Its commits, oldest first. Absent means none, or a plxd without `prDiff`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<PrCommit>,
+    /// Its submitted reviews, oldest first. Absent means none, or a plxd without `prDiff`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviews: Vec<PrReview>,
     /// Whether it can merge. Absent while GitHub is still working it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -231,7 +310,7 @@ pub struct PullRequest {
 mod tests {
     use serde_json::json;
 
-    use super::{PrAction, PrCheckState, PrMergeMethod, PrMergeState, PrState};
+    use super::{PrAction, PrCheckState, PrMergeMethod, PrMergeState, PrReviewState, PrState};
 
     #[test]
     fn unknown_values_decode_as_unknown() {
@@ -254,6 +333,10 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<PrCheckState>(json!("stale")).unwrap(),
             PrCheckState::Unknown
+        );
+        assert_eq!(
+            serde_json::from_value::<PrReviewState>(json!("pending")).unwrap(),
+            PrReviewState::Unknown
         );
     }
 }
