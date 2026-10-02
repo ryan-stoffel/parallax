@@ -1,6 +1,8 @@
+import { Plus, Terminal, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ThreadsState, ThreadsView } from "./threads";
+import { IconButton } from "./ui";
 
 // xterm.js loads with the first terminal shown.
 const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
@@ -34,8 +36,15 @@ export function folderOf(
   return path === undefined ? undefined : { key: `${hostId}/${threadId}`, hostId, path, threadId };
 }
 
-/** The drawer's terminal id for a folder, to type or run a command in it with `terminalInput`. */
+/** The terminal id of a folder's first drawer tab, to type or run a command in it with `terminalInput`. */
 export const drawerTerminalId = (folder: ThreadFolder) => `drawer:${folder.key}`;
+
+/** The terminal id of a folder's drawer tab `n`. */
+const tabTerminalId = (folder: ThreadFolder, n: number) =>
+  n === 1 ? drawerTerminalId(folder) : `${drawerTerminalId(folder)}:${n}`;
+
+// Each folder's shown drawer tab's terminal id, by folder key, where `runInDrawer` runs a command.
+const shownTabs = new Map<string, string>();
 
 // The terminals whose shell runs, and the command to run in each once it does, by terminal id.
 // Main drops input to a terminal that hasn't started. A shell that exits drops its queue, and only
@@ -44,11 +53,12 @@ const running = new Set<string>();
 const queued = new Map<string, string>();
 
 /**
- * Runs `command` in `folder`'s drawer terminal: now if its shell runs, else once it starts, in
- * place of any command already waiting. Open the drawer on `folder` too, so it starts.
+ * Runs `command` in `folder`'s shown drawer tab, or its first while it has none: now if its shell
+ * runs, else once it starts, in place of any command already waiting. Open the drawer on `folder`
+ * too, so it starts.
  */
 export function runInDrawer(folder: ThreadFolder, command: string) {
-  const id = drawerTerminalId(folder);
+  const id = shownTabs.get(folder.key) ?? drawerTerminalId(folder);
   const input = `${command}\r`;
   if (running.has(id)) window.parallax.terminalInput(id, input);
   else queued.set(id, input);
@@ -176,23 +186,59 @@ function PooledTerminal({
   );
 }
 
+/** A folder's drawer tabs: their numbers in order, the shown one, and the next new one's. */
+type Tabs = { folder: ThreadFolder; open: number[]; active: number; next: number };
+
 /**
- * The terminal drawer under the chat: `folder`'s terminal while `open`, and every other folder's
- * it has shown, hidden. Its top edge drags, or takes the arrow keys, to resize it.
+ * The terminal drawer under the chat: `folder`'s tabs while `open`, and every other folder's it has
+ * shown, hidden, each tab a shell kept running while another is shown. Its tab bar's + opens
+ * another tab, and its X, or closing the last tab, calls `onClose`; the next open starts one fresh
+ * tab. Its top edge drags, or takes the arrow keys, to resize it.
  */
 export function TerminalDrawer({
   open,
   folder,
   deleted,
+  onClose,
 }: {
   open: boolean;
   folder: ThreadFolder | undefined;
   deleted: (folder: ThreadFolder) => boolean;
+  onClose: () => void;
 }) {
   const [height, setHeight] = useState(280);
   const drag = useRef<{ y: number; height: number }>(undefined);
   const resize = (next: number) =>
     setHeight(Math.round(Math.min(Math.max(next, 96), window.innerHeight - 160)));
+
+  const [tabs, setTabs] = useState<Readonly<Record<string, Tabs>>>({});
+  const setTabsOf = (key: string, next: Tabs | undefined) => {
+    const { [key]: _, ...rest } = tabs;
+    setTabs(next ? { ...rest, [key]: next } : rest);
+    if (next) shownTabs.set(key, tabTerminalId(next.folder, next.active));
+    else shownTabs.delete(key);
+  };
+  if (open && folder && !deleted(folder) && !tabs[folder.key])
+    setTabsOf(folder.key, { folder, open: [1], active: 1, next: 2 });
+  else {
+    const gone = Object.values(tabs).find((t) => deleted(t.folder));
+    if (gone) setTabsOf(gone.folder.key, undefined);
+  }
+  const current = folder && tabs[folder.key];
+
+  // Closing the shown tab shows the one after it, or before it; closing the last closes the drawer.
+  const closeTab = (t: Tabs, n: number) => {
+    const i = t.open.indexOf(n);
+    const rest = t.open.toSpliced(i, 1);
+    if (!rest.length) {
+      setTabsOf(t.folder.key, undefined);
+      onClose();
+      return;
+    }
+    const active = n === t.active ? rest[Math.min(i, rest.length - 1)]! : t.active;
+    setTabsOf(t.folder.key, { ...t, open: rest, active });
+  };
+
   return (
     <section
       id="terminal-drawer"
@@ -223,12 +269,66 @@ export function TerminalDrawer({
         }}
         className="absolute inset-x-0 -top-1 z-10 h-2 cursor-row-resize focus-visible:bg-ring/40"
       />
-      <TerminalPool
-        prefix="drawer"
-        label="Terminal"
-        active={open ? folder : undefined}
-        deleted={deleted}
-      />
+      {current && (
+        <div className="flex shrink-0 items-center gap-0.5 px-2 pt-1.5">
+          <ul aria-label="Terminals" className="flex min-w-0 gap-0.5 overflow-x-auto">
+            {current.open.map((n) => (
+              <li
+                key={n}
+                className={`flex shrink-0 items-center rounded-lg ${n === current.active ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+              >
+                <button
+                  type="button"
+                  aria-current={n === current.active ? "true" : undefined}
+                  onClick={() => setTabsOf(current.folder.key, { ...current, active: n })}
+                  className="flex items-center gap-1.5 py-1 pl-2 text-[13px]"
+                >
+                  <Terminal aria-hidden className="size-3.5" />
+                  Terminal {n}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Close Terminal ${n}`}
+                  title={`Close Terminal ${n}`}
+                  onClick={() => closeTab(current, n)}
+                  className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
+                >
+                  <X />
+                </button>
+              </li>
+            ))}
+          </ul>
+          <IconButton
+            label="New terminal"
+            onClick={() =>
+              setTabsOf(current.folder.key, {
+                ...current,
+                open: [...current.open, current.next],
+                active: current.next,
+                next: current.next + 1,
+              })
+            }
+          >
+            <Plus />
+          </IconButton>
+          <div className="ml-auto">
+            <IconButton label="Hide terminal" keys="J" onClick={onClose}>
+              <X />
+            </IconButton>
+          </div>
+        </div>
+      )}
+      {Object.values(tabs).flatMap((t) =>
+        t.open.map((n) => (
+          <PooledTerminal
+            key={tabTerminalId(t.folder, n)}
+            id={tabTerminalId(t.folder, n)}
+            label="Terminal"
+            folder={t.folder}
+            hidden={!open || t !== current || n !== t.active}
+          />
+        )),
+      )}
     </section>
   );
 }
