@@ -2,6 +2,7 @@ import { expect, test } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/threads.json";
 import type {
+  AgentRun,
   EventsEventParams,
   ThreadStartResult,
   ParallaxEvent,
@@ -46,6 +47,25 @@ test("repo.added, thread.started, and project.created add entries, and repeating
   expect(state.repos.map((r) => r.name)).toEqual(["parallax"]);
   expect(state.threads.map((t) => t.id)).toEqual([started.thread.id]);
   expect(state.projects).toEqual([project]);
+});
+
+test("project.deleted drops the project and its runs, and keeps the rest", () => {
+  const project = (id: string) => ({
+    id,
+    name: id,
+    repoPath: "/src/parallax",
+    createdAt: "2026-09-26T12:00:00Z",
+    updatedAt: "2026-09-26T12:00:00Z",
+  });
+  const run = (id: string, inProject: string) => ({ id, project: inProject }) as AgentRun;
+  const state: ThreadsState = {
+    ...emptyThreads,
+    projects: [project("p-1"), project("p-2")],
+    runs: { a: run("a", "p-1"), b: run("b", "p-1"), c: run("c", "p-2"), t: run("t", "r-1") },
+  };
+  const after = apply(state, { kind: "project.deleted", project: "p-1" });
+  expect(after.projects.map((p) => p.id)).toEqual(["p-2"]);
+  expect(Object.keys(after.runs)).toEqual(["c", "t"]);
 });
 
 test("project.updated replaces the project with its new name and icon, and repeating it changes nothing", () => {
