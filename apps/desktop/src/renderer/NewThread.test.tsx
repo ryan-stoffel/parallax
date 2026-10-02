@@ -464,7 +464,7 @@ describe("with plxd's run options", () => {
       result: { accounts: [{ id: "k-1", provider: "openai", label: "Work" }] },
     });
     await renderApp();
-    expect(control("Model: GPT-6 Astra")).not.toBeNull();
+    expect(control("Model: GPT-6.1 Sol")).not.toBeNull();
     const access = control("Access: Accept Edits")!;
     const menu = document.getElementById(access.getAttribute("popovertarget")!)!;
     expect(menu.textContent).toContain("Bypass Permissions");
@@ -476,7 +476,7 @@ describe("with plxd's run options", () => {
         runId: expect.any(String),
         repo: parallax.id,
         prompt: "Tidy the README",
-        model: "gpt-6-astra",
+        model: "gpt-6.1-sol",
         effort: "high",
         permission: "edit",
       },
