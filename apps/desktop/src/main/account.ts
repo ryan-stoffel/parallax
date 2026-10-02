@@ -3,13 +3,14 @@ import { app, BrowserWindow, ipcMain, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { NewAccount, OAuthProvider, Profile } from "../preload/bridge";
-import { listenForCode, type Loopback } from "./loopback";
+import type { Profile } from "../preload/bridge";
+import { serveSignIn, type Answer, type SignInPage } from "./loopback";
 
 // The Supabase project that holds Parallax accounts (0037). Both values are public: the key only
 // names the project. PLX_SUPABASE_URL and PLX_SUPABASE_KEY point a dev build at another project.
-const SUPABASE_URL = process.env["PLX_SUPABASE_URL"] ?? "";
-const SUPABASE_KEY = process.env["PLX_SUPABASE_KEY"] ?? "";
+const SUPABASE_URL = process.env["PLX_SUPABASE_URL"] ?? "https://hkfrqrikselgxhoswgtk.supabase.co";
+const SUPABASE_KEY =
+  process.env["PLX_SUPABASE_KEY"] ?? "sb_publishable_YYLxUEvqEOWBt000SGDoiA_i5_vhanC";
 const notSetUp = "Accounts aren't set up in this build yet.";
 
 /**
@@ -66,10 +67,19 @@ async function fetchPicture(url: string): Promise<string | undefined> {
   }
 }
 
+/** Brings the app's window forward once the browser has signed it in. */
+function bringForward() {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win?.isMinimized()) win.restore();
+  win?.show();
+  app.focus({ steal: true });
+}
+
 /**
  * Starts the Parallax account (0037): a Supabase Auth session kept in the main process, so the
- * renderer only ever sees the profile. Sign-ins use PKCE, and come back from the browser to a
- * loopback server (loopback.ts). Call once the app is ready, as safeStorage needs.
+ * renderer only ever sees the profile. Signing in happens on a page in the system browser that
+ * main serves on loopback (loopback.ts), with PKCE. Call once the app is ready, as safeStorage
+ * needs.
  */
 export function startAccount() {
   const auth = SUPABASE_URL
@@ -79,6 +89,10 @@ export function startAccount() {
         storage: encryptedStorage(path.join(app.getPath("userData"), "account")),
         flowType: "pkce",
         detectSessionInUrl: false,
+        // Each redirect carries its PKCE flow id, so a sign-up's email link and an OAuth sign-in
+        // started on the same page each trade their code with their own verifier. Sign-up has no
+        // other way to name its flow. Experimental in auth-js: recheck it on upgrades (PLX-300).
+        experimental: { appendPkceFlowIdToRedirects: true },
       })
     : undefined;
 
@@ -108,80 +122,61 @@ export function startAccount() {
     });
   });
 
-  // Sign-ins waiting on the browser. Each OAuth one keeps the id of its own PKCE verifier, so two
-  // at once both work. Sign-up's email link has no id, and uses the latest verifier.
-  const pending = new Set<Loopback>();
-  const listen = async (flow: { id?: string }, timeoutMs?: number) => {
-    const loopback: Loopback = await listenForCode(async (code) => {
-      try {
-        const options = flow.id ? { flowId: flow.id } : undefined;
-        const { error } = await auth!.exchangeCodeForSession(code, options);
-        // Signed in: the other browser sign-ins end, so a late one can't switch accounts.
-        if (!error) for (const other of pending) if (other !== loopback) other.close();
-        return error?.message;
-      } catch (error) {
-        return (error as Error).message;
-      }
-    }, timeoutMs);
-    pending.add(loopback);
-    void loopback.done.then(() => pending.delete(loopback));
-    return loopback;
-  };
-  // Another way in, or out, ends the browser sign-ins, so a late one can't switch accounts.
-  const cancelPending = () => {
-    for (const loopback of pending) loopback.close();
-  };
+  // The open sign-in page, if any.
+  let page: SignInPage | undefined;
 
   ipcMain.handle("parallax:profile", () => profile);
 
-  ipcMain.handle("parallax:signInWith", async (_event, provider: OAuthProvider) => {
+  ipcMain.handle("parallax:signIn", async (_event, create: boolean) => {
     if (!auth) return notSetUp;
-    if (!["github", "google", "apple"].includes(provider)) return "Unknown provider.";
-    const flow: { id?: string } = {};
-    const loopback = await listen(flow);
-    const { data, error } = await auth.signInWithOAuth({
-      provider,
-      options: { redirectTo: loopback.url, skipBrowserRedirect: true },
-    });
-    if (error) {
-      loopback.close();
-      return error.message;
-    }
-    flow.id = data.flowId ?? undefined;
-    await shell.openExternal(data.url);
-    return loopback.done;
-  });
-
-  ipcMain.handle("parallax:signInWithEmail", async (_event, email: string, password: string) => {
-    if (!auth) return notSetUp;
-    cancelPending();
-    const { error } = await auth.signInWithPassword({ email, password });
-    return error?.message;
-  });
-
-  ipcMain.handle("parallax:signUp", async (_event, account: NewAccount) => {
-    if (!auth) return notSetUp;
-    cancelPending();
-    // The confirmation email's link comes back here too, and signs the app in, for as long as
-    // Supabase's links last by default. A later click still confirms the account.
-    const loopback = await listen({}, 60 * 60_000);
-    const { data, error } = await auth.signUp({
-      email: account.email,
-      password: account.password,
-      options: {
-        emailRedirectTo: loopback.url,
-        data: { first_name: account.firstName.trim(), last_name: account.lastName.trim() },
+    // One page at a time, so a late one can't switch accounts.
+    page?.close();
+    const signedIn = (error: { message: string } | null): Answer =>
+      error ? { error: error.message } : { signedIn: true };
+    const current = await serveSignIn({
+      oauthUrl: async (provider, redirectTo) => {
+        const { data, error } = await auth.signInWithOAuth({
+          provider,
+          options: { redirectTo, skipBrowserRedirect: true },
+        });
+        return error ? { error: error.message } : data.url;
       },
+      signIn: async (email, password) =>
+        signedIn((await auth.signInWithPassword({ email, password })).error),
+      signUp: async (account, redirectTo) => {
+        const { data, error } = await auth.signUp({
+          email: account.email,
+          password: account.password,
+          options: {
+            emailRedirectTo: redirectTo,
+            data: { first_name: account.firstName.trim(), last_name: account.lastName.trim() },
+          },
+        });
+        if (error || data.session) return signedIn(error);
+        // The link comes back to this page, which waits an hour, as long as Supabase's links last
+        // by default. A later click still confirms the account.
+        return { note: `Check ${account.email} for a link to confirm your account.` };
+      },
+      exchange: async (code, flowId) =>
+        signedIn((await auth.exchangeCodeForSession(code, flowId ? { flowId } : undefined)).error),
     });
-    if (error || data.session) {
-      loopback.close();
-      return error?.message;
+    page = current;
+    const url = new URL(current.url);
+    if (create) url.searchParams.set("create", "");
+    try {
+      await shell.openExternal(url.href);
+    } catch (error) {
+      current.close();
+      return `Couldn't open your browser: ${(error as Error).message}`;
     }
-    return `Check ${account.email} for a link to confirm your account.`;
+    const error = await current.done;
+    if (page === current) page = undefined;
+    if (!error) bringForward();
+    return error;
   });
 
   ipcMain.handle("parallax:signOut", async () => {
-    cancelPending();
+    page?.close();
     // Local: other devices stay signed in.
     await auth?.signOut({ scope: "local" });
   });
