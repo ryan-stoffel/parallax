@@ -126,28 +126,17 @@ export interface ParallaxBridge {
    */
   onProfile(listener: (profile: Profile | null) => void): () => void;
   /**
-   * Signs in with a provider in the system browser, which creates the account the first time.
-   * Settles once the browser comes back, or another sign-in replaces this one. Resolves to an
-   * error for people, or undefined.
+   * Opens the Parallax sign-in page in the system browser, on Create an account if `create`.
+   * Settles once the page signs the app in, another sign-in replaces it, or it times out. Resolves
+   * to an error for people, or undefined.
    */
-  signInWith(provider: OAuthProvider): Promise<string | undefined>;
-  /** Signs in with email and password. Resolves to an error for people, or undefined. */
-  signInWithEmail(email: string, password: string): Promise<string | undefined>;
-  /**
-   * Creates an account with email and password. Resolves to a note for people, such as an error
-   * or "Check your email", or undefined once signed in.
-   */
-  signUp(account: NewAccount): Promise<string | undefined>;
+  signIn(create: boolean): Promise<string | undefined>;
   /** Signs out on this computer. */
   signOut(): Promise<void>;
 }
 
 /** The signed-in Parallax account, as the app shows it. `picture` is a data: URL. */
 export type Profile = { name: string; email: string; picture?: string };
-
-export type OAuthProvider = "github" | "google" | "apple";
-
-export type NewAccount = { firstName: string; lastName: string; email: string; password: string };
 
 /** What the sidebar's Update button shows. */
 export type UpdateState = {
