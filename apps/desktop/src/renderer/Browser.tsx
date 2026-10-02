@@ -18,10 +18,11 @@ export function browserUrl(address: string): string | undefined {
 
 /**
  * The side panel's browser: back, forward, reload, and an address bar over a webview, which main
- * keeps in its own session with no preload or Node (main.ts). Setting `url` loads that page.
- * `remoteHost`, the open host's name when it's an SSH host, notes that localhost is this computer.
+ * keeps in its own session with no preload or Node (main.ts). Each new `page` loads its url, even
+ * the one already shown. `remoteHost`, the open host's name when it's an SSH host, notes that
+ * localhost is this computer.
  */
-export function Browser({ url, remoteHost }: { url?: string; remoteHost?: string }) {
+export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHost?: string }) {
   const view = useRef<WebviewTag>(null);
   // The first page, which mounts the webview; later pages load in it.
   const [src, setSrc] = useState<string>();
@@ -39,8 +40,8 @@ export function Browser({ url, remoteHost }: { url?: string; remoteHost?: string
     else setSrc(next);
   };
 
-  // Only a new `url` loads a page.
-  useEffect(() => void (url && open(url)), [url]);
+  // Only a new `page` loads a page.
+  useEffect(() => page && open(page.url), [page]);
 
   useEffect(() => {
     const el = view.current;

@@ -2,6 +2,7 @@ import { PanelBottom, PanelLeft, PanelRight, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
+import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
@@ -19,7 +20,7 @@ import { attentionOf } from "./attention";
 import { useSnoozeAlarms } from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
-import { folderOf, TerminalDrawer, TerminalPool, useDeleted } from "./ThreadTerminal";
+import { folderOf, runInDrawer, TerminalDrawer, TerminalPool, useDeleted } from "./ThreadTerminal";
 import {
   asksOf,
   groupOf,
@@ -31,7 +32,7 @@ import {
   type ThreadsView,
 } from "./threads";
 import { isRunning } from "./transcript";
-import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
+import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { UsagePage } from "./UsagePage";
 
 /**
@@ -69,6 +70,8 @@ export function App() {
   const [panelExpanded, setPanelExpanded] = useState(false);
   // The folders whose terminal drawer is open, by key (ThreadTerminal.tsx).
   const [drawers, setDrawers] = useState<ReadonlySet<string>>(new Set());
+  // The page a repository action last opened in the side panel's Browser view.
+  const [browse, setBrowse] = useState<{ url: string }>();
   // A quiet note for the thread New Thread just started, such as the account it picked.
   const [notice, setNotice] = useState<{ threadId: string; text: string }>();
 
@@ -241,20 +244,26 @@ export function App() {
     if (!next.delete(folder.key)) next.add(folder.key);
     setDrawers(next);
   };
+  // Runs a repository action in the folder's drawer, opened for it, and opens its preview.
+  const runAction = (action: RepoAction) => {
+    if (!folder) return;
+    if (!drawers.has(folder.key)) setDrawers(new Set(drawers).add(folder.key));
+    runInDrawer(folder, action.command);
+    if (action.openPreview && action.previewUrl) {
+      setPanelOpen(true);
+      setBrowse({ url: action.previewUrl });
+    }
+  };
 
-  // Mod+B: sidebar. Mod+Alt+B: side panel. Mod+J: terminal. Mod+N: new thread. Mod+,: Settings.
+  // The app's shortcuts (ui.tsx), but Mod+O, which OpenMenu takes.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const mac = window.parallax.platform === "darwin";
-      if (!(mac ? e.metaKey : e.ctrlKey)) return;
-      // Off macOS, AltGr arrives as Ctrl+Alt and types characters we must not
-      // eat. (macOS may report Option as AltGraph, and uses Cmd anyway.)
-      if (!mac && e.getModifierState("AltGraph")) return;
-      if (e.code === "KeyB" && e.altKey) setPanelOpen((open) => !open);
-      else if (e.code === "KeyB") setSidebarOpen((open) => !open);
-      else if (e.code === "KeyJ" && !e.altKey && folder) toggleDrawer();
-      else if (e.code === "KeyN" && !e.altKey) newThread();
-      else if (e.key === "," && !e.altKey) openSettings("general");
+      const command = appShortcut(e);
+      if (command === "panel") setPanelOpen((open) => !open);
+      else if (command === "sidebar") setSidebarOpen((open) => !open);
+      else if (command === "terminal" && folder) toggleDrawer();
+      else if (command === "newThread") newThread();
+      else if (command === "settings") openSettings("general");
       else return;
       e.preventDefault();
     };
@@ -324,10 +333,13 @@ export function App() {
           <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
         ) : (
           <>
-            <TopBar className={topBarInset}>
+            <TopBar className={`@container ${topBarInset}`}>
               {showSidebar}
               <Breadcrumb items={crumbs} />
-              <div className="ml-auto flex items-center gap-2">
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                {selection.kind !== "project" && group.id !== noRepo && (
+                  <Actions hostId={host.id} repoId={group.id} canRun={!!folder} onRun={runAction} />
+                )}
                 <OpenMenu
                   hostId={host.id}
                   // The thread's worktree, or New thread's repository.
@@ -439,6 +451,7 @@ export function App() {
         leading={expanded && showSidebar}
         topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
         remoteHost={host.id === localId ? undefined : host.name}
+        browse={browse}
         agents={
           project && (
             <AgentsPanel
