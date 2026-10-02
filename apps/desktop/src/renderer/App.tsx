@@ -1,4 +1,4 @@
-import { PanelBottom, PanelLeft, PanelRight, Workflow } from "lucide-react";
+import { PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
@@ -309,7 +309,7 @@ export function App() {
       aria-controls="sidebar"
       onClick={() => setSidebarOpen(true)}
     >
-      <PanelLeft />
+      <PanelLeftOpen />
     </IconButton>
   );
   // The side panel is a chat's, so Settings and Usage have none.

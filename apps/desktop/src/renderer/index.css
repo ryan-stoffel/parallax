@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@fontsource-variable/sora";
 
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
    (theme.ts). Components use only these tokens, never raw colors. Every
@@ -63,6 +64,10 @@
   --project-violet: #7c3aed;
   --project-pink: #db2777;
   --project-gray: #71717a;
+  /* The app's two-circle mark (logos.tsx): the brand blue and coral, and their overlap. */
+  --mark-blue: #2b5cff;
+  --mark-coral: #ff4a1f;
+  --mark-overlap: #1e1b4b;
 }
 
 :root.dark {
@@ -94,10 +99,13 @@
   --project-violet: #a78bfa;
   --project-pink: #f472b6;
   --project-gray: #a1a1aa;
+  --mark-overlap: #e4e4e7;
 }
 
 @theme inline {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* The app's name in the sidebar. */
+  --font-brand: "Sora Variable", var(--font-sans);
   --color-background: var(--background);
   --color-sidebar: var(--sidebar);
   --color-surface: var(--surface);
@@ -130,6 +138,9 @@
   --color-project-violet: var(--project-violet);
   --color-project-pink: var(--project-pink);
   --color-project-gray: var(--project-gray);
+  --color-mark-blue: var(--mark-blue);
+  --color-mark-coral: var(--mark-coral);
+  --color-mark-overlap: var(--mark-overlap);
   --shadow-composer: var(--shadow-composer);
 }
 
