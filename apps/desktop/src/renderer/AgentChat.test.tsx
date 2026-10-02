@@ -172,6 +172,57 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   expect(links[1]!.hasAttribute("href")).toBe(false);
 });
 
+test("a code block names its language, highlights it, and copies its text", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  row({ kind: "assistant", key: "a", text: "```ts\nconst x = 1;\n```\n\n```\nplain\n```" });
+  const [ts, plain] = [...document.querySelectorAll(".markdown > div")];
+  expect(ts!.firstElementChild!.textContent).toBe("tsCopy");
+  expect(ts!.querySelector(".hljs-keyword")?.textContent).toBe("const");
+  expect(plain!.firstElementChild!.textContent).toBe("textCopy");
+  expect(plain!.querySelector("[class^='hljs-']")).toBeNull();
+  await act(async () => ts!.querySelector<HTMLButtonElement>("button")!.click());
+  expect(writeText).toHaveBeenCalledWith("const x = 1;\n");
+});
+
+test("a diff code block shows added and removed lines, and copies the diff", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const diff = "--- a/q.sql\n+++ b/q.sql\n@@ -1,3 +1,2 @@\n-old\n--- a note\n+new\n same\n";
+  row({ kind: "assistant", key: "a", text: `\`\`\`diff\n${diff}\`\`\`` });
+  // The block's header, then its lines.
+  const lines = [...document.querySelector(".markdown > div")!.lastElementChild!.children];
+  expect(lines.map((l) => l.textContent)).toEqual([
+    "--- a/q.sql",
+    "+++ b/q.sql",
+    "@@ -1,3 +1,2 @@",
+    "−Removed: old",
+    "−Removed: -- a note",
+    "+Added: new",
+    " same",
+  ]);
+  expect(lines[5]!.className).toContain("bg-added/10");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Copy code"]')!.click(),
+  );
+  expect(writeText).toHaveBeenCalledWith(diff);
+});
+
+test("an edit's tool call shows its change as a diff, not JSON", () => {
+  row({
+    kind: "tool",
+    key: "t",
+    callId: "toolu_3",
+    name: "Edit",
+    input: { file_path: "/a.ts", old_string: "let a = 1;", new_string: "let a = 2;" },
+    status: "ok",
+  });
+  const diff = document.querySelector('[role="group"]')!;
+  expect(diff.getAttribute("aria-label")).toBe("Diff: 1 line added, 1 removed");
+  expect(diff.textContent).toBe("−Removed: let a = 1;+Added: let a = 2;");
+  expect(document.querySelector("details")!.textContent).not.toContain("old_string");
+});
+
 test("a tool call collapses its input and output under its name", () => {
   const toggled = vi.fn();
   const tool: Item = {
