@@ -230,6 +230,8 @@ export interface ComposerProps {
    * value is added once.
    */
   insert?: string;
+  /** The thread's earlier prompts, oldest first, which Up and Down recall into an empty box. */
+  history?: readonly string[];
 }
 
 /**
@@ -239,6 +241,7 @@ export interface ComposerProps {
  * through it, anywhere in the box. It grows with its text up to 40% of the window.
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
  * it (RYA-193).
+ * In an empty box, Up and Down step through `history`, until the recalled prompt is edited.
  */
 export function Composer({
   newThread,
@@ -256,6 +259,7 @@ export function Composer({
   imageCaps,
   manualDenied,
   insert,
+  history = [],
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
@@ -267,6 +271,8 @@ export function Composer({
   // Why an image wasn't added, shown by the thumbnails.
   const [imageError, setImageError] = useState<string>();
   const filePicker = useRef<HTMLInputElement>(null);
+  // Which of `history` the box holds, unedited.
+  const recalled = useRef<number>(undefined);
   const [pickedModel, setModel] = useState<Model>();
   const [pickedEffort, setEffort] = useState<AgentEffort>();
   const [pickedPermission, setPermission] = useState<AgentPermission>();
@@ -389,7 +395,10 @@ export function Composer({
     extensions,
     // Pasted text arrives as typed, never reformatted.
     enablePasteRules: false,
-    onUpdate: ({ editor }) => setText(toMarkdown(editor.state.doc)),
+    onUpdate: ({ editor, transaction }) => {
+      if (!transaction.getMeta("recall")) recalled.current = undefined;
+      setText(toMarkdown(editor.state.doc));
+    },
     editorProps: {
       // All of them, since these replace Tiptap's own (its role too) once props change.
       attributes: {
@@ -404,6 +413,27 @@ export function Composer({
           "composer-input markdown block max-h-[40vh] min-h-[calc(4.875em+1.125rem)] overflow-y-auto px-5 pt-4.5 focus-visible:outline-none",
       },
       handleKeyDown: (_view, event): boolean => {
+        const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
+        if ((event.key === "ArrowUp" || event.key === "ArrowDown") && plain) {
+          const at = recalled.current;
+          if (at === undefined && !(event.key === "ArrowUp" && editor.isEmpty && history.length))
+            return false;
+          // Up stops at the oldest, and Down past the newest empties the box.
+          const next = Math.max(0, (at ?? history.length) + (event.key === "ArrowUp" ? -1 : 1));
+          recalled.current = next < history.length ? next : undefined;
+          // A paragraph a line, as pasted text is, with the cursor at its end.
+          const lines = (history[next] ?? "").split("\n").map((line) => ({
+            type: "paragraph",
+            ...(line && { content: [{ type: "text", text: line }] }),
+          }));
+          editor
+            .chain()
+            .setMeta("recall", true)
+            .setContent(next < history.length ? { type: "doc", content: lines } : "")
+            .focus("end")
+            .run();
+          return true;
+        }
         if (event.key !== "Enter" || event.isComposing) return false;
         const inCode = editor.isActive("codeBlock");
         const mod = event.metaKey || event.ctrlKey;
