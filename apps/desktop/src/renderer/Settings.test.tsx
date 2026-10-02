@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, SshHost, UpdateChannel, ParallaxBridge } from "../preload/bridge";
 import type { SettingsSection } from "./App";
+import { models } from "./models";
 import { Settings } from "./Settings";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -99,37 +100,78 @@ const rows = (name: string) =>
   [...section(name).querySelectorAll(":scope > div:last-child > div")].map((r) => r.textContent);
 const button = (within: Element, name: string) =>
   [...within.querySelectorAll("button")].find((b) => b.textContent === name)!;
+const tabs = () => [...document.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
+const tab = (name: string) =>
+  [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) =>
+    t.textContent?.startsWith(name),
+  )!;
+const pane = () => document.querySelector<HTMLElement>('[role="tabpanel"]')!;
 // The Work key's row.
 const work = () =>
-  [...section("This Mac").querySelectorAll("div")].find((d) => d.textContent?.startsWith("Work"))!;
+  [...section("Anthropic API keys").querySelectorAll("div")].find((d) =>
+    d.textContent?.startsWith("Work"),
+  )!;
 const click = async (element: HTMLElement) => {
   await act(async () => element.click());
   await settle();
 };
 
-test("lists each connected host's CLIs and keys, and links a missing CLI to its install page", async () => {
+test("lists the host's CLIs, and shows the chosen one's account, API keys, and models", async () => {
   await renderSettings();
-  expect(rows("This Mac")).toEqual([
-    "Claude Code2.1.281 · MaxSigned in",
-    "Codex0.156.1Not signed inSign in",
-    "CursorNot installedInstall",
-    "WorkAnthropic API key · sk-ant-...abcdRemove",
+  expect(tabs()).toEqual([
+    "Claude Code2.1.281Signed in · Max",
+    "Codex0.156.1Not signed in",
+    "CursorNot installed",
   ]);
-  const install = section("This Mac").querySelector("a")!;
+  expect(tab("Claude Code").getAttribute("aria-selected")).toBe("true");
+  expect(pane().getAttribute("aria-labelledby")).toBe(tab("Claude Code").id);
+  expect(rows("Account")).toEqual(["Signed in · Max"]);
+  expect(rows("Anthropic API keys")).toEqual(["WorkAPI key · sk-ant-...abcdRemove"]);
+  expect(rows("Models")).toEqual(
+    models.filter((m) => m.provider === "Claude").map((m) => m.name + m.id),
+  );
+
+  // Down moves to the next tab and chooses it.
+  await act(async () =>
+    tab("Claude Code").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    ),
+  );
+  expect(document.activeElement).toBe(tab("Codex"));
+  expect(rows("Account")).toEqual(["Not signed inSign in"]);
+  expect(rows("OpenAI API keys")).toEqual([]);
+
+  // Cursor takes no API key (0004), and links to its install page.
+  await click(tab("Cursor"));
+  expect(rows("Account")).toEqual([
+    "Not installedInstall Cursor on this host, then refresh.Install",
+  ]);
+  expect(pane().querySelector('[aria-label$="API keys"]')).toBeNull();
+  const install = section("Account").querySelector("a")!;
   expect(install.href).toBe("https://cursor.com/docs/cli/installation");
   expect(install.target).toBe("_blank");
-
-  expect(section("Mac mini").textContent).toContain("Disconnected");
   expect(request.mock.calls.every(([host]) => host === "local")).toBe(true);
+});
+
+test("the host picker shows another host's state", async () => {
+  await renderSettings();
+  const picker = section("Host") as HTMLSelectElement;
+  await act(async () => {
+    picker.value = mini.id;
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await settle();
+  expect(tabs()).toEqual([]);
+  expect(document.body.textContent).toContain("Disconnected");
 });
 
 test("adds a key, clearing it from its field after each try, and never gets it back", async () => {
   await renderSettings();
-  await click(button(section("This Mac"), "Add API key"));
+  await click(tab("Codex"));
+  await click(button(section("OpenAI API keys"), "Add API key"));
   const form = document.querySelector<HTMLFormElement>('form[aria-label="Add API key"]')!;
   const keyField = form.querySelector<HTMLInputElement>('[name="key"]')!;
   const submit = async () => {
-    form.querySelector<HTMLSelectElement>('[name="provider"]')!.value = "openai";
     form.querySelector<HTMLInputElement>('[name="label"]')!.value = "Personal";
     keyField.value = secret;
     await act(async () => form.requestSubmit());
@@ -165,7 +207,7 @@ test("adds a key, clearing it from its field after each try, and never gets it b
   expect(retry).toEqual(first);
   expect(first!.params).toMatchObject({ provider: "openai", label: "Personal", key: secret });
   expect(document.querySelector("form")).toBeNull();
-  expect(rows("This Mac").at(-1)).toBe("PersonalOpenAI API key · sk-proj-...cdefRemove");
+  expect(rows("OpenAI API keys")).toEqual(["PersonalAPI key · sk-proj-...cdefRemove"]);
   expect(document.body.innerHTML).not.toContain("THE-SECRET");
 });
 
@@ -180,7 +222,7 @@ test("removes a key only once it's confirmed", async () => {
   await click(button(work(), "Remove"));
   await click(button(work(), "Remove"));
   expect(calls("accounts/keys/remove")).toEqual([{ host: "local", params: { id: "k-work" } }]);
-  expect(section("This Mac").textContent).not.toContain("Work");
+  expect(rows("Anthropic API keys")).toEqual([]);
 });
 
 test("a key another client already removed goes when removed", async () => {
@@ -190,7 +232,7 @@ test("a key another client already removed goes when removed", async () => {
   await renderSettings();
   await click(button(work(), "Remove"));
   await click(button(work(), "Remove"));
-  expect(section("This Mac").textContent).not.toContain("Work");
+  expect(rows("Anthropic API keys")).toEqual([]);
   expect(document.querySelector('[role="alert"]')).toBeNull();
 });
 
@@ -208,13 +250,14 @@ test("Refresh probes the CLIs again, without undoing a remove made meanwhile", a
     });
   answers["accounts/keys/remove"] = () => ({ result: {} });
   await renderSettings();
-  await click(button(section("This Mac"), "Refresh"));
+  await click(document.querySelector<HTMLElement>('[aria-label="Refresh"]')!);
   await click(button(work(), "Remove"));
   await click(button(work(), "Remove"));
   await act(async () => probed());
   await settle();
   expect(calls("accounts/refresh")).toHaveLength(1);
-  expect(rows("This Mac")).toEqual(["Claude CodeInstalledNot signed inSign in"]);
+  expect(tabs()).toEqual(["Claude CodeNot signed in"]);
+  expect(rows("Anthropic API keys")).toEqual([]);
 });
 
 test("shows each account's usage and limits for the chosen period, and keeps them live", async () => {
@@ -248,27 +291,29 @@ test("shows each account's usage and limits for the chosen period, and keeps the
     },
   });
   await renderSettings();
-  expect(rows("This Mac")).toEqual([
-    "Claude Code2.1.281 · Max1.2K tokens today, about $0.505-hour limit · 12% used · resets in 2 hSigned in",
-    "Codex0.156.1No usage todayNot signed inSign in",
-    "CursorNot installedInstall",
-    "WorkAnthropic API key · sk-ant-...abcdNo usage todayRemove",
+  expect(document.body.textContent).toContain("Checked just now");
+  expect(rows("Usage")).toEqual([
+    "1.2K tokens today, about $0.505-hour limit · 12% used · resets in 2 h",
   ]);
+  expect(rows("Anthropic API keys")).toEqual(["WorkAPI key · sk-ant-...abcdNo usage todayRemove"]);
 
   await click(section("Usage period").querySelector<HTMLInputElement>('[value="week"]')!);
-  expect(rows("This Mac")).toEqual([
-    "Claude Code2.1.281 · Max42K tokens this week, about $0.905-hour limit · 12% used · resets in 2 hSigned in",
-    "Codex0.156.1No usage this weekNot signed inSign in",
-    "CursorNot installedInstall",
-    "WorkAnthropic API key · sk-ant-...abcd3M tokens this weekRemove",
+  expect(rows("Usage")).toEqual([
+    "42K tokens this week, about $0.905-hour limit · 12% used · resets in 2 h",
   ]);
+  expect(rows("Anthropic API keys")).toEqual([
+    "WorkAPI key · sk-ant-...abcd3M tokens this weekRemove",
+  ]);
+  await click(tab("Codex"));
+  expect(rows("Usage")).toEqual(["No usage this week"]);
 
   // A run hits the limit: the next poll shows it.
   used = 100;
+  await click(tab("Claude Code"));
   await act(() => vi.advanceTimersByTimeAsync(5000));
   await settle();
   expect(calls("usage/get")).toHaveLength(2);
-  expect(rows("This Mac")[0]).toContain("5-hour limit reached · resets in 2 h");
+  expect(rows("Usage")[0]).toContain("5-hour limit reached · resets in 2 h");
 });
 
 const channelRadio = (name: string) =>

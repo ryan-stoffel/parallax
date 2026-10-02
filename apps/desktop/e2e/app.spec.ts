@@ -190,9 +190,9 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
 test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();
-  const host = page.getByRole("region", { name: /^This (Mac|computer)$/ });
-  const codex = (row: RegExp) => host.locator("div").filter({ hasText: row });
-  await expect(codex(/^CodexInstalledNo usage todayNot signed inSign in$/)).toBeVisible();
+  const codex = page.getByRole("tab", { name: /^Codex/ });
+  await codex.click();
+  await expect(codex).toHaveText("CodexNot signed in");
   await page.getByRole("button", { name: "Sign in to Codex" }).click();
 
   const terminal = page.getByRole("group", { name: "Codex sign-in terminal" });
@@ -201,7 +201,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await page.keyboard.press("Enter");
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
   // The sign-in's end ran accounts/refresh, which found the fake signed in.
-  await expect(codex(/^CodexInstalledNo usage todaySigned in$/)).toBeVisible();
+  await expect(codex).toHaveText("CodexSigned in");
 });
 
 test("creates a project on a repository it adds, and opens it (RYA-166)", async () => {
