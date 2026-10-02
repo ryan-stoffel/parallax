@@ -48,7 +48,9 @@ export function TerminalView({
       };
     };
     const term = new Terminal({
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+      // Last, the bundled Nerd Font icons (index.css), for the glyphs no system font has.
+      fontFamily:
+        'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"',
       fontSize: 12,
       cursorBlink: true,
       theme: theme(),

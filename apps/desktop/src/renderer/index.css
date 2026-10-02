@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "@fontsource-variable/sora";
 
+/* Nerd Fonts' icons alone (v3.4.0, MIT, fonts/SymbolsNerdFontMono-LICENSE), the terminal's
+   last font (Terminal.tsx): prompts' icons draw from it, and everything else from the system's
+   monospace font. */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("./fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
+}
+
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
    (theme.ts). Components use only these tokens, never raw colors. Every
    *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
