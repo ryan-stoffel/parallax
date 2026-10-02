@@ -31,9 +31,10 @@ import { ModelMenu } from "./ModelMenu";
 import { backendOf, backends, models, type Model, type Provider, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
 
-// Claude Code's permission modes, under its own names (0027). Every mode but Bypass keeps a
-// worker in its sandbox (0013). Manual's requests, and Auto's undecided ones, come to the chat as
-// approval cards (RYA-196), unless the run can't send them (`manualDenied`).
+// Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
+// every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
+// What would prompt comes to the chat as approval cards (RYA-196), unless the run can't send them
+// (`manualDenied`).
 const accessOptions: Record<AgentPermission, PickerOption> = {
   auto: {
     value: "auto",
@@ -63,8 +64,7 @@ const accessOptions: Record<AgentPermission, PickerOption> = {
     value: "bypass",
     label: "Bypass Permissions",
     icon: <ShieldOff />,
-    description:
-      "Skips every permission check, with no sandbox, like Claude Code on your own machine.",
+    description: "Skips every permission check.",
   },
 };
 

@@ -4,11 +4,12 @@
 //! over the same way (RYA-243). A worker also keeps its plan with Claude Code's task tools, which
 //! ask nothing (RYA-248), and so do a coordinator and a bypass worker, whose `--allowedTools`
 //! turns them on (RYA-249). Each keeps its session's own list, whatever the settings it reads
-//! name in `CLAUDE_CODE_TASK_LIST_ID` (RYA-251). Each test starts the CLI through plxd's own
-//! Claude backend, so the arguments, the translator that reads the CLI's `can_use_tool` request,
-//! and the driver that writes the `control_response` are the ones a real run uses. A local fake
-//! Messages API asks for the tool calls, so no account or Anthropic connection is needed. Set
-//! `PLX_SANDBOX_CLAUDE` to the CLI under test, as CI's Linux legs do.
+//! name in `CLAUDE_CODE_TASK_LIST_ID` (RYA-251). A thread, full Claude Code, asks before a `git
+//! commit` in Accept Edits, and its commit lands once allowed (RYA-276). Each test starts the CLI
+//! through plxd's own Claude backend, so the arguments, the translator that reads the CLI's
+//! `can_use_tool` request, and the driver that writes the `control_response` are the ones a real
+//! run uses. A local fake Messages API asks for the tool calls, so no account or Anthropic
+//! connection is needed. Set `PLX_SANDBOX_CLAUDE` to the CLI under test, as CI's Linux legs do.
 #![cfg(unix)]
 
 #[expect(
@@ -117,6 +118,7 @@ fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
             thread: CoordinatorThreadId::generate(),
         }),
         approvals: true,
+        thread: false,
     }
 }
 
@@ -373,6 +375,73 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
     assert!(results[0].2.contains("probe-ran"), "{events:#?}");
     assert_eq!(results[1].1, ToolStatus::Ok, "{events:#?}");
     assert_eq!(fs::read_to_string(&file).unwrap(), "approved\n");
+    assert_eq!(outcome(&events), &done(), "{events:#?}");
+}
+
+/// A thread in Accept Edits is full Claude Code (RYA-276, 0034): its Bash isn't sandboxed, so a
+/// `git commit` asks plxd first, and once allowed it writes the repository's git folder, which a
+/// sandboxed worker's commands can't.
+#[tokio::test]
+async fn a_thread_commits_in_its_worktree_once_plxd_allows_it() {
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        return;
+    };
+    let folders = Folders::new();
+    let repo = folders.root.join("repo");
+    let worktree = folders.data.join("worktrees/run");
+    let git = |dir: &Path, args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "parallax/run",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    let context = folders.data.join("context/p");
+    fs::create_dir_all(&context).unwrap();
+    let (mut request, _temp) = worker_request(
+        &folders.home,
+        &folders.data,
+        &worktree,
+        &repo.join(".git"),
+        &context,
+    );
+    request.thread = true;
+    request.approvals = true;
+    request.permission = Some(AgentPermission::Edit);
+    request.account.credential = Credential::ApiKey(ApiKey::new(KEY.into()));
+    let commit = "git -c user.name=t -c user.email=t@t commit -q --allow-empty -m probe";
+    let api = fake_api(vec![ToolCall::bash(commit)]).await;
+    let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
+
+    let events = drive(&backend, request, |_| Decision::Allow {
+        input: None,
+        always: false,
+    })
+    .await;
+    let asked = requests(&events);
+    assert_eq!(asked.len(), 1, "{events:#?}");
+    assert_eq!(asked[0].tool_name, "Bash");
+    assert_eq!(asked[0].input["command"], commit);
+    assert_eq!(results(&events)[0].1, ToolStatus::Ok, "{events:#?}");
+    assert_eq!(git(&worktree, &["log", "-1", "--format=%s"]), "probe\n");
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 

@@ -167,7 +167,8 @@ pub struct RepoAddResult {
 }
 
 /// Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
-/// starts a worker, with the same sandbox (0013).
+/// starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
+/// worker sandbox (0034); without it, it keeps the worker's sandbox (0013).
 ///
 /// Idempotent on `runId`: the same id with the same params returns the run; with different
 /// params it fails with `idConflict`.
@@ -195,7 +196,7 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
-    /// How the agent may act inside its sandbox, as `agent/start` takes it.
+    /// Claude Code's permission mode for the agent, as `agent/start` takes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,

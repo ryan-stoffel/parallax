@@ -91,8 +91,8 @@ pub(crate) fn initialize(
 /// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
 /// `approvals` (RYA-222, 0031): `agent/start`, `thread/start`, and `project/start` take
 /// `approvals`, which an older plxd would silently ignore. A run started with it, in Manual,
-/// Auto, or Plan, asks through `approvalRequested` items, which `agent/approve` answers, instead
-/// of denying what would prompt.
+/// Auto, or Plan, and a thread in Accept Edits too (0034), asks through `approvalRequested`
+/// items, which `agent/approve` answers, instead of denying what would prompt.
 /// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
 /// and `project/create`, which an older plxd would silently drop.
 /// `threadAttention` (RYA-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and

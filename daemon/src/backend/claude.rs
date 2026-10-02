@@ -20,11 +20,13 @@
 //!   terminal. As a second check, a coordinator whose `system/init` reports another permission
 //!   mode fails with [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
-//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
-//!   each writable folder. In [`AgentPermission::Bypass`] a worker is full Claude Code instead,
-//!   as on the user's own machine (0027): only its permission mode, `--allowedTools` with
-//!   [`TODO_TOOLS`], `--add-dir`, and `--settings` with only [`settings_env`], with no sandbox,
-//!   and its `system/init` may list any tool. Otherwise:
+//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for each
+//!   writable folder. A normal thread in any mode whose client answers permission requests (0034),
+//!   and a worker in [`AgentPermission::Bypass`] (0027), are full Claude Code instead, as on the
+//!   user's own machine ([`unsandboxed`]): only the permission mode, `--allowedTools` with
+//!   [`TODO_TOOLS`], `--add-dir`, and `--settings` with only [`settings_env`], with no sandbox, so
+//!   the user's settings, `CLAUDE.md` files, skills, plugins, hooks, subagents, and MCP servers all
+//!   load, and its `system/init` may list any tool. Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
@@ -123,18 +125,19 @@
 //!
 //! # Permission requests
 //!
-//! In Manual, Auto, and Plan, a worker's, a thread's, or a coordinator's CLI gets
-//! [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its `canUseTool` (RYA-222, 0031), when
-//! its client answers permission requests ([`RunRequest::approvals`]).
-//! Instead of denying a tool call nobody approved, the CLI writes a `can_use_tool` control request
-//! on stdout and waits. The driver reports it as [`Event::ApprovalRequested`] and writes the
-//! answer that [`Run::answer`] gives as a `control_response` on stdin, which stays open while a
-//! request waits. A `control_cancel_request` withdraws one, as the CLI's exit withdraws every one
-//! left, and any other control request gets an error response. Accept Edits and Bypass
-//! Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`), and a run
-//! without `approvals` denies what would prompt, so their CLIs run as before. In Plan, the plan
-//! itself is a request: `ExitPlanMode`'s, which a coordinator always has with the channel and a
-//! worker gets with it (RYA-243).
+//! In Manual, Auto, and Plan, a worker's, a thread's, or a coordinator's CLI, and a thread's in
+//! Accept Edits too, gets [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its
+//! `canUseTool` (RYA-222, 0031), when its client answers permission requests
+//! ([`RunRequest::approvals`]). Instead of denying a tool call nobody approved, the CLI writes a
+//! `can_use_tool` control request on stdout and waits. The driver reports it as
+//! [`Event::ApprovalRequested`] and writes the answer that [`Run::answer`] gives as a
+//! `control_response` on stdin, which stays open while a request waits. A
+//! `control_cancel_request` withdraws one, as the CLI's exit withdraws every one left, and any
+//! other control request gets an error response. A sandboxed worker in Accept Edits and every run
+//! in Bypass Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`),
+//! and a run without `approvals` denies what would prompt, so their CLIs run as before. In Plan,
+//! the plan itself is a request: `ExitPlanMode`'s, which a coordinator and a thread always have
+//! with the channel and a worker gets with it (RYA-243).
 //!
 //! # Cancel
 //!
@@ -564,12 +567,11 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             "plxd's coordinator tools are only for a no-write run".into(),
         ));
     }
-    let bypass = request.policy == ToolPolicy::WorkspaceWrite
-        && request.permission == Some(AgentPermission::Bypass);
+    let unsandboxed = unsandboxed(request);
     let policy: &[&str] = match request.policy {
         ToolPolicy::NoWrite if coordinator => &[],
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
-        ToolPolicy::WorkspaceWrite if bypass => &[],
+        ToolPolicy::WorkspaceWrite if unsandboxed => &[],
         ToolPolicy::WorkspaceWrite if hands_over_plans(request) => PLAN_WORKSPACE_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
@@ -607,11 +609,11 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             "--allowedTools".into(),
             allowed.join(",").into(),
         ]);
-    } else if bypass {
+    } else if unsandboxed {
         args.extend(["--allowedTools".into(), TODO_TOOLS.join(",").into()]);
     }
     if let Some(sandbox) = worker_sandbox(request)? {
-        if !bypass {
+        if !unsandboxed {
             let config_home = match &request.account.credential {
                 Credential::Subscription { config_home } => config_home.as_deref(),
                 Credential::ApiKey(_) => None,
@@ -623,7 +625,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             args.extend(["--add-dir".into(), dir.into()]);
         }
     }
-    if coordinator || bypass {
+    if coordinator || unsandboxed {
         // Full Claude Code loads the user's and the project's settings, whose `env` could share
         // its task list, so it gets `--settings` only for this (RYA-251).
         let env = serde_json::json!({"env": settings_env()});
@@ -717,25 +719,50 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
         .collect()
 }
 
+/// Whether `request` runs as full Claude Code with no worker sandbox, though it may write: a
+/// normal thread in any mode whose client answers permission requests ([`full_thread`], 0034),
+/// or a worker in [`AgentPermission::Bypass`] (0027). Its tools, settings, and MCP servers are
+/// whatever the user's configuration loads.
+#[must_use]
+pub fn unsandboxed(request: &RunRequest) -> bool {
+    request.policy == ToolPolicy::WorkspaceWrite
+        && (full_thread(request) || request.permission == Some(AgentPermission::Bypass))
+}
+
+/// Whether `request` is a normal thread that runs as full Claude Code (0034): one whose client
+/// answers permission requests. Without `approvals`, such as a thread started before the app
+/// showed them, its commands would be denied wherever they'd prompt, so it keeps the worker
+/// sandbox, where they run without asking, as before.
+#[must_use]
+pub fn full_thread(request: &RunRequest) -> bool {
+    request.thread && request.approvals
+}
+
 /// Whether `request`'s CLI asks plxd before a tool call that would prompt (RYA-222, 0031): a
-/// worker, a thread, or a coordinator in Manual, Auto, or Plan, whose client answers
-/// ([`RunRequest::approvals`]). Accept Edits and Bypass Permissions don't ask about what they run,
-/// a plain no-write run denies anything not allowed (`dontAsk`), and a run without `approvals`
-/// denies what would prompt, as headless Claude Code does.
+/// worker, a thread, or a coordinator in Manual, Auto, or Plan, and a thread in Accept Edits too,
+/// whose client answers ([`RunRequest::approvals`]). A thread has no sandbox to run its commands
+/// without asking, so in Accept Edits its Bash calls prompt, as in a terminal (0034). A sandboxed
+/// worker's don't, and Bypass Permissions asks about nothing. A plain no-write run denies
+/// anything not allowed (`dontAsk`), and a run without `approvals` denies what would prompt, as
+/// headless Claude Code does.
 #[must_use]
 pub fn prompts(request: &RunRequest) -> bool {
     let plain_no_write =
         request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none();
+    let thread_edits =
+        full_thread(request) && matches!(request.permission, None | Some(AgentPermission::Edit));
     request.approvals
         && !plain_no_write
-        && matches!(
-            request.permission,
-            Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)
-        )
+        && (thread_edits
+            || matches!(
+                request.permission,
+                Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)
+            ))
 }
 
 /// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], RYA-243):
-/// a worker or a thread in Plan whose CLI asks plxd ([`prompts`]). Headless Claude Code offers
+/// a sandboxed worker in Plan whose CLI asks plxd ([`prompts`]). A thread has no `--tools`, so
+/// it has the tool as a coordinator does (0034). Headless Claude Code offers
 /// the tool only to a run that asks a host, and asking with it is how the plan reaches the user
 /// (0031). The tool runs nothing and writes nothing in the worktree. Allowing it only moves the
 /// CLI to `default` (Manual), a mode a worker can start in, under the same `--restricted`,
@@ -745,6 +772,7 @@ pub fn prompts(request: &RunRequest) -> bool {
 #[must_use]
 pub fn hands_over_plans(request: &RunRequest) -> bool {
     request.policy == ToolPolicy::WorkspaceWrite
+        && !full_thread(request)
         && request.permission == Some(AgentPermission::Plan)
         && prompts(request)
 }
@@ -871,6 +899,7 @@ impl Backend for ClaudeBackend {
         spec.args = arguments(&request)?;
         let asks = prompts(&request);
         let plan_exit = hands_over_plans(&request);
+        let full = full_thread(&request);
         if let Some(sandbox) = worker_sandbox(&request)? {
             spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
         }
@@ -925,6 +954,7 @@ impl Backend for ClaudeBackend {
             stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
                 .with_coordinator_tools(request.coordinator_tools.is_some())
+                .with_thread(full)
                 .with_permission_mode(permission_mode(request.permission)?)
                 .with_prompts(asks)
                 .with_plan_exit(plan_exit),

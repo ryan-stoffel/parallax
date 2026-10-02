@@ -75,6 +75,7 @@ fn request(cwd: &Path) -> RunRequest {
         fast: None,
         coordinator_tools: None,
         approvals: false,
+        thread: false,
     }
 }
 

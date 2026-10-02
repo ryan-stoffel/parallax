@@ -503,6 +503,7 @@ fi"#;
             fast: None,
             coordinator_tools: None,
             approvals: false,
+            thread: false,
         };
         let mut started = backend.start(request).unwrap();
         loop {
