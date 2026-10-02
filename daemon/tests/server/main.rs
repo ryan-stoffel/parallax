@@ -12,6 +12,7 @@ mod approvals;
 mod context;
 mod coordinator;
 mod events;
+mod git;
 mod handshake;
 mod keys;
 mod lifecycle;

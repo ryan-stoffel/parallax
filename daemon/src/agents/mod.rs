@@ -50,7 +50,7 @@ use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
     AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun,
     AgentRunState, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind,
-    ImageMediaType, ParallaxEvent, ProjectId, PromptImage, Role, RunId, TurnId,
+    GitStatus, ImageMediaType, ParallaxEvent, ProjectId, PromptImage, Role, RunId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
@@ -59,6 +59,7 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+pub(crate) use self::actor::GitAction;
 use self::actor::{Actor, Command};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
@@ -1149,6 +1150,15 @@ pub(crate) async fn open_pr(
     })
     .await?;
     Ok(AgentOpenPrResult { url })
+}
+
+/// `agent/gitStatus`, `agent/commit`, and `agent/push`: through the run's actor (RYA-298).
+pub(crate) async fn git(
+    daemon: Arc<Daemon>,
+    run_id: RunId,
+    action: GitAction,
+) -> Result<GitStatus, ErrorObject> {
+    ask(&daemon, run_id, |reply| Command::Git { action, reply }).await
 }
 
 /// Marks every run the store still has as `starting` or `running` as `interrupted`: plxd
