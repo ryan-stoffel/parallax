@@ -250,7 +250,7 @@ export function App() {
         ? undefined
         : "Connecting to plxd…";
 
-  // The open thread's folder, or the new thread's repository's, where its terminals open.
+  // The open thread's or New thread's repository checkout, where its terminals open (folderOf).
   const folder =
     settings || selection.kind === "usage" || selection.kind === "project"
       ? undefined
