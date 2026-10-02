@@ -6,7 +6,14 @@ import type {
   ThreadStartResult,
   ParallaxEvent,
 } from "../protocol/generated/protocol";
-import { emptyThreads, groupThreads, noRepo, threadsReducer, type ThreadsState } from "./threads";
+import {
+  asksOf,
+  emptyThreads,
+  groupThreads,
+  noRepo,
+  threadsReducer,
+  type ThreadsState,
+} from "./threads";
 
 const messages = samples as { id?: number; method?: string; params?: unknown; result?: unknown }[];
 const events = messages
@@ -115,4 +122,36 @@ test("groups: repositories, then No Repo, newest first, archived apart", () => {
     [noRepo, "No Repo", [quickChat.thread.id]],
   ]);
   expect(groupThreads(state).archived.map((t) => t.id)).toEqual([started.thread.id]);
+});
+
+test("a scope's events keep a run current, stamp when it changed, and track what it asks", () => {
+  const run = { id: "r-1", prompt: "Go", status: "running", updatedAt: "2026-10-01T10:00:00Z" };
+  let state = threadsReducer(emptyThreads, {
+    type: "snapshot",
+    projects: [],
+    repos: [],
+    threads: [],
+    runs: [run as never],
+  });
+  const asked = {
+    seq: 5,
+    time: "2026-10-01T10:01:00Z",
+    event: {
+      kind: "agent.output",
+      runId: "r-1",
+      items: [{ kind: "approvalRequested", requestId: "q-1", toolName: "Bash", input: {} }],
+    },
+  };
+  const finished = {
+    seq: 6,
+    time: "2026-10-01T10:02:00Z",
+    event: { kind: "agent.updated", runId: "r-1", state: { status: "completed", accountId: "a" } },
+  };
+  state = threadsReducer(state, { type: "scope", events: [asked as never] });
+  expect(asksOf(state, "r-1")).toBe(1);
+  state = threadsReducer(state, { type: "scope", events: [finished as never] });
+  expect(state.runs["r-1"]).toMatchObject({
+    status: "completed",
+    updatedAt: "2026-10-01T10:02:00Z",
+  });
 });

@@ -228,8 +228,8 @@ test("creates a project on a repository it adds, and opens it (RYA-166)", async 
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  const projects = page.getByRole("region", { name: "Projects" });
-  await expect(projects.getByRole("listitem")).toHaveText([/^ember/]);
+  // One row for the Project, in the sidebar's one list (0033).
+  await expect(page.locator('#sidebar li[data-kind="project"] [data-title]')).toHaveText(["ember"]);
 });
 
 test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (RYA-46)", async () => {
@@ -260,8 +260,7 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
 
   await page.reload();
-  const projects = page.getByRole("region", { name: "Projects" });
-  await projects.getByRole("button", { name: /^ember/ }).click();
+  await page.locator('#sidebar li[data-kind="project"] > button').first().click();
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 
   // Stop plxd with the coordinator running. The app reconnects through a new `serve`, which
@@ -326,15 +325,16 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
 
 test("renames the project and picks its icon from its row, and both outlive a reload (RYA-230)", async () => {
   // The last test left ember open. Its row's actions show on hover.
-  const projects = page.getByRole("region", { name: "Projects" });
-  await projects.getByRole("listitem").hover();
+  const projects = page.locator('#sidebar li[data-kind="project"]');
+  await projects.hover();
   await projects.getByRole("button", { name: "Project actions" }).click();
   await page.getByRole("menuitem", { name: "Rename" }).click();
   const name = projects.getByRole("textbox", { name: "Project name" });
   await expect(name).toBeFocused();
   await name.fill("ember app");
   await name.press("Enter");
-  const row = projects.getByRole("button", { name: /^ember app/ });
+  const row = projects.locator(":scope > button").first();
+  await expect(row.locator("[data-title]")).toHaveText("ember app");
   await expect(row).toBeFocused();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember app");
 
@@ -354,7 +354,7 @@ test("renames the project and picks its icon from its row, and both outlive a re
   await expect(rocket).toHaveAttribute("aria-selected", "true");
   await rocket.press("Escape");
   await expect(picker).toBeHidden();
-  const icon = row.locator("svg");
+  const icon = row.locator("[data-project-icon] svg");
   await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
 
   // The name and icon are the host's (0032).
@@ -382,8 +382,10 @@ test("starts a thread in the repository's current checkout, on its branch, with 
   )) as { result: { repo: { id: string } } };
   expect(added).not.toHaveProperty("error");
 
-  await page.getByRole("button", { name: "quill", exact: true }).hover();
-  await page.getByRole("button", { name: "New thread in quill" }).click();
+  // New thread, then quill from the heading's repository menu.
+  await page.getByRole("button", { name: "New thread" }).click();
+  await page.getByRole("heading", { level: 1 }).getByRole("button").click();
+  await page.getByRole("menuitemradio", { name: "quill" }).click();
   // The heading's accessible name spaces out the repository button inside it, so match its text.
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "What should we build in quill?",

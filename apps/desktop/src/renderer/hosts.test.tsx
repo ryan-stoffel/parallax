@@ -9,6 +9,7 @@ import { App } from "./App";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
+const [t0, t1, t2] = ["2026-10-01T09:00:00Z", "2026-10-01T10:00:00Z", "2026-10-01T11:00:00Z"];
 const connected: ConnectionState = {
   status: "connected",
   plxd: "0.1.0",
@@ -22,15 +23,16 @@ const untrusted: ConnectionState = {
 };
 
 let states: Record<string, ConnectionState>;
-const request = vi.fn(async (_host: string, method: string) =>
+const listsNothing = async (_host: string, method: string): Promise<unknown> =>
   method === "thread/list" || method === "agent/list"
     ? { result: { repos: [], threads: [], runs: [], seq: 1 }, logId: "log" }
-    : { error: { code: -32601, message: `${method} isn't faked` } },
-);
+    : { error: { code: -32601, message: `${method} isn't faked` } };
+const request = vi.fn(listsNothing);
 const saveHost = vi.fn<(host: HostInput, id?: string) => Promise<string | undefined>>();
 
 beforeEach(() => {
-  request.mockClear();
+  request.mockReset();
+  request.mockImplementation(listsNothing);
   saveHost.mockReset();
   states = { local: connected, [mini.id]: untrusted };
   window.parallax = {
@@ -64,47 +66,74 @@ async function renderApp() {
 const settle = async () => {
   for (let i = 0; i < 10; i++) await act(async () => {});
 };
-const hostRows = () => [
-  ...document.querySelectorAll<HTMLButtonElement>(
-    '[aria-labelledby="hosts-heading"] > li > button',
-  ),
-];
 const click = async (element: HTMLElement) => {
   await act(async () => element.click());
   await settle();
 };
+const rows = () => [
+  ...document.querySelectorAll<HTMLButtonElement>('#sidebar li[data-kind="thread"] > button'),
+];
+const title = (row: HTMLElement) => row.querySelector("[data-title]")!.textContent;
 
-test("every host is listed with its own status, this computer first", async () => {
-  await renderApp();
-  expect(hostRows().map((row) => row.textContent)).toEqual([
-    "This MacConnected",
-    "Mac miniDisconnected",
-  ]);
-  expect(hostRows()[1]!.title).toBe("mini's host key isn't trusted yet.");
-  expect(hostRows()[0]!.getAttribute("aria-expanded")).toBe("true");
-});
-
-test("opening an SSH host shows its error and loads its threads from it", async () => {
-  await renderApp();
-  await click(hostRows()[1]!);
-  expect(hostRows()[1]!.getAttribute("aria-expanded")).toBe("true");
-  const footer = document.querySelector('[role="status"]')!;
-  expect(footer.textContent).toContain("mini's host key isn't trusted yet.");
-  expect(footer.textContent).toContain("Retry");
-
+test("every connected host's threads are one list, newest prompt first, each opening on its host", async () => {
   states[mini.id] = connected;
-  await click(hostRows()[0]!);
-  await click(hostRows()[1]!);
-  expect(
-    request.mock.calls.some(([host, method]) => host === mini.id && method === "thread/list"),
-  ).toBe(true);
-  const crumbs = document.querySelectorAll('[aria-label="Breadcrumb"] li');
-  expect(crumbs[0]!.textContent).toBe("Mac mini");
+  const repo = (id: string, name: string) => ({ id, name, path: `/src/${name}`, createdAt: t0 });
+  const thread = (id: string, repoId: string, lastPromptAt: string) => ({
+    id,
+    repo: repoId,
+    createdAt: t0,
+    lastPromptAt,
+  });
+  const lists: Record<string, unknown> = {
+    local: { repos: [repo("r-1", "parallax")], threads: [thread("t-1", "r-1", t1)], seq: 1 },
+    [mini.id]: { repos: [repo("r-2", "api")], threads: [thread("t-2", "r-2", t2)], seq: 1 },
+  };
+  const runs: Record<string, unknown[]> = {
+    local: [{ id: "t-1", project: "r-1", prompt: "Fix the flaky test", status: "completed" }],
+    [mini.id]: [{ id: "t-2", project: "r-2", prompt: "Add the endpoint", status: "completed" }],
+  };
+  request.mockImplementation(async (host: string, method: string) =>
+    method === "thread/list"
+      ? { result: lists[host], logId: "log" }
+      : method === "agent/list"
+        ? { result: { runs: runs[host], seq: 1 }, logId: "log" }
+        : method === "project/list"
+          ? { result: { projects: [], seq: 1 }, logId: "log" }
+          : { error: { code: -32601, message: `${method} isn't faked` } },
+  );
+  await renderApp();
+  expect(rows().map(title)).toEqual(["Add the endpoint", "Fix the flaky test"]);
+  // No Hosts section: each host is a source of rows, not a heading.
+  expect(document.querySelector("#hosts-heading")).toBeNull();
+
+  await click(rows()[0]!);
+  const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Mac mini", "api", "Add the endpoint"]);
+  expect(rows()[0]!.getAttribute("aria-current")).toBe("page");
 });
 
-test("the sidebar's Add host opens the form, which shows the main process's error", async () => {
+test("a host that can't connect adds nothing to the list, and Settings shows why", async () => {
   await renderApp();
-  await click(document.querySelector<HTMLButtonElement>('[aria-label="Add host"]')!);
+  expect(rows()).toEqual([]);
+  expect(request.mock.calls.some(([host]) => host === mini.id)).toBe(false);
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }));
+  });
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Hosts")!);
+  expect(document.querySelector("main")!.textContent).toContain("Mac mini");
+});
+
+test("Settings' Add host opens the form, which shows the main process's error", async () => {
+  await renderApp();
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }));
+  });
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Hosts")!);
+  await click(
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Add host",
+    )!,
+  );
   expect(document.querySelector("h1")!.textContent).toBe("Hosts");
 
   const form = document.querySelector<HTMLFormElement>('form[aria-label="Add host"]')!;

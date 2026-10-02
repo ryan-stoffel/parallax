@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import type { RpcError, ThreadName } from "../preload/bridge";
 import type {
   AgentRun,
+  LoggedEvent,
   Project,
   ProjectIcon as ProjectIconValue,
   ProjectStartParams,
@@ -14,6 +15,7 @@ import type {
 } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import type { RunOptions } from "./models";
+import { isRunning, trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
 /** A host's projects, repo entries, and normal threads (0017), and each thread's title and run. */
@@ -23,11 +25,10 @@ export interface ThreadsState {
   threads: Thread[];
   /** By run id: the first line of the run's prompt, since a thread has no title of its own. */
   titles: Readonly<Record<string, string>>;
-  /**
-   * By run id: each thread's run as last listed. Host-level events don't carry run changes, so
-   * its status can lag until `refresh` lists the thread's repository again.
-   */
+  /** By run id: each run, kept current by its repo's or Project's own events. */
   runs: Readonly<Record<string, AgentRun>>;
+  /** By run id: the permission requests each run waits on (0033's "needs you"). */
+  approvals: ApprovalsByRun;
 }
 
 export const emptyThreads: ThreadsState = {
@@ -36,14 +37,21 @@ export const emptyThreads: ThreadsState = {
   threads: [],
   titles: {},
   runs: {},
+  approvals: {},
 };
+
+/** How many permission requests run `runId` waits on. */
+export const asksOf = (state: ThreadsState, runId: string) =>
+  state.approvals[runId]?.items.length ?? 0;
 
 export type ThreadsAction =
   | { type: "snapshot"; projects: Project[]; repos: Repo[]; threads: Thread[]; runs: AgentRun[] }
   | { type: "runs"; runs: AgentRun[] }
   /** A Project's new coordinator, which no host-level event announces (0024). */
   | { type: "coordinator"; run: AgentRun }
-  | { type: "event"; event: ParallaxEvent };
+  | { type: "event"; event: ParallaxEvent }
+  /** A repo's or a Project's own events: its runs and their permission requests. */
+  | { type: "scope"; events: LoggedEvent[] };
 
 /** Applies a snapshot, runs' titles, or a host-level event. Events are upserts, so a repeat is harmless. */
 export function threadsReducer(state: ThreadsState, action: ThreadsAction): ThreadsState {
@@ -55,6 +63,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         threads: action.threads,
         titles: titlesOf(action.runs),
         runs: byId(action.runs),
+        approvals: {},
       };
     case "runs":
       return {
@@ -69,6 +78,26 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
           p.id === action.run.project ? { ...p, coordinator: action.run.id } : p,
         ),
       };
+    case "scope": {
+      let runs = state.runs;
+      for (const { event, time } of action.events) {
+        if (!("runId" in event)) continue;
+        const before = runs[event.runId];
+        const run = updateRun(before, event);
+        // `updatedAt` marks when it last changed, so a run that stops after the user looked
+        // counts as unseen (0033).
+        if (run && run !== before) runs = { ...runs, [run.id]: { ...run, updatedAt: time } };
+      }
+      const started = action.events.flatMap((e) =>
+        e.event.kind === "agent.started" && e.event.run ? [e.event.run] : [],
+      );
+      return {
+        ...state,
+        runs,
+        titles: started.length ? { ...state.titles, ...titlesOf(started) } : state.titles,
+        approvals: trackApprovals(state.approvals, action.events),
+      };
+    }
     case "event": {
       const e = action.event;
       switch (e.kind) {
@@ -76,6 +105,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         case "project.updated":
           return { ...state, projects: upsert(state.projects, e.project) };
         case "repo.added":
+        case "repo.updated":
           return { ...state, repos: upsert(state.repos, e.repo) };
         case "thread.started":
         case "thread.updated":
@@ -189,8 +219,6 @@ export interface ThreadsView {
   ) => Promise<RpcError | undefined>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
-  /** Lists a repo entry's runs again, so their status is current. Failures are ignored. */
-  refresh: (repo: string) => void;
   /**
    * Creates a project on a repository's path, with `icon` if one was chosen. Reuse `id`, with the
    * same name, path, and icon, to retry. Resolves to the project or an error message.
@@ -219,7 +247,21 @@ export interface ThreadsView {
     images: PromptImage[],
     options: CoordinatorOptions,
   ) => Promise<RpcError | undefined>;
+  /** Whether the host's plxd keeps seen and snooze state and repo icons (`threadAttention`, 0033). */
+  attention: boolean;
+  /** Whether the host's plxd renames Projects and sets their icons (`projectEdit`, 0032). */
+  editable: boolean;
+  /**
+   * Marks a thread seen, or snoozes it until a time (a past one ends the snooze). Resolves to an
+   * error message, or undefined.
+   */
+  update: (runId: string, change: ThreadChange) => Promise<string | undefined>;
+  /** Sets a repo entry's icon. Resolves to an error message, or undefined. */
+  updateRepo: (repo: string, icon: ProjectIconValue) => Promise<string | undefined>;
 }
+
+/** What `thread/update` changes. */
+export type ThreadChange = { seen?: boolean; snoozedUntil?: string };
 
 /** What `project/update` changes: a project's name, its icon, or both. */
 export type ProjectChange = Omit<ProjectUpdateParams, "project">;
@@ -232,11 +274,17 @@ export type CoordinatorOptions = Pick<
 
 /**
  * A host's threads and projects, kept live: `thread/list`, `agent/list` (for titles and runs), and
- * `project/list`, then host-level events after the thread list's `seq`, starting over on `resync`.
- * Loads only while `connected`. With `approvals`, the host's plxd advertises them, and the threads
- * and coordinators started here forward their permission requests (RYA-196, 0031).
+ * `project/list`, then host-level events after the thread list's `seq`, and each repo's and
+ * Project's own events for its runs and their permission requests (0033), starting over on
+ * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
+ * `approvals`, the threads and coordinators started here forward their permission requests
+ * (RYA-196, 0031); `attention` and `editable` are passed through for the sidebar.
  */
-export function useThreads(hostId: string, connected: boolean, approvals = false): ThreadsView {
+export function useThreads(
+  hostId: string,
+  connected: boolean,
+  { approvals = false, attention = false, editable = false } = {},
+): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
   // Another host starts empty, rather than showing this one's threads until its list loads.
@@ -246,7 +294,7 @@ export function useThreads(hostId: string, connected: boolean, approvals = false
     dispatch({ type: "snapshot", projects: [], repos: [], threads: [], runs: [] });
     setError(undefined);
   }
-  // The host shown now, so `refresh` drops a late answer from one the user has left.
+  // The host shown now, so an answer from one the user has left is dropped.
   const shown = useRef(hostId);
   useEffect(() => {
     shown.current = hostId;
@@ -257,7 +305,23 @@ export function useThreads(hostId: string, connected: boolean, approvals = false
     let stopped = false;
     let unsubscribe = () => {};
 
+    // Each repo's and Project's own events, for its runs' status and permission requests.
+    let scopes = new Map<string, () => void>();
+    const watch = (scope: string, after: number, logId: string) => {
+      if (scopes.has(scope)) return;
+      scopes.set(
+        scope,
+        window.parallax.subscribe(hostId, { after, project: scope, logId }, (message) => {
+          if (stopped) return;
+          if (message.type === "resync") return void load();
+          if (message.type === "event") dispatch({ type: "scope", events: [message.event] });
+        }),
+      );
+    };
+
     async function load() {
+      for (const stop of scopes.values()) stop();
+      scopes = new Map();
       const list = await window.parallax.request(hostId, "thread/list", {});
       if (stopped) return;
       if ("error" in list) return setError(list.error.message);
@@ -277,6 +341,15 @@ export function useThreads(hostId: string, connected: boolean, approvals = false
         runs: runs.result.runs,
       });
       setError(undefined);
+      // From the run list's `seq`, so no run's change since is missed.
+      const after = runs.result.seq;
+      for (const r of list.result.repos) watch(r.id, after, runs.logId);
+      for (const p of projects.result.projects) watch(p.id, after, runs.logId);
+      // Requests from before the list are in the logs of runs that still go.
+      const backlog = await waitingSince(hostId, runs.result.runs, () => stopped);
+      if (stopped) return;
+      dispatch({ type: "scope", events: backlog });
+      unsubscribe();
       const since = { after: list.result.seq, logId: list.logId };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
@@ -284,6 +357,10 @@ export function useThreads(hostId: string, connected: boolean, approvals = false
         if (message.type === "error") return setError(message.error.message);
         const { event } = message.event;
         dispatch({ type: "event", event });
+        // A new scope's events start after this one, which is newer than its creation.
+        if (event.kind === "repo.added") watch(event.repo.id, message.event.seq, list.logId);
+        if (event.kind === "project.created")
+          watch(event.project.id, message.event.seq, list.logId);
         // Its title is its run's prompt, which the event doesn't carry.
         if (event.kind === "thread.started")
           void window.parallax
@@ -299,6 +376,7 @@ export function useThreads(hostId: string, connected: boolean, approvals = false
     return () => {
       stopped = true;
       unsubscribe();
+      for (const stop of scopes.values()) stop();
     };
   }, [hostId, connected]);
 
@@ -366,16 +444,6 @@ export function useThreads(hostId: string, connected: boolean, approvals = false
     [hostId],
   );
 
-  const refresh = useCallback(
-    (repo: string) => {
-      void window.parallax.request(hostId, "agent/list", { project: repo }).then((answer) => {
-        if (shown.current === hostId && "result" in answer)
-          dispatch({ type: "runs", runs: answer.result.runs });
-      });
-    },
-    [hostId],
-  );
-
   const createProject = useCallback(
     async (id: string, name: string, repoPath: string, icon?: ProjectIconValue) => {
       const answer = await window.parallax.request(hostId, "project/create", {
@@ -436,16 +504,97 @@ export function useThreads(hostId: string, connected: boolean, approvals = false
     [hostId, approvals],
   );
 
-  return {
-    state,
-    error,
-    addRepo,
-    start,
-    archive,
-    remove,
-    refresh,
-    createProject,
-    updateProject,
-    startCoordinator,
-  };
+  const update = useCallback(
+    async (runId: string, change: ThreadChange) => {
+      const answer = await window.parallax.request(hostId, "thread/update", { runId, ...change });
+      if ("error" in answer) return describeError(answer.error);
+      dispatch({ type: "event", event: { kind: "thread.updated", thread: answer.result.thread } });
+      return undefined;
+    },
+    [hostId],
+  );
+
+  const updateRepo = useCallback(
+    async (repo: string, icon: ProjectIconValue) => {
+      const answer = await window.parallax.request(hostId, "repo/update", { repo, icon });
+      if ("error" in answer) return describeError(answer.error);
+      dispatch({ type: "event", event: { kind: "repo.updated", repo: answer.result.repo } });
+      return undefined;
+    },
+    [hostId],
+  );
+
+  // One object per change, so a parent can keep it and compare.
+  return useMemo(
+    () => ({
+      state,
+      error,
+      attention,
+      editable,
+      update,
+      updateRepo,
+      addRepo,
+      start,
+      archive,
+      remove,
+      createProject,
+      updateProject,
+      startCoordinator,
+    }),
+    [
+      state,
+      error,
+      attention,
+      editable,
+      update,
+      updateRepo,
+      addRepo,
+      start,
+      archive,
+      remove,
+      createProject,
+      updateProject,
+      startCoordinator,
+    ],
+  );
 }
+
+/**
+ * The permission-request events in the logs of `runs` that still go and forward requests, read
+ * page by page, for whatever subscribes after the list. A page that fails leaves that run's out;
+ * new requests still arrive by subscription.
+ */
+export async function waitingSince(
+  hostId: string,
+  runs: AgentRun[],
+  stopped: () => boolean,
+): Promise<LoggedEvent[]> {
+  const events: LoggedEvent[] = [];
+  for (const run of runs.filter((r) => r.approvals && isRunning(r.status)))
+    for (let after = 0, more = true; more;) {
+      const page = await window.parallax.request(hostId, "agent/events", { runId: run.id, after });
+      if (stopped() || "error" in page) break;
+      events.push(...page.result.events);
+      after = page.result.events.at(-1)?.seq ?? after;
+      more = page.result.more && page.result.events.length > 0;
+    }
+  return events;
+}
+
+const notConnected = "Not connected to this host.";
+
+/** A host's view before its list loads: empty, and every action answers that it isn't connected. */
+export const idleThreads: ThreadsView = {
+  state: emptyThreads,
+  attention: false,
+  editable: false,
+  addRepo: async () => notConnected,
+  start: async () => ({ code: -32000, message: notConnected }),
+  archive: async () => notConnected,
+  remove: async () => notConnected,
+  createProject: async () => notConnected,
+  updateProject: async () => notConnected,
+  startCoordinator: async () => ({ code: -32000, message: notConnected }),
+  update: async () => notConnected,
+  updateRepo: async () => notConnected,
+};

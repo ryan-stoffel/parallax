@@ -30,14 +30,12 @@ const themeOptions: { value: ThemePreference; name: string; icon: ReactNode }[] 
 
 interface SettingsProps {
   section: SettingsSection;
-  /** Hosts opens with the Add host form open, as the sidebar's "Add host" asks. */
-  addingHost: boolean;
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
 }
 
 /** The Settings page body. The sidebar's SettingsNav picks the section. */
-export function Settings({ section, addingHost, theme, onThemeChange }: SettingsProps) {
+export function Settings({ section, theme, onThemeChange }: SettingsProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-2xl px-8 pt-6 pb-16">
@@ -73,7 +71,7 @@ export function Settings({ section, addingHost, theme, onThemeChange }: Settings
             <UpdateSettings />
           </>
         ) : section === "hosts" ? (
-          <HostsSettings addingHost={addingHost} />
+          <HostsSettings />
         ) : (
           <ProvidersSettings />
         )}
@@ -131,10 +129,10 @@ const quietButton =
   "rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground";
 
 /** Settings > Hosts: this computer, then the SSH hosts, which can be added, edited, and removed. */
-function HostsSettings({ addingHost }: { addingHost: boolean }) {
+function HostsSettings() {
   const hosts = useHosts();
   // The host whose form is open: its id, "new", or none.
-  const [editing, setEditing] = useState(addingHost ? "new" : undefined);
+  const [editing, setEditing] = useState<string>();
   const [removeError, setRemoveError] = useState<string>();
   const remove = async (id: string) => setRemoveError(await window.parallax.removeHost(id));
 

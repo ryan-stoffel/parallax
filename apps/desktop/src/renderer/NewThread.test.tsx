@@ -88,10 +88,10 @@ const button = (name: string) =>
   [...document.querySelectorAll("button")].find(
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
   );
-// A thread's row: its title, then its age.
+// A thread's row, by its title.
 const threadRow = (title: string) =>
-  [...document.querySelectorAll("#sidebar li > button:first-child")].find((b) =>
-    b.textContent?.startsWith(title),
+  [...document.querySelectorAll('#sidebar li[data-kind="thread"] > button:first-child')].find((b) =>
+    b.querySelector("[data-title]")?.textContent?.startsWith(title),
   );
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
@@ -133,14 +133,12 @@ async function send(text: string) {
   await settle();
 }
 
-test("lists threads by repository, titled by their first prompt line, with No Repo last", async () => {
+test("lists threads in one list, titled by their first prompt line, each under its repo's name", async () => {
   await renderApp();
-  const groups = [...document.querySelectorAll('[aria-labelledby="repositories-heading"] > div')];
-  expect(groups.map((g) => g.querySelector("button")!.textContent)).toEqual([
-    "parallax",
-    "No Repo",
-  ]);
-  expect(groups[0]!.contains(threadRow("Fix the flaky test")!)).toBe(true);
+  const row = threadRow("Fix the flaky test")!;
+  expect(row.querySelector("[data-title]")!.textContent).toBe("Fix the flaky test");
+  expect(row.textContent).toContain("parallax");
+  expect(document.querySelector("#repositories-heading")).toBeNull();
   expect(heading()).toBe("What should we build in parallax?");
 });
 

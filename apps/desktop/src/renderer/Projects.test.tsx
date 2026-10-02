@@ -145,10 +145,12 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
+// Each Project row's name and status (its age while it asks nothing), in the sidebar's order.
 const projectRows = () =>
-  [
-    ...document.querySelectorAll('[aria-labelledby="projects-heading"] li > button:first-child'),
-  ].map((b) => b.textContent);
+  [...document.querySelectorAll('#sidebar li[data-kind="project"]')].map(
+    (li) =>
+      `${li.querySelector("[data-title]")?.textContent}${li.querySelector("[data-status]")?.textContent}`,
+  );
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 const dialog = () =>
@@ -207,10 +209,6 @@ const hostNote = (host: string) =>
     ?.textContent;
 const searchBox = () =>
   workspaceMenu().querySelector<HTMLInputElement>('input[aria-label="Search repositories"]')!;
-const hostRow = (name: string) =>
-  [...document.querySelectorAll('#sidebar [aria-labelledby="hosts-heading"] > li > button')].find(
-    (b) => b.textContent?.startsWith(name),
-  );
 
 const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
 const repo = (name: string, path = `/srv/${name}`): Repo => ({
@@ -251,9 +249,7 @@ test("lists plxd's projects, most recently active first, and adds one from proje
 
 test("a Project is one row that opens its chat: its repository and branch, with the composer off on an older plxd", async () => {
   await renderApp();
-  const row = [...document.querySelectorAll("#sidebar li button")].find(
-    (b) => b.textContent === "ember3d",
-  );
+  const row = rowButton("ember");
   await click(row);
   expect(crumbs()).toEqual(["This Mac", "ember"]);
   expect(row?.getAttribute("aria-current")).toBe("page");
@@ -393,10 +389,9 @@ test("a repository on another host creates the Project there, then opens that ho
   expect(retry).toEqual(first);
   expect(hostsOf("project/create")).toEqual([mini.id, mini.id]);
   expect(dialog().open).toBe(false);
-  // The sidebar opened Mac mini, then the Project once Mac mini listed it.
-  expect(hostRow("Mac mini")!.getAttribute("aria-expanded")).toBe("true");
+  // Mac mini became the open host, then the Project opened once Mac mini listed it.
   expect(crumbs()).toEqual(["Mac mini", "api"]);
-  expect(projectRows()).toEqual(["apinow"]);
+  expect(projectRows()).toContain("apinow");
 });
 
 test("a host that is connecting or can't be reached says so in its group, and lists once it connects", async () => {
@@ -467,11 +462,11 @@ test("the Workspace menu searches every host's repositories, Enter picks the fir
 });
 
 const projectsList = () =>
-  document.querySelector<HTMLElement>('#sidebar [aria-labelledby="projects-heading"]')!;
+  document.querySelector<HTMLElement>('#sidebar [aria-label="Threads and Projects"]')!;
 /** A Project's row in the sidebar, by its name. */
 const projectRow = (name: string) =>
-  [...projectsList().querySelectorAll<HTMLLIElement>("li")].find((li) =>
-    li.querySelector(":scope > button:first-child")?.textContent?.startsWith(name),
+  [...projectsList().querySelectorAll<HTMLLIElement>('li[data-kind="project"]')].find((li) =>
+    li.querySelector("[data-title]")?.textContent?.startsWith(name),
   )!;
 const rowButton = (name: string) =>
   projectRow(name).querySelector<HTMLButtonElement>(":scope > button:first-child")!;
@@ -489,7 +484,7 @@ const looks = (svg: Element | null | undefined) => {
     classes.find((c) => c.startsWith("text-")),
   ];
 };
-const rowIcon = (name: string) => looks(rowButton(name).querySelector("svg"));
+const rowIcon = (name: string) => looks(rowButton(name).querySelector("[data-project-icon] svg"));
 const iconPicker = (within: Element) =>
   within.querySelector<HTMLElement>('[role="dialog"][aria-label="Project icon"]');
 const pickIcon = (within: Element, label: string) =>
@@ -631,7 +626,7 @@ test("a rename shows its name while plxd answers, then plxd's error under the pr
   await act(async () => release());
   await settle();
   expect(projectRows()).toEqual(["photon3h", "ember3d"]);
-  expect(projectsList().querySelector('[role="alert"]')?.textContent).toBe(
+  expect(document.querySelector('#sidebar [role="alert"]')?.textContent).toBe(
     "Invalid params: name must be at most 256 bytes",
   );
 });
@@ -650,7 +645,7 @@ test("Change icon opens the picker under the row's icon, and each pick saves the
   expect(iconPicker(row)!.childElementCount).toBe(0);
 
   await click(menuItem("ember", "Change icon"));
-  expect(popoverSources).toEqual([rowButton("ember").querySelector("span")]);
+  expect(popoverSources).toEqual([rowButton("ember").querySelector("[data-project-icon]")]);
   expect(popoverSources[0]!.querySelector("svg")).not.toBeNull();
   expect(
     iconPicker(row)!
@@ -807,7 +802,7 @@ test("without projectEdit, a Project row has no actions and Create Project's ico
   act(() => void rowButton("ember").dispatchEvent(contextMenu));
   expect(contextMenu.defaultPrevented).toBe(false);
   // The age stays put on hover and focus.
-  expect(rowButton("ember").lastElementChild!.className).not.toContain("hidden");
+  expect(rowButton("ember").querySelector("[data-status]")!.className).not.toContain("invisible");
 
   await openNewProject();
   expect(iconButton()).toBeNull();
@@ -878,10 +873,7 @@ const serveEvents = (runs: () => (AgentRun | undefined)[]) => (params: Record<st
   ];
   return { result: { events: events.filter((e) => e.seq > Number(params["after"])), more: false } };
 };
-const openEmber = () =>
-  click(
-    [...document.querySelectorAll("#sidebar li button")].find((b) => b.textContent === "ember3d"),
-  );
+const openEmber = () => click(rowButton("ember"));
 const type = (text: string) => act(() => void composer()!.editor!.commands.setContent(text));
 const button = (label: string) =>
   document.querySelector<HTMLButtonElement>(`main button[aria-label="${label}"]`);
@@ -1151,9 +1143,7 @@ test("opening a subagent shows its chat, with Open PR, and the Project crumb goe
   expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);
   expect(agentRow("Fix the login bug")!.getAttribute("aria-current")).toBe("page");
   // The Project stays selected in the sidebar.
-  const ember = [...document.querySelectorAll("#sidebar li button")].find(
-    (b) => b.textContent === "ember3d",
-  );
+  const ember = rowButton("ember");
   expect(ember!.getAttribute("aria-current")).toBe("page");
   expect(transcript()).toContain("Fix the login bug");
   const main = document.querySelector("main")!;
@@ -1250,9 +1240,7 @@ test("another Project's Agents view starts with an empty box and never gets a la
   });
   await click(document.querySelector('#side-panel button[aria-label="Start subagent"]'));
 
-  await click(
-    [...document.querySelectorAll("#sidebar li button")].find((b) => b.textContent === "photon3h"),
-  );
+  await click(rowButton("photon"));
   expect(crumbs()).toEqual(["This Mac", "photon"]);
   expect(box().value).toBe("");
   await act(async () => release());
