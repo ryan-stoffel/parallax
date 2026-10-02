@@ -104,7 +104,7 @@ const oauthProviders: { id: OAuthProvider; name: string }[] = [
 ];
 
 /**
- * Settings > Account: the Parallax account (0034) and Sign out, or while signed out, sign in or
+ * Settings > Account: the Parallax account (0037) and Sign out, or while signed out, sign in or
  * create one with a provider or an email and password.
  */
 function AccountSettings() {

@@ -9,7 +9,7 @@ export type Loopback = { url: string; done: Promise<string | undefined>; close: 
 
 /**
  * Listens on 127.0.0.1, on a port the OS picks, for one redirect to `/callback` (RFC 8252), as
- * Supabase sends after an OAuth sign-in or an email link (0034). Its `code` goes to `onCode`,
+ * Supabase sends after an OAuth sign-in or an email link (0037). Its `code` goes to `onCode`,
  * which trades it for a session and resolves to an error for people, or undefined.
  * The browser gets the outcome once `onCode` settles. `done` resolves to that outcome, the
  * provider's error, or why it stopped waiting: after `timeoutMs`, or on `close`.

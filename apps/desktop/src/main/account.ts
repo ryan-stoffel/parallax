@@ -6,7 +6,7 @@ import path from "node:path";
 import type { NewAccount, OAuthProvider, Profile } from "../preload/bridge";
 import { listenForCode, type Loopback } from "./loopback";
 
-// The Supabase project that holds Parallax accounts (0034). Both values are public: the key only
+// The Supabase project that holds Parallax accounts (0037). Both values are public: the key only
 // names the project. PLX_SUPABASE_URL and PLX_SUPABASE_KEY point a dev build at another project.
 const SUPABASE_URL = process.env["PLX_SUPABASE_URL"] ?? "";
 const SUPABASE_KEY = process.env["PLX_SUPABASE_KEY"] ?? "";
@@ -67,7 +67,7 @@ async function fetchPicture(url: string): Promise<string | undefined> {
 }
 
 /**
- * Starts the Parallax account (0034): a Supabase Auth session kept in the main process, so the
+ * Starts the Parallax account (0037): a Supabase Auth session kept in the main process, so the
  * renderer only ever sees the profile. Sign-ins use PKCE, and come back from the browser to a
  * loopback server (loopback.ts). Call once the app is ready, as safeStorage needs.
  */

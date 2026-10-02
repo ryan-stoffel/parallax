@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { Profile } from "../preload/bridge";
 
-/** The signed-in Parallax account (0034), kept current. Null when signed out, undefined until known. */
+/** The signed-in Parallax account (0037), kept current. Null when signed out, undefined until known. */
 export function useProfile(): Profile | null | undefined {
   const [profile, setProfile] = useState<Profile | null>();
   useEffect(() => window.parallax.onProfile(setProfile), []);

@@ -121,7 +121,7 @@ export interface ParallaxBridge {
   openFolder(hostId: string, target: OpenTarget, folder: string): Promise<void>;
 
   /**
-   * Calls `listener` with the signed-in Parallax account (0034), or null, now and on every
+   * Calls `listener` with the signed-in Parallax account (0037), or null, now and on every
    * change. Returns the unsubscribe function.
    */
   onProfile(listener: (profile: Profile | null) => void): () => void;

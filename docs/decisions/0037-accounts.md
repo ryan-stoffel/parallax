@@ -1,4 +1,4 @@
-# 0034: Parallax accounts live in Supabase Auth
+# 0037: Parallax accounts live in Supabase Auth
 
 - Status: accepted
 - Date: 2026-10-01
