@@ -423,6 +423,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;
              ALTER TABLE projects DROP COLUMN icon_color;
+             ALTER TABLE projects DROP COLUMN icon_image_type;
+             ALTER TABLE projects DROP COLUMN icon_image_data;
              DELETE FROM schema_version WHERE version >= 7;",
         )
         .unwrap();

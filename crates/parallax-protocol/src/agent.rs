@@ -64,7 +64,8 @@ pub enum ImageMediaType {
 }
 
 /// An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
-/// decision 0026). The CLI gets it beside the text, never as a file name or path in it.
+/// decision 0026). The CLI gets it beside the text, never as a file name or path in it. A
+/// project's or repo's icon image has the same shape (0038).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptImage {

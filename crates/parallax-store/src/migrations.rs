@@ -311,6 +311,16 @@ const MIGRATIONS: &[Migration] = &[
         version: 21,
         sql: "ALTER TABLE runs ADD COLUMN pull_requests TEXT NOT NULL DEFAULT '';",
     },
+    // An uploaded image as a project's or repo entry's icon (PLX-339, decision 0038): its media
+    // type and base64 data, as the client sent them. A NULL type means no image, so existing
+    // icons keep their glyph.
+    Migration {
+        version: 22,
+        sql: "ALTER TABLE projects ADD COLUMN icon_image_type TEXT;
+        ALTER TABLE projects ADD COLUMN icon_image_data TEXT;
+        ALTER TABLE repos ADD COLUMN icon_image_type TEXT;
+        ALTER TABLE repos ADD COLUMN icon_image_data TEXT;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

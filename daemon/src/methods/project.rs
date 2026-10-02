@@ -224,11 +224,14 @@ fn check_name(name: &str) -> Result<(), ErrorObject> {
 }
 
 /// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0032). plxd never reads them, so
-/// that is all it checks.
+/// that is all it checks. Its image is capped and checked as a prompt's are (0038).
 pub(crate) fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
     check_key("icon.name", &icon.name, MAX_ICON_NAME_CHARS)?;
     if let Some(color) = &icon.color {
         check_key("icon.color", color, MAX_ICON_COLOR_CHARS)?;
+    }
+    if let Some(image) = &icon.image {
+        crate::images::check_icon(image)?;
     }
     Ok(())
 }
@@ -267,6 +270,7 @@ mod tests {
         ProjectIcon {
             name: name.to_owned(),
             color: color.map(str::to_owned),
+            image: None,
         }
     }
 
