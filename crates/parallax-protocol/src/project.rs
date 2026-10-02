@@ -44,7 +44,8 @@ pub struct Project {
 }
 
 /// A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
-/// name. plxd stores them as the client sent them and never reads them.
+/// name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
+/// them and never reads them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectIcon {
@@ -56,6 +57,12 @@ pub struct ProjectIcon {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub color: Option<String>,
+    /// An uploaded image the app draws instead of the glyph, behind the `iconImages` capability
+    /// (0038). Its `data` is at most the capability's `maxBytes` of base64, or the request fails
+    /// with `imageTooLarge`. Absent means no image, so an icon sent without one clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub image: Option<PromptImage>,
 }
 
 /// Params of `project/list`.

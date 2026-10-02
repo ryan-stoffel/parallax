@@ -271,13 +271,28 @@ mod tests {
             ProjectIcon {
                 name: "rocket".to_owned(),
                 color: Some("green".to_owned()),
+                image: None,
             },
             ProjectIcon {
                 name: "folder-kanban".to_owned(),
                 color: None,
+                image: None,
+            },
+            ProjectIcon {
+                name: "rocket".to_owned(),
+                color: None,
+                image: Some(PromptImage {
+                    media_type: ImageMediaType::Webp,
+                    data: "UklGRg==".to_owned(),
+                }),
             },
         ];
-        for icon in [None, Some(icons[0].clone()), Some(icons[1].clone())] {
+        for icon in [
+            None,
+            Some(icons[0].clone()),
+            Some(icons[1].clone()),
+            Some(icons[2].clone()),
+        ] {
             let with_icon = Project {
                 icon: icon.clone(),
                 ..project()
@@ -310,6 +325,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&icons[1]).unwrap(),
             json!({"name": "folder-kanban"})
+        );
+        assert_eq!(
+            serde_json::to_value(&icons[2]).unwrap(),
+            json!({"name": "rocket", "image": {"mediaType": "image/webp", "data": "UklGRg=="}})
         );
         let id = ProjectId::generate();
         assert_eq!(

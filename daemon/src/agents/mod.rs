@@ -33,7 +33,7 @@
 
 mod actor;
 mod approvals;
-mod convert;
+pub(crate) mod convert;
 pub(crate) mod coordinator;
 pub(crate) mod review;
 mod wake;

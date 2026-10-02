@@ -16,10 +16,10 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentCancelParams, AgentEffort, AgentEventsParams,
     AgentListParams, AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
-    EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectIcon, ProjectId, Provider, Repo,
-    RepoAddParams, RepoId, RepoRefsParams, RepoUpdateParams, RunId, ThreadArchiveParams,
-    ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadUpdateParams,
-    TurnId,
+    EventsSubscribeParams, HostHealthParams, ImageMediaType, ParallaxEvent, ProjectIcon, ProjectId,
+    PromptImage, Provider, Repo, RepoAddParams, RepoId, RepoRefsParams, RepoUpdateParams, RunId,
+    ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ThreadUpdateParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -1715,6 +1715,90 @@ async fn stopping_a_running_thread_drops_the_messages_waiting_for_it() {
     host.server.stop().await;
 }
 
+/// A repo entry's icon takes an uploaded image (0038), with `repo.updated`, refuses one over the
+/// cap, and loses it to an icon sent without one.
+#[tokio::test]
+async fn a_repo_icon_takes_an_image_and_a_glyph_clears_it() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let seq = client.list().await.seq;
+    client.subscribe(seq, None).await;
+
+    let glyph = ProjectIcon {
+        name: "flame".to_owned(),
+        color: Some("orange".to_owned()),
+        image: None,
+    };
+    let with_image = ProjectIcon {
+        image: Some(PromptImage {
+            media_type: ImageMediaType::Png,
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+        }),
+        ..glyph.clone()
+    };
+    let updated = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: repo.id,
+            icon: with_image.clone(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    assert_eq!(updated.icon, Some(with_image.clone()));
+    let events = client
+        .until(|event| matches!(&event.event, ParallaxEvent::RepoUpdated { .. }))
+        .await;
+    assert_eq!(
+        events.last().unwrap().event,
+        ParallaxEvent::RepoUpdated {
+            repo: updated.clone()
+        }
+    );
+    assert_eq!(client.list().await.repos, std::slice::from_ref(&updated));
+
+    let too_large = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: repo.id,
+            icon: ProjectIcon {
+                image: Some(PromptImage {
+                    media_type: ImageMediaType::Png,
+                    data: "A".repeat(64 * 1024 + 4),
+                }),
+                ..glyph.clone()
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&too_large), ErrorKind::ImageTooLarge);
+
+    let cleared = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: repo.id,
+            icon: glyph.clone(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    assert_eq!(
+        cleared.icon,
+        Some(glyph),
+        "an icon without an image clears it"
+    );
+    let events = client
+        .until(|event| matches!(&event.event, ParallaxEvent::RepoUpdated { .. }))
+        .await;
+    assert_eq!(
+        events.last().unwrap().event,
+        ParallaxEvent::RepoUpdated {
+            repo: cleared.clone()
+        }
+    );
+    assert_eq!(client.list().await.repos, [cleared]);
+    host.server.stop().await;
+}
+
 /// The sidebar's attention state (0033): a thread is marked seen and snoozed, a message moves its
 /// `lastPromptAt`, and a repo entry takes an icon, each with a host-level event.
 #[tokio::test]
@@ -1778,6 +1862,7 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
     let icon = ProjectIcon {
         name: "flame".to_owned(),
         color: Some("orange".to_owned()),
+        image: None,
     };
     let with_icon = client
         .call::<RepoUpdate>(RepoUpdateParams {
@@ -1799,6 +1884,7 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
             icon: ProjectIcon {
                 name: "Not An Icon".to_owned(),
                 color: None,
+                image: None,
             },
         })
         .await
