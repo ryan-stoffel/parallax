@@ -49,7 +49,7 @@ use super::convert::{
     self, WORKSPACE_WRITE, agent_run, item_bytes, option_name, option_value, output_item,
 };
 use super::wake::{self, Wakes};
-use super::worker::{ThreadFolder, sandbox_path, thread_prompt, worker_prompt, worker_unavailable};
+use super::worker::{sandbox_path, worker_prompt, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
     AccountRef, Answer, AnswerError, Backend, CoordinatorTools, Credential, Decision, Event,
@@ -158,6 +158,7 @@ struct Setup {
     sandbox: Option<WorkerSandbox>,
     temp: Option<RunTemp>,
     tools: Option<CoordinatorTools>,
+    thread: bool,
 }
 
 #[derive(Default)]
@@ -1151,8 +1152,8 @@ impl Actor {
     }
 
     /// The first message of a new session that takes over the run from one on `from`: what the
-    /// run's first message says about where the agent is and what it may do, then the
-    /// conversation so far, then `text`.
+    /// run's first message says about where the agent is and what it may do, if anything, then
+    /// the conversation so far, then `text`.
     async fn handoff_prompt(
         &mut self,
         from: &str,
@@ -1184,29 +1185,14 @@ impl Actor {
                 &message,
                 &repo.to_string_lossy(),
             )),
+            // A thread's first message is the user's own (0034).
+            Place::Worker { thread: true, .. } => Ok(message),
             Place::Worker { context, .. } => {
                 let cwd = match paths {
                     Some((cwd, _)) => cwd.clone(),
                     None => self.worker_paths().await?.0,
                 };
-                let (project, id) = (self.project, self.row.id);
-                let (thread, scratch) = store(&self.daemon, move |db| {
-                    let thread = db.get_thread(id).map_err(|e| store_error(&e))?;
-                    Ok((thread.is_some(), crate::threads::is_scratch(db, project)?))
-                })
-                .await?;
-                let folder = if self.row.fields.checkout {
-                    ThreadFolder::Checkout
-                } else if scratch {
-                    ThreadFolder::Scratch
-                } else {
-                    ThreadFolder::Worktree
-                };
-                Ok(if thread {
-                    thread_prompt(&message, &cwd, context, folder)
-                } else {
-                    worker_prompt(&message, &cwd, context)
-                })
+                Ok(worker_prompt(&message, &cwd, context))
             }
         }
     }
@@ -1292,7 +1278,11 @@ impl Actor {
                 home,
                 data_dir,
                 context,
-            } => self.worker_setup(&home, &data_dir, &context, paths).await,
+                thread,
+            } => {
+                self.worker_setup(&home, &data_dir, &context, paths, thread)
+                    .await
+            }
             Place::Coordinator { repo } => self.coordinator_setup(repo),
         };
         let Setup {
@@ -1300,6 +1290,7 @@ impl Actor {
             sandbox,
             temp,
             tools,
+            thread,
         } = match setup {
             Ok(setup) => setup,
             Err(message) => {
@@ -1328,6 +1319,7 @@ impl Actor {
             fast: self.row.fields.fast,
             coordinator_tools: tools,
             approvals: self.row.fields.approvals,
+            thread,
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
             Ok(started) => {
@@ -1358,6 +1350,7 @@ impl Actor {
         data_dir: &Path,
         context: &Path,
         paths: Option<(PathBuf, PathBuf)>,
+        thread: bool,
     ) -> Result<Setup, String> {
         let (cwd, git_common_dir) = match paths {
             Some(paths) => paths,
@@ -1371,6 +1364,7 @@ impl Actor {
             sandbox: Some(sandbox),
             temp: Some(temp),
             tools: None,
+            thread,
         })
     }
 
@@ -1396,6 +1390,7 @@ impl Actor {
             sandbox: None,
             temp: None,
             tools: Some(tools),
+            thread: false,
         })
     }
 

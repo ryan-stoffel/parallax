@@ -51,6 +51,7 @@ pub fn worker_request(
         fast: None,
         coordinator_tools: None,
         approvals: false,
+        thread: false,
     };
     (request, temp)
 }

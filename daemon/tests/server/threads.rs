@@ -74,11 +74,13 @@ fn fake(steps: Vec<Step>) -> BackendRegistry {
     backends
 }
 
-/// A run's model, effort, permission, and approvals, as its backend got them.
+/// A run's model, effort, permission, approvals, and whether it ran as a thread (0034), as its
+/// backend got them.
 type Options = (
     Option<String>,
     Option<AgentEffort>,
     Option<AgentPermission>,
+    bool,
     bool,
 );
 
@@ -104,6 +106,7 @@ impl Backend for WithOptions {
             request.effort,
             request.permission,
             request.approvals,
+            request.thread,
         );
         self.seen.lock().unwrap().push(options);
         self.fake.start(request)
@@ -1118,6 +1121,38 @@ async fn a_checkout_thread_never_switches_under_a_running_one() {
     assert_eq!(client.list().await.threads.len(), 1);
 }
 
+/// RYA-276, 0034: a thread's CLI gets the user's message as is, with no Parallax limits before it,
+/// as in Claude Code.
+#[tokio::test]
+async fn a_threads_first_message_is_the_users_own() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(Other::new(fake_backend(editing()), &prompts)),
+    );
+    let host = Host::start(backends);
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    client
+        .call::<ThreadStart>(ThreadStartParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..start_params(Some(repo.id), "Write the notes")
+        })
+        .await
+        .unwrap();
+    client.until(updated_to(AgentStatus::Completed)).await;
+    assert_eq!(
+        *prompts.lock().unwrap(),
+        [("Write the notes".to_owned(), false)]
+    );
+    host.server.stop().await;
+}
+
 /// RYA-97, RYA-222: a thread's model, effort, permission, and approvals reach its backend when it
 /// starts and when it resumes, come back on its run, and count for `thread/start`'s idempotency.
 /// What the backend can't honor is refused before anything is made.
@@ -1154,6 +1189,7 @@ async fn a_thread_keeps_its_model_effort_permission_and_approvals() {
         Some("opus".to_owned()),
         Some(AgentEffort::High),
         Some(AgentPermission::Plan),
+        true,
         true,
     );
     assert_eq!(*seen.lock().unwrap(), [options.clone(), options]);
@@ -1278,13 +1314,15 @@ async fn a_message_changes_a_finished_threads_model_and_effort() {
                 opus,
                 Some(AgentEffort::High),
                 Some(AgentPermission::Plan),
-                false
+                false,
+                true
             ),
             (
                 sonnet,
                 Some(AgentEffort::Low),
                 Some(AgentPermission::Plan),
-                false
+                false,
+                true
             ),
         ]
     );
@@ -1376,9 +1414,9 @@ async fn a_message_with_a_new_model_waits_for_a_running_thread_to_finish() {
     assert_eq!(
         *seen.lock().unwrap(),
         [
-            (None, high, None, false),
-            (sonnet.clone(), high, None, false),
-            (sonnet, high, None, false),
+            (None, high, None, false, true),
+            (sonnet.clone(), high, None, false, true),
+            (sonnet, high, None, false, true),
         ]
     );
     host.server.stop().await;
@@ -1482,7 +1520,7 @@ async fn a_message_on_another_backends_account_moves_the_thread_there() {
 }
 
 /// A message on another backend's account moves a Current checkout thread there, still in the
-/// user's checkout.
+/// user's checkout, with the conversation as its first message.
 #[tokio::test]
 async fn a_checkout_thread_moves_to_another_backend_in_the_same_checkout() {
     let prompts = Arc::new(Mutex::new(Vec::new()));
@@ -1525,11 +1563,9 @@ async fn a_checkout_thread_moves_to_another_backend_in_the_same_checkout() {
     let [(prompt, false)] = prompts.as_slice() else {
         panic!("one new session on the other backend: {prompts:?}");
     };
+    // A thread's handoff, like its first message, adds no Parallax limits (0034).
     assert!(
-        prompt.contains(&format!(
-            "own checkout of their repository at {}",
-            path.display()
-        )),
+        prompt.starts_with("This conversation began with another agent"),
         "{prompt}"
     );
     host.server.stop().await;

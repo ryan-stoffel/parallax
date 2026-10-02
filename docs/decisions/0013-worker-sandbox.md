@@ -1,6 +1,6 @@
 # 0013: The worker sandbox
 
-- Status: accepted; the Linux sandbox is under [Claude Code on Linux](#claude-code-on-linux) (RYA-20), Codex workers are under [Codex](#codex) (RYA-38), and the refusal of Claude workers on native Windows is in [0023](0023-cross-platform.md); a worker in Bypass Permissions runs without it since [0027](0027-claude-permission-modes.md); a worker in Plan whose client answers permission requests also gets `ExitPlanMode` since [0031](0031-permission-requests.md#plan-mode-and-exitplanmode) (RYA-243); a worker's todo tools include Claude Code's task tools since RYA-248, and every run keeps its session's own task list since RYA-251 (both under [Claude Code](#claude-code))
+- Status: accepted; the Linux sandbox is under [Claude Code on Linux](#claude-code-on-linux) (RYA-20), Codex workers are under [Codex](#codex) (RYA-38), and the refusal of Claude workers on native Windows is in [0023](0023-cross-platform.md); a worker in Bypass Permissions runs without it since [0027](0027-claude-permission-modes.md); a worker in Plan whose client answers permission requests also gets `ExitPlanMode` since [0031](0031-permission-requests.md#plan-mode-and-exitplanmode) (RYA-243); a worker's todo tools include Claude Code's task tools since RYA-248, and every run keeps its session's own task list since RYA-251 (both under [Claude Code](#claude-code)); a normal thread whose client answers permission requests runs without it in every mode since [0034](0034-threads-are-full-claude-code.md)
 - Date: 2026-09-25
 - Issue: #137
 
