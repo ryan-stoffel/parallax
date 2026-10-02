@@ -25,15 +25,14 @@ type Todo = Extract<Item, { kind: "todo" }>;
 type Tool = Extract<Item, { kind: "tool" }>;
 
 /**
- * A turn's plan, in place of its first checklist: the turn's latest checklist, so the card
- * updates in place. `latest` marks the last turn's, the only one that can still be in progress.
+ * A turn's plan, in place of its first checklist: the turn's latest checklist, so its line
+ * updates in place.
  */
 export interface PlanRow {
   kind: "plan";
   key: string;
   at?: string;
   items: AgentTodoItem[];
-  latest?: boolean;
 }
 
 /** A later checklist in the turn, with the one before it, so its line can say what changed. */
@@ -265,7 +264,6 @@ export function withPlans<R extends { kind: string; key: string }>(
     }
     out.push(row);
   });
-  if (plan) plan.latest = true;
   return out;
 }
 
@@ -375,7 +373,7 @@ function ProgressBar({
 /**
  * A checklist as a plan: "Plan", how many steps are done, a progress bar, and each step in its
  * state. A step under way shows `loader` while the run goes (`live`). A step the card showed
- * unfinished draws its check as it finishes; one done before then, as on scrolling back, or that
+ * unfinished draws its check as it finishes; one done before then, as on opening it, or that
  * comes done, as a renamed one, just shows it.
  */
 export const PlanCard = memo(function PlanCard({
@@ -504,17 +502,23 @@ function Check({ draw }: { draw: boolean }) {
 }
 
 /**
- * One line for a later update to the turn's plan, in the work it came in: what changed, such as
- * "Finished: Add tests". The full list is the turn's plan card.
+ * One line for the turn's plan in the transcript: where it was made, with how many steps are
+ * done, and each later update with what changed, such as "Finished: Add tests". The full list is
+ * the strip's card, over the composer.
  */
-export function PlanUpdateLine({ item }: { item: PlanUpdate }) {
-  const changes = item.previous ? planChanges(item.previous, item.items) : "";
+export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
+  const made = item.kind === "plan";
+  const changes = made
+    ? `${doneCount(item.items)} of ${item.items.length} done`
+    : item.previous
+      ? planChanges(item.previous, item.items)
+      : "";
   return (
     // Indented past a tool call's chevron, so its icon lines up with theirs.
     <p className="flex min-w-0 items-center gap-2 py-0.5 pl-5.5 text-[13px]">
       <ListChecks aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
       <span className="shrink-0 font-medium">
-        {item.items.length === 0 ? "Cleared the plan" : "Updated the plan"}
+        {made ? "Made a plan" : item.items.length === 0 ? "Cleared the plan" : "Updated the plan"}
       </span>
       {changes && (
         <span className="truncate text-muted-foreground" title={changes}>

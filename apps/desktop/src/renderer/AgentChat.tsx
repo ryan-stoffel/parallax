@@ -69,9 +69,8 @@ import { GitHubLogo, LinearLogo } from "./logos";
 import { backendOf, backends, models, type Provider, type RunOptions } from "./models";
 import {
   latestPlan,
-  PlanCard,
   PlanStrip,
-  PlanUpdateLine,
+  PlanLine,
   ProposedPlan,
   withPlans,
   type PlanRow,
@@ -795,11 +794,10 @@ export const RowView = memo(function RowView({
       );
     case "tool":
       return <ToolCall item={row} live={live} open={open} onToggle={onToggle} />;
-    case "todo":
-      // A later update to the turn's plan, whose card shows the whole list.
-      return <PlanUpdateLine item={row} />;
     case "plan":
-      return <PlanCard items={row.items} live={live && !!row.latest} loader={loaders.planning} />;
+    case "todo":
+      // The turn's plan and its later updates, as lines: the strip shows the whole list.
+      return <PlanLine item={row} />;
     case "proposedPlan":
       return (
         <ProposedPlan id={row.key} status={row.status} open={open} onToggle={onToggle}>
