@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell 
 import path from "node:path";
 
 import { THEME_PREFERENCES, type OpenTarget, type UpdateState } from "../preload/bridge";
+import { startAccount } from "./account";
 import {
   detectEditors,
   editorCommand,
@@ -10,7 +11,6 @@ import {
   launch,
   type Editor,
 } from "./editors";
-import { startAccount } from "./account";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";

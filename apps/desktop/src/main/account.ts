@@ -112,10 +112,12 @@ export function startAccount() {
   // at once both work. Sign-up's email link has no id, and uses the latest verifier.
   const pending = new Set<Loopback>();
   const listen = async (flow: { id?: string }, timeoutMs?: number) => {
-    const loopback = await listenForCode(async (code) => {
+    const loopback: Loopback = await listenForCode(async (code) => {
       try {
         const options = flow.id ? { flowId: flow.id } : undefined;
         const { error } = await auth!.exchangeCodeForSession(code, options);
+        // Signed in: the other browser sign-ins end, so a late one can't switch accounts.
+        if (!error) for (const other of pending) if (other !== loopback) other.close();
         return error?.message;
       } catch (error) {
         return (error as Error).message;
