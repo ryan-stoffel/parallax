@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
+import type { ParallaxBridge } from "../preload/bridge";
 import type { PromptImage } from "../protocol/generated/protocol";
 import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
@@ -429,4 +430,108 @@ test("a recalled prompt sends as it was first sent, Markdown and all (PLX-325)",
   await press("ArrowUp");
   await press("Enter");
   expect(onSend).toHaveBeenCalledWith(prompt, {}, []);
+});
+
+// plxd's lists for the `/` and `@` menus (PLX-359): Claude's own `model` is the composer's.
+const request = vi.fn(async (_host: string, method: string) =>
+  method === "agent/commands"
+    ? {
+        logId: "log-1",
+        result: {
+          commands: ["ponytail:ponytail-help", "model", "review", "code-review"].map((name) => ({
+            text: `/${name}`,
+            name,
+            description: `About ${name}`,
+          })),
+        },
+      }
+    : {
+        logId: "log-1",
+        result: { files: ["README.md", "src/lib.rs", "src/main.rs"], truncated: false },
+      },
+);
+const withMenus = async (
+  onSend: (text: string) => Promise<string | undefined>,
+  props: Partial<ComposerProps> = {},
+) => {
+  request.mockClear();
+  window.parallax = { platform: "darwin", request } as Partial<ParallaxBridge> as ParallaxBridge;
+  const composer = render(onSend, caps, {
+    backend: "claude",
+    menus: { hostId: "local", runId: "run-1" },
+    ...props,
+  });
+  for (let i = 0; i < 5; i++) await act(async () => {});
+  return composer;
+};
+const options = () =>
+  [...document.querySelectorAll('[role="option"]')].map((o) => o.firstChild?.textContent);
+const highlighted = () => document.querySelector('[aria-selected="true"]')?.firstChild?.textContent;
+
+test("/ lists the composer's commands, then the CLI's, filtered as typed, and picks with the keyboard (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = await withMenus(onSend);
+  expect(request).toHaveBeenCalledWith("local", "agent/commands", {
+    backend: "claude",
+    runId: "run-1",
+  });
+  type("/");
+  expect(options()).toEqual([
+    "/model",
+    "/effort",
+    "/permissions",
+    "/ponytail:ponytail-help",
+    "/review",
+    "/code-review",
+  ]);
+  // Names that start with it, then names that contain it.
+  type("rev");
+  expect(options()).toEqual(["/review", "/code-review"]);
+  expect(highlighted()).toBe("/review");
+  await press("ArrowDown");
+  expect(highlighted()).toBe("/code-review");
+  await press("Tab");
+  expect(box.textContent).toBe("/code-review ");
+  expect(options()).toEqual([]);
+  type("the diff");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("/code-review the diff", expect.anything(), []);
+});
+
+test("/model opens the composer's model picker instead of reaching the CLI (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = await withMenus(onSend);
+  const opened = vi.fn();
+  document.querySelector('[aria-label^="Model:"]')!.addEventListener("click", opened);
+  type("/mod");
+  expect(options()).toEqual(["/model"]);
+  await press("Enter");
+  expect(opened).toHaveBeenCalledOnce();
+  expect(box.textContent).toBe("");
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+test("@ lists the thread's files and inserts @path (PLX-359)", async () => {
+  const { box, type, press } = await withMenus(async () => undefined);
+  expect(request).toHaveBeenCalledWith("local", "repo/files", { runId: "run-1" });
+  type("see @main");
+  expect(options()).toEqual(["src/main.rs"]);
+  await press("Enter");
+  expect(box.textContent).toBe("see @src/main.rs ");
+});
+
+test("Esc closes the menu, Enter then sends, and a plxd without composerMenus shows none (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = await withMenus(onSend);
+  type("/rev");
+  await press("Escape");
+  expect(options()).toEqual([]);
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("/rev", expect.anything(), []);
+  act(() => unmount());
+
+  const { type: typeAgain } = await withMenus(onSend, { menus: undefined });
+  expect(request).not.toHaveBeenCalled();
+  typeAgain("/");
+  expect(options()).toEqual([]);
 });

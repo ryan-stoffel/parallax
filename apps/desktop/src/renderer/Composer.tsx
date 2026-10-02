@@ -17,9 +17,10 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model"
 import { EditorContent, markInputRule, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type {
+  AgentCommand,
   AgentEffort,
   AgentPermission,
   AgentRun,
@@ -29,7 +30,7 @@ import { EffortMenu } from "./EffortMenu";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { ModelMenu } from "./ModelMenu";
 import { backendOf, backends, models, type Model, type Provider, type RunOptions } from "./models";
-import { Picker, type PickerOption } from "./ui";
+import { menuItem, Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
@@ -167,6 +168,72 @@ const manualDenials = {
   run: "Asks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
 };
 
+/** What a `/` or `@` at the start of a word, up to the cursor, is typing: its kind, what follows
+ * it, and where it is, for the menus. */
+interface Trigger {
+  kind: "/" | "@";
+  query: string;
+  from: number;
+  to: number;
+}
+
+function triggerAt(editor: Editor): Trigger | undefined {
+  const { $from, empty } = editor.state.selection;
+  if (!empty || $from.parent.type.spec.code) return undefined;
+  const before = $from.parent.textBetween(0, $from.parentOffset, undefined, "\ufffc");
+  const match = /(?:^|\s)([/@])(\S*)$/.exec(before);
+  if (!match) return undefined;
+  const query = match[2]!;
+  return { kind: match[1] as "/" | "@", query, from: $from.pos - query.length - 1, to: $from.pos };
+}
+
+/** `items` whose name starts with `query`, then those that only contain it, each in order. */
+function byName<T>(items: T[], query: string, name: (item: T) => string): T[] {
+  const q = query.toLowerCase();
+  const starts = (item: T) => name(item).toLowerCase().startsWith(q);
+  return [
+    ...items.filter(starts),
+    ...items.filter((item) => !starts(item) && name(item).toLowerCase().includes(q)),
+  ];
+}
+
+/** The most files the `@` menu shows. */
+const maxFiles = 50;
+
+/**
+ * `paths` matching `query`: those whose file name starts with it, then those that contain it,
+ * then those that have its letters in order, at most `maxFiles`.
+ */
+function matchPaths(paths: readonly string[], query: string): string[] {
+  const q = query.toLowerCase();
+  const rank = (path: string) => {
+    const p = path.toLowerCase();
+    if (p.slice(p.lastIndexOf("/") + 1).startsWith(q)) return 0;
+    if (p.includes(q)) return 1;
+    let i = 0;
+    for (const c of p) if (c === q[i]) i++;
+    return i === q.length ? 2 : 3;
+  };
+  return paths
+    .map((path) => ({ path, rank: rank(path) }))
+    .filter((p) => p.rank < 3)
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, maxFiles)
+    .map((p) => p.path);
+}
+
+/** The commands the composer's own controls take, which no CLI gets (PLX-359). */
+const ownCommands = new Set(["model", "effort", "fast", "permissions"]);
+
+/** A row of the `/` or `@` menu. */
+interface MenuEntry {
+  key: string;
+  label: string;
+  description?: string;
+  hint?: string;
+  pick: () => void;
+}
+
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
 export const tabItem =
   "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
@@ -241,6 +308,12 @@ export interface ComposerProps {
   insert?: string;
   /** The thread's earlier prompts, oldest first, which Up and Down recall into an empty box. */
   history?: readonly string[];
+  /**
+   * Where the `/` and `@` menus' lists come from, on a plxd with `composerMenus`: the host, and
+   * the thread's run or repo entry, whose folder they're read in. The commands are the CLI's that
+   * the message goes to; the files need a run or repo. Absent: no menus.
+   */
+  menus?: { hostId: string; repo?: string; runId?: string };
 }
 
 /**
@@ -251,6 +324,9 @@ export interface ComposerProps {
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
  * it (RYA-193).
  * In an empty box, Up and Down step through `history`, until the recalled prompt is edited.
+ * With `menus`, `/` at the start of a word opens a menu of the composer's own commands and the
+ * CLI's commands and skills, and `@` one of the thread's files, filtered as you type. Up and Down
+ * move through it, Enter or Tab picks, and Esc closes it.
  */
 export function Composer({
   newThread,
@@ -270,6 +346,7 @@ export function Composer({
   manualDenied,
   insert,
   history = [],
+  menus,
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
@@ -350,6 +427,113 @@ export function Composer({
       ...speed,
       ...(target !== backend && { account }),
     };
+  // The `/` and `@` menus: what's typed, the lists, and the highlighted row. Esc closes the menu
+  // until its `/` or `@` goes.
+  const [trigger, setTrigger] = useState<Trigger>();
+  const [closedAt, setClosedAt] = useState<number>();
+  const [active, setActive] = useState(0);
+  const [commands, setCommands] = useState<AgentCommand[]>([]);
+  const [paths, setPaths] = useState<string[]>([]);
+  const controls = useRef<HTMLFieldSetElement>(null);
+  const menuId = useId();
+  const { hostId, repo, runId } = menus ?? {};
+  // Once per backend the message goes to, and once for the files.
+  useEffect(() => {
+    setCommands([]);
+    if (hostId === undefined || target === undefined) return;
+    let live = true;
+    void window.parallax
+      .request(hostId, "agent/commands", { backend: target, repo, runId })
+      .then((r) => live && "result" in r && setCommands(r.result.commands));
+    return () => {
+      live = false;
+    };
+  }, [hostId, repo, runId, target]);
+  useEffect(() => {
+    setPaths([]);
+    if (hostId === undefined || (repo === undefined && runId === undefined)) return;
+    let live = true;
+    void window.parallax
+      .request(hostId, "repo/files", { repo, runId })
+      .then((r) => live && "result" in r && setPaths(r.result.files));
+    return () => {
+      live = false;
+    };
+  }, [hostId, repo, runId]);
+
+  // Puts `text` where the trigger is, as typed text, which Markdown leaves alone.
+  const replaceTrigger = (at: Trigger, text: string) =>
+    editor
+      .chain()
+      .focus()
+      .command(({ tr }) => !!tr.insertText(text, at.from, at.to))
+      .run();
+  // The composer's own controls, as commands where they're shown and can change.
+  const openControl = (label: string) =>
+    controls.current?.querySelector<HTMLButtonElement>(`[aria-label^="${label}"]`)?.click();
+  const own =
+    !run || optionsDisabled
+      ? []
+      : [
+          model && {
+            name: "model",
+            description: "Pick the model",
+            act: () => openControl("Model:"),
+          },
+          efforts && {
+            name: "effort",
+            description: "Set the reasoning effort",
+            act: () => openControl("Reasoning effort:"),
+          },
+          efforts &&
+            hasFast && {
+              name: "fast",
+              description: fast ? "Turn fast mode off" : "Turn fast mode on",
+              act: () => setFast(!fast),
+            },
+          permissions.length > 1 && {
+            name: "permissions",
+            description: "Choose what it may do without asking",
+            act: () => openControl("Access:"),
+          },
+        ].filter((c) => !!c);
+  let entries: MenuEntry[] = [];
+  if (trigger?.kind === "/")
+    entries = [
+      ...byName(own, trigger.query, (c) => c.name).map((c) => ({
+        key: `own:${c.name}`,
+        label: `/${c.name}`,
+        description: c.description,
+        pick: () => {
+          replaceTrigger(trigger, "");
+          c.act();
+        },
+      })),
+      ...byName(
+        commands.filter((c) => !ownCommands.has(c.name)),
+        trigger.query,
+        (c) => c.name,
+      ).map((c, i) => ({
+        // Two scopes can each have a skill of the same name.
+        key: `${i}:${c.text}`,
+        label: c.text,
+        description: c.description,
+        hint: c.argumentHint,
+        pick: () => replaceTrigger(trigger, `${c.text} `),
+      })),
+    ];
+  else if (trigger?.kind === "@")
+    entries = matchPaths(paths, trigger.query).map((path) => ({
+      key: path,
+      label: path,
+      pick: () => replaceTrigger(trigger, `@${path} `),
+    }));
+  const menuOpen = !!menus && !!trigger && trigger.from !== closedAt && entries.length > 0;
+  const highlighted = Math.min(active, entries.length - 1);
+  useEffect(() => {
+    document.getElementById(`${menuId}-${highlighted}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [menuId, highlighted, menuOpen]);
+
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
   const empty = text.trim() === "" && images.length === 0;
@@ -430,6 +614,12 @@ export function Composer({
       if (!transaction.getMeta("recall")) recalled.current = undefined;
       setText(toMarkdown(editor.state.doc));
     },
+    onSelectionUpdate: ({ editor }) => {
+      const at = triggerAt(editor);
+      setTrigger(at);
+      setActive(0);
+      if (!at) setClosedAt(undefined);
+    },
     editorProps: {
       // All of them, since these replace Tiptap's own (its role too) once props change.
       attributes: {
@@ -438,6 +628,12 @@ export function Composer({
         "aria-label": "Message",
         "aria-multiline": "true",
         "aria-placeholder": placeholder,
+        "aria-autocomplete": "list",
+        "aria-expanded": String(menuOpen),
+        ...(menuOpen && {
+          "aria-controls": menuId,
+          "aria-activedescendant": `${menuId}-${highlighted}`,
+        }),
         // It grows from three rows up to the cap, then scrolls. Its parent is anchored below it,
         // so it grows upward.
         class:
@@ -445,6 +641,14 @@ export function Composer({
       },
       handleKeyDown: (_view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
+        if (menuOpen && plain && !event.isComposing) {
+          const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+          if (step) setActive((highlighted + step + entries.length) % entries.length);
+          else if (event.key === "Enter" || event.key === "Tab") entries[highlighted]!.pick();
+          else if (event.key === "Escape") setClosedAt(trigger.from);
+          else return false;
+          return true;
+        }
         if ((event.key === "ArrowUp" || event.key === "ArrowDown") && plain) {
           const at = recalled.current;
           if (at === undefined && !(event.key === "ArrowUp" && editor.isEmpty && history.length))
@@ -571,6 +775,40 @@ export function Composer({
         }}
         className="relative z-10 rounded-3xl border border-border bg-surface shadow-composer focus-within:border-ring"
       >
+        {menuOpen && (
+          <div
+            id={menuId}
+            role="listbox"
+            aria-label={trigger.kind === "/" ? "Commands" : "Files"}
+            className="absolute inset-x-0 bottom-full mb-2 max-h-72 overflow-y-auto rounded-lg border border-border bg-surface p-1 text-foreground shadow-composer"
+          >
+            {entries.map((entry, i) => (
+              <div
+                key={entry.key}
+                id={`${menuId}-${i}`}
+                role="option"
+                aria-selected={i === highlighted}
+                // The box keeps focus, so typing goes on filtering.
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  entry.pick();
+                }}
+                onMouseMove={() => setActive(i)}
+                className={`${menuItem} cursor-default ${i === highlighted ? "bg-hover" : ""}`}
+              >
+                <span className="shrink-0">{entry.label}</span>
+                {entry.hint && (
+                  <span className="shrink-0 text-[12px] text-faint-foreground">{entry.hint}</span>
+                )}
+                {entry.description && (
+                  <span className="min-w-0 truncate text-[12px] text-faint-foreground">
+                    {entry.description}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {(images.length > 0 || imageError) && (
           <div className="flex flex-wrap items-center gap-2 px-4 pt-3.5">
             {images.map((image, i) => (
@@ -635,6 +873,7 @@ export function Composer({
             <>
               {/* A disabled fieldset turns off every control in it, and its title says why. */}
               <fieldset
+                ref={controls}
                 disabled={!!optionsDisabled}
                 title={optionsDisabled}
                 className="flex min-w-0 items-center gap-0.5"

@@ -425,6 +425,11 @@ export function NewThread({
           }
           disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
           imageCaps={imageCaps(connection)}
+          menus={
+            connection?.status === "connected" && "composerMenus" in connection.capabilities
+              ? { hostId, repo: group.id === noRepo ? undefined : group.id }
+              : undefined
+          }
           // A new thread asks only through a plxd that sends its requests (RYA-196).
           manualDenied={
             connection?.status === "connected" && !("approvals" in connection.capabilities)
