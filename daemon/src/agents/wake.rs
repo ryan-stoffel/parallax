@@ -9,17 +9,17 @@
 //! `agent.wakeupsPaused`.
 //!
 //! A restart keeps the count and a pause in the store (RYA-178). What was waiting, and the runs
-//! the stop interrupted, [`catch_up`] rebuilds from the store when wispd starts.
+//! the stop interrupted, [`catch_up`] rebuilds from the store when plxd starts.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use parallax_protocol::{AgentFailureKind, AgentOutcome, AgentRun, AgentStatus, RunId, TurnId};
+use parallax_store::WakeState;
 use tokio::time::Instant;
 use tracing::{info, warn};
 use uuid::Uuid;
-use wisp_protocol::{AgentFailureKind, AgentOutcome, AgentRun, AgentStatus, RunId, TurnId};
-use wisp_store::WakeState;
 
 use super::actor::Command;
 use super::convert::{INTERRUPTED, NO_WRITE, agent_run, option_name, truncate};
@@ -29,7 +29,7 @@ use crate::server::Daemon;
 /// How long wake-ups wait after the first arrives, so runs that finish together make one turn.
 const BATCH: Duration = Duration::from_secs(2);
 
-/// Wake-up turns a coordinator takes in a row, with no message from the user, before wispd
+/// Wake-up turns a coordinator takes in a row, with no message from the user, before plxd
 /// pauses them.
 pub(super) const CAP: u32 = 10;
 
@@ -99,7 +99,7 @@ impl Wakes {
         self.state
     }
 
-    /// Takes up the count and pause a previous wispd stored.
+    /// Takes up the count and pause a previous plxd stored.
     pub fn restore(&mut self, state: WakeState) {
         self.state = state;
     }
@@ -149,7 +149,7 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
     let missed = store(daemon, |db| {
         let runs = db.list_runs(None).map_err(|e| store_error(&e))?;
         // Oldest first, so each project keeps its newest no-write run: its coordinator (0024).
-        let coordinators: HashMap<Uuid, &wisp_store::Run> = runs
+        let coordinators: HashMap<Uuid, &parallax_store::Run> = runs
             .iter()
             .filter(|run| run.fields.policy == NO_WRITE)
             .map(|run| (run.fields.project_id, run))
@@ -188,18 +188,18 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
     match missed {
         Ok(missed) => {
             for (thread, summary) in missed {
-                info!(coordinator = %thread, "waking a coordinator for what it missed while wispd was stopped");
+                info!(coordinator = %thread, "waking a coordinator for what it missed while plxd was stopped");
                 notify(daemon, thread, summary);
             }
         }
         Err(error) => {
-            warn!(error = %error.message, "could not find what coordinators missed while wispd was stopped");
+            warn!(error = %error.message, "could not find what coordinators missed while plxd was stopped");
         }
     }
 }
 
 /// The summary line for a coordinator whose own turn a stop interrupted.
-const OWN_TURN: &str = "- Your own last turn was interrupted when wispd stopped; pick it back up.";
+const OWN_TURN: &str = "- Your own last turn was interrupted when plxd stopped; pick it back up.";
 
 /// [`summary`] from `run`'s row alone, for a run whose wake-up a restart lost: the row keeps its
 /// status and error, but not its last result or its failure's kind. `None` for a run that hasn't
@@ -241,7 +241,7 @@ pub(super) fn summary(run: &AgentRun, outcome: &AgentOutcome) -> String {
         ),
         AgentOutcome::Cancelled => "cancelled".to_owned(),
         AgentOutcome::Interrupted => {
-            "interrupted when wispd stopped; message_agent resumes it".to_owned()
+            "interrupted when plxd stopped; message_agent resumes it".to_owned()
         }
         AgentOutcome::Unknown => "stopped".to_owned(),
     };
@@ -270,7 +270,7 @@ fn one_line(text: &str, max: usize) -> String {
 /// A wake-up turn's message: the summaries, and what to do with them.
 fn message(summaries: &[String]) -> String {
     format!(
-        "wisp, not the user: runs you started ended.\n\n{}\n\nReview them with agent_status \
+        "Parallax, not the user: runs you started ended.\n\n{}\n\nReview them with agent_status \
          and agent_diff, message or start runs if more is needed, and tell the user where things \
          stand.",
         summaries.join("\n")

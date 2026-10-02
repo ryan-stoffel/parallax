@@ -9,7 +9,7 @@
 //!
 //! When the client closes its side, or the server starts shutting down, the reader stops, and the
 //! connection closes once every request it read has been answered. When the client is gone, has
-//! been silent too long, stops reading what wispd writes, or sends an oversized frame, the
+//! been silent too long, stops reading what plxd writes, or sends an oversized frame, the
 //! connection closes at once and its requests are cancelled.
 
 use std::collections::HashMap;
@@ -20,6 +20,15 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures_util::{FutureExt, SinkExt, StreamExt};
+use parallax_protocol::framing::{FrameCodec, FrameError};
+use parallax_protocol::jsonrpc::{
+    CancelRequestParams, ErrorObject, INVALID_REQUEST, Message, Notification, Request, RequestId,
+    Response,
+};
+use parallax_protocol::methods::{
+    CancelRequest, EventsEvent, Initialize, NotificationMethod, RequestMethod,
+};
+use parallax_protocol::{ErrorKind, EventsEventParams};
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{Semaphore, mpsc};
@@ -28,15 +37,6 @@ use tokio::time::{self, Instant};
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, debug_span, error, info, warn};
-use wisp_protocol::framing::{FrameCodec, FrameError};
-use wisp_protocol::jsonrpc::{
-    CancelRequestParams, ErrorObject, INVALID_REQUEST, Message, Notification, Request, RequestId,
-    Response,
-};
-use wisp_protocol::methods::{
-    CancelRequest, EventsEvent, Initialize, NotificationMethod, RequestMethod,
-};
-use wisp_protocol::{ErrorKind, EventsEventParams};
 
 use super::Daemon;
 use crate::event_log::EventLog;
@@ -192,7 +192,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             Ok(Message::Response(response)) => {
                 debug!(
                     id = ?response.id.as_ref().map(untrusted_id),
-                    "ignored a response; wispd sends no requests"
+                    "ignored a response; plxd sends no requests"
                 );
                 true
             }
@@ -274,7 +274,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
                 Err(error) => Response::error(Some(request.id), error),
             }
         } else {
-            let error = ErrorObject::wisp(
+            let error = ErrorObject::parallax(
                 ErrorKind::NotInitialized,
                 "initialize must be the first request",
             );
@@ -509,14 +509,14 @@ mod tests {
 
     use futures_util::StreamExt;
     use jiff::Timestamp;
+    use parallax_protocol::framing::{FrameCodec, FrameError};
+    use parallax_protocol::jsonrpc::Message;
+    use parallax_protocol::{EventsEventParams, ParallaxEvent, Project, ProjectId, SubscriptionId};
     use serde_json::{Value, json};
     use tokio::io::{AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
     use tokio::time::timeout;
     use tokio_util::codec::{FramedRead, FramedWrite};
     use tokio_util::sync::CancellationToken;
-    use wisp_protocol::framing::{FrameCodec, FrameError};
-    use wisp_protocol::jsonrpc::Message;
-    use wisp_protocol::{EventsEventParams, Project, ProjectId, SubscriptionId, WispEvent};
 
     use super::{send_event, serve};
     use crate::server::Daemon;
@@ -533,9 +533,9 @@ mod tests {
         for _ in 0..count {
             let project = Project {
                 id: ProjectId::generate(),
-                name: "wisp".to_owned(),
+                name: "parallax".to_owned(),
                 icon: None,
-                repo_path: "/src/wisp".to_owned(),
+                repo_path: "/src/parallax".to_owned(),
                 branch: None,
                 coordinator: None,
                 created_at: Timestamp::now(),
@@ -546,7 +546,7 @@ mod tests {
                 .append(
                     Timestamp::now(),
                     None,
-                    WispEvent::ProjectCreated { project },
+                    ParallaxEvent::ProjectCreated { project },
                 )
                 .await;
         }
@@ -648,7 +648,7 @@ mod tests {
             CancellationToken::new(),
             CancellationToken::new(),
         ));
-        // The read half stays open and unread, so wispd's writes back up instead of failing.
+        // The read half stays open and unread, so plxd's writes back up instead of failing.
         let (_unread, mut write) = tokio::io::split(client);
         let started = std::time::Instant::now();
         let flood = async move {
@@ -664,8 +664,8 @@ mod tests {
         };
         let flooded = timeout(PATIENCE, flood)
             .await
-            .expect("wispd drops the connection instead of waiting forever");
-        assert!(flooded.is_err(), "writes fail once wispd has closed");
+            .expect("plxd drops the connection instead of waiting forever");
+        assert!(flooded.is_err(), "writes fail once plxd has closed");
         assert!(started.elapsed() >= idle, "{:?}", started.elapsed());
     }
 
@@ -677,7 +677,7 @@ mod tests {
             seq: 1,
             time: Timestamp::now(),
             project: None,
-            event: WispEvent::ProjectCreated {
+            event: ParallaxEvent::ProjectCreated {
                 project: Project {
                     id: ProjectId::generate(),
                     name: name.to_owned(),
@@ -690,7 +690,7 @@ mod tests {
                 },
             },
         };
-        assert!(send_event(&mut sink, event("wisp")).await.is_ok());
+        assert!(send_event(&mut sink, event("parallax")).await.is_ok());
         assert!(matches!(
             send_event(&mut sink, event(&"n".repeat(2000))).await,
             Err(FrameError::TooLarge { .. })

@@ -5,7 +5,7 @@ const maxTitleWords = 6;
 const maxSlugLength = 40;
 
 /**
- * A branch name from `text`: its first four words, lowercase, joined by hyphens. Matches wispd's
+ * A branch name from `text`: its first four words, lowercase, joined by hyphens. Matches plxd's
  * `branchSlug` rules. Undefined when `text` has no letters or digits.
  */
 export function slugify(text: string): string | undefined {

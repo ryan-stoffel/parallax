@@ -1,4 +1,4 @@
-//! `accounts/list` and `accounts/refresh` (#114): the vendor CLIs wispd detects, gated on the
+//! `accounts/list` and `accounts/refresh` (#114): the vendor CLIs plxd detects, gated on the
 //! `agentClis` capability.
 //!
 //! `keys` holds `accounts/keys/add`, `accounts/keys/list`, and `accounts/keys/remove` (#117),
@@ -8,8 +8,8 @@
 
 pub(crate) mod keys;
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult,
 };
 

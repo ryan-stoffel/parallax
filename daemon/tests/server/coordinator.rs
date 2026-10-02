@@ -1,25 +1,25 @@
 //! A project's coordinator chat end to end (RYA-41, decision 0024): `project/start` against an
-//! in-process wispd whose backend is the fake CLI, in a real git repository. The coordinator runs
+//! in-process plxd whose backend is the fake CLI, in a real git repository. The coordinator runs
 //! in the project's repository, in its permission mode (0027).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use uuid::Uuid;
-use wisp_protocol::methods::{
+use parallax_protocol::methods::{
     AgentCancel, AgentEvents, AgentSend, AgentStart, ProjectList, ProjectStart,
 };
-use wisp_protocol::{
+use parallax_protocol::{
     AccountChoice, AgentCancelParams, AgentEventsParams, AgentOutputItem, AgentPermission,
     AgentPolicy, AgentRun, AgentSendParams, AgentStartParams, AgentStatus, CoordinatorThreadId,
-    ErrorKind, ProjectId, ProjectListParams, ProjectStartParams, Provider, RunId, TurnId,
-    WispEvent,
+    ErrorKind, ParallaxEvent, ProjectId, ProjectListParams, ProjectStartParams, Provider, RunId,
+    TurnId,
 };
-use wispd::backend::fake::{FakeBackend, Step};
-use wispd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
-use wispd::paths::DataDir;
-use wispd::routing::BackendRegistry;
+use plxd::backend::fake::{FakeBackend, Step};
+use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
+use plxd::paths::DataDir;
+use plxd::routing::BackendRegistry;
+use uuid::Uuid;
 
 use crate::agents::{
     Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params,
@@ -127,7 +127,7 @@ async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a
     assert_eq!(first.policy, ToolPolicy::NoWrite);
     assert_eq!(first.cwd, repo, "it runs in the user's checkout");
     assert!(first.sandbox.is_none());
-    let tools = first.coordinator_tools.expect("wispd's tools are attached");
+    let tools = first.coordinator_tools.expect("plxd's tools are attached");
     assert_eq!((tools.project, tools.thread), (project.id, thread));
     assert!(first.prompt.contains("spawn_agent"), "{}", first.prompt);
     assert!(
@@ -158,7 +158,7 @@ async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a
     assert!(
         transcript.events.iter().any(|logged| matches!(
             &logged.event,
-            WispEvent::AgentOutput { items, .. } if items.iter().any(|item| matches!(
+            ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item| matches!(
                 item, AgentOutputItem::Text { text, .. } if text == "Planning."
             ))
         )),
@@ -324,7 +324,7 @@ async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
 async fn sessions(client: &mut Conn, runs: &[RunId]) {
     let mut left = runs.to_vec();
     until(client, |event| {
-        if let WispEvent::AgentUpdated { run_id, state } = &event.event
+        if let ParallaxEvent::AgentUpdated { run_id, state } = &event.event
             && state.session_id.is_some()
         {
             left.retain(|run| run != run_id);
@@ -468,7 +468,7 @@ async fn approvals_last_through_a_resume_and_reach_the_coordinators_subagents() 
 }
 
 /// RYA-42: two runs the coordinator started finish during its turn; once that turn ends, and with
-/// no client connected, wispd wakes it with one turn that names both.
+/// no client connected, plxd wakes it with one turn that names both.
 #[tokio::test]
 async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_connected() {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -500,7 +500,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
     }
     let mut left = workers.len();
     until(&mut client, |event| {
-        if matches!(&event.event, WispEvent::AgentUpdated { run_id, state }
+        if matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
             if workers.contains(run_id) && state.status == AgentStatus::Completed)
         {
             left -= 1;
@@ -536,11 +536,11 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
     let mut client = host.client().await;
     subscribe(&mut client, project.id, 0).await;
     let events = until(&mut client, |event| {
-        matches!(&event.event, WispEvent::AgentOutput { items, .. } if items.iter().any(|item|
+        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item|
             matches!(item, AgentOutputItem::TurnStarted { wake: true, .. })))
     })
     .await;
-    let Some(WispEvent::AgentOutput { run_id, items }) = events.last().map(|e| &e.event) else {
+    let Some(ParallaxEvent::AgentOutput { run_id, items }) = events.last().map(|e| &e.event) else {
         unreachable!();
     };
     assert_eq!(*run_id, coordinator.id);
@@ -554,7 +554,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
 }
 
 /// RYA-178: a run the coordinator started is running, and so is the coordinator's own turn, when
-/// wispd restarts. Once it is back, one wake-up names both, and another restart wakes nothing.
+/// plxd restarts. Once it is back, one wake-up names both, and another restart wakes nothing.
 #[tokio::test]
 async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted() {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -581,13 +581,13 @@ async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted
         "a wake-up resumes the session"
     );
     assert!(
-        wake.prompt.starts_with("wisp, not the user"),
+        wake.prompt.starts_with("Parallax, not the user"),
         "{}",
         wake.prompt
     );
     assert!(
         wake.prompt.contains(&format!(
-            "- Run {worker} (Add a README.): interrupted when wispd stopped"
+            "- Run {worker} (Add a README.): interrupted when plxd stopped"
         )),
         "{}",
         wake.prompt
@@ -607,13 +607,13 @@ async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(coordinator_launches(&seen).len(), 2, "nothing new");
     host.server.stop().await;
-    // The wake-up counts against the cap, and the count outlives wispd.
+    // The wake-up counts against the cap, and the count outlives plxd.
     let store =
-        wisp_store::Store::open(DataDir::new(host.dir.path()).unwrap().store_file()).unwrap();
+        parallax_store::Store::open(DataDir::new(host.dir.path()).unwrap().store_file()).unwrap();
     assert_eq!(store.wake_state(coordinator.id.into()).unwrap().in_a_row, 1);
 }
 
-/// RYA-178: the user stops the coordinator while a run it started is running, then wispd
+/// RYA-178: the user stops the coordinator while a run it started is running, then plxd
 /// restarts. Wake-ups stay paused, and what the restart interrupted waits for the user's message.
 #[tokio::test]
 async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
@@ -639,7 +639,7 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
         .await
         .unwrap();
     until(&mut client, |event| {
-        matches!(event.event, WispEvent::AgentWakeupsPaused { .. })
+        matches!(event.event, ParallaxEvent::AgentWakeupsPaused { .. })
     })
     .await;
 

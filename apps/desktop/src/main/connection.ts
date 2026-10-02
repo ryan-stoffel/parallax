@@ -10,7 +10,7 @@ import {
   type InitializeResult,
   type LogId,
   type SubscriptionId,
-  type WispRequests,
+  type ParallaxRequests,
 } from "../protocol/generated/protocol";
 import type {
   ConnectionError,
@@ -25,7 +25,7 @@ import { RpcClient } from "./rpc";
 // 0007's client rules.
 export const HEARTBEAT_MS = 30_000;
 export const LIVENESS_MS = 10_000;
-// `attach` may spend its 10 s connect timeout starting wispd before it forwards `initialize`.
+// `attach` may spend its 10 s connect timeout starting plxd before it forwards `initialize`.
 export const HANDSHAKE_TIMEOUT_MS = 20_000;
 export const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -33,19 +33,19 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10_000);
 
 /**
- * The command that reaches an SSH host's wispd (0007, 0022). The destination was checked when it
+ * The command that reaches an SSH host's plxd (0007, 0022). The destination was checked when it
  * was saved (`checkHost`), and `--` keeps ssh from reading it as an option. `ssh` is the program,
  * which a setting can override (0023).
  */
 // prettier-ignore
 export const sshCommand = (destination: string, ssh = "ssh") => [
   ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlPath=none",
-  "--", destination, "wispd", "attach",
+  "--", destination, "plxd", "attach",
 ];
 
 export type ConnectionOptions = {
   /**
-   * The program and arguments that run `wispd attach`, or undefined if wispd can't be found.
+   * The program and arguments that run `plxd attach`, or undefined if plxd can't be found.
    * Asked again on every attempt.
    */
   command: () => string[] | undefined;
@@ -54,7 +54,7 @@ export type ConnectionOptions = {
   /** The app's version, sent in `initialize`. */
   clientVersion: string;
   onState: (state: ConnectionState) => void;
-  /** Starts `wispd attach`. Tests pass a fake. */
+  /** Starts `plxd attach`. Tests pass a fake. */
   spawn?: (file: string, args: string[]) => ChildProcessWithoutNullStreams;
 };
 
@@ -64,12 +64,12 @@ type Subscription = {
   /** The log `params.after` counts in. */
   logId: LogId;
   listener: (message: SubscriptionMessage) => void;
-  /** wispd's id for it on the current connection. */
+  /** plxd's id for it on the current connection. */
   id?: SubscriptionId;
 };
 
 /**
- * One host's connection: a `wispd attach` child speaking JSON-RPC over its stdio, kept alive
+ * One host's connection: a `plxd attach` child speaking JSON-RPC over its stdio, kept alive
  * with heartbeats and reconnected with backoff when it ends. The main process makes one per
  * host id.
  */
@@ -103,10 +103,10 @@ export class Connection {
     this.teardown();
   }
 
-  request<M extends keyof WispRequests>(
+  request<M extends keyof ParallaxRequests>(
     method: M,
-    params: WispRequests[M]["params"],
-  ): Promise<HostResponse<WispRequests[M]["result"]>> {
+    params: ParallaxRequests[M]["params"],
+  ): Promise<HostResponse<ParallaxRequests[M]["result"]>> {
     const { client, logId } = this;
     if (this.state.status !== "connected" || !client || logId === undefined) {
       return Promise.resolve({
@@ -120,7 +120,7 @@ export class Connection {
   }
 
   /**
-   * See `WispBridge.subscribe`. The listener may get a `resync` before this returns.
+   * See `ParallaxBridge.subscribe`. The listener may get a `resync` before this returns.
    * Returns the unsubscribe function.
    */
   subscribe({ logId, ...params }: SubscribeParams, listener: Subscription["listener"]): () => void {
@@ -147,7 +147,7 @@ export class Connection {
     if (this.state.status !== "connected" || !this.client) return;
     this.client.send("host/health", {}, REQUEST_TIMEOUT_MS, ignore);
     this.livenessTimer ??= setTimeout(
-      () => this.end({ reason: "unresponsive", message: "wispd stopped answering" }),
+      () => this.end({ reason: "unresponsive", message: "plxd stopped answering" }),
       LIVENESS_MS,
     );
   }
@@ -158,7 +158,7 @@ export class Connection {
     if (!file) {
       return this.fail({
         reason: "notFound",
-        message: "wispd wasn't found. Set WISPD_PATH to the wispd binary.",
+        message: "plxd wasn't found. Set PLXD_PATH to the plxd binary.",
       });
     }
     const { destination } = this.options;
@@ -171,15 +171,15 @@ export class Connection {
       onBadLine: (line) => {
         if (child !== this.child) return;
         if (this.state.status === "connected") {
-          return console.warn("wispd sent a line that isn't JSON:", line.slice(0, 200));
+          return console.warn("plxd sent a line that isn't JSON:", line.slice(0, 200));
         }
-        // attach writes nothing but wispd's frames to stdout, so this came from the host's shell
+        // attach writes nothing but plxd's frames to stdout, so this came from the host's shell
         // as it started, and would keep corrupting the handshake.
         this.end({
           reason: "sshSetup",
           message: destination
-            ? `${destination}'s shell printed text before wispd started. Keep its startup files quiet for commands that aren't interactive.`
-            : "wispd attach printed something that isn't wispd's protocol.",
+            ? `${destination}'s shell printed text before plxd started. Keep its startup files quiet for commands that aren't interactive.`
+            : "plxd attach printed something that isn't plxd's protocol.",
           stderr: `stdout: ${line.slice(0, 200)}`,
         });
       },
@@ -194,7 +194,7 @@ export class Connection {
     });
     child.stdout.on("data", (chunk: Buffer) => {
       if (child !== this.child) return;
-      // Any received byte, such as a long replay, proves wispd is alive.
+      // Any received byte, such as a long replay, proves plxd is alive.
       clearTimeout(this.livenessTimer);
       this.livenessTimer = undefined;
       client.receive(chunk);
@@ -219,7 +219,7 @@ export class Connection {
       "initialize",
       {
         protocol: { min: PROTOCOL_VERSION, max: PROTOCOL_VERSION },
-        client: { name: "wisp", version: this.options.clientVersion },
+        client: { name: "parallax", version: this.options.clientVersion },
         capabilities: {},
       },
       HANDSHAKE_TIMEOUT_MS,
@@ -238,7 +238,7 @@ export class Connection {
     this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
     this.setState({
       status: "connected",
-      wispd: result.wispd,
+      plxd: result.plxd,
       protocol: result.protocol,
       capabilities: result.capabilities,
     });
@@ -313,7 +313,7 @@ export class Connection {
     clearInterval(this.heartbeatTimer);
     clearTimeout(this.livenessTimer);
     this.livenessTimer = undefined;
-    client?.close("the connection to wispd ended");
+    client?.close("the connection to plxd ended");
     for (const subscription of this.subscriptions) subscription.id = undefined;
     child?.kill();
   }
@@ -331,7 +331,7 @@ function spawnAttach(file: string, args: string[]): ChildProcessWithoutNullStrea
 const ignore = () => {};
 
 /**
- * Why `wispd attach` exited (0010), or ssh for the host at `destination` (0022), in words that
+ * Why `plxd attach` exited (0010), or ssh for the host at `destination` (0022), in words that
  * say what to do. ssh exits 255 for its own errors, and the remote shell 127 for a missing
  * command. The raw stderr rides along for the tooltip.
  */
@@ -375,7 +375,7 @@ export function exitError(
     if (code === 127 || /not recognized as an internal or external command/.test(stderr)) {
       return error(
         "notFound",
-        `wispd isn't on ${destination}'s PATH for ssh commands. Install it there, or add its folder to PATH in the shell file that ssh commands read.`,
+        `plxd isn't on ${destination}'s PATH for ssh commands. Install it there, or add its folder to PATH in the shell file that ssh commands read.`,
       );
     }
     if (code === 255 && stderr.includes("Could not resolve hostname")) {
@@ -384,16 +384,15 @@ export function exitError(
     if (code === 255) {
       return error("exited", `Couldn't reach ${destination}. Check that it's on and accepts ssh.`);
     }
-    if (code === 4)
-      return error("exited", `wispd couldn't be reached or started on ${destination}`);
+    if (code === 4) return error("exited", `plxd couldn't be reached or started on ${destination}`);
   }
-  if (code === 127) return error("notFound", "wispd isn't installed");
+  if (code === 127) return error("notFound", "plxd isn't installed");
   const message =
     code === 4
-      ? "wispd couldn't be reached or started"
+      ? "plxd couldn't be reached or started"
       : code === 2
-        ? "wispd attach rejected its arguments. Update wispd."
-        : `wispd attach exited with ${code ?? signal}`;
+        ? "plxd attach rejected its arguments. Update plxd."
+        : `plxd attach exited with ${code ?? signal}`;
   return error("exited", message);
 }
 
@@ -403,10 +402,10 @@ function handshakeError(error: RpcError): ConnectionError {
   }
   const detail = error.data.detail as IncompatibleProtocolDetail | undefined;
   const update =
-    detail && detail.supported.max < PROTOCOL_VERSION ? "Update wispd." : "Update the app.";
+    detail && detail.supported.max < PROTOCOL_VERSION ? "Update plxd." : "Update the app.";
   return {
     reason: "incompatibleProtocol",
     message: `${error.message}. ${update}`,
-    ...(detail && { wispd: detail.wispd }),
+    ...(detail && { plxd: detail.plxd }),
   };
 }

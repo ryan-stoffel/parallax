@@ -1,7 +1,7 @@
 //! Each worker run's own temp folder (RYA-130), whichever backend runs it.
 //!
 //! A vendor CLI's default temp is shared: Claude Code's `/tmp/claude-<uid>` holds what every
-//! session of the user leaves there. So wispd makes a new, owner-only folder for each worker's
+//! session of the user leaves there. So plxd makes a new, owner-only folder for each worker's
 //! CLI in [`DataDir::run_temp_roots`] before the CLI starts, and removes it when the CLI exits.
 //! The backend points the vendor's temp setting at it through
 //! [`WorkerSandbox::temp`](super::WorkerSandbox), and the sandbox hides every other run's. A root goes with its last run's folder, and `serve`
@@ -20,7 +20,7 @@ use tracing::warn;
 use crate::paths::DataDir;
 
 /// Held while a run's folder is made or a root removed, so a run that ends can't remove the
-/// root another is making its folder in. Only one wispd uses a data folder's roots.
+/// root another is making its folder in. Only one plxd uses a data folder's roots.
 static ROOTS: Mutex<()> = Mutex::new(());
 
 /// A worker run's temp folder. Dropping it removes the folder, and its root if no other run's
@@ -29,7 +29,7 @@ static ROOTS: Mutex<()> = Mutex::new(());
 pub struct RunTemp(PathBuf);
 
 impl RunTemp {
-    /// The folder, as made: `/tmp/wisp-<hash>/<6 characters>`, not canonical on macOS.
+    /// The folder, as made: `/tmp/parallax-<hash>/<6 characters>`, not canonical on macOS.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.0

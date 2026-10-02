@@ -1,8 +1,8 @@
 //! Scratch repositories for normal threads with no repo (#110, decision 0017).
 //!
 //! Each such thread gets its own repository, made here, so the runner treats it like any other:
-//! a worktree cut from its first commit, and wispd's commit when the CLI ends. The repository
-//! is wispd's, not the user's, so it gets a local identity for those commits.
+//! a worktree cut from its first commit, and plxd's commit when the CLI ends. The repository
+//! is plxd's, not the user's, so it gets a local identity for those commits.
 
 use std::path::Path;
 
@@ -12,8 +12,8 @@ use super::{WorktreeError, WorktreeManager};
 const BRANCH: &str = "main";
 
 /// The identity of commits in a scratch repository.
-const NAME: &str = "wisp";
-const EMAIL: &str = "wisp@localhost";
+const NAME: &str = "parallax";
+const EMAIL: &str = "parallax@localhost";
 
 impl WorktreeManager {
     /// Makes `path` a git repository with one empty commit on `main`, unless it already is one
@@ -56,7 +56,7 @@ impl WorktreeManager {
                 "--allow-empty",
                 "--no-gpg-sign",
                 "-m",
-                "Start a wisp scratch folder",
+                "Start a parallax scratch folder",
             ],
         )
         .await?;
@@ -87,11 +87,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             String::from_utf8_lossy(&log.stdout).trim(),
-            "wisp <wisp@localhost> Start a wisp scratch folder",
+            "parallax <parallax@localhost> Start a parallax scratch folder",
             "a second init keeps the first commit"
         );
         let created = manager
-            .create(&scratch, wisp_protocol::RunId::generate(), None)
+            .create(&scratch, parallax_protocol::RunId::generate(), None)
             .await
             .unwrap();
         assert!(created.path.join(".git").exists());

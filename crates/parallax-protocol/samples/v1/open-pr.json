@@ -1,0 +1,115 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/openPr",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "title": "Add a README",
+      "body": "Opened from Parallax."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "url": "https://github.com/me/app/pull/42"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/openPr",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "title": "Add a README"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "url": "https://github.com/me/app/pull/42"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "agent/openPr",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "title": "Add a README"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32000,
+      "message": "run 01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01 is still running; open a pull request once it has finished",
+      "data": {
+        "kind": "prRefused"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "agent/openPr",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "title": "Add a README"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32000,
+      "message": "/Users/me/src/app has no origin to push to: error: No such remote 'origin'",
+      "data": {
+        "kind": "pushFailed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "agent/openPr",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "title": "Add a README"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32000,
+      "message": "GitHub CLI isn't signed in on the host; run `gh auth login` there: To get started with GitHub CLI, please run:  gh auth login",
+      "data": {
+        "kind": "ghUnavailable"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "agent/openPr",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "title": "Add a README"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "error": {
+      "code": -32000,
+      "message": "`gh pr create` failed: pull request create failed: GraphQL: No commits between main and parallax/add-readme (createPullRequest)",
+      "data": {
+        "kind": "prFailed"
+      }
+    }
+  }
+]

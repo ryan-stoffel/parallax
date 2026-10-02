@@ -7,27 +7,27 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rustix::process::Signal;
-use tempfile::TempDir;
-use tokio::time::Instant;
-use wisp_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification, RequestId};
-use wisp_protocol::methods::{
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification, RequestId};
+use parallax_protocol::methods::{
     AgentAccept, AgentEvents, AgentList, AgentSend, EventsEvent, EventsSubscribe, HostHealth,
     NotificationMethod, RepoAdd, RequestMethod, ThreadArchive, ThreadDelete, ThreadList,
     ThreadStart,
 };
-use wisp_protocol::{
+use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentEffort, AgentEventsParams, AgentListParams,
     AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
-    EventsSubscribeParams, HostHealthParams, ProjectId, Provider, Repo, RepoAddParams, RepoId,
-    RunId, ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult,
-    ThreadStartParams, TurnId, WispEvent,
+    EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectId, Provider, Repo,
+    RepoAddParams, RepoId, RunId, ThreadArchiveParams, ThreadDeleteParams, ThreadListParams,
+    ThreadListResult, ThreadStartParams, TurnId,
 };
-use wispd::backend::fake::{FakeBackend, Script, Step};
-use wispd::backend::process::{CancelPolicy, Environment, Launcher};
-use wispd::backend::{Backend, Capabilities, Event, RunRequest, StartError, Started};
-use wispd::paths::DataDir;
-use wispd::routing::BackendRegistry;
+use plxd::backend::fake::{FakeBackend, Script, Step};
+use plxd::backend::process::{CancelPolicy, Environment, Launcher};
+use plxd::backend::{Backend, Capabilities, Event, RunRequest, StartError, Started};
+use plxd::paths::DataDir;
+use plxd::routing::BackendRegistry;
+use rustix::process::Signal;
+use tempfile::TempDir;
+use tokio::time::Instant;
 
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
@@ -192,7 +192,7 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
 }
 
 struct Host {
-    /// wispd's data folder.
+    /// plxd's data folder.
     dir: TempDir,
     /// Where the tests' own repositories live: outside the data folder, which `repo/add` refuses.
     work: TempDir,
@@ -350,7 +350,7 @@ impl Conn {
 }
 
 fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) -> bool {
-    move |event| matches!(&event.event, WispEvent::AgentUpdated { state, .. } if state.status == status)
+    move |event| matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.status == status)
 }
 
 fn scope(repo: RepoId) -> ProjectId {
@@ -373,7 +373,7 @@ async fn a_thread_runs_in_a_worktree_of_its_repo_entry_and_lists_under_it() {
     let again = client.add(&path).await;
     assert_eq!(again, repo, "a path has one entry");
     let added = client
-        .until(|event| matches!(event.event, WispEvent::RepoAdded { .. }))
+        .until(|event| matches!(event.event, ParallaxEvent::RepoAdded { .. }))
         .await;
     assert_eq!(added.last().unwrap().project, None, "host-level");
 
@@ -388,7 +388,7 @@ async fn a_thread_runs_in_a_worktree_of_its_repo_entry_and_lists_under_it() {
     let worktree = PathBuf::from(started.run.worktree_path.clone().unwrap());
     let branch = started.run.branch.clone().unwrap();
     client
-        .until(|event| matches!(&event.event, WispEvent::ThreadStarted { thread } if thread.id == params.run_id))
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadStarted { thread } if thread.id == params.run_id))
         .await;
 
     let mut runs = host.client().await;
@@ -402,7 +402,7 @@ async fn a_thread_runs_in_a_worktree_of_its_repo_entry_and_lists_under_it() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event.event, WispEvent::AgentDiffReady { .. }))
+            .any(|event| matches!(event.event, ParallaxEvent::AgentDiffReady { .. }))
     );
     assert_eq!(
         git(&path, &["show", &format!("{branch}:NOTES.md")]),
@@ -441,12 +441,12 @@ async fn a_thread_with_no_repo_gets_its_own_scratch_repository() {
     let params = start_params(None, "Jot something down");
     let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
     let events = client
-        .until(|event| matches!(event.event, WispEvent::ThreadStarted { .. }))
+        .until(|event| matches!(event.event, ParallaxEvent::ThreadStarted { .. }))
         .await;
     let scratch = events
         .iter()
         .find_map(|event| match &event.event {
-            WispEvent::RepoAdded { repo } => Some(repo.clone()),
+            ParallaxEvent::RepoAdded { repo } => Some(repo.clone()),
             _ => None,
         })
         .expect("the scratch entry is announced");
@@ -461,7 +461,7 @@ async fn a_thread_with_no_repo_gets_its_own_scratch_repository() {
     let branch = started.run.branch.unwrap();
     assert_eq!(
         git(&repository, &["log", "--format=%an %s", &branch]),
-        "wisp wisp: Jot something down\nwisp Start a wisp scratch folder"
+        "parallax parallax: Jot something down\nparallax Start a parallax scratch folder"
     );
 
     let second = start_params(None, "Another quick chat");
@@ -513,14 +513,14 @@ async fn deleting_a_running_thread_stops_its_agent_and_removes_everything() {
     assert!(archived.archived);
     client
         .until(
-            |event| matches!(&event.event, WispEvent::ThreadUpdated { thread } if thread.archived),
+            |event| matches!(&event.event, ParallaxEvent::ThreadUpdated { thread } if thread.archived),
         )
         .await;
     assert!(client.list().await.threads[0].archived);
 
     client.delete(params.run_id).await.unwrap();
     client
-        .until(|event| matches!(&event.event, WispEvent::ThreadDeleted { run_id, .. } if *run_id == params.run_id))
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadDeleted { run_id, .. } if *run_id == params.run_id))
         .await;
     assert_eq!(client.running_agents().await, 0, "the agent was stopped");
 
@@ -765,7 +765,10 @@ async fn a_thread_can_name_its_branch() {
         })
         .await
         .unwrap();
-    assert_eq!(started.run.branch.as_deref(), Some("wisp/write-some-notes"));
+    assert_eq!(
+        started.run.branch.as_deref(),
+        Some("parallax/write-some-notes")
+    );
 
     let refused = client
         .call::<ThreadStart>(ThreadStartParams {
@@ -909,7 +912,7 @@ async fn a_message_changes_a_finished_threads_model_and_effort() {
         .await
         .into_iter()
         .filter_map(|event| match event.event {
-            WispEvent::AgentUpdated { state, .. } => Some((state.model, state.effort)),
+            ParallaxEvent::AgentUpdated { state, .. } => Some((state.model, state.effort)),
             _ => None,
         })
         .collect();

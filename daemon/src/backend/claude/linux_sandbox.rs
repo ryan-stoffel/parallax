@@ -48,11 +48,11 @@ const REFUSED: i32 = 97;
 /// on from 24.04.
 const APPARMOR_USERNS: &str = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
 
-/// What wispd runs to read Claude Code's sandbox posture: one JSON line. `--restricted` makes it
+/// What plxd runs to read Claude Code's sandbox posture: one JSON line. `--restricted` makes it
 /// load the settings a worker loads, and no others.
 const STATUS_ARGS: &[&str] = &["--restricted", "sandbox", "status"];
 
-/// The only `statusVersion` wispd knows how to read.
+/// The only `statusVersion` plxd knows how to read.
 const STATUS_VERSION: u64 = 3;
 
 /// The `sandbox status` field that is `"unsupported"` on Linux exactly when
@@ -62,8 +62,8 @@ const SCRUB_FIELD: &str = "autoAllowBashIfSandboxedSource";
 /// Every other value 2.1.283 gives [`SCRUB_FIELD`]: where the auto-allow setting comes from.
 const SCRUB_OFF: &[&str] = &["default", "settings", "policy"];
 
-/// The end of every refusal for a status wispd can't read.
-const CANT_TELL: &str = "so wispd can't tell whether CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, which \
+/// The end of every refusal for a status plxd can't read.
+const CANT_TELL: &str = "so plxd can't tell whether CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, which \
                          would widen a worker's sandbox";
 
 /// The first Claude Code whose `sandbox status` is [`STATUS_VERSION`], with [`SCRUB_FIELD`].
@@ -74,7 +74,7 @@ const STATUS_MIN_VERSION: &str = "2.1.275";
 ///
 /// 1. `bwrap` and `socat` resolve on the launcher's `PATH`, where Claude Code looks for them.
 /// 2. `claude` doesn't run with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on ([`check_scrub_flag`]).
-/// 3. Inside bwrap alone, `socat` connects to a Unix socket wispd listens on. If it can't, bwrap
+/// 3. Inside bwrap alone, `socat` connects to a Unix socket plxd listens on. If it can't, bwrap
 ///    can't sandbox here, as on Ubuntu 24.04 and later without a profile for it.
 /// 4. Inside bwrap and `claude`'s own filter, the same connect is refused.
 ///
@@ -106,7 +106,7 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
         Some(REFUSED) => {
             return Err(
                 "socat can't connect to a Unix socket even outside Claude Code's seccomp filter, \
-                 so wispd can't check the filter"
+                 so plxd can't check the filter"
                     .into(),
             );
         }
@@ -138,9 +138,9 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
 
 /// Refuses a `claude` that runs with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on. On Linux the flag
 /// merges Claude Code's CI profile into every command's sandbox, which lets commands write all of
-/// `/home`, `/tmp`, `/var`, `/opt`, `/run`, `/mnt`, and `/root` (0013). wispd never sets it for a
+/// `/home`, `/tmp`, `/var`, `/opt`, `/run`, `/mnt`, and `/root` (0013). plxd never sets it for a
 /// worker and drops it from what a worker inherits, but managed settings can set it, and their
-/// `env` beats both the worker's environment and its `--settings`. So wispd asks Claude Code
+/// `env` beats both the worker's environment and its `--settings`. So plxd asks Claude Code
 /// itself, with the environment a worker gets. That was tested with the flag in
 /// `managed-settings.json` and in a `managed-settings.d` drop-in. Server-managed settings, a
 /// `policyHelper`, and WSL's inherited settings join the same managed tier inside Claude Code,
@@ -174,7 +174,7 @@ async fn read_status(launcher: &Launcher, spec: &ProcessSpec) -> Result<(), Stri
         ));
     }
     let status: Value = serde_json::from_str(ran.stdout.trim()).map_err(|error| {
-        format!("`claude sandbox status` printed something wispd can't read ({error}), {CANT_TELL}")
+        format!("`claude sandbox status` printed something plxd can't read ({error}), {CANT_TELL}")
     })?;
     match status["statusVersion"].as_u64() {
         Some(STATUS_VERSION) => {}
@@ -186,7 +186,7 @@ async fn read_status(launcher: &Launcher, spec: &ProcessSpec) -> Result<(), Stri
         }
         _ => {
             return Err(format!(
-                "`claude sandbox status` has statusVersion {}, and wispd reads only version \
+                "`claude sandbox status` has statusVersion {}, and plxd reads only version \
                  {STATUS_VERSION}, {CANT_TELL}",
                 status["statusVersion"]
             ));
@@ -196,14 +196,14 @@ async fn read_status(launcher: &Launcher, spec: &ProcessSpec) -> Result<(), Stri
         Some(source) if SCRUB_OFF.contains(&source) => Ok(()),
         Some("unsupported") => Err(
             "Claude Code runs with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB on, which on Linux lets a \
-             worker's commands write all of /home, /tmp, /var, /opt, /run, /mnt, and /root. wispd \
+             worker's commands write all of /home, /tmp, /var, /opt, /run, /mnt, and /root. plxd \
              doesn't pass it on, so something Claude Code loads sets it, most likely the env block \
              of its managed settings (such as /etc/claude-code/managed-settings.json); turn it off \
              there"
                 .into(),
         ),
         _ => Err(format!(
-            "`claude sandbox status` reports {SCRUB_FIELD} as {}, which wispd doesn't know, \
+            "`claude sandbox status` reports {SCRUB_FIELD} as {}, which plxd doesn't know, \
              {CANT_TELL}",
             status[SCRUB_FIELD]
         )),
@@ -336,11 +336,11 @@ mod tests {
             ),
             (
                 r#"echo '{"statusVersion":4,"autoAllowBashIfSandboxedSource":"default"}'"#,
-                "wispd reads only version 3",
+                "plxd reads only version 3",
             ),
             (
                 r#"echo '{"autoAllowBashIfSandboxedSource":"default"}'"#,
-                "wispd reads only version 3",
+                "plxd reads only version 3",
             ),
             (
                 r#"echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"forced"}'"#,
@@ -354,7 +354,7 @@ mod tests {
                 r#"echo "error: unknown command 'sandbox'" >&2; exit 1"#,
                 "failed (error: unknown command 'sandbox')",
             ),
-            ("echo 'not json'", "printed something wispd can't read"),
+            ("echo 'not json'", "printed something plxd can't read"),
         ];
         for (index, (body, expected)) in cases.into_iter().enumerate() {
             let claude = script(&bin, &format!("claude-{index}"), body);
@@ -391,9 +391,9 @@ echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"default"}'"#,
     }
 
     /// The real bwrap and socat, which CI installs along with the Claude Code it names in
-    /// `WISP_SANDBOX_CLAUDE` (0013).
+    /// `PLX_SANDBOX_CLAUDE` (0013).
     fn installed() -> Option<(tempfile::TempDir, Launcher, PathBuf)> {
-        let claude = PathBuf::from(std::env::var_os("WISP_SANDBOX_CLAUDE")?);
+        let claude = PathBuf::from(std::env::var_os("PLX_SANDBOX_CLAUDE")?);
         let dir = tempfile::tempdir().unwrap();
         let launcher = launcher(dir.path(), &[("PATH", INSTALLED_PATH)]);
         Some((dir, launcher, claude))
@@ -438,7 +438,7 @@ fi"#;
         let Some((dir, _, claude)) = installed() else {
             return;
         };
-        // In wispd's own environment the flag is dropped, as it is for a worker.
+        // In plxd's own environment the flag is dropped, as it is for a worker.
         let inherited = launcher(
             dir.path(),
             &[
@@ -462,7 +462,7 @@ fi"#;
     }
 
     /// How a worker run through the real `claude`, via `wrapper`, ends: cancelled once its init
-    /// passed wispd's checks, or failed. The wrapper points it at a closed port, so nothing
+    /// passed plxd's checks, or failed. The wrapper points it at a closed port, so nothing
     /// reaches Anthropic.
     async fn worker_outcome(root: &Path, wrapper: &Path) -> Outcome {
         let data = root.join("data");
@@ -491,7 +491,9 @@ fi"#;
             )),
             account: AccountRef {
                 id: "test".into(),
-                credential: Credential::ApiKey(ApiKey::new("sk-ant-wisp-test-not-a-key".into())),
+                credential: Credential::ApiKey(ApiKey::new(
+                    "sk-ant-parallax-test-not-a-key".into(),
+                )),
             },
             resume: None,
             model: None,

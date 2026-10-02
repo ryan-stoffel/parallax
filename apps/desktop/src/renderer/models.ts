@@ -1,12 +1,12 @@
 import type { AgentPermission, ThreadStartParams } from "../protocol/generated/protocol";
 
 // The models each worker backend's CLI took on 2026-09-29, and what to send for each. A
-// placeholder until wispd reports them per host. Sources:
+// placeholder until plxd reports them per host. Sources:
 // - Claude Code 2.1.283: the full names its aliases (opus, fable, sonnet, haiku) resolve to in
 //   its baked-in model catalog. `--model` takes these as they are.
 // - codex-cli 0.157.1: the slugs ~/.codex/models_cache.json lists (visibility "list"), which
 //   `-m` takes.
-// Cursor has no wispd backend, so it has no models here.
+// Cursor has no plxd backend, so it has no models here.
 
 export type Provider = "Claude" | "Codex";
 
@@ -31,14 +31,14 @@ export const models: Model[] = [
 ];
 
 /**
- * The wispd backends a thread can run on, by name (`AccountChoice`'s `backend`): whose models
+ * The plxd backends a thread can run on, by name (`AccountChoice`'s `backend`): whose models
  * they take, and the permissions they map. Every backend maps every effort (RYA-97, RYA-38).
- * ponytail: mirrors wispd's `Backend::permissions`, which it doesn't report yet (RYA-154).
+ * ponytail: mirrors plxd's `Backend::permissions`, which it doesn't report yet (RYA-154).
  */
 export const backends: Record<string, { provider: Provider; permissions: AgentPermission[] }> = {
   claude: { provider: "Claude", permissions: ["auto", "manual", "edit", "plan", "bypass"] },
   codex: { provider: "Codex", permissions: ["edit"] },
 };
 
-/** What a new thread's run asks of its CLI, sent only to a wispd that advertises `runOptions`. */
+/** What a new thread's run asks of its CLI, sent only to a plxd that advertises `runOptions`. */
 export type RunOptions = Pick<ThreadStartParams, "model" | "effort" | "permission">;

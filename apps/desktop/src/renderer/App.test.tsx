@@ -3,12 +3,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { UpdateState, WispBridge } from "../preload/bridge";
+import type { UpdateState, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // Only what the frame calls, so new bridge methods don't break this stub.
-const bridge: Partial<WispBridge> = {
+const bridge: Partial<ParallaxBridge> = {
   platform: "darwin",
   setThemeSource: vi.fn(),
   connectionState: async () => ({ status: "connecting" }),
@@ -16,7 +16,7 @@ const bridge: Partial<WispBridge> = {
   hosts: async () => [],
   onHosts: () => () => {},
 };
-window.wisp = bridge as WispBridge;
+window.parallax = bridge as ParallaxBridge;
 
 let unmount = () => {};
 afterEach(() => {
@@ -62,7 +62,7 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   renderApp();
   // Update is only for `pnpm dev`.
-  expect(button("Update wisp")).toBeNull();
+  expect(button("Update parallax")).toBeNull();
 
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
@@ -97,9 +97,9 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   const status = () =>
     [...document.querySelectorAll('#sidebar [role="status"]')].map((s) => s.textContent);
   expect(status()).toContain("Updating…");
-  expect(button("Update wisp")!.disabled).toBe(true);
+  expect(button("Update parallax")!.disabled).toBe(true);
   await act(async () => answer("Updated to abc1234"));
   act(() => publish({}));
   expect(status()).toContain("Updated to abc1234");
-  expect(button("Update wisp")!.disabled).toBe(false);
+  expect(button("Update parallax")!.disabled).toBe(false);
 });

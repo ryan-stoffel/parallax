@@ -1,6 +1,6 @@
 //! Real Claude Code regression for RYA-110 and RYA-20: a worker can run Bash, and its commands
 //! don't see the key. A local fake Messages API asks for Bash, so no account or Anthropic
-//! connection is needed. Set `WISP_SANDBOX_CLAUDE` to the CLI under test.
+//! connection is needed. Set `PLX_SANDBOX_CLAUDE` to the CLI under test.
 #![cfg(unix)]
 
 mod common;
@@ -9,14 +9,14 @@ use std::fs;
 
 use common::{run_worker, tool_result, worker_request};
 
-const KEY: &str = "sk-ant-wisp-test-key-never-send";
+const KEY: &str = "sk-ant-parallax-test-key-never-send";
 /// A stand-in for the messaging token, in case Claude Code doesn't set its own.
-const TOKEN: &str = "wisp-test-messaging-token";
+const TOKEN: &str = "parallax-test-messaging-token";
 
 #[tokio::test]
 async fn a_worker_can_run_bash_without_exposing_its_key() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let dir = tempfile::tempdir().unwrap();

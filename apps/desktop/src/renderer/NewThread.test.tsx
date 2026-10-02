@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
-import type { RpcResponse, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import type { RpcResponse, SubscriptionMessage, ParallaxBridge } from "../preload/bridge";
 import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
 import { App } from "./App";
 
@@ -18,13 +18,13 @@ Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
   },
 });
 
-const wisp: Repo = {
-  id: "r-wisp",
-  name: "wisp",
-  path: "/src/wisp",
+const parallax: Repo = {
+  id: "r-parallax",
+  name: "parallax",
+  path: "/src/parallax",
   createdAt: "2026-09-26T12:00:00Z",
 };
-const thread: Thread = { id: "t-1", repo: wisp.id, createdAt: "2026-09-26T12:00:01Z" };
+const thread: Thread = { id: "t-1", repo: parallax.id, createdAt: "2026-09-26T12:00:01Z" };
 const run = (id: string, prompt: string, status = "running") => ({ id, prompt, status });
 
 type Answer = (params: Record<string, unknown>) => RpcResponse<unknown>;
@@ -35,7 +35,7 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
 let capabilities: Capabilities;
-const nameThread = vi.fn<WispBridge["nameThread"]>(async () => ({}));
+const nameThread = vi.fn<ParallaxBridge["nameThread"]>(async () => ({}));
 
 beforeEach(() => {
   request.mockClear();
@@ -43,18 +43,18 @@ beforeEach(() => {
   nameThread.mockReset().mockResolvedValue({});
   localStorage.clear();
   answers = {
-    "thread/list": () => ({ result: { repos: [wisp], threads: [thread], seq: 7 } }),
+    "thread/list": () => ({ result: { repos: [parallax], threads: [thread], seq: 7 } }),
     "agent/list": () => ({
       result: { runs: [run(thread.id, "Fix the flaky test\nPlease.")], seq: 7 },
     }),
     "project/list": () => ({ result: { projects: [], seq: 7 } }),
   };
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async () => ({
       status: "connected",
-      wispd: "0.1.0",
+      plxd: "0.1.0",
       protocol: 1,
       capabilities,
     }),
@@ -65,7 +65,7 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => [],
     onHosts: () => () => {},
-  } as Partial<WispBridge> as WispBridge;
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};
@@ -136,13 +136,16 @@ async function send(text: string) {
 test("lists threads by repository, titled by their first prompt line, with No Repo last", async () => {
   await renderApp();
   const groups = [...document.querySelectorAll('[aria-labelledby="repositories-heading"] > div')];
-  expect(groups.map((g) => g.querySelector("button")!.textContent)).toEqual(["wisp", "No Repo"]);
+  expect(groups.map((g) => g.querySelector("button")!.textContent)).toEqual([
+    "parallax",
+    "No Repo",
+  ]);
   expect(groups[0]!.contains(threadRow("Fix the flaky test")!)).toBe(true);
-  expect(heading()).toBe("What should we build in wisp?");
+  expect(heading()).toBe("What should we build in parallax?");
 });
 
 test("New Thread adds a picked folder, starts there, and reuses its run id on a retry", async () => {
-  const other: Repo = { ...wisp, id: "", name: "other", path: "/src/other" };
+  const other: Repo = { ...parallax, id: "", name: "other", path: "/src/other" };
   pickFolder.mockResolvedValue("/src/other");
   answers["repo/add"] = (p) => ({ result: { repo: { ...other, id: p["id"] } } });
   await renderApp();
@@ -154,9 +157,9 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
   expect(heading()).toBe("What should we build in other?");
 
   // The first try fails, the retry with the same prompt succeeds.
-  answers["thread/start"] = () => ({ error: { code: -32000, message: "wispd is busy" } });
+  answers["thread/start"] = () => ({ error: { code: -32000, message: "plxd is busy" } });
   await send("Tidy the README");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("wispd is busy");
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe("plxd is busy");
   answers["thread/start"] = (p) => ({
     result: {
       thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
@@ -182,7 +185,7 @@ const bubble = () => document.querySelector('[role="log"] .bg-selected')?.textCo
 const musing = () =>
   document.querySelector('[role="log"] button[aria-expanded] .sr-only')?.textContent;
 
-test("Send shows the prompt at once while wispd starts the thread, and a failure puts it back", async () => {
+test("Send shows the prompt at once while plxd starts the thread, and a failure puts it back", async () => {
   let answer: (response: RpcResponse<unknown>) => void = () => {};
   answers["thread/start"] = () =>
     new Promise((resolve) => (answer = resolve)) as unknown as RpcResponse<unknown>;
@@ -194,11 +197,11 @@ test("Send shows the prompt at once while wispd starts the thread, and a failure
   expect(musing()).toBe("Working");
   expect(composer().getAttribute("aria-placeholder")).toBe("Starting thread…");
 
-  await act(async () => answer({ error: { code: -32000, message: "wispd is busy" } }));
+  await act(async () => answer({ error: { code: -32000, message: "plxd is busy" } }));
   await settle();
-  expect(heading()).toBe("What should we build in wisp?");
+  expect(heading()).toBe("What should we build in parallax?");
   expect(composer().textContent).toBe("Tidy the README");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("wispd is busy");
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe("plxd is busy");
   expect(document.querySelector(".loader")).toBeNull();
 });
 
@@ -222,7 +225,7 @@ test("the loader under the prompt carries on as the thread opens and loads", asy
 
   await act(async () => answer());
   await settle();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   expect(bubble()).toBe("Tidy the README");
   expect(musing()).toBe("Working");
   // Its word carries on rather than fading in again.
@@ -232,7 +235,7 @@ test("the loader under the prompt carries on as the thread opens and loads", asy
 test("a thread started here that finished reopens with no loader while its transcript loads", async () => {
   answers["thread/start"] = (p) => ({
     result: {
-      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
+      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
       run: run(p["runId"] as string, "Tidy the README", "starting"),
     },
   });
@@ -242,7 +245,7 @@ test("a thread started here that finished reopens with no loader while its trans
     if (held) return new Promise(() => {}) as unknown as RpcResponse<unknown>;
     const done = {
       ...run(p["runId"] as string, "Tidy the README", "completed"),
-      project: wisp.id,
+      project: parallax.id,
       backend: "claude",
     };
     const events = [
@@ -260,7 +263,7 @@ test("a thread started here that finished reopens with no loader while its trans
   };
   await renderApp();
   await send("Tidy the README");
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   expect(bubble()).toBe("Tidy the README");
   expect(document.querySelector(".loader")).toBeNull();
 
@@ -270,7 +273,7 @@ test("a thread started here that finished reopens with no loader while its trans
   held = true;
   await act(async () => (threadRow("Tidy the README") as HTMLElement).click());
   await settle();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   expect(bubble()).toBe("Tidy the README");
   expect(document.querySelector(".loader")).toBeNull();
   expect(musing()).toBeUndefined();
@@ -285,7 +288,7 @@ test("a finished thread opens on its prompt with no loader while its transcript 
   await renderApp();
   await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
   await settle();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix the flaky test"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
   expect(bubble()).toBe("Fix the flaky test");
   expect(document.querySelector(".loader")).toBeNull();
   expect(musing()).toBeUndefined();
@@ -306,14 +309,14 @@ test("No Repo starts a thread with no repo", async () => {
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
 });
 
-test("a new thread asks wispd to forward its permission requests only when wispd advertises approvals (RYA-196)", async () => {
+test("a new thread asks plxd to forward its permission requests only when plxd advertises approvals (RYA-196)", async () => {
   answers["thread/start"] = (p) => ({
     result: {
-      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
+      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
       run: run(p["runId"] as string, "Hi"),
     },
   });
-  // An older wispd never gets the flag.
+  // An older plxd never gets the flag.
   await renderApp();
   await send("Hi");
   act(() => unmount());
@@ -325,7 +328,7 @@ test("a new thread asks wispd to forward its permission requests only when wispd
   expect(newer).toMatchObject({ prompt: "Hi", approvals: true });
 });
 
-describe("with wispd's run options", () => {
+describe("with plxd's run options", () => {
   const started = (p: Record<string, unknown>) => ({
     result: {
       thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
@@ -338,7 +341,7 @@ describe("with wispd's run options", () => {
     answers["thread/start"] = started;
   });
 
-  test("Manual says its requests come to the chat only when wispd advertises approvals (RYA-196)", async () => {
+  test("Manual says its requests come to the chat only when plxd advertises approvals (RYA-196)", async () => {
     const manual = () =>
       [
         ...document.querySelectorAll(
@@ -347,7 +350,7 @@ describe("with wispd's run options", () => {
       ].find((o) => o.textContent?.startsWith("Manual"))!.textContent;
     await renderApp();
     expect(manual()).toBe(
-      "ManualAsks before edits and commands. This host's wispd can't show those requests, so they're denied.",
+      "ManualAsks before edits and commands. This host's plxd can't show those requests, so they're denied.",
     );
     act(() => unmount());
     capabilities = { runOptions: {}, approvals: {} };
@@ -394,7 +397,7 @@ describe("with wispd's run options", () => {
     const [refused, retry] = calls("thread/start");
     expect(refused).toEqual({
       runId: expect.any(String),
-      repo: wisp.id,
+      repo: parallax.id,
       prompt: "Plan the settings split",
       model: "claude-fable-5-1",
       effort: "max",
@@ -417,7 +420,7 @@ describe("with wispd's run options", () => {
     expect(calls("thread/start")).toEqual([
       {
         runId: expect.any(String),
-        repo: wisp.id,
+        repo: parallax.id,
         prompt: "Tidy the README",
         model: "gpt-6-astra",
         effort: "high",
@@ -439,7 +442,7 @@ test("a thread starts on the branch its prompt was named for, and takes the name
   nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
   answers["thread/start"] = (p) => ({
     result: {
-      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
+      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
       run: run(p["runId"] as string, "the flaky test is flaky, please fix it"),
     },
   });
@@ -449,11 +452,11 @@ test("a thread starts on the branch its prompt was named for, and takes the name
     {
       runId: expect.any(String),
       prompt: "the flaky test is flaky, please fix it",
-      repo: wisp.id,
+      repo: parallax.id,
       branchSlug: "fix-flaky-test",
     },
   ]);
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix flaky test"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
 });
 
 test("a thread can start with an image alone, titled Image, and nothing to name it by", async () => {
@@ -463,7 +466,7 @@ test("a thread can start with an image alone, titled Image, and nothing to name 
   vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1, close() {} }));
   answers["thread/start"] = (p) => ({
     result: {
-      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
+      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
       run: run(p["runId"] as string, ""),
     },
   });
@@ -480,11 +483,11 @@ test("a thread can start with an image alone, titled Image, and nothing to name 
       runId: expect.any(String),
       prompt: "",
       images: [{ mediaType: "image/jpeg", data: "/9j/" }],
-      repo: wisp.id,
+      repo: parallax.id,
     },
   ]);
   expect(nameThread).not.toHaveBeenCalled();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Image"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Image"]);
   vi.unstubAllGlobals();
 });
 
@@ -502,7 +505,7 @@ test("a folder that isn't a repository says so under the composer", async () => 
   expect(document.querySelector('[role="alert"]')?.textContent).toBe(
     "/tmp/notes is not the top folder of a git repository: it has no .git.",
   );
-  expect(heading()).toBe("What should we build in wisp?");
+  expect(heading()).toBe("What should we build in parallax?");
 });
 
 test("the row menu archives into Archived, and unarchives back", async () => {
@@ -599,7 +602,7 @@ describe("a host with no usable default account for threads", () => {
     ]);
     const [first, retry] = calls("thread/start");
     expect(retry).toEqual(first);
-    expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
+    expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   });
 
   test("a default naming a removed key account asks again", async () => {
@@ -620,13 +623,13 @@ describe("a host with no usable default account for threads", () => {
     ]);
     const [first, retry] = calls("thread/start");
     expect(retry).toEqual(first);
-    expect(crumbs()).toEqual(["This Mac", "wisp", "Hi"]);
+    expect(crumbs()).toEqual(["This Mac", "parallax", "Hi"]);
     expect(document.querySelector("main")!.textContent).toContain(
       "Using Claude Code for new threads on this host.",
     );
   });
 
-  test("shows wispd's error when it can't list accounts", async () => {
+  test("shows plxd's error when it can't list accounts", async () => {
     accounts([]);
     answers["accounts/list"] = () => ({ error: { code: -32601, message: "Method not found" } });
     await renderApp();
@@ -645,36 +648,36 @@ describe("a host with no usable default account for threads", () => {
   });
 });
 
-test("known error kinds read plainly, and unknown ones show wispd's message", async () => {
+test("known error kinds read plainly, and unknown ones show plxd's message", async () => {
   const alert = () => document.querySelector('[role="alert"]')?.textContent;
   answers["thread/start"] = () => ({
     error: { code: -32000, message: "no repo entry has id r-9", data: { kind: "repoNotFound" } },
   });
   await renderApp();
   await send("Hi");
-  expect(alert()).toBe("That repository isn't in wisp anymore. Choose another one.");
+  expect(alert()).toBe("That repository isn't in Parallax anymore. Choose another one.");
 
   answers["thread/start"] = () => ({
-    // A kind from a newer wispd.
+    // A kind from a newer plxd.
     error: {
       code: -32000,
-      message: "wispd is shy today",
+      message: "plxd is shy today",
       data: { kind: "somethingNew" as ErrorKind },
     },
   });
   await send("Hi");
-  expect(alert()).toBe("wispd is shy today");
+  expect(alert()).toBe("plxd is shy today");
 });
 
 test("an open thread deleted by another client goes back to New Thread", async () => {
   let deliver: (message: SubscriptionMessage) => void = () => {};
-  window.wisp.subscribe = (_host, _params, listener) => {
+  window.parallax.subscribe = (_host, _params, listener) => {
     deliver = listener;
     return () => {};
   };
   await renderApp();
   await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix the flaky test"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
 
   await act(async () =>
     deliver({
@@ -683,10 +686,10 @@ test("an open thread deleted by another client goes back to New Thread", async (
         subscription: "s-1",
         seq: 8,
         time: "2026-09-26T12:06:00Z",
-        event: { kind: "thread.deleted", runId: thread.id, repo: wisp.id },
+        event: { kind: "thread.deleted", runId: thread.id, repo: parallax.id },
       },
     }),
   );
   await settle();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "New thread"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
 });

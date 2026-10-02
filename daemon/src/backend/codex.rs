@@ -17,7 +17,7 @@
 //! `--image=<file>`: with a space instead of `=`, `--image` would take the `-` after it as a
 //! second image, and Codex splits a value at commas, so a path with one is refused. The CLI reads
 //! them itself, outside its sandbox, and wraps each in `<image name=[Image #1] path="...">` for
-//! the model, so the model sees wispd's temp path, never the user's file name, which wispd never
+//! the model, so the model sees plxd's temp path, never the user's file name, which plxd never
 //! gets.
 //!
 //! Only workers run on Codex so far: the coordinator's no-write mode is RYA-39. A worker is held
@@ -27,7 +27,7 @@
 //! - `--ignore-user-config` and `--ignore-rules` load none of the user's `config.toml` or
 //!   execpolicy rules, and the worktree is marked `untrusted`, so no project `.codex/` config,
 //!   hooks, or rules load either. Auth still comes from `CODEX_HOME`.
-//! - A `wisp_worker` permission profile extends `:workspace`, which writes the workspace roots
+//! - A `parallax_worker` permission profile extends `:workspace`, which writes the workspace roots
 //!   and the temp folders and keeps `.git` read-only. The context folder is a second root, the
 //!   sandbox's unreadable paths are `deny`, and its read-only git paths are `read`, which reopens
 //!   them inside a denied folder. Network is on through Codex's proxy with every host allowed; its
@@ -39,7 +39,7 @@
 //! # A worker's `PATH`
 //!
 //! Codex runs each command with the user's shell, and zsh reads `/etc/zshenv` and `~/.zshenv`
-//! for every command, so startup files that set `PATH` outright replace the `PATH` wispd gave the
+//! for every command, so startup files that set `PATH` outright replace the `PATH` plxd gave the
 //! CLI. The shell snapshot that would put it back is off (above). So a worker's commands get
 //! `ZDOTDIR`, which zsh reads right after `/etc/zshenv`: [`write_zdotdir`] writes a folder into the
 //! data folder's `tmp/` whose `.zshenv` runs the user's own `~/.zshenv` and then puts the CLI's
@@ -51,7 +51,7 @@
 //! [`FailureKind::PolicyViolation`]. Codex older than [`WORKER_MIN_VERSION`] would ignore the
 //! profile, so the runner refuses it before starting a worker. The backend runs workers only on
 //! macOS, but it reports no `worker_sandbox` on any OS until RYA-145 keeps their commands out of
-//! the shared temp folders, so wispd refuses Codex workers (0013, RYA-153).
+//! the shared temp folders, so plxd refuses Codex workers (0013, RYA-153).
 //!
 //! # Credentials
 //!
@@ -169,7 +169,7 @@ pub fn arguments(
 ) -> Result<Vec<OsString>, StartError> {
     let Some(sandbox) = worker_sandbox(request)? else {
         return Err(StartError::Unsupported(
-            "wispd runs only workers on Codex so far; its coordinator is RYA-39".into(),
+            "plxd runs only workers on Codex so far; its coordinator is RYA-39".into(),
         ));
     };
     let mut args: Vec<OsString> = vec!["exec".into()];
@@ -269,9 +269,9 @@ pub fn worker_overrides(
             .map(|path| format!("{}=true", toml(path))),
     );
     vec![
-        r#"default_permissions="wisp_worker""#.to_owned(),
+        r#"default_permissions="parallax_worker""#.to_owned(),
         format!(
-            r#"permissions={{wisp_worker={{extends=":workspace", workspace_roots={roots}, filesystem={filesystem}, network={{enabled=true, domains={{"*"="allow"}}}}}}}}"#
+            r#"permissions={{parallax_worker={{extends=":workspace", workspace_roots={roots}, filesystem={filesystem}, network={{enabled=true, domains={{"*"="allow"}}}}}}}}"#
         ),
         WORKER_FEATURES.to_owned(),
         format!(r#"projects={{{}={{trust_level="untrusted"}}}}"#, toml(cwd)),
@@ -288,11 +288,11 @@ pub fn worker_overrides(
 }
 
 /// The start of a worker's `.zshenv`. zsh reads it in place of the user's `~/.zshenv`, so it runs
-/// that file itself, after unsetting `ZDOTDIR` so neither that file nor the command sees wispd's
+/// that file itself, after unsetting `ZDOTDIR` so neither that file nor the command sees plxd's
 /// folder.
 const ZSHENV_START: &[u8] = b"unset ZDOTDIR\n[ -f \"$HOME/.zshenv\" ] && . \"$HOME/.zshenv\"\n";
 
-/// Writes a worker's `ZDOTDIR` into `dir` (wispd's data folder's `tmp/`) and returns it, which
+/// Writes a worker's `ZDOTDIR` into `dir` (plxd's data folder's `tmp/`) and returns it, which
 /// deletes it when dropped (RYA-141). Its `.zshenv` runs the user's `~/.zshenv` and then puts
 /// `path`, the `PATH` the CLI started with, in front of whatever `PATH` the startup files left.
 /// The folder is new, has a random name and a canonical path, as the sandbox needs, and only its
@@ -318,7 +318,7 @@ pub fn write_zdotdir(dir: &Path, path: &OsStr) -> io::Result<TempDir> {
     Ok(zdotdir)
 }
 
-/// Writes `images` as files into a new folder in `dir` (wispd's data folder's `tmp/`), named by
+/// Writes `images` as files into a new folder in `dir` (plxd's data folder's `tmp/`), named by
 /// their order and file type, and returns the folder, which deletes them when dropped, with their
 /// paths. `None` for no images. Only the folder's owner may open it (0700).
 ///
@@ -427,7 +427,7 @@ impl Backend for CodexBackend {
         }
         if request.policy == ToolPolicy::WorkspaceWrite && !cfg!(target_os = "macos") {
             return Err(StartError::Unsupported(
-                "wispd hasn't checked Codex's worker sandbox on this OS yet (decision 0013)".into(),
+                "plxd hasn't checked Codex's worker sandbox on this OS yet (decision 0013)".into(),
             ));
         }
         let zdotdir = match self.launcher.base().get("PATH") {

@@ -4,7 +4,7 @@
 //! Closing every other descriptor works per OS (0023). macOS has `POSIX_SPAWN_CLOEXEC_DEFAULT`.
 //! Linux doesn't, so [`spawn_session`] lists `/proc/self/fd` and adds a close action for each
 //! descriptor above 2. A descriptor opened after that scan leaks only if it lacks close-on-exec,
-//! and wispd opens none without it: std, tokio, and SQLite set it, and clippy's
+//! and plxd opens none without it: std, tokio, and SQLite set it, and clippy's
 //! `disallowed-methods` (`clippy.toml`) keeps out the calls that don't.
 
 use std::collections::BTreeMap;
@@ -141,7 +141,7 @@ fn close_the_rest(actions: &mut PosixSpawnFileActions) -> io::Result<()> {
         io::Error::new(
             error.kind(),
             format!(
-                "could not list /proc/self/fd, which wispd needs to start a process with only \
+                "could not list /proc/self/fd, which plxd needs to start a process with only \
                  its stdio; is /proc mounted? {error}"
             ),
         )
@@ -208,10 +208,10 @@ mod tests {
         command
             .args([
                 "-c",
-                "read line; echo \"$line $0 $WISPD_TEST\"; echo err >&2",
+                "read line; echo \"$line $0 $PLXD_TEST\"; echo err >&2",
             ])
             .arg("arg")
-            .env("WISPD_TEST", "set");
+            .env("PLXD_TEST", "set");
         let pid = spawn_detached(
             &command,
             Stdio {

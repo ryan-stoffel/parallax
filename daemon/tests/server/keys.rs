@@ -3,11 +3,11 @@
 //! Linux only: on a Mac the same call would reach the real login Keychain.
 #![cfg(target_os = "linux")]
 
+use parallax_protocol::methods::{AccountsKeysAdd, AccountsKeysList};
+use parallax_protocol::{AccountId, AccountsKeysListParams, ErrorKind};
 use serde_json::json;
-use wisp_protocol::methods::{AccountsKeysAdd, AccountsKeysList};
-use wisp_protocol::{AccountId, AccountsKeysListParams, ErrorKind};
 
-use crate::support::{Client, Wispd, kind, temp_dir};
+use crate::support::{Client, Plxd, kind, temp_dir};
 
 #[tokio::test]
 async fn adding_a_key_without_a_secret_service_fails_and_stores_nothing() {
@@ -15,10 +15,10 @@ async fn adding_a_key_without_a_secret_service_fails_and_stores_nothing() {
     // A session bus that doesn't exist, as on a headless host.
     let no_bus = [(
         "DBUS_SESSION_BUS_ADDRESS",
-        "unix:path=/nonexistent/wispd-test-bus",
+        "unix:path=/nonexistent/plxd-test-bus",
     )];
-    let wispd = Wispd::start_with(dir.path(), &[], &no_bus).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start_with(dir.path(), &[], &no_bus).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     let params = serde_json::from_value(json!({
         "id": AccountId::generate(),

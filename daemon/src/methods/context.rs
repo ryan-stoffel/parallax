@@ -2,17 +2,17 @@
 //!
 //! File I/O runs on tokio's blocking pool (`spawn_blocking`), not the request's own task, since
 //! reading, writing, and listing a project's shared context folder are ordinary blocking
-//! filesystem calls, just like `wisp_store`'s calls are blocking SQLite ones.
+//! filesystem calls, just like `parallax_store`'s calls are blocking SQLite ones.
 
 use std::sync::Arc;
 
-use tracing::info;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
-    ContextWriteResult, ErrorKind, ProjectId, WispEvent,
+    ContextWriteResult, ErrorKind, ParallaxEvent, ProjectId,
 };
-use wisp_store::StoreError;
+use parallax_store::StoreError;
+use tracing::info;
 
 use super::Context;
 use crate::context::{self, Existing};
@@ -63,7 +63,7 @@ pub(crate) async fn read(
     .await
 }
 
-/// The logic behind `context/write`, apart from wispd's blocking pool, so a test can call it
+/// The logic behind `context/write`, apart from plxd's blocking pool, so a test can call it
 /// directly.
 ///
 /// Idempotent on `id`: a retry with the same `project`, `path`, `content`, and `writer` returns
@@ -77,10 +77,10 @@ fn write_context_file(
     name: &str,
     content: &str,
     writer: Option<String>,
-    write_id: wisp_protocol::ContextWriteId,
+    write_id: parallax_protocol::ContextWriteId,
 ) -> Result<ContextWriteResult, ErrorObject> {
     if content.len() as u64 > context::MAX_FILE_BYTES {
-        return Err(ErrorObject::wisp(
+        return Err(ErrorObject::parallax(
             ErrorKind::ContextTooLarge,
             format!("{name} would be over the per-file shared context size cap"),
         ));
@@ -99,7 +99,7 @@ fn write_context_file(
             return Ok(ContextWriteResult { file });
         }
         Existing::Conflict => {
-            return Err(ErrorObject::wisp(
+            return Err(ErrorObject::parallax(
                 ErrorKind::IdConflict,
                 format!("context write {write_id} exists with different content or writer"),
             ));
@@ -108,7 +108,7 @@ fn write_context_file(
     }
     let other_total = context::other_files_total(&dir, name).map_err(io_error(name))?;
     if other_total + content.len() as u64 > context::MAX_PROJECT_BYTES {
-        return Err(ErrorObject::wisp(
+        return Err(ErrorObject::parallax(
             ErrorKind::ContextTooLarge,
             format!("{name} would be over the shared context size cap"),
         ));
@@ -128,7 +128,7 @@ fn write_context_file(
     let seq = daemon.log.append_blocking(
         jiff::Timestamp::now(),
         Some(project),
-        WispEvent::ContextChanged { file: file.clone() },
+        ParallaxEvent::ContextChanged { file: file.clone() },
     );
     info!(project = %project, path = name, seq, "wrote a shared context file");
     Ok(ContextWriteResult { file })
@@ -149,7 +149,7 @@ pub(crate) async fn write(
     // A fast, redundant check: `write_context_file` enforces this cap too, but failing here skips
     // a project lookup and a trip to the blocking pool for a request that is invalid regardless.
     if content.len() as u64 > context::MAX_FILE_BYTES {
-        return Err(ErrorObject::wisp(
+        return Err(ErrorObject::parallax(
             ErrorKind::ContextTooLarge,
             format!("{name} would be over the per-file shared context size cap"),
         ));
@@ -199,7 +199,7 @@ fn io_error(path: &str) -> impl Fn(std::io::Error) -> ErrorObject {
 
 #[cfg(test)]
 mod tests {
-    use wisp_protocol::{ContextWriteId, ErrorKind, ProjectId};
+    use parallax_protocol::{ContextWriteId, ErrorKind, ProjectId};
 
     use super::write_context_file;
     use crate::server::Daemon;
@@ -238,7 +238,10 @@ mod tests {
 
         let conflict =
             write_context_file(&daemon, project, "notes.md", "different", None, id).unwrap_err();
-        assert_eq!(conflict.wisp_data().unwrap().kind, ErrorKind::IdConflict);
+        assert_eq!(
+            conflict.parallax_data().unwrap().kind,
+            ErrorKind::IdConflict
+        );
     }
 
     #[test]
@@ -281,7 +284,10 @@ mod tests {
             ContextWriteId::generate(),
         )
         .unwrap_err();
-        assert_eq!(error.wisp_data().unwrap().kind, ErrorKind::ContextTooLarge);
+        assert_eq!(
+            error.parallax_data().unwrap().kind,
+            ErrorKind::ContextTooLarge
+        );
     }
 
     #[test]
@@ -314,6 +320,9 @@ mod tests {
             ContextWriteId::generate(),
         )
         .unwrap_err();
-        assert_eq!(error.wisp_data().unwrap().kind, ErrorKind::ContextTooLarge);
+        assert_eq!(
+            error.parallax_data().unwrap().kind,
+            ErrorKind::ContextTooLarge
+        );
     }
 }

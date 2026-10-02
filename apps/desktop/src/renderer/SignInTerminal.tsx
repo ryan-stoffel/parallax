@@ -51,7 +51,7 @@ export function SignInTerminal({
     // Outside macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac.
     term.attachCustomKeyEventHandler(
       (e) =>
-        window.wisp.platform === "darwin" ||
+        window.parallax.platform === "darwin" ||
         e.type !== "keydown" ||
         !e.ctrlKey ||
         !(e.key === "v" || (e.key === "c" && term.hasSelection())),
@@ -59,22 +59,22 @@ export function SignInTerminal({
     term.open(element);
     fit.fit();
 
-    const stop = window.wisp.onTerminal((message) => {
+    const stop = window.parallax.onTerminal((message) => {
       if (message.type === "data") return term.write(message.data);
       setEnded(true);
       exited();
     });
-    term.onData((data) => window.wisp.terminalInput(data));
-    term.onResize(({ cols, rows }) => window.wisp.resizeTerminal(cols, rows));
+    term.onData((data) => window.parallax.terminalInput(data));
+    term.onResize(({ cols, rows }) => window.parallax.resizeTerminal(cols, rows));
     const observer = new ResizeObserver(() => fit.fit());
     observer.observe(element);
-    void window.wisp.openTerminal(hostId, cli, term.cols, term.rows).then(setError);
+    void window.parallax.openTerminal(hostId, cli, term.cols, term.rows).then(setError);
     term.focus();
 
     return () => {
       observer.disconnect();
       stop();
-      window.wisp.closeTerminal();
+      window.parallax.closeTerminal();
       term.dispose();
     };
   }, [hostId, cli]);

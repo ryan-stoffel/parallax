@@ -4,20 +4,20 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use tracing::{error, info, warn};
-use wisp_protocol::{CoordinatorThreadId, ProjectId};
-use wispd::attach::{
+use parallax_protocol::{CoordinatorThreadId, ProjectId};
+use plxd::attach::{
     self, DEFAULT_CONNECT_TIMEOUT, EXIT_UNAVAILABLE, MAX_CONNECT_TIMEOUT, Options, report,
 };
-use wispd::launch_agent::LaunchAgent;
-use wispd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
-use wispd::paths::{DATA_DIR_ENV, DataDir};
-use wispd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartError};
+use plxd::launch_agent::LaunchAgent;
+use plxd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
+use plxd::paths::{DATA_DIR_ENV, DataDir};
+use plxd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartError};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-use wispd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
+use plxd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Parser)]
-#[command(name = "wispd", version = wispd::version(), about = "The wisp host daemon.")]
+#[command(name = "plxd", version = plxd::version(), about = "The Parallax host daemon.")]
 #[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
@@ -29,21 +29,21 @@ enum Command {
     /// Serve the editor on this user's socket or pipe until SIGTERM or SIGINT (Ctrl-C or
     /// Ctrl-Break on Windows).
     Serve(ServeArgs),
-    /// Connect stdin and stdout to wispd's socket or pipe, starting wispd if it isn't running.
+    /// Connect stdin and stdout to plxd's socket or pipe, starting plxd if it isn't running.
     Attach(AttachArgs),
-    /// Manage the per-user service that keeps wispd running: a `LaunchAgent` on macOS, a systemd
+    /// Manage the per-user service that keeps plxd running: a `LaunchAgent` on macOS, a systemd
     /// user unit on Linux.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Service(ServiceArgs),
-    /// Serve a coordinator's wisp tools over MCP on stdin and stdout. wispd starts it.
+    /// Serve a coordinator's Parallax tools over MCP on stdin and stdout. plxd starts it.
     #[command(hide = true)]
     Mcp(McpArgs),
 }
 
 #[derive(Debug, Args)]
 struct McpArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
+    /// The data folder [default: ~/Library/Application Support/parallax on macOS, ~/.local/share/parallax
+    /// on Linux, %LOCALAPPDATA%\parallax on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -58,24 +58,24 @@ struct McpArgs {
 
 #[derive(Debug, Args)]
 struct ServeArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
+    /// The data folder [default: ~/Library/Application Support/parallax on macOS, ~/.local/share/parallax
+    /// on Linux, %LOCALAPPDATA%\parallax on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
-    /// off, error, warn, info, debug, or trace, or a list such as wispd=debug,warn
+    /// off, error, warn, info, debug, or trace, or a list such as plxd=debug,warn
     #[arg(long, value_name = "LEVEL", env = LOG_LEVEL_ENV, default_value = DEFAULT_LOG_LEVEL)]
     log_level: LogFilter,
 }
 
 #[derive(Debug, Args)]
 struct AttachArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
+    /// The data folder [default: ~/Library/Application Support/parallax on macOS, ~/.local/share/parallax
+    /// on Linux, %LOCALAPPDATA%\parallax on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
-    /// How long to wait for wispd to accept a connection, including starting it [default: 10]
+    /// How long to wait for plxd to accept a connection, including starting it [default: 10]
     #[arg(long, value_name = "SECONDS", value_parser = parse_seconds)]
     connect_timeout: Option<Duration>,
 }
@@ -115,8 +115,8 @@ enum ServiceCommand {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Args)]
 struct ServiceOptions {
-    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
+    /// The data folder [default: ~/Library/Application Support/parallax on macOS, ~/.local/share/parallax
+    /// on Linux, %LOCALAPPDATA%\parallax on Windows]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -127,7 +127,7 @@ struct ServiceOptions {
 
 fn main() -> ExitCode {
     // Before anything else, so the version is the one this process started as (see `version`).
-    wispd::version();
+    plxd::version();
     let cli = Cli::parse();
     match cli.command {
         Command::Serve(args) => serve(&args),
@@ -141,17 +141,17 @@ fn main() -> ExitCode {
 /// Runs `mcp` and exits with `std::process::exit`, for the same reason as [`attach`].
 fn mcp(args: &McpArgs) -> ! {
     let report = |message: &dyn std::fmt::Display| {
-        let _ = writeln!(io::stderr(), "wispd mcp: {message}");
+        let _ = writeln!(io::stderr(), "plxd mcp: {message}");
     };
     let socket = match DataDir::resolve(args.data_dir.as_deref()).and_then(|dir| dir.socket_path())
     {
         Ok(socket) => socket.path,
         Err(error) => {
-            report(&format!("could not find wispd's socket: {error}"));
+            report(&format!("could not find plxd's socket: {error}"));
             std::process::exit(EXIT_UNAVAILABLE.into());
         }
     };
-    let binding = wispd::mcp::Binding {
+    let binding = plxd::mcp::Binding {
         socket,
         project: args.project,
         thread: args.coordinator_thread,
@@ -166,7 +166,7 @@ fn mcp(args: &McpArgs) -> ! {
             std::process::exit(1);
         }
     };
-    let served = runtime.block_on(wispd::mcp::run(
+    let served = runtime.block_on(plxd::mcp::run(
         &binding,
         tokio::io::stdin(),
         tokio::io::stdout(),
@@ -182,14 +182,14 @@ fn mcp(args: &McpArgs) -> ! {
 /// input arrives, and would keep the runtime from shutting down (0007).
 fn attach(args: &AttachArgs) -> ! {
     #[cfg(windows)]
-    wispd::windows::stop_inheriting_handles();
+    plxd::windows::stop_inheriting_handles();
     let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
         Ok(data_dir) => data_dir,
         Err(error) => unavailable(&format!("could not find the data folder: {error}")),
     };
     let program = match std::env::current_exe() {
         Ok(program) => program,
-        Err(error) => unavailable(&format!("could not find wispd's own executable: {error}")),
+        Err(error) => unavailable(&format!("could not find plxd's own executable: {error}")),
     };
     let options = Options {
         program,
@@ -203,7 +203,7 @@ fn attach(args: &AttachArgs) -> ! {
         Ok(runtime) => runtime,
         Err(error) => failed(&format!("could not start the runtime: {error}")),
     };
-    // On Unix, starting wispd happens here, before the runtime exists (0023). Windows' pipe
+    // On Unix, starting plxd happens here, before the runtime exists (0023). Windows' pipe
     // client needs the runtime to connect.
     #[cfg(windows)]
     let runtime = runtime();
@@ -270,7 +270,7 @@ fn failed(message: &str) -> ! {
 fn serve(args: &ServeArgs) -> ExitCode {
     // So agent CLIs don't inherit the log, or whatever else started `serve` (0023).
     #[cfg(windows)]
-    wispd::windows::stop_inheriting_handles();
+    plxd::windows::stop_inheriting_handles();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -299,8 +299,8 @@ fn serve(args: &ServeArgs) -> ExitCode {
             ));
         }
         info!(log_level = %args.log_level, "starting");
-        // Every path wispd uses is absolute by now. Leaving the directory it was started in
-        // keeps a folder, or the volume it is on, from staying busy for as long as wispd runs.
+        // Every path plxd uses is absolute by now. Leaving the directory it was started in
+        // keeps a folder, or the volume it is on, from staying busy for as long as plxd runs.
         if let Err(error) = std::env::set_current_dir("/") {
             warn!(%error, "could not change to the root folder");
         }
@@ -308,7 +308,7 @@ fn serve(args: &ServeArgs) -> ExitCode {
             Ok(server) => server,
             Err(error @ StartError::AlreadyRunning { .. }) => {
                 warn!(%error, "not starting");
-                eprintln!("wispd: {error}");
+                eprintln!("plxd: {error}");
                 return ExitCode::from(EXIT_ALREADY_RUNNING);
             }
             Err(error) => {
@@ -449,7 +449,7 @@ fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
 }
 
 fn fail(message: &str) -> ExitCode {
-    eprintln!("wispd: {message}");
+    eprintln!("plxd: {message}");
     ExitCode::FAILURE
 }
 
@@ -467,21 +467,21 @@ mod tests {
     }
 
     #[test]
-    fn version_is_wired_to_wispds_own_version() {
-        // daemon/tests/cli.rs checks what `wispd --version` actually prints; this just checks
-        // the command is wired to `wispd::version` (0006, #44), not a hardcoded string.
-        assert_eq!(Cli::command().get_version(), Some(wispd::version()));
+    fn version_is_wired_to_plxds_own_version() {
+        // daemon/tests/cli.rs checks what `plxd --version` actually prints; this just checks
+        // the command is wired to `plxd::version` (0006, #44), not a hardcoded string.
+        assert_eq!(Cli::command().get_version(), Some(plxd::version()));
     }
 
     #[test]
     fn serve_takes_a_data_folder_and_a_log_level() {
         let cli = Cli::try_parse_from([
-            "wispd",
+            "plxd",
             "serve",
             "--data-dir",
             "/tmp/d",
             "--log-level",
-            "wispd=debug,warn",
+            "plxd=debug,warn",
         ])
         .unwrap();
         let Command::Serve(args) = cli.command else {
@@ -491,18 +491,18 @@ mod tests {
             args.data_dir.as_deref(),
             Some(std::path::Path::new("/tmp/d"))
         );
-        assert_eq!(args.log_level.to_string(), "wispd=debug,warn");
+        assert_eq!(args.log_level.to_string(), "plxd=debug,warn");
     }
 
     #[test]
     fn unknown_levels_and_arguments_are_rejected() {
-        assert!(Cli::try_parse_from(["wispd", "serve", "--log-level", "loud"]).is_err());
-        assert!(Cli::try_parse_from(["wispd", "--bogus"]).is_err());
-        assert!(Cli::try_parse_from(["wispd", "serve", "extra"]).is_err());
+        assert!(Cli::try_parse_from(["plxd", "serve", "--log-level", "loud"]).is_err());
+        assert!(Cli::try_parse_from(["plxd", "--bogus"]).is_err());
+        assert!(Cli::try_parse_from(["plxd", "serve", "extra"]).is_err());
     }
 
     fn attach_args(args: &[&str]) -> Result<AttachArgs, clap::Error> {
-        let cli = Cli::try_parse_from(["wispd", "attach"].iter().chain(args))?;
+        let cli = Cli::try_parse_from(["plxd", "attach"].iter().chain(args))?;
         let Command::Attach(args) = cli.command else {
             panic!("expected attach, got {:?}", cli.command);
         };
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn service_install_takes_a_data_folder_and_a_label() {
         let cli = Cli::try_parse_from([
-            "wispd",
+            "plxd",
             "service",
             "install",
             "--data-dir",
@@ -558,8 +558,8 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
-    fn service_status_defaults_to_the_wisp_label_with_no_data_dir_override() {
-        let cli = Cli::try_parse_from(["wispd", "service", "status"]).unwrap();
+    fn service_status_defaults_to_the_parallax_label_with_no_data_dir_override() {
+        let cli = Cli::try_parse_from(["plxd", "service", "status"]).unwrap();
         let Command::Service(service) = cli.command else {
             panic!("expected service, got {:?}", cli.command);
         };
@@ -575,7 +575,7 @@ mod tests {
         let project = "01a0d349-6e00-7c9e-80e2-0426486a8cae";
         let thread = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
         let cli = Cli::try_parse_from([
-            "wispd",
+            "plxd",
             "mcp",
             "--project",
             project,
@@ -588,10 +588,10 @@ mod tests {
         };
         assert_eq!(args.project.to_string(), project);
         assert_eq!(args.coordinator_thread.to_string(), thread);
-        assert!(Cli::try_parse_from(["wispd", "mcp", "--project", project]).is_err());
+        assert!(Cli::try_parse_from(["plxd", "mcp", "--project", project]).is_err());
         assert!(
             Cli::try_parse_from([
-                "wispd",
+                "plxd",
                 "mcp",
                 "--project",
                 "not-an-id",
@@ -605,7 +605,7 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn service_uninstall_parses_with_no_options() {
-        let cli = Cli::try_parse_from(["wispd", "service", "uninstall"]).unwrap();
+        let cli = Cli::try_parse_from(["plxd", "service", "uninstall"]).unwrap();
         let Command::Service(service) = cli.command else {
             panic!("expected service, got {:?}", cli.command);
         };
@@ -618,6 +618,6 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn service_without_a_subcommand_is_a_usage_error() {
-        assert!(Cli::try_parse_from(["wispd", "service"]).is_err());
+        assert!(Cli::try_parse_from(["plxd", "service"]).is_err());
     }
 }

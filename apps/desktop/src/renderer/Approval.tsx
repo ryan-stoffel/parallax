@@ -110,7 +110,7 @@ export function useAnswers(hostId: string) {
         choice === "deny"
           ? { decision: "deny" as const, ...(message && { message }) }
           : { decision: "allow" as const, ...(choice === "always" && { always: true }) };
-      const reply = await window.wisp.request(hostId, "agent/approve", {
+      const reply = await window.parallax.request(hostId, "agent/approve", {
         runId: asked.runId,
         approvalId,
         ...decision,
@@ -187,7 +187,7 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
         : by === "cancel"
           ? `Denied when the run was stopped${at}.`
           : by === "stop"
-            ? `Denied when wispd stopped${at}.`
+            ? `Denied when plxd stopped${at}.`
             : `Denied${at}.`;
     if (plan && by === "user")
       return { verb: "Kept planning", who, Icon: ListRestart, color: "text-muted-foreground" };
@@ -201,7 +201,7 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
   if (decision === "expired")
     return {
       verb: plan ? "Plan timed out" : "Timed out",
-      who: `Nobody answered in time, so wispd denied it${at}.`,
+      who: `Nobody answered in time, so plxd denied it${at}.`,
       Icon: TimerOff,
       color: "text-faint-foreground",
     };

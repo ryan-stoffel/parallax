@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
-import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
-import type { AgentOutputItem, LoggedEvent, WispEvent } from "../protocol/generated/protocol";
+import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
+import type { AgentOutputItem, LoggedEvent, ParallaxEvent } from "../protocol/generated/protocol";
 import {
   applyEvents,
   emptyTranscript,
@@ -21,7 +21,7 @@ const logged = (samples as { method?: string; params?: unknown }[])
 const upTo = (seq: number) => logged.filter((e) => e.seq <= seq);
 
 let nextSeq = 100;
-const at = (event: WispEvent): LoggedEvent => ({ seq: nextSeq++, time: "", event });
+const at = (event: ParallaxEvent): LoggedEvent => ({ seq: nextSeq++, time: "", event });
 const output = (...items: AgentOutputItem[]) => at({ kind: "agent.output", runId, items });
 const build = (...events: LoggedEvent[]) => applyEvents(emptyTranscript, events, runId);
 const of = <K extends Item["kind"]>(items: Item[], kind: K) =>
@@ -88,7 +88,7 @@ test("a page and a live event with the same seq apply once, and other runs are s
 test("kinds this version doesn't know are skipped, but still count their seq", () => {
   const known = build(...upTo(1));
   const newer = [
-    at({ kind: "agent.somethingNew", runId } as unknown as WispEvent),
+    at({ kind: "agent.somethingNew", runId } as unknown as ParallaxEvent),
     output({ kind: "somethingNew" } as unknown as AgentOutputItem),
   ];
   const t = applyEvents(known, newer, runId);
@@ -164,9 +164,9 @@ test("a message's image ids come from its turnStarted: the prompt's from the tur
   expect(followUp).toMatchObject({ text: "", turnId, images: ["i-3"] });
 });
 
-test("a wake-up is marked as wisp's, and a pause says the next message resumes them (0025)", () => {
+test("a wake-up is marked as Parallax's, and a pause says the next message resumes them (0025)", () => {
   const turnId = uuidv7();
-  const text = "wisp, not the user: runs you started finished.";
+  const text = "Parallax, not the user: runs you started finished.";
   const t = build(
     ...upTo(1),
     output({ kind: "turnStarted", turnId, text, wake: true }),
@@ -226,11 +226,11 @@ test("messages split work rows and stay in order; a mid-run notice folds, and a 
   expect(groupWork([rows[3]!, rows[6]!])[0]).toMatchObject({ endedAt: at(10) });
 });
 
-test("a coordinator's wispd tool that names a subagent gets its prompt's first line from an earlier answer", () => {
+test("a coordinator's plxd tool that names a subagent gets its prompt's first line from an earlier answer", () => {
   const call = (callId: string, tool: string, input: Record<string, string>) => ({
     kind: "toolCall" as const,
     callId,
-    name: `mcp__wispd__${tool}`,
+    name: `mcp__plxd__${tool}`,
     input,
   });
   const answer = (callId: string, value: unknown) => ({
@@ -270,7 +270,7 @@ const asked = (approvalId: string, more: Partial<AgentOutputItem> = {}): AgentOu
     expiresAt: "2026-10-01T12:30:00Z",
     ...more,
   }) as AgentOutputItem;
-const timed = (event: WispEvent, time: string): LoggedEvent => ({ ...at(event), time });
+const timed = (event: ParallaxEvent, time: string): LoggedEvent => ({ ...at(event), time });
 
 test("a permission request is an item until its resolution says how it ended, and when", () => {
   const t = build(

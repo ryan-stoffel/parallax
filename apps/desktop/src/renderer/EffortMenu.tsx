@@ -4,7 +4,7 @@ import { useId, type CSSProperties } from "react";
 import type { AgentEffort } from "../protocol/generated/protocol";
 import { menuButton, menuPanel } from "./ui";
 
-// Each level wispd takes, its icon, a line about it, and how long (in seconds) a stripe takes to
+// Each level plxd takes, its icon, a line about it, and how long (in seconds) a stripe takes to
 // cross the fill.
 const levels: {
   value: AgentEffort;

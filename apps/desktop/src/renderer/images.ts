@@ -1,5 +1,5 @@
 // Images sent with a message (RYA-193, decision 0026): read from a pasted, dropped, or picked
-// file into what wispd takes, and fetched back for the transcript.
+// file into what plxd takes, and fetched back for the transcript.
 import type { ConnectionState } from "../preload/bridge";
 import type { ImageMediaType, PromptImage } from "../protocol/generated/protocol";
 
@@ -10,7 +10,7 @@ export interface ImageCaps {
   maxTotalBytes: number;
 }
 
-/** A host's image caps. Undefined while it isn't connected, or when its wispd takes no images. */
+/** A host's image caps. Undefined while it isn't connected, or when its plxd takes no images. */
 export function imageCaps(connection?: ConnectionState): ImageCaps | undefined {
   const options =
     connection?.status === "connected" ? connection.capabilities["promptImages"] : undefined;
@@ -36,7 +36,7 @@ const maxEdge = 2000;
 /**
  * `file` as an image to send, at most 2000 px on its long edge and `maxBytes` of base64: as it is
  * when it fits (so a GIF keeps its frames), or else redrawn smaller as WebP, which keeps any
- * transparency. Resolves to why not, for people, when it isn't an image wispd takes or can't fit.
+ * transparency. Resolves to why not, for people, when it isn't an image plxd takes or can't fit.
  */
 export async function readImage(file: Blob, maxBytes: number): Promise<PromptImage | string> {
   if (!mediaTypes.includes(file.type)) return "Only PNG, JPEG, GIF, and WebP images can be sent.";
@@ -103,12 +103,12 @@ export function imageUrl(image: PromptImage): string {
   return url;
 }
 
-// Images fetched from wispd, by id, which never changes what it names. ponytail: kept for the
+// Images fetched from plxd, by id, which never changes what it names. ponytail: kept for the
 // window's life at up to ~5 MiB each; evict the least recently shown if long sessions grow large.
 const fetched = new Map<string, Promise<string | undefined>>();
 
 /**
- * Image `imageId` of run `runId` as a data URL, from `agent/image`, or undefined when wispd can't
+ * Image `imageId` of run `runId` as a data URL, from `agent/image`, or undefined when plxd can't
  * serve it. Cached by id; a failure isn't, so the next showing tries again.
  */
 export function loadImage(hostId: string, runId: string, imageId: string) {
@@ -118,7 +118,7 @@ export function loadImage(hostId: string, runId: string, imageId: string) {
       fetched.delete(imageId);
       return undefined;
     };
-    image = window.wisp
+    image = window.parallax
       .request(hostId, "agent/image", { runId, imageId })
       .then((answer) => ("result" in answer ? imageUrl(answer.result) : failed()), failed);
     fetched.set(imageId, image);

@@ -47,7 +47,7 @@ export function AddRepositoryDialog({
       name: "GitHub repository",
       description: "Clone one by its owner/name",
       icon: <GitHubLogo />,
-      // Cloning needs wispd's help on the host, which it doesn't offer yet.
+      // Cloning needs plxd's help on the host, which it doesn't offer yet.
       unavailable: "Not available yet",
     },
   ];

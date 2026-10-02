@@ -8,30 +8,30 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rustix::process::Signal;
-use tempfile::TempDir;
-use tokio::time::Instant;
-use wisp_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification};
-use wisp_protocol::methods::{
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification};
+use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
     AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
     NotificationMethod, ProjectCreate, RequestMethod, UsageGet,
 };
-use wisp_protocol::{
+use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
     AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFailureKind,
     AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentImageParams,
     AgentListParams, AgentMerge, AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy,
     AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
     CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    HostHealthParams, ImageId, ImageMediaType, InitializeResult, Project, ProjectCreateParams,
-    ProjectId, PromptImage, Provider, RunId, TurnId, UsageGetParams, WispEvent,
+    HostHealthParams, ImageId, ImageMediaType, InitializeResult, ParallaxEvent, Project,
+    ProjectCreateParams, ProjectId, PromptImage, Provider, RunId, TurnId, UsageGetParams,
 };
-use wispd::backend::fake::{FakeBackend, Script, Step};
-use wispd::backend::process::{CancelPolicy, Environment, Launcher};
-use wispd::backend::{Event, FailureKind, ModelUsage, Usage};
-use wispd::paths::DataDir;
-use wispd::routing::BackendRegistry;
+use plxd::backend::fake::{FakeBackend, Script, Step};
+use plxd::backend::process::{CancelPolicy, Environment, Launcher};
+use plxd::backend::{Event, FailureKind, ModelUsage, Usage};
+use plxd::paths::DataDir;
+use plxd::routing::BackendRegistry;
+use rustix::process::Signal;
+use tempfile::TempDir;
+use tokio::time::Instant;
 
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
@@ -136,7 +136,7 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
     }
 }
 
-/// An in-process wispd and its data folder.
+/// An in-process plxd and its data folder.
 pub(crate) struct Host {
     pub(crate) dir: TempDir,
     pub(crate) server: InProcess,
@@ -275,18 +275,18 @@ pub(crate) async fn until(
 }
 
 pub(crate) fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) -> bool {
-    move |event| matches!(&event.event, WispEvent::AgentUpdated { state, .. } if state.status == status)
+    move |event| matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.status == status)
 }
 
 fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) -> bool {
-    move |event| matches!(&event.event, WispEvent::AgentOutput { items, .. } if items.contains(&item))
+    move |event| matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.contains(&item))
 }
 
 pub(crate) fn items(events: &[EventsEventParams]) -> Vec<AgentOutputItem> {
     events
         .iter()
         .filter_map(|event| match &event.event {
-            WispEvent::AgentOutput { items, .. } => Some(items.clone()),
+            ParallaxEvent::AgentOutput { items, .. } => Some(items.clone()),
             _ => None,
         })
         .flatten()
@@ -309,13 +309,13 @@ pub(crate) fn outcomes(events: &[EventsEventParams]) -> Vec<AgentOutcome> {
     events
         .iter()
         .filter_map(|event| match &event.event {
-            WispEvent::AgentFinished { outcome, .. } => Some(outcome.clone()),
+            ParallaxEvent::AgentFinished { outcome, .. } => Some(outcome.clone()),
             _ => None,
         })
         .collect()
 }
 
-/// How many run worktrees wispd has under the data folder `dir`.
+/// How many run worktrees plxd has under the data folder `dir`.
 fn worktree_count(dir: &Path) -> usize {
     let Ok(repos) = std::fs::read_dir(dir.join("worktrees")) else {
         return 0;
@@ -358,7 +358,7 @@ fn editing_script(note: &Path) -> Vec<Step> {
 fn assert_committed(repo: &Path, branch: &str, worktree: &Path, diff: &DiffSummary) {
     assert_eq!(git(repo, &["rev-parse", branch]), diff.commit);
     let subject = git(repo, &["log", "-1", "--format=%s", branch]);
-    assert_eq!(subject, "wisp: Rewrite the README");
+    assert_eq!(subject, "parallax: Rewrite the README");
     assert_eq!(
         git(repo, &["show", &format!("{branch}:README.md")]),
         "# App\nBuilt by an agent."
@@ -383,7 +383,7 @@ async fn assert_replays(
     let mut replay = host.client().await;
     subscribe(&mut replay, project, 0).await;
     let replayed = until(&mut replay, |event| event.seq == last).await;
-    let pairs = |events: &[EventsEventParams]| -> Vec<(u64, WispEvent)> {
+    let pairs = |events: &[EventsEventParams]| -> Vec<(u64, ParallaxEvent)> {
         events
             .iter()
             .map(|event| (event.seq, event.event.clone()))
@@ -418,7 +418,7 @@ async fn assert_replays(
         .collect();
     let run_events: Vec<u64> = events
         .iter()
-        .filter(|event| !matches!(event.event, WispEvent::ContextChanged { .. }))
+        .filter(|event| !matches!(event.event, ParallaxEvent::ContextChanged { .. }))
         .map(|event| event.seq)
         .collect();
     assert_eq!(paged, run_events);
@@ -451,13 +451,13 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
     assert_eq!(started.status, AgentStatus::Running);
     let branch = started.branch.clone().expect("a branch");
     let worktree = PathBuf::from(started.worktree_path.clone().expect("a worktree"));
-    assert!(branch.starts_with("wisp/"), "{branch}");
+    assert!(branch.starts_with("parallax/"), "{branch}");
 
     let mut context_changed = false;
     let mut is_done = updated_to(AgentStatus::Completed);
     let events = until(&mut client, |event| {
         context_changed |=
-            matches!(&event.event, WispEvent::ContextChanged { file } if file.path == "notes.md");
+            matches!(&event.event, ParallaxEvent::ContextChanged { file } if file.path == "notes.md");
         is_done(event)
     })
     .await;
@@ -495,18 +495,18 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
     let diff = events
         .iter()
         .find_map(|event| match &event.event {
-            WispEvent::AgentDiffReady { diff, .. } => Some(diff.clone()),
+            ParallaxEvent::AgentDiffReady { diff, .. } => Some(diff.clone()),
             _ => None,
         })
         .expect("diffReady");
     assert_eq!((diff.files, diff.insertions, diff.deletions), (1, 2, 1));
-    let WispEvent::AgentUpdated { state: done, .. } = &events.last().unwrap().event else {
+    let ParallaxEvent::AgentUpdated { state: done, .. } = &events.last().unwrap().event else {
         unreachable!()
     };
     assert_eq!(done.diff.as_ref(), Some(&diff));
     assert_eq!(done.session_id.as_deref(), Some("session-1"));
     for event in &events {
-        if let WispEvent::AgentUpdated { .. } = event.event {
+        if let ParallaxEvent::AgentUpdated { .. } = event.event {
             let json = serde_json::to_string(&event.event).unwrap();
             assert!(!json.contains("Rewrite the README"), "no prompt: {json}");
         }
@@ -519,7 +519,7 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
     );
     if !context_changed {
         until(&mut client, |event| {
-            matches!(&event.event, WispEvent::ContextChanged { file } if file.path == "notes.md")
+            matches!(&event.event, ParallaxEvent::ContextChanged { file } if file.path == "notes.md")
         })
         .await;
     }
@@ -886,7 +886,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     let first_log = client.initialize().await.log_id;
     let project = create(&mut client, project_params(host.dir.path())).await;
     subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Work until wispd stops");
+    let params = start_params(project.id, "Work until plxd stops");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
     let before = until(
@@ -904,7 +904,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     let host = host.restart(fake(hang())).await;
     let mut client = Conn::connect(&host.server.socket).await;
     let init = client.initialize().await;
-    assert_eq!(init.log_id, first_log, "the event log outlived wispd");
+    assert_eq!(init.log_id, first_log, "the event log outlived plxd");
     let runs = list(&mut client).await;
     assert_eq!(runs[0].status, AgentStatus::Interrupted);
     assert_eq!(runs[0].session_id.as_deref(), Some("hang-1"));
@@ -933,7 +933,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         },
     ];
     until(&mut client, |event| {
-        if let WispEvent::AgentOutput { items, .. } = &event.event {
+        if let ParallaxEvent::AgentOutput { items, .. } = &event.event {
             wanted.retain(|item| !items.contains(item));
         }
         wanted.is_empty()
@@ -941,11 +941,11 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     .await;
     drop(client);
 
-    // A crash: the store still says `running` when wispd starts.
+    // A crash: the store still says `running` when plxd starts.
     let Host { dir, server } = host;
     server.stop().await;
     {
-        let db = rusqlite::Connection::open(dir.path().join("wispd.sqlite3")).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
         db.execute("UPDATE runs SET status = 'running'", [])
             .unwrap();
     }
@@ -957,7 +957,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     host.server.stop().await;
 }
 
-/// #190 N5: a fresh actor after a restart has no in-memory record of a turn it (or a wispd
+/// #190 N5: a fresh actor after a restart has no in-memory record of a turn it (or a plxd
 /// before it) already sent, so `agent/send`'s idempotency has to come from the store instead.
 #[tokio::test]
 async fn a_sent_turn_stays_idempotent_across_a_restart() {
@@ -1066,7 +1066,7 @@ async fn a_worker_learns_its_limits_and_a_fallback_moves_its_usage_to_the_new_ac
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
 
     let fallback = events.iter().find_map(|event| match &event.event {
-        WispEvent::AgentAccountFallback {
+        ParallaxEvent::AgentAccountFallback {
             from_account,
             to_account,
             reason,
@@ -1082,7 +1082,7 @@ async fn a_worker_learns_its_limits_and_a_fallback_moves_its_usage_to_the_new_ac
             AgentFailureKind::RateLimited
         ))
     );
-    let WispEvent::AgentUpdated { state: run, .. } = &events.last().unwrap().event else {
+    let ParallaxEvent::AgentUpdated { state: run, .. } = &events.last().unwrap().event else {
         unreachable!()
     };
     assert_eq!(run.account_id, "key-1");
@@ -1117,7 +1117,7 @@ async fn a_worker_learns_its_limits_and_a_fallback_moves_its_usage_to_the_new_ac
 }
 
 #[tokio::test]
-async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
+async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     let dir = temp_dir();
     // A `claude` older than the sandbox needs, found where agents' CLIs are looked up.
     let bin = dir.path().join("bin");
@@ -1140,11 +1140,11 @@ async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
     let launcher = Launcher::new(DataDir::new(dir.path()).unwrap(), environment);
     backends.register(
         Provider::Anthropic,
-        Arc::new(wispd::backend::claude::ClaudeBackend::new(launcher.clone())),
+        Arc::new(plxd::backend::claude::ClaudeBackend::new(launcher.clone())),
     );
     backends.register(
         Provider::Openai,
-        Arc::new(wispd::backend::codex::CodexBackend::new(launcher)),
+        Arc::new(plxd::backend::codex::CodexBackend::new(launcher)),
     );
     config.backends = Some(backends);
     let server = InProcess::start(config);
@@ -1422,7 +1422,7 @@ async fn a_finished_run_is_reviewed_accepted_into_the_branch_and_then_closed() {
     let branch = started.branch.clone().unwrap();
     let worktree = PathBuf::from(started.worktree_path.clone().unwrap());
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let WispEvent::AgentUpdated { state, .. } = &events.last().unwrap().event else {
+    let ParallaxEvent::AgentUpdated { state, .. } = &events.last().unwrap().event else {
         unreachable!()
     };
     let commit = state.diff.as_ref().expect("a commit").commit.clone();
@@ -1472,7 +1472,7 @@ async fn a_finished_run_is_reviewed_accepted_into_the_branch_and_then_closed() {
     let events = until(&mut client, updated_to(AgentStatus::Accepted)).await;
     assert!(events.iter().any(|event| matches!(
         &event.event,
-        WispEvent::AgentAccepted { run_id: id, merge } if *id == run_id && *merge == accepted.merge
+        ParallaxEvent::AgentAccepted { run_id: id, merge } if *id == run_id && *merge == accepted.merge
     )));
 
     assert_closed_after_accept(&mut client, &accept, &accepted).await;
@@ -1537,7 +1537,7 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
     )
     .await;
 
-    // The worker writes into its worktree while it runs: nothing is reviewable until wispd
+    // The worker writes into its worktree while it runs: nothing is reviewable until plxd
     // commits, and accept waits for the run to stop.
     let secret_dir = tempfile::tempdir().unwrap();
     let secret = secret_dir.path().join("secret.txt");

@@ -6,10 +6,11 @@ import { expect, test } from "vite-plus/test";
 
 import { checkHost, readSettings, writeSettings } from "./settings";
 
-const file = () => path.join(mkdtempSync(path.join(tmpdir(), "wisp-settings-")), "settings.json");
+const file = () =>
+  path.join(mkdtempSync(path.join(tmpdir(), "parallax-settings-")), "settings.json");
 
 test("a destination that ssh could read as an option, split, or pass to a shell is refused", () => {
-  const bad = ["", "  ", "-oProxyCommand=x", "mini wispd", "mini\u0000", "a\tb"];
+  const bad = ["", "  ", "-oProxyCommand=x", "mini plxd", "mini\u0000", "a\tb"];
   // OpenSSH 9.6's set (CVE-2023-51385).
   bad.push(..."'`\"$\\;&<>|(){}".split("").map((c) => `me${c}@mini`));
   for (const destination of bad) {

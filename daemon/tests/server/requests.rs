@@ -2,18 +2,20 @@
 
 use std::time::Duration;
 
-use serde_json::{Value, json};
-use tokio::time::sleep;
-use wisp_protocol::framing::MAX_FRAME_BYTES;
-use wisp_protocol::jsonrpc::{
+use parallax_protocol::framing::MAX_FRAME_BYTES;
+use parallax_protocol::jsonrpc::{
     CancelRequestParams, INVALID_REQUEST, Message, PARSE_ERROR, REQUEST_CANCELLED, Response,
 };
-use wisp_protocol::methods::{CancelRequest, HostHealth, Initialize, ProjectCreate, ProjectList};
-use wisp_protocol::{
+use parallax_protocol::methods::{
+    CancelRequest, HostHealth, Initialize, ProjectCreate, ProjectList,
+};
+use parallax_protocol::{
     HostHealthParams, InitializeResult, ProjectCreateResult, ProjectListParams, ProjectListResult,
 };
+use serde_json::{Value, json};
+use tokio::time::sleep;
 
-use crate::support::{Client, Wispd, WriteLock, create_params, temp_dir};
+use crate::support::{Client, Plxd, WriteLock, create_params, temp_dir};
 
 // Long enough for a request to reach the store's thread, which takes microseconds.
 const SETTLE: Duration = Duration::from_millis(300);
@@ -21,12 +23,12 @@ const SETTLE: Duration = Duration::from_millis(300);
 #[tokio::test]
 async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let lock = WriteLock::take(dir.path());
 
     // The create starts and waits for SQLite's lock; the list queues behind it.
-    let params = create_params(dir.path(), "wisp");
+    let params = create_params(dir.path(), "parallax");
     let create = client.send::<ProjectCreate>(params.clone()).await;
     sleep(SETTLE).await;
     let list = client.send::<ProjectList>(ProjectListParams {}).await;
@@ -62,8 +64,8 @@ async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes()
 #[tokio::test]
 async fn an_id_already_in_flight_is_refused() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let lock = WriteLock::take(dir.path());
 
     let request = |id: i64| {
@@ -71,7 +73,7 @@ async fn an_id_already_in_flight_is_refused() {
             "jsonrpc": "2.0",
             "id": id,
             "method": "project/create",
-            "params": create_params(dir.path(), "wisp"),
+            "params": create_params(dir.path(), "parallax"),
         })
     };
     client.send_message(&request(7)).await;
@@ -90,8 +92,8 @@ async fn an_id_already_in_flight_is_refused() {
 #[tokio::test]
 async fn malformed_lines_are_answered_and_the_connection_stays_open() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     client.send_raw(b"not json\n").await.unwrap();
     let parse = client.response().await;
@@ -122,24 +124,24 @@ async fn malformed_lines_are_answered_and_the_connection_stays_open() {
 #[tokio::test]
 async fn an_oversized_frame_closes_the_connection() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     // The server may close before it has read everything, so the write can fail.
     let _ = client.send_raw(&vec![b' '; MAX_FRAME_BYTES + 1]).await;
     assert!(client.closes_within(Duration::from_secs(5)).await);
 
-    let mut other = Client::ready(&wispd.socket).await;
+    let mut other = Client::ready(&plxd.socket).await;
     other.call::<HostHealth>(HostHealthParams {}).await.unwrap();
 }
 
 #[tokio::test]
 async fn requests_sent_before_the_client_closes_its_side_are_all_answered() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
 
-    // As `printf '...' | wispd attach` would: pipelined requests, then end of input.
+    // As `printf '...' | plxd attach` would: pipelined requests, then end of input.
     let init = client
         .send::<Initialize>(
             serde_json::from_value(json!({
@@ -151,7 +153,7 @@ async fn requests_sent_before_the_client_closes_its_side_are_all_answered() {
         )
         .await;
     let create = client
-        .send::<ProjectCreate>(create_params(dir.path(), "wisp"))
+        .send::<ProjectCreate>(create_params(dir.path(), "parallax"))
         .await;
     let list = client.send::<ProjectList>(ProjectListParams {}).await;
     client.close_write().await;
@@ -181,10 +183,10 @@ async fn requests_sent_before_the_client_closes_its_side_are_all_answered() {
 #[tokio::test]
 async fn a_client_that_disconnects_mid_request_leaves_the_server_serving() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
+    let plxd = Plxd::start(dir.path()).await;
 
     // Half a frame, then gone.
-    let mut partial = Client::ready(&wispd.socket).await;
+    let mut partial = Client::ready(&plxd.socket).await;
     partial
         .send_raw(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"host/hea")
         .await
@@ -192,13 +194,13 @@ async fn a_client_that_disconnects_mid_request_leaves_the_server_serving() {
     drop(partial);
 
     // A whole create, then gone before the answer.
-    let params = create_params(dir.path(), "wisp");
-    let mut hasty = Client::ready(&wispd.socket).await;
+    let params = create_params(dir.path(), "parallax");
+    let mut hasty = Client::ready(&plxd.socket).await;
     hasty.send::<ProjectCreate>(params.clone()).await;
     drop(hasty);
 
     // The retry with the same id is safe whether or not the first create ran.
-    let mut client = Client::ready(&wispd.socket).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let retried = client
         .call::<ProjectCreate>(params.clone())
         .await
@@ -220,8 +222,8 @@ async fn a_client_that_disconnects_mid_request_leaves_the_server_serving() {
 #[tokio::test]
 async fn params_may_be_absent_or_null() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     for params in [None, Some(Value::Null)] {
         let mut request = json!({"jsonrpc": "2.0", "id": 3, "method": "host/health"});
         if let Some(params) = params {

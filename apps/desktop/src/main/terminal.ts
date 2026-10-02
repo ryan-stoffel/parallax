@@ -22,7 +22,7 @@ export type Command = { file: string; args: string[] | string };
 export type SshTarget = { destination: string; ssh: string };
 
 /**
- * The command that signs in to `cli` at `path`, where the host's wispd found it: run here, or
+ * The command that signs in to `cli` at `path`, where the host's plxd found it: run here, or
  * with `ssh -t` on an SSH host.
  * - Windows can't run an npm `.cmd` shim by itself, so one goes through `cmd.exe`. node-pty looks
  *   a bare name up on PATH without PATHEXT there, so `ssh` becomes `ssh.exe`.
@@ -74,7 +74,7 @@ const watched = new WeakSet<WebContents>();
 /**
  * Starts `sender`'s terminal once `command` says what to run, replacing any terminal it had.
  * Resolves to an error for people, or undefined once it runs. What it prints goes only to
- * `sender`, as `wisp:terminal` messages, and is never logged or kept.
+ * `sender`, as `parallax:terminal` messages, and is never logged or kept.
  */
 export async function openTerminal(
   sender: WebContents,
@@ -88,7 +88,7 @@ export async function openTerminal(
   sessions.set(sender, session);
   const current = () => sessions.get(sender) === session;
   const send = (message: TerminalMessage) => {
-    if (current() && !sender.isDestroyed()) sender.send("wisp:terminal", message);
+    if (current() && !sender.isDestroyed()) sender.send("parallax:terminal", message);
   };
 
   try {

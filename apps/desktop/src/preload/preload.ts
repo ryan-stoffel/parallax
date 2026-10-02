@@ -7,42 +7,43 @@ import type {
   SubscriptionMessage,
   TerminalMessage,
   UpdateState,
-  WispBridge,
+  ParallaxBridge,
 } from "./bridge";
 
 // Subscription listeners by the key this preload gave them.
 const subscriptions = new Map<string, (message: SubscriptionMessage) => void>();
-ipcRenderer.on("wisp:subscription", (_event, key: string, message: SubscriptionMessage) => {
+ipcRenderer.on("parallax:subscription", (_event, key: string, message: SubscriptionMessage) => {
   const listener = subscriptions.get(key);
   if (message.type !== "event") subscriptions.delete(key);
   listener?.(message);
 });
 
-// The renderer's only way into the app, exposed as `window.wisp`.
-const bridge: WispBridge = {
+// The renderer's only way into the app, exposed as `window.parallax`.
+const bridge: ParallaxBridge = {
   platform: process.platform,
-  version: () => ipcRenderer.invoke("wisp:version") as Promise<string>,
-  setThemeSource: (preference) => ipcRenderer.send("wisp:theme", preference),
-  pickFolder: () => ipcRenderer.invoke("wisp:pickFolder") as Promise<string | null>,
-  updatable: process.argv.includes("--wisp-updatable"),
-  update: () => ipcRenderer.invoke("wisp:update") as Promise<string>,
+  version: () => ipcRenderer.invoke("parallax:version") as Promise<string>,
+  setThemeSource: (preference) => ipcRenderer.send("parallax:theme", preference),
+  pickFolder: () => ipcRenderer.invoke("parallax:pickFolder") as Promise<string | null>,
+  updatable: process.argv.includes("--parallax-updatable"),
+  update: () => ipcRenderer.invoke("parallax:update") as Promise<string>,
   onUpdateState(listener) {
     const forward = (_event: unknown, state: UpdateState) => listener(state);
-    ipcRenderer.on("wisp:updateState", forward);
-    void (ipcRenderer.invoke("wisp:updateState") as Promise<UpdateState>).then(listener);
-    return () => ipcRenderer.removeListener("wisp:updateState", forward);
+    ipcRenderer.on("parallax:updateState", forward);
+    void (ipcRenderer.invoke("parallax:updateState") as Promise<UpdateState>).then(listener);
+    return () => ipcRenderer.removeListener("parallax:updateState", forward);
   },
 
-  updateChannel: () => ipcRenderer.invoke("wisp:updateChannel"),
-  setUpdateChannel: (channel) => ipcRenderer.invoke("wisp:setUpdateChannel", channel),
+  updateChannel: () => ipcRenderer.invoke("parallax:updateChannel"),
+  setUpdateChannel: (channel) => ipcRenderer.invoke("parallax:setUpdateChannel", channel),
 
-  nameThread: (prompt) => ipcRenderer.invoke("wisp:nameThread", prompt),
+  nameThread: (prompt) => ipcRenderer.invoke("parallax:nameThread", prompt),
 
-  request: (hostId, method, params) => ipcRenderer.invoke("wisp:request", hostId, method, params),
+  request: (hostId, method, params) =>
+    ipcRenderer.invoke("parallax:request", hostId, method, params),
   subscribe(hostId, params, listener) {
     const key = crypto.randomUUID();
     subscriptions.set(key, listener);
-    ipcRenderer.invoke("wisp:subscribe", hostId, key, params).catch((error: Error) => {
+    ipcRenderer.invoke("parallax:subscribe", hostId, key, params).catch((error: Error) => {
       if (subscriptions.delete(key))
         listener({
           type: "error",
@@ -50,37 +51,37 @@ const bridge: WispBridge = {
         });
     });
     return () => {
-      if (subscriptions.delete(key)) void ipcRenderer.invoke("wisp:unsubscribe", key);
+      if (subscriptions.delete(key)) void ipcRenderer.invoke("parallax:unsubscribe", key);
     };
   },
-  connectionState: (hostId) => ipcRenderer.invoke("wisp:connectionState", hostId),
+  connectionState: (hostId) => ipcRenderer.invoke("parallax:connectionState", hostId),
   onConnectionState(listener) {
     const forward = (_event: unknown, hostId: string, state: ConnectionState) =>
       listener(hostId, state);
-    ipcRenderer.on("wisp:state", forward);
-    return () => ipcRenderer.removeListener("wisp:state", forward);
+    ipcRenderer.on("parallax:state", forward);
+    return () => ipcRenderer.removeListener("parallax:state", forward);
   },
-  retry: (hostId) => ipcRenderer.invoke("wisp:retry", hostId),
+  retry: (hostId) => ipcRenderer.invoke("parallax:retry", hostId),
 
-  hosts: () => ipcRenderer.invoke("wisp:hosts"),
+  hosts: () => ipcRenderer.invoke("parallax:hosts"),
   onHosts(listener) {
     const forward = (_event: unknown, hosts: SshHost[]) => listener(hosts);
-    ipcRenderer.on("wisp:hosts", forward);
-    return () => ipcRenderer.removeListener("wisp:hosts", forward);
+    ipcRenderer.on("parallax:hosts", forward);
+    return () => ipcRenderer.removeListener("parallax:hosts", forward);
   },
-  saveHost: (host, id) => ipcRenderer.invoke("wisp:saveHost", host, id),
-  removeHost: (id) => ipcRenderer.invoke("wisp:removeHost", id),
+  saveHost: (host, id) => ipcRenderer.invoke("parallax:saveHost", host, id),
+  removeHost: (id) => ipcRenderer.invoke("parallax:removeHost", id),
 
   openTerminal: (hostId, cli, cols, rows) =>
-    ipcRenderer.invoke("wisp:openTerminal", hostId, cli, cols, rows),
-  terminalInput: (data) => ipcRenderer.send("wisp:terminalInput", data),
-  resizeTerminal: (cols, rows) => ipcRenderer.send("wisp:resizeTerminal", cols, rows),
-  closeTerminal: () => ipcRenderer.send("wisp:closeTerminal"),
+    ipcRenderer.invoke("parallax:openTerminal", hostId, cli, cols, rows),
+  terminalInput: (data) => ipcRenderer.send("parallax:terminalInput", data),
+  resizeTerminal: (cols, rows) => ipcRenderer.send("parallax:resizeTerminal", cols, rows),
+  closeTerminal: () => ipcRenderer.send("parallax:closeTerminal"),
   onTerminal(listener) {
     const forward = (_event: unknown, message: TerminalMessage) => listener(message);
-    ipcRenderer.on("wisp:terminal", forward);
-    return () => ipcRenderer.removeListener("wisp:terminal", forward);
+    ipcRenderer.on("parallax:terminal", forward);
+    return () => ipcRenderer.removeListener("parallax:terminal", forward);
   },
 };
 
-contextBridge.exposeInMainWorld("wisp", bridge);
+contextBridge.exposeInMainWorld("parallax", bridge);

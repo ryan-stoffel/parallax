@@ -1,19 +1,19 @@
 //! `agent/openPr` end to end (RYA-168): a run's branch goes to a local bare `origin`, and a fake
-//! `gh` stands in for GitHub. wispd's `PATH` holds only git and that fake, so no test can reach
+//! `gh` stands in for GitHub. plxd's `PATH` holds only git and that fake, so no test can reach
 //! the real GitHub.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use tempfile::TempDir;
-use wisp_protocol::methods::{AgentCancel, AgentOpenPr, AgentStart, RepoAdd, ThreadStart};
-use wisp_protocol::{
+use parallax_protocol::methods::{AgentCancel, AgentOpenPr, AgentStart, RepoAdd, ThreadStart};
+use parallax_protocol::{
     AccountChoice, AgentCancelParams, AgentOpenPrParams, AgentStatus, ErrorKind, ProjectId,
     RepoAddParams, RepoId, RunId, ThreadStartParams,
 };
-use wispd::backend::fake::Step;
-use wispd::backend::process::{Environment, find_program};
+use plxd::backend::fake::Step;
+use plxd::backend::process::{Environment, find_program};
+use tempfile::TempDir;
 
 use crate::agents::{
     Conn, Host, create, end_turn, fake, git, init, project_params, real_repo, start_params,
@@ -23,7 +23,7 @@ use crate::support::{InProcess, kind, temp_dir};
 
 const URL: &str = "https://github.com/example/app/pull/7";
 
-/// A folder that is wispd's whole `PATH`: the real git, and a fake `gh` that logs its arguments to
+/// A folder that is plxd's whole `PATH`: the real git, and a fake `gh` that logs its arguments to
 /// `gh.log`, answers `pr list` with a fork's pull request from a branch of the same name, then the
 /// one `pr create` made, and fails as `gh-mode` says: `signed-out` (exit 4, as gh does) or `fail`.
 struct Tools(TempDir);
@@ -173,7 +173,7 @@ async fn a_finished_run_pushes_its_branch_and_opens_one_pull_request() {
         .call::<AgentOpenPr>(open(
             run_id,
             "  Rewrite the README\nwith more",
-            Some("Built in wisp."),
+            Some("Built in Parallax."),
         ))
         .await
         .unwrap();
@@ -190,7 +190,7 @@ async fn a_finished_run_pushes_its_branch_and_opens_one_pull_request() {
             ),
             format!(
                 "pr create --repo={origin} --head={branch} --title=Rewrite the README \
-                 --body=Built in wisp."
+                 --body=Built in Parallax."
             ),
         ]
     );
@@ -328,7 +328,7 @@ async fn a_running_run_or_one_with_nothing_committed_is_refused() {
         .call::<AgentOpenPr>(open(run_id, " \n ", None))
         .await
         .unwrap_err();
-    assert_eq!(blank.code, wisp_protocol::jsonrpc::INVALID_PARAMS);
+    assert_eq!(blank.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
     assert!(tools.log().is_empty(), "gh never ran");
     host.server.stop().await;
 }

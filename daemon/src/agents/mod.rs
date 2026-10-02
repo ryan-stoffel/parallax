@@ -1,6 +1,6 @@
 //! The M3 runner (#156, decision 0014): runs a worker end to end.
 //!
-//! `agent/start` resolves the worker's account through routing (#119), refuses a worker wispd
+//! `agent/start` resolves the worker's account through routing (#119), refuses a worker plxd
 //! can't sandbox (0013) or a model, effort, or permission its backend can't honor (RYA-97),
 //! creates the run's worktree (#154), records the run, and starts the
 //! backend in the worktree with the project's shared context folder (#155) writable. From then
@@ -15,10 +15,10 @@
 //! Every launch of the run, a resume included, keeps the flag.
 //!
 //! A run outlives its CLI processes: `agent/send` to a run whose CLI has ended resumes the
-//! vendor session in the same worktree. When wispd stops, running CLIs are cancelled and their
-//! runs recorded `interrupted`; a run still `starting` or `running` in the store when wispd
+//! vendor session in the same worktree. When plxd stops, running CLIs are cancelled and their
+//! runs recorded `interrupted`; a run still `starting` or `running` in the store when plxd
 //! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`, and
-//! either wakes the coordinator that started it once wispd starts again ([`wake::catch_up`]).
+//! either wakes the coordinator that started it once plxd starts again ([`wake::catch_up`]).
 //!
 //! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
 //! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
@@ -38,19 +38,19 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
+    AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun,
+    AgentRunState, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind,
+    ImageMediaType, ParallaxEvent, ProjectId, PromptImage, Role, RunId, TurnId,
+};
+use parallax_store::{RunFields, RunState, StoreError, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 use uuid::Uuid;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
-    AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
-    AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun,
-    AgentRunState, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind,
-    ImageMediaType, ProjectId, PromptImage, Role, RunId, TurnId, WispEvent,
-};
-use wisp_store::{RunFields, RunState, StoreError, WorktreeFields};
 
 use self::actor::{Actor, Command};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
@@ -62,7 +62,7 @@ use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
 use crate::worktree::{CreatedWorktree, WorktreeError, WorktreeManager};
 
-/// How long a stopping wispd waits for its runs to record that they were interrupted.
+/// How long a stopping plxd waits for its runs to record that they were interrupted.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 
 /// Every run's actor, and what they share.
@@ -249,7 +249,7 @@ impl Agents {
     }
 
     /// Stops every running CLI, and waits a while for their runs to record that they were
-    /// interrupted. Called once, when wispd stops, before the store closes.
+    /// interrupted. Called once, when plxd stops, before the store closes.
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
         self.tracker.close();
@@ -266,7 +266,7 @@ impl Agents {
 /// a run's bookkeeping has to happen whether or not anyone is still waiting for it.
 async fn store<T: Send + 'static>(
     daemon: &Daemon,
-    job: impl FnOnce(&mut wisp_store::Store) -> Result<T, ErrorObject> + Send + 'static,
+    job: impl FnOnce(&mut parallax_store::Store) -> Result<T, ErrorObject> + Send + 'static,
 ) -> Result<T, ErrorObject> {
     daemon.store.run(&CancellationToken::new(), job).await
 }
@@ -277,11 +277,11 @@ pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
 }
 
 pub(super) fn run_not_found(id: RunId) -> ErrorObject {
-    ErrorObject::wisp(ErrorKind::RunNotFound, format!("no agent run has id {id}"))
+    ErrorObject::parallax(ErrorKind::RunNotFound, format!("no agent run has id {id}"))
 }
 
 pub(crate) fn run_accepted(id: RunId) -> ErrorObject {
-    ErrorObject::wisp(
+    ErrorObject::parallax(
         ErrorKind::RunAccepted,
         format!("run {id} was accepted; its worktree and branch are gone"),
     )
@@ -357,12 +357,12 @@ pub(super) async fn prepare(
             worker::check_version(cli, Some(&detected))?;
         }
         #[cfg(target_os = "linux")]
-        if cli == wisp_protocol::CliKind::Claude {
+        if cli == parallax_protocol::CliKind::Claude {
             worker::check_linux_sandbox(&daemon.cli_detector, Some(&detected)).await?;
         }
     }
     let home = worker::home()?;
-    let data_dir = sandbox_path(daemon.data_dir.root(), "wispd's data folder")?;
+    let data_dir = sandbox_path(daemon.data_dir.root(), "plxd's data folder")?;
     let context = crate::context::ensure_dir(&daemon.data_dir, context_scope).map_err(|error| {
         worker_unavailable(format!(
             "could not create the shared context folder: {error}"
@@ -395,7 +395,7 @@ impl RunOptions {
     /// Refuses, with `unsupportedOption`, a model name that can't be a CLI argument, or an
     /// effort or permission that `backend` doesn't map.
     fn check(&self, backend: &dyn Backend) -> Result<(), ErrorObject> {
-        let refuse = |detail: String| ErrorObject::wisp(ErrorKind::UnsupportedOption, detail);
+        let refuse = |detail: String| ErrorObject::parallax(ErrorKind::UnsupportedOption, detail);
         let name = backend.name();
         if let Some(model) = &self.model
             && check_argument("model", model).is_err()
@@ -426,7 +426,7 @@ impl RunOptions {
 
 fn routing_error(error: &RoutingError) -> ErrorObject {
     match error {
-        &RoutingError::NoAccount { role } => ErrorObject::wisp(
+        &RoutingError::NoAccount { role } => ErrorObject::parallax(
             ErrorKind::NoDefaultAccount,
             format!(
                 "no account was named, and the {} role has no default; set one with \
@@ -434,7 +434,7 @@ fn routing_error(error: &RoutingError) -> ErrorObject {
                 crate::store::role_text(role)
             ),
         ),
-        &RoutingError::UnknownKeyAccount { id } => ErrorObject::wisp(
+        &RoutingError::UnknownKeyAccount { id } => ErrorObject::parallax(
             ErrorKind::AccountNotFound,
             format!("no key account has id {id}"),
         ),
@@ -448,7 +448,7 @@ fn routing_error(error: &RoutingError) -> ErrorObject {
 }
 
 fn worktree_failed(error: &WorktreeError) -> ErrorObject {
-    ErrorObject::wisp(ErrorKind::WorktreeFailed, error.to_string())
+    ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string())
 }
 
 /// The run `run_id` already is, for a retry of `agent/start` that asks for the same `fields`, or
@@ -477,7 +477,7 @@ async fn existing(
         ..row.fields.clone()
     };
     if stored != *fields {
-        return Err(ErrorObject::wisp(
+        return Err(ErrorObject::parallax(
             ErrorKind::IdConflict,
             format!(
                 "run {run_id} exists with a different project, prompt, account, policy, \
@@ -540,9 +540,9 @@ async fn record(
     created: &CreatedWorktree,
 ) -> Result<
     (
-        wisp_store::Run,
-        wisp_store::Worktree,
-        Option<wisp_store::Thread>,
+        parallax_store::Run,
+        parallax_store::Worktree,
+        Option<parallax_store::Thread>,
     ),
     ErrorObject,
 > {
@@ -613,7 +613,7 @@ async fn inherit(
 
 /// Logs `run`'s `agent.started` on `project`'s events.
 async fn log_started(daemon: &Daemon, project: ProjectId, run: AgentRun) {
-    let event = WispEvent::AgentStarted {
+    let event = ParallaxEvent::AgentStarted {
         run_id: run.id,
         run: Some(run.clone()),
     };
@@ -669,7 +669,7 @@ pub(crate) struct NewRun {
     /// The prompt's images (RYA-191), already checked.
     pub images: Vec<PromptImage>,
     pub account: Option<AccountChoice>,
-    /// The coordinator thread starting the run through `wispd mcp` (#195).
+    /// The coordinator thread starting the run through `plxd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
     pub options: RunOptions,
     /// The client answers the run's permission requests (RYA-222, 0031).
@@ -682,14 +682,14 @@ pub(crate) struct NewThread {
     /// A thread with no repo's own scratch repository, which the caller made. Its worktree is
     /// cut from this instead of from the scope's path.
     pub scratch: Option<PathBuf>,
-    /// The name after `wisp/` for the worktree's branch, already checked.
+    /// The name after `parallax/` for the worktree's branch, already checked.
     pub branch_slug: Option<String>,
 }
 
 /// A created run, and its thread row for a normal thread.
 pub(crate) struct CreatedRun {
     pub run: AgentRun,
-    pub thread: Option<wisp_store::Thread>,
+    pub thread: Option<parallax_store::Thread>,
 }
 
 /// Creates and starts a run: see the module documentation. Idempotent on the run id.
@@ -805,7 +805,7 @@ impl Agents {
     }
 }
 
-/// The command channel of `id`'s actor, spawning one for a run created before this wispd
+/// The command channel of `id`'s actor, spawning one for a run created before this plxd
 /// started.
 async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Command>, ErrorObject> {
     let agents = &daemon.agents;
@@ -836,7 +836,7 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
     })
     .await?;
     // A restarted actor rebuilds `agent/send`'s idempotency from the store (#190), since a fresh
-    // one has no memory of what a previous wispd already sent to this run's CLI.
+    // one has no memory of what a previous plxd already sent to this run's CLI.
     let turns = turns
         .into_iter()
         .filter_map(|(turn_id, text)| {
@@ -858,7 +858,7 @@ async fn ask<T>(
 ) -> Result<T, ErrorObject> {
     let (reply, answer) = oneshot::channel();
     let mut command = command(reply);
-    let stopping = || ErrorObject::internal_error("wispd is stopping");
+    let stopping = || ErrorObject::internal_error("plxd is stopping");
     // An actor that `thread/delete` just stopped has closed its channel: look the run up again,
     // which then finds it gone.
     for _ in 0..2 {
@@ -919,7 +919,7 @@ pub(crate) async fn image(
     })
     .await?
     .ok_or_else(|| {
-        ErrorObject::wisp(
+        ErrorObject::parallax(
             ErrorKind::ImageNotFound,
             format!("run {run_id} has no image {image_id}"),
         )
@@ -946,7 +946,7 @@ pub(crate) async fn approve(
 }
 
 pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObject {
-    ErrorObject::wisp(
+    ErrorObject::parallax(
         ErrorKind::ApprovalNotFound,
         format!("run {run} has no permission request {approval}"),
     )
@@ -989,9 +989,9 @@ pub(crate) async fn open_pr(
     Ok(AgentOpenPrResult { url })
 }
 
-/// Marks every run the store still has as `starting` or `running` as `interrupted`: wispd
+/// Marks every run the store still has as `starting` or `running` as `interrupted`: plxd
 /// stopped without recording how they ended, as after a crash. Then wakes each project's
-/// coordinator for what it missed while wispd was stopped ([`wake::catch_up`], RYA-178). Called
+/// coordinator for what it missed while plxd was stopped ([`wake::catch_up`], RYA-178). Called
 /// once at startup, before any connection is accepted.
 pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     let recovered = store(daemon, |db| {
@@ -1014,13 +1014,13 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     match recovered {
         Ok(runs) => {
             for run in runs {
-                info!(run = %run.id, "an agent run was interrupted when wispd last stopped");
+                info!(run = %run.id, "an agent run was interrupted when plxd last stopped");
                 daemon
                     .log
                     .append(
                         run.updated_at,
                         Some(run.project),
-                        WispEvent::AgentFinished {
+                        ParallaxEvent::AgentFinished {
                             run_id: run.id,
                             outcome: AgentOutcome::Interrupted,
                         },
@@ -1031,7 +1031,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                     .append(
                         run.updated_at,
                         Some(run.project),
-                        WispEvent::AgentUpdated {
+                        ParallaxEvent::AgentUpdated {
                             run_id: run.id,
                             state: AgentRunState {
                                 status: run.status,
@@ -1059,7 +1059,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use wisp_protocol::RunId;
+    use parallax_protocol::RunId;
 
     use super::StartLocks;
 

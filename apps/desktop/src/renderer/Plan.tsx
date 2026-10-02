@@ -1,5 +1,5 @@
 // The agent's plan (RYA-220): its checklist as a card with progress, a strip over the composer
-// while the run goes, and Claude Code's proposed plan. The checklist comes from wispd, as for
+// while the run goes, and Claude Code's proposed plan. The checklist comes from plxd, as for
 // TodoWrite, or from Claude Code's task tools (RYA-248). Pure helpers first, then the components.
 import { Ban, ChevronDown, ChevronUp, CircleX, ClipboardList, ListChecks } from "lucide-react";
 import {
@@ -138,14 +138,14 @@ function applyTask(tasks: Map<string, Task>, item: Tool): boolean {
 }
 
 // A task list's checklist keeps its object while the list is unchanged, so its update line's memo
-// holds as for wispd's own.
+// holds as for plxd's own.
 const checklists = new WeakMap<Item, Todo>();
 
 /**
  * The transcript with Claude Code's task tools as checklists (RYA-248). Claude Code 2.1.283 keeps
  * its plan with TaskCreate and TaskUpdate in place of TodoWrite, one step per call, in a list that
  * lasts the session, across turns and resumes. So after each call that changes it, the whole list
- * goes in as a checklist, as wispd puts one after TodoWrite, and the plan card and strip read it
+ * goes in as a checklist, as plxd puts one after TodoWrite, and the plan card and strip read it
  * the same way. A list whose every step is done is put away when the next turn starts, as Claude
  * Code's own view of it is; a step a later TaskUpdate reopens comes back. The session rows go: a
  * new session, as an account fallback starts with ids from 1 again, starts a new list, and clears

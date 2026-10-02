@@ -62,11 +62,11 @@ export function App() {
 
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
-  // Runs started here forward their permission requests, only to a wispd that takes the flag.
+  // Runs started here forward their permission requests, only to a plxd that takes the flag.
   const approvals = connected && "approvals" in connection.capabilities;
   const threads = useThreads(host.id, connected, approvals);
   const { groups } = groupThreads(threads.state);
-  // The open thread's group (No Repo's until wispd lists it), or the new thread's.
+  // The open thread's group (No Repo's until plxd lists it), or the new thread's.
   let group = groups[0]!;
   if (selection.kind === "thread") {
     const open = threads.state.threads.find((t) => t.id === selection.threadId);
@@ -158,15 +158,15 @@ export function App() {
 
   const offline =
     connection?.status === "failed"
-      ? "Disconnected from wispd"
+      ? "Disconnected from plxd"
       : connected
         ? undefined
-        : "Connecting to wispd…";
+        : "Connecting to plxd…";
 
   // Mod+B: sidebar. Mod+Alt+B: side panel. Mod+N: new thread. Mod+,: Settings.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const mac = window.wisp.platform === "darwin";
+      const mac = window.parallax.platform === "darwin";
       if (!(mac ? e.metaKey : e.ctrlKey)) return;
       // Off macOS, AltGr arrives as Ctrl+Alt and types characters we must not
       // eat. (macOS may report Option as AltGraph, and uses Cmd anyway.)

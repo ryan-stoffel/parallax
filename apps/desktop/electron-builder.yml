@@ -1,7 +1,7 @@
-# The installer for the current OS and arch (0029). scripts/ci/package-app builds wispd and the
+# The installer for the current OS and arch (0029). scripts/ci/package-app builds plxd and the
 # app's dist/ first, and passes the arch and version on the command line.
-appId: dev.wisp.desktop
-productName: Wisp
+appId: dev.parallax.desktop
+productName: Parallax
 directories:
   output: release
 # Where the app's updater (electron-updater, RYA-68) looks: the app ships this as app-update.yml
@@ -14,7 +14,7 @@ directories:
 publish:
   provider: github
   owner: ryan-stoffel
-  repo: wisp
+  repo: parallax
   channel: ${channel}
 # node-pty and node-llama-cpp ship prebuilt binaries for every target, so nothing needs compiling.
 # @electron/rebuild would fetch Electron's headers and run node-gyp anyway on some runners.
@@ -35,19 +35,21 @@ asarUnpack:
   - node_modules/node-pty/**
   - node_modules/node-llama-cpp/**
   - node_modules/@node-llama-cpp/**
-# wispd, built for this target, and wispd.version, the version it reports (0030), go in the
-# resources folder, where findWispd looks. package-app puts both in target/package-resources.
+# plxd, built for this target, and plxd.version, the version it reports (0030), go in the
+# resources folder, where findPlxd looks. package-app puts both in target/package-resources.
 extraResources:
   - from: ../../target/package-resources
     to: .
-artifactName: wisp-${version}-${os}-${arch}.${ext}
+artifactName: parallax-${version}-${os}-${arch}.${ext}
 # The updater installs from the zip; the dmg is for first installs. Signing happens only when
-# CSC_KEYCHAIN (or CSC_LINK) is set (release.yml's macOS build): everything in the bundle, wispd
+# CSC_KEYCHAIN (or CSC_LINK) is set (release.yml's macOS build): everything in the bundle, plxd
 # included, gets the hardened runtime and a secure timestamp. electron-builder notarizes only when
 # the APPLE_API_* variables are set too, which release.yml doesn't do: it notarizes the dmg after
 # publishing (0030).
 mac:
   target: [dmg, zip]
+  # The full-bleed dark tile from the icon kit (design/icon/README.md).
+  icon: ../../design/icon/icns/Parallax-dark.icns
   category: public.app-category.developer-tools
   entitlements: entitlements.mac.plist
   entitlementsInherit: entitlements.mac.plist

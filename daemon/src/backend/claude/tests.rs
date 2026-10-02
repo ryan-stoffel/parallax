@@ -6,9 +6,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use parallax_protocol::{CoordinatorThreadId, ProjectId};
 use serde_json::Value;
 use tempfile::TempDir;
-use wisp_protocol::{CoordinatorThreadId, ProjectId};
 
 use super::stream::{Ask, Step, Translator};
 use super::{
@@ -69,21 +69,24 @@ fn fixture(name: &str) -> &'static str {
 /// of each kind, and the variable that would share a run's task list (RYA-251). None may reach the
 /// CLI, whatever the run's account or policy.
 const INHERITED_CREDENTIALS: &[(&str, &str)] = &[
-    ("ANTHROPIC_API_KEY", "wisp-test-not-a-key"),
-    ("ANTHROPIC_AUTH_TOKEN", "wisp-test-not-a-bearer"),
-    ("CLAUDE_CODE_OAUTH_TOKEN", "wisp-test-not-a-token"),
-    ("CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "wisp-test-not-a-token"),
+    ("ANTHROPIC_API_KEY", "parallax-test-not-a-key"),
+    ("ANTHROPIC_AUTH_TOKEN", "parallax-test-not-a-bearer"),
+    ("CLAUDE_CODE_OAUTH_TOKEN", "parallax-test-not-a-token"),
+    (
+        "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+        "parallax-test-not-a-token",
+    ),
     ("CLAUDE_CODE_USE_BEDROCK", "1"),
     ("CLAUDE_CODE_USE_VERTEX", "1"),
     ("CLAUDE_CODE_USE_FOUNDRY", "1"),
     ("ANTHROPIC_BASE_URL", "https://example.invalid"),
-    ("ANTHROPIC_UNIX_SOCKET", "/tmp/wisp-test.sock"),
+    ("ANTHROPIC_UNIX_SOCKET", "/tmp/parallax-test.sock"),
     ("ANTHROPIC_PROFILE", "work"),
-    ("ANTHROPIC_FEDERATION_RULE_ID", "wisp-test-rule"),
-    ("ANTHROPIC_ORGANIZATION_ID", "wisp-test-org"),
-    ("AWS_BEARER_TOKEN_BEDROCK", "wisp-test-not-a-token"),
-    ("CLAUDE_CONFIG_DIR", "/tmp/wisp-test-inherited-config"),
-    ("CLAUDE_CODE_TASK_LIST_ID", "wisp-test-shared-list"),
+    ("ANTHROPIC_FEDERATION_RULE_ID", "parallax-test-rule"),
+    ("ANTHROPIC_ORGANIZATION_ID", "parallax-test-org"),
+    ("AWS_BEARER_TOKEN_BEDROCK", "parallax-test-not-a-token"),
+    ("CLAUDE_CONFIG_DIR", "/tmp/parallax-test-inherited-config"),
+    ("CLAUDE_CODE_TASK_LIST_ID", "parallax-test-shared-list"),
 ];
 
 fn turn(id: &str) -> TurnId {
@@ -113,7 +116,7 @@ impl Fake {
             ("FAKE_CLAUDE_FIXTURE", fixture_path.display().to_string()),
             ("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22".into()),
             ("KEPT", "yes".into()),
-            // Set in wispd's own environment: a no-write run sets it anyway, and a worker must
+            // Set in plxd's own environment: a no-write run sets it anyway, and a worker must
             // not get it (RYA-112).
             ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "0".into()),
         ]
@@ -148,7 +151,7 @@ impl Fake {
     }
 
     /// Checks that no inherited credential reached the CLI. `CLAUDE_CONFIG_DIR` may only have
-    /// the value wisp set on purpose.
+    /// the value Parallax set on purpose.
     fn assert_no_inherited_credentials(&self, config_dir: Option<&str>) {
         let env = self.env();
         for (name, value) in INHERITED_CREDENTIALS {
@@ -295,7 +298,7 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
             },
             Event::Text {
                 message_id: Some("msg_01Rd1".into()),
-                text: "The README describes wisp, a macOS editor with a host daemon.".into(),
+                text: "The README describes Parallax, a macOS editor with a host daemon.".into(),
             },
             Event::RateLimit(LimitWindow {
                 window: "five_hour".into(),
@@ -311,13 +314,13 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
             Event::TurnFinished {
                 turn_id: Some(turn(TURN_1)),
                 result: Some(
-                    "The README describes wisp, a macOS editor with a host daemon.".into()
+                    "The README describes Parallax, a macOS editor with a host daemon.".into()
                 ),
             },
             Event::Finished {
                 outcome: Outcome::Completed {
                     result: Some(
-                        "The README describes wisp, a macOS editor with a host daemon.".into()
+                        "The README describes Parallax, a macOS editor with a host daemon.".into()
                     ),
                 },
                 usage_totals: vec![ModelUsage {
@@ -401,7 +404,7 @@ async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
     let cwd = fake.root();
     let request = RunRequest {
         coordinator_tools: Some(CoordinatorTools {
-            program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
+            program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
             data_dir: cwd.join("data"),
             project: ProjectId::generate(),
             thread: CoordinatorThreadId::generate(),
@@ -428,11 +431,11 @@ async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
 fn worker_sandbox(cwd: &Path) -> WorkerSandbox {
     WorkerSandbox::for_worktree(
         Path::new("/Users/u"),
-        Path::new("/Users/u/Library/Application Support/wisp"),
+        Path::new("/Users/u/Library/Application Support/parallax"),
         cwd,
         Path::new("/Users/u/src/app/.git"),
-        Path::new("/Users/u/Library/Application Support/wisp/context/p"),
-        Path::new("/tmp/wisp-625c7f6d/Ab12Cd"),
+        Path::new("/Users/u/Library/Application Support/parallax/context/p"),
+        Path::new("/tmp/parallax-625c7f6d/Ab12Cd"),
     )
 }
 
@@ -488,10 +491,10 @@ fn assert_worker_invocation(fake: &Fake) {
                     "denyRead": deny_read,
                     "allowRead": [
                         cwd,
-                        "/Users/u/Library/Application Support/wisp/context/p",
+                        "/Users/u/Library/Application Support/parallax/context/p",
                         format!("{cwd}/.git"),
                         "/Users/u/src/app/.git",
-                        format!("/tmp/wisp-625c7f6d/Ab12Cd/claude-{uid}"),
+                        format!("/tmp/parallax-625c7f6d/Ab12Cd/claude-{uid}"),
                     ],
                     "denyWrite": [
                         format!("{cwd}/.git"),
@@ -514,7 +517,7 @@ fn assert_worker_invocation(fake: &Fake) {
         argv[7 + expected.len()..],
         [
             "--add-dir",
-            "/Users/u/Library/Application Support/wisp/context/p",
+            "/Users/u/Library/Application Support/parallax/context/p",
             "--model",
             "claude-sonnet-4-6",
             "--effort",
@@ -538,7 +541,7 @@ fn assert_worker_invocation(fake: &Fake) {
         "{env:?}"
     );
     // The run's own temp folder (RYA-130).
-    let temp = "CLAUDE_CODE_TMPDIR=/tmp/wisp-625c7f6d/Ab12Cd".to_owned();
+    let temp = "CLAUDE_CODE_TMPDIR=/tmp/parallax-625c7f6d/Ab12Cd".to_owned();
     assert!(env.contains(&temp), "{env:?}");
 }
 
@@ -914,7 +917,7 @@ async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
 }
 
 /// A worker's own init shows scrub mode, which the Linux host check runs in another process and
-/// can miss (RYA-118): wispd stops it at init, before its Bash call.
+/// can miss (RYA-118): plxd stops it at init, before its Bash call.
 #[tokio::test]
 async fn a_worker_whose_init_shows_another_permission_mode_is_stopped_before_any_tool() {
     let fake = Fake::new("scrub-mode");
@@ -1165,7 +1168,7 @@ async fn an_api_key_account_gets_only_its_key_and_reports_it_as_the_source() {
         "{all:?}"
     );
     let env = fake.env();
-    // Every other inherited credential is scrubbed; ANTHROPIC_API_KEY is wisp's own value, not
+    // Every other inherited credential is scrubbed; ANTHROPIC_API_KEY is Parallax's own value, not
     // the poisoned inherited one INHERITED_CREDENTIALS set.
     for (name, value) in INHERITED_CREDENTIALS {
         let prefix = format!("{name}=");
@@ -1190,7 +1193,7 @@ async fn an_api_key_account_gets_only_its_key_and_reports_it_as_the_source() {
 
 #[tokio::test]
 async fn a_key_account_resolved_from_the_keystore_runs_end_to_end() {
-    use wisp_protocol::{AccountId, Provider};
+    use parallax_protocol::{AccountId, Provider};
 
     use crate::backend::key_account;
     use crate::keystore::{KeyStore, MemoryKeyStore};
@@ -1272,7 +1275,7 @@ async fn an_api_key_never_reaches_tracing_output() {
         !format!("{completed_request:?}").contains(key),
         "the key must not appear in a request's Debug output"
     );
-    tracing::info!("wisp-test-sentinel: starting the completed run");
+    tracing::info!("parallax-test-sentinel: starting the completed run");
     let all = run(&completed, completed_request).await;
     assert!(
         matches!(outcome(&all), Outcome::Completed { .. }),
@@ -1280,14 +1283,14 @@ async fn an_api_key_never_reaches_tracing_output() {
     );
 
     let mismatched = Fake::new("read-only");
-    tracing::info!("wisp-test-sentinel: starting the mismatched run");
+    tracing::info!("parallax-test-sentinel: starting the mismatched run");
     let all = run(&mismatched, api_key_request(&mismatched.root(), key)).await;
     assert_eq!(failure(&all).0, FailureKind::UnexpectedApiKey);
 
     drop(guard);
     let logged = String::from_utf8_lossy(&capture.0.lock().unwrap()).into_owned();
     assert!(
-        logged.contains("wisp-test-sentinel: starting the mismatched run"),
+        logged.contains("parallax-test-sentinel: starting the mismatched run"),
         "the capture never saw anything, so it can't prove the key's absence: {logged:?}"
     );
     assert!(
@@ -1297,7 +1300,7 @@ async fn an_api_key_never_reaches_tracing_output() {
 }
 
 // The fake CLI's own scrubbing of its child's environment stands in for the real CLI's, which
-// is documented (0004 [16]) but not something wispd can verify directly: this proves wispd sets
+// is documented (0004 [16]) but not something plxd can verify directly: this proves plxd sets
 // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 and that a CLI honoring it keeps the key from a subprocess.
 #[tokio::test]
 async fn a_tool_subprocess_the_cli_spawns_never_sees_the_key() {
@@ -1751,7 +1754,7 @@ fn a_worker_must_report_the_permission_mode_it_asked_for() {
         let expected = refused.then_some(FailureKind::PolicyViolation);
         assert_eq!(violation_kind(&steps), expected, "{mode}");
     }
-    // wispd sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB for a no-write run, which forces "default".
+    // plxd sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB for a no-write run, which forces "default".
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     let steps = translator.line(init(r#","permissionMode":"default""#).as_bytes());
     assert_eq!(violation_kind(&steps), None);
@@ -1803,7 +1806,7 @@ fn a_worker_run_allows_only_the_worker_tools() {
 
 /// RYA-248: a worker on Claude Code 2.1.283 plans with the task tools, which its `--tools` names
 /// and its init lists in place of `TodoWrite`. Each call, and its result's text, which says the
-/// task's id, reach the app as they are; it builds the plan from them, so wispd makes no checklist.
+/// task's id, reach the app as they are; it builds the plan from them, so plxd makes no checklist.
 #[tokio::test]
 async fn a_worker_plans_with_claude_code_s_task_tools() {
     let fake = Fake::new("worker-tasks");
@@ -1889,7 +1892,7 @@ async fn a_worker_plans_with_claude_code_s_task_tools() {
 
 /// RYA-249: a coordinator and a bypass worker have no `--tools`, so they name the todo tools in
 /// `--allowedTools`, which turns them on for any model, in every mode. A coordinator's list
-/// starts with wispd's own tools. Any other worker names them in `--tools` and gets no
+/// starts with plxd's own tools. Any other worker names them in `--tools` and gets no
 /// allowlist, and a plain no-write run keeps 0004's flags.
 #[test]
 fn a_coordinator_and_a_bypass_worker_allow_the_todo_tools_in_every_mode() {
@@ -2003,17 +2006,17 @@ async fn a_coordinator_plans_with_claude_code_s_task_tools_on_any_model() {
         results,
         [
             (
-                "toolu_01WispProbe",
+                "toolu_01ParallaxProbe",
                 ToolStatus::Ok,
                 Some("Task #1 created successfully: Add tests")
             ),
             (
-                "toolu_01WispProbe1",
+                "toolu_01ParallaxProbe1",
                 ToolStatus::Ok,
                 Some("Updated task #1 status")
             ),
             (
-                "toolu_01WispProbe2",
+                "toolu_01ParallaxProbe2",
                 ToolStatus::Ok,
                 Some("#1 [in_progress] Add tests")
             ),
@@ -2054,12 +2057,12 @@ fn a_no_write_run_allows_only_the_read_tools() {
 }
 
 /// 0027: a coordinator and a bypass worker are full Claude Code, so their init may list any
-/// tool, another MCP server's included, in the mode they asked for. Without wispd's tools a
+/// tool, another MCP server's included, in the mode they asked for. Without plxd's tools a
 /// no-write run keeps its read tools.
 #[test]
 fn a_coordinator_and_a_bypass_worker_allow_any_tool_in_the_mode_they_asked_for() {
     let tools =
-        r#"["Read","Edit","Bash","Task","mcp__wispd__spawn_agent","mcp__linear__list_issues"]"#;
+        r#"["Read","Edit","Bash","Task","mcp__plxd__spawn_agent","mcp__linear__list_issues"]"#;
     let loaded = init_line(tools);
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
     assert_eq!(violation_kind(&translator.line(&loaded)), None);
@@ -2075,7 +2078,7 @@ fn a_coordinator_and_a_bypass_worker_allow_any_tool_in_the_mode_they_asked_for()
     assert_eq!(
         violation_kind(&translator.line(&loaded)),
         Some(FailureKind::PolicyViolation),
-        "without wispd's tools it isn't a coordinator"
+        "without plxd's tools it isn't a coordinator"
     );
 
     let bypass = String::from_utf8(loaded)
@@ -2130,11 +2133,11 @@ fn retries_and_rejected_limits_name_a_failed_turn_s_kind_until_it_ends() {
     );
 }
 
-/// A coordinator's request at `cwd`, whose wispd tools make it full Claude Code (0027).
+/// A coordinator's request at `cwd`, whose plxd tools make it full Claude Code (0027).
 fn coordinator(cwd: &Path) -> RunRequest {
     RunRequest {
         coordinator_tools: Some(CoordinatorTools {
-            program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
+            program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
             data_dir: cwd.join("data"),
             project: ProjectId::generate(),
             thread: CoordinatorThreadId::generate(),
@@ -2143,11 +2146,11 @@ fn coordinator(cwd: &Path) -> RunRequest {
     }
 }
 
-/// RYA-222: Manual, Auto, and Plan ask wispd over stdio, right after the mode, for a worker and a
+/// RYA-222: Manual, Auto, and Plan ask plxd over stdio, right after the mode, for a worker and a
 /// coordinator alike, when the client answers. Without `approvals`, every mode runs as before, as
 /// do Accept Edits and Bypass Permissions, and a plain no-write run never asks.
 #[test]
-fn only_the_modes_that_prompt_ask_wispd_over_stdio_and_only_with_approvals() {
+fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
     let cwd = Path::new("/Users/u/wt");
     let mut worker = request(cwd);
     worker.policy = ToolPolicy::WorkspaceWrite;
@@ -2226,7 +2229,7 @@ fn only_the_modes_that_prompt_ask_wispd_over_stdio_and_only_with_approvals() {
 /// so it can hand its plan over. Every other mode, and Plan without `approvals`, keeps 0013's
 /// tools exactly; a bypass worker names none, and a coordinator never has the list.
 #[test]
-fn only_a_plan_worker_that_asks_wispd_gets_exit_plan_mode() {
+fn only_a_plan_worker_that_asks_plxd_gets_exit_plan_mode() {
     let mut plan_tools = WORKER_TOOLS.to_vec();
     plan_tools.push(EXIT_PLAN_MODE);
     assert_eq!(PLAN_WORKER_TOOL_LIST, plan_tools.join(","));
@@ -2416,7 +2419,7 @@ async fn a_denied_or_edited_request_answers_with_what_the_user_said() {
 }
 
 /// RYA-222: a `control_cancel_request` withdraws a request, whose late answer then never reaches
-/// the CLI; a request that suppresses "always allow" offers none; and a control request wispd
+/// the CLI; a request that suppresses "always allow" offers none; and a control request plxd
 /// doesn't serve gets an error, so the CLI doesn't wait on it.
 #[tokio::test]
 async fn a_withdrawn_request_takes_no_answer_and_other_control_requests_get_an_error() {
@@ -2469,7 +2472,7 @@ async fn a_withdrawn_request_takes_no_answer_and_other_control_requests_get_an_e
             "response": {
                 "subtype": "error",
                 "request_id": "req-hook",
-                "error": "wispd doesn't answer hook_callback control requests",
+                "error": "plxd doesn't answer hook_callback control requests",
             },
         })
     );
@@ -2600,7 +2603,7 @@ fn control_requests_are_answered_only_with_the_prompt_channel() {
         translator.line(elicit),
         [Step::Refuse {
             request_id: "r2".into(),
-            error: "wispd doesn't answer elicitation control requests".into(),
+            error: "plxd doesn't answer elicitation control requests".into(),
         }]
     );
     let nameless = br#"{"type":"control_request","request_id":"r3","request":{"subtype":"can_use_tool","input":{}}}"#;
@@ -2678,7 +2681,7 @@ fn worker_init(mode: &str, tools: &str) -> Vec<u8> {
 /// and reports Manual, which the check then accepts, but never a mode that asks less.
 #[test]
 fn a_worker_s_init_may_list_exit_plan_mode_only_when_it_hands_over_plans() {
-    // What 2.1.283 lists for a plan worker that asks wispd.
+    // What 2.1.283 lists for a plan worker that asks plxd.
     let planning = r#"["Bash","Edit","ExitPlanMode","Glob","Grep","NotebookEdit","Read","WebFetch","WebSearch","Write"]"#;
     let worker = |mode: &'static str, plan_exit: bool| {
         Translator::new(ToolPolicy::WorkspaceWrite, "none")
@@ -2703,7 +2706,7 @@ fn a_worker_s_init_may_list_exit_plan_mode_only_when_it_hands_over_plans() {
         "AskUserQuestion",
         "EnterPlanMode",
         "Agent",
-        "mcp__wispd__spawn_agent",
+        "mcp__plxd__spawn_agent",
     ] {
         let tools = format!(r#"["Bash","ExitPlanMode","{extra}"]"#);
         let mut translator = worker("plan", true);
@@ -2742,7 +2745,7 @@ fn plan_worker(cwd: &Path) -> RunRequest {
 }
 
 /// RYA-243: a plan worker hands its plan over with `ExitPlanMode`, as a coordinator does (0031).
-/// The request is a question for the user that holds the plan, and wispd's answer goes back on
+/// The request is a question for the user that holds the plan, and plxd's answer goes back on
 /// stdin. Once allowed, a later turn's init may report Manual. Once denied, the worker still
 /// plans, so an init that reports Manual fails it.
 #[tokio::test]

@@ -154,7 +154,7 @@ import {
 
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
 
-/** One of the icons a Project can wear: its Lucide name, which wispd keeps (0032), and its glyph. */
+/** One of the icons a Project can wear: its Lucide name, which plxd keeps (0032), and its glyph. */
 export interface IconChoice {
   name: string;
   /** Its accessible name, from its Lucide name. */
@@ -340,7 +340,7 @@ export const defaultIcon: ProjectIconValue = { name: "folder-kanban" };
 
 /**
  * A color an icon can take, as Tailwind classes: the accent, which has no key, then the palette's
- * `--project-*` colors in index.css, by the key wispd keeps.
+ * `--project-*` colors in index.css, by the key plxd keeps.
  */
 export interface IconColor {
   key?: string;

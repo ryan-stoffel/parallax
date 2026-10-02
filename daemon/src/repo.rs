@@ -197,8 +197,8 @@ mod tests {
         );
 
         assert_eq!(
-            NotARepository::NoGit("/src/wisp".to_owned()).to_string(),
-            "/src/wisp is not the top folder of a git repository: it has no .git."
+            NotARepository::NoGit("/src/parallax".to_owned()).to_string(),
+            "/src/parallax is not the top folder of a git repository: it has no .git."
         );
     }
 }

@@ -1,10 +1,10 @@
-import { ErrorCodes, MAX_FRAME_BYTES, type WispRequests } from "../protocol/generated/protocol";
+import { ErrorCodes, MAX_FRAME_BYTES, type ParallaxRequests } from "../protocol/generated/protocol";
 import type { RpcError, RpcResponse } from "../preload/bridge";
 
 type Pending = { onResponse: (response: RpcResponse<unknown>) => void; timer: NodeJS.Timeout };
 
 export type RpcHandlers = {
-  /** A notification from wispd, such as `events/event`. */
+  /** A notification from plxd, such as `events/event`. */
   onNotification(method: string, params: unknown): void;
   /** The stream broke a framing rule (0007) and must be closed. */
   onFatal(message: string): void;
@@ -17,7 +17,7 @@ export type RpcHandlers = {
  * it received bytes with `receive` and gives it a `write` for outgoing lines.
  */
 export class RpcClient {
-  /** The largest frame to send, lowered to wispd's `maxFrameBytes` after `initialize`. */
+  /** The largest frame to send, lowered to plxd's `maxFrameBytes` after `initialize`. */
   maxFrameBytes = MAX_FRAME_BYTES;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
@@ -46,16 +46,16 @@ export class RpcClient {
   }
 
   /**
-   * Sends a request and calls `onResponse` exactly once: with wispd's answer, or with an error
+   * Sends a request and calls `onResponse` exactly once: with plxd's answer, or with an error
    * after `timeoutMs` (which also sends `$/cancelRequest`) or when the client closes.
    * `onResponse` runs synchronously while the response line is read, so it sees the stream's
    * state before any later line, such as the first event of a new subscription.
    */
-  send<M extends keyof WispRequests>(
+  send<M extends keyof ParallaxRequests>(
     method: M,
-    params: WispRequests[M]["params"],
+    params: ParallaxRequests[M]["params"],
     timeoutMs: number,
-    onResponse: (response: RpcResponse<WispRequests[M]["result"]>) => void,
+    onResponse: (response: RpcResponse<ParallaxRequests[M]["result"]>) => void,
   ): void {
     if (this.closed) return onResponse(failure(ErrorCodes.InternalError, "not connected"));
     const id = this.nextId++;
@@ -75,11 +75,11 @@ export class RpcClient {
   }
 
   /** `send` as a promise, for callers that don't need the synchronous ordering. */
-  request<M extends keyof WispRequests>(
+  request<M extends keyof ParallaxRequests>(
     method: M,
-    params: WispRequests[M]["params"],
+    params: ParallaxRequests[M]["params"],
     timeoutMs: number,
-  ): Promise<RpcResponse<WispRequests[M]["result"]>> {
+  ): Promise<RpcResponse<ParallaxRequests[M]["result"]>> {
     return new Promise((resolve) => this.send(method, params, timeoutMs, resolve));
   }
 
@@ -102,8 +102,8 @@ export class RpcClient {
     this.buffered.push(part);
     this.bufferedBytes += part.length;
     if (this.bufferedBytes > MAX_FRAME_BYTES) {
-      this.close("wispd sent a frame larger than maxFrameBytes");
-      this.handlers.onFatal("wispd sent a frame larger than maxFrameBytes");
+      this.close("plxd sent a frame larger than maxFrameBytes");
+      this.handlers.onFatal("plxd sent a frame larger than maxFrameBytes");
     }
   }
 
@@ -119,7 +119,7 @@ export class RpcClient {
     if (typeof message !== "object" || message === null) return;
     const { id, method, params, result, error } = message as Record<string, unknown>;
     if (typeof method === "string") {
-      // wispd sends no requests to clients yet, only notifications.
+      // plxd sends no requests to clients yet, only notifications.
       if (id === undefined) this.handlers.onNotification(method, params);
       return;
     }

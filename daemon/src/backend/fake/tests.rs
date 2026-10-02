@@ -16,7 +16,7 @@ use crate::backend::{
 };
 use crate::paths::DataDir;
 
-const DATA_DIR: &str = "/tmp/wispd-fake-data";
+const DATA_DIR: &str = "/tmp/plxd-fake-data";
 
 fn fixture(name: &str) -> Script {
     let json = match name {
@@ -39,7 +39,7 @@ fn launcher() -> Launcher {
     let base: Environment = [
         ("PATH", "/usr/bin:/bin"),
         ("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22"),
-        ("FAKE_API_KEY", "leaked-from-wispd"),
+        ("FAKE_API_KEY", "leaked-from-plxd"),
     ]
     .into_iter()
     .collect();
@@ -165,11 +165,11 @@ async fn an_api_key_account_gets_its_key_and_a_subscription_its_config_home() {
     );
     request.sandbox = Some(WorkerSandbox::for_worktree(
         Path::new("/Users/u"),
-        Path::new("/Users/u/wisp"),
+        Path::new("/Users/u/parallax"),
         &root(),
         Path::new("/Users/u/src/app/.git"),
-        Path::new("/Users/u/wisp/context/p"),
-        Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
+        Path::new("/Users/u/parallax/context/p"),
+        Path::new("/tmp/parallax-1a2b3c4d/Ab12Cd"),
     ));
     request.account.credential = Credential::ApiKey(ApiKey::new("sk-fake-123".into()));
     let mut events = launch(&backend("context"), request.clone()).await.events;
@@ -715,7 +715,7 @@ async fn bad_requests_are_refused_before_spawning() {
         backend("resume").start(bad),
         Err(StartError::Invalid(_))
     ));
-    let bad = request(Path::new("/nonexistent-wisp-worktree"));
+    let bad = request(Path::new("/nonexistent-parallax-worktree"));
     let error = backend("resume").start(bad).unwrap_err();
     assert!(matches!(error, StartError::Spawn(_)), "{error:?}");
     let script = Script {

@@ -4,8 +4,8 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
-import type { ConnectionState, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
+import type { ConnectionState, SubscriptionMessage, ParallaxBridge } from "../preload/bridge";
 import type {
   AgentRun,
   AgentRunResult,
@@ -122,14 +122,14 @@ test("a user message shows its images over its text: fetched by id, or at hand w
   expect(document.body.textContent).toBe("And this?");
 });
 
-test("a wake-up reads as from wisp, with its message folded away", () => {
+test("a wake-up reads as from Parallax, with its message folded away", () => {
   row({
     kind: "user",
     key: "w",
-    text: "wisp, not the user: runs you started finished.",
+    text: "Parallax, not the user: runs you started finished.",
     wake: true,
   });
-  expect(document.querySelector("summary")!.textContent).toBe("From wisp: subagents finished");
+  expect(document.querySelector("summary")!.textContent).toBe("From parallax: subagents finished");
   expect(document.querySelector("details")!.open).toBe(false);
   expect(document.querySelector(".bg-selected")).toBeNull();
 });
@@ -191,24 +191,24 @@ test("a tool call with an oversized input says so", () => {
   expect(document.querySelector("details")!.textContent).toContain("Too large to show (89 KB)");
 });
 
-test("a coordinator's wispd tool calls read as what they did, and to what", () => {
+test("a coordinator's plxd tool calls read as what they did, and to what", () => {
   const summary = (name: string, input: Record<string, string>, subagent?: string) => {
     row({ kind: "tool", key: "t", callId: "1", name, input, ...(subagent && { subagent }) });
     const text = shown();
     act(() => unmount());
     return text;
   };
-  expect(summary("mcp__wispd__spawn_agent", { prompt: "Fix the login bug\nwith a test" })).toBe(
+  expect(summary("mcp__plxd__spawn_agent", { prompt: "Fix the login bug\nwith a test" })).toBe(
     "Started a subagentFix the login bug",
   );
-  expect(summary("mcp__wispd__agent_status", { runId: "r-1" }, "Fix the login bug")).toBe(
+  expect(summary("mcp__plxd__agent_status", { runId: "r-1" }, "Fix the login bug")).toBe(
     "Checked on a subagentFix the login bug",
   );
-  expect(summary("mcp__wispd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
+  expect(summary("mcp__plxd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
     "Wrote shared contextplan.md",
   );
-  // A wispd tool this app doesn't know reads as any MCP server's tool does.
-  expect(summary("mcp__wispd__plan_approve", {})).toBe("wispdplan approve");
+  // A plxd tool this app doesn't know reads as any MCP server's tool does.
+  expect(summary("mcp__plxd__plan_approve", {})).toBe("plxdplan approve");
 });
 
 test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
@@ -268,14 +268,14 @@ test("each kind of work has its own loader, and MCP tools and skills read by nam
     detail: "save issue",
     loader: loader("beacon", "balance"),
   });
-  expect(activity(tool("mcp__wispd__spawn_agent", { prompt: "Fix the login bug" }))).toEqual({
+  expect(activity(tool("mcp__plxd__spawn_agent", { prompt: "Fix the login bug" }))).toEqual({
     label: "Started a subagent",
     detail: "Fix the login bug",
     loader: loader("cells", "spread"),
   });
-  // A wispd tool this app doesn't know reads as any MCP server's tool does, with wispd's loader.
-  expect(activity(tool("mcp__wispd__plan_approve"))).toEqual({
-    label: "Using wispd",
+  // A plxd tool this app doesn't know reads as any MCP server's tool does, with plxd's loader.
+  expect(activity(tool("mcp__plxd__plan_approve"))).toEqual({
+    label: "Using plxd",
     detail: "plan approve",
     loader: loader("cells", "spread"),
   });
@@ -340,8 +340,8 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
         "WebFetch",
         "mcp__linear__save_issue",
         "Skill",
-        "mcp__wispd__spawn_agent",
-        "mcp__wispd__plan_approve",
+        "mcp__plxd__spawn_agent",
+        "mcp__plxd__plan_approve",
         "TodoWrite",
         "TaskCreate",
         "TaskUpdate",
@@ -368,9 +368,9 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
     WebFetch: "lucide-globe",
     mcp__linear__save_issue: "lucide-plug",
     Skill: "lucide-sparkles",
-    mcp__wispd__spawn_agent: "lucide-workflow",
-    // A wispd tool this app doesn't know is still wispd's.
-    mcp__wispd__plan_approve: "lucide-workflow",
+    mcp__plxd__spawn_agent: "lucide-workflow",
+    // A plxd tool this app doesn't know is still plxd's.
+    mcp__plxd__plan_approve: "lucide-workflow",
     TodoWrite: "lucide-list-checks",
     // Claude Code's task tools plan as TodoWrite did (RYA-248).
     TaskCreate: "lucide-list-checks",
@@ -426,7 +426,7 @@ test("a failed, denied, or unfinished tool call marks its icon, and says how it 
   row(tool());
   expect(slot()).toEqual(unfinished);
   act(() => unmount());
-  // A status from a newer wispd reads as no result, rather than breaking the row.
+  // A status from a newer plxd reads as no result, rather than breaking the row.
   row(tool("cancelled" as AgentToolStatus));
   expect(slot()).toEqual(unfinished);
   act(() => unmount());
@@ -465,7 +465,7 @@ test("a coordinator's no-write stop lists the files it changed", () => {
     },
   });
   const alert = document.querySelector('[role="alert"]')!;
-  expect(alert.querySelector("p")!.textContent).toBe("Failed: stopped by wisp's safety check");
+  expect(alert.querySelector("p")!.textContent).toBe("Failed: stopped by Parallax's safety check");
   expect(alert.textContent).toContain("the coordinator's no-write turn changed the working tree:");
   expect(alert.querySelector("pre")!.textContent).toBe(" M src/settings.tsx\n?? notes.md");
 });
@@ -499,7 +499,7 @@ test("a failed run shows why; other endings are a divider", () => {
     outcome: { status: "failed", failure: "commitFailed", message: "no git identity" },
   });
   expect(document.querySelector('[role="alert"]')!.textContent).toBe(
-    "Failed: wisp couldn't commit its changesno git identity",
+    "Failed: Parallax couldn't commit its changesno git identity",
   );
   act(() => unmount());
   row({ kind: "end", key: "e", outcome: { status: "cancelled" } });
@@ -511,9 +511,9 @@ const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
 
 /**
  * A bridge serving the sample's events up to `seq`, two per page, that records calls.
- * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as wispd does
+ * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as plxd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
- * wispd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
+ * plxd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
  * default), and `agent/openPr` answers `prUrl`. `connect` changes the connection's state.
  */
 function fakeBridge(
@@ -546,11 +546,11 @@ function fakeBridge(
     if (params.after < listSeq || resyncs-- > 0) queueMicrotask(() => l({ type: "resync" }));
     return unsubscribe;
   });
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     connectionState: async () => ({
       status: "connected",
-      wispd: "0.1.0",
+      plxd: "0.1.0",
       protocol: 1,
       capabilities,
     }),
@@ -560,7 +560,7 @@ function fakeBridge(
     },
     request,
     subscribe,
-  } as Partial<WispBridge> as WispBridge;
+  } as Partial<ParallaxBridge> as ParallaxBridge;
   return {
     request,
     subscribe,
@@ -619,7 +619,7 @@ test("subscribes after the scope's snapshot seq, so repeated resyncs end", async
 test("the composer tab shows the worktree and its branch", () => {
   const started = samples.find((m) => "result" in m && m.id === 2)!;
   render(<RunTab run={(started as unknown as { result: AgentRunResult }).result.run} />);
-  expect(document.body.textContent).toBe("Worktreewisp/1a2b3c4d");
+  expect(document.body.textContent).toBe("Worktreeparallax/1a2b3c4d");
 });
 
 test("Enter sends with a fresh v7 turn id, but not while an IME is composing", async () => {
@@ -683,7 +683,7 @@ test("a message a finished run couldn't take goes back in the box, with no loade
     });
     await settle();
   };
-  // wispd answers with the run its CLI failed to start again, and no turn follows.
+  // plxd answers with the run its CLI failed to start again, and no turn follows.
   fakeBridge(8, { sent: { status: "failed", error: "the CLI didn't start" } });
   await renderChat();
   await send("Also mention the tests.");
@@ -726,13 +726,13 @@ test("a pasted image goes with agent/send beside the text, and shows while it's 
 });
 
 test("Stop cancels, and a failed cancel says why and allows another try", async () => {
-  const { request } = fakeBridge(4, { cancelError: "wispd is gone" });
+  const { request } = fakeBridge(4, { cancelError: "plxd is gone" });
   await renderChat();
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
   );
   expect(request).toHaveBeenCalledWith("local", "agent/cancel", { runId });
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("wispd is gone");
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe("plxd is gone");
   expect(document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.disabled).toBe(
     false,
   );
@@ -741,7 +741,7 @@ test("Stop cancels, and a failed cancel says why and allows another try", async 
 test("a finished run opens a pull request titled like its thread, then links to it", async () => {
   const openPr = () =>
     [...document.querySelectorAll("button")].find((b) => b.textContent === "Open PR");
-  // Not while the run goes, nor in a thread with no repo, nor from a wispd that can't.
+  // Not while the run goes, nor in a thread with no repo, nor from a plxd that can't.
   fakeBridge(4, { capabilities: { openPr: {} } });
   await renderChat();
   expect(openPr()).toBeUndefined();
@@ -772,14 +772,14 @@ test("a finished run opens a pull request titled like its thread, then links to 
 
 test("while disconnected, nothing loads and the composer says why", async () => {
   const { request } = fakeBridge(8);
-  window.wisp.connectionState = async () => ({
+  window.parallax.connectionState = async () => ({
     status: "failed",
     retrying: true,
-    error: { reason: "exited", message: "wispd exited" },
+    error: { reason: "exited", message: "plxd exited" },
   });
   await renderChat();
   expect(request).not.toHaveBeenCalled();
-  expect(composer().getAttribute("aria-placeholder")).toBe("Disconnected from wispd");
+  expect(composer().getAttribute("aria-placeholder")).toBe("Disconnected from plxd");
   const send = document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
   expect(send.disabled).toBe(true);
 });
@@ -967,7 +967,7 @@ test("under reduced motion, the musing keeps its word", () => {
   expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
 });
 
-test("a running chat that loses wispd shows no loader", async () => {
+test("a running chat that loses plxd shows no loader", async () => {
   // The run is going, and the agent hasn't done anything yet.
   const { connect } = fakeBridge(2);
   await renderChat();
@@ -977,7 +977,7 @@ test("a running chat that loses wispd shows no loader", async () => {
   connect({
     status: "failed",
     retrying: true,
-    error: { reason: "exited", message: "wispd exited" },
+    error: { reason: "exited", message: "plxd exited" },
   });
   expect(document.querySelector(".loader")).toBeNull();
   expect(transcriptText()).toContain("Add a README");
@@ -986,7 +986,7 @@ test("a running chat that loses wispd shows no loader", async () => {
 test("until its transcript loads, a chat shows its first message, with the loader only if it goes", async () => {
   fakeBridge(8);
   // The transcript is still on its way.
-  window.wisp.request = vi.fn(() => new Promise<never>(() => {}));
+  window.parallax.request = vi.fn(() => new Promise<never>(() => {}));
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" />);
   await settle();
   expect(transcriptText()).toBe("Add a README");
@@ -1003,12 +1003,14 @@ test("until its transcript loads, a chat shows its first message, with the loade
 
 test("a chat that couldn't load shows its first message, with no loader", async () => {
   fakeBridge(8);
-  window.wisp.request = vi.fn(async () => ({ error: { code: -32000, message: "wispd is gone" } }));
+  window.parallax.request = vi.fn(async () => ({
+    error: { code: -32000, message: "plxd is gone" },
+  }));
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
   await settle();
   expect(transcriptText()).toBe("Add a README");
   expect(document.querySelector(".loader")).toBeNull();
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("wispd is gone");
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe("plxd is gone");
 });
 
 // A two-step checklist with `done` steps finished and the next one under way.
@@ -1017,7 +1019,7 @@ const checklist = (done: number): AgentTodoItem[] =>
     text,
     status: i < done ? "completed" : i === done ? "inProgress" : "pending",
   }));
-// TodoWrite as wispd sends it: the call, then the checklist it stands for.
+// TodoWrite as plxd sends it: the call, then the checklist it stands for.
 const todoWrite = (n: number, done: number): Item[] => [
   { kind: "tool", key: `w${n}`, callId: `w${n}`, name: "TodoWrite", input: {}, status: "ok" },
   { kind: "todo", key: `t${n}`, items: checklist(done) },
@@ -1064,7 +1066,7 @@ test("a turn's plan is one card where it began, its updates lines in the work, i
 });
 
 test("Claude Code's task tools make the same card and lines as TodoWrite, and their rows go", () => {
-  // As wispd logs them from Claude Code 2.1.283: each call, with its result's text.
+  // As plxd logs them from Claude Code 2.1.283: each call, with its result's text.
   const task = (
     key: string,
     name: string,
@@ -1163,7 +1165,7 @@ test("while the run works on a plan, a strip over the composer shows it, until a
   expect(strip()).toBeNull();
   act(() => unmount());
 
-  // Losing wispd stalls it: no strip, and nothing moves in the card.
+  // Losing plxd stalls it: no strip, and nothing moves in the card.
   const card = () => document.querySelector('[role="log"] [role="group"]')!;
   const third = fakeBridge(4);
   await renderChat();

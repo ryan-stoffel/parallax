@@ -98,23 +98,23 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
-      WISP_VERSION: ${{ needs.plan.outputs.version }}
-      # Where package-app keeps the release wispd between runs (see "Restore wispd").
-      WISPD_BIN: target/release-wispd/wispd${{ startsWith(matrix.os, 'windows') && '.exe' || '' }}
+      PLX_VERSION: ${{ needs.plan.outputs.version }}
+      # Where package-app keeps the release plxd between runs (see "Restore plxd").
+      PLXD_BIN: target/release-plxd/plxd${{ startsWith(matrix.os, 'windows') && '.exe' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # wispd reads its version from a file the package step writes beside it (0030), so a commit
-      # that changes no Rust reuses the last release wispd and skips the Rust build. The key covers
+      # plxd reads its version from a file the package step writes beside it (0030), so a commit
+      # that changes no Rust reuses the last release plxd and skips the Rust build. The key covers
       # everything that goes into the binary.
-      - name: Restore wispd
-        id: wispd
+      - name: Restore plxd
+        id: plxd
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ env.WISPD_BIN }}
-          key: wispd-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'daemon/**', 'crates/**', 'scripts/ci/package-app') }}
+          path: ${{ env.PLXD_BIN }}
+          key: plxd-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'daemon/**', 'crates/**', 'scripts/ci/package-app') }}
 
       # package-app still needs rustc for the target, cached or not.
       - name: Cache Rust toolchain
@@ -141,13 +141,13 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.wispd.outputs.cache-hit != 'true'
+        if: steps.plxd.outputs.cache-hit != 'true'
         with:
           key: release-${{ runner.os }}-${{ runner.arch }}
 
-      # The static musl wispd (0023) compiles bundled SQLite with musl-gcc.
+      # The static musl plxd (0023) compiles bundled SQLite with musl-gcc.
       - name: Install musl-tools
-        if: runner.os == 'Linux' && steps.wispd.outputs.cache-hit != 'true'
+        if: runner.os == 'Linux' && steps.plxd.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends musl-tools
@@ -207,7 +207,7 @@ jobs:
       # notarize runs it.
       - name: Verify the app's signature
         if: runner.os == 'macOS'
-        run: codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/Wisp.app
+        run: codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/Parallax.app
 
       # Straight from the runner to plan's draft, then publishes it: the first build done makes the
       # release visible. A dry run on workflow_dispatch.
@@ -228,7 +228,7 @@ jobs:
         with:
           name: installer-${{ matrix.os }}
           path: |
-            apps/desktop/release/wisp-*
+            apps/desktop/release/parallax-*
             apps/desktop/release/latest*.yml
             apps/desktop/release/nightly*.yml
           if-no-files-found: error
@@ -299,8 +299,8 @@ jobs:
         run: |
           mkdir dmg
           assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
-          if grep -q '^wisp-.*\.dmg$' <<< "$assets"; then
-            gh release download "$TAG" --pattern 'wisp-*.dmg' --dir dmg
+          if grep -q '^parallax-.*\.dmg$' <<< "$assets"; then
+            gh release download "$TAG" --pattern 'parallax-*.dmg' --dir dmg
           fi
 
       - name: Download the built dmg
@@ -320,7 +320,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           shopt -s nullglob
-          dmg=(wisp-*.dmg)
+          dmg=(parallax-*.dmg)
           if [ ${#dmg[@]} = 0 ]; then
             echo "::notice::No dmg to notarize: the macOS build didn't produce one."
             exit 0
@@ -340,7 +340,7 @@ jobs:
           rm -f "$key"
           # What a fresh download meets: Gatekeeper on the dmg, then on the app inside.
           spctl --assess --type open --context context:primary-signature --verbose "${dmg[0]}"
-          hdiutil attach "${dmg[0]}" -nobrowse -readonly -mountpoint "$RUNNER_TEMP/wisp"
-          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/wisp/Wisp.app"
-          spctl --assess --type execute --verbose "$RUNNER_TEMP/wisp/Wisp.app"
-          hdiutil detach "$RUNNER_TEMP/wisp"
+          hdiutil attach "${dmg[0]}" -nobrowse -readonly -mountpoint "$RUNNER_TEMP/parallax"
+          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/parallax/Parallax.app"
+          spctl --assess --type execute --verbose "$RUNNER_TEMP/parallax/Parallax.app"
+          hdiutil detach "$RUNNER_TEMP/parallax"

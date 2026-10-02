@@ -14,10 +14,10 @@
 //!   socket), so a symlink swapped in after validation is refused atomically, with no race.
 //! - Writes go to a temporary file in the same folder, then `rename` it over the target
 //!   ([`tempfile::NamedTempFile::persist`]). `rename` never follows a symlink at the destination,
-//!   so even a swapped-in symlink can't be written through; wispd also rejects an existing
+//!   so even a swapped-in symlink can't be written through; plxd also rejects an existing
 //!   symlink outright first, for a clear error in the common, non-racing case.
 //!
-//! [`ContextIndex`] remembers, in memory, the last writer and content hash wispd has seen for
+//! [`ContextIndex`] remembers, in memory, the last writer and content hash plxd has seen for
 //! each file. It resets on restart, the same trade-off the M1 event log makes (0007, 0009): the
 //! file on disk is 0005's durable source of truth, and this is only bookkeeping for idempotent
 //! retries and the `lastWriter` display field.
@@ -34,8 +34,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use jiff::Timestamp;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{ContextFile, ContextWriteId, ErrorKind, ProjectId};
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{ContextFile, ContextWriteId, ErrorKind, ProjectId};
 
 use crate::paths::DataDir;
 
@@ -46,7 +46,7 @@ fn is_symlink_error(error: &io::Error) -> bool {
 }
 
 /// The error for a final path component that is a symlink: `ELOOP`, "too many levels of symbolic
-/// links", which `O_NOFOLLOW` produces. Windows has no such flag, so there wispd refuses the
+/// links", which `O_NOFOLLOW` produces. Windows has no such flag, so there plxd refuses the
 /// reparse point itself, with `ERROR_STOPPED_ON_SYMLINK`.
 fn symlink_error() -> io::Error {
     #[cfg(unix)]
@@ -181,7 +181,7 @@ pub(crate) fn write_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<s
         return Err(symlink_error());
     }
     let mut temp = tempfile::Builder::new()
-        .prefix(".wisp-context-")
+        .prefix(".parallax-context-")
         .tempfile_in(dir)?;
     temp.write_all(content)?;
     temp.as_file().sync_all()?;
@@ -191,7 +191,7 @@ pub(crate) fn write_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<s
 
 /// Lists the shared context files in `dir`, ordered by path.
 ///
-/// A directory, a hidden (dot) entry (including wispd's own temporary files while a write is in
+/// A directory, a hidden (dot) entry (including plxd's own temporary files while a write is in
 /// progress), a symlink, or a name with a disallowed extension is skipped rather than listed:
 /// [`std::fs::DirEntry::file_type`] does not follow a symlink, so one is reported as a symlink,
 /// never as whatever it points to.
@@ -309,7 +309,7 @@ impl ContextIndex {
     /// index the whole time.
     ///
     /// The watcher checks the index for every change it sees, and inotify reports the rename at
-    /// once, so recording after letting go would let the watcher take wispd's own write for an
+    /// once, so recording after letting go would let the watcher take plxd's own write for an
     /// agent's. Holding it also orders racing writes: the last one recorded is the one on disk.
     ///
     /// # Errors
@@ -344,7 +344,7 @@ impl ContextIndex {
     /// path. Returns whether it was new: `false` when it matched or `read` failed.
     ///
     /// A change that matches carries no new information and should not be reported: it is either
-    /// the echo of wispd's own write (which the OS can report more than once for a single rename,
+    /// the echo of plxd's own write (which the OS can report more than once for a single rename,
     /// so this checks content rather than consuming a one-shot flag), or a rewrite of a file with
     /// the content it already had. The index is held from the read to the record, as
     /// [`ContextIndex::write_protocol`] holds it, so a `context/write` can't land in between and
@@ -375,7 +375,7 @@ impl ContextIndex {
         true
     }
 
-    /// Who last wrote `path` in `project`, if wispd has seen a write to it since it started.
+    /// Who last wrote `path` in `project`, if plxd has seen a write to it since it started.
     pub fn writer_of(&self, project: ProjectId, path: &str) -> Option<String> {
         self.lock()
             .get(&(project, path.to_owned()))
@@ -404,7 +404,7 @@ pub(crate) fn context_file(
 /// The protocol error for a shared context I/O failure.
 pub(crate) fn io_error(path: &str, error: &io::Error) -> ErrorObject {
     if error.kind() == io::ErrorKind::NotFound {
-        return ErrorObject::wisp(
+        return ErrorObject::parallax(
             ErrorKind::ContextNotFound,
             format!("no shared context file has path {path}"),
         );
@@ -420,7 +420,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
-    use wisp_protocol::jsonrpc::INVALID_PARAMS;
+    use parallax_protocol::jsonrpc::INVALID_PARAMS;
 
     use super::{
         ContextIndex, Existing, MAX_FILE_BYTES, ensure_dir, list_files, other_files_total,
@@ -453,7 +453,7 @@ mod tests {
     fn a_context_dir_is_created_private_and_ensuring_it_again_is_a_no_op() {
         let temp = tempfile::tempdir().unwrap();
         let data_dir = DataDir::new(temp.path()).unwrap();
-        let project = wisp_protocol::ProjectId::generate();
+        let project = parallax_protocol::ProjectId::generate();
         let dir = ensure_dir(&data_dir, project).unwrap();
         assert!(dir.is_dir());
         #[cfg(unix)]
@@ -541,7 +541,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "notes.md", b"hello").unwrap();
         let leftover = tempfile::Builder::new()
-            .prefix(".wisp-context-")
+            .prefix(".parallax-context-")
             .tempfile_in(dir.path())
             .unwrap();
         leftover.keep().unwrap();
@@ -574,8 +574,8 @@ mod tests {
     #[test]
     fn the_index_tells_new_writes_from_retries_and_conflicts() {
         let index = ContextIndex::default();
-        let project = wisp_protocol::ProjectId::generate();
-        let id = wisp_protocol::ContextWriteId::generate();
+        let project = parallax_protocol::ProjectId::generate();
+        let id = parallax_protocol::ContextWriteId::generate();
         assert_eq!(
             index.check(project, "notes.md", id, b"hello", None),
             Existing::New
@@ -605,7 +605,7 @@ mod tests {
             "a different writer with the same id and content is still a conflict"
         );
 
-        let other_id = wisp_protocol::ContextWriteId::generate();
+        let other_id = parallax_protocol::ContextWriteId::generate();
         assert_eq!(
             index.check(project, "notes.md", other_id, b"anything", None),
             Existing::New,
@@ -616,8 +616,8 @@ mod tests {
     #[test]
     fn matching_content_is_recognized_no_matter_how_many_times_it_is_observed() {
         let index = ContextIndex::default();
-        let project = wisp_protocol::ProjectId::generate();
-        let id = wisp_protocol::ContextWriteId::generate();
+        let project = parallax_protocol::ProjectId::generate();
+        let id = parallax_protocol::ContextWriteId::generate();
         index
             .write_protocol(project, "notes.md", id, None, b"hello", || Ok(()))
             .unwrap();
@@ -639,11 +639,11 @@ mod tests {
     #[test]
     fn writer_of_reports_the_last_recorded_writer() {
         let index = ContextIndex::default();
-        let project = wisp_protocol::ProjectId::generate();
+        let project = parallax_protocol::ProjectId::generate();
         assert_eq!(index.writer_of(project, "notes.md"), None);
         index.record_disk_write(project, "notes.md", || Some(b"from disk".to_vec()));
         assert_eq!(index.writer_of(project, "notes.md"), None);
-        let id = wisp_protocol::ContextWriteId::generate();
+        let id = parallax_protocol::ContextWriteId::generate();
         index
             .write_protocol(
                 project,

@@ -1,4 +1,4 @@
-// The `window.wisp` contract. The preload implements it and the renderer types
+// The `window.parallax` contract. The preload implements it and the renderer types
 // against it, so it must not import anything from Node or Electron.
 import type {
   Capabilities,
@@ -7,7 +7,7 @@ import type {
   EventsEventParams,
   EventsSubscribeParams,
   LogId,
-  WispRequests,
+  ParallaxRequests,
 } from "../protocol/generated/protocol";
 
 /** The Appearance setting: follow the OS, or force a theme. */
@@ -22,7 +22,7 @@ export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 export const UPDATE_CHANNELS = ["nightly", "release"] as const;
 export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
 
-export interface WispBridge {
+export interface ParallaxBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
   /** The app's version. */
@@ -62,14 +62,14 @@ export interface WispBridge {
   nameThread(prompt: string): Promise<ThreadName>;
 
   /**
-   * Calls a wispd method on a host. Resolves to its result or its error, also for an unknown
+   * Calls a plxd method on a host. Resolves to its result or its error, also for an unknown
    * host or method; never rejects.
    */
   request<M extends RendererMethod>(
     hostId: string,
     method: M,
-    params: WispRequests[M]["params"],
-  ): Promise<HostResponse<WispRequests[M]["result"]>>;
+    params: ParallaxRequests[M]["params"],
+  ): Promise<HostResponse<ParallaxRequests[M]["result"]>>;
   /**
    * Streams a host's events after `params.after`, surviving reconnects. Ends with a `resync`
    * message when the events are gone, or at once if the host's log isn't `params.logId`
@@ -131,10 +131,10 @@ export type UpdateState = {
 
 export type TerminalMessage = { type: "data"; data: string } | { type: "exit"; exitCode: number };
 
-/** A thread's name: a `title` for lists, and a `slug` to name its worktree branch `wisp/<slug>`. */
+/** A thread's name: a `title` for lists, and a `slug` to name its worktree branch `parallax/<slug>`. */
 export type ThreadName = { title?: string; slug?: string };
 
-/** A host the user added, reached with `ssh <destination> wispd attach` (0022). */
+/** A host the user added, reached with `ssh <destination> plxd attach` (0022). */
 export type SshHost = { id: string; name: string; destination: string };
 
 /** What the Hosts settings edit. The main process checks it and picks the id. */
@@ -142,11 +142,11 @@ export type HostInput = { name: string; destination: string };
 
 /** The methods the renderer may call. Main owns the handshake and event subscriptions. */
 export type RendererMethod = Exclude<
-  keyof WispRequests,
+  keyof ParallaxRequests,
   "initialize" | "events/subscribe" | "events/unsubscribe"
 >;
 
-/** A JSON-RPC error. A wisp error (code -32000) carries `data.kind`. */
+/** A JSON-RPC error. A Parallax error (code -32000) carries `data.kind`. */
 export type RpcError = { code: number; message: string; data?: ErrorData };
 
 export type RpcResponse<R> = { result: R } | { error: RpcError };
@@ -162,15 +162,15 @@ export type SubscribeParams = EventsSubscribeParams & { logId: LogId };
 
 export type SubscriptionMessage =
   | { type: "event"; event: EventsEventParams }
-  /** The subscription ended because wispd can't replay what was missed. */
+  /** The subscription ended because plxd can't replay what was missed. */
   | { type: "resync" }
   /** The subscription ended with an error, such as `projectNotFound`. */
   | { type: "error"; error: RpcError };
 
 export type ConnectionState =
   | { status: "connecting" }
-  /** `capabilities` are what wispd's `initialize` advertised, such as `runOptions`. */
-  | { status: "connected"; wispd: string; protocol: number; capabilities: Capabilities }
+  /** `capabilities` are what plxd's `initialize` advertised, such as `runOptions`. */
+  | { status: "connected"; plxd: string; protocol: number; capabilities: Capabilities }
   /** `retrying` is false once only `retry` can bring it back. */
   | { status: "failed"; error: ConnectionError; retrying: boolean };
 
@@ -185,9 +185,9 @@ export type ConnectionError = {
     | "sshSetup";
   /** For people: what went wrong and how to fix it. */
   message: string;
-  /** wispd's version, when it refused the handshake. */
-  wispd?: string;
-  /** How `wispd attach` exited, or ssh for a host. */
+  /** plxd's version, when it refused the handshake. */
+  plxd?: string;
+  /** How `plxd attach` exited, or ssh for a host. */
   exitCode?: number | null;
   /** The end of attach's stderr, and ssh's for a host, if they wrote any. */
   stderr?: string;

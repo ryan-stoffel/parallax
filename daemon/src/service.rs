@@ -1,5 +1,5 @@
-//! `wispd service`: installs, removes, and reports on the per-user service that keeps
-//! `wispd serve` running: a `LaunchAgent` on macOS ([`launchd`], #61) and a systemd user unit on
+//! `plxd service`: installs, removes, and reports on the per-user service that keeps
+//! `plxd serve` running: a `LaunchAgent` on macOS ([`launchd`], #61) and a systemd user unit on
 //! Linux ([`systemd`], RYA-18), both named after [`DEFAULT_LABEL`] (0010, 0023).
 //!
 //! Each OS module renders its file with a pure function, covered by a golden-file test, and drives
@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
 
-use wisp_protocol::jsonrpc::{Message, Request};
-use wisp_protocol::methods::Initialize;
-use wisp_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
+use parallax_protocol::jsonrpc::{Message, Request};
+use parallax_protocol::methods::Initialize;
+use parallax_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
 
 #[cfg(target_os = "macos")]
 pub use launchd::{install, status, uninstall};
@@ -28,14 +28,14 @@ pub use systemd::{install, status, uninstall};
 
 use crate::paths::DataDir;
 
-/// wispd's service label: wisp's bundle id (`io.github.ryan-stoffel.wisp`, 0006) plus `.wispd`.
+/// plxd's service label: Parallax's bundle id (`io.github.ryan-stoffel.parallax`, 0006) plus `.plxd`.
 /// It is the `LaunchAgent`'s label on macOS, and the systemd unit's name, before `.service`, on
 /// Linux.
-pub const DEFAULT_LABEL: &str = "io.github.ryan-stoffel.wisp.wispd";
+pub const DEFAULT_LABEL: &str = "io.github.ryan-stoffel.parallax.plxd";
 
 /// The environment variable that overrides the label when `--label` is not given. Only tests
 /// should set it, so a test run never touches a real install.
-pub const SERVICE_LABEL_ENV: &str = "WISPD_SERVICE_LABEL";
+pub const SERVICE_LABEL_ENV: &str = "PLXD_SERVICE_LABEL";
 
 /// How long [`status`] and the conflict check in [`install`] wait for an `initialize` answer.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -46,18 +46,18 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub enum ServiceError {
     /// A `serve` is already answering this data folder's socket, and it is not the one the service
     /// manager runs under this label. Starting the service anyway would start a second `serve`
-    /// that loses the race for `wispd.lock` (0009's exit code 3) and gets restarted into the same
+    /// that loses the race for `plxd.lock` (0009's exit code 3) and gets restarted into the same
     /// failure, fighting the first `serve` for the lock.
     #[error(
-        "wispd is already serving {} outside its service; stop it, then run \
-         `wispd service install` again",
+        "plxd is already serving {} outside its service; stop it, then run \
+         `plxd service install` again",
         .data_dir.display()
     )]
     AlreadyRunningOutsideService {
         /// The data folder it is serving.
         data_dir: PathBuf,
     },
-    /// The default label serves only the default data folder, because a plain `wispd attach`
+    /// The default label serves only the default data folder, because a plain `plxd attach`
     /// starts the service under that label for that folder (0010). Another folder needs its own
     /// label.
     #[error(
@@ -72,8 +72,8 @@ pub enum ServiceError {
     /// The home folder is unknown, so the service's file can't be placed.
     #[error("the home folder is unknown")]
     NoHomeDir,
-    /// The running `wispd`'s own path could not be read.
-    #[error("could not find the running wispd's path: {0}")]
+    /// The running `plxd`'s own path could not be read.
+    #[error("could not find the running plxd's path: {0}")]
     CurrentExe(io::Error),
     /// The data folder could not be prepared. See [`crate::server::prepare_data_dir`].
     #[error(transparent)]
@@ -96,7 +96,7 @@ pub enum ServiceError {
     /// A file operation failed.
     #[error("{context}: {source}")]
     Io {
-        /// What wispd was doing.
+        /// What plxd was doing.
         context: String,
         /// The error.
         #[source]
@@ -169,7 +169,7 @@ impl ServiceState {
     }
 }
 
-/// What `wispd service status` reports.
+/// What `plxd service status` reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {
     /// The label checked.
@@ -229,7 +229,7 @@ fn check_label_serves(
 
 /// What every install does before writing its file: refuses when something other than the
 /// service already answers `data_dir` (`ours` says whether the service is what could be
-/// answering), prepares the data folder and its `logs/`, and returns the running `wispd`'s path.
+/// answering), prepares the data folder and its `logs/`, and returns the running `plxd`'s path.
 fn prepare_install(data_dir: &DataDir, ours: bool) -> Result<PathBuf, ServiceError> {
     if !ours && probe_initialize(data_dir) {
         return Err(ServiceError::AlreadyRunningOutsideService {
@@ -261,7 +261,7 @@ fn probe_initialize(data_dir: &DataDir) -> bool {
         InitializeParams {
             protocol: ProtocolRange::SUPPORTED,
             client: ClientInfo {
-                name: "wispd-service".to_owned(),
+                name: "plxd-service".to_owned(),
                 version: crate::version().to_owned(),
                 machine_id: None,
             },
@@ -301,9 +301,9 @@ fn prepare_log_dir(data_dir: &DataDir) -> Result<(), ServiceError> {
         .map_err(|error| ServiceError::io(format!("creating {}", dir.display()), error))
 }
 
-/// The absolute path of the running `wispd` binary, as `std::env::current_exe` reports it.
+/// The absolute path of the running `plxd` binary, as `std::env::current_exe` reports it.
 ///
-/// This is not resolved through symlinks: a package manager that upgrades wispd by relinking a
+/// This is not resolved through symlinks: a package manager that upgrades plxd by relinking a
 /// stable path should keep the service pointing at that stable path. Re-running `install` after
 /// moving the binary picks up its new location either way.
 fn current_exe() -> Result<PathBuf, ServiceError> {
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn the_default_label_serves_only_the_default_data_folder() {
-        let default = DataDir::new("/Users/me/Library/Application Support/wisp").unwrap();
+        let default = DataDir::new("/Users/me/Library/Application Support/parallax").unwrap();
         let other = DataDir::new("/tmp/elsewhere").unwrap();
 
         check_label_serves(DEFAULT_LABEL, &default, Some(&default)).unwrap();

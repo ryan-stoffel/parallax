@@ -90,7 +90,7 @@ function useKeys(hostId: string, connected: boolean, refresh?: number): KeyAccou
   useEffect(() => {
     if (!connected) return;
     let stopped = false;
-    void window.wisp.request(hostId, "accounts/keys/list", {}).then((answer) => {
+    void window.parallax.request(hostId, "accounts/keys/list", {}).then((answer) => {
       if (!stopped && "result" in answer) setKeys(answer.result.accounts);
     });
     return () => {
@@ -100,10 +100,10 @@ function useKeys(hostId: string, connected: boolean, refresh?: number): KeyAccou
   return keys;
 }
 
-/** A failed usage request, for people. A wispd without the method is too old. */
+/** A failed usage request, for people. A plxd without the method is too old. */
 function usageError(error: RpcError): string {
   return error.code === ErrorCodes.MethodNotFound
-    ? "Update wispd on this host to see its usage here."
+    ? "Update plxd on this host to see its usage here."
     : describeError(error);
 }
 
@@ -565,8 +565,8 @@ function HostHistoryLoader({
     let stopped = false;
     // The range's own answer, for its run counts; the longer one is only for the range before.
     void Promise.all([
-      window.wisp.request(host.id, "usage/history", { since }),
-      window.wisp.request(host.id, "usage/history", { since: before }),
+      window.parallax.request(host.id, "usage/history", { since }),
+      window.parallax.request(host.id, "usage/history", { since: before }),
     ]).then(([range, longer]) => {
       if (stopped) return;
       setAnswer({

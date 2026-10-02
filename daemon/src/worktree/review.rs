@@ -12,13 +12,13 @@
 //! any file, ignored ones included, sits where the result adds one. Only then does it move the
 //! branch and working tree, with `git merge --ff-only --no-overwrite-ignore <result>`, whose
 //! two-way checkout keeps every other uncommitted change. If that checkout stops part way (one of
-//! the user's own filters failed, or the branch couldn't move), wispd puts back only the files
+//! the user's own filters failed, or the branch couldn't move), plxd puts back only the files
 //! that still hold exactly what git wrote, and names any that changed meanwhile; after a lock
 //! failure or a timeout it puts back nothing (see `WorktreeManager::roll_back`). It never pushes.
 //!
 //! Those calls use the user's own configuration, since the checkout is theirs: global config,
 //! filters such as Git LFS's, merge drivers, and identity. Hooks are the exception: like every git
-//! call wispd makes, they run with `core.hooksPath=/dev/null` (see `WorktreeManager::run_git`).
+//! call plxd makes, they run with `core.hooksPath=/dev/null` (see `WorktreeManager::run_git`).
 //! The merge commit is not signed, because signing can wait on a prompt.
 
 use std::collections::{HashMap, HashSet};
@@ -144,7 +144,7 @@ pub struct Blob {
 pub enum MergeHow {
     /// The branch moved forward to the commit.
     FastForward,
-    /// wispd made a merge commit.
+    /// plxd made a merge commit.
     Merge,
     /// The branch already contained the commit.
     UpToDate,
@@ -600,7 +600,7 @@ impl WorktreeManager {
                     let paths: Vec<&str> = changes.iter().map(|(_, path)| path.as_str()).collect();
                     return Err(AcceptError::Refused(format!(
                         "git did not finish updating {into} in {repo} within {}s, and was \
-                         stopped. It left {} behind, so wispd put nothing back: these files may \
+                         stopped. It left {} behind, so plxd put nothing back: these files may \
                          be partly updated: {}. If no other git is running there, remove the \
                          lock, then check git status",
                         self.merge_timeout.as_secs(),
@@ -700,7 +700,7 @@ impl WorktreeManager {
             Ok(states) => states,
             Err(error) => {
                 return AcceptError::Refused(format!(
-                    "git could not update {into} in {repo} ({failure}), and wispd could not tell \
+                    "git could not update {into} in {repo} ({failure}), and plxd could not tell \
                      which files it had written ({error}), so it put nothing back; check git \
                      status for {}",
                     list_paths(&paths)
@@ -726,10 +726,9 @@ impl WorktreeManager {
         let left = self.put_back(repo_root, head, &mut restore, &remove).await;
         let mut message = format!("git could not update {into} in {repo} ({failure}). ");
         if left.is_empty() && foreign.is_empty() {
-            message
-                .push_str("wispd put back the files it had started to write, so nothing changed");
+            message.push_str("plxd put back the files it had started to write, so nothing changed");
         } else {
-            message.push_str("wispd put back the files only git had written");
+            message.push_str("plxd put back the files only git had written");
             if !foreign.is_empty() {
                 let _ = write!(
                     message,

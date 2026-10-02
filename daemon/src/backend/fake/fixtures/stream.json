@@ -5,7 +5,7 @@
   {"emit": {"kind": "text", "messageId": "m1", "text": "Reading the repo."}},
   {"emit": {"kind": "toolCall", "callId": "c1", "name": "Read", "input": {"file_path": "README.md"}}},
   {"sleepMs": 20},
-  {"emit": {"kind": "toolResult", "callId": "c1", "status": "ok", "output": "# wisp"}},
+  {"emit": {"kind": "toolResult", "callId": "c1", "status": "ok", "output": "# parallax"}},
   {"emit": {"kind": "toolCall", "callId": "c2", "name": "Write", "input": {"file_path": "x"}}},
   {"emit": {"kind": "toolResult", "callId": "c2", "status": "denied"}},
   {"emit": {"kind": "usage", "model": "fake-model", "inputTokens": 1200, "outputTokens": 80, "cacheReadTokens": 5000, "cacheWriteTokens": 300, "costUsdMicros": 21000}},

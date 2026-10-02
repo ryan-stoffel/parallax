@@ -3,15 +3,15 @@
 
 use std::sync::Arc;
 
-use serde_json::Value;
-use wisp_protocol::jsonrpc::{ErrorObject, Request};
-use wisp_protocol::methods::{
+use parallax_protocol::jsonrpc::{ErrorObject, Request};
+use parallax_protocol::methods::{
     RepoAdd, RequestMethod, ThreadArchive, ThreadDelete, ThreadList, ThreadStart,
 };
-use wisp_protocol::{
+use parallax_protocol::{
     RepoAddParams, RepoAddResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
     ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
 };
+use serde_json::Value;
 
 use super::{Context, handle};
 use crate::threads;

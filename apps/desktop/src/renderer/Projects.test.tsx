@@ -9,7 +9,7 @@ import type {
   RpcResponse,
   SshHost,
   SubscriptionMessage,
-  WispBridge,
+  ParallaxBridge,
 } from "../preload/bridge";
 import type {
   AgentOutputItem,
@@ -17,7 +17,7 @@ import type {
   LoggedEvent,
   Project,
   Repo,
-  WispEvent,
+  ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
 
@@ -39,10 +39,10 @@ Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
   },
 });
 
-const wisp: Repo = {
-  id: "r-wisp",
-  name: "wisp",
-  path: "/src/wisp",
+const parallax: Repo = {
+  id: "r-parallax",
+  name: "parallax",
+  path: "/src/parallax",
   createdAt: "2026-09-29T09:00:00Z",
 };
 const project = (name: string, updatedAt: string): Project => ({
@@ -90,7 +90,7 @@ beforeEach(() => {
   states = {};
   stateListeners = new Set();
   answers = {
-    "thread/list": () => ({ result: { repos: [wisp], threads: [], seq: 7 } }),
+    "thread/list": () => ({ result: { repos: [parallax], threads: [], seq: 7 } }),
     "agent/list": () => ({ result: { runs: [], seq: 7 } }),
     "project/list": () => ({
       result: {
@@ -102,11 +102,11 @@ beforeEach(() => {
       },
     }),
   };
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async (hostId) =>
-      states[hostId] ?? { status: "connected", wispd: "0.1.0", protocol: 1, capabilities },
+      states[hostId] ?? { status: "connected", plxd: "0.1.0", protocol: 1, capabilities },
     onConnectionState: (listener) => {
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);
@@ -119,7 +119,7 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => sshHosts,
     onHosts: () => () => {},
-  } as Partial<WispBridge> as WispBridge;
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};
@@ -223,15 +223,15 @@ const scratch: Repo = { ...repo("scratch"), scratch: true };
 /** `thread/list` answering each host with its own repositories, this computer's by default. */
 const reposOn =
   (byHost: Record<string, Repo[]>): Answer =>
-  (_params, host) => ({ result: { repos: byHost[host] ?? [wisp], threads: [], seq: 7 } });
+  (_params, host) => ({ result: { repos: byHost[host] ?? [parallax], threads: [], seq: 7 } });
 const connected: ConnectionState = {
   status: "connected",
-  wispd: "0.1.0",
+  plxd: "0.1.0",
   protocol: 1,
   capabilities: {},
 };
 
-test("lists wispd's projects, most recently active first, and adds one from project.created", async () => {
+test("lists plxd's projects, most recently active first, and adds one from project.created", async () => {
   await renderApp();
   expect(projectRows()).toEqual(["photon3h", "ember3d"]);
 
@@ -242,14 +242,14 @@ test("lists wispd's projects, most recently active first, and adds one from proj
         subscription: "s-1",
         seq: 8,
         time: "2026-09-29T12:00:00Z",
-        event: { kind: "project.created", project: project("wisp", "2026-09-29T12:00:00Z") },
+        event: { kind: "project.created", project: project("parallax", "2026-09-29T12:00:00Z") },
       },
     }),
   );
-  expect(projectRows()).toEqual(["wispnow", "photon3h", "ember3d"]);
+  expect(projectRows()).toEqual(["parallaxnow", "photon3h", "ember3d"]);
 });
 
-test("a Project is one row that opens its chat: its repository and branch, with the composer off on an older wispd", async () => {
+test("a Project is one row that opens its chat: its repository and branch, with the composer off on an older plxd", async () => {
   await renderApp();
   const row = [...document.querySelectorAll("#sidebar li button")].find(
     (b) => b.textContent === "ember3d",
@@ -267,16 +267,16 @@ test("a Project is one row that opens its chat: its repository and branch, with 
   expect(main.textContent).toContain("/src/ember");
   expect(main.textContent).toContain("main");
   expect(composer()!.getAttribute("aria-placeholder")).toBe(
-    "This host's wispd can't run a Project's coordinator yet",
+    "This host's plxd can't run a Project's coordinator yet",
   );
   expect(main.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.disabled).toBe(true);
 });
 
-test("Create Project names it after its repository, shows wispd's error, retries with the same id, then opens it", async () => {
+test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
   answers["project/create"] = () => ({
     error: {
       code: -32000,
-      message: "/src/wisp is not the top folder of a git repository: it has no .git.",
+      message: "/src/parallax is not the top folder of a git repository: it has no .git.",
       data: { kind: "notARepository" },
     },
   });
@@ -284,42 +284,42 @@ test("Create Project names it after its repository, shows wispd's error, retries
   await openNewProject();
   expect(dialog().open).toBe(true);
   // A large name under the Project's icon, then the Workspace: the open host's first repository.
-  expect(nameBox().value).toBe("wisp");
+  expect(nameBox().value).toBe("parallax");
   expect(nameBox().placeholder).toBe("New Project");
-  expect(workspaceButton()).toBe("Workspace: wisp on This Mac");
+  expect(workspaceButton()).toBe("Workspace: parallax on This Mac");
   // The coordinator's model is picked per message (RYA-46), not here.
   expect(dialog().querySelector('[aria-label^="Model"]')).toBeNull();
   typeInto(nameBox(), "");
   expect(inDialog("Create Project")!.disabled).toBe(true);
-  typeInto(nameBox(), "wisp");
+  typeInto(nameBox(), "parallax");
 
   await click(inDialog("Create Project"));
   expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
-    "/src/wisp is not the top folder of a git repository: it has no .git.",
+    "/src/parallax is not the top folder of a git repository: it has no .git.",
   );
   expect(dialog().open).toBe(true);
 
   answers["project/create"] = (p) => ({
-    result: { project: { ...project("wisp", "2026-09-29T12:00:00Z"), id: p["id"] } },
+    result: { project: { ...project("parallax", "2026-09-29T12:00:00Z"), id: p["id"] } },
   });
   await click(inDialog("Create Project"));
   const [first, retry] = calls("project/create");
   expect(first).toEqual({
     id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7/),
-    name: "wisp",
-    repoPath: "/src/wisp",
+    name: "parallax",
+    repoPath: "/src/parallax",
   });
   expect(retry).toEqual(first);
   expect(hostsOf("project/create")).toEqual(["local", "local"]);
   expect(dialog().open).toBe(false);
-  expect(crumbs()).toEqual(["This Mac", "wisp"]);
-  expect(projectRows()[0]).toBe("wispnow");
+  expect(crumbs()).toEqual(["This Mac", "parallax"]);
+  expect(projectRows()[0]).toBe("parallaxnow");
 });
 
 test("Choose folder… in the Workspace menu adds a folder on this computer and names the project after it until one is typed", async () => {
   pickFolder.mockResolvedValue("/src/other");
   answers["repo/add"] = (p) => ({
-    result: { repo: { ...wisp, id: p["id"], name: "other", path: "/src/other" } },
+    result: { repo: { ...parallax, id: p["id"], name: "other", path: "/src/other" } },
   });
   answers["project/create"] = (p) => ({
     result: { project: { ...project("Other work", "2026-09-29T12:00:00Z"), id: p["id"] } },
@@ -367,12 +367,12 @@ test("a repository on another host creates the Project there, then opens that ho
   // This computer, then each SSH host, then GitHub, each host listing its own repositories with
   // no scratch entry. Browsing a host and cloning aren't available yet (RYA-32, RYA-33).
   expect(workspaceGroups()).toEqual([
-    ["This Mac", "wisp", "Choose folder…"],
+    ["This Mac", "parallax", "Choose folder…"],
     ["Mac mini", "api", "Browse foldersNot available yet"],
     ["GitHub", "Clone a repositoryNot available yet"],
   ]);
   expect(hostsOf("thread/list")).toContain(mini.id);
-  expect(workspaceItem("wisp")!.getAttribute("aria-checked")).toBe("true");
+  expect(workspaceItem("parallax")!.getAttribute("aria-checked")).toBe("true");
   expect(workspaceItem("Browse foldersNot available yet")!.disabled).toBe(true);
   expect(workspaceItem("Clone a repositoryNot available yet")!.disabled).toBe(true);
 
@@ -413,7 +413,7 @@ test("a host that is connecting or can't be reached says so in its group, and li
   await openNewProject();
   await openWorkspaces();
   expect(workspaceGroups()).toEqual([
-    ["This Mac", "wisp", "Choose folder…"],
+    ["This Mac", "parallax", "Choose folder…"],
     ["Mac mini", "Browse foldersNot available yet"],
     ["Studio", "Browse foldersNot available yet"],
     ["GitHub", "Clone a repositoryNot available yet"],
@@ -432,7 +432,7 @@ test("a host that is connecting or can't be reached says so in its group, and li
 test("the Workspace menu searches every host's repositories, Enter picks the first match, and Up and Down pass unavailable entries", async () => {
   sshHosts = [mini];
   answers["thread/list"] = reposOn({
-    local: [wisp, repo("api-docs", "/src/api-docs")],
+    local: [parallax, repo("api-docs", "/src/api-docs")],
     [mini.id]: [repo("api"), repo("web")],
   });
   await renderApp();
@@ -458,12 +458,12 @@ test("the Workspace menu searches every host's repositories, Enter picks the fir
 
   typeInto(searchBox(), "");
   press("ArrowDown");
-  expect(document.activeElement?.textContent).toBe("wisp");
+  expect(document.activeElement?.textContent).toBe("parallax");
   // From the top, Up wraps past GitHub's and Mac mini's unavailable entries to Mac mini's last.
   press("ArrowUp");
   expect(document.activeElement?.textContent).toBe("web");
   press("ArrowDown");
-  expect(document.activeElement?.textContent).toBe("wisp");
+  expect(document.activeElement?.textContent).toBe("parallax");
 });
 
 const projectsList = () =>
@@ -615,7 +615,7 @@ test("a rename left as it opened sends nothing, even after another client rename
   expect(projectRows()).toEqual(["photon3h", "ember (renamed elsewhere)3d"]);
 });
 
-test("a rename shows its name while wispd answers, then wispd's error under the projects list", async () => {
+test("a rename shows its name while plxd answers, then plxd's error under the projects list", async () => {
   capabilities = { projectEdit: {} };
   let release = () => {};
   answers["project/update"] = async () => {
@@ -710,7 +710,7 @@ test("an icon name or color this app doesn't know draws FolderKanban or the acce
           ...project("photon", "2026-09-29T09:00:00Z"),
           icon: { name: "bug", color: "chartreuse" },
         },
-        { ...project("wisp", "2026-09-28T09:00:00Z"), icon: { name: "nope" } },
+        { ...project("parallax", "2026-09-28T09:00:00Z"), icon: { name: "nope" } },
       ],
       seq: 7,
     },
@@ -718,7 +718,7 @@ test("an icon name or color this app doesn't know draws FolderKanban or the acce
   await renderApp();
   expect(rowIcon("ember")).toEqual(["folder-kanban", "text-project-red"]);
   expect(rowIcon("photon")).toEqual(["bug", "text-accent"]);
-  expect(rowIcon("wisp")).toEqual(["folder-kanban", "text-accent"]);
+  expect(rowIcon("parallax")).toEqual(["folder-kanban", "text-accent"]);
   await click(rowButton("ember"));
   const crumbIcon = document.querySelector('[aria-label="Breadcrumb"] li:last-child svg');
   expect(looks(crumbIcon)).toEqual(["folder-kanban", "text-project-red"]);
@@ -747,10 +747,19 @@ test("Create Project's icon opens the picker, project/create sends the chosen ic
   let fails = 2;
   answers["project/create"] = (p) =>
     fails-- > 0
-      ? { error: { code: -32000, message: "/src/wisp is not the top folder of a git repository" } }
+      ? {
+          error: {
+            code: -32000,
+            message: "/src/parallax is not the top folder of a git repository",
+          },
+        }
       : {
           result: {
-            project: { ...project("wisp", "2026-09-29T12:00:00Z"), id: p["id"], icon: p["icon"] },
+            project: {
+              ...project("parallax", "2026-09-29T12:00:00Z"),
+              id: p["id"],
+              icon: p["icon"],
+            },
           },
         };
   await renderApp();
@@ -770,8 +779,8 @@ test("Create Project's icon opens the picker, project/create sends the chosen ic
   const [first, second, retry] = calls("project/create");
   expect(first).toEqual({
     id: expect.any(String),
-    name: "wisp",
-    repoPath: "/src/wisp",
+    name: "parallax",
+    repoPath: "/src/parallax",
     icon: { name: "rocket", color: "teal" },
   });
   expect(second).toEqual({
@@ -782,7 +791,7 @@ test("Create Project's icon opens the picker, project/create sends the chosen ic
   expect(second!["id"]).not.toBe(first!["id"]);
   expect(retry).toEqual(second);
   expect(dialog().open).toBe(false);
-  expect(rowIcon("wisp")).toEqual(["bug", "text-project-teal"]);
+  expect(rowIcon("parallax")).toEqual(["bug", "text-project-teal"]);
 
   // It opens again on the default.
   await openNewProject();
@@ -806,7 +815,7 @@ test("without projectEdit, a Project row has no actions and Create Project's ico
   expect(dialogIcon()).toEqual(["folder-kanban", "text-accent"]);
 });
 
-test("Create Project's icon follows the Workspace's host: an icon only where that host's wispd keeps one", async () => {
+test("Create Project's icon follows the Workspace's host: an icon only where that host's plxd keeps one", async () => {
   sshHosts = [mini];
   states[mini.id] = { ...connected, capabilities: { projectEdit: {} } };
   const api = repo("api");
@@ -816,7 +825,7 @@ test("Create Project's icon follows the Workspace's host: an icon only where tha
   });
   await renderApp();
   await openNewProject();
-  // This computer's wispd has no projectEdit here.
+  // This computer's plxd has no projectEdit here.
   expect(iconButton()).toBeNull();
 
   await openWorkspaces();
@@ -827,14 +836,14 @@ test("Create Project's icon follows the Workspace's host: an icon only where tha
   expect(dialogIcon()).toEqual(["rocket", "text-accent"]);
   await click(inDialog("Create Project"));
 
-  await click(workspaceItem("wisp"));
+  await click(workspaceItem("parallax"));
   expect(iconButton()).toBeNull();
   expect(dialogIcon()).toEqual(["folder-kanban", "text-accent"]);
   await click(inDialog("Create Project"));
 
   expect(calls("project/create")).toEqual([
     { id: expect.any(String), name: "api", repoPath: "/srv/api", icon: { name: "rocket" } },
-    { id: expect.any(String), name: "wisp", repoPath: "/src/wisp" },
+    { id: expect.any(String), name: "parallax", repoPath: "/src/parallax" },
   ]);
   expect(hostsOf("project/create")).toEqual([mini.id, "local"]);
 });
@@ -997,7 +1006,7 @@ function emberWith(old: AgentRun) {
 }
 const oldId = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
 
-test("a coordinator wispd can't resume offers Start over, which replaces it with the refused message", async () => {
+test("a coordinator plxd can't resume offers Start over, which replaces it with the refused message", async () => {
   emberWith({
     ...coordinatorRun(oldId, "Add a dark mode"),
     status: "completed",
@@ -1058,14 +1067,14 @@ const subagent = (id: string, prompt: string, more: Partial<AgentRun> = {}): Age
 });
 const login = subagent("01a0d391-0000-7000-8000-000000000001", "Fix the login bug\nwith a test", {
   status: "completed",
-  branch: "wisp/login",
+  branch: "parallax/login",
   diff: { commit: "c1", files: 2, insertions: 12, deletions: 3 },
   sessionId: "s-1",
 });
 const docs = subagent("01a0d391-0000-7000-8000-000000000002", "Write the docs", {
   coordinatorThread: undefined,
   accountId: "01a0d34b-3c4d-7e5f-a061-7b8c9d0e1f22",
-  branch: "wisp/docs",
+  branch: "parallax/docs",
 });
 /**
  * Ember with a coordinator and `runs` after it, served by `agent/list` and `agent/events`, open
@@ -1107,11 +1116,11 @@ const agentRow = (title: string) =>
 test("a Project's Agents view lists its subagents newest first, without its coordinator, and keeps them live", async () => {
   await openEmberAgents(login, docs);
   expect(agentRows()).toEqual([
-    "Write the docsby youWorkingwisp/docsAPI key",
-    "Fix the login bugby coordinatorDonewisp/login+12 −3Claude subscription",
+    "Write the docsby youWorkingparallax/docsAPI key",
+    "Fix the login bugby coordinatorDoneparallax/login+12 −3Claude subscription",
   ]);
 
-  const event = (seq: number, e: WispEvent) =>
+  const event = (seq: number, e: ParallaxEvent) =>
     act(async () =>
       deliver({ type: "event", event: { subscription: "s-2", seq, time: "", event: e } }),
     );
@@ -1129,8 +1138,8 @@ test("a Project's Agents view lists its subagents newest first, without its coor
   });
   expect(agentRows()).toEqual([
     "Add the testsby coordinatorWorkingClaude subscription",
-    "Write the docsby youDonewisp/docs+4 −0API key",
-    "Fix the login bugby coordinatorDonewisp/login+12 −3Claude subscription",
+    "Write the docsby youDoneparallax/docs+4 −0API key",
+    "Fix the login bugby coordinatorDoneparallax/login+12 −3Claude subscription",
   ]);
 });
 
@@ -1276,7 +1285,7 @@ const planAsk = (input: Record<string, string>): AgentOutputItem[] => [
 ];
 /**
  * Ember open on its coordinator, if it has one, with `runs` after it. Each run's log is its start,
- * then `items` for it as one output. wispd advertises approvals, and allows what's answered.
+ * then `items` for it as one output. plxd advertises approvals, and allows what's answered.
  */
 async function openEmberAsking(
   coordinator: AgentRun | undefined,
@@ -1322,7 +1331,7 @@ const pinnedButton = (name: string) =>
   [...(pinned()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === name);
 const asking = (run: AgentRun): AgentRun => ({ ...run, approvals: true });
 
-test("with approvals, a coordinator and a subagent started here ask wispd to forward their requests", async () => {
+test("with approvals, a coordinator and a subagent started here ask plxd to forward their requests", async () => {
   capabilities = { coordinator: {}, approvals: {} };
   answers["accounts/defaults/get"] = () => ({
     result: { coordinator: { kind: "subscription", backend: "claude" } },

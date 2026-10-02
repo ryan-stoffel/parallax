@@ -8,8 +8,8 @@ import { expect, test, type ElectronApplication, type Page } from "@playwright/t
 import { uuidv7 } from "../src/renderer/uuidv7";
 import { close, launch, printFailure, servePids, type Launched } from "./launch";
 
-// The built app against a real wispd whose workers are the fake backend playing agent.json
-// (RYA-16). See launch.ts for the wispd it needs.
+// The built app against a real plxd whose workers are the fake backend playing agent.json
+// (RYA-16). See launch.ts for the plxd it needs.
 
 test.describe.configure({ mode: "serial" });
 
@@ -24,10 +24,10 @@ test.beforeAll(async () => {
 
 /**
  * A fake Codex, for the sign-in test: signed out until `codex login` has read a line. Returns its
- * folder, which goes first on PATH, so wispd finds it before any real Codex.
+ * folder, which goes first on PATH, so plxd finds it before any real Codex.
  */
 function fakeCodex(): string {
-  const bin = mkdtempSync(path.join(tmpdir(), "wisp-e2e-bin-"));
+  const bin = mkdtempSync(path.join(tmpdir(), "parallax-e2e-bin-"));
   const marker = path.join(bin, "signed-in");
   if (process.platform === "win32") {
     const script = [
@@ -58,14 +58,14 @@ test.afterEach(async () => {
 
 test.afterAll(() => close(launched));
 
-test("connects to wispd", async () => {
-  await expect(page.getByRole("status").filter({ hasText: "Connected · wispd" })).toBeVisible();
+test("connects to plxd", async () => {
+  await expect(page.getByRole("status").filter({ hasText: "Connected · plxd" })).toBeVisible();
 });
 
 test("starts a thread and shows the agent's output", async () => {
   // A fresh host has no default account for threads, and the fake's is `fake`. The app only
-  // offers signed-in vendor CLIs, which wispd finds by running them, so set it directly.
-  const set = await page.evaluate(`window.wisp.request("local", "accounts/defaults/set", {
+  // offers signed-in vendor CLIs, which plxd finds by running them, so set it directly.
+  const set = await page.evaluate(`window.parallax.request("local", "accounts/defaults/set", {
     role: "worker",
     account: { kind: "subscription", backend: "fake" },
   })`);
@@ -144,7 +144,7 @@ test("the composer grows upward as it fills, up to 40% of the window (RYA-184)",
 test("a follow-up's text is still there after a reload (RYA-92)", async () => {
   await page.getByRole("textbox", { name: "Message" }).fill("Check the links too");
   await page.getByRole("button", { name: "Send" }).click();
-  // The resumed fake answers again, after wispd logged the follow-up's turnStarted.
+  // The resumed fake answers again, after plxd logged the follow-up's turnStarted.
   const said = page.getByRole("log", { name: "Transcript" }).getByText("The fake agent is on it.");
   await expect(said).toHaveCount(2);
 
@@ -180,7 +180,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
   const sent = transcript.getByRole("img", { name: "Image", exact: true });
   await expect(sent).toBeVisible();
 
-  // Rebuilt from the log, the image comes from wispd.
+  // Rebuilt from the log, the image comes from plxd.
   await page.reload();
   await page.getByRole("button", { name: /Tidy up the README/ }).click();
   await expect(sent).toBeVisible();
@@ -205,11 +205,11 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
 });
 
 test("creates a project on a repository it adds, and opens it (RYA-166)", async () => {
-  const repo = path.join(mkdtempSync(path.join(tmpdir(), "wisp-e2e-repo-")), "ember");
+  const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "ember");
   mkdirSync(repo);
   execFileSync("git", ["init", "-q", repo]);
   // A coordinator runs on a copy of the latest commit, so the repository needs one (0024).
-  const identity = ["-c", "user.name=wisp", "-c", "user.email=wisp@localhost"];
+  const identity = ["-c", "user.name=parallax", "-c", "user.email=parallax@localhost"];
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The native folder picker can't be driven, so it answers with the repository.
   await app.evaluate(({ dialog }, folder) => {
@@ -232,11 +232,11 @@ test("creates a project on a repository it adds, and opens it (RYA-166)", async 
   await expect(projects.getByRole("listitem")).toHaveText([/^ember/]);
 });
 
-test("chats with the project's coordinator, whose transcript outlives a reload and a wispd restart (RYA-46)", async () => {
+test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (RYA-46)", async () => {
   // Reconnecting after the restart waits out the app's backoff.
   test.slow();
   // As for threads: the fake runs coordinators once it's their default.
-  const set = await page.evaluate(`window.wisp.request("local", "accounts/defaults/set", {
+  const set = await page.evaluate(`window.parallax.request("local", "accounts/defaults/set", {
     role: "coordinator",
     account: { kind: "subscription", backend: "fake" },
   })`);
@@ -264,12 +264,12 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await projects.getByRole("button", { name: /^ember/ }).click();
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 
-  // Stop wispd with the coordinator running. The app reconnects through a new `serve`, which
+  // Stop plxd with the coordinator running. The app reconnects through a new `serve`, which
   // marks the run interrupted, and the transcript loads again.
   const [pid] = servePids(launched.dataDir);
   expect(pid).toBeGreaterThan(1);
   process.kill(pid!, "SIGTERM");
-  await expect(transcript.getByText(/^Interrupted when wispd stopped/)).toBeVisible({
+  await expect(transcript.getByText(/^Interrupted when plxd stopped/)).toBeVisible({
     timeout: 45_000,
   });
   expect(servePids(launched.dataDir).length).toBeGreaterThan(1);
@@ -290,8 +290,8 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
   const agents = panel.getByRole("list", { name: "Agents" });
   await expect(agents.getByRole("button", { name: /^Write the changelog.*by you/ })).toBeVisible();
 
-  // One the coordinator started, as `wispd mcp`'s spawn_agent does (0019): it arrives by event.
-  const listed = (await page.evaluate(`window.wisp.request("local", "project/list", {})`)) as {
+  // One the coordinator started, as `plxd mcp`'s spawn_agent does (0019): it arrives by event.
+  const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
     result: { projects: { id: string; coordinator: string }[] };
   };
   const ember = listed.result.projects[0]!;
@@ -303,7 +303,7 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
     coordinatorThread: ember.coordinator,
   };
   const started = await page.evaluate(
-    `window.wisp.request("local", "agent/start", ${JSON.stringify(params)})`,
+    `window.parallax.request("local", "agent/start", ${JSON.stringify(params)})`,
   );
   expect(started).not.toHaveProperty("error");
   const tag = agents.getByRole("button", { name: /^Tag the release.*by coordinator/ });
@@ -321,7 +321,7 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
 
   await crumbs.getByRole("button", { name: "ember" }).click();
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
-  await expect(transcript.getByText("From wisp: subagents finished")).toBeVisible();
+  await expect(transcript.getByText("From parallax: subagents finished")).toBeVisible();
 });
 
 test("renames the project and picks its icon from its row, and both outlive a reload (RYA-230)", async () => {
@@ -360,7 +360,7 @@ test("renames the project and picks its icon from its row, and both outlive a re
   // The name and icon are the host's (0032).
   await page.reload();
   await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
-  const listed = (await page.evaluate(`window.wisp.request("local", "project/list", {})`)) as {
+  const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
     result: { projects: { name: string; icon?: { name: string; color?: string } }[] };
   };
   expect(listed.result.projects).toMatchObject([

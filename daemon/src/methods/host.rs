@@ -3,14 +3,14 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use tracing::info;
-use wisp_protocol::framing::MAX_FRAME_BYTES;
-use wisp_protocol::jsonrpc::{ErrorObject, Request};
-use wisp_protocol::{
+use parallax_protocol::framing::MAX_FRAME_BYTES;
+use parallax_protocol::jsonrpc::{ErrorObject, Request};
+use parallax_protocol::{
     Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostVersionParams,
     HostVersionResult, IncompatibleProtocolDetail, InitializeParams, InitializeProtocol,
     InitializeResult, ProtocolRange,
 };
+use tracing::info;
 
 use super::Context;
 use crate::images;
@@ -40,7 +40,7 @@ pub(crate) fn initialize(
             &IncompatibleProtocolDetail {
                 requested: protocol,
                 supported: ProtocolRange::SUPPORTED,
-                wispd: crate::version().to_owned(),
+                plxd: crate::version().to_owned(),
             },
         ));
     };
@@ -59,7 +59,7 @@ pub(crate) fn initialize(
     );
     let result = InitializeResult {
         protocol: version,
-        wispd: crate::version().to_owned(),
+        plxd: crate::version().to_owned(),
         log_id: daemon.log.id(),
         capabilities: capabilities_advertised(),
         max_frame_bytes: u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX),
@@ -71,27 +71,27 @@ pub(crate) fn initialize(
     Ok((session, result))
 }
 
-/// The capabilities this wispd advertises. M2 adds `accounts` (#117) and `agentClis` (#114),
+/// The capabilities this plxd advertises. M2 adds `accounts` (#117) and `agentClis` (#114),
 /// distinct capabilities since the two features (stored API keys and detected CLIs) can ship
 /// independently; M3 adds `agents` (#156): the `agent/*` methods and `agent.*` events,
 /// `agentReview` (#157): `agent/diff`, `agent/file`, `agent/accept`, `agent/requestChanges`, and
 /// `agent.accepted`, so an editor can tell a host that reviews runs from one that only runs them,
 /// `threads` (#110): normal threads, with the `thread/*` and `repo/*` methods and the `repo.*`
 /// and `thread.*` events, `runOptions` (RYA-97): `agent/start` and `thread/start` take
-/// `model`, `effort`, and `permission`, which an older wispd would silently ignore (0007), and
+/// `model`, `effort`, and `permission`, which an older plxd would silently ignore (0007), and
 /// `sendOptions` (RYA-161): `agent/send` takes `effort` and `permission`, likewise, and its
 /// successor `sendModel` (RYA-163): `agent/send` also takes `model`, which a `sendOptions`-only
-/// wispd would silently ignore. M4 adds `coordinator` (RYA-41, 0024): `project/start` and
+/// plxd would silently ignore. M4 adds `coordinator` (RYA-41, 0024): `project/start` and
 /// `Project.coordinator`, and `openPr` (RYA-168): `agent/openPr`. `promptImages` (RYA-191, 0026):
 /// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
-/// older wispd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
+/// older plxd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
 /// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
 /// `approvals` (RYA-222, 0031): `agent/start`, `thread/start`, and `project/start` take
-/// `approvals`, which an older wispd would silently ignore. A run started with it, in Manual,
+/// `approvals`, which an older plxd would silently ignore. A run started with it, in Manual,
 /// Auto, or Plan, asks through `approvalRequested` items, which `agent/approve` answers, instead
 /// of denying what would prompt.
 /// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
-/// and `project/create`, which an older wispd would silently drop.
+/// and `project/create`, which an older plxd would silently drop.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -126,7 +126,7 @@ pub(crate) fn health(context: &Context, _: HostHealthParams) -> HostHealthResult
 
 pub(crate) fn version(context: &Context, _: HostVersionParams) -> HostVersionResult {
     HostVersionResult {
-        wispd: crate::version().to_owned(),
+        plxd: crate::version().to_owned(),
         protocol: ProtocolRange::SUPPORTED,
         os: context.daemon.os.clone(),
         arch: std::env::consts::ARCH.to_owned(),

@@ -1,22 +1,22 @@
-//! `wispd mcp`, the coordinator's wisp tools (#195, decision 0019): the built binary, speaking
-//! MCP on stdio, against an in-process wispd whose workers run on the fake backend in a real git
+//! `plxd mcp`, the coordinator's Parallax tools (#195, decision 0019): the built binary, speaking
+//! MCP on stdio, against an in-process plxd whose workers run on the fake backend in a real git
 //! repository.
 
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use parallax_protocol::methods::{AgentList, AgentStart, ContextList, ContextRead, ProjectStart};
+use parallax_protocol::{
+    AccountChoice, AgentListParams, AgentRun, AgentStatus, ContextListParams, ContextReadParams,
+    CoordinatorThreadId, ProjectId, ProjectStartParams, RunId,
+};
+use plxd::backend::fake::Step;
+use plxd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, TOOLS};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
-use wisp_protocol::methods::{AgentList, AgentStart, ContextList, ContextRead, ProjectStart};
-use wisp_protocol::{
-    AccountChoice, AgentListParams, AgentRun, AgentStatus, ContextListParams, ContextReadParams,
-    CoordinatorThreadId, ProjectId, ProjectStartParams, RunId,
-};
-use wispd::backend::fake::Step;
-use wispd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, TOOLS};
 
 use crate::agents::{Conn, Host, create, end_turn, fake, init, project_params, start_params, text};
 use crate::support::{PATIENCE, temp_dir};
@@ -35,7 +35,7 @@ fn worker() -> Vec<Step> {
     ]
 }
 
-/// `wispd mcp` bound to `project` and `thread`, initialized.
+/// `plxd mcp` bound to `project` and `thread`, initialized.
 struct Mcp {
     child: Child,
     stdin: ChildStdin,
@@ -44,13 +44,13 @@ struct Mcp {
 }
 
 fn command(data_dir: &Path, project: ProjectId, thread: CoordinatorThreadId) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_wispd"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_plxd"));
     command
         .args(["mcp", "--data-dir"])
         .arg(data_dir)
         .args(["--project", &project.to_string()])
         .args(["--coordinator-thread", &thread.to_string()])
-        .env_remove("WISPD_DATA_DIR")
+        .env_remove("PLXD_DATA_DIR")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -62,7 +62,7 @@ impl Mcp {
     async fn start(data_dir: &Path, project: ProjectId, thread: CoordinatorThreadId) -> Self {
         let mut child = command(data_dir, project, thread)
             .spawn()
-            .expect("spawn wispd mcp");
+            .expect("spawn plxd mcp");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap()).lines();
         let mut mcp = Self {
@@ -77,12 +77,12 @@ impl Mcp {
                 json!({
                     "protocolVersion": "2025-06-18",
                     "capabilities": {},
-                    "clientInfo": {"name": "wispd-tests", "version": "0.0.0"},
+                    "clientInfo": {"name": "plxd-tests", "version": "0.0.0"},
                 }),
             )
             .await;
         assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
-        assert_eq!(initialized["result"]["serverInfo"]["name"], "wispd");
+        assert_eq!(initialized["result"]["serverInfo"]["name"], "plxd");
         assert!(initialized["result"]["capabilities"]["tools"].is_object());
         mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
             .await;
@@ -98,7 +98,7 @@ impl Mcp {
     async fn read(&mut self) -> Option<Value> {
         let line = timeout(PATIENCE, self.stdout.next_line())
             .await
-            .expect("a line from wispd mcp")
+            .expect("a line from plxd mcp")
             .unwrap()?;
         Some(serde_json::from_str(&line).expect("a JSON line"))
     }
@@ -358,7 +358,7 @@ async fn the_tools_reach_only_the_bound_project() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("wispd has no project"), "{stderr}");
+    assert!(stderr.contains("plxd has no project"), "{stderr}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

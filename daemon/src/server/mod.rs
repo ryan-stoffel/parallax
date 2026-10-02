@@ -1,4 +1,4 @@
-//! The server behind `wispd serve` (decision record 0007).
+//! The server behind `plxd serve` (decision record 0007).
 //!
 //! [`Server::start`] runs the startup checks in order: the data folder, the instance lock, the old
 //! socket, the new socket, and the store. [`Server::run`] then accepts connections until
@@ -48,7 +48,7 @@ use crate::worktree::WorktreeManager;
 
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
-/// `serve` exits with this when another `wispd serve` already runs for the data folder (0009).
+/// `serve` exits with this when another `plxd serve` already runs for the data folder (0009).
 pub const EXIT_ALREADY_RUNNING: u8 = 3;
 
 /// How a server runs. [`Config::new`] has the defaults from 0007.
@@ -93,13 +93,13 @@ pub struct Config {
     /// Replies one connection may have waiting to be written. 32 by default.
     pub outbound_queue: usize,
     /// The backends workers run on (#156). `None`, the default, registers Claude Code for
-    /// Anthropic accounts, or the fake backend when `WISPD_FAKE_BACKEND` names a script
+    /// Anthropic accounts, or the fake backend when `PLXD_FAKE_BACKEND` names a script
     /// ([`FakeBackend::from_env`]), and Codex for `OpenAI` accounts; tests register a fake.
     pub backends: Option<BackendRegistry>,
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
-    /// default, is wispd's own with the usual install folders on `PATH` (#96, decision 0014).
+    /// default, is plxd's own with the usual install folders on `PATH` (#96, decision 0014).
     pub agent_environment: Option<Environment>,
-    /// How long a run's permission request waits for an answer before wispd denies it (RYA-222,
+    /// How long a run's permission request waits for an answer before plxd denies it (RYA-222,
     /// decision 0031). 30 minutes by default.
     pub approval_timeout: Duration,
 }
@@ -129,7 +129,7 @@ impl Config {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StartError {
-    /// Another `wispd serve` holds the lock on this data folder.
+    /// Another `plxd serve` holds the lock on this data folder.
     #[error(
         "already running for {}{}",
         .data_dir.display(),
@@ -149,9 +149,9 @@ pub enum StartError {
         /// What is wrong with it.
         reason: String,
     },
-    /// Something that is not a socket is where the socket goes, so wispd won't remove it. Unix
+    /// Something that is not a socket is where the socket goes, so plxd won't remove it. Unix
     /// only.
-    #[error("{} is not a socket, so wispd won't remove it", .path.display())]
+    #[error("{} is not a socket, so plxd won't remove it", .path.display())]
     NotASocket {
         /// The socket path.
         path: PathBuf,
@@ -159,7 +159,7 @@ pub enum StartError {
     /// A file operation failed.
     #[error("{context}: {source}")]
     Io {
-        /// What wispd was doing.
+        /// What plxd was doing.
         context: String,
         /// The error.
         #[source]
@@ -214,7 +214,7 @@ pub(crate) struct Daemon {
     pub cli_detector: CliDetector,
     /// Where key accounts' API keys live (#117): the OS's real store, except in tests.
     pub keys: Arc<dyn KeyStore>,
-    /// wispd's data folder, so `context/*` (#155) and the runner (#156) can find a project's
+    /// plxd's data folder, so `context/*` (#155) and the runner (#156) can find a project's
     /// shared context folder.
     pub data_dir: DataDir,
     /// In-memory bookkeeping for shared context writes (#155): idempotency and `lastWriter`.
@@ -308,9 +308,9 @@ impl Server {
                 None => Arc::new(ClaudeBackend::new(launcher.clone())),
             };
             let mut backends = BackendRegistry::new();
-            backends.register(wisp_protocol::Provider::Anthropic, backend);
+            backends.register(parallax_protocol::Provider::Anthropic, backend);
             backends.register(
-                wisp_protocol::Provider::Openai,
+                parallax_protocol::Provider::Openai,
                 Arc::new(CodexBackend::new(launcher.clone())),
             );
             backends
@@ -558,7 +558,7 @@ fn rebind(socket: &mut Socket, listener: &mut UnixListener) {
         Ok(Some(bound)) => match UnixListener::from_std(bound) {
             Ok(bound) => {
                 *listener = bound;
-                info!(path = %socket.path().display(), "the socket was gone, so wispd bound it again");
+                info!(path = %socket.path().display(), "the socket was gone, so plxd bound it again");
             }
             Err(error) => warn!(%error, "could not listen on the socket it bound again"),
         },
@@ -584,11 +584,11 @@ impl Daemon {
             Environment::empty(),
         );
         let worktrees = WorktreeManager::new(launcher.clone(), dir);
-        let store = StoreHandle::open(&dir.join("wispd.sqlite3"));
+        let store = StoreHandle::open(&dir.join("plxd.sqlite3"));
         Arc::new(Self {
             started: Instant::now(),
             log: Arc::new(EventLog::open(
-                &dir.join("wispd.sqlite3"),
+                &dir.join("plxd.sqlite3"),
                 event_retention,
                 usize::MAX,
                 usize::MAX,

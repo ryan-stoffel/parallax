@@ -95,7 +95,7 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
         >
           <PanelLeft />
         </IconButton>
-        <span className="flex-1 text-[13px] font-bold text-muted-foreground">wisp</span>
+        <span className="flex-1 text-[13px] font-bold text-muted-foreground">Parallax</span>
         <IconButton label="New thread" keys="N" onClick={onNewThread}>
           <SquarePen />
         </IconButton>
@@ -164,7 +164,7 @@ export function ThreadList({
   const [actionError, setActionError] = useState<string>();
   const [projectError, setProjectError] = useState<string>();
   const [query, setQuery] = useState("");
-  // Renaming a Project and choosing its icon need a wispd with `projectEdit` (0032).
+  // Renaming a Project and choosing its icon need a plxd with `projectEdit` (0032).
   const connection = useConnection(host.id);
   const editable = connection?.status === "connected" && "projectEdit" in connection.capabilities;
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -231,7 +231,7 @@ export function ThreadList({
   );
 
   const addRepository = async () => {
-    const path = await window.wisp.pickFolder();
+    const path = await window.parallax.pickFolder();
     if (!path) return;
     const repo = await threads.addRepo(path);
     if (typeof repo === "string") return setActionError(repo);
@@ -501,11 +501,14 @@ function Footer({
   const [update, setUpdate] = useState<string>();
   const updating = update === "Updating…";
   const [state, setState] = useState<UpdateState>({});
-  useEffect(() => (window.wisp.updatable ? window.wisp.onUpdateState(setState) : undefined), []);
+  useEffect(
+    () => (window.parallax.updatable ? window.parallax.onUpdateState(setState) : undefined),
+    [],
+  );
   const ready = state.ready !== undefined && !updating;
   const runUpdate = async () => {
     setUpdate("Updating…");
-    setUpdate(await window.wisp.update());
+    setUpdate(await window.parallax.update());
   };
   return (
     <>
@@ -521,10 +524,10 @@ function Footer({
         <IconButton label="Usage" onClick={onOpenUsage}>
           <ChartNoAxesColumn />
         </IconButton>
-        {window.wisp.updatable && (
+        {window.parallax.updatable && (
           <span className="ml-auto">
             <IconButton
-              label={ready ? `Update ready: ${state.ready}` : (state.note ?? "Update wisp")}
+              label={ready ? `Update ready: ${state.ready}` : (state.note ?? "Update parallax")}
               disabled={updating}
               onClick={() => void runUpdate()}
             >
@@ -569,7 +572,7 @@ function HostRow({ host, open, onOpen }: { host: Host; open: boolean; onOpen: ()
 }
 
 /**
- * A Project's row: its icon, name, and age. Where its host's wispd can edit Projects, hovering or
+ * A Project's row: its icon, name, and age. Where its host's plxd can edit Projects, hovering or
  * focusing it swaps the age for its actions, which also open by right-clicking the row: Rename,
  * which edits the name in place, and Change icon, which opens the icon picker under the row's icon.
  */
@@ -584,7 +587,7 @@ function ProjectRow({
   selected: boolean;
   editable: boolean;
   onOpen: () => void;
-  /** Sends `project/update`, and settles once wispd has answered. */
+  /** Sends `project/update`, and settles once plxd has answered. */
   onUpdate: (change: ProjectChange) => Promise<void>;
 }) {
   const menuId = useId();
@@ -596,7 +599,7 @@ function ProjectRow({
   const picker = useRef<HTMLDivElement>(null);
   // The name the field opened with, while Rename is open.
   const [renaming, setRenaming] = useState<string>();
-  // The new name, shown until wispd answers.
+  // The new name, shown until plxd answers.
   const [saving, setSaving] = useState<string>();
   // Set while the name box is open, so Enter and the blur that follows save once.
   const editing = useRef(false);

@@ -1,19 +1,21 @@
 //! Permission requests end to end (RYA-222, decision 0031): `agent/approve` against an in-process
-//! wispd whose backend is the fake CLI, which asks and prints the answer it gets as JSON.
+//! plxd whose backend is the fake CLI, which asks and prints the answer it gets as JSON.
 
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use serde_json::{Value, json};
-use wisp_protocol::jsonrpc::INVALID_PARAMS;
-use wisp_protocol::methods::{AgentApprove, AgentCancel, AgentEvents, AgentStart, ProjectStart};
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::INVALID_PARAMS;
+use parallax_protocol::methods::{
+    AgentApprove, AgentCancel, AgentEvents, AgentStart, ProjectStart,
+};
+use parallax_protocol::{
     AccountChoice, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
     AgentApproveResult, AgentCancelParams, AgentEventsParams, AgentOutcome, AgentOutputItem,
-    AgentStartParams, AgentStatus, ApprovalId, ErrorKind, EventsEventParams, ProjectStartParams,
-    RunId, WispEvent,
+    AgentStartParams, AgentStatus, ApprovalId, ErrorKind, EventsEventParams, ParallaxEvent,
+    ProjectStartParams, RunId,
 };
-use wispd::backend::fake::{AskedApproval, Step};
+use plxd::backend::fake::{AskedApproval, Step};
+use serde_json::{Value, json};
 
 use crate::agents::{
     Conn, Host, create, end_turn, fake, init, items, outcomes, project_params, start_params,
@@ -98,7 +100,7 @@ async fn start(host: &Host) -> (Conn, RunId, ApprovalId) {
 
 /// The permission requests an event logs.
 fn requested(event: &EventsEventParams) -> Vec<ApprovalId> {
-    let WispEvent::AgentOutput { items, .. } = &event.event else {
+    let ParallaxEvent::AgentOutput { items, .. } = &event.event else {
         return Vec::new();
     };
     items
@@ -180,7 +182,7 @@ async fn logged(client: &mut Conn, run_id: RunId) -> Vec<AgentOutputItem> {
     page.events
         .into_iter()
         .filter_map(|event| match event.event {
-            WispEvent::AgentOutput { items, .. } => Some(items),
+            ParallaxEvent::AgentOutput { items, .. } => Some(items),
             _ => None,
         })
         .flatten()
@@ -552,7 +554,7 @@ async fn a_request_the_cli_withdraws_or_leaves_behind_is_withdrawn() {
 }
 
 #[tokio::test]
-async fn stopping_wispd_denies_what_waits() {
+async fn stopping_plxd_denies_what_waits() {
     let script = vec![
         init("approval-1"),
         Step::RequestApproval(bash()),
@@ -577,7 +579,7 @@ async fn stopping_wispd_denies_what_waits() {
     assert_eq!(
         kind(&error),
         ErrorKind::ApprovalNotFound,
-        "a new wispd has no CLI to answer"
+        "a new plxd has no CLI to answer"
     );
 }
 

@@ -10,10 +10,10 @@ M2 is done when one subscription login and one API key work, model calls route t
 
 ## Decision
 
-- **wisp never handles consumer credentials.** It has no vendor sign-in of its own. It never reads, stores, or forwards OAuth or session tokens, including `claude setup-token` output, and never calls a model endpoint with them.
-- **Subscriptions run through the vendor's official CLI.** The user installs it and signs in through the vendor's own flow in the editor terminal, on every machine that runs tasks. `wispd` runs the unmodified CLI once per task and parses its JSON events.
-- **API keys use the same adapters** and are kept in the macOS Keychain. wisp's own tool-free calls may use the vendor API directly.
-- **The coordinator runs only on Claude Code or Codex**, in no-write mode, with `wispd`'s tools served over MCP. If `git status` changes during its turn, `wispd` stops the turn and shows the diff without reverting it. The check misses writes outside the repo and to ignored files.
+- **Parallax never handles consumer credentials.** It has no vendor sign-in of its own. It never reads, stores, or forwards OAuth or session tokens, including `claude setup-token` output, and never calls a model endpoint with them.
+- **Subscriptions run through the vendor's official CLI.** The user installs it and signs in through the vendor's own flow in the editor terminal, on every machine that runs tasks. `plxd` runs the unmodified CLI once per task and parses its JSON events.
+- **API keys use the same adapters** and are kept in the macOS Keychain. Parallax's own tool-free calls may use the vendor API directly.
+- **The coordinator runs only on Claude Code or Codex**, in no-write mode, with `plxd`'s tools served over MCP. If `git status` changes during its turn, `plxd` stops the turn and shows the diff without reverting it. The check misses writes outside the repo and to ignored files.
 - **Order:** Claude Code first, because one adapter covers a Max login and an Anthropic key, which is enough for M2. Codex second. Cursor ships only after Cursor confirms in writing (#35); if Cursor declines, its adapter is dropped. `CURSOR_API_KEY` is no fallback, because the AUP applies however the Service is accessed [34].
 
 ## Provider integration
@@ -28,7 +28,7 @@ Versions read: Claude Code 2.1.281 [19], Codex CLI 0.156.1 [27], Cursor CLI 2026
 | Resume | `--resume <session_id>` [10] | `codex exec resume <thread_id>` [23] | `--resume <chatId>` [38] |
 | cwd and worktrees | Process cwd plus `--add-dir`; `-p` never shows the trust dialog [10][13] | `-C <dir>`; the dir must be in a git repo, and linked worktrees count [23][27] | `--workspace <dir>`; an untrusted folder fails without `--trust` [38][41] |
 | Model | `--model` [10] | `-m` [27] | `--model`; list with `agent models` [38] |
-| No-write mode | `--tools Read,Glob,Grep --setting-sources user --settings '{"disableAllHooks":true}' --strict-mcp-config --permission-mode dontAsk`. Write tools are removed, the project's settings, `env` block, and `.mcp.json` are skipped, and hooks are off, except managed-policy hooks [10][11][13]. `wispd`'s tools also need `--mcp-config` and `--allowedTools "mcp__wispd__*"`, or `dontAsk` denies them [10][11] | `-s read-only`, which Seatbelt enforces for commands [25]. `wispd`'s MCP tools need `mcp_servers.wispd.default_tools_approval_mode = "approve"` and no destructive hint [26], since exec denies approval requests [27] | `--mode ask --sandbox enabled`. Ask mode disables MCP execution, so Cursor cannot coordinate, and staff say modes "were never meant to be isolation" [44] |
+| No-write mode | `--tools Read,Glob,Grep --setting-sources user --settings '{"disableAllHooks":true}' --strict-mcp-config --permission-mode dontAsk`. Write tools are removed, the project's settings, `env` block, and `.mcp.json` are skipped, and hooks are off, except managed-policy hooks [10][11][13]. `plxd`'s tools also need `--mcp-config` and `--allowedTools "mcp__plxd__*"`, or `dontAsk` denies them [10][11] | `-s read-only`, which Seatbelt enforces for commands [25]. `plxd`'s MCP tools need `mcp_servers.plxd.default_tools_approval_mode = "approve"` and no destructive hint [26], since exec denies approval requests [27] | `--mode ask --sandbox enabled`. Ask mode disables MCP execution, so Cursor cannot coordinate, and staff say modes "were never meant to be isolation" [44] |
 | Tool needs approval | Denied, with a `permission_denied` event [11] | exec runs with approval policy `never`. An approval request is denied, so that call fails and the turn continues [27] | Held back unless `--force` or an allow rule is set; the docs disagree on whether edits are blocked or only proposed [36][38] |
 | Cancel | SIGINT ends the turn; SIGTERM exits 143 and leaves the turn unfinished [11] | SIGINT interrupts the turn; there is no SIGTERM handler [27] | Undocumented; kill the process group |
 | Signed in | `claude auth status`: JSON, exit 0 or 1 [10] | `codex login status`: text on stderr, exit 0 or 1 [27] | `agent status --format json` [38][40] |
@@ -37,15 +37,15 @@ Versions read: Claude Code 2.1.281 [19], Codex CLI 0.156.1 [27], Cursor CLI 2026
 | Second account per machine | `CLAUDE_CONFIG_DIR` [12] | `CODEX_HOME` [24] | Unverified; the login lives in fixed Keychain items [46] |
 | Tokens and cost | `result.modelUsage[model]`, which includes subagents and carries over into resumed sessions. `result.usage` covers the main loop only, and all costs are client-side estimates [14][15] | `turn.completed.usage`, cumulative for the thread [27] | `result.usage`: `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`; no cost [41][43] |
 | Limit windows | Only the last `rate_limit_event.rate_limit_info` seen: `status`, `rateLimitType` (`five_hour`, `seven_day`, ...), `utilization`, `resetsAt`. An experimental `get_usage` control request also returns the plan and windows [14] | `account/rateLimits/read` in `codex app-server`: `primary` and `secondary`, each with `usedPercent`, `windowDurationMins`, `resetsAt`; never in exec output [22] | None in headless output; `/usage` is interactive only; there is no public usage API for individual plans [41][45] |
-| API key | `ANTHROPIC_API_KEY`, which wins over the login in `-p` [12]. Subscription runs strip `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_OAUTH_TOKEN`, since all three outrank `/login` [12]. A project's `env` block can still set a key for worker runs [13], so `wispd` checks `apiKeySource` in `system/init` before charging a subscription account [14]. Direct calls: `POST https://api.anthropic.com/v1/messages` [17] | `CODEX_API_KEY` for exec [23]. Direct calls: `POST https://api.openai.com/v1/responses` [31] | `CURSOR_API_KEY` [40] runs the Cursor agent, not a model API [48], and falls under the same AUP question [34] |
+| API key | `ANTHROPIC_API_KEY`, which wins over the login in `-p` [12]. Subscription runs strip `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_OAUTH_TOKEN`, since all three outrank `/login` [12]. A project's `env` block can still set a key for worker runs [13], so `plxd` checks `apiKeySource` in `system/init` before charging a subscription account [14]. Direct calls: `POST https://api.anthropic.com/v1/messages` [17] | `CODEX_API_KEY` for exec [23]. Direct calls: `POST https://api.openai.com/v1/responses` [31] | `CURSOR_API_KEY` [40] runs the Cursor agent, not a model API [48], and falls under the same AUP question [34] |
 | Remote Mac | A locked Keychain over SSH falls back to `~/.claude/.credentials.json` [12] | Stores `$CODEX_HOME/auth.json` by default [24][27] | Keychain writes fail over SSH; set `AGENT_CLI_CREDENTIAL_STORE=file` [46] |
 
 ## Terms assessment
 
 | Approach | Claude Max | ChatGPT Plus | Cursor Pro+ |
 | --- | --- | --- | --- |
-| wisp signs in, or uses subscription tokens itself | Prohibited [1][5][6] | Unclear in the Terms [20]; endorsed by staff and the app-server docs [22][29][30]. wisp does not do it | Prohibited, with a ban risk [33][35] |
-| wisp launches the user's own signed-in official CLI | Allowed if wisp meets the product conditions, including the Commercial Terms [1]; whether they apply to a local open-source launcher is unclear (#35) | Allowed [21][22][23] | Unclear. The AUP bans automated or scripted access with no CLI carve-out [34], while the CLI docs [36][37][40] and an Aug 10 staff post that predates the AUP [35] endorse it. Pending written confirmation (#35) |
+| Parallax signs in, or uses subscription tokens itself | Prohibited [1][5][6] | Unclear in the Terms [20]; endorsed by staff and the app-server docs [22][29][30]. Parallax does not do it | Prohibited, with a ban risk [33][35] |
+| Parallax launches the user's own signed-in official CLI | Allowed if Parallax meets the product conditions, including the Commercial Terms [1]; whether they apply to a local open-source launcher is unclear (#35) | Allowed [21][22][23] | Unclear. The AUP bans automated or scripted access with no CLI carve-out [34], while the CLI docs [36][37][40] and an Aug 10 staff post that predates the AUP [35] endorse it. Pending written confirmation (#35) |
 | API key in the CLI or the vendor API | Allowed; the recommended path for third-party tools [1][3] | Allowed [23] | Unclear, for the same AUP reason [34]; agent-level only [48] |
 | 2026 enforcement and changes | Jan: accounts whose third-party harnesses tripped abuse filters were banned, then anti-spoofing safeguards tightened [7]. By Feb 18: subscription tokens banned even in the Agent SDK, a ban removed by Apr 13 [2]. Apr 4: third-party harnesses moved to extra usage (secondary report [9]). Late Aug: the carve-out below [2] | None found | Aug 10: staff warn that token proxies risk a ban [35]. Aug 11: new AUP [34] |
 
@@ -67,7 +67,7 @@ A sketch, with async omitted:
 trait Backend {
     fn probe(&self, account: &Account) -> Probe;            // installed, version, signed in, auth kind, plan
     fn login_command(&self, account: &Account) -> Command;  // run in the editor terminal
-    fn start(&self, account: &Account, task: Task) -> Run;  // cwd, prompt, model, tool policy, wispd MCP server, resume id
+    fn start(&self, account: &Account, task: Task) -> Run;  // cwd, prompt, model, tool policy, plxd MCP server, resume id
     fn limits(&self, account: &Account) -> Option<Limits>;  // latest windows and when they were read
 }
 trait Run {
@@ -80,12 +80,12 @@ What it smooths over, beyond the table's differences:
 
 - **Approvals.** All three deny or fail in headless mode, so M2 fixes the policy up front.
 - **Completion and counters.** A Cursor run can end with no terminal event, so completion comes from the exit code plus the last event. Cumulative totals become per-run deltas.
-- **Commits.** Codex keeps `.git` read-only under `workspace-write`, including in worktrees [26], so `wispd` commits for Codex workers.
+- **Commits.** Codex keeps `.git` read-only under `workspace-write`, including in worktrees [26], so `plxd` commits for Codex workers.
 
 ## Consequences
 
-- Keys in the environment would reach the agent's shell, so `wispd` sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` for no-write runs [16], has the sandbox unset the key for a worker's commands instead (0013), and sets Codex's `shell_environment_policy.ignore_default_excludes=false` [26].
-- On a remote Mac, SSH sessions may not reach the Keychain [12][46]. Running `wispd` as a LaunchAgent in the user's GUI session should avoid this, but that is unverified and requires the user to be logged in.
+- Keys in the environment would reach the agent's shell, so `plxd` sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` for no-write runs [16], has the sandbox unset the key for a worker's commands instead (0013), and sets Codex's `shell_environment_policy.ignore_default_excludes=false` [26].
+- On a remote Mac, SSH sessions may not reach the Keychain [12][46]. Running `plxd` as a LaunchAgent in the user's GUI session should avoid this, but that is unverified and requires the user to be logged in.
 
 ## Open risks
 

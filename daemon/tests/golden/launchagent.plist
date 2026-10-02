@@ -3,16 +3,16 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>io.github.ryan-stoffel.wisp.wispd</string>
+	<string>io.github.ryan-stoffel.parallax.plxd</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/local/bin/wispd</string>
+		<string>/usr/local/bin/plxd</string>
 		<string>serve</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
-		<key>WISPD_DATA_DIR</key>
-		<string>/Users/ryan/Library/Application Support/wisp</string>
+		<key>PLXD_DATA_DIR</key>
+		<string>/Users/ryan/Library/Application Support/parallax</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
@@ -22,8 +22,8 @@
 		<false/>
 	</dict>
 	<key>StandardOutPath</key>
-	<string>/Users/ryan/Library/Application Support/wisp/logs/wispd.log</string>
+	<string>/Users/ryan/Library/Application Support/parallax/logs/plxd.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/ryan/Library/Application Support/wisp/logs/wispd.log</string>
+	<string>/Users/ryan/Library/Application Support/parallax/logs/plxd.log</string>
 </dict>
 </plist>

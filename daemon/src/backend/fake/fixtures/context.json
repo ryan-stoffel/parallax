@@ -5,6 +5,6 @@
   {"echoEnv": "FAKE_API_KEY"},
   {"echoEnv": "FAKE_CONFIG_HOME"},
   {"echoEnv": "SSH_CONNECTION"},
-  {"echoEnv": "WISPD_DATA_DIR"},
+  {"echoEnv": "PLXD_DATA_DIR"},
   {"endTurn": {}}
 ]

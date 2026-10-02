@@ -2,26 +2,26 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::json;
-use wisp_protocol::framing::MAX_FRAME_BYTES;
-use wisp_protocol::jsonrpc::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
-use wisp_protocol::methods::{HostHealth, HostVersion, Initialize, ProjectList, RequestMethod};
-use wisp_protocol::{
+use parallax_protocol::framing::MAX_FRAME_BYTES;
+use parallax_protocol::jsonrpc::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
+use parallax_protocol::methods::{HostHealth, HostVersion, Initialize, ProjectList, RequestMethod};
+use parallax_protocol::{
     Capabilities, ErrorKind, HostHealthParams, HostVersionParams, IncompatibleProtocolDetail,
     ProjectListParams, ProtocolRange, StoreState,
 };
+use serde_json::json;
 
-use crate::support::{Client, Wispd, kind, temp_dir};
+use crate::support::{Client, Plxd, kind, temp_dir};
 
 #[tokio::test]
 async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
 
     let init = client.initialize().await.unwrap();
     assert_eq!(init.protocol, 1);
-    assert_eq!(init.wispd, wispd::version());
+    assert_eq!(init.plxd, plxd::version());
     assert_eq!(
         init.capabilities,
         Capabilities(BTreeMap::from([
@@ -62,7 +62,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
         .call::<HostVersion>(HostVersionParams {})
         .await
         .unwrap();
-    assert_eq!(version.wispd, wispd::version());
+    assert_eq!(version.plxd, plxd::version());
     assert_eq!(version.protocol, ProtocolRange::SUPPORTED);
     assert_eq!(version.arch, std::env::consts::ARCH);
     #[cfg(target_os = "macos")]
@@ -74,8 +74,8 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
 #[tokio::test]
 async fn requests_before_initialize_get_not_initialized() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
 
     let error = client
         .call::<ProjectList>(ProjectListParams {})
@@ -94,14 +94,14 @@ async fn requests_before_initialize_get_not_initialized() {
 #[tokio::test]
 async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_usable() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
 
     let error = client
         .initialize_with(ProtocolRange { min: 2, max: 3 })
         .await
         .unwrap_err();
-    let data = error.wisp_data().expect("a wisp error");
+    let data = error.parallax_data().expect("a Parallax error");
     assert_eq!(data.kind, ErrorKind::IncompatibleProtocol);
     let detail: IncompatibleProtocolDetail =
         serde_json::from_value(data.detail.expect("the frozen detail")).unwrap();
@@ -110,7 +110,7 @@ async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_
         IncompatibleProtocolDetail {
             requested: ProtocolRange { min: 2, max: 3 },
             supported: ProtocolRange::SUPPORTED,
-            wispd: wispd::version().to_owned(),
+            plxd: plxd::version().to_owned(),
         }
     );
 
@@ -125,8 +125,8 @@ async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_
 #[tokio::test]
 async fn a_newer_client_is_answered_at_the_highest_common_version() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
 
     // A future client: a wider range, and fields and capabilities this version doesn't know.
     client
@@ -136,22 +136,22 @@ async fn a_newer_client_is_answered_at_the_highest_common_version() {
             "method": "initialize",
             "params": {
                 "protocol": {"min": 1, "max": 4},
-                "client": {"name": "wisp", "version": "9.0.0", "locale": "en"},
+                "client": {"name": "parallax", "version": "9.0.0", "locale": "en"},
                 "capabilities": {"agents": {}, "someday": {"level": 3}},
                 "trace": "off"
             }
         }))
         .await;
     let response = client.response().await;
-    let init: wisp_protocol::InitializeResult = response.into_result().unwrap();
+    let init: parallax_protocol::InitializeResult = response.into_result().unwrap();
     assert_eq!(init.protocol, 1);
 }
 
 #[tokio::test]
 async fn a_second_initialize_is_an_invalid_request() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     let error = client.initialize().await.unwrap_err();
     assert_eq!(error.code, INVALID_REQUEST);
@@ -160,8 +160,8 @@ async fn a_second_initialize_is_an_invalid_request() {
 #[tokio::test]
 async fn bad_initialize_params_are_invalid_params() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
 
     client
         .send_message(&Request {
@@ -179,8 +179,8 @@ async fn bad_initialize_params_are_invalid_params() {
 #[tokio::test]
 async fn unknown_methods_are_not_found() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     client
         .send_message(&Request {

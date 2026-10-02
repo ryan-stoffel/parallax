@@ -1,6 +1,6 @@
 [package]
-name = "wispd"
-description = "The wisp host daemon"
+name = "plxd"
+description = "The Parallax host daemon"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# `fake-backend` lets `WISPD_FAKE_BACKEND` run workers on the fake backend, for the app's end-to-end
+# `fake-backend` lets `PLXD_FAKE_BACKEND` run workers on the fake backend, for the app's end-to-end
 # tests (RYA-16). Test builds only: it refuses to compile without debug assertions.
 [features]
 fake-backend = []
@@ -31,15 +31,15 @@ tokio-util = { workspace = true, features = ["codec", "rt"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
 uuid.workspace = true
-wisp-protocol = { path = "../crates/wisp-protocol" }
-wisp-store = { path = "../crates/wisp-store" }
+parallax-protocol = { path = "../crates/parallax-protocol" }
+parallax-store = { path = "../crates/parallax-store" }
 zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["process", "signal"] }
 rustix = { workspace = true, features = ["fs", "process"] }
 
-# Agent CLIs run through tokio's process support, and every Win32 call wispd makes is in
+# Agent CLIs run through tokio's process support, and every Win32 call plxd makes is in
 # `src/windows.rs` (0023).
 [target.'cfg(windows)'.dependencies]
 tokio = { workspace = true, features = ["process"] }

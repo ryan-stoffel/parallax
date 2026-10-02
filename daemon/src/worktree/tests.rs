@@ -6,7 +6,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use wisp_protocol::RunId;
+use parallax_protocol::RunId;
 
 use super::{ChangeStatus, WorktreeError, WorktreeManager, short_hash, valid_branch_slug};
 use crate::backend::process::{Environment, Launcher};
@@ -62,7 +62,7 @@ fn git_output_pinned(work_tree: &Path, git_dir: &Path, args: &[&str]) -> String 
 
 /// Writes an executable shell script at `path`, creating its parent folder if needed, that
 /// touches `sentinel` when run. Every hook, hooksPath, `.gitattributes` driver, and filter test
-/// below plants one of these and then asserts `sentinel` was never created, proving wispd's
+/// below plants one of these and then asserts `sentinel` was never created, proving plxd's
 /// worktree-scoped git calls never ran it (#166).
 fn write_sentinel_script(path: &Path, sentinel: &Path) {
     if let Some(parent) = path.parent() {
@@ -116,7 +116,7 @@ async fn create_makes_a_worktree_on_a_new_branch_from_head() {
 
     assert!(created.path.starts_with(mgr.root()));
     assert!(created.path.is_dir(), "{created:?}");
-    assert!(created.branch.starts_with("wisp/"), "{created:?}");
+    assert!(created.branch.starts_with("parallax/"), "{created:?}");
     assert_eq!(
         git_output(&created.path, &["rev-parse", "--abbrev-ref", "HEAD"]),
         created.branch
@@ -141,7 +141,7 @@ async fn create_named_uses_the_slug_and_keeps_names_unique() {
         .create_named(&repo, RunId::generate(), None, Some("fix-login-bug"))
         .await
         .unwrap();
-    assert_eq!(first.branch, "wisp/fix-login-bug");
+    assert_eq!(first.branch, "parallax/fix-login-bug");
 
     let second_id = RunId::generate();
     let second = mgr
@@ -149,7 +149,7 @@ async fn create_named_uses_the_slug_and_keeps_names_unique() {
         .await
         .unwrap();
     let short = short_hash(&second_id.to_string());
-    assert_eq!(second.branch, format!("wisp/fix-login-bug-{short}"));
+    assert_eq!(second.branch, format!("parallax/fix-login-bug-{short}"));
 
     // An invalid slug falls back to the run's short id rather than reaching git.
     let odd = mgr
@@ -758,7 +758,7 @@ async fn stage_all_does_not_run_a_gitattributes_filter_from_a_fake_global_config
 
     // A fake "ambient" HOME with a global gitconfig defining a filter driver, standing in for
     // whatever an inherited or otherwise compromised environment might already have configured.
-    // A worker can't write here, but wispd's worktree-scoped calls must not reach it either
+    // A worker can't write here, but plxd's worktree-scoped calls must not reach it either
     // way — `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`, and `HOME` are all overridden.
     let fake_home = tempfile::tempdir().unwrap();
     let sentinel = fake_home.path().join("sentinel-filter");
@@ -851,7 +851,7 @@ async fn gc_orphans_never_runs_a_git_command_against_a_repository_an_orphan_is_r
     let data_dir = tempfile::tempdir().unwrap();
     let mgr = manager(data_dir.path());
 
-    // A repository entirely outside wispd's data dir, with no relation to anything wispd
+    // A repository entirely outside plxd's data dir, with no relation to anything plxd
     // manages, that the orphan folder happens to be a genuine, registered linked worktree of:
     // exactly what a worker could arrange by the time gc looks at an orphan it left behind.
     let evil_dir = tempfile::tempdir().unwrap();
@@ -882,7 +882,7 @@ async fn gc_orphans_never_runs_a_git_command_against_a_repository_an_orphan_is_r
     assert!(!orphan.exists());
     // Before #171's fix, `remove_orphan` discovered the evil repo from the orphan's own `.git`
     // file and ran `git worktree remove --force`, then `git worktree prune`, directly against
-    // it — an unrelated repository the worker has no business making wispd touch. Its own
+    // it — an unrelated repository the worker has no business making plxd touch. Its own
     // worktree bookkeeping must be completely untouched: still listing the folder gc just
     // deleted, since gc never ran a git command there at all.
     assert_eq!(

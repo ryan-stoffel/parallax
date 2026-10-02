@@ -18,7 +18,7 @@ defaults:
     shell: bash
 
 jobs:
-  # wispd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (RYA-17),
+  # plxd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (RYA-17),
   # and Windows x86_64 and arm64 (RYA-21).
   rust:
     strategy:
@@ -93,7 +93,7 @@ jobs:
             "https://downloads.claude.ai/claude-code-releases/$CLAUDE_VERSION/$platform/claude"
           echo "$sha256  $RUNNER_TEMP/claude" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/claude"
-          echo "WISP_SANDBOX_CLAUDE=$RUNNER_TEMP/claude" >> "$GITHUB_ENV"
+          echo "PLX_SANDBOX_CLAUDE=$RUNNER_TEMP/claude" >> "$GITHUB_ENV"
 
       - name: Lint, type-check, build, and test
         run: scripts/ci/check-rust
@@ -108,15 +108,15 @@ jobs:
           fi
 
       # scripts/ci/ssh-localhost sets up key-based ssh to localhost; check-ssh-attach runs
-      # `wispd attach` through it (#95). On a runner, "ssh not ready" fails instead of skipping.
-      - name: Check wispd attach over ssh
+      # `plxd attach` through it (#95). On a runner, "ssh not ready" fails instead of skipping.
+      - name: Check plxd attach over ssh
         if: runner.os != 'Windows'
         env:
-          WISP_E2E_REQUIRE_SSH: "1"
+          PLX_E2E_REQUIRE_SSH: "1"
         run: |
           status=$(mktemp)
           scripts/ci/ssh-localhost "$status"
-          scripts/ci/check-ssh-attach "$status" "$PWD/target/debug/wispd"
+          scripts/ci/check-ssh-attach "$status" "$PWD/target/debug/plxd"
 
       # The same check through Windows' own OpenSSH server, which puts each session in a job
       # object that `serve` must break away from (0023).
@@ -126,23 +126,23 @@ jobs:
         shell: pwsh
         run: scripts/ci/ssh-localhost.ps1 -StatusFile "$env:RUNNER_TEMP\ssh-status"
 
-      - name: Check wispd attach over Windows OpenSSH
+      - name: Check plxd attach over Windows OpenSSH
         if: runner.os == 'Windows'
         env:
-          WISP_E2E_REQUIRE_SSH: "1"
+          PLX_E2E_REQUIRE_SSH: "1"
         run: |
-          scripts/ci/check-ssh-attach "$RUNNER_TEMP\\ssh-status" "$(cygpath -w "$PWD/target/debug/wispd.exe")"
+          scripts/ci/check-ssh-attach "$RUNNER_TEMP\\ssh-status" "$(cygpath -w "$PWD/target/debug/plxd.exe")"
 
-      # The e2e job's wispd, so it doesn't build its own (RYA-25). The feature only changes the
-      # wispd crate, so this rebuilds just that.
-      - name: Build wispd with the fake backend
-        run: cargo build -p wispd --locked --features fake-backend
+      # The e2e job's plxd, so it doesn't build its own (RYA-25). The feature only changes the
+      # plxd crate, so this rebuilds just that.
+      - name: Build plxd with the fake backend
+        run: cargo build -p plxd --locked --features fake-backend
 
-      - name: Upload wispd
+      - name: Upload plxd
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wispd-${{ matrix.os }}
-          path: target/debug/wispd${{ runner.os == 'Windows' && '.exe' || '' }}
+          name: plxd-${{ matrix.os }}
+          path: target/debug/plxd${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 7
 
@@ -201,8 +201,8 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/launch-app
 
-  # The app against a wispd running its fake backend, with Playwright (RYA-16), on the OSes the app
-  # job covers, with the wispd the rust job built for that OS (RYA-25).
+  # The app against a plxd running its fake backend, with Playwright (RYA-16), on the OSes the app
+  # job covers, with the plxd the rust job built for that OS (RYA-25).
   e2e:
     needs: rust
     strategy:
@@ -220,17 +220,17 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: wispd-${{ matrix.os }}
-          path: ${{ runner.temp }}/wispd
+          name: plxd-${{ matrix.os }}
+          path: ${{ runner.temp }}/plxd
 
-      # e2e-app runs the tests against WISPD_PATH. Artifacts drop the executable bit.
-      - name: Point the tests at wispd
+      # e2e-app runs the tests against PLXD_PATH. Artifacts drop the executable bit.
+      - name: Point the tests at plxd
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
-            echo "WISPD_PATH=$RUNNER_TEMP\\wispd\\wispd.exe" >> "$GITHUB_ENV"
+            echo "PLXD_PATH=$RUNNER_TEMP\\plxd\\plxd.exe" >> "$GITHUB_ENV"
           else
-            chmod +x "$RUNNER_TEMP/wispd/wispd"
-            echo "WISPD_PATH=$RUNNER_TEMP/wispd/wispd" >> "$GITHUB_ENV"
+            chmod +x "$RUNNER_TEMP/plxd/plxd"
+            echo "PLXD_PATH=$RUNNER_TEMP/plxd/plxd" >> "$GITHUB_ENV"
           fi
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

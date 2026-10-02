@@ -25,7 +25,7 @@ import {
   unavailableBadge,
 } from "./ui";
 
-/** A repository on one of wisp's hosts: where a Project works. */
+/** A repository on one of Parallax's hosts: where a Project works. */
 export type Workspace = { hostId: string; repo: Repo };
 
 /** What the menu knows of a host's repositories, or why it can't list them. */
@@ -56,7 +56,7 @@ function useListings(hosts: Host[], open: boolean): Readonly<Record<string, List
         return set(hostId, () => ({ status: "unreachable", message: state.error.message }));
       // A host listed before keeps its repositories in view while it's asked again.
       set(hostId, (prev) => (prev?.status === "listed" ? prev : { status: "listing" }));
-      const answer = await window.wisp.request(hostId, "thread/list", {});
+      const answer = await window.parallax.request(hostId, "thread/list", {});
       set(hostId, () =>
         "error" in answer
           ? { status: "failed", message: describeError(answer.error) }
@@ -64,12 +64,12 @@ function useListings(hosts: Host[], open: boolean): Readonly<Record<string, List
       );
     };
     const hostIds = ids.split("\n");
-    const stop = window.wisp.onConnectionState((hostId, state) => {
+    const stop = window.parallax.onConnectionState((hostId, state) => {
       if (hostIds.includes(hostId)) void list(hostId, state);
     });
     // It rejects only for a host just removed, which the next render leaves out.
     for (const hostId of hostIds)
-      window.wisp.connectionState(hostId).then(
+      window.parallax.connectionState(hostId).then(
         (state) => list(hostId, state),
         () => {},
       );
@@ -244,7 +244,7 @@ function ListingNote({ listing }: { listing?: Listing }) {
   );
 }
 
-/** A way to add a repository that wisp can't offer yet: disabled, with a badge that says so. */
+/** A way to add a repository that Parallax can't offer yet: disabled, with a badge that says so. */
 function Unavailable({ icon, label }: { icon: ReactNode; label: string }) {
   return (
     <button
