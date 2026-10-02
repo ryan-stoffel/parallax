@@ -66,7 +66,8 @@ fn fixture(name: &str) -> &'static str {
 }
 
 /// Inherited variables that could pick Claude's credentials, provider, endpoint, or account, one
-/// of each kind. None may reach the CLI, whatever the run's account or policy.
+/// of each kind, and the variable that would share a run's task list (RYA-251). None may reach the
+/// CLI, whatever the run's account or policy.
 const INHERITED_CREDENTIALS: &[(&str, &str)] = &[
     ("ANTHROPIC_API_KEY", "wisp-test-not-a-key"),
     ("ANTHROPIC_AUTH_TOKEN", "wisp-test-not-a-bearer"),
@@ -82,6 +83,7 @@ const INHERITED_CREDENTIALS: &[(&str, &str)] = &[
     ("ANTHROPIC_ORGANIZATION_ID", "wisp-test-org"),
     ("AWS_BEARER_TOKEN_BEDROCK", "wisp-test-not-a-token"),
     ("CLAUDE_CONFIG_DIR", "/tmp/wisp-test-inherited-config"),
+    ("CLAUDE_CODE_TASK_LIST_ID", "wisp-test-shared-list"),
 ];
 
 fn turn(id: &str) -> TurnId {
@@ -386,6 +388,7 @@ fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
                 format!("Read(//tmp/claude-{uid}/**)"),
                 format!("Read(//private/tmp/claude-{uid}/**)"),
             ]},
+            "env": {"CLAUDE_CODE_TASK_LIST_ID": ""},
         })
     );
 }
@@ -504,6 +507,7 @@ fn assert_worker_invocation(fake: &Fake) {
                     {"name": "CLAUDE_CODE_MESSAGING_TOKEN", "mode": "deny"},
                 ]},
             },
+            "env": {"CLAUDE_CODE_TASK_LIST_ID": ""},
         })
     );
     assert_eq!(
@@ -692,14 +696,14 @@ fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
     }
     let bypass = args(Some(AgentPermission::Bypass));
     assert_eq!(after(&bypass, "--permission-mode"), "bypassPermissions");
-    for flag in [
-        "--restricted",
-        "--tools",
-        "--strict-mcp-config",
-        "--settings",
-    ] {
+    for flag in ["--restricted", "--tools", "--strict-mcp-config"] {
         assert!(!bypass.contains(&flag.to_owned()), "{flag}: {bypass:?}");
     }
+    // None of the sandbox's settings, only its task list's (RYA-251).
+    assert_eq!(
+        after(&bypass, "--settings"),
+        r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""}}"#
+    );
     assert_eq!(
         bypass.iter().filter(|arg| *arg == "--add-dir").count(),
         edit.iter().filter(|arg| *arg == "--add-dir").count()
@@ -713,6 +717,57 @@ fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
         super::arguments(&no_write),
         Err(StartError::Invalid(_))
     ));
+}
+
+/// RYA-251: every run, whatever its policy, mode, or prompt channel, gets exactly one
+/// `--settings`, since Claude Code keeps only the last, and it sets `CLAUDE_CODE_TASK_LIST_ID`
+/// empty. That beats a value in the `env` of the global config or of the user's, the project's,
+/// or the local settings, so the run keeps its session's own task list.
+#[test]
+fn every_run_s_one_settings_keep_its_task_list_its_own() {
+    let cwd = Path::new("/Users/u/wt");
+    let mut worker = request(cwd);
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(cwd));
+    let coordinator_run = coordinator(cwd);
+    let mut runs = vec![request(cwd)];
+    for permission in [
+        None,
+        Some(AgentPermission::Edit),
+        Some(AgentPermission::Auto),
+        Some(AgentPermission::Manual),
+        Some(AgentPermission::Plan),
+        Some(AgentPermission::Bypass),
+    ] {
+        for approvals in [false, true] {
+            for base in [&worker, &coordinator_run] {
+                runs.push(RunRequest {
+                    permission,
+                    approvals,
+                    ..base.clone()
+                });
+            }
+        }
+    }
+    for run in runs {
+        let args: Vec<String> = super::arguments(&run)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        let settings: Vec<Value> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, arg)| *arg == "--settings")
+            .map(|(at, _)| serde_json::from_str(&args[at + 1]).unwrap())
+            .collect();
+        assert_eq!(settings.len(), 1, "{args:?}");
+        assert_eq!(
+            settings[0]["env"],
+            serde_json::json!({"CLAUDE_CODE_TASK_LIST_ID": ""}),
+            "{args:?}"
+        );
+    }
 }
 
 #[test]
