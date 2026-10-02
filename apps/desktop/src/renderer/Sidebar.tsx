@@ -291,7 +291,7 @@ export function ThreadList({
       : filter === `${item.host.id}/${item.repo?.id}`);
   const shown = items
     .filter((i) => inFilter(i) && (!q || titleOf(i).toLowerCase().includes(q)))
-    .sort((a, b) => b.at.localeCompare(a.at));
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, i.attention, now);
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
   const listed = shown.filter((i) => !isArchived(i) && !isSnoozed(i));

@@ -15,7 +15,7 @@ export function attentionOf(thread: Thread, run: AgentRun | undefined, asks: num
   if (asks > 0) return "needsYou";
   if (!run) return "settled";
   if (isRunning(run.status)) return "working";
-  const unseen = !thread.seenAt || run.updatedAt > thread.seenAt;
+  const unseen = !thread.seenAt || Date.parse(run.updatedAt) > Date.parse(thread.seenAt);
   if (!unseen) return "settled";
   return run.status === "failed" ? "failed" : "done";
 }

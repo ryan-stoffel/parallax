@@ -155,3 +155,21 @@ test("a scope's events keep a run current, stamp when it changed, and track what
     updatedAt: "2026-10-01T10:02:00Z",
   });
 });
+
+test("an older log read for its requests never undoes a run's newer status", () => {
+  const done = { id: "r-1", prompt: "Go", status: "completed", updatedAt: "2026-10-01T10:05:00Z" };
+  let state = threadsReducer(emptyThreads, {
+    type: "snapshot",
+    projects: [],
+    repos: [],
+    threads: [],
+    runs: [done as never],
+  });
+  const old = {
+    seq: 2,
+    time: "2026-10-01T10:00:00Z",
+    event: { kind: "agent.updated", runId: "r-1", state: { status: "running", accountId: "a" } },
+  };
+  state = threadsReducer(state, { type: "approvals", events: [old as never] });
+  expect(state.runs["r-1"]).toEqual(done);
+});

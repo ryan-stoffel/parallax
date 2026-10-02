@@ -51,7 +51,9 @@ export type ThreadsAction =
   | { type: "coordinator"; run: AgentRun }
   | { type: "event"; event: ParallaxEvent }
   /** A repo's or a Project's own events: its runs and their permission requests. */
-  | { type: "scope"; events: LoggedEvent[] };
+  | { type: "scope"; events: LoggedEvent[] }
+  /** Older events from runs' logs, read only for the permission requests still waiting. */
+  | { type: "approvals"; events: LoggedEvent[] };
 
 /** Applies a snapshot, runs' titles, or a host-level event. Events are upserts, so a repeat is harmless. */
 export function threadsReducer(state: ThreadsState, action: ThreadsAction): ThreadsState {
@@ -91,13 +93,18 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
       const started = action.events.flatMap((e) =>
         e.event.kind === "agent.started" && e.event.run ? [e.event.run] : [],
       );
+      const approvals = trackApprovals(state.approvals, action.events);
+      // Output that changes neither, the bulk of a running agent's events, keeps the state.
+      if (runs === state.runs && approvals === state.approvals && !started.length) return state;
       return {
         ...state,
         runs,
         titles: started.length ? { ...state.titles, ...titlesOf(started) } : state.titles,
-        approvals: trackApprovals(state.approvals, action.events),
+        approvals,
       };
     }
+    case "approvals":
+      return { ...state, approvals: trackApprovals(state.approvals, action.events) };
     case "event": {
       const e = action.event;
       switch (e.kind) {
@@ -341,14 +348,15 @@ export function useThreads(
         runs: runs.result.runs,
       });
       setError(undefined);
-      // From the run list's `seq`, so no run's change since is missed.
+      // Requests from before the list are in the logs of runs that still go. Read first, and
+      // only for requests, so they never undo a newer change from the subscriptions below.
+      const backlog = await waitingSince(hostId, runs.result.runs, () => stopped);
+      if (stopped) return;
+      dispatch({ type: "approvals", events: backlog });
+      // From the run list's `seq`, which plxd replays from, so no change since is missed.
       const after = runs.result.seq;
       for (const r of list.result.repos) watch(r.id, after, runs.logId);
       for (const p of projects.result.projects) watch(p.id, after, runs.logId);
-      // Requests from before the list are in the logs of runs that still go.
-      const backlog = await waitingSince(hostId, runs.result.runs, () => stopped);
-      if (stopped) return;
-      dispatch({ type: "scope", events: backlog });
       unsubscribe();
       const since = { after: list.result.seq, logId: list.logId };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
