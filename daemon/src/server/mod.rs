@@ -98,7 +98,8 @@ pub struct Config {
     /// ([`FakeBackend::from_env`]), and Codex for `OpenAI` accounts; tests register a fake.
     pub backends: Option<BackendRegistry>,
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
-    /// default, is plxd's own with the usual install folders on `PATH` (#96, decision 0014).
+    /// default, is plxd's own with the login shell's `PATH` and the usual install folders filled in
+    /// (#96, decision 0014, PLX-323).
     pub agent_environment: Option<Environment>,
     /// How long a run's permission request waits for an answer before plxd denies it (RYA-222,
     /// decision 0031). 30 minutes by default.
