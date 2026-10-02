@@ -250,6 +250,16 @@ export type ParallaxRequests = {
 	 * thread starts from. Gated on the `repoRefs` capability.
 	 */
 	"repo/refs": { params: RepoRefsParams, result: RepoRefsResult },
+	/**
+	 * `pr/view`: one of a run's linked pull requests as GitHub has it now, read with `gh`
+	 * (PLX-318). Gated on the `pullRequests` capability, like `pr/act`.
+	 */
+	"pr/view": { params: PrViewParams, result: PullRequest },
+	/**
+	 * `pr/act`: merges, squashes, sets auto-merge on or off, drafts, readies, or closes one
+	 * of a run's linked pull requests with `gh`, and returns it as it is after.
+	 */
+	"pr/act": { params: PrActParams, result: PullRequest },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1405,6 +1415,12 @@ export type AgentRun = {
 	 */
 	checkout?: boolean,
 	/**
+	 * The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
+	 * `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
+	 * `pullRequests` capability. Absent means none.
+	 */
+	pullRequests?: Array<string>,
+	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -2073,6 +2089,10 @@ export type AgentRunState = {
 	 * Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * Its linked pull requests, as `AgentRun.pullRequests` (PLX-318). Absent means none.
+	 */
+	pullRequests?: Array<string>,
 	/**
 	 * When it changed, in RFC 3339 UTC.
 	 */
@@ -3009,6 +3029,205 @@ export type RepoRef = {
 	 */
 	worktree?: boolean,
 };
+
+/**
+ * Params of `pr/view`.
+ */
+export type PrViewParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's web URL, as the run's `pullRequests` lists it.
+	 */
+	url: string,
+};
+
+/**
+ * A pull request as GitHub has it now: the result of `pr/view` and `pr/act`.
+ */
+export type PullRequest = {
+	/**
+	 * Its number in its repository.
+	 */
+	number: number,
+	/**
+	 * Its title.
+	 */
+	title: string,
+	/**
+	 * Its web URL.
+	 */
+	url: string,
+	/**
+	 * Its repository, as `owner/name`.
+	 */
+	repo: string,
+	/**
+	 * Where it is.
+	 */
+	state: PrState,
+	/**
+	 * Whether it is a draft.
+	 */
+	draft: boolean,
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * When it last changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+	/**
+	 * The branch it merges into.
+	 */
+	baseBranch: string,
+	/**
+	 * The branch it merges from.
+	 */
+	headBranch: string,
+	/**
+	 * Files changed.
+	 */
+	changedFiles: number,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
+	/**
+	 * Its description, in Markdown.
+	 */
+	body: string,
+	/**
+	 * Its comments and the text of its reviews, oldest first.
+	 */
+	comments: Array<PrComment>,
+	/**
+	 * Who is asked to review it: users' logins and teams' names.
+	 */
+	reviewRequests: Array<string>,
+	/**
+	 * Its labels' names.
+	 */
+	labels: Array<string>,
+	/**
+	 * The checks on its head commit.
+	 */
+	checks: Array<PrCheck>,
+	/**
+	 * All its checks together: failed if any failed, else pending if any is, else passed.
+	 * Absent when it has none.
+	 */
+	checksState?: PrCheckState,
+	/**
+	 * Whether it can merge. Absent while GitHub is still working it out.
+	 */
+	mergeState?: PrMergeState,
+	/**
+	 * How it merges once its requirements pass, when auto-merge is on. Absent means off.
+	 */
+	autoMerge?: PrMergeMethod,
+};
+
+/**
+ * One check on a pull request's head commit: a GitHub Actions job or another CI's status.
+ */
+export type PrCheck = {
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Where it is.
+	 */
+	state: PrCheckState,
+	/**
+	 * How it ended, as GitHub says it in lowercase, such as `success`, `failure`, or
+	 * `timed_out`. Absent while it is pending.
+	 */
+	conclusion?: string,
+	/**
+	 * Its page, when it has one.
+	 */
+	url?: string,
+};
+
+/**
+ * Where a check is, or all of a pull request's checks together.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrCheckState = "pending" | "passed" | "failed" | "skipped";
+
+/**
+ * A comment on a pull request, or a review's text.
+ */
+export type PrComment = {
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * Its Markdown.
+	 */
+	body: string,
+	/**
+	 * When it was written, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * How a pull request merges.
+ *
+ * A newer plxd may send a method this version does not know; treat it as unknown.
+ */
+export type PrMergeMethod = "merge" | "squash" | "rebase";
+
+/**
+ * Whether a pull request can merge, as GitHub's `mergeStateStatus` says.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrMergeState = "clean" | "unstable" | "hasHooks" | "behind" | "blocked" | "dirty" | "draft";
+
+/**
+ * Where a pull request is.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrState = "open" | "closed" | "merged";
+
+/**
+ * Params of `pr/act`.
+ */
+export type PrActParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's web URL, as the run's `pullRequests` lists it.
+	 */
+	url: string,
+	/**
+	 * What to do.
+	 */
+	action: PrAction,
+};
+
+/**
+ * What `pr/act` does to a pull request.
+ *
+ * A newer client may send an action this version does not know; plxd refuses it.
+ */
+export type PrAction = "merge" | "squash" | "autoMerge" | "disableAutoMerge" | "draft" | "ready" | "close";
 
 /**
  * Params of `$/cancelRequest`.

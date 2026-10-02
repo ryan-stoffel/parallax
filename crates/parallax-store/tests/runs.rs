@@ -146,9 +146,14 @@ fn a_run_is_created_once_read_back_and_updated() {
         insertions: Some(10),
         deletions: Some(1),
         accept: None,
+        pull_requests: vec![
+            "https://github.com/me/app/pull/7".to_owned(),
+            "https://github.com/me/app/pull/9".to_owned(),
+        ],
     };
     let updated = store.update_run(id, &finished).unwrap();
     assert_eq!(updated.state, finished);
+    assert_eq!(store.get_run(id).unwrap().unwrap().state, finished);
     assert_eq!(updated.fields, fields(project), "the request never changes");
     assert!(updated.updated_at >= created.updated_at);
     assert_eq!(updated.created_at, created.created_at);

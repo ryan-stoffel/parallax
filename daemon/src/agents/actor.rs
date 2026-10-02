@@ -23,7 +23,7 @@
 //! A thread in its repository's own checkout has no worktree: every launch, a resume included,
 //! starts in the checkout, and it is never committed either.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -59,7 +59,7 @@ use crate::backend::{
 };
 use crate::routing;
 use crate::server::Daemon;
-use crate::worktree::PrError;
+use crate::worktree::github_pr_urls;
 
 mod git;
 pub(crate) use git::GitAction;
@@ -205,6 +205,9 @@ pub(super) struct Actor {
     wakes: Wakes,
     /// The permission requests its CLIs asked (RYA-222).
     approvals: Approvals,
+    /// The tool calls running `gh pr create`, by call id, until their results link the pull
+    /// requests they print (PLX-318).
+    pr_calls: HashSet<String>,
 }
 
 impl Actor {
@@ -239,6 +242,7 @@ impl Actor {
             deleted: false,
             wakes: Wakes::default(),
             approvals: Approvals::default(),
+            pr_calls: HashSet::new(),
         }
     }
 
@@ -365,6 +369,9 @@ impl Actor {
             }
             Command::OpenPr { title, body, reply } => {
                 let answer = self.open_pr(&title, &body).await;
+                if let Ok(url) = &answer {
+                    self.link_pr(url.clone()).await;
+                }
                 let _ = reply.send(answer);
             }
             Command::Git { action, reply } => {
@@ -666,16 +673,40 @@ impl Actor {
             .worktrees
             .open_pr(repo, branch, title, body)
             .await
-            .map_err(|error| {
-                let kind = match &error {
-                    PrError::Push(_) => ErrorKind::PushFailed,
-                    PrError::GhUnavailable(_) => ErrorKind::GhUnavailable,
-                    PrError::Gh(_) => ErrorKind::PrFailed,
-                };
-                ErrorObject::parallax(kind, error.to_string())
-            })?;
+            .map_err(|error| super::pr_error(&error))?;
         info!(run = %self.id, %url, "opened a pull request for an agent run");
         Ok(url)
+    }
+
+    /// Links pull request `url` to the run, unless it already is, and reports it as
+    /// `agent.updated` (PLX-318).
+    async fn link_pr(&mut self, url: String) {
+        if self.row.state.pull_requests.contains(&url) {
+            return;
+        }
+        info!(run = %self.id, %url, "linked a pull request to an agent run");
+        self.row.state.pull_requests.push(url);
+        self.save().await;
+    }
+
+    /// The pull requests a finished `gh pr create` tool call printed, whatever the backend: its
+    /// call is told by its input's JSON text, not by the tool's name, and remembered until its
+    /// result.
+    fn created_prs(&mut self, event: &Event) -> Vec<String> {
+        match event {
+            Event::ToolCall { call_id, input, .. }
+                if input.to_string().contains("gh pr create") =>
+            {
+                self.pr_calls.insert(call_id.clone());
+                Vec::new()
+            }
+            Event::ToolResult {
+                call_id, output, ..
+            } if self.pr_calls.remove(call_id) => {
+                output.as_deref().map(github_pr_urls).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// `agent/approve` (RYA-222): passes the user's answer to the CLI and logs it as the
@@ -1558,6 +1589,7 @@ impl Actor {
                 self.finish(&outcome).await;
             }
             _ => {
+                let created = self.created_prs(&event);
                 if let Some(mut item) = output_item(&event) {
                     // A follow-up's text, which `send` recorded before its CLI could report the
                     // turn, so a transcript rebuilt from the log shows it (RYA-92), capped like
@@ -1579,6 +1611,9 @@ impl Actor {
                         }
                     }
                     self.push(item).await;
+                }
+                for url in created {
+                    self.link_pr(url).await;
                 }
             }
         }
