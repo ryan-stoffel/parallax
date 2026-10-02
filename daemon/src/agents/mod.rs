@@ -24,11 +24,12 @@
 //! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
 //! ([`wake`]).
 //!
-//! A thread started with `checkout` has no worktree either: it runs in its repo entry's own
-//! checkout, on the branch the user has out or the one `checkoutRef` switches it to first, in the
-//! same worker sandbox with that checkout as its cwd. plxd never commits it, since the checkout
-//! can hold the user's own uncommitted work, so its changes stay there for the user to review, and
-//! it has no diff to accept or open a PR from.
+//! A normal thread's run is full Claude Code in every mode, with no worker sandbox, and its first
+//! message is the user's own (0034). A thread started with `checkout` has no worktree either: it
+//! runs in its repo entry's own checkout, on the branch the user has out or the one `checkoutRef`
+//! switches it to first. plxd never commits it, since the checkout can hold the user's own
+//! uncommitted work, so its changes stay there for the user to review, and it has no diff to
+//! accept or open a PR from.
 
 mod actor;
 mod approvals;
@@ -62,7 +63,7 @@ use self::actor::{Actor, Command};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
 use self::convert::{RUNNING, STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
-use self::worker::{StoredKeyAccounts, ThreadFolder, sandbox_path, worker_unavailable};
+use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
@@ -167,10 +168,12 @@ pub(super) struct Prepared {
 /// Where a run's CLI starts, and what that needs.
 pub(super) enum Place {
     /// A worker, in its worktree, inside the worker sandbox (0013), which needs these folders.
+    /// A normal thread is placed the same way, but runs as full Claude Code (`thread`, 0034).
     Worker {
         home: PathBuf,
         data_dir: PathBuf,
         context: PathBuf,
+        thread: bool,
     },
     /// A project's coordinator, with no sandbox (0024), in a detached worktree of `repo` that the
     /// actor refreshes before each CLI process (RYA-171).
@@ -307,8 +310,13 @@ pub(super) async fn prepare(
     requested: Option<AccountChoice>,
     role: Role,
 ) -> Result<(Prepared, String), ErrorObject> {
-    let (repo_path, context_scope, defaults, accounts) = store(daemon, move |db| {
+    let (repo_path, context_scope, thread, defaults, accounts) = store(daemon, move |db| {
         let repo_path = crate::threads::scope_path(db, project)?;
+        // A run whose scope is a repo entry is a normal thread's (0017).
+        let thread = db
+            .get_repo(project.into())
+            .map_err(|e| store_error(&e))?
+            .is_some();
         let context_scope = crate::threads::context_scope(db, project, run)?;
         let defaults = crate::methods::read_defaults(db)?;
         let mut accounts = HashMap::new();
@@ -319,6 +327,7 @@ pub(super) async fn prepare(
         Ok((
             repo_path,
             context_scope,
+            thread,
             defaults,
             StoredKeyAccounts(accounts),
         ))
@@ -383,6 +392,7 @@ pub(super) async fn prepare(
             home,
             data_dir,
             context,
+            thread,
         },
     };
     Ok((prepared, repo_path))
@@ -889,20 +899,13 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
     })
 }
 
-/// A new run's first message: a thread's or a worker's limits, for its CLI started in `cwd`, then
-/// `prompt`.
+/// A new run's first message: a worker's limits, for its CLI started in `cwd`, then `prompt`. A
+/// thread's is `prompt` as the user wrote it, as in Claude Code (0034).
 fn first_prompt(prompt: &str, thread: Option<&NewThread>, cwd: &Path, context: &Path) -> String {
-    let Some(thread) = thread else {
-        return worker::worker_prompt(prompt, cwd, context);
-    };
-    let folder = if thread.checkout {
-        ThreadFolder::Checkout
-    } else if thread.scratch.is_some() {
-        ThreadFolder::Scratch
-    } else {
-        ThreadFolder::Worktree
-    };
-    worker::thread_prompt(prompt, cwd, context, folder)
+    if thread.is_some() {
+        return prompt.to_owned();
+    }
+    worker::worker_prompt(prompt, cwd, context)
 }
 
 impl Agents {

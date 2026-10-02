@@ -133,6 +133,9 @@ pub(super) struct Translator {
     /// plxd's MCP tools were attached, so a no-write run is a coordinator: full Claude Code in
     /// its permission mode (0027), whose `system/init` may list any tool.
     coordinator_tools: bool,
+    /// A normal thread's run: full Claude Code in every mode (0034), whose `system/init` may list
+    /// any tool, as a bypass worker's may.
+    thread: bool,
     /// The permission mode a worker or a coordinator asked for, which its `system/init` must
     /// report.
     permission_mode: &'static str,
@@ -165,6 +168,7 @@ impl Translator {
             policy,
             expected_key_source,
             coordinator_tools: false,
+            thread: false,
             permission_mode: DEFAULT_PERMISSION_MODE,
             prompts: false,
             plan_exit: false,
@@ -183,6 +187,12 @@ impl Translator {
     /// Checks `system/init` as a coordinator's when plxd's MCP tools were `attached` (0019, 0027).
     pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
         self.coordinator_tools = attached;
+        self
+    }
+
+    /// Checks `system/init` as a normal thread's, which may list any tool (0034).
+    pub fn with_thread(mut self, thread: bool) -> Self {
+        self.thread = thread;
         self
     }
 
@@ -314,8 +324,8 @@ impl Translator {
             return steps;
         }
         let coordinator = self.policy == ToolPolicy::NoWrite && self.coordinator_tools;
-        let bypass = self.policy == ToolPolicy::WorkspaceWrite
-            && self.permission_mode == BYPASS_PERMISSION_MODE;
+        let unsandboxed = self.policy == ToolPolicy::WorkspaceWrite
+            && (self.thread || self.permission_mode == BYPASS_PERMISSION_MODE);
         let (allowed, run) = match self.policy {
             ToolPolicy::NoWrite if coordinator => (&[][..], "a coordinator run"),
             ToolPolicy::NoWrite => (NO_WRITE_TOOLS, "a no-write run"),
@@ -327,14 +337,14 @@ impl Translator {
             steps.push(violation(FailureKind::PolicyViolation, message));
             return steps;
         };
-        // A coordinator and a bypass worker are full Claude Code, whose tools are whatever its
-        // configuration loads (0027).
+        // A coordinator, a thread, and a bypass worker are full Claude Code, whose tools are
+        // whatever its configuration loads (0027, 0034).
         let offered: Vec<&str> = tools
             .iter()
             .map(|tool| tool.as_str().unwrap_or("<not a string>"))
             .filter(|tool| !allowed.contains(tool) && !self.also_allowed(tool))
             .collect();
-        if !coordinator && !bypass && !offered.is_empty() {
+        if !coordinator && !unsandboxed && !offered.is_empty() {
             let message = format!(
                 "Claude Code offered tools beyond {} in {run}: {}",
                 allowed.join(", "),

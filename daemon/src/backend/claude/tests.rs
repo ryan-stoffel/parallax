@@ -199,6 +199,7 @@ fn request(cwd: &Path) -> RunRequest {
         fast: None,
         coordinator_tools: None,
         approvals: false,
+        thread: false,
     }
 }
 
@@ -2107,6 +2108,75 @@ fn a_no_write_run_allows_only_the_read_tools() {
     let no_tools = br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none"}"#;
     assert_eq!(
         violation_kind(&translator.line(no_tools)),
+        Some(FailureKind::PolicyViolation)
+    );
+}
+
+/// RYA-276, 0034: a thread is full Claude Code in every mode, as a bypass worker is: no
+/// `--restricted`, `--tools`, `--strict-mcp-config`, or sandbox settings, so the user's settings,
+/// skills, and MCP servers load. It asks plxd in Accept Edits too, since nothing sandboxes its
+/// commands, and in Plan it has `ExitPlanMode` without a `--tools` list. Its init may list any
+/// tool. A worker keeps its sandbox.
+#[test]
+fn a_thread_is_full_claude_code_in_every_mode() {
+    let cwd = Path::new("/Users/u/wt");
+    let mut thread = request(cwd);
+    thread.policy = ToolPolicy::WorkspaceWrite;
+    thread.sandbox = Some(worker_sandbox(cwd));
+    thread.approvals = true;
+    thread.thread = true;
+    for permission in [
+        None,
+        Some(AgentPermission::Auto),
+        Some(AgentPermission::Manual),
+        Some(AgentPermission::Edit),
+        Some(AgentPermission::Plan),
+        Some(AgentPermission::Bypass),
+    ] {
+        let request = RunRequest {
+            permission,
+            ..thread.clone()
+        };
+        let args: Vec<String> = super::arguments(&request)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        for flag in ["--restricted", "--tools", "--strict-mcp-config"] {
+            assert!(
+                !args.contains(&flag.to_owned()),
+                "{permission:?} {flag}: {args:?}"
+            );
+        }
+        let settings = args.iter().position(|arg| arg == "--settings").unwrap();
+        assert_eq!(
+            args[settings + 1],
+            r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""}}"#
+        );
+        let asks = permission != Some(AgentPermission::Bypass);
+        assert_eq!(super::prompts(&request), asks, "{permission:?}");
+        assert!(!super::hands_over_plans(&request));
+    }
+    let worker = RunRequest {
+        thread: false,
+        ..thread
+    };
+    assert!(
+        super::arguments(&worker)
+            .unwrap()
+            .contains(&"--restricted".into())
+    );
+    assert!(
+        !super::prompts(&worker),
+        "a sandboxed worker in Accept Edits never asks"
+    );
+
+    let loaded = init_line(r#"["Read","Bash","Skill","Task","mcp__linear__list_issues"]"#);
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none").with_thread(true);
+    assert_eq!(violation_kind(&translator.line(&loaded)), None);
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+    assert_eq!(
+        violation_kind(&translator.line(&loaded)),
         Some(FailureKind::PolicyViolation)
     );
 }
