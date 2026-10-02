@@ -1,0 +1,217 @@
+// @vitest-environment happy-dom
+import { act, useEffect } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+
+import type { ParallaxBridge } from "../preload/bridge";
+import { Actions, formatKeybinding, keybindingOf, readActions, type RepoAction } from "./Actions";
+import { SidePanel } from "./SidePanel";
+import { runInDrawer, TerminalDrawer, type ThreadFolder } from "./ThreadTerminal";
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers. The menus are in the DOM either way.
+HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.showPopover = () => {};
+
+// xterm.js doesn't run in happy-dom: a terminal here starts as soon as it mounts.
+vi.mock("./Terminal", () => ({
+  TerminalView: ({ onStart }: { onStart?: () => void }) => {
+    useEffect(() => onStart?.(), [onStart]);
+    return null;
+  },
+}));
+
+const terminalInput = vi.fn();
+beforeEach(() => {
+  localStorage.clear();
+  terminalInput.mockClear();
+  window.parallax = {
+    platform: "darwin",
+    terminalInput,
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+});
+
+let root: Root | undefined;
+afterEach(() => {
+  act(() => root?.unmount());
+  root = undefined;
+  document.body.innerHTML = "";
+});
+
+function render(node: React.ReactNode) {
+  root ??= createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root!.render(node));
+}
+
+const button = (name: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (b) => b.textContent === name || b.getAttribute("aria-label") === name,
+  )!;
+const dialog = () => document.querySelector("dialog");
+const field = (selector: string) => dialog()!.querySelector<HTMLInputElement>(selector)!;
+const keybindingField = () => field('input[placeholder="Press a shortcut"]');
+const fill = (el: HTMLInputElement | HTMLTextAreaElement, value: string) =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+const press = (target: EventTarget, init: KeyboardEventInit) =>
+  act(() => void target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init })));
+
+test("a keybinding is its modifiers and key code, written the OS's way", () => {
+  const e = (init: KeyboardEventInit) => new KeyboardEvent("keydown", init);
+  expect(keybindingOf(e({ key: "T", code: "KeyT", metaKey: true, shiftKey: true }))).toBe(
+    "Shift+Meta+KeyT",
+  );
+  // A lone modifier, or a press that would type, isn't one.
+  expect(keybindingOf(e({ key: "Meta", code: "MetaLeft", metaKey: true }))).toBeUndefined();
+  expect(keybindingOf(e({ key: "t", code: "KeyT", shiftKey: true }))).toBeUndefined();
+  expect(formatKeybinding("Ctrl+Shift+Meta+Digit1")).toBe("⌃⇧⌘1");
+  window.parallax = { platform: "linux" } as ParallaxBridge;
+  expect(formatKeybinding("Ctrl+Alt+KeyR")).toBe("Ctrl+Alt+R");
+});
+
+test("Add action saves an action for the repository, refusing the app's shortcuts", () => {
+  const onRun = vi.fn();
+  render(<Actions hostId="local" repoId="r1" canRun onRun={onRun} />);
+  act(() => button("Add action").click());
+  expect(dialog()!.open).toBe(true);
+  expect(button("Save action").disabled).toBe(true);
+
+  fill(field('input[placeholder="Test"]'), "Test");
+  fill(field("textarea"), "pnpm test");
+  // Cmd+B is the sidebar's, and nothing else hears it while it's pressed here.
+  const sidebar = vi.fn();
+  window.addEventListener("keydown", sidebar);
+  press(keybindingField(), { key: "b", code: "KeyB", metaKey: true });
+  window.removeEventListener("keydown", sidebar);
+  expect(sidebar).not.toHaveBeenCalled();
+  expect(dialog()!.textContent).toContain("⌘B is one of Parallax's shortcuts.");
+  expect(keybindingField().value).toBe("");
+  press(keybindingField(), { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
+  expect(keybindingField().value).toBe("⇧⌘T");
+  press(keybindingField(), { key: "Backspace", code: "Backspace" });
+  expect(keybindingField().value).toBe("");
+  press(keybindingField(), { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
+
+  // The preview opens only with an http or https URL.
+  const toggle = field('input[type="checkbox"]');
+  expect(toggle.disabled).toBe(true);
+  fill(field('input[placeholder="localhost:5173"]'), "file:///etc");
+  expect(button("Save action").disabled).toBe(true);
+  fill(field('input[placeholder="localhost:5173"]'), "localhost:5173");
+  act(() => toggle.click());
+  act(() => button("Save action").click());
+
+  expect(dialog()).toBeNull();
+  expect(readActions("local", "r1")).toEqual([
+    {
+      id: expect.any(String),
+      icon: "play",
+      name: "Test",
+      command: "pnpm test",
+      keybinding: "Shift+Meta+KeyT",
+      previewUrl: "localhost:5173",
+      openPreview: true,
+    },
+  ]);
+  // Another repository has its own.
+  expect(readActions("local", "r2")).toEqual([]);
+  expect(button("Test").title).toBe("Run Test (⇧⌘T)");
+});
+
+const saved = (actions: Partial<RepoAction>[]) =>
+  localStorage.setItem(
+    "parallax:actions:local/r1",
+    JSON.stringify(
+      actions.map((a, i) => ({
+        id: `a${i}`,
+        icon: "play",
+        command: "x",
+        openPreview: false,
+        ...a,
+      })),
+    ),
+  );
+
+test("an action runs from its button, its menu row, and its keybinding, but not under a dialog", () => {
+  saved([
+    { name: "Test", keybinding: "Shift+Meta+KeyT" },
+    { name: "Dev" },
+    { name: "Lint" },
+    { name: "Build", icon: "build" },
+  ]);
+  const onRun = vi.fn();
+  render(<Actions hostId="local" repoId="r1" canRun onRun={onRun} />);
+  // Three buttons, and every action in the menu.
+  const bar = [...document.querySelectorAll("button:not([role])")].map((b) => b.textContent);
+  expect(bar).toEqual(["Test", "Dev", "Lint", ""]);
+  const rows = [...document.querySelectorAll('[role="menu"] [role="menuitem"]')];
+  expect(rows.map((r) => r.textContent)).toEqual([
+    "Test⇧⌘T",
+    "",
+    "Dev",
+    "",
+    "Lint",
+    "",
+    "Build",
+    "",
+    "Add action",
+  ]);
+
+  act(() => button("Dev").click());
+  act(() => (rows[6] as HTMLButtonElement).click());
+  press(document.body, { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
+  expect(onRun.mock.calls.map(([a]) => (a as RepoAction).name)).toEqual(["Dev", "Build", "Test"]);
+
+  act(() => button("Edit Test").click());
+  press(document.body, { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
+  expect(onRun).toHaveBeenCalledTimes(3);
+  // The Edit dialog's Delete removes it.
+  act(() => button("Delete").click());
+  expect(readActions("local", "r1").map((a) => a.name)).toEqual(["Dev", "Lint", "Build"]);
+});
+
+test("without a folder, actions can't run", () => {
+  saved([{ name: "Test", keybinding: "Shift+Meta+KeyT" }]);
+  const onRun = vi.fn();
+  render(<Actions hostId="local" repoId="r1" canRun={false} onRun={onRun} />);
+  expect(button("Test").disabled).toBe(true);
+  expect(button("Test").title).toBe("No folder to run in yet");
+  press(document.body, { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
+  expect(onRun).not.toHaveBeenCalled();
+});
+
+test("a command waits for the drawer's shell to start, then runs in it", async () => {
+  const folder: ThreadFolder = { key: "local/t1", hostId: "local", path: "/wt/t1", threadId: "t1" };
+  const drawer = (open: boolean) => (
+    <TerminalDrawer open={open} folder={folder} deleted={() => false} />
+  );
+  render(drawer(false));
+  runInDrawer(folder, "pnpm test");
+  expect(terminalInput).not.toHaveBeenCalled();
+  render(drawer(true));
+  await act(async () => {});
+  expect(terminalInput).toHaveBeenCalledWith("drawer:local/t1", "pnpm test\r");
+  runInDrawer(folder, "pnpm dev");
+  expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t1", "pnpm dev\r");
+});
+
+test("a preview opens the side panel's Browser view at its URL", () => {
+  const panel = (browse?: { url: string }) => (
+    <SidePanel
+      open
+      onClose={() => {}}
+      expanded={false}
+      onExpandedChange={() => {}}
+      browse={browse}
+    />
+  );
+  render(panel());
+  expect(document.querySelector('input[aria-label="Address"]')).toBeNull();
+  render(panel({ url: "localhost:5173" }));
+  expect(document.querySelector('[aria-current="true"]')?.textContent).toBe("Browser");
+  expect(document.querySelector<HTMLInputElement>('input[aria-label="Address"]')!.value).toBe(
+    "http://localhost:5173/",
+  );
+});
