@@ -26,10 +26,10 @@ const URL: &str = "https://github.com/example/app/pull/7";
 /// A folder that is plxd's whole `PATH`: the real git, and a fake `gh` that logs its arguments to
 /// `gh.log`, answers `pr list` with a fork's pull request from a branch of the same name, then the
 /// one `pr create` made, and fails as `gh-mode` says: `signed-out` (exit 4, as gh does) or `fail`.
-struct Tools(TempDir);
+pub(crate) struct Tools(TempDir);
 
 impl Tools {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let tools = Self(temp_dir());
         let bin = tools.0.path().join("bin");
         fs::create_dir(&bin).unwrap();
@@ -72,7 +72,7 @@ esac
         env
     }
 
-    fn log(&self) -> Vec<String> {
+    pub(crate) fn log(&self) -> Vec<String> {
         fs::read_to_string(self.0.path().join("gh.log"))
             .unwrap_or_default()
             .lines()
@@ -98,7 +98,7 @@ esac
     }
 }
 
-fn start(dir: TempDir, steps: Vec<Step>, tools: &Tools) -> Host {
+pub(crate) fn start(dir: TempDir, steps: Vec<Step>, tools: &Tools) -> Host {
     let mut config = InProcess::config(dir.path());
     config.backends = Some(fake(steps));
     config.agent_environment = Some(tools.environment());
@@ -108,7 +108,7 @@ fn start(dir: TempDir, steps: Vec<Step>, tools: &Tools) -> Host {
     }
 }
 
-fn editing() -> Vec<Step> {
+pub(crate) fn editing() -> Vec<Step> {
     vec![
         init("s"),
         Step::WriteFile {
@@ -120,14 +120,14 @@ fn editing() -> Vec<Step> {
 }
 
 /// A bare repository under `dir`, added to `repo` as its `origin`.
-fn add_origin(repo: &Path, dir: &Path) -> PathBuf {
+pub(crate) fn add_origin(repo: &Path, dir: &Path) -> PathBuf {
     let origin = dir.join("origin.git");
     git(dir, &["init", "-q", "--bare", origin.to_str().unwrap()]);
     git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
     origin
 }
 
-fn thread(repo: Option<RepoId>) -> ThreadStartParams {
+pub(crate) fn thread(repo: Option<RepoId>) -> ThreadStartParams {
     ThreadStartParams {
         run_id: RunId::generate(),
         repo,
@@ -149,7 +149,7 @@ fn thread(repo: Option<RepoId>) -> ThreadStartParams {
     }
 }
 
-fn open(run_id: RunId, title: &str, body: Option<&str>) -> AgentOpenPrParams {
+pub(crate) fn open(run_id: RunId, title: &str, body: Option<&str>) -> AgentOpenPrParams {
     AgentOpenPrParams {
         run_id,
         title: title.to_owned(),

@@ -1,8 +1,8 @@
 //! One run's actor: the task that owns a run for as long as plxd runs.
 //!
 //! It takes commands (`agent/send`, `agent/cancel`, `agent/approve`, `agent/accept`,
-//! `agent/openPr`, `thread/delete`) and the run's backend events in one loop, so nothing about a
-//! run needs a lock, and events are logged in the order they happened.
+//! `agent/openPr`, the Git menu's in `git`, `thread/delete`) and the run's backend events in one
+//! loop, so nothing about a run needs a lock, and events are logged in the order they happened.
 //!
 //! It also keeps the permission requests its CLI waits on (RYA-222, decision 0031): it logs each
 //! one with when it expires, passes `agent/approve`'s answer to the CLI, denies one nobody
@@ -34,8 +34,8 @@ use parallax_protocol::{AcceptId, AgentMerge};
 use parallax_protocol::{
     AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
     AgentApproveParams, AgentApproveResult, AgentFailureKind, AgentOutcome, AgentOutputItem,
-    AgentRun, ApprovalId, CoordinatorThreadId, DiffSummary, ErrorKind, ImageId, ParallaxEvent,
-    ProjectId, PromptImage, Role, RunId, TurnId,
+    AgentRun, ApprovalId, CoordinatorThreadId, DiffSummary, ErrorKind, GitStatus, ImageId,
+    ParallaxEvent, ProjectId, PromptImage, Role, RunId, TurnId,
 };
 use parallax_store::{Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree};
 use tokio::sync::{mpsc, oneshot};
@@ -60,6 +60,9 @@ use crate::backend::{
 use crate::routing;
 use crate::server::Daemon;
 use crate::worktree::PrError;
+
+mod git;
+pub(crate) use git::GitAction;
 
 /// How long transcript items wait to be sent together as one `agent.output` (0007).
 const COALESCE: Duration = Duration::from_millis(50);
@@ -102,6 +105,11 @@ pub(super) enum Command {
         body: String,
         reply: oneshot::Sender<Result<String, ErrorObject>>,
     },
+    /// `agent/gitStatus`, `agent/commit`, or `agent/push` (RYA-298).
+    Git {
+        action: GitAction,
+        reply: oneshot::Sender<Result<GitStatus, ErrorObject>>,
+    },
     /// `thread/delete` (#110): stops the run's CLI, waits for it to exit, and deletes the thread.
     Delete {
         reply: oneshot::Sender<Result<(), ErrorObject>>,
@@ -124,6 +132,9 @@ impl Command {
                 let _ = reply.send(Err(error));
             }
             Self::OpenPr { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::Git { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Delete { reply } => {
@@ -354,6 +365,10 @@ impl Actor {
             }
             Command::OpenPr { title, body, reply } => {
                 let answer = self.open_pr(&title, &body).await;
+                let _ = reply.send(answer);
+            }
+            Command::Git { action, reply } => {
+                let answer = self.git(action).await;
                 let _ = reply.send(answer);
             }
             Command::Delete { reply } => {
@@ -588,6 +603,23 @@ impl Actor {
                 self.id
             )));
         }
+        // A Current checkout thread pushes the branch its checkout has out (RYA-298).
+        if self.row.fields.checkout {
+            let repo = self.checkout_path().await?;
+            let worktrees = &self.daemon.agents.worktrees;
+            let branch = worktrees
+                .current_branch(&repo)
+                .await
+                .map_err(|error| ErrorObject::parallax(ErrorKind::PushFailed, error.to_string()))?
+                .ok_or_else(|| {
+                    refused(format!(
+                        "run {}'s checkout has a detached HEAD; check out a branch to open a pull \
+                         request",
+                        self.id
+                    ))
+                })?;
+            return self.pull_request(&repo, &branch, title, body).await;
+        }
         if self.row.state.commit_sha.is_none() {
             return Err(refused(format!(
                 "run {} has no committed changes to open a pull request for",
@@ -611,16 +643,28 @@ impl Actor {
                 self.id
             )));
         };
+        self.pull_request(
+            Path::new(&worktree.repo_path),
+            &worktree.branch,
+            title,
+            body,
+        )
+        .await
+    }
+
+    /// Pushes `branch` from `repo` and returns its pull request's URL, for `agent/openPr`.
+    async fn pull_request(
+        &self,
+        repo: &Path,
+        branch: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<String, ErrorObject> {
         let url = self
             .daemon
             .agents
             .worktrees
-            .open_pr(
-                Path::new(&worktree.repo_path),
-                &worktree.branch,
-                title,
-                body,
-            )
+            .open_pr(repo, branch, title, body)
             .await
             .map_err(|error| {
                 let kind = match &error {
@@ -1585,7 +1629,8 @@ impl Actor {
         let committed = if self.is_coordinator() || self.row.fields.checkout {
             Ok(None)
         } else {
-            self.commit().await
+            self.commit(&commit_message(&self.last_message, self.id))
+                .await
         };
         let diff = match committed {
             Ok(diff) => diff,
@@ -1608,15 +1653,7 @@ impl Actor {
         })
         .await;
         if let Some(diff) = diff {
-            self.row.state.commit_sha = Some(diff.commit.clone());
-            self.row.state.files_changed = Some(diff.files);
-            self.row.state.insertions = Some(diff.insertions);
-            self.row.state.deletions = Some(diff.deletions);
-            self.append(ParallaxEvent::AgentDiffReady {
-                run_id: self.id,
-                diff,
-            })
-            .await;
+            self.record_diff(diff).await;
         }
         status.clone_into(&mut self.row.state.status);
         self.row.state.error = error;
@@ -1630,9 +1667,24 @@ impl Actor {
         }
     }
 
-    /// Commits whatever the run changed in its worktree, on its branch, and measures the branch
-    /// against the worktree's base. `None` when there was nothing new to commit.
-    async fn commit(&self) -> Result<Option<DiffSummary>, String> {
+    /// Records the run's new commit and its diff, and tells clients, as `agent.diffReady`. The
+    /// caller saves the row.
+    async fn record_diff(&mut self, diff: DiffSummary) {
+        self.row.state.commit_sha = Some(diff.commit.clone());
+        self.row.state.files_changed = Some(diff.files);
+        self.row.state.insertions = Some(diff.insertions);
+        self.row.state.deletions = Some(diff.deletions);
+        self.append(ParallaxEvent::AgentDiffReady {
+            run_id: self.id,
+            diff,
+        })
+        .await;
+    }
+
+    /// Commits whatever the run changed in its worktree, on its branch, with `message`, and
+    /// measures the branch against the worktree's base. `None` when there was nothing new to
+    /// commit.
+    async fn commit(&self, message: &str) -> Result<Option<DiffSummary>, String> {
         let Some(worktree) = &self.worktree else {
             return Err("the run was accepted, and its worktree is gone".to_owned());
         };
@@ -1645,9 +1697,8 @@ impl Actor {
         let worktrees = &self.daemon.agents.worktrees;
         let path = Path::new(&worktree.path);
         let git_dir = Path::new(&worktree.git_dir);
-        let message = commit_message(&self.last_message, self.id);
         let commit = worktrees
-            .commit_all(path, git_dir, Path::new(&worktree.repo_path), &message)
+            .commit_all(path, git_dir, Path::new(&worktree.repo_path), message)
             .await
             .map_err(|error| error.to_string())?;
         let Some(commit) = commit else {

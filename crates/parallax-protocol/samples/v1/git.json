@@ -1,0 +1,118 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/gitStatus",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "branch": "main",
+      "changes": 2,
+      "upstream": "origin/main",
+      "ahead": 0,
+      "origin": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/commit",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "message": "Add a README"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "branch": "main",
+      "changes": 0,
+      "upstream": "origin/main",
+      "ahead": 1,
+      "origin": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "agent/push",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "branch": "main",
+      "changes": 0,
+      "upstream": "origin/main",
+      "ahead": 0,
+      "origin": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "agent/gitStatus",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "branch": null,
+      "changes": 0,
+      "upstream": null,
+      "ahead": 3,
+      "origin": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "agent/push",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32000,
+      "message": "run 01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01's folder has a detached HEAD; check out a branch to push",
+      "data": {
+        "kind": "gitRefused"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "agent/commit",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "message": "Add a README"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "error": {
+      "code": -32000,
+      "message": "/Users/me/src/app has no git identity configured (user.name and user.email); set one before an agent can commit there",
+      "data": {
+        "kind": "commitFailed"
+      }
+    }
+  }
+]

@@ -104,6 +104,8 @@ pub(crate) fn initialize(
 /// `contextAndFast`: `agent/start`, `agent/send`, and `thread/start` take `contextWindow` and
 /// `fast`, and `AgentRun` and `agent.updated` report them; an older plxd would silently ignore
 /// them.
+/// `git` (RYA-298): `agent/gitStatus`, `agent/commit`, and `agent/push`, and `agent/openPr` on a
+/// Current checkout thread.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -119,6 +121,7 @@ fn capabilities_advertised() -> Capabilities {
         ("checkout".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
+        ("git".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
