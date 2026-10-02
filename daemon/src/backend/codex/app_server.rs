@@ -333,6 +333,7 @@ impl Driver {
         let mut answers_open = true;
         let exit = loop {
             tokio::select! {
+                biased;
                 output = self.process.next() => match output {
                     Some(Output::Line(line)) => {
                         for step in self.translator.line(&line) {

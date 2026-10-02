@@ -122,7 +122,7 @@ The tool stays listed after the plan is approved, and a later call answers "You 
 
 ### Codex
 
-Out of scope. `codex exec` runs with approval policy `never` (0004, 0013) and has no way to ask its host during a run; only Codex's app-server protocol does, which plxd doesn't run.
+Out of scope. `codex exec` runs with approval policy `never` (0004, 0013) and has no way to ask its host during a run; only Codex's app-server protocol does, which plxd doesn't run. A Codex thread runs on app-server and asks since [0035](0035-codex-threads.md).
 
 ## Alternatives
 
