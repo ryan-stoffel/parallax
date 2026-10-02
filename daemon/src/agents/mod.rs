@@ -303,7 +303,7 @@ fn requested_account(account: Option<&AccountChoice>) -> Option<String> {
 
 /// The project's repository, the routing inputs, and the paths run `run` of `project` needs,
 /// checked: everything that can refuse a worker, or a coordinator when `role` is one, before
-/// anything is created.
+/// anything is created. For a run that exists already, or one that isn't a thread.
 pub(super) async fn prepare(
     daemon: &Arc<Daemon>,
     project: ProjectId,
@@ -311,29 +311,51 @@ pub(super) async fn prepare(
     requested: Option<AccountChoice>,
     role: Role,
 ) -> Result<(Prepared, String), ErrorObject> {
-    let (repo_path, context_scope, thread, defaults, accounts) = store(daemon, move |db| {
-        let repo_path = crate::threads::scope_path(db, project)?;
-        // A run whose scope is a repo entry is a normal thread's (0017).
-        let thread = db
-            .get_repo(project.into())
-            .map_err(|e| store_error(&e))?
-            .is_some();
-        let context_scope = crate::threads::context_scope(db, project, run)?;
-        let defaults = crate::methods::read_defaults(db)?;
-        let mut accounts = HashMap::new();
-        for account in db.list_accounts().map_err(|error| store_error(&error))? {
-            let account = crate::store::key_account(account)?;
-            accounts.insert(account.id, account.provider);
-        }
-        Ok((
-            repo_path,
-            context_scope,
-            thread,
-            defaults,
-            StoredKeyAccounts(accounts),
-        ))
-    })
-    .await?;
+    prepare_run(daemon, project, run, requested, role, false).await
+}
+
+/// [`prepare`], where `new_thread` says the run being created is a normal thread's
+/// (`thread/start`), whose thread row doesn't exist yet.
+async fn prepare_run(
+    daemon: &Arc<Daemon>,
+    project: ProjectId,
+    run: RunId,
+    requested: Option<AccountChoice>,
+    role: Role,
+    new_thread: bool,
+) -> Result<(Prepared, String), ErrorObject> {
+    let (repo_path, context_scope, thread, thread_run, defaults, accounts) =
+        store(daemon, move |db| {
+            let repo_path = crate::threads::scope_path(db, project)?;
+            // A run whose scope is a repo entry is a normal thread's (0017).
+            let thread = db
+                .get_repo(project.into())
+                .map_err(|e| store_error(&e))?
+                .is_some();
+            // The run itself is a thread: one `thread/start` made, not any run on a repo entry,
+            // such as a coordinator's worker started on one.
+            let thread_run = new_thread
+                || db
+                    .get_thread(run.into())
+                    .map_err(|e| store_error(&e))?
+                    .is_some();
+            let context_scope = crate::threads::context_scope(db, project, run)?;
+            let defaults = crate::methods::read_defaults(db)?;
+            let mut accounts = HashMap::new();
+            for account in db.list_accounts().map_err(|error| store_error(&error))? {
+                let account = crate::store::key_account(account)?;
+                accounts.insert(account.id, account.provider);
+            }
+            Ok((
+                repo_path,
+                context_scope,
+                thread,
+                thread_run,
+                defaults,
+                StoredKeyAccounts(accounts),
+            ))
+        })
+        .await?;
     let defaults = Defaults {
         coordinator: defaults.coordinator,
         worker: defaults.worker,
@@ -364,10 +386,10 @@ pub(super) async fn prepare(
         return Ok((prepared, repo_path));
     }
     // A Codex or Cursor thread is full Codex or Cursor Agent, with no worker sandbox to check
-    // (0035, 0036). Cursor runs nothing else, so a coordinator's subagent on it is refused here,
-    // and a Codex worker is still refused (RYA-153).
+    // (0035, 0036). Any other run on them is refused, even one on a repo entry: Cursor runs
+    // nothing else, and Codex workers wait on RYA-153.
     let full = [codex::PROGRAM, cursor::NAME].contains(&resolved.backend().name());
-    if !(thread && full) {
+    if !(thread_run && full) {
         worker::check_backend(resolved.backend())?;
     }
     if let Some(cli) = worker::cli_of(resolved.backend()) {
@@ -843,7 +865,15 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         };
         return Ok(CreatedRun { run, thread: row });
     }
-    let (prepared, scope_path) = prepare(&daemon, project, run_id, account, Role::Worker).await?;
+    let (prepared, scope_path) = prepare_run(
+        &daemon,
+        project,
+        run_id,
+        account,
+        Role::Worker,
+        thread.is_some(),
+    )
+    .await?;
     if inherited.is_some_and(|mode| !prepared.resolved.backend().permissions().contains(&mode)) {
         (options.permission, fields.permission) = (None, None);
     }

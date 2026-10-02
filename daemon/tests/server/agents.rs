@@ -12,7 +12,7 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notificat
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
     AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
-    NotificationMethod, ProjectCreate, RequestMethod, UsageGet,
+    NotificationMethod, ProjectCreate, RepoAdd, RequestMethod, UsageGet,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
@@ -22,7 +22,8 @@ use parallax_protocol::{
     AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
     CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
     HostHealthParams, ImageId, ImageMediaType, InitializeResult, ParallaxEvent, Project,
-    ProjectCreateParams, ProjectId, PromptImage, Provider, RunId, TurnId, UsageGetParams,
+    ProjectCreateParams, ProjectId, PromptImage, Provider, RepoAddParams, RepoId, RunId, TurnId,
+    UsageGetParams,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -1197,6 +1198,33 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
         .await
         .unwrap_err();
     assert_eq!(kind(&cursor), ErrorKind::WorkerUnavailable);
+
+    // A Codex worker on a repo entry, such as a coordinator's started on one, isn't a thread, so
+    // it is refused too; only `thread/start` runs Codex unsandboxed (0035).
+    let work = temp_dir();
+    let entry = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: real_repo(work.path()).to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    let on_entry = client
+        .call::<AgentStart>(AgentStartParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "codex".to_owned(),
+            }),
+            coordinator_thread: Some(CoordinatorThreadId::generate()),
+            ..start_params(
+                ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
+                "Fix it",
+            )
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&on_entry), ErrorKind::WorkerUnavailable);
+    assert!(on_entry.message.contains("RYA-145"), "{}", on_entry.message);
 
     server.stop().await;
 }
