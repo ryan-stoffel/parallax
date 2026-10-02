@@ -13,7 +13,8 @@ interface Source {
   unavailable?: string;
 }
 
-const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-[11.5px] text-foreground";
+/** A key in a palette's footer of keys. */
+export const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-[11.5px] text-foreground";
 
 /**
  * Add Repository, a native modal <dialog> laid out like a command palette: a search box over

@@ -1,6 +1,7 @@
 import { Check, ChevronDown, Search } from "lucide-react";
 import {
   Fragment,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -23,12 +24,22 @@ export type KeyPress = Pick<
 
 /**
  * The app's own shortcut `e` presses, if any: Mod+B the sidebar, Mod+Alt+B the side panel, Mod+J
- * the terminal, Mod+N a new thread, Mod+, Settings, and Mod+O Open. App and OpenMenu act on them,
- * and a repository action's keybinding can't be one.
+ * the terminal, Mod+N the new thread picker, Mod+Shift+N a new thread with no repo, Mod+1 to
+ * Mod+9 a sidebar row (`rowShortcut`), Mod+, Settings, and Mod+O Open. App, ThreadList, and
+ * OpenMenu act on them, and a repository action's keybinding can't be one.
  */
 export function appShortcut(
   e: KeyPress,
-): "sidebar" | "panel" | "terminal" | "newThread" | "settings" | "open" | undefined {
+):
+  | "sidebar"
+  | "panel"
+  | "terminal"
+  | "newThread"
+  | "noRepoThread"
+  | "row"
+  | "settings"
+  | "open"
+  | undefined {
   const mac = window.parallax.platform === "darwin";
   if (!(mac ? e.metaKey : e.ctrlKey)) return undefined;
   // Off macOS, AltGr arrives as Ctrl+Alt and types characters we must not eat. (macOS may report
@@ -37,10 +48,49 @@ export function appShortcut(
   if (e.code === "KeyB") return e.altKey ? "panel" : "sidebar";
   if (e.altKey) return undefined;
   if (e.code === "KeyJ") return "terminal";
-  if (e.code === "KeyN") return "newThread";
+  if (e.code === "KeyN") return e.shiftKey ? "noRepoThread" : "newThread";
+  if (rowShortcut(e) !== undefined) return "row";
   if (e.key === ",") return "settings";
   if (e.code === "KeyO" && !e.shiftKey) return "open";
   return undefined;
+}
+
+/** The 0-based row Mod+1 to Mod+9 picks, from the digit `e` presses with Mod and nothing else. */
+export function rowShortcut(e: KeyPress): number | undefined {
+  const digit = /^Digit([1-9])$/.exec(e.code)?.[1];
+  const mod = window.parallax.platform === "darwin" ? e.metaKey : e.ctrlKey;
+  return digit && mod && !e.shiftKey && !e.altKey ? Number(digit) - 1 : undefined;
+}
+
+/** Whether Mod is held, so lists can show their Mod+1 to Mod+9 badges. */
+export function useModHeld() {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    const mod = window.parallax.platform === "darwin" ? "Meta" : "Control";
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key === mod) setHeld(e.type === "keydown");
+    };
+    // Switching apps with Cmd+Tab never sends its keyup.
+    const blur = () => setHeld(false);
+    window.addEventListener("keydown", key);
+    window.addEventListener("keyup", key);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("keyup", key);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+  return held;
+}
+
+/** The ⌘1 to ⌘9 badge on a row that Mod and its number open. */
+export function RowBadge({ index }: { index: number }) {
+  return (
+    <kbd className="shrink-0 rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+      {shortcut(String(index + 1))}
+    </kbd>
+  );
 }
 
 /**

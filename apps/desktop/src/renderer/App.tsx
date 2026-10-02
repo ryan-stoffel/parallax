@@ -10,6 +10,7 @@ import { ContextPanel } from "./ContextPanel";
 import { FilesPanel } from "./FilesPanel";
 import { GitMenu } from "./GitMenu";
 import { NewThread } from "./NewThread";
+import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
@@ -208,10 +209,12 @@ export function App() {
     setOpening({ hostId, projectId });
   };
 
-  const newThread = () => {
+  const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
     setSettings(null);
-    setSelection({ kind: "new", groupId: selection.kind === "project" ? undefined : group.id });
+    setSelection({ kind: "new", groupId });
   };
+  // Mod+N's picker of the repository a new thread goes in.
+  const picker = useRef<HTMLDialogElement>(null);
   const deleteThread = async (hostId: string, thread: Thread) => {
     const view = views[hostId] ?? idleThreads;
     const error = await view.remove(thread);
@@ -255,14 +258,17 @@ export function App() {
     }
   };
 
-  // The app's shortcuts (ui.tsx), but Mod+O, which OpenMenu takes.
+  // The app's shortcuts (ui.tsx), but Mod+O, which OpenMenu takes, and Mod+1 to Mod+9, which
+  // ThreadList takes.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const command = appShortcut(e);
       if (command === "panel") setPanelOpen((open) => !open);
       else if (command === "sidebar") setSidebarOpen((open) => !open);
       else if (command === "terminal" && folder) toggleDrawer();
-      else if (command === "newThread") newThread();
+      else if (command === "newThread") {
+        if (!picker.current?.open) picker.current?.showModal();
+      } else if (command === "noRepoThread") newThread(noRepo);
       else if (command === "settings") openSettings("general");
       else return;
       e.preventDefault();
@@ -299,7 +305,18 @@ export function App() {
       {hosts.map((h) => (
         <HostLoader key={h.id} hostId={h.id} onView={report} />
       ))}
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} onNewThread={newThread}>
+      <NewThreadPicker
+        ref={picker}
+        groups={groups}
+        repos={threads.state.repos}
+        hostName={host.name}
+        onPick={newThread}
+      />
+      <Sidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onNewThread={() => newThread()}
+      >
         {settings ? (
           <SettingsNav
             section={settings}
@@ -409,9 +426,9 @@ export function App() {
                 runOptions={
                   connection?.status === "connected" && "runOptions" in connection.capabilities
                 }
-                onStarted={(threadId, text) => {
+                onStarted={(threadId, text, background) => {
                   setNotice(text ? { threadId, text } : undefined);
-                  setSelection({ kind: "thread", threadId, started: true });
+                  if (!background) setSelection({ kind: "thread", threadId, started: true });
                 }}
                 disabledReason={offline}
               />

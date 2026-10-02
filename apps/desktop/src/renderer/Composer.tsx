@@ -184,6 +184,8 @@ export interface ComposerProps {
     options: RunOptions,
     images: PromptImage[],
   ) => Promise<string | undefined>;
+  /** Sends as `onSend` does, for Cmd/Ctrl+Enter anywhere in the box: a new thread's background start. */
+  onSendInBackground?: ComposerProps["onSend"];
   /**
    * While set, an empty box shows Stop instead of Send. Resolves to an error message.
    * Stop stays pending until the caller drops `onStop`, when the run stops.
@@ -228,13 +230,15 @@ export interface ComposerProps {
 /**
  * The prompt box, the same on every screen. It formats Markdown as you type and sends it as
  * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
- * block Enter adds a line and Cmd/Ctrl+Enter sends. It grows with its text up to 40% of the window.
+ * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSendInBackground`, Cmd/Ctrl+Enter sends
+ * through it, anywhere in the box. It grows with its text up to 40% of the window.
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
  * it (RYA-193).
  */
 export function Composer({
   newThread,
   onSend,
+  onSendInBackground,
   onStop,
   disabledReason,
   tab,
@@ -350,7 +354,7 @@ export function Composer({
     setImages((all) => [...all, ...ok].slice(0, maxImages));
   };
 
-  const submit = async () => {
+  const submit = async (background = false) => {
     if (!canSend) return;
     const sent = editor.getJSON();
     const sentImages = images;
@@ -358,7 +362,7 @@ export function Composer({
     setImages([]);
     setError(undefined);
     setImageError(undefined);
-    const failed = await onSend(text, options, sentImages);
+    const failed = await (background ? onSendInBackground! : onSend)(text, options, sentImages);
     if (failed === undefined) setFiles([]);
     else if (!editor.isDestroyed) {
       // Put it back ahead of anything typed or added while it was in flight.
@@ -396,8 +400,9 @@ export function Composer({
       handleKeyDown: (_view, event): boolean => {
         if (event.key !== "Enter" || event.isComposing) return false;
         const inCode = editor.isActive("codeBlock");
-        if (inCode ? event.metaKey || event.ctrlKey : !event.shiftKey) {
-          void submit();
+        const mod = event.metaKey || event.ctrlKey;
+        if (inCode ? mod : !event.shiftKey) {
+          void submit(!!onSendInBackground && mod);
           return true;
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of

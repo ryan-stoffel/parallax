@@ -42,8 +42,11 @@ interface NewThreadProps {
   ) => Promise<RpcError | undefined>;
   /** Whether the host's plxd takes a thread's model, effort, and permission (`runOptions`). */
   runOptions: boolean;
-  /** Called once plxd has the thread, with a note for it, such as which account it picked. */
-  onStarted: (runId: string, notice?: string) => void;
+  /**
+   * Called once plxd has the thread, with a note for it, such as which account it picked.
+   * `background` when Cmd/Ctrl+Enter started it, so New Thread stays open.
+   */
+  onStarted: (runId: string, notice: string | undefined, background: boolean) => void;
   disabledReason?: string;
 }
 
@@ -58,6 +61,8 @@ interface Attempt {
   /** The picked ref: the worktree's base, or the branch the checkout switches to. */
   gitRef?: string;
   name: ThreadName;
+  /** Started with Cmd/Ctrl+Enter, leaving New Thread open. */
+  background: boolean;
 }
 
 /** An account a worker or coordinator can run on, as the account chooser lists it. */
@@ -209,7 +214,7 @@ export function NewThread({
     );
     failed.current = error ? attempt : undefined;
     if (!error) {
-      onStarted(attempt.runId, notice);
+      onStarted(attempt.runId, notice, attempt.background);
       return undefined;
     }
     // No default, or one naming a removed key account: both need an account picked. Asks once
@@ -246,7 +251,12 @@ export function NewThread({
     return attemptStart(attempt, false, notice);
   };
 
-  const send = async (prompt: string, options: RunOptions, images: PromptImage[]) => {
+  const send = async (
+    prompt: string,
+    options: RunOptions,
+    images: PromptImage[],
+    background: boolean,
+  ) => {
     setChoices(undefined);
     const last = failed.current;
     // plxd refuses a run id reused with other options, so changing one starts afresh. It doesn't
@@ -262,7 +272,8 @@ export function NewThread({
       last.gitRef === gitRef
         ? last
         : undefined;
-    setStarting({ prompt, images });
+    // A background start leaves the box empty for the next thread.
+    if (!background) setStarting({ prompt, images });
     // A retry keeps its name, so the same start is the same request. Images alone name nothing.
     const name = same?.name ?? (prompt.trim() ? await window.parallax.nameThread(prompt) : {});
     const error = await attemptStart({
@@ -274,6 +285,7 @@ export function NewThread({
       checkout,
       gitRef,
       name,
+      background,
     });
     // On success the app opens the thread instead.
     if (error !== undefined) setStarting(undefined);
@@ -376,7 +388,8 @@ export function NewThread({
         )}
         <Composer
           newThread
-          onSend={send}
+          onSend={(prompt, options, images) => send(prompt, options, images, false)}
+          onSendInBackground={(prompt, options, images) => send(prompt, options, images, true)}
           // Hidden while starting, as the opened thread's composer has none.
           backend={runOptions && starting === undefined ? backend : undefined}
           contextAndFast={
