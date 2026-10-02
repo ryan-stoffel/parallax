@@ -399,3 +399,34 @@ test("a picked image is a thumbnail, and any other file is a chip", async () => 
   expect(thumbnails()).toEqual(["Image 1"]);
   expect(document.querySelector('[aria-label="Remove notes.md"]')).not.toBeNull();
 });
+
+test("Up and Down recall the thread's earlier prompts until one is edited (PLX-325)", async () => {
+  const { box, type, press } = render(async () => undefined, caps, {
+    history: ["first", "second\nline two"],
+  });
+  const shown = () => box.editor!.getText({ blockSeparator: "\n" });
+  await press("ArrowUp");
+  expect(shown()).toBe("second\nline two");
+  await press("ArrowUp");
+  expect(shown()).toBe("first");
+  await press("ArrowUp");
+  expect(shown()).toBe("first");
+  await press("ArrowDown");
+  expect(shown()).toBe("second\nline two");
+  await press("ArrowDown");
+  expect(shown()).toBe("");
+  // An edited prompt is the user's own, so the arrows leave it be.
+  await press("ArrowUp");
+  type("!");
+  await press("ArrowUp");
+  expect(shown()).toBe("second\nline two!");
+});
+
+test("a recalled prompt sends as it was first sent, Markdown and all (PLX-325)", async () => {
+  const prompt = "**all** of `it`\n- one\n- two";
+  const onSend = vi.fn(async () => undefined);
+  const { press } = render(onSend, caps, { history: [prompt] });
+  await press("ArrowUp");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(prompt, {}, []);
+});
