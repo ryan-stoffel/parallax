@@ -90,6 +90,14 @@ export function usePullRequests(
     },
     [hostId, runId, put],
   );
+  // Kept across renders, so the Code tab's read isn't restarted by every App render.
+  const diff = useCallback(
+    async (url: string) => {
+      const answer = await window.parallax.request(hostId, "pr/diff", { runId: runId!, url });
+      return "error" in answer ? { error: describeError(answer.error) } : { result: answer.result };
+    },
+    [hostId, runId],
+  );
   const key = urls.join("\n");
   useEffect(() => {
     for (const url of key ? key.split("\n") : []) void refresh(url);
@@ -104,15 +112,7 @@ export function usePullRequests(
       if ("error" in answer) return describeError(answer.error);
       put(url, () => ({ pr: answer.result, at: new Date().toISOString() }));
     },
-    diff:
-      diffs && runId
-        ? async (url) => {
-            const answer = await window.parallax.request(hostId, "pr/diff", { runId, url });
-            return "error" in answer
-              ? { error: describeError(answer.error) }
-              : { result: answer.result };
-          }
-        : undefined,
+    diff: diffs && runId ? diff : undefined,
   };
 }
 
@@ -398,9 +398,13 @@ export function parseDiff(diff: string): DiffFile[] {
   let now = 0;
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      // `diff --git a/<old> b/<new>`; a `+++` line below, when there is one, says it exactly.
+      // `a/<path> b/<path>`: the same path twice unless renamed. A `rename to` or `+++` line
+      // below, when there is one, says it exactly.
+      const rest = line.slice(11).replaceAll('"', "");
+      const half = (rest.length - 1) / 2;
+      const same = rest.slice(2, half) === rest.slice(half + 3);
       file = {
-        path: / b\/(.*)$/.exec(line)?.[1] ?? line.slice(11),
+        path: same ? rest.slice(2, half) : (/ b\/(.*)$/.exec(rest)?.[1] ?? rest),
         added: 0,
         removed: 0,
         binary: false,
@@ -416,8 +420,11 @@ export function parseDiff(diff: string): DiffFile[] {
       file.lines.push({ op: "@", text: line });
     } else if (file.lines.length === 0) {
       // The file's header, before its first hunk.
-      if (line.startsWith("rename from ")) file.oldPath = line.slice(12);
+      // git quotes a path with special characters, and escapes them.
+      if (line.startsWith("rename from ")) file.oldPath = line.slice(12).replaceAll('"', "");
+      else if (line.startsWith("rename to ")) file.path = line.slice(10).replaceAll('"', "");
       else if (line.startsWith("+++ b/")) file.path = line.slice(6);
+      else if (line.startsWith('+++ "b/')) file.path = line.slice(7, -1);
       else if (line.startsWith("Binary files ")) file.binary = true;
     } else if (line.startsWith("+")) {
       file.added++;
@@ -525,8 +532,12 @@ function DiffFileView({
   );
 }
 
-/** A review verdict in words, and its icon. A plain "commented" review shows as its comment. */
+/**
+ * A review verdict in words, and its icon. A plain "commented" review shows as its comment, or,
+ * with only inline comments, as "reviewed".
+ */
 const verdicts: Record<string, { Icon: LucideIcon; color: string; text: string }> = {
+  commented: { Icon: MessageSquare, color: "text-muted-foreground", text: "reviewed" },
   approved: { Icon: CircleCheck, color: "text-added", text: "approved these changes" },
   changesRequested: { Icon: CircleAlert, color: "text-danger", text: "requested changes" },
   dismissed: { Icon: CircleMinus, color: "text-faint-foreground", text: "had a review dismissed" },
@@ -716,7 +727,8 @@ export function PullRequestView({
     })),
     ...(pr.reviews ?? []).flatMap((r, i) => {
       const verdict = verdicts[r.state];
-      if (!verdict) return [];
+      const said = pr.comments.some((c) => c.author === r.author && c.createdAt === r.submittedAt);
+      if (!verdict || (r.state === "commented" && said)) return [];
       return [
         {
           at: r.submittedAt,

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
@@ -321,6 +321,7 @@ test("the timeline shows opening, commits, comments, reviews, and the merge, new
   expect(rows()).toEqual([
     "reviewer merged parallax/add-readme into main",
     "bot had a review dismissed",
+    "bot reviewed",
     "bot requested changes",
     "reviewer approved these changes",
     "reviewer commented",
@@ -350,6 +351,33 @@ test("the code tab reads the diff once and shows each file numbered, folding a v
   await click(document.querySelector('[role="tab"]:nth-child(1)'));
   await click(document.querySelector('[role="tab"]:nth-child(3)'));
   expect(request.mock.calls.filter(([, m]) => m === "pr/diff")).toHaveLength(1);
+});
+
+test("a re-render while the diff is read doesn't read it again", async () => {
+  read = { [url(42)]: merged };
+  let answer!: (value: { logId: string; result: PrDiffResult }) => void;
+  request.mockImplementation(async (_host, method, params) => {
+    if (method === "pr/diff")
+      return new Promise<{ logId: string; result: PrDiffResult }>((resolve) => (answer = resolve));
+    return { logId: "l", result: read[params["url"] as string] };
+  });
+  let rerender!: () => void;
+  function Harness() {
+    const [, set] = useState(0);
+    rerender = () => set((n) => n + 1);
+    const prs = usePullRequests("local", "run-1", [url(42)], true);
+    return <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />;
+  }
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root!.render(<Harness />));
+  await settle();
+  await click(document.querySelector('[role="tab"]:nth-child(3)'));
+  act(() => rerender());
+  await settle();
+  await act(async () => answer({ logId: "l", result: sampleDiff }));
+  await settle();
+  expect(request.mock.calls.filter(([, m]) => m === "pr/diff")).toHaveLength(1);
+  expect(document.body.textContent).toContain("1 file · 0 / 1 viewed");
 });
 
 test("parseDiff numbers each side, and keeps renames and binary files", () => {
@@ -386,4 +414,16 @@ test("parseDiff numbers each side, and keeps renames and binary files", () => {
     },
     { path: "new.png", oldPath: "old.png", added: 0, removed: 0, binary: true, lines: [] },
   ]);
+  // A path with ` b/` in it, and one git quotes.
+  expect(
+    parseDiff(
+      [
+        "diff --git a/x b/y.bin b/x b/y.bin",
+        "Binary files a/x b/y.bin and b/x b/y.bin differ",
+        'diff --git "a/caf\\303\\251.md" "b/caf\\303\\251.md"',
+        '--- "a/caf\\303\\251.md"',
+        '+++ "b/caf\\303\\251.md"',
+      ].join("\n"),
+    ).map((f) => f.path),
+  ).toEqual(["x b/y.bin", "caf\\303\\251.md"]);
 });
