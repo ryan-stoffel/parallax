@@ -12,7 +12,7 @@ use tempfile::TempDir;
 use super::CliDetector;
 use crate::backend::process::{Environment, Launcher};
 use crate::paths::DataDir;
-use wisp_protocol::{AuthKind, CliKind, DetectedCli};
+use parallax_protocol::{AuthKind, CliKind, DetectedCli};
 
 const FAKE_CLAUDE: &str = include_str!("fixtures/fake-claude.sh");
 const FAKE_CODEX: &str = include_str!("fixtures/fake-codex.sh");
@@ -331,10 +331,10 @@ async fn get_probes_only_the_cli_asked_for() {
 /// Proves detection never opens a vendor's credential files: with sentinel files under fake
 /// `.claude`, `.codex`, and `.cursor` folders made unreadable (mode 0), a full `refresh()` still
 /// succeeds and the files are exactly as they were. `detect.rs` has no code path that reads a path
-/// under `$HOME` at all (unlike `paths.rs` and `service.rs`, which read wispd's own data folder);
+/// under `$HOME` at all (unlike `paths.rs` and `service.rs`, which read plxd's own data folder);
 /// this test guards against that ever changing, without needing `std::env::set_var` (unsafe, and
 /// this workspace denies `unsafe_code`) since the sandboxed `HOME` is only threaded into the fake
-/// CLIs' own environment, exactly as a real wispd would hand it to a real vendor CLI.
+/// CLIs' own environment, exactly as a real plxd would hand it to a real vendor CLI.
 #[tokio::test]
 async fn detection_never_touches_files_under_vendor_config_directories() {
     let fixture = Fixture::new();

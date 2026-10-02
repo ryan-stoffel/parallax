@@ -9,8 +9,14 @@ import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
 import { startUpdater } from "./updater";
 
+// The app menu's About, Hide, and Quit items show the app's name. userData stays in the
+// package-named folder, because `Parallax` would share plxd's `parallax` data folder on a
+// case-insensitive disk.
+app.setPath("userData", app.getPath("userData"));
+app.setName("Parallax");
+
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
-const devServerUrl = app.isPackaged ? undefined : process.env["WISP_DEV_SERVER_URL"];
+const devServerUrl = app.isPackaged ? undefined : process.env["PLX_DEV_SERVER_URL"];
 
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors;
@@ -29,8 +35,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // The preload reads it, so `window.wisp.updatable` is a plain value.
-      additionalArguments: updatable ? ["--wisp-updatable"] : [],
+      // The preload reads it, so `window.parallax.updatable` is a plain value.
+      additionalArguments: updatable ? ["--parallax-updatable"] : [],
     },
   });
   win.once("ready-to-show", () => win.show());
@@ -60,15 +66,16 @@ app.on("web-contents-created", (_event, contents) => {
   });
 });
 
-ipcMain.handle("wisp:version", () => app.getVersion());
+ipcMain.handle("parallax:version", () => app.getVersion());
 
 // What the Update button shows. Windows get each change; a (re)loaded renderer asks.
 let updateState: UpdateState = {};
 function publishUpdate(state: UpdateState) {
   updateState = state;
-  for (const win of BrowserWindow.getAllWindows()) win.webContents.send("wisp:updateState", state);
+  for (const win of BrowserWindow.getAllWindows())
+    win.webContents.send("parallax:updateState", state);
 }
-ipcMain.handle("wisp:updateState", () => updateState);
+ipcMain.handle("parallax:updateState", () => updateState);
 
 // The sidebar's Update installs releases in a packaged app (updater.ts). Under `pnpm dev`,
 // scripts/dev.mjs gives Electron an IPC channel, over which it runs Update with git.
@@ -78,7 +85,7 @@ const updatable = updater !== undefined || process.send !== undefined;
 // Installs or checks for a release, or asks scripts/dev.mjs to move the checkout to the update
 // channel's branch and rebuild, and resolves to the one-line answer.
 ipcMain.handle(
-  "wisp:update",
+  "parallax:update",
   () =>
     updater?.update() ??
     new Promise<string>((resolve) => {
@@ -109,12 +116,12 @@ app.on("browser-window-focus", () => {
 
 // Names a new thread and its branch from its first prompt (see namer.ts).
 const namer = createNamer(path.join(app.getPath("userData"), "models"));
-ipcMain.handle("wisp:nameThread", (_event, prompt: unknown) =>
+ipcMain.handle("parallax:nameThread", (_event, prompt: unknown) =>
   typeof prompt === "string" ? namer.name(prompt) : fallbackName(""),
 );
 
 // New Thread's "Add repository…": a folder on this Mac, sheet-attached to the asking window.
-ipcMain.handle("wisp:pickFolder", async (event) => {
+ipcMain.handle("parallax:pickFolder", async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const options = { properties: ["openDirectory" as const] };
   const { canceled, filePaths } = await (win
@@ -124,7 +131,7 @@ ipcMain.handle("wisp:pickFolder", async (event) => {
 });
 
 // The renderer's Appearance setting. Native UI follows it.
-ipcMain.on("wisp:theme", (_event, preference: unknown) => {
+ipcMain.on("parallax:theme", (_event, preference: unknown) => {
   const source = THEME_PREFERENCES.find((p) => p === preference);
   if (source) nativeTheme.themeSource = source;
 });
@@ -143,7 +150,7 @@ void app.whenReady().then(() => {
   // change.
   startHosts((channel) => (updater ? updater.follow(channel) : process.send?.({ channel })));
   // The end-to-end tests launch the app on CI machines, where a 490 MB download isn't wanted.
-  if (!process.env["WISP_NO_NAMER"]) namer.warm();
+  if (!process.env["PLX_NO_NAMER"]) namer.warm();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

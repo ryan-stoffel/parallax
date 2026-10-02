@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, SshHost, UpdateChannel, WispBridge } from "../preload/bridge";
+import type { ConnectionState, SshHost, UpdateChannel, ParallaxBridge } from "../preload/bridge";
 import type { SettingsSection } from "./App";
 import { Settings } from "./Settings";
 
@@ -11,11 +11,11 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
 const states: Record<string, ConnectionState> = {
-  local: { status: "connected", wispd: "0.1.0", protocol: 1, capabilities: {} },
+  local: { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} },
   [mini.id]: {
     status: "failed",
     retrying: false,
-    error: { reason: "exited", message: "wispd exited." },
+    error: { reason: "exited", message: "plxd exited." },
   },
 };
 const secret = "sk-proj-THE-SECRET-0123456789abcdef";
@@ -63,16 +63,16 @@ beforeEach(() => {
       },
     }),
   };
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     connectionState: async (hostId) => states[hostId]!,
     onConnectionState: () => () => {},
     hosts: async () => [mini],
     onHosts: () => () => {},
-    request: request as unknown as WispBridge["request"],
+    request: request as unknown as ParallaxBridge["request"],
     updateChannel: async () => channel,
-    setUpdateChannel: setUpdateChannel as WispBridge["setUpdateChannel"],
-  } as Partial<WispBridge> as WispBridge;
+    setUpdateChannel: setUpdateChannel as ParallaxBridge["setUpdateChannel"],
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};
@@ -293,7 +293,7 @@ test("Updates shows the saved channel, and saves the one chosen", async () => {
 });
 
 test("a channel that can't be saved stays as it was, with the reason", async () => {
-  setUpdateChannel.mockResolvedValueOnce("wisp couldn't save its settings: disk full");
+  setUpdateChannel.mockResolvedValueOnce("Parallax couldn't save its settings: disk full");
   await renderSettings("general");
   await click(channelRadio("Standard"));
   expect(channelRadio("Nightly").checked).toBe(true);

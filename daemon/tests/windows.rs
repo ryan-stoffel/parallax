@@ -1,4 +1,4 @@
-//! `wispd attach` and `wispd serve` on Windows (0023): attach starts a detached `serve`, which
+//! `plxd attach` and `plxd serve` on Windows (0023): attach starts a detached `serve`, which
 //! answers over the named pipe, outlives attach, holds the lock, and gets none of attach's
 //! handles.
 #![cfg(windows)]
@@ -8,26 +8,26 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use parallax_protocol::framing::FrameCodec;
+use parallax_protocol::jsonrpc::{Message, Request};
+use parallax_protocol::methods::Initialize;
+use parallax_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
+use plxd::paths::DataDir;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::codec::Framed;
-use wisp_protocol::framing::FrameCodec;
-use wisp_protocol::jsonrpc::{Message, Request};
-use wisp_protocol::methods::Initialize;
-use wisp_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
-use wispd::paths::DataDir;
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
-fn wispd(data: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_wispd"));
+fn plxd(data: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_plxd"));
     command
         .args(args)
         .arg("--data-dir")
         .arg(data)
-        .env_remove("WISPD_LOG")
-        .env_remove("WISPD_DATA_DIR")
+        .env_remove("PLXD_LOG")
+        .env_remove("PLXD_DATA_DIR")
         .kill_on_drop(true);
     command
 }
@@ -38,7 +38,7 @@ fn initialize() -> Request<InitializeParams> {
         InitializeParams {
             protocol: ProtocolRange::SUPPORTED,
             client: ClientInfo {
-                name: "wispd-windows-tests".to_owned(),
+                name: "plxd-windows-tests".to_owned(),
                 version: "0.0.0".to_owned(),
                 machine_id: None,
             },
@@ -47,11 +47,11 @@ fn initialize() -> Request<InitializeParams> {
     )
 }
 
-/// Runs `wispd attach` with one `initialize` on stdin, then the end of stdin, and returns what
+/// Runs `plxd attach` with one `initialize` on stdin, then the end of stdin, and returns what
 /// it printed. attach only exits once stdout's other copies close, so this also fails if the
 /// `serve` it started inherited its stdout.
 async fn attach_once(data: &Path) -> String {
-    let mut child = wispd(data, &["attach"])
+    let mut child = plxd(data, &["attach"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -72,7 +72,7 @@ async fn attach_once(data: &Path) -> String {
 
 /// The pid `serve` logged when it started listening.
 fn serve_pid(data: &Path) -> u32 {
-    let log = std::fs::read_to_string(data.join("logs").join("wispd.log")).unwrap();
+    let log = std::fs::read_to_string(data.join("logs").join("plxd.log")).unwrap();
     let listening = log
         .lines()
         .rfind(|line| line.contains("listening"))
@@ -97,7 +97,7 @@ async fn kill(data: &Path) {
     assert!(status.success(), "taskkill {pid}");
     let pipe = DataDir::new(data).unwrap().socket_path().unwrap().path;
     timeout(PATIENCE, async {
-        while wispd::transport::connect(&pipe).await.is_ok() {
+        while plxd::transport::connect(&pipe).await.is_ok() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -123,7 +123,7 @@ async fn attach_starts_a_serve_that_answers_outlives_it_and_holds_the_lock() {
         .unwrap()
         .path;
     let mut client = Framed::new(
-        wispd::transport::connect(&pipe).await.unwrap(),
+        plxd::transport::connect(&pipe).await.unwrap(),
         FrameCodec::new(),
     );
     client.send(&initialize()).await.unwrap();
@@ -138,7 +138,7 @@ async fn attach_starts_a_serve_that_answers_outlives_it_and_holds_the_lock() {
     drop(client);
 
     // A second serve for the folder is kept out by the lock, whose holder it can't name.
-    let second = timeout(PATIENCE, wispd(data.path(), &["serve"]).output())
+    let second = timeout(PATIENCE, plxd(data.path(), &["serve"]).output())
         .await
         .unwrap()
         .unwrap();
@@ -151,7 +151,7 @@ async fn attach_starts_a_serve_that_answers_outlives_it_and_holds_the_lock() {
 
     // The lock file stays when serve dies, and doesn't keep the next one out.
     kill(data.path()).await;
-    assert!(data.path().join("wispd.lock").exists());
+    assert!(data.path().join("plxd.lock").exists());
     let stdout = attach_once(data.path()).await;
     assert!(stdout.contains("\"protocol\":1"), "{stdout}");
     kill(data.path()).await;

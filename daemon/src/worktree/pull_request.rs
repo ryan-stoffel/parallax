@@ -4,7 +4,7 @@
 //! branch to `origin` through [`WorktreeManager::run_git`], so git uses the user's own
 //! configuration and credential helpers, runs no hooks, and never prompts. Then `gh`, with its own
 //! sign-in, returns the branch's open pull request, or opens one against the GitHub repository's
-//! default branch. `gh` is found on the same `PATH` as every other tool wispd runs.
+//! default branch. `gh` is found on the same `PATH` as every other tool plxd runs.
 
 use std::ffi::OsString;
 use std::path::Path;

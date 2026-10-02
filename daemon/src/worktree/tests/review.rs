@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use wisp_protocol::RunId;
+use parallax_protocol::RunId;
 
 use super::{git, git_output, init_repo, manager, rev_parse, write_sentinel_script};
 use crate::worktree::review::Target;
@@ -60,7 +60,7 @@ impl Fixture {
 
     async fn accept(&self, commit: &str) -> Result<crate::worktree::Accepted, AcceptError> {
         self.mgr
-            .accept(&self.repo, commit, "Merge wisp run: test\n")
+            .accept(&self.repo, commit, "Merge Parallax run: test\n")
             .await
     }
 }
@@ -236,7 +236,7 @@ async fn a_file_list_too_long_to_read_fails_the_diff_and_accept() {
         .unwrap_err();
     assert!(too_long(&error), "{error}");
     let refused = small
-        .accept(&f.repo, &head, "Merge wisp run: test\n")
+        .accept(&f.repo, &head, "Merge Parallax run: test\n")
         .await
         .unwrap_err();
     assert!(
@@ -415,7 +415,7 @@ async fn accept_makes_a_merge_commit_when_the_branch_moved_on() {
     );
     assert_eq!(
         git_output(&f.repo, &["log", "-1", "--format=%s%n%an <%ae>"]),
-        "Merge wisp run: test\nTest User <test@example.com>"
+        "Merge Parallax run: test\nTest User <test@example.com>"
     );
     assert_eq!(
         std::fs::read_to_string(f.repo.join("README.md")).unwrap(),
@@ -614,7 +614,7 @@ async fn no_hook_runs_through_accept_remove_and_the_next_create() {
     );
     let merged = f
         .mgr
-        .accept(&f.repo, &second_commit, "Merge wisp run: second\n")
+        .accept(&f.repo, &second_commit, "Merge Parallax run: second\n")
         .await
         .unwrap();
     assert_eq!(merged.how, MergeHow::Merge);
@@ -869,7 +869,7 @@ async fn a_checkout_stopped_at_the_timeout_names_the_lock_it_left() {
 
     let mgr = f.mgr.clone().with_merge_timeout(Duration::from_secs(1));
     let error = mgr
-        .accept(&f.repo, &commit, "Merge wisp run: test\n")
+        .accept(&f.repo, &commit, "Merge Parallax run: test\n")
         .await
         .unwrap_err();
     let lock = f.repo.join(".git/index.lock");

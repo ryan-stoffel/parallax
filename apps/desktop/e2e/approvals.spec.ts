@@ -3,8 +3,8 @@ import { expect, test } from "@playwright/test";
 import { close, launch, printFailure, type Launched } from "./launch";
 
 // RYA-196: a thread whose fake agent asks before writing a long file and before a command, then
-// hands over its plan, as Claude Code does through wispd (0031). The fake prints each answer it
-// reads as the agent's text, so the transcript shows what reached it. Its own app and wispd, since
+// hands over its plan, as Claude Code does through plxd (0031). The fake prints each answer it
+// reads as the agent's text, so the transcript shows what reached it. Its own app and plxd, since
 // the fake plays one script.
 
 test.describe.configure({ mode: "serial" });
@@ -24,9 +24,9 @@ test.afterAll(() => close(launched));
 
 test("answers a thread's permission requests from the card over the composer, and keeps them as lines", async () => {
   const { page } = launched;
-  await expect(page.getByRole("status").filter({ hasText: "Connected · wispd" })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Connected · plxd" })).toBeVisible();
   // As in app.spec.ts: the fake's account runs threads once it's the default.
-  const set = await page.evaluate(`window.wisp.request("local", "accounts/defaults/set", {
+  const set = await page.evaluate(`window.parallax.request("local", "accounts/defaults/set", {
     role: "worker",
     account: { kind: "subscription", backend: "fake" },
   })`);

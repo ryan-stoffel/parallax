@@ -23,7 +23,7 @@ const csp = (dev: boolean) =>
     .join("; ");
 
 const cspMeta: Plugin = {
-  name: "wisp-csp",
+  name: "parallax-csp",
   transformIndexHtml: (_html, ctx) => [
     {
       tag: "meta",

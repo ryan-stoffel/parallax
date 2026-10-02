@@ -3,12 +3,12 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { RpcResponse, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import type { RpcResponse, SubscriptionMessage, ParallaxBridge } from "../preload/bridge";
 import type {
   AgentOutputItem,
   AgentRun,
   LoggedEvent,
-  WispEvent,
+  ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { AgentChat, describeTool, RowView } from "./AgentChat";
 import {
@@ -34,7 +34,7 @@ Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
 const runId = "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01";
 const run: AgentRun = {
   id: runId,
-  project: "r-wisp",
+  project: "r-parallax",
   prompt: "Fix the flaky test",
   policy: "workspaceWrite",
   status: "running",
@@ -62,7 +62,7 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
   if (method === "agent/approve") return { logId: "log-1", ...(await approve(params)) };
   return { result: {}, logId: "log-1" };
 });
-const append = (event: WispEvent) => {
+const append = (event: ParallaxEvent) => {
   const seq = (log.at(-1)?.seq ?? 0) + 1;
   const logged = { seq, time: `2026-10-01T12:00:${String(seq).padStart(2, "0")}Z`, event };
   log.push(logged);
@@ -71,7 +71,7 @@ const append = (event: WispEvent) => {
 const output = (...items: AgentOutputItem[]) => append({ kind: "agent.output", runId, items });
 const emit = (...items: AgentOutputItem[]) =>
   act(async () => listener({ type: "event", event: { subscription: "s", ...output(...items) } }));
-const emitEvent = (event: WispEvent) =>
+const emitEvent = (event: ParallaxEvent) =>
   act(async () => listener({ type: "event", event: { subscription: "s", ...append(event) } }));
 
 const asked = (approvalId: string, more: Partial<ApprovalRequest> = {}): AgentOutputItem => ({
@@ -99,11 +99,11 @@ beforeEach(() => {
         ? { decision: "allowed", by: "user", ...(p["always"] ? { always: true } : {}) }
         : { decision: "denied", by: "user", ...(p["message"] ? { message: p["message"] } : {}) },
   });
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     connectionState: async () => ({
       status: "connected",
-      wispd: "0.1.0",
+      plxd: "0.1.0",
       protocol: 1,
       capabilities: { approvals: {} },
     }),
@@ -113,7 +113,7 @@ beforeEach(() => {
       listener = l;
       return () => {};
     },
-  } as Partial<WispBridge> as WispBridge;
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};
@@ -208,7 +208,7 @@ test("Approve answers with agent/approve, shows the answer on its way, then coll
   await settle();
   expect(pinned()).toBeNull();
   expect(lines()).toEqual([expect.stringMatching(/^ApprovedBash: pnpm test/)]);
-  // wispd's resolution confirms it.
+  // plxd's resolution confirms it.
   await emit(resolved("a1", { decision: "allowed", by: "user" }));
   expect(pinned()).toBeNull();
   expect(lines()).toEqual([expect.stringMatching(/^ApprovedBash: pnpm test/)]);
@@ -223,11 +223,11 @@ test("a request that ends while its answer is on the way leaves, and the answer'
   await renderChat();
   await click(inCard("Approve"));
   expect(inCard("Approving…")).toBeDefined();
-  // It timed out just before the answer reached wispd.
+  // It timed out just before the answer reached plxd.
   await emit(resolved("a1", { decision: "expired", by: "timeout" }));
   expect(pinned()).toBeNull();
   expect(lines()).toEqual([expect.stringMatching(/^Timed outBash/)]);
-  // wispd's reply is how it ended, as `agent/approve` is idempotent.
+  // plxd's reply is how it ended, as `agent/approve` is idempotent.
   await act(async () => release({ result: { decision: "expired", by: "timeout" } }));
   await settle();
   expect(pinned()).toBeNull();
@@ -307,11 +307,11 @@ test("Deny asks for an optional note, which goes as the message; Escape goes bac
 
 test("an answer that fails says why, and can be sent again", async () => {
   output(asked("a1"));
-  approve = () => ({ error: { code: -32000, message: "wispd is busy" } });
+  approve = () => ({ error: { code: -32000, message: "plxd is busy" } });
   await renderChat();
   await click(inCard("Approve"));
   expect(pinned()!.querySelector('[role="alert"]')!.textContent).toBe(
-    "Your answer didn't reach the agent: wispd is busy",
+    "Your answer didn't reach the agent: plxd is busy",
   );
   expect(buttons().every((b) => !b.disabled)).toBe(true);
 
@@ -358,7 +358,7 @@ test("a request that times out, is withdrawn, is stopped, or outlives its run le
     expect.stringMatching(/^WithdrawnBash/),
   ]);
   const details = [...transcript().querySelectorAll("details")].map((d) => d.textContent);
-  expect(details[0]).toContain("Nobody answered in time, so wispd denied it");
+  expect(details[0]).toContain("Nobody answered in time, so plxd denied it");
   expect(details[2]).toContain("Denied when the run was stopped");
   expect(details[3]).toContain("The run ended before anyone answered");
 });
@@ -497,14 +497,14 @@ test("an open chat's Manual says its requests are denied when its run started wi
   append({ kind: "agent.started", runId, run: { ...run, approvals: undefined } });
   await renderChat();
   expect(manual()).toBe(
-    "ManualAsks before edits and commands. This chat started before wisp could show those requests, so they're denied.",
+    "ManualAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
   );
 });
 
 test("a long preview scrolls inside its bound, with the header, a problem, and the buttons outside it", async () => {
   const content = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
   output(asked("a1", { toolName: "Write", input: { file_path: "/repo/notes.txt", content } }));
-  approve = () => ({ error: { code: -32000, message: "wispd is busy" } });
+  approve = () => ({ error: { code: -32000, message: "plxd is busy" } });
   await renderChat();
   const bounded = card()!.querySelector<HTMLElement>('[style*="max-height"]')!;
   expect(bounded.style.maxHeight).toBe("45vh");
@@ -1024,10 +1024,10 @@ test("while disconnected, the answers are off and say why", () => {
       onDismiss={() => {}}
       describe={describeTool}
       markdown={(text) => <p>{text}</p>}
-      disabledReason="Disconnected from wispd"
+      disabledReason="Disconnected from plxd"
     />,
   );
-  expect(buttons().every((b) => b.disabled && b.title === "Disconnected from wispd")).toBe(true);
+  expect(buttons().every((b) => b.disabled && b.title === "Disconnected from plxd")).toBe(true);
 });
 
 // --- The pure parts ---

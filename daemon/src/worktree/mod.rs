@@ -3,14 +3,14 @@
 //!
 //! [`WorktreeManager`] runs every git command through [`Launcher`], the same process supervisor
 //! backends use: an explicit, scrubbed environment and a timeout per call, so a hung or
-//! credential-prompting git can never block wispd. Only one call changes the project repo's own
+//! credential-prompting git can never block plxd. Only one call changes the project repo's own
 //! working tree: [`WorktreeManager::accept`] (#157), when the user accepts a run, and it refuses
 //! rather than touch uncommitted changes (see `review`). Otherwise `worktree add`, `worktree
 //! remove`, and `worktree prune` only touch `.git/worktrees` metadata and refs, and `status`,
 //! `rev-parse`, and `diff` are read-only.
 //!
 //! The runner (`crate::agents`, #156) is its caller: `agent/start` creates a run's worktree here
-//! and stores its row, including [`CreatedWorktree::git_dir`], in `wisp-store`'s `worktrees`
+//! and stores its row, including [`CreatedWorktree::git_dir`], in `parallax-store`'s `worktrees`
 //! table, and a finished run is committed with [`WorktreeManager::commit_all`] and measured with
 //! [`WorktreeManager::diff_stat`]. A client reviews the commit through
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
@@ -20,8 +20,8 @@
 //!
 //! A worktree lives at `<data dir>/worktrees/<repo slug>/<run id>`, where `<repo slug>` is the
 //! repo's directory name plus a short hash of its canonical path (so two repos named the same
-//! thing never collide, and the folder stays readable). Its branch is `wisp/<short run id>`
-//! (or `wisp/<slug>` for a named one, see [`WorktreeManager::create_named`]),
+//! thing never collide, and the folder stays readable). Its branch is `parallax/<short run id>`
+//! (or `parallax/<slug>` for a named one, see [`WorktreeManager::create_named`]),
 //! `<short run id>` being the first 8 hex digits of the SHA-256 of the run id — the same
 //! short-hash idea [`crate::paths::DataDir`] uses for its socket fallback, and collision-free in
 //! the way a prefix of the run id's own (time-ordered) `UUIDv7` bytes would not be.
@@ -40,7 +40,7 @@
 //! resolves `user.name`/`user.email` itself, from the repository the user actually works in
 //! (`repo_root`, see [`WorktreeManager::resolve_identity`]), and scrubs every environment
 //! variable that could override them anyway (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `EMAIL`), so a
-//! commit is always attributed to whatever the repo itself says, never to whatever wispd
+//! commit is always attributed to whatever the repo itself says, never to whatever plxd
 //! inherited.
 //!
 //! # A worker's worktree is hostile input (#166)
@@ -67,7 +67,7 @@
 //! writes, so there is no `.git` file or repo-local config of the worker's to distrust there. A
 //! coordinator or a worker in Bypass Permissions can write it, but either can already run any
 //! command as the user (0027). They still run
-//! with hooks off, like every git call wispd makes (#157, #191): once a run is accepted, the
+//! with hooks off, like every git call plxd makes (#157, #191): once a run is accepted, the
 //! checkout's hooks can include files the worker wrote.
 //!
 //! [`WorktreeManager::gc_orphans`] takes a third path (#171): an orphan folder has no
@@ -113,18 +113,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::Duration;
 
+use parallax_protocol::RunId;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::timeout;
 use tracing::warn;
-use wisp_protocol::RunId;
 
 use crate::backend::process::{
     Environment, Exit, Launcher, Output, Process, ProcessSpec, SpawnError, StdinMode,
 };
 
-/// How long a single git invocation may run before wispd gives up on it and kills its process
-/// group. A hung `git` (an unexpected credential prompt, a stuck hook) must never block wispd.
+/// How long a single git invocation may run before plxd gives up on it and kills its process
+/// group. A hung `git` (an unexpected credential prompt, a stuck hook) must never block plxd.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The most bytes of unified diff [`WorktreeManager::diff`] returns before truncating. Diffs,
@@ -314,9 +314,9 @@ pub enum WorktreeError {
 /// A newly created worktree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreatedWorktree {
-    /// Its absolute path, under the wisp-owned worktrees folder.
+    /// Its absolute path, under the parallax-owned worktrees folder.
     pub path: PathBuf,
-    /// Its branch, `wisp/<short run id>`.
+    /// Its branch, `parallax/<short run id>`.
     pub branch: String,
     /// The concrete commit it was created from, resolved once so it never moves under it.
     pub base: String,
@@ -460,13 +460,13 @@ impl WorktreeManager {
         self
     }
 
-    /// The wisp-owned folder every worktree lives under.
+    /// The parallax-owned folder every worktree lives under.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Creates a worktree of `repo_path` for `run_id`, on a new branch `wisp/<short run id>`
+    /// Creates a worktree of `repo_path` for `run_id`, on a new branch `parallax/<short run id>`
     /// starting from `base` (a commit-ish git can resolve), or the repo's current branch `HEAD`
     /// when `base` is `None`.
     ///
@@ -485,7 +485,7 @@ impl WorktreeManager {
         self.create_named(repo_path, run_id, base, None).await
     }
 
-    /// [`WorktreeManager::create`] with the branch `wisp/<slug>` instead of `wisp/<short run id>`
+    /// [`WorktreeManager::create`] with the branch `parallax/<slug>` instead of `parallax/<short run id>`
     /// when `slug` is given ([`valid_branch_slug`]). A branch that already has the name gets the
     /// short run id after it.
     ///
@@ -512,7 +512,7 @@ impl WorktreeManager {
         let short = short_hash(&run_id.to_string());
         let branch = match slug {
             Some(slug) if valid_branch_slug(slug) => {
-                let named = format!("wisp/{slug}");
+                let named = format!("parallax/{slug}");
                 let taken = self
                     .run_git(
                         &repo_root,
@@ -531,7 +531,7 @@ impl WorktreeManager {
                     named
                 }
             }
-            _ => format!("wisp/{short}"),
+            _ => format!("parallax/{short}"),
         };
         let path = self
             .root
@@ -669,7 +669,7 @@ impl WorktreeManager {
     /// nothing to commit.
     ///
     /// Runs with `--no-verify` and `--no-gpg-sign`: hooks and interactive signing assume a person
-    /// is at the keyboard, and a headless commit that triggers either must not hang wispd.
+    /// is at the keyboard, and a headless commit that triggers either must not hang plxd.
     /// `--no-verify` alone only skips the `pre-commit` and `commit-msg` hooks; `git_dir` must be
     /// [`CreatedWorktree::git_dir`] for `worktree_path`, which additionally disables every other
     /// hook and execution vector a worker's worktree could reach (#166); see
@@ -764,7 +764,7 @@ impl WorktreeManager {
     }
 
     /// Removes every worktree folder under [`WorktreeManager::root`] that isn't in `known`
-    /// (normally every [`wisp_store::Worktree::path`] the store has), and cleans up any project
+    /// (normally every [`parallax_store::Worktree::path`] the store has), and cleans up any project
     /// folder that becomes empty as a result. Afterward, prunes every repository in
     /// `known_repos` (normally every project repository the store has): removing an orphan's
     /// folder directly, with no git command, can leave that repository's own
@@ -800,7 +800,7 @@ impl WorktreeManager {
 
         for project_dir in project_dirs {
             if !is_real_dir(&project_dir).await {
-                // Not a genuine directory wispd created: a stray file, or a symlink planted to
+                // Not a genuine directory plxd created: a stray file, or a symlink planted to
                 // make gc follow it outside `root` (#171). Either way, never descended into.
                 warn!(
                     path = %project_dir.display(),
@@ -847,7 +847,7 @@ impl WorktreeManager {
 
     /// Removes an orphan folder directly, with no git command: gc has no pinned `git_dir` for it
     /// (#171), so nothing here may discover a repository from, or trust, whatever `path`'s own
-    /// `.git` file says — a worker could have rewritten it before wispd ever looked, just as
+    /// `.git` file says — a worker could have rewritten it before plxd ever looked, just as
     /// #166 found for a known worktree. `path` itself must be a real directory, never a symlink a
     /// worker could substitute to route this removal outside [`WorktreeManager::root`].
     async fn remove_orphan(&self, path: &Path) -> Result<(), WorktreeError> {
@@ -988,11 +988,11 @@ impl WorktreeManager {
     /// a line too long to read (see [`collect`]) are possible failures here; callers that want a
     /// non-zero exit turned into an error use [`WorktreeManager::run_git_ok`].
     ///
-    /// Every call runs with `core.hooksPath=/dev/null` (#157, #191): no git command wispd runs
+    /// Every call runs with `core.hooksPath=/dev/null` (#157, #191): no git command plxd runs
     /// in the user's checkout ever runs a repository hook. Once a run is accepted, the
     /// repository's hooks can include files the agent wrote (a tracked `core.hooksPath` such as
     /// husky's `.husky/`), and `worktree add` (`post-checkout`) or `branch -D`
-    /// (`reference-transaction`) would otherwise run them, headless and unsandboxed, in wispd.
+    /// (`reference-transaction`) would otherwise run them, headless and unsandboxed, in plxd.
     async fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<GitOutput, WorktreeError> {
         self.run_git_for(cwd, args, self.timeout).await
     }
@@ -1192,7 +1192,7 @@ async fn collect(
                 return Err(WorktreeError::GitFailed {
                     cwd: cwd.to_owned(),
                     args: owned_args(args),
-                    detail: format!("it wrote a {bytes}-byte line, too long for wispd to read"),
+                    detail: format!("it wrote a {bytes}-byte line, too long for plxd to read"),
                 });
             }
             Some(Output::Exited(exit)) => return Ok((stdout, exit)),
@@ -1201,7 +1201,7 @@ async fn collect(
     }
 }
 
-/// Whether `slug` can follow `wisp/` in a branch name: 1 to 40 lowercase letters, digits, and
+/// Whether `slug` can follow `parallax/` in a branch name: 1 to 40 lowercase letters, digits, and
 /// hyphens, none leading or trailing.
 #[must_use]
 pub fn valid_branch_slug(slug: &str) -> bool {

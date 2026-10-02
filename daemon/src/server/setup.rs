@@ -85,7 +85,7 @@ fn is_reparse_point(metadata: &fs::Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-/// The lock on `wispd.lock` that admits one `serve` per data folder: `flock` on Unix, and
+/// The lock on `plxd.lock` that admits one `serve` per data folder: `flock` on Unix, and
 /// `LockFileEx` on Windows, both through std's `File::try_lock`.
 #[derive(Debug)]
 pub(crate) struct InstanceLock {
@@ -176,7 +176,7 @@ impl InstanceLock {
             });
         }
         Err(io_error(io::Error::other(
-            "the lock file kept changing while wispd locked it",
+            "the lock file kept changing while plxd locked it",
         )))
     }
 
@@ -214,7 +214,7 @@ fn read_pid(file: &mut File) -> Option<u32> {
     text.trim().parse().ok()
 }
 
-/// The socket this server bound, known by its inode, so wispd only ever removes its own.
+/// The socket this server bound, known by its inode, so plxd only ever removes its own.
 #[cfg(unix)]
 #[derive(Debug)]
 pub(crate) struct Socket {
@@ -288,7 +288,7 @@ impl Socket {
 
 /// The named pipe this server listens on (0023): one instance that waits for the next client,
 /// with a DACL that grants only this user. Unlike a socket, a pipe can't be deleted or replaced
-/// while wispd holds an instance, so it needs no rebinding or removal.
+/// while plxd holds an instance, so it needs no rebinding or removal.
 ///
 /// It is a message pipe, though the protocol is a byte stream: a pipe has no half-close, so a
 /// client ends its input with an empty message, which reads here as the end of the stream (see
@@ -383,10 +383,10 @@ mod windows_tests {
     use std::process::Command;
 
     use futures_util::SinkExt;
+    use parallax_protocol::framing::FrameCodec;
     use tokio::io::AsyncReadExt;
     use tokio::time::{Duration, timeout};
     use tokio_util::codec::FramedWrite;
-    use wisp_protocol::framing::FrameCodec;
 
     use super::{InstanceLock, Pipe, prepare_data_dir};
     use crate::server::StartError;
@@ -424,7 +424,7 @@ mod windows_tests {
     #[test]
     fn a_second_lock_is_refused_without_a_pid_and_the_file_stays() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.lock");
+        let path = temp.path().join("plxd.lock");
         let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
         match InstanceLock::acquire(&path, temp.path()) {
             Err(StartError::AlreadyRunning { pid, .. }) => assert_eq!(pid, None),
@@ -440,7 +440,7 @@ mod windows_tests {
 
     #[tokio::test]
     async fn the_pipe_takes_this_users_clients_and_its_name_only_once() {
-        let name = format!(r"\\.\pipe\wispd-test-{}", std::process::id());
+        let name = format!(r"\\.\pipe\plxd-test-{}", std::process::id());
         let mut pipe = Pipe::create(name.as_ref()).unwrap();
         assert!(matches!(
             Pipe::create(name.as_ref()),
@@ -460,7 +460,7 @@ mod windows_tests {
 
     #[tokio::test]
     async fn a_large_framed_write_arrives_without_early_eof() {
-        let name = format!(r"\\.\pipe\wispd-test-framed-{}", std::process::id());
+        let name = format!(r"\\.\pipe\plxd-test-framed-{}", std::process::id());
         let mut pipe = Pipe::create(name.as_ref()).unwrap();
         let client = crate::transport::connect(name.as_ref()).await.unwrap();
         let mut server = pipe.accept().await.unwrap();
@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn a_symlinked_lock_file_is_refused_and_its_target_not_created() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.lock");
+        let path = temp.path().join("plxd.lock");
         let target = temp.path().join("elsewhere");
         symlink(&target, &path).unwrap();
         assert!(matches!(
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn releasing_leaves_a_lock_file_that_replaced_ours_alone() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.lock");
+        let path = temp.path().join("plxd.lock");
         let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
         let other = temp.path().join("other");
         fs::write(&other, "another instance's\n").unwrap();
@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn a_second_lock_is_refused_with_the_holders_pid() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.lock");
+        let path = temp.path().join("plxd.lock");
         let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
         match InstanceLock::acquire(&path, temp.path()) {
             Err(StartError::AlreadyRunning { pid, .. }) => {
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn an_old_socket_is_replaced_and_anything_else_is_left_alone() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.sock");
+        let path = temp.path().join("plxd.sock");
         drop(UnixListener::bind(&path).unwrap());
         let (socket, _listener) = Socket::bind(&path).unwrap();
         assert_eq!(
@@ -608,7 +608,7 @@ mod tests {
     #[test]
     fn a_deleted_socket_is_bound_again_and_a_replaced_one_is_not_removed() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.sock");
+        let path = temp.path().join("plxd.sock");
         let (mut socket, _listener) = Socket::bind(&path).unwrap();
         assert!(socket.rebind_if_gone().unwrap().is_none());
         fs::remove_file(&path).unwrap();

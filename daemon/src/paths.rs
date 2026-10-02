@@ -1,28 +1,28 @@
-//! Where wispd keeps its files.
+//! Where plxd keeps its files.
 //!
 //! Everything lives in one data folder (0009, 0023), which the editor shares:
-//! `~/Library/Application Support/wisp` on macOS, `$XDG_DATA_HOME/wisp` or
-//! `~/.local/share/wisp` on Linux, and `%LOCALAPPDATA%\wisp` on Windows. wispd's own entries are:
+//! `~/Library/Application Support/parallax` on macOS, `$XDG_DATA_HOME/parallax` or
+//! `~/.local/share/parallax` on Linux, and `%LOCALAPPDATA%\parallax` on Windows. plxd's own entries are:
 //!
-//! - `wispd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]). Windows
+//! - `plxd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]). Windows
 //!   listens on a named pipe instead, so there it isn't in the folder.
-//! - `wispd.lock`: locked (`flock`, or `LockFileEx` on Windows) while a `wispd serve` runs. It
+//! - `plxd.lock`: locked (`flock`, or `LockFileEx` on Windows) while a `plxd serve` runs. It
 //!   contains that process's pid.
-//! - `wispd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
+//! - `plxd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
-//! - `tmp/`: files wispd writes for a run and deletes when it ends, such as a Claude worker's
+//! - `tmp/`: files plxd writes for a run and deletes when it ends, such as a Claude worker's
 //!   `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141). See
 //!   [`DataDir::temp_dir`].
-//! - `logs/wispd.log`: the log.
+//! - `logs/plxd.log`: the log.
 //!
-//! One folder is outside it: `/tmp/wisp-<hash>/`, which holds each worker run's own temp folder
+//! One folder is outside it: `/tmp/parallax-<hash>/`, which holds each worker run's own temp folder
 //! (RYA-130). See [`DataDir::run_temp_roots`].
 //!
 //! `--data-dir` or [`DATA_DIR_ENV`] moves the whole folder. Every subcommand that reaches the
 //! socket must resolve the folder and the socket path with [`DataDir`], so that `serve` and
-//! `attach` always agree. Every process wispd starts is built with [`DataDir::command`], which
-//! passes the folder on, so a `wispd` that an agent runs reaches the same socket.
+//! `attach` always agree. Every process plxd starts is built with [`DataDir::command`], which
+//! passes the folder on, so a `plxd` that an agent runs reaches the same socket.
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
@@ -30,11 +30,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use parallax_protocol::ProjectId;
 use sha2::{Digest, Sha256};
-use wisp_protocol::ProjectId;
 
 /// The environment variable that sets the data folder when `--data-dir` is not given.
-pub const DATA_DIR_ENV: &str = "WISPD_DATA_DIR";
+pub const DATA_DIR_ENV: &str = "PLXD_DATA_DIR";
 
 /// The longest socket path the OS accepts: `sun_path` holds 104 bytes on macOS, including the
 /// final NUL.
@@ -47,15 +47,15 @@ pub const MAX_SOCKET_PATH_BYTES: usize = 107;
 
 /// The data folder under the home folder.
 #[cfg(target_os = "macos")]
-const DEFAULT_DATA_DIR: &str = "Library/Application Support/wisp";
+const DEFAULT_DATA_DIR: &str = "Library/Application Support/parallax";
 /// The data folder under the home folder, when `XDG_DATA_HOME` doesn't name one.
 #[cfg(target_os = "linux")]
-const DEFAULT_DATA_DIR: &str = ".local/share/wisp";
+const DEFAULT_DATA_DIR: &str = ".local/share/parallax";
 
 #[cfg(target_os = "macos")]
 const GETCONF: &str = "/usr/bin/getconf";
 
-/// wispd's data folder, as an absolute path.
+/// plxd's data folder, as an absolute path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataDir {
     root: PathBuf,
@@ -78,9 +78,9 @@ impl DataDir {
         })
     }
 
-    /// The OS's data folder for wisp (0023): `~/Library/Application Support/wisp` on macOS. On
-    /// Linux, `$XDG_DATA_HOME/wisp`, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset or,
-    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\wisp`.
+    /// The OS's data folder for Parallax (0023): `~/Library/Application Support/parallax` on macOS. On
+    /// Linux, `$XDG_DATA_HOME/parallax`, or `~/.local/share/parallax` when `XDG_DATA_HOME` is unset or,
+    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\parallax`.
     ///
     /// # Errors
     ///
@@ -96,12 +96,12 @@ impl DataDir {
                     "LOCALAPPDATA isn't set to an absolute path",
                 )
             })?;
-        Self::new(local.join("wisp"))
+        Self::new(local.join("parallax"))
     }
 
-    /// The OS's data folder for wisp (0023): `~/Library/Application Support/wisp` on macOS. On
-    /// Linux, `$XDG_DATA_HOME/wisp`, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset or,
-    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\wisp`.
+    /// The OS's data folder for Parallax (0023): `~/Library/Application Support/parallax` on macOS. On
+    /// Linux, `$XDG_DATA_HOME/parallax`, or `~/.local/share/parallax` when `XDG_DATA_HOME` is unset or,
+    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\parallax`.
     ///
     /// # Errors
     ///
@@ -113,7 +113,7 @@ impl DataDir {
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
         {
-            return Self::new(data_home.join("wisp"));
+            return Self::new(data_home.join("parallax"));
         }
         let home = std::env::home_dir()
             .filter(|home| home.is_absolute())
@@ -139,25 +139,25 @@ impl DataDir {
         &self.root
     }
 
-    /// `wispd.lock`, which a running `serve` holds locked.
+    /// `plxd.lock`, which a running `serve` holds locked.
     #[must_use]
     pub fn lock_file(&self) -> PathBuf {
-        self.root.join("wispd.lock")
+        self.root.join("plxd.lock")
     }
 
-    /// `wispd.sqlite3`, the project store.
+    /// `plxd.sqlite3`, the project store.
     #[must_use]
     pub fn store_file(&self) -> PathBuf {
-        self.root.join("wispd.sqlite3")
+        self.root.join("plxd.sqlite3")
     }
 
-    /// `logs/wispd.log`.
+    /// `logs/plxd.log`.
     #[must_use]
     pub fn log_file(&self) -> PathBuf {
-        self.root.join("logs").join("wispd.log")
+        self.root.join("logs").join("plxd.log")
     }
 
-    /// `tmp/`: files wispd writes for a run and deletes when the run ends, such as a Claude
+    /// `tmp/`: files plxd writes for a run and deletes when the run ends, such as a Claude
     /// worker's `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141), and `serve`
     /// sweeps at startup. No worker's commands can write them or read another run's, since the
     /// data folder is unreadable to every worker (0013). A Codex worker's own `ZDOTDIR` is
@@ -167,15 +167,15 @@ impl DataDir {
         self.root.join("tmp")
     }
 
-    /// Where each worker run gets its own temp folder (RYA-130), in order: `/tmp/wisp-<hash>`,
-    /// then `wisp-<hash>` in `$TMPDIR`, for when `/tmp` can't be written, such as inside a
-    /// worker's sandbox running wispd's own tests. `<hash>` is the socket fallback's, so each
-    /// wispd has its own. They are outside the data folder because the path has to be short:
+    /// Where each worker run gets its own temp folder (RYA-130), in order: `/tmp/parallax-<hash>`,
+    /// then `parallax-<hash>` in `$TMPDIR`, for when `/tmp` can't be written, such as inside a
+    /// worker's sandbox running plxd's own tests. `<hash>` is the socket fallback's, so each
+    /// plxd has its own. They are outside the data folder because the path has to be short:
     /// Claude Code gives a worker's commands `$CLAUDE_CODE_TMPDIR/claude-<uid>` as `TMPDIR` only
     /// when that fits in 44 bytes. Windows, which runs no workers (0023), has only the second.
     #[must_use]
     pub fn run_temp_roots(&self) -> Vec<PathBuf> {
-        let name = format!("wisp-{}", self.hash(4));
+        let name = format!("parallax-{}", self.hash(4));
         let mut roots = vec![std::env::temp_dir().join(&name)];
         if cfg!(unix) {
             roots.insert(0, Path::new("/tmp").join(&name));
@@ -200,9 +200,9 @@ impl DataDir {
 
     /// A command for `program` with [`DATA_DIR_ENV`] set to this folder.
     ///
-    /// Every process wispd starts is built with it, so a `wispd attach` or `wispd mcp` that an
-    /// agent starts reaches this wispd's socket even when `serve` was given `--data-dir`.
-    /// (Setting the variable on wispd's own environment instead is `unsafe` in Rust 2024.)
+    /// Every process plxd starts is built with it, so a `plxd attach` or `plxd mcp` that an
+    /// agent starts reaches this plxd's socket even when `serve` was given `--data-dir`.
+    /// (Setting the variable on plxd's own environment instead is `unsafe` in Rust 2024.)
     #[must_use]
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut command = Command::new(program);
@@ -212,9 +212,9 @@ impl DataDir {
 
     /// Where the socket goes.
     ///
-    /// That is `wispd.sock` in the data folder, unless that path is longer than
+    /// That is `plxd.sock` in the data folder, unless that path is longer than
     /// [`MAX_SOCKET_PATH_BYTES`], which on macOS happens when the home folder's path is longer
-    /// than 59 bytes. Then it is `wispd-<hash>.sock` in a per-user, 0700 folder (0023): the one
+    /// than 56 bytes. Then it is `plxd-<hash>.sock` in a per-user, 0700 folder (0023): the one
     /// `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. `<hash>`
     /// is the first 8 hex digits of the SHA-256 of the data folder's path, as [`DataDir::root`]
     /// spells it.
@@ -225,14 +225,14 @@ impl DataDir {
     /// long too.
     #[cfg(unix)]
     pub fn socket_path(&self) -> io::Result<SocketPath> {
-        let default = self.root.join("wispd.sock");
+        let default = self.root.join("plxd.sock");
         if fits(&default) {
             return Ok(SocketPath {
                 path: default,
                 fallback: false,
             });
         }
-        let path = fallback_socket_dir()?.join(format!("wispd-{}.sock", self.hash(4)));
+        let path = fallback_socket_dir()?.join(format!("plxd-{}.sock", self.hash(4)));
         if !fits(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -248,7 +248,7 @@ impl DataDir {
         })
     }
 
-    /// The named pipe `serve` listens on (0023): `\\.\pipe\wispd-<hash>`, where `<hash>` is the
+    /// The named pipe `serve` listens on (0023): `\\.\pipe\plxd-<hash>`, where `<hash>` is the
     /// first 16 hex digits of the SHA-256 of the data folder's path. Pipe names share one
     /// machine-wide namespace, hence twice the digits of the socket's fallback name. Only this
     /// user may connect; see [`crate::transport`].
@@ -259,7 +259,7 @@ impl DataDir {
     #[cfg(windows)]
     pub fn socket_path(&self) -> io::Result<SocketPath> {
         Ok(SocketPath {
-            path: PathBuf::from(format!(r"\\.\pipe\wispd-{}", self.hash(8))),
+            path: PathBuf::from(format!(r"\\.\pipe\plxd-{}", self.hash(8))),
             fallback: false,
         })
     }
@@ -454,17 +454,17 @@ mod tests {
         use std::path::Path;
 
         let dir = DataDir::new("/d").unwrap();
-        assert_eq!(dir.lock_file(), Path::new("/d/wispd.lock"));
-        assert_eq!(dir.store_file(), Path::new("/d/wispd.sqlite3"));
-        assert_eq!(dir.log_file(), Path::new("/d/logs/wispd.log"));
+        assert_eq!(dir.lock_file(), Path::new("/d/plxd.lock"));
+        assert_eq!(dir.store_file(), Path::new("/d/plxd.sqlite3"));
+        assert_eq!(dir.log_file(), Path::new("/d/logs/plxd.log"));
         assert_eq!(dir.context_root(), Path::new("/d/context"));
-        let runs = format!("wisp-{}", dir.hash(4));
+        let runs = format!("parallax-{}", dir.hash(4));
         assert_eq!(dir.run_temp_roots()[0], Path::new("/tmp").join(&runs));
         assert_eq!(
             dir.run_temp_roots().last(),
             Some(&std::env::temp_dir().join(runs))
         );
-        let project = wisp_protocol::ProjectId::generate();
+        let project = parallax_protocol::ProjectId::generate();
         assert_eq!(
             dir.context_dir(project),
             Path::new("/d/context").join(project.to_string())
@@ -474,12 +474,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn commands_pass_the_data_folder_on() {
-        let dir = DataDir::new("/tmp/wispd-data/./x/").unwrap();
+        let dir = DataDir::new("/tmp/plxd-data/./x/").unwrap();
         let output = dir.command("/usr/bin/env").output().unwrap();
         let env = String::from_utf8(output.stdout).unwrap();
         assert!(
             env.lines()
-                .any(|line| line == "WISPD_DATA_DIR=/tmp/wispd-data/x"),
+                .any(|line| line == "PLXD_DATA_DIR=/tmp/plxd-data/x"),
             "{env}"
         );
     }
@@ -487,9 +487,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_hash_is_the_first_8_hex_digits_of_the_paths_sha256() {
-        // printf '%s' /Users/me/Library/Application\ Support/wisp | shasum -a 256
-        let dir = DataDir::new("/Users/me/Library/Application Support/wisp").unwrap();
-        assert_eq!(dir.hash(4), "625c7f6d");
+        // printf '%s' /Users/me/Library/Application\ Support/parallax | shasum -a 256
+        let dir = DataDir::new("/Users/me/Library/Application Support/parallax").unwrap();
+        assert_eq!(dir.hash(4), "2786512e");
     }
 
     #[cfg(unix)]
@@ -497,14 +497,14 @@ mod tests {
     fn the_default_socket_is_used_up_to_the_limit() {
         use super::MAX_SOCKET_PATH_BYTES;
 
-        let folder = "/Library/Application Support/wisp";
+        let folder = "/Library/Application Support/parallax";
         let home = format!(
             "/Users/{}",
-            "u".repeat(MAX_SOCKET_PATH_BYTES - "/Users//wispd.sock".len() - folder.len())
+            "u".repeat(MAX_SOCKET_PATH_BYTES - "/Users//plxd.sock".len() - folder.len())
         );
-        // On macOS, that leaves 59 bytes for the home folder, as 0007 says.
+        // On macOS, that leaves 56 bytes for the home folder, as 0007 says.
         #[cfg(target_os = "macos")]
-        assert_eq!(home.len(), 59);
+        assert_eq!(home.len(), 56);
         let dir = DataDir::new(format!("{home}{folder}")).unwrap();
         let socket = dir.socket_path().unwrap();
         assert!(!socket.fallback);
@@ -517,25 +517,22 @@ mod tests {
         use super::MAX_SOCKET_PATH_BYTES;
 
         let home = format!("/Users/{}", "u".repeat(53));
-        let dir = DataDir::new(format!("{home}/Library/Application Support/wisp")).unwrap();
+        let dir = DataDir::new(format!("{home}/Library/Application Support/parallax")).unwrap();
         let socket = dir.socket_path().unwrap();
         assert!(socket.fallback);
         let temp = super::fallback_socket_dir().unwrap();
-        assert_eq!(
-            socket.path,
-            temp.join(format!("wispd-{}.sock", dir.hash(4)))
-        );
+        assert_eq!(socket.path, temp.join(format!("plxd-{}.sock", dir.hash(4))));
         assert!(socket.path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES);
     }
 
     #[cfg(windows)]
     #[test]
     fn the_pipe_is_named_after_16_hex_digits_of_the_paths_sha256() {
-        // printf %s 'C:\wisp' | shasum -a 256
-        let dir = DataDir::new(r"C:\wisp").unwrap();
-        assert_eq!(dir.hash(8), "bb46ad6a4ea41022");
+        // printf %s 'C:\parallax' | shasum -a 256
+        let dir = DataDir::new(r"C:\parallax").unwrap();
+        assert_eq!(dir.hash(8), "7dd38c3ef373388d");
         let socket = dir.socket_path().unwrap();
-        assert_eq!(socket.path.as_os_str(), r"\\.\pipe\wispd-bb46ad6a4ea41022");
+        assert_eq!(socket.path.as_os_str(), r"\\.\pipe\plxd-7dd38c3ef373388d");
         assert!(!socket.fallback);
     }
 
@@ -643,11 +640,11 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn the_default_folder_is_wisp_in_local_app_data() {
+    fn the_default_folder_is_parallax_in_local_app_data() {
         let local = std::env::var_os("LOCALAPPDATA").unwrap();
         assert_eq!(
             DataDir::default_location().unwrap().root(),
-            std::path::Path::new(&local).join("wisp")
+            std::path::Path::new(&local).join("parallax")
         );
     }
 }

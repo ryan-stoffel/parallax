@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, HostInput, SshHost, WispBridge } from "../preload/bridge";
+import type { ConnectionState, HostInput, SshHost, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -11,7 +11,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
 const connected: ConnectionState = {
   status: "connected",
-  wispd: "0.1.0",
+  plxd: "0.1.0",
   protocol: 1,
   capabilities: {},
 };
@@ -33,19 +33,19 @@ beforeEach(() => {
   request.mockClear();
   saveHost.mockReset();
   states = { local: connected, [mini.id]: untrusted };
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async (hostId) => states[hostId]!,
     onConnectionState: () => () => {},
     subscribe: () => () => {},
-    request: request as unknown as WispBridge["request"],
+    request: request as unknown as ParallaxBridge["request"],
     hosts: async () => [mini],
     onHosts: () => () => {},
     saveHost,
     // Settings opens on General, which shows the update channel.
     updateChannel: async () => "nightly",
-  } as Partial<WispBridge> as WispBridge;
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};
@@ -122,7 +122,7 @@ test("the sidebar's Add host opens the form, which shows the main process's erro
 });
 
 test("a failed remove shows the main process's message", async () => {
-  window.wisp.removeHost = async () => "wisp couldn't save its settings: EACCES";
+  window.parallax.removeHost = async () => "Parallax couldn't save its settings: EACCES";
   await renderApp();
   await act(async () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }));
@@ -132,5 +132,5 @@ test("a failed remove shows the main process's message", async () => {
 
   await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Remove")!);
   const alert = document.querySelector('[role="alert"]')!.textContent;
-  expect(alert).toBe("wisp couldn't save its settings: EACCES");
+  expect(alert).toBe("Parallax couldn't save its settings: EACCES");
 });

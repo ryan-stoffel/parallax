@@ -1059,6 +1059,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "parallax-protocol"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "jiff",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "ts-rs",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "parallax-store"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "rusqlite",
+ "tempfile",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1086,6 +1113,36 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
+name = "plxd"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "futures-util",
+ "jiff",
+ "keyring-core",
+ "nix",
+ "notify",
+ "parallax-protocol",
+ "parallax-store",
+ "rusqlite",
+ "rustix",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "windows-sys 0.61.2",
+ "zbus-secret-service-keyring-store",
+ "zeroize",
+]
 
 [[package]]
 name = "polling"
@@ -1783,63 +1840,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "wisp-protocol"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "futures-util",
- "jiff",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "ts-rs",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "wisp-store"
-version = "0.1.0"
-dependencies = [
- "jiff",
- "rusqlite",
- "tempfile",
- "thiserror",
- "uuid",
-]
-
-[[package]]
-name = "wispd"
-version = "0.1.0"
-dependencies = [
- "clap",
- "futures-util",
- "jiff",
- "keyring-core",
- "nix",
- "notify",
- "rusqlite",
- "rustix",
- "security-framework",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "windows-sys 0.61.2",
- "wisp-protocol",
- "wisp-store",
- "zbus-secret-service-keyring-store",
- "zeroize",
 ]
 
 [[package]]

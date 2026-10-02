@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use wisp_protocol::{AccountChoice, AccountId, CoordinatorThreadId, ProjectId, Provider, Role};
+use parallax_protocol::{AccountChoice, AccountId, CoordinatorThreadId, ProjectId, Provider, Role};
 
 use super::{BackendRegistry, Defaults, KeyAccounts, RoutingError, resolve, start};
 use crate::backend::{
@@ -27,11 +27,11 @@ fn request(cwd: &Path) -> RunRequest {
         policy: ToolPolicy::WorkspaceWrite,
         sandbox: Some(WorkerSandbox::for_worktree(
             Path::new("/Users/u"),
-            Path::new("/Users/u/wisp"),
+            Path::new("/Users/u/parallax"),
             cwd,
             Path::new("/Users/u/src/app/.git"),
-            Path::new("/Users/u/wisp/context/p"),
-            Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
+            Path::new("/Users/u/parallax/context/p"),
+            Path::new("/tmp/parallax-1a2b3c4d/Ab12Cd"),
         )),
         account: AccountRef {
             id: "unset".into(),
@@ -435,19 +435,19 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
 
 fn coordinator_tools() -> CoordinatorTools {
     CoordinatorTools {
-        program: PathBuf::from("/Applications/Wisp.app/Contents/Resources/wispd"),
-        data_dir: PathBuf::from("/Users/u/Library/Application Support/wisp"),
+        program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
+        data_dir: PathBuf::from("/Users/u/Library/Application Support/parallax"),
         project: ProjectId::generate(),
         thread: CoordinatorThreadId::generate(),
     }
 }
 
 /// #195, 0027: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
-/// flags, `wispd mcp` joining its own MCP servers, and wispd's eight tools allowed in every mode.
+/// flags, `plxd mcp` joining its own MCP servers, and plxd's eight tools allowed in every mode.
 /// The allowlist also names Claude Code's todo tools, so it keeps a plan on any model (RYA-249),
 /// and its only `--settings` keeps its task list its own (RYA-251).
 #[tokio::test]
-async fn a_coordinator_gets_wispds_mcp_tools_on_claude_codes_own_configuration() {
+async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() {
     let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
         Outcome::Completed { result: None },
     )]]));
@@ -473,12 +473,12 @@ async fn a_coordinator_gets_wispds_mcp_tools_on_claude_codes_own_configuration()
         .iter()
         .map(|arg| (*arg).to_owned())
         .collect();
-    let config = serde_json::json!({"mcpServers": {"wispd": {
+    let config = serde_json::json!({"mcpServers": {"plxd": {
         "type": "stdio",
-        "command": "/Applications/Wisp.app/Contents/Resources/wispd",
+        "command": "/Applications/Parallax.app/Contents/Resources/plxd",
         "args": [
             "mcp",
-            "--data-dir", "/Users/u/Library/Application Support/wisp",
+            "--data-dir", "/Users/u/Library/Application Support/parallax",
             "--project", tools.project.to_string(),
             "--coordinator-thread", tools.thread.to_string(),
         ],
@@ -489,9 +489,9 @@ async fn a_coordinator_gets_wispds_mcp_tools_on_claude_codes_own_configuration()
         "--mcp-config".to_owned(),
         config.to_string(),
         "--allowedTools".to_owned(),
-        "mcp__wispd__spawn_agent,mcp__wispd__list_agents,mcp__wispd__agent_status,\
-         mcp__wispd__message_agent,mcp__wispd__cancel_agent,mcp__wispd__agent_diff,\
-         mcp__wispd__read_context,mcp__wispd__write_context,\
+        "mcp__plxd__spawn_agent,mcp__plxd__list_agents,mcp__plxd__agent_status,\
+         mcp__plxd__message_agent,mcp__plxd__cancel_agent,mcp__plxd__agent_diff,\
+         mcp__plxd__read_context,mcp__plxd__write_context,\
          TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate"
             .to_owned(),
         "--settings".to_owned(),

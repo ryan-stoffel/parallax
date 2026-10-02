@@ -1,7 +1,7 @@
 //! The project store, on a thread of its own, and the mapping between its rows and the
 //! protocol's types.
 //!
-//! SQLite calls block, so one thread owns [`wisp_store::Store`] and runs the jobs that requests
+//! SQLite calls block, so one thread owns [`parallax_store::Store`] and runs the jobs that requests
 //! send it, one at a time. Running them in order is also what keeps a snapshot consistent:
 //! `project/create` appends its event in the job that writes the row, and `project/list` reads the
 //! head `seq` in the job that reads the rows.
@@ -16,16 +16,16 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    AccountChoice, AccountId, ErrorKind, KeyAccount, Project, ProjectCreateParams, ProjectIcon,
+    ProjectId, ProjectUpdateParams, Provider, Role, RunId, StoreState,
+};
+use parallax_store::{AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use uuid::Uuid;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
-    AccountChoice, AccountId, ErrorKind, KeyAccount, Project, ProjectCreateParams, ProjectIcon,
-    ProjectId, ProjectUpdateParams, Provider, Role, RunId, StoreState,
-};
-use wisp_store::{AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError};
 
 use crate::repo;
 
@@ -53,7 +53,7 @@ enum State {
 }
 
 impl StoreHandle {
-    /// Opens the store at `path` and starts its thread. If it can't be opened, wispd keeps
+    /// Opens the store at `path` and starts its thread. If it can't be opened, plxd keeps
     /// running without it: `host/health` says so, and project methods fail.
     pub fn open(path: &Path) -> Self {
         let store = match Store::open(path) {
@@ -65,7 +65,7 @@ impl StoreHandle {
         };
         let (jobs, queue) = mpsc::channel();
         let spawned = thread::Builder::new()
-            .name("wispd-store".to_owned())
+            .name("plxd-store".to_owned())
             .spawn(move || run(store, &queue));
         match spawned {
             Ok(thread) => {
@@ -183,11 +183,11 @@ fn unavailable() -> ErrorObject {
 /// The protocol error for a store error.
 pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
     match error {
-        StoreError::IdConflict { id } => ErrorObject::wisp(
+        StoreError::IdConflict { id } => ErrorObject::parallax(
             ErrorKind::IdConflict,
             format!("project {id} exists with a different name, repository, or icon"),
         ),
-        StoreError::NotFound { id } => ErrorObject::wisp(
+        StoreError::NotFound { id } => ErrorObject::parallax(
             ErrorKind::ProjectNotFound,
             format!("no project has id {id}"),
         ),
@@ -221,8 +221,8 @@ pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
     )
 }
 
-fn stored_icon(icon: ProjectIcon) -> wisp_store::ProjectIcon {
-    wisp_store::ProjectIcon {
+fn stored_icon(icon: ProjectIcon) -> parallax_store::ProjectIcon {
+    parallax_store::ProjectIcon {
         name: icon.name,
         color: icon.color,
     }
@@ -231,10 +231,10 @@ fn stored_icon(icon: ProjectIcon) -> wisp_store::ProjectIcon {
 /// A store row as the protocol's project, with the branch its repository has checked out now and
 /// its coordinator run, if it has one (0024).
 ///
-/// wispd writes only version 7 ids, so a row with another kind of id was written by something
+/// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
 pub(crate) fn project(
-    row: wisp_store::Project,
+    row: parallax_store::Project,
     coordinator: Option<RunId>,
 ) -> Result<Project, ErrorObject> {
     let id = ProjectId::try_from(row.id).map_err(|_| {
@@ -262,11 +262,11 @@ pub(crate) fn project(
 /// tables share [`StoreError`], but not its meaning.
 pub(crate) fn account_store_error(error: &StoreError) -> ErrorObject {
     match error {
-        StoreError::IdConflict { id } => ErrorObject::wisp(
+        StoreError::IdConflict { id } => ErrorObject::parallax(
             ErrorKind::IdConflict,
             format!("key account {id} exists with a different provider, label, or key"),
         ),
-        StoreError::NotFound { id } => ErrorObject::wisp(
+        StoreError::NotFound { id } => ErrorObject::parallax(
             ErrorKind::AccountNotFound,
             format!("no key account has id {id}"),
         ),
@@ -322,7 +322,7 @@ pub(crate) fn role_text(role: Role) -> &'static str {
 
 /// A stored [`RoleDefault`] as the protocol's [`AccountChoice`].
 ///
-/// wispd writes only version 7 ids, so a row with another kind of id was written by something
+/// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
 pub(crate) fn account_choice(default: RoleDefault) -> Result<AccountChoice, ErrorObject> {
     match default {
@@ -339,9 +339,9 @@ pub(crate) fn account_choice(default: RoleDefault) -> Result<AccountChoice, Erro
     }
 }
 
-/// Vendor CLIs wispd ships or plans an adapter for (0004), ahead of #170's real detection of which
+/// Vendor CLIs plxd ships or plans an adapter for (0004), ahead of #170's real detection of which
 /// are actually installed and signed in (#114). `role_default` checks a `Subscription` choice's
-/// backend name against this fixed list; #170 replaces it with something wispd has actually
+/// backend name against this fixed list; #170 replaces it with something plxd has actually
 /// probed.
 const KNOWN_BACKENDS: &[&str] = &["claude", "codex", "cursor"];
 
@@ -355,7 +355,7 @@ const KNOWN_BACKENDS: &[&str] = &["claude", "codex", "cursor"];
 /// `invalidParams`, naming the missing account or backend, or an internal error if the check
 /// itself fails.
 pub(crate) fn role_default(
-    db_store: &wisp_store::Store,
+    db_store: &parallax_store::Store,
     choice: &AccountChoice,
 ) -> Result<RoleDefault, ErrorObject> {
     match choice {
@@ -368,7 +368,7 @@ pub(crate) fn role_default(
                 })
             } else {
                 Err(ErrorObject::invalid_params(format!(
-                    "{backend:?} is not a backend wispd knows"
+                    "{backend:?} is not a backend plxd knows"
                 )))
             }
         }
@@ -397,9 +397,9 @@ pub(crate) fn role_default(
 
 /// A store row as the protocol's key account.
 ///
-/// wispd writes only version 7 ids, so a row with another kind of id was written by something
+/// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
-pub(crate) fn key_account(row: wisp_store::Account) -> Result<KeyAccount, ErrorObject> {
+pub(crate) fn key_account(row: parallax_store::Account) -> Result<KeyAccount, ErrorObject> {
     let id = AccountId::try_from(row.id).map_err(|_| {
         error!(id = %row.id, "a stored key account's id is not a UUIDv7");
         ErrorObject::internal_error(format!(
@@ -420,26 +420,26 @@ pub(crate) fn key_account(row: wisp_store::Account) -> Result<KeyAccount, ErrorO
 mod tests {
     use std::time::Duration;
 
-    use tokio_util::sync::CancellationToken;
-    use uuid::Uuid;
-    use wisp_protocol::jsonrpc::{INTERNAL_ERROR, REQUEST_CANCELLED, WISP_ERROR};
-    use wisp_protocol::{
+    use parallax_protocol::jsonrpc::{INTERNAL_ERROR, PLX_ERROR, REQUEST_CANCELLED};
+    use parallax_protocol::{
         AccountId, ErrorKind, ProjectCreateParams, ProjectIcon, ProjectId, ProjectUpdateParams,
         Provider, StoreState,
     };
-    use wisp_store::StoreError;
+    use parallax_store::StoreError;
+    use tokio_util::sync::CancellationToken;
+    use uuid::Uuid;
 
     use super::{
         StoreHandle, account_fields, account_store_error, edit, fields, key_account, project,
         store_error,
     };
 
-    fn row(id: Uuid) -> wisp_store::Project {
-        wisp_store::Project {
+    fn row(id: Uuid) -> parallax_store::Project {
+        parallax_store::Project {
             id,
-            name: "wisp".to_owned(),
-            repo_path: "/src/wisp".to_owned(),
-            icon: Some(wisp_store::ProjectIcon {
+            name: "parallax".to_owned(),
+            repo_path: "/src/parallax".to_owned(),
+            icon: Some(parallax_store::ProjectIcon {
                 name: "rocket".to_owned(),
                 color: Some("green".to_owned()),
             }),
@@ -453,8 +453,8 @@ mod tests {
         let id = ProjectId::generate();
         let mapped = project(row(id.into()), None).unwrap();
         assert_eq!(mapped.id, id);
-        assert_eq!(mapped.name, "wisp");
-        assert_eq!(mapped.repo_path, "/src/wisp");
+        assert_eq!(mapped.name, "parallax");
+        assert_eq!(mapped.repo_path, "/src/parallax");
         assert_eq!(
             mapped.icon,
             Some(ProjectIcon {
@@ -481,7 +481,7 @@ mod tests {
             (fields.name.as_str(), fields.repo_path.as_str()),
             ("n", "/r")
         );
-        let stored = wisp_store::ProjectIcon {
+        let stored = parallax_store::ProjectIcon {
             name: "star".to_owned(),
             color: None,
         };
@@ -504,22 +504,25 @@ mod tests {
     }
 
     #[test]
-    fn conflicts_and_missing_projects_are_wisp_errors() {
+    fn conflicts_and_missing_projects_are_parallax_errors() {
         let id = Uuid::now_v7();
         let conflict = store_error(&StoreError::IdConflict { id });
-        assert_eq!(conflict.code, WISP_ERROR);
-        assert_eq!(conflict.wisp_data().unwrap().kind, ErrorKind::IdConflict);
+        assert_eq!(conflict.code, PLX_ERROR);
+        assert_eq!(
+            conflict.parallax_data().unwrap().kind,
+            ErrorKind::IdConflict
+        );
         let missing = store_error(&StoreError::NotFound { id });
         assert_eq!(
-            missing.wisp_data().unwrap().kind,
+            missing.parallax_data().unwrap().kind,
             ErrorKind::ProjectNotFound
         );
         let other = store_error(&StoreError::JournalMode("delete".to_owned()));
         assert_eq!(other.code, INTERNAL_ERROR);
     }
 
-    fn account_row(id: Uuid) -> wisp_store::Account {
-        wisp_store::Account {
+    fn account_row(id: Uuid) -> parallax_store::Account {
+        parallax_store::Account {
             id,
             provider: "anthropic".to_owned(),
             label: "Personal".to_owned(),
@@ -566,10 +569,13 @@ mod tests {
     fn missing_accounts_are_account_not_found_not_project_not_found() {
         let id = Uuid::now_v7();
         let conflict = account_store_error(&StoreError::IdConflict { id });
-        assert_eq!(conflict.wisp_data().unwrap().kind, ErrorKind::IdConflict);
+        assert_eq!(
+            conflict.parallax_data().unwrap().kind,
+            ErrorKind::IdConflict
+        );
         let missing = account_store_error(&StoreError::NotFound { id });
         assert_eq!(
-            missing.wisp_data().unwrap().kind,
+            missing.parallax_data().unwrap().kind,
             ErrorKind::AccountNotFound
         );
     }
@@ -595,7 +601,7 @@ mod tests {
     #[tokio::test]
     async fn a_queued_job_is_skipped_when_cancelled_and_a_started_one_finishes() {
         let dir = tempfile::tempdir().unwrap();
-        let store = StoreHandle::open(&dir.path().join("wispd.sqlite3"));
+        let store = StoreHandle::open(&dir.path().join("plxd.sqlite3"));
         assert_eq!(store.state(), StoreState::Ok);
 
         let (started_tx, started_rx) = std::sync::mpsc::channel();

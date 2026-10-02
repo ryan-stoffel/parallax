@@ -1,19 +1,19 @@
 //! Real Claude Code for RYA-222 (0031): in Manual, a run whose client answers permission requests
-//! asks wispd over stdio before a tool call that would prompt, and runs it or not on wispd's
+//! asks plxd over stdio before a tool call that would prompt, and runs it or not on plxd's
 //! answer, and a run whose client doesn't is denied as before. In Plan, a worker hands its plan
 //! over the same way (RYA-243). A worker also keeps its plan with Claude Code's task tools, which
 //! ask nothing (RYA-248), and so do a coordinator and a bypass worker, whose `--allowedTools`
 //! turns them on (RYA-249). Each keeps its session's own list, whatever the settings it reads
-//! name in `CLAUDE_CODE_TASK_LIST_ID` (RYA-251). Each test starts the CLI through wispd's own
+//! name in `CLAUDE_CODE_TASK_LIST_ID` (RYA-251). Each test starts the CLI through plxd's own
 //! Claude backend, so the arguments, the translator that reads the CLI's `can_use_tool` request,
 //! and the driver that writes the `control_response` are the ones a real run uses. A local fake
 //! Messages API asks for the tool calls, so no account or Anthropic connection is needed. Set
-//! `WISP_SANDBOX_CLAUDE` to the CLI under test, as CI's Linux legs do.
+//! `PLX_SANDBOX_CLAUDE` to the CLI under test, as CI's Linux legs do.
 #![cfg(unix)]
 
 #[expect(
     dead_code,
-    reason = "these tests run the CLI through wispd's backend, not `run_worker`"
+    reason = "these tests run the CLI through plxd's backend, not `run_worker`"
 )]
 mod common;
 
@@ -25,36 +25,36 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use common::{ToolCall, fake_api, worker_request};
-use serde_json::{Value, json};
-use wisp_protocol::{CoordinatorThreadId, ProjectId};
-use wispd::backend::claude::ClaudeBackend;
-use wispd::backend::process::{Environment, Launcher};
-use wispd::backend::run_temp::RunTemp;
-use wispd::backend::{
+use parallax_protocol::{CoordinatorThreadId, ProjectId};
+use plxd::backend::claude::ClaudeBackend;
+use plxd::backend::process::{Environment, Launcher};
+use plxd::backend::run_temp::RunTemp;
+use plxd::backend::{
     AccountRef, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, CoordinatorTools,
     Credential, Decision, Event, Outcome, RunId, RunRequest, Started, ToolPolicy, ToolStatus,
 };
-use wispd::paths::DataDir;
+use plxd::paths::DataDir;
+use serde_json::{Value, json};
 
-const KEY: &str = "sk-ant-wisp-test-key-never-send";
+const KEY: &str = "sk-ant-parallax-test-key-never-send";
 
 /// What the fake API's Bash calls run: it says so, and leaves a line in `ran` for each run.
 const PROBE: &str = "echo probe-ran\necho x >> ran\n";
 
 /// The task list [`share_the_task_list`] names, which no run may use (RYA-251).
-const SHARED_LIST: &str = "wisp-shared-list";
+const SHARED_LIST: &str = "parallax-shared-list";
 
 /// Where [`WRAPPER`] finds the fake API's base URL.
-const API_ENV: &str = "WISP_TEST_API_URL";
+const API_ENV: &str = "PLX_TEST_API_URL";
 /// Where [`WRAPPER`] finds the CLI under test.
-const CLAUDE_ENV: &str = "WISP_TEST_CLAUDE";
+const CLAUDE_ENV: &str = "PLX_TEST_CLAUDE";
 
-/// The program the backend starts: the CLI under test, against the fake API. wispd passes no
+/// The program the backend starts: the CLI under test, against the fake API. plxd passes no
 /// inherited `ANTHROPIC_` variable on to a run, so the base URL can only reach the CLI this way.
 const WRAPPER: &str = "#!/bin/sh\n\
-    export ANTHROPIC_BASE_URL=\"$WISP_TEST_API_URL\" DISABLE_AUTOUPDATER=1 \
+    export ANTHROPIC_BASE_URL=\"$PLX_TEST_API_URL\" DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n\
-    exec \"$WISP_TEST_CLAUDE\" \"$@\"\n";
+    exec \"$PLX_TEST_CLAUDE\" \"$@\"\n";
 
 /// [`WRAPPER`], written once, before any test here starts a process, so no other test's child
 /// can still hold it open for writing when it runs ("Text file busy").
@@ -68,7 +68,7 @@ fn wrapper() -> &'static Path {
     })
 }
 
-/// wispd's Claude backend, as `serve` builds it, with `data` as wispd's data folder and `home` as
+/// plxd's Claude backend, as `serve` builds it, with `data` as plxd's data folder and `home` as
 /// `HOME`, starting `claude` against the fake API at `api`.
 fn claude_backend(
     claude: &OsStr,
@@ -77,7 +77,7 @@ fn claude_backend(
     home: &Path,
     data: &Path,
 ) -> ClaudeBackend {
-    // The CLI's own `TMPDIR`, wispd's in a real run.
+    // The CLI's own `TMPDIR`, plxd's in a real run.
     fs::create_dir_all(root.join("tmp")).unwrap();
     let mut env = Environment::empty();
     env.set("PATH", std::env::var_os("PATH").unwrap_or_default());
@@ -89,7 +89,7 @@ fn claude_backend(
 }
 
 /// A coordinator in Manual at `cwd`, which is full Claude Code (0027), on an API key, whose
-/// client answers permission requests. Its wispd tools' server can't reach a wispd, so it fails
+/// client answers permission requests. Its plxd tools' server can't reach a plxd, so it fails
 /// to start, which the run doesn't need.
 fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
     RunRequest {
@@ -109,7 +109,7 @@ fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
         effort: None,
         permission: Some(AgentPermission::Manual),
         coordinator_tools: Some(CoordinatorTools {
-            program: PathBuf::from(env!("CARGO_BIN_EXE_wispd")),
+            program: PathBuf::from(env!("CARGO_BIN_EXE_plxd")),
             data_dir: data.to_owned(),
             project: ProjectId::generate(),
             thread: CoordinatorThreadId::generate(),
@@ -213,12 +213,12 @@ fn done() -> Outcome {
     }
 }
 
-/// A coordinator's Bash asks first. wispd allows it for the rest of the session with the rule the
+/// A coordinator's Bash asks first. plxd allows it for the rest of the session with the rule the
 /// CLI offered, so the probe runs, and the same call later runs without asking.
 #[tokio::test]
-async fn a_manual_coordinator_runs_bash_once_wispd_allows_it() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+async fn a_manual_coordinator_runs_bash_once_plxd_allows_it() {
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let folders = Folders::new();
@@ -236,7 +236,7 @@ async fn a_manual_coordinator_runs_bash_once_wispd_allows_it() {
     assert_eq!(asked.len(), 1, "only the first call asks: {events:#?}");
     assert_eq!(asked[0].tool_name, "Bash");
     assert_eq!(asked[0].input["command"], "sh probe.sh");
-    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01WispProbe"));
+    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01ParallaxProbe"));
     assert!(!asked[0].always_allow.is_empty(), "{events:#?}");
     assert!(!asked[0].interactive);
     let results = results(&events);
@@ -252,13 +252,13 @@ async fn a_manual_coordinator_runs_bash_once_wispd_allows_it() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A coordinator's Bash asks, wispd denies it with the user's words, and the CLI skips the call
+/// A coordinator's Bash asks, plxd denies it with the user's words, and the CLI skips the call
 /// and tells the model why.
 #[tokio::test]
-async fn a_manual_coordinator_skips_bash_that_wispd_denies() {
-    const DENIAL: &str = "Not now: wisp's test denies this call.";
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+async fn a_manual_coordinator_skips_bash_that_plxd_denies() {
+    const DENIAL: &str = "Not now: Parallax's test denies this call.";
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let folders = Folders::new();
@@ -274,11 +274,11 @@ async fn a_manual_coordinator_skips_bash_that_wispd_denies() {
     let asked = requests(&events);
     assert_eq!(asked.len(), 1, "{events:#?}");
     assert_eq!(asked[0].tool_name, "Bash");
-    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01WispProbe"));
+    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01ParallaxProbe"));
     let results = results(&events);
     assert_eq!(results.len(), 1, "{events:#?}");
     let (call_id, status, output) = results[0];
-    assert_eq!(call_id, "toolu_01WispProbe");
+    assert_eq!(call_id, "toolu_01ParallaxProbe");
     assert_ne!(status, ToolStatus::Ok, "{events:#?}");
     assert!(output.contains(DENIAL), "{events:#?}");
     assert!(!folders.project.join("ran").exists(), "the probe never ran");
@@ -289,8 +289,8 @@ async fn a_manual_coordinator_skips_bash_that_wispd_denies() {
 /// denies its Bash without asking anyone, and the turn goes on.
 #[tokio::test]
 async fn a_manual_coordinator_without_approvals_is_denied_without_asking() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let folders = Folders::new();
@@ -313,7 +313,7 @@ async fn a_manual_coordinator_without_approvals_is_denied_without_asking() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A worker's worktree in `folders`' data folder, laid out as wispd lays one out and holding
+/// A worker's worktree in `folders`' data folder, laid out as plxd lays one out and holding
 /// [`PROBE`], and a request for a worker there in `permission`, on an API key, whose client
 /// answers permission requests. Keep the [`RunTemp`] until the run is over.
 fn worker(folders: &Folders, permission: AgentPermission) -> (PathBuf, RunRequest, RunTemp) {
@@ -338,11 +338,11 @@ fn worker(folders: &Folders, permission: AgentPermission) -> (PathBuf, RunReques
 }
 
 /// A worker in Manual, in its sandbox: its Bash runs without asking, since its settings allow
-/// Bash (0013), and its `Write` asks. wispd allows it, and the file is written.
+/// Bash (0013), and its `Write` asks. plxd allows it, and the file is written.
 #[tokio::test]
 async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let folders = Folders::new();
@@ -364,7 +364,7 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
     assert_eq!(asked.len(), 1, "only the Write asks: {events:#?}");
     assert_eq!(asked[0].tool_name, "Write");
     assert_eq!(asked[0].input["file_path"], file.to_str().unwrap());
-    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01WispProbe1"));
+    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01ParallaxProbe1"));
     let results = results(&events);
     assert_eq!(results.len(), 2, "{events:#?}");
     assert_eq!(results[0].1, ToolStatus::Ok, "{events:#?}");
@@ -374,16 +374,16 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A worker in Plan whose client answers hands its plan to wispd with `ExitPlanMode` (RYA-243),
-/// and wispd's allow takes it out of plan mode. In plan mode, Claude Code 2.1.283 sends each
+/// A worker in Plan whose client answers hands its plan to plxd with `ExitPlanMode` (RYA-243),
+/// and plxd's allow takes it out of plan mode. In plan mode, Claude Code 2.1.283 sends each
 /// command to its auto-mode classifier, which the fake API can't answer, so the worker's first
 /// Bash is denied without asking. Once the plan is allowed, the CLI runs in Manual, where the
 /// worker's settings allow sandboxed Bash (0013), so the same command runs without asking.
 #[tokio::test]
-async fn a_plan_worker_hands_its_plan_to_wispd_and_leaves_plan_mode_on_its_allow() {
+async fn a_plan_worker_hands_its_plan_to_plxd_and_leaves_plan_mode_on_its_allow() {
     const PLAN: &str = "1. Add a README.\n2. Link it from the docs.\n";
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let folders = Folders::new();
@@ -415,7 +415,7 @@ async fn a_plan_worker_hands_its_plan_to_wispd_and_leaves_plan_mode_on_its_allow
     assert_eq!(asked[0].tool_name, "ExitPlanMode");
     assert!(asked[0].interactive, "{events:#?}");
     assert_eq!(asked[0].input["plan"], PLAN);
-    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01WispProbe1"));
+    assert_eq!(asked[0].call_id.as_deref(), Some("toolu_01ParallaxProbe1"));
     let results = results(&events);
     assert_eq!(results.len(), 3, "{events:#?}");
     assert_ne!(
@@ -436,13 +436,13 @@ async fn a_plan_worker_hands_its_plan_to_wispd_and_leaves_plan_mode_on_its_allow
 
 /// A worker keeps its plan with Claude Code's task tools (RYA-248). Its `--tools` names them, so
 /// 2.1.283 offers them even on a model it would otherwise give no todo tool, and its init passes
-/// wispd's check. The CLI writes the list itself, in its configuration folder outside the
+/// plxd's check. The CLI writes the list itself, in its configuration folder outside the
 /// worktree, which the worker's commands still can't read. The list is the session's own, though
 /// the global config, which even `--restricted` reads, names a shared one (RYA-251).
 #[tokio::test]
 async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_read_it() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let folders = Folders::new();
@@ -485,7 +485,7 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
     assert_eq!(
         results[0],
         (
-            "toolu_01WispProbe",
+            "toolu_01ParallaxProbe",
             ToolStatus::Ok,
             "Task #1 created successfully: Add tests"
         ),
@@ -524,8 +524,8 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
 /// turns them on.
 #[tokio::test]
 async fn a_coordinator_keeps_its_plan_with_the_task_tools_on_any_model() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let folders = Folders::new();
@@ -539,8 +539,8 @@ async fn a_coordinator_keeps_its_plan_with_the_task_tools_on_any_model() {
 /// A worker in Bypass Permissions, which has no `--tools` either, does the same (RYA-249).
 #[tokio::test]
 async fn a_bypass_worker_keeps_its_plan_with_the_task_tools_on_any_model() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
         return;
     };
     let folders = Folders::new();
@@ -550,7 +550,7 @@ async fn a_bypass_worker_keeps_its_plan_with_the_task_tools_on_any_model() {
 }
 
 /// Runs `request` against a fake API that asks for `TaskCreate`, `TaskUpdate`, and `TaskList`.
-/// Each answers as 2.1.283's task tools do, none asks wispd, and the CLI keeps the session's list
+/// Each answers as 2.1.283's task tools do, none asks plxd, and the CLI keeps the session's list
 /// in its configuration folder, `.claude` in `HOME`, though the global config and the user's, the
 /// project's, and the local settings all name a shared one (RYA-251).
 async fn plans_with_the_task_tools(claude: &OsStr, folders: &Folders, request: RunRequest) {
@@ -582,17 +582,17 @@ async fn plans_with_the_task_tools(claude: &OsStr, folders: &Folders, request: R
         results(&events),
         [
             (
-                "toolu_01WispProbe",
+                "toolu_01ParallaxProbe",
                 ToolStatus::Ok,
                 "Task #1 created successfully: Add tests"
             ),
             (
-                "toolu_01WispProbe1",
+                "toolu_01ParallaxProbe1",
                 ToolStatus::Ok,
                 "Updated task #1 status"
             ),
             (
-                "toolu_01WispProbe2",
+                "toolu_01ParallaxProbe2",
                 ToolStatus::Ok,
                 "#1 [in_progress] Add tests"
             ),

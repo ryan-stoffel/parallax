@@ -35,11 +35,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
 use futures_util::Stream;
-use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
-pub use wisp_protocol::{
+pub use parallax_protocol::{
     AgentEffort, AgentPermission, ApprovalId, ImageMediaType, PromptImage, RunId, TurnId,
 };
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use zeroize::Zeroize;
 
 pub use self::event::{
@@ -171,7 +171,7 @@ pub struct RunRequest {
     /// How a worker may act inside its sandbox, or [`AgentPermission::Edit`]. Only a value in
     /// [`Backend::permissions`], and only for a [`ToolPolicy::WorkspaceWrite`] run.
     pub permission: Option<AgentPermission>,
-    /// wispd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
+    /// plxd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
     /// Routing drops them for every other role, and a backend refuses them on a worker.
     pub coordinator_tools: Option<CoordinatorTools>,
     /// The client answers permission requests (RYA-222, 0031): a CLI that can ask before a tool
@@ -180,22 +180,22 @@ pub struct RunRequest {
     pub approvals: bool,
 }
 
-/// How a coordinator's CLI launches `wispd mcp` (0019): the server is bound to one project and one
-/// coordinator thread by these arguments, which wispd sets and the model never sees or chooses.
+/// How a coordinator's CLI launches `plxd mcp` (0019): the server is bound to one project and one
+/// coordinator thread by these arguments, which plxd sets and the model never sees or chooses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoordinatorTools {
-    /// The `wispd` executable that serves the tools.
+    /// The `plxd` executable that serves the tools.
     pub program: PathBuf,
-    /// wispd's data folder, which tells `wispd mcp` where the socket is.
+    /// plxd's data folder, which tells `plxd mcp` where the socket is.
     pub data_dir: PathBuf,
     /// The only project the tools can reach.
-    pub project: wisp_protocol::ProjectId,
+    pub project: parallax_protocol::ProjectId,
     /// The coordinator thread that runs spawned through the tools are tagged with.
-    pub thread: wisp_protocol::CoordinatorThreadId,
+    pub thread: parallax_protocol::CoordinatorThreadId,
 }
 
 impl CoordinatorTools {
-    /// `{"mcpServers": {"wispd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
+    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
     /// its program and arguments.
     ///
     /// # Errors
@@ -207,7 +207,7 @@ impl CoordinatorTools {
                 StartError::Invalid(format!("{what} {} is not UTF-8", path.display()))
             })
         };
-        let program = text(&self.program, "wispd's executable")?;
+        let program = text(&self.program, "plxd's executable")?;
         let data_dir = text(&self.data_dir, "the data folder")?;
         Ok(serde_json::json!({
             "mcpServers": {
@@ -271,7 +271,7 @@ pub struct Resume {
     /// The session's running usage totals per model: the `usage_totals` of the last run of it
     /// that finished. The caller stores them per session and passes them back here, so the new
     /// run reports only what it adds, even for vendors whose totals carry over into a resumed
-    /// session (Claude, Codex) and across a wispd restart. Empty for a session with no usage.
+    /// session (Claude, Codex) and across a plxd restart. Empty for a session with no usage.
     pub usage_totals: Vec<ModelUsage>,
 }
 
@@ -354,7 +354,7 @@ pub enum ToolPolicy {
 /// The account a run is charged to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountRef {
-    /// wispd's id for the account (#114, #117).
+    /// plxd's id for the account (#114, #117).
     pub id: String,
     /// How the CLI authenticates.
     pub credential: Credential,
@@ -376,7 +376,7 @@ pub enum Credential {
 
 /// An API key. Its `Debug` hides it, it doesn't serialize, and it zeroizes its buffer once the
 /// run that needed it (#118's [`key_account::resolve`]) is done with it, like
-/// [`wisp_protocol::RawKey`] does for the same key on its way in from the editor.
+/// [`parallax_protocol::RawKey`] does for the same key on its way in from the editor.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ApiKey(String);
 
@@ -417,7 +417,7 @@ pub struct Capabilities {
     pub follow_ups: bool,
     /// [`RunRequest::resume`] works.
     pub resume: bool,
-    /// It can run the coordinator: no-write mode with wispd's MCP tools (0004: Claude Code and
+    /// It can run the coordinator: no-write mode with plxd's MCP tools (0004: Claude Code and
     /// Codex, not Cursor).
     pub coordinator: bool,
     /// Its usage includes a cost.

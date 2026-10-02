@@ -1,14 +1,14 @@
 [Unit]
-Description=wispd, the wisp host daemon
+Description=plxd, the Parallax host daemon
 
 [Service]
 Type=exec
-ExecStart="/usr/local/bin/wispd" serve
-Environment="WISPD_DATA_DIR=/home/ryan/.local/share/wisp"
+ExecStart="/usr/local/bin/plxd" serve
+Environment="PLXD_DATA_DIR=/home/ryan/.local/share/parallax"
 KillMode=mixed
 Restart=on-failure
-StandardOutput=append:/home/ryan/.local/share/wisp/logs/wispd.log
-StandardError=append:/home/ryan/.local/share/wisp/logs/wispd.log
+StandardOutput=append:/home/ryan/.local/share/parallax/logs/plxd.log
+StandardError=append:/home/ryan/.local/share/parallax/logs/plxd.log
 
 [Install]
 WantedBy=default.target

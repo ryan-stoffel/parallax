@@ -4,14 +4,14 @@
 //! [`KeyStore`] is the interface. [`system_store`] is this OS's real one: `KeychainStore`, one
 //! generic password per account under a service name via the `security-framework` crate;
 //! `SecretServiceStore`, one item per account in the default collection via `keyring-core`; or
-//! [`NoKeyStore`] where wispd has none. [`MemoryKeyStore`] is an in-memory mock for tests. Only
+//! [`NoKeyStore`] where plxd has none. [`MemoryKeyStore`] is an in-memory mock for tests. Only
 //! these ever see a key in the clear, and only for as long as it takes to hand it to the OS or a
-//! caller; wisp's project store and event log never do (0004, decision record 0009).
+//! caller; Parallax's project store and event log never do (0004, decision record 0009).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use wisp_protocol::AccountId;
+use parallax_protocol::AccountId;
 use zeroize::Zeroizing;
 
 #[cfg(target_os = "macos")]
@@ -23,8 +23,8 @@ mod secret_service;
 #[cfg(target_os = "linux")]
 pub use secret_service::SecretServiceStore;
 
-/// The service name every real wisp key account is stored under: 0006's bundle id.
-pub const SERVICE: &str = "io.github.ryan-stoffel.wisp";
+/// The service name every real Parallax key account is stored under: 0006's bundle id.
+pub const SERVICE: &str = "io.github.ryan-stoffel.parallax";
 
 /// What `keychainUnavailable` tells the user: the store is locked or access was denied.
 #[cfg(target_os = "macos")]
@@ -33,11 +33,11 @@ pub const UNAVAILABLE_MESSAGE: &str = "the keychain is locked or access was deni
 /// was denied. A headless host has none until one is installed and unlocked (0023).
 #[cfg(target_os = "linux")]
 pub const UNAVAILABLE_MESSAGE: &str = "no unlocked Secret Service: install one, such as \
-     gnome-keyring or KeePassXC, and unlock it, or run wispd serve in a logged-in desktop session";
+     gnome-keyring or KeePassXC, and unlock it, or run plxd serve in a logged-in desktop session";
 /// What `keychainUnavailable` tells the user: this host has no store for API keys yet.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub const UNAVAILABLE_MESSAGE: &str =
-    "this host can't store API keys yet: wispd has no Secret Service support on this OS";
+    "this host can't store API keys yet: plxd has no Secret Service support on this OS";
 
 /// Where API keys are stored, keyed by account id.
 ///
@@ -98,7 +98,7 @@ impl KeyStoreError {
     }
 
     /// Whether this is the store being locked, access to an item being denied, or no store at
-    /// all, rather than some other failure. wispd maps this to its own `keychainUnavailable`,
+    /// all, rather than some other failure. plxd maps this to its own `keychainUnavailable`,
     /// distinct from a bare internal error, so the editor can tell "locked" from "broken".
     #[must_use]
     pub fn is_unavailable(&self) -> bool {
@@ -106,7 +106,7 @@ impl KeyStoreError {
     }
 }
 
-/// The store on an OS where wispd can't keep API keys yet: every call fails as unavailable, so
+/// The store on an OS where plxd can't keep API keys yet: every call fails as unavailable, so
 /// key accounts fail with `keychainUnavailable` and a key never goes anywhere else (0023). There
 /// is never a plaintext fallback.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -173,7 +173,7 @@ impl KeyStore for MemoryKeyStore {
 
 #[cfg(test)]
 mod tests {
-    use wisp_protocol::AccountId;
+    use parallax_protocol::AccountId;
 
     use super::{KeyStore, MemoryKeyStore};
 

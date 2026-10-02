@@ -82,7 +82,7 @@ import {
   isRunning,
   waitingApprovals,
   workedFor,
-  wispdTools,
+  plxdTools,
   type Approval,
   type Item,
   type Work,
@@ -202,7 +202,7 @@ export function AgentChat({
   const plan = useMemo(() => latestPlan(items), [items]);
   const showImage = useCallback((id: ImageId) => loadImage(hostId, runId, id), [hostId, runId]);
 
-  // A message wispd wouldn't send because the run can't be resumed, which `startOver` can take.
+  // A message plxd wouldn't send because the run can't be resumed, which `startOver` can take.
   const [refused, setRefused] = useState<{
     text: string;
     options: RunOptions;
@@ -264,16 +264,16 @@ export function AgentChat({
   }, [items, sent, prompt, going]);
 
   let disabledReason: string | undefined;
-  if (connection?.status === "failed") disabledReason = "Disconnected from wispd";
-  else if (!connected) disabledReason = "Connecting to wispd…";
+  if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
+  else if (!connected) disabledReason = "Connecting to plxd…";
   else if (!run) disabledReason = error ? "This chat couldn't load" : "Loading…";
   let optionsDisabled: string | undefined;
   // `sendModel` is `sendOptions`' successor, which also takes the model (RYA-163).
   if (connected && !("sendModel" in connection.capabilities))
-    optionsDisabled = "This host's wispd can't change a thread's model, effort, or access";
+    optionsDisabled = "This host's plxd can't change a thread's model, effort, or access";
   else if (isRunning(run?.status))
     optionsDisabled = "The model, effort, and access can change once it finishes";
-  // Manual's requests come here only from a run that asked for them, on a wispd that sends them.
+  // Manual's requests come here only from a run that asked for them, on a plxd that sends them.
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
   else if (run && !run.approvals) manualDenied = "run";
@@ -286,7 +286,7 @@ export function AgentChat({
     !isRunning(run.status) &&
     run.status !== "accepted";
 
-  // One that couldn't load, stopped updating, or lost wispd shows nothing in progress.
+  // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
   const stalled = error !== undefined || (connection !== undefined && !connected);
 
   return (
@@ -320,7 +320,7 @@ export function AgentChat({
           answers={answers}
           onAnswer={(a, choice, message) => void answer(a, choice, message)}
           onDismiss={dismiss}
-          disabledReason={connected ? undefined : (disabledReason ?? "Connecting to wispd…")}
+          disabledReason={connected ? undefined : (disabledReason ?? "Connecting to plxd…")}
         />
         {/* A loaded transcript that stopped updating, a failed Send again, or Open PR. */}
         {(error ?? resendError ?? prError) && rows.length > 0 && (
@@ -574,7 +574,7 @@ export const RowView = memo(function RowView({
       );
     case "user":
     case "pending": {
-      // A wake-up is wisp's message to the coordinator, not the user's (0025).
+      // A wake-up is Parallax's message to the coordinator, not the user's (0025).
       if (row.kind === "user" && row.wake)
         return (
           <Disclosure
@@ -584,7 +584,7 @@ export const RowView = memo(function RowView({
             summary={
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <Workflow aria-hidden className="size-3.5" />
-                From wisp: subagents finished
+                From Parallax: subagents finished
               </span>
             }
           >
@@ -594,7 +594,7 @@ export const RowView = memo(function RowView({
           </Disclosure>
         );
       const text = row.text ?? sent?.text;
-      // Images sent from here are at hand; the log's come from wispd by id.
+      // Images sent from here are at hand; the log's come from plxd by id.
       const images = row.kind === "pending" ? row.images : (sent?.images ?? row.images);
       return (
         <div className="flex flex-col items-end gap-1.5">
@@ -718,7 +718,7 @@ export const RowView = memo(function RowView({
           : outcome.status === "cancelled"
             ? "Stopped"
             : outcome.status === "interrupted"
-              ? "Interrupted when wispd stopped. Send a message to pick up where it left off."
+              ? "Interrupted when plxd stopped. Send a message to pick up where it left off."
               : "Ended";
       return (
         <div className="flex items-center gap-3 text-[12px] text-faint-foreground">
@@ -742,7 +742,7 @@ function MessageImage({
   image: PromptImage | ImageId;
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
 }) {
-  // By id: its data URL once fetched, or null when wispd couldn't serve it.
+  // By id: its data URL once fetched, or null when plxd couldn't serve it.
   const [fetched, setFetched] = useState<{ id: ImageId; url: string | null }>();
   useEffect(() => {
     if (typeof image !== "string" || !loadImage) return;
@@ -934,7 +934,7 @@ const loaders = {
   agent: { kind: "orbit", variant: "oppose" },
   skill: { kind: "lift", variant: "rise" },
   mcp: { kind: "beacon", variant: "balance" },
-  wispd: { kind: "cells", variant: "spread" },
+  plxd: { kind: "cells", variant: "spread" },
   planning: { kind: "lift", variant: "breathe" },
   working: { kind: "orbit", variant: "chase" },
 } as const satisfies Record<string, LoaderStyle>;
@@ -953,7 +953,7 @@ const icons = {
   agent: Bot,
   skill: Sparkles,
   mcp: Plug,
-  wispd: Workflow,
+  plxd: Workflow,
   planning: ListChecks,
   working: Hammer,
 } as const satisfies Record<Kind, LucideIcon>;
@@ -984,9 +984,9 @@ const toolKinds: Partial<Record<string, Kind>> = {
   TaskGet: "planning",
 };
 
-/** The kind of work a tool call does: a wispd or other MCP server's tool, or by its name. */
+/** The kind of work a tool call does: a plxd or other MCP server's tool, or by its name. */
 function toolKind(item: Extract<Item, { kind: "tool" }>): Kind {
-  if (item.name?.startsWith(wispdTools)) return "wispd";
+  if (item.name?.startsWith(plxdTools)) return "plxd";
   if (mcpTool(item.name)) return "mcp";
   // The table's own names only, so "constructor" or "toString" is any other tool.
   const name = item.name ?? "";
@@ -1007,9 +1007,9 @@ export function activity(item?: Item): Activity {
       return { label: "Thinking", loader: loaders.thinking };
     case "tool": {
       const loader = loaders[toolKind(item)];
-      const wispd = wispdCall(item);
-      if (wispd) return { ...wispd, loader };
-      // Including a wispd tool this app doesn't know.
+      const plxd = plxdCall(item);
+      if (plxd) return { ...plxd, loader };
+      // Including a plxd tool this app doesn't know.
       const mcp = mcpTool(item.name);
       if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool, loader };
       if (item.name === "Skill")
@@ -1038,7 +1038,7 @@ function ToolCall({
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
 }) {
-  const named = wispdCall(item) ?? namedTool(item);
+  const named = plxdCall(item) ?? namedTool(item);
   const kind = toolKind(item);
   const status = item.status ?? (live ? "running" : "none");
   // A status newer than this app reads as no result.
@@ -1156,8 +1156,8 @@ function toolHint(input?: JsonValue, fields = hintFields): string {
   return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
 }
 
-// A coordinator's wispd tools (0019), by what they did.
-const wispdLabels: Partial<Record<string, string>> = {
+// A coordinator's plxd tools (0019), by what they did.
+const plxdLabels: Partial<Record<string, string>> = {
   spawn_agent: "Started a subagent",
   list_agents: "Listed subagents",
   agent_status: "Checked on a subagent",
@@ -1169,12 +1169,12 @@ const wispdLabels: Partial<Record<string, string>> = {
 };
 
 /**
- * A wispd tool call as a short line: what it did, and what it did it to (the new subagent's task,
+ * A plxd tool call as a short line: what it did, and what it did it to (the new subagent's task,
  * the subagent it named, or the context file). Undefined for any other tool.
  */
-function wispdCall(item: Extract<Item, { kind: "tool" }>) {
-  const label = item.name?.startsWith(wispdTools)
-    ? wispdLabels[item.name.slice(wispdTools.length)]
+function plxdCall(item: Extract<Item, { kind: "tool" }>) {
+  const label = item.name?.startsWith(plxdTools)
+    ? plxdLabels[item.name.slice(plxdTools.length)]
     : undefined;
   return label
     ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path"]) }
@@ -1183,14 +1183,14 @@ function wispdCall(item: Extract<Item, { kind: "tool" }>) {
 
 /**
  * An MCP server's tool as Claude Code names it, `mcp__<server>__<tool>`, readably: the server's
- * name, capitalized unless it's wispd's, and the tool's. Undefined for any other tool.
+ * name, capitalized unless it's plxd's, and the tool's. Undefined for any other tool.
  */
 function mcpTool(name: string | null) {
   const [, server, tool] = /^mcp__(.+?)__(.+)$/.exec(name ?? "") ?? [];
   if (!server || !tool) return undefined;
   const words = server.replace(/[_-]/g, " ");
   return {
-    server: server === "wispd" ? server : words.charAt(0).toUpperCase() + words.slice(1),
+    server: server === "plxd" ? server : words.charAt(0).toUpperCase() + words.slice(1),
     tool: tool.replaceAll("_", " "),
   };
 }
@@ -1200,8 +1200,8 @@ const skillName = (input?: JsonValue) => toolHint(input, ["skill", "command"]);
 
 /**
  * A tool as a permission request names it (RYA-196): its kind's icon, then its name and what it
- * acts on, as its row would, or an MCP server's tool by the server, wispd's too. It hasn't run
- * yet, so a wispd tool isn't named by what it did.
+ * acts on, as its row would, or an MCP server's tool by the server, plxd's too. It hasn't run
+ * yet, so a plxd tool isn't named by what it did.
  */
 export function describeTool(name: string, input?: JsonValue): ToolLook {
   const item = { kind: "tool", key: "", callId: "", name, input } as const;
@@ -1214,7 +1214,7 @@ export function describeTool(name: string, input?: JsonValue): ToolLook {
 }
 
 /**
- * A tool call its row names readably: an MCP server's tool by the server, including a wispd tool
+ * A tool call its row names readably: an MCP server's tool by the server, including a plxd tool
  * this app doesn't know, or a skill.
  */
 function namedTool(item: Extract<Item, { kind: "tool" }>) {
@@ -1319,7 +1319,7 @@ export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode 
 }
 
 /**
- * Open PR: wispd pushes the run's branch and opens a pull request titled like the thread, then
+ * Open PR: plxd pushes the run's branch and opens a pull request titled like the thread, then
  * this links to it, in the browser. It unmounts while the run works, so after another turn the
  * button is back, to push the new commit to the same pull request.
  */
@@ -1352,7 +1352,7 @@ function OpenPr({
   const open = async () => {
     setOpening(true);
     onError(undefined);
-    const answer = await window.wisp.request(hostId, "agent/openPr", {
+    const answer = await window.parallax.request(hostId, "agent/openPr", {
       runId: run.id,
       title: titleOf(run),
     });

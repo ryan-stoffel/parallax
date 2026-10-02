@@ -17,12 +17,12 @@ write() {
 
 # The installers, the macOS zip, and the blockmaps; then the channel's update metadata.
 files=()
-for f in wisp-*; do [ -f "$f" ] && files+=("$f"); done
+for f in parallax-*; do [ -f "$f" ] && files+=("$f"); done
 if [ ${#files[@]} = 0 ]; then echo "publish-build: no installer in $PWD" >&2; exit 1; fi
 # Both Windows builds write <channel>.yml. Each attaches its own as <channel>-win-<arch>.yml, which
 # no updater reads, and release.yml's finish job joins the two from the release into <channel>.yml.
 if [ -f "$CHANNEL.yml" ]; then
-  exe=(wisp-*-win-*.exe)
+  exe=(parallax-*-win-*.exe)
   [ -f "${exe[0]}" ] || { echo "publish-build: $CHANNEL.yml without a Windows installer" >&2; exit 1; }
   arch=${exe[0]##*-win-}
   mv "$CHANNEL.yml" "$CHANNEL-win-${arch%.exe}.yml"

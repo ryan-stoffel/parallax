@@ -8,7 +8,7 @@
 
 0014 moved the event log into SQLite and left a note: "The table isn't pruned yet (#187)." Two bounds were missing:
 
-- The `events` table grows forever. Every `project.created`, `context.changed`, and `agent.*` event stays, so `wispd.sqlite3` grows with every agent run.
+- The `events` table grows forever. Every `project.created`, `context.changed`, and `agent.*` event stays, so `plxd.sqlite3` grows with every agent run.
 - `EventLog`'s in-memory window, which `events/subscribe` replays from, was bounded only by count (`event_retention`, 10,000). A run's `agent.output` batches can reach about 256 KiB each (0007's per-tool-output cap is 32 KiB), so a long run with large outputs could hold far more memory than `event_retention` was sized for when M1's events were all small.
 
 ## Decision
@@ -46,6 +46,6 @@ Count over age: age needs a wall-clock cutoff and a periodic sweep to catch even
 
 ## Consequences
 
-- `wispd.sqlite3`'s growth from `project.created` and `context.changed` is now bounded; growth from agent runs' own events is not, until #207.
+- `plxd.sqlite3`'s growth from `project.created` and `context.changed` is now bounded; growth from agent runs' own events is not, until #207.
 - `host_event_retention` can't be configured below `event_retention` — it is clamped up rather than rejected, so a low value silently becomes `event_retention` instead of erroring.
 - The in-memory replay window's peak size is now bounded by `event_retention_bytes` on a fresh log and after a restart alike, not only once enough appends have evicted down to it.

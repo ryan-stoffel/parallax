@@ -1,12 +1,12 @@
 //! What a worker needs before it starts (0013, decision 0014): the environment agents run in,
-//! the checks that refuse a worker wispd can't sandbox, the key accounts routing reads, and the
+//! the checks that refuse a worker plxd can't sandbox, the key accounts routing reads, and the
 //! prompt that tells the agent its limits.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{AccountId, CliKind, DetectedCli, ErrorKind, Provider};
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{AccountId, CliKind, DetectedCli, ErrorKind, Provider};
 
 use crate::backend::Backend;
 use crate::backend::claude::{self, WORKER_MIN_VERSION, parse_version};
@@ -18,7 +18,7 @@ use crate::routing::KeyAccounts;
 /// Folders appended to an agent's `PATH` when it lacks them (#96): the vendors' own install
 /// folder (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
 /// on Windows), rustup's `~/.cargo/bin` (RYA-126), Homebrew on Apple silicon (macOS only) and
-/// `/usr/local/bin`, and the system folders (0023). They go after whatever `PATH` wispd was
+/// `/usr/local/bin`, and the system folders (0023). They go after whatever `PATH` plxd was
 /// started with, so the user's own order still wins; they only fill in what launchd or an SSH
 /// session left out.
 const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin", ".cargo/bin"];
@@ -36,14 +36,14 @@ const EXTRA_PATH: &[&str] = &["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin",
 #[cfg(windows)]
 const EXTRA_PATH: &[&str] = &[];
 
-/// The variables of wispd's own environment that agent CLIs, CLI probes, and worktree git
-/// commands inherit; everything else stays with wispd (0013, decision 0014). A worker has network
-/// access and reads prompt-injectable content, so a token wispd happened to start with, such as
+/// The variables of plxd's own environment that agent CLIs, CLI probes, and worktree git
+/// commands inherit; everything else stays with plxd (0013, decision 0014). A worker has network
+/// access and reads prompt-injectable content, so a token plxd happened to start with, such as
 /// `GITHUB_TOKEN`, `NPM_TOKEN`, `OPENAI_API_KEY`, or `AWS_SECRET_ACCESS_KEY`, must never reach
 /// it. These are what a CLI needs to find itself, its home folder, its temp folder, the user's
 /// locale and terminal, and a corporate network's proxy and certificates. A backend adds its own
 /// variables on top, such as an account's API key or configuration folder, and the launcher
-/// adds `WISPD_DATA_DIR`.
+/// adds `PLXD_DATA_DIR`.
 const INHERITED: &[&str] = &[
     "PATH",
     "HOME",
@@ -99,7 +99,7 @@ const INHERITED_ON_WINDOWS: &[&str] = &[
 ];
 
 /// The environment every agent CLI, CLI probe, and worktree git command starts from (#96,
-/// decision 0014): only the [`INHERITED`] part of wispd's own, with [`EXTRA_PATH`] filled in.
+/// decision 0014): only the [`INHERITED`] part of plxd's own, with [`EXTRA_PATH`] filled in.
 pub(crate) fn agent_environment() -> Environment {
     with_extra_path(
         allowlisted(&Environment::inherited()),
@@ -145,7 +145,7 @@ pub(crate) fn with_extra_path(mut env: Environment, home: Option<&Path>) -> Envi
 }
 
 pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
-    ErrorObject::wisp(ErrorKind::WorkerUnavailable, message)
+    ErrorObject::parallax(ErrorKind::WorkerUnavailable, message)
 }
 
 /// What to do about a backend that can't sandbox a worker here: Claude Code's sandbox is checked
@@ -156,7 +156,7 @@ const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 /// What to do about a backend that can't sandbox a worker here: Claude Code has no sandbox on
 /// native Windows (0023, RYA-24).
 #[cfg(windows)]
-const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so run wispd in \
+const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so run plxd in \
                                WSL2 and add that as the host for workers";
 
 /// Refuses a worker on a backend that doesn't enforce the worker sandbox (0013).
@@ -195,7 +195,7 @@ pub(super) fn check_version(
     };
     let Some(version) = detected.version.as_deref() else {
         return Err(worker_unavailable(format!(
-            "wispd could not read {name}'s version, and a sandboxed worker needs {min} or later; \
+            "plxd could not read {name}'s version, and a sandboxed worker needs {min} or later; \
              update {name}"
         )));
     };
@@ -216,7 +216,7 @@ pub(super) async fn check_linux_sandbox(
 ) -> Result<(), ErrorObject> {
     let Some(path) = claude.and_then(|claude| claude.path.as_deref()) else {
         return Err(worker_unavailable(
-            "wispd could not tell where Claude Code is installed",
+            "plxd could not tell where Claude Code is installed",
         ));
     };
     claude::linux_sandbox::check_host(detector.launcher(), Path::new(path))
@@ -224,7 +224,7 @@ pub(super) async fn check_linux_sandbox(
         .map_err(worker_unavailable)
 }
 
-/// The detected CLI a backend runs, if wispd checks its version before starting a worker.
+/// The detected CLI a backend runs, if plxd checks its version before starting a worker.
 pub(super) fn cli_of(backend: &dyn Backend) -> Option<CliKind> {
     match backend.name() {
         claude::PROGRAM => Some(CliKind::Claude),
@@ -285,12 +285,12 @@ impl KeyAccounts for StoredKeyAccounts {
 /// The first message of a new worker: its limits (0013), then the task.
 pub(super) fn worker_prompt(task: &str, worktree: &Path, context: &Path) -> String {
     format!(
-        "You are a wisp worker agent in a git worktree at {worktree}.\n\
+        "You are a Parallax worker agent in a git worktree at {worktree}.\n\
          - You may write files only in that worktree and in the project's shared context folder \
          at {context}. Put notes there that the user or other agents should see.\n\
          - Your commands have network access, but this Mac's own services (localhost) are \
          unreachable.\n\
-         - Don't commit or change git history: wisp commits your changes when you finish.\n\
+         - Don't commit or change git history: Parallax commits your changes when you finish.\n\
          - The project's dependencies may not be installed.\n\
          \n\
          Your task:\n{task}",
@@ -301,17 +301,17 @@ pub(super) fn worker_prompt(task: &str, worktree: &Path, context: &Path) -> Stri
 
 /// The first message of a normal thread (#110): the same limits as a worker's, for an agent the
 /// user talks to directly, then the user's message. `scratch` is true for a thread with no repo,
-/// whose repository wispd made empty for it.
+/// whose repository plxd made empty for it.
 pub(super) fn thread_prompt(message: &str, worktree: &Path, notes: &Path, scratch: bool) -> String {
     let place = if scratch {
         format!(
-            "You are a wisp agent. Your working folder is {worktree}, a git worktree of an empty \
-             scratch repository wispd made for this conversation; use it for any files you need.",
+            "You are a Parallax agent. Your working folder is {worktree}, a git worktree of an empty \
+             scratch repository plxd made for this conversation; use it for any files you need.",
             worktree = worktree.display(),
         )
     } else {
         format!(
-            "You are a wisp agent in a git worktree at {worktree}, checked out for this \
+            "You are a Parallax agent in a git worktree at {worktree}, checked out for this \
              conversation from the user's repository.",
             worktree = worktree.display(),
         )
@@ -321,7 +321,7 @@ pub(super) fn thread_prompt(message: &str, worktree: &Path, notes: &Path, scratc
          - You may write files only in that folder and in the notes folder at {notes}.\n\
          - Your commands have network access, but this Mac's own services (localhost) are \
          unreachable.\n\
-         - Don't commit or change git history: wisp commits your changes when you finish.\n\
+         - Don't commit or change git history: Parallax commits your changes when you finish.\n\
          - The repository's dependencies may not be installed.\n\
          \n\
          The user's message:\n{message}",
@@ -342,7 +342,7 @@ mod tests {
     #[cfg(unix)]
     use std::path::Path;
 
-    use wisp_protocol::{CliKind, DetectedCli, ErrorKind};
+    use parallax_protocol::{CliKind, DetectedCli, ErrorKind};
 
     #[cfg(unix)]
     use super::{allowlisted, with_extra_path};
@@ -381,7 +381,10 @@ mod tests {
         assert!(check(Some("2.1.248")).is_ok());
         assert!(check(Some("2.2.0")).is_ok());
         let old = check(Some("2.1.247")).unwrap_err();
-        assert_eq!(old.wisp_data().unwrap().kind, ErrorKind::WorkerUnavailable);
+        assert_eq!(
+            old.parallax_data().unwrap().kind,
+            ErrorKind::WorkerUnavailable
+        );
         assert!(old.message.contains("2.1.247"), "{}", old.message);
         assert!(old.message.contains("2.1.248"), "{}", old.message);
         for missing in [None, Some(&claude(None)), Some(&claude(Some("latest")))] {
@@ -428,7 +431,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    /// wispd started from a shell that holds credentials for other services: a worker spawned
+    /// plxd started from a shell that holds credentials for other services: a worker spawned
     /// from the agent environment sees none of them, but keeps what a CLI needs.
     #[tokio::test]
     async fn a_spawned_worker_inherits_only_the_allowlist() {
@@ -456,18 +459,18 @@ mod tests {
             ("HTTPS_PROXY", "http://proxy:3128"),
             ("NODE_EXTRA_CA_CERTS", "/etc/corp.pem"),
         ];
-        let mut wispd_env = Environment::empty();
-        wispd_env.set("PATH", "/usr/bin:/bin");
+        let mut plxd_env = Environment::empty();
+        plxd_env.set("PATH", "/usr/bin:/bin");
         for name in secrets {
-            wispd_env.set(name, "secret-value");
+            plxd_env.set(name, "secret-value");
         }
         for (name, value) in kept {
-            wispd_env.set(name, value);
+            plxd_env.set(name, value);
         }
         let dir = tempfile::tempdir().unwrap();
         let launcher = Launcher::new(
             DataDir::new(dir.path()).unwrap(),
-            with_extra_path(allowlisted(&wispd_env), None),
+            with_extra_path(allowlisted(&plxd_env), None),
         );
         let names: Vec<&str> = secrets
             .iter()
@@ -531,7 +534,7 @@ mod tests {
         std::fs::create_dir(&odd).unwrap();
         let error = sandbox_path(&odd, "the repository").unwrap_err();
         assert_eq!(
-            error.wisp_data().unwrap().kind,
+            error.parallax_data().unwrap().kind,
             ErrorKind::WorkerUnavailable
         );
         assert!(error.message.contains("app[old]"), "{}", error.message);
@@ -591,7 +594,7 @@ mod tests {
         std::fs::create_dir(&verbatim).unwrap();
         let error = sandbox_path(&verbatim, "the repository").unwrap_err();
         assert_eq!(
-            error.wisp_data().unwrap().kind,
+            error.parallax_data().unwrap().kind,
             ErrorKind::WorkerUnavailable
         );
         assert!(error.message.contains("trailing."), "{}", error.message);

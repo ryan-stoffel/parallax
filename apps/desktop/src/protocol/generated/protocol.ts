@@ -1,6 +1,6 @@
-// Generated from crates/wisp-protocol by `cargo run -p wisp-protocol --bin generate-typescript`. Do not edit.
+// Generated from crates/parallax-protocol by `cargo run -p parallax-protocol --bin generate-typescript`. Do not edit.
 //
-// The messages of the protocol between clients and wispd (decision record 0007), without
+// The messages of the protocol between clients and plxd (decision record 0007), without
 // the JSON-RPC 2.0 envelope around them.
 
 /** The newest protocol version these types describe. */
@@ -9,21 +9,21 @@ export const PROTOCOL_VERSION = 1;
 /** The largest frame either side sends or accepts: 8 MiB, not counting the line ending. */
 export const MAX_FRAME_BYTES = 8388608;
 
-/** JSON-RPC error codes. A `WispError`'s `data` is an `ErrorData`. */
+/** JSON-RPC error codes. A `ParallaxError`'s `data` is an `ErrorData`. */
 export const ErrorCodes = {
 	ParseError: -32700,
 	InvalidRequest: -32600,
 	MethodNotFound: -32601,
 	InvalidParams: -32602,
 	InternalError: -32603,
-	WispError: -32000,
+	ParallaxError: -32000,
 	RequestCancelled: -32800,
 } as const;
 
-/** Requests, which the client sends and wispd answers, by method. */
-export type WispRequests = {
+/** Requests, which the client sends and plxd answers, by method. */
+export type ParallaxRequests = {
 	/**
-	 * `initialize`: the handshake. It must be the first request on a connection; wispd
+	 * `initialize`: the handshake. It must be the first request on a connection; plxd
 	 * answers anything before it with `notInitialized`.
 	 */
 	"initialize": { params: InitializeParams, result: InitializeResult },
@@ -33,7 +33,7 @@ export type WispRequests = {
 	 */
 	"host/health": { params: HostHealthParams, result: HostHealthResult },
 	/**
-	 * `host/version`: wispd's release and protocol versions, operating system, and CPU
+	 * `host/version`: plxd's release and protocol versions, operating system, and CPU
 	 * architecture.
 	 */
 	"host/version": { params: HostVersionParams, result: HostVersionResult },
@@ -69,7 +69,7 @@ export type WispRequests = {
 	 */
 	"accounts/keys/remove": { params: AccountsKeysRemoveParams, result: AccountsKeysRemoveResult },
 	/**
-	 * `accounts/list`: the vendor CLIs wispd detects (#114), installed, signed in, and their
+	 * `accounts/list`: the vendor CLIs plxd detects (#114), installed, signed in, and their
 	 * plan where exposed. May answer from a short-lived cache. Gated on the `agentClis`
 	 * capability.
 	 */
@@ -135,7 +135,7 @@ export type WispRequests = {
 	 */
 	"agent/list": { params: AgentListParams, result: AgentListResult },
 	/**
-	 * `agent/events`: one run's events from wispd's log, a page at a time.
+	 * `agent/events`: one run's events from plxd's log, a page at a time.
 	 */
 	"agent/events": { params: AgentEventsParams, result: AgentEventsResult },
 	/**
@@ -204,7 +204,7 @@ export type WispRequests = {
 	"thread/delete": { params: ThreadDeleteParams, result: ThreadDeleteResult },
 	/**
 	 * `project/start`: starts a project's coordinator chat, a no-write run in its repository
-	 * with wispd's coordinator tools (0024), idempotent on its client-generated run id. It
+	 * with plxd's coordinator tools (0024), idempotent on its client-generated run id. It
 	 * replaces the project's last coordinator unless that one is running. Gated on the
 	 * `coordinator` capability.
 	 */
@@ -218,14 +218,14 @@ export type WispRequests = {
 };
 
 /** Notifications, which get no response, by method. */
-export type WispNotifications = {
+export type ParallaxNotifications = {
 	/**
 	 * `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
 	 * side may send it.
 	 */
 	"$/cancelRequest": CancelRequestParams,
 	/**
-	 * `events/event`: one event for a subscription. wispd sends it.
+	 * `events/event`: one event for a subscription. plxd sends it.
 	 */
 	"events/event": EventsEventParams,
 };
@@ -255,7 +255,7 @@ export type InitializeParams = {
  * Capabilities by name, such as `{"agents": {}}`. Each value holds that capability's options,
  * and is empty when it has none. The map never changes shape.
  *
- * Later features are gated on a capability, so a newer client still works with an older wispd.
+ * Later features are gated on a capability, so a newer client still works with an older plxd.
  */
 export type Capabilities = { [key in string]: { [key in string]: JsonValue } };
 
@@ -266,7 +266,7 @@ export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in
  */
 export type ClientInfo = {
 	/**
-	 * The client's name, such as `wisp` for the desktop app.
+	 * The client's name, such as `parallax` for the desktop app.
 	 */
 	name: string,
 	/**
@@ -302,26 +302,26 @@ export type InitializeResult = {
 	 */
 	protocol: number,
 	/**
-	 * wispd's release version.
+	 * plxd's release version.
 	 */
-	wispd: string,
+	plxd: string,
 	/**
-	 * Identifies wispd's event log. It changes only when the log starts over, and then every
+	 * Identifies plxd's event log. It changes only when the log starts over, and then every
 	 * `seq` the client holds is meaningless.
 	 */
 	logId: LogId,
 	/**
-	 * What wispd supports.
+	 * What plxd supports.
 	 */
 	capabilities: Capabilities,
 	/**
-	 * The largest frame wispd accepts, in bytes, not counting the line ending.
+	 * The largest frame plxd accepts, in bytes, not counting the line ending.
 	 */
 	maxFrameBytes: number,
 };
 
 /**
- * Identifies wispd's event log. It changes only when the log starts over.
+ * Identifies plxd's event log. It changes only when the log starts over.
  */
 export type LogId = string;
 
@@ -335,11 +335,11 @@ export type HostHealthParams = Record<symbol, never>;
  */
 export type HostHealthResult = {
 	/**
-	 * Seconds since wispd started.
+	 * Seconds since plxd started.
 	 */
 	uptimeSeconds: number,
 	/**
-	 * Whether wispd can read and write its project store.
+	 * Whether plxd can read and write its project store.
 	 */
 	store: StoreState,
 	/**
@@ -349,9 +349,9 @@ export type HostHealthResult = {
 };
 
 /**
- * The state of wispd's project store.
+ * The state of plxd's project store.
  *
- * A newer wispd may send states that are not listed here. Treat those as unknown, so a `switch`
+ * A newer plxd may send states that are not listed here. Treat those as unknown, so a `switch`
  * over this type must not end in an exhaustiveness assertion.
  */
 export type StoreState = "ok" | "unavailable";
@@ -366,11 +366,11 @@ export type HostVersionParams = Record<symbol, never>;
  */
 export type HostVersionResult = {
 	/**
-	 * wispd's release version.
+	 * plxd's release version.
 	 */
-	wispd: string,
+	plxd: string,
 	/**
-	 * The protocol versions wispd speaks.
+	 * The protocol versions plxd speaks.
 	 */
 	protocol: ProtocolRange,
 	/**
@@ -403,7 +403,7 @@ export type ProjectListResult = {
 };
 
 /**
- * A project: a body of work on one repository, run by this wispd.
+ * A project: a body of work on one repository, run by this plxd.
  */
 export type Project = {
 	/**
@@ -425,7 +425,7 @@ export type Project = {
 	repoPath: string,
 	/**
 	 * The branch checked out in the repository, or the first 7 digits of the commit when `HEAD`
-	 * is detached, read when wispd sends the project. Absent when wispd can't read it.
+	 * is detached, read when plxd sends the project. Absent when plxd can't read it.
 	 */
 	branch?: string,
 	/**
@@ -446,7 +446,7 @@ export type Project = {
 
 /**
  * A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
- * name. wispd stores them as the client sent them and never reads them.
+ * name. plxd stores them as the client sent them and never reads them.
  */
 export type ProjectIcon = {
 	/**
@@ -476,7 +476,7 @@ export type RunId = string;
 /**
  * Params of `project/create`.
  *
- * It is idempotent on `id`: if a project with that id exists, wispd returns it instead of
+ * It is idempotent on `id`: if a project with that id exists, plxd returns it instead of
  * creating another, and fails with `idConflict` if `name`, `repoPath`, or `icon` differ. A new
  * project's `repoPath` must be the top folder of a git working tree on this host, or it fails
  * with `notARepository`.
@@ -495,7 +495,7 @@ export type ProjectCreateParams = {
 	 */
 	repoPath: string,
 	/**
-	 * The project's icon, sent only to a wispd that advertises `projectEdit`. Absent means the
+	 * The project's icon, sent only to a plxd that advertises `projectEdit`. Absent means the
 	 * app's default icon.
 	 */
 	icon?: ProjectIcon,
@@ -514,7 +514,7 @@ export type ProjectCreateResult = {
 /**
  * Params of `events/subscribe`.
  *
- * wispd replays the events after `after`, then sends new ones as they happen, each as an
+ * plxd replays the events after `after`, then sends new ones as they happen, each as an
  * `events/event` notification. If those events are gone or too many to replay, it fails with
  * `resyncRequired`.
  */
@@ -542,7 +542,7 @@ export type EventsSubscribeResult = {
 };
 
 /**
- * Identifies one `events/subscribe` on one connection. wispd generates it.
+ * Identifies one `events/subscribe` on one connection. plxd generates it.
  */
 export type SubscriptionId = string;
 
@@ -566,7 +566,7 @@ export type EventsUnsubscribeResult = Record<symbol, never>;
  *
  * It is idempotent on `id`: adding the same id again with the same `provider`, `label`, and
  * `key` returns the existing account instead of storing the key twice, and fails with
- * `idConflict` if they differ. The key is sent once; wispd stores it in the Keychain and never
+ * `idConflict` if they differ. The key is sent once; plxd stores it in the Keychain and never
  * echoes it back unmasked.
  */
 export type AccountsKeysAddParams = {
@@ -597,7 +597,7 @@ export type AccountId = string;
 /**
  * Who a stored API key is for (0004's fallback for a subscription).
  *
- * A newer wispd may send providers that are not listed here. Treat those as unknown, so a
+ * A newer plxd may send providers that are not listed here. Treat those as unknown, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
 export type Provider = "anthropic" | "openai" | "cursor";
@@ -608,7 +608,7 @@ export type Provider = "anthropic" | "openai" | "cursor";
  * It serializes and deserializes as a plain string (serde's newtype-struct representation is
  * already transparent in JSON, so `#[serde(transparent)]` would be redundant here, and ts-rs 12
  * cannot parse it), but its `Debug` never shows the value, so a stray `{:?}` in a log line can't
- * leak it (#117). Compare wispd's `backend::ApiKey`, which does the same for the key once it
+ * leak it (#117). Compare plxd's `backend::ApiKey`, which does the same for the key once it
  * reaches a backend.
  */
 export type RawKey = string;
@@ -624,8 +624,8 @@ export type AccountsKeysAddResult = {
 };
 
 /**
- * A key account: its record in wisp's store. The key itself lives only in the macOS Keychain
- * (0004); wispd never returns it unmasked.
+ * A key account: its record in Parallax's store. The key itself lives only in the macOS Keychain
+ * (0004); plxd never returns it unmasked.
  */
 export type KeyAccount = {
 	/**
@@ -692,7 +692,7 @@ export type AccountsListParams = Record<symbol, never>;
  */
 export type AccountsListResult = {
 	/**
-	 * Every CLI wispd knows how to detect, in a stable order (`claude`, `codex`, `cursor`).
+	 * Every CLI plxd knows how to detect, in a stable order (`claude`, `codex`, `cursor`).
 	 */
 	clis: Array<DetectedCli>,
 	/**
@@ -706,7 +706,7 @@ export type AccountsListResult = {
  * One CLI's detected state.
  *
  * Every field but `cli` and `installed` is best-effort: the status commands 0004 lists are
- * undocumented in places, so a field wispd could not read is `null` rather than a guess.
+ * undocumented in places, so a field plxd could not read is `null` rather than a guess.
  */
 export type DetectedCli = {
 	/**
@@ -714,7 +714,7 @@ export type DetectedCli = {
 	 */
 	cli: CliKind,
 	/**
-	 * Whether the binary resolves on the `PATH` wispd itself uses (#96).
+	 * Whether the binary resolves on the `PATH` plxd itself uses (#96).
 	 */
 	installed: boolean,
 	/**
@@ -726,7 +726,7 @@ export type DetectedCli = {
 	 */
 	version?: string,
 	/**
-	 * Whether the user is signed in. `null` when installed but wispd could not tell (a timeout,
+	 * Whether the user is signed in. `null` when installed but plxd could not tell (a timeout,
 	 * unparseable output, or an exit code 0004 doesn't document).
 	 */
 	signedIn?: boolean,
@@ -749,15 +749,15 @@ export type DetectedCli = {
 /**
  * How a signed-in CLI authenticates.
  *
- * A newer wispd may send kinds that are not listed here. Treat those as unknown, so a `switch`
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown, so a `switch`
  * over this type must not end in an exhaustiveness assertion.
  */
 export type AuthKind = "subscription" | "apiKey";
 
 /**
- * A vendor CLI wispd knows how to detect (0004).
+ * A vendor CLI plxd knows how to detect (0004).
  *
- * A newer wispd may send kinds that are not listed here. Treat those as unknown, so a `switch`
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown, so a `switch`
  * over this type must not end in an exhaustiveness assertion.
  */
 export type CliKind = "claude" | "codex" | "cursor";
@@ -772,7 +772,7 @@ export type AccountsRefreshParams = Record<symbol, never>;
  */
 export type AccountsRefreshResult = {
 	/**
-	 * Every CLI wispd knows how to detect, freshly probed.
+	 * Every CLI plxd knows how to detect, freshly probed.
 	 */
 	clis: Array<DetectedCli>,
 	/**
@@ -784,7 +784,7 @@ export type AccountsRefreshResult = {
 /**
  * Params of `usage/get`.
  *
- * Empty: wispd has no account registry yet (#114, #117, #118 are still open, and #113's
+ * Empty: plxd has no account registry yet (#114, #117, #118 are still open, and #113's
  * `AccountRef` is already just a caller-supplied string), so it reports every account id it has
  * recorded usage or limits for.
  */
@@ -795,7 +795,7 @@ export type UsageGetParams = Record<symbol, never>;
  */
 export type UsageGetResult = {
 	/**
-	 * Every account wispd has recorded usage or limits for, in no particular order.
+	 * Every account plxd has recorded usage or limits for, in no particular order.
 	 */
 	accounts: Array<AccountUsage>,
 };
@@ -805,7 +805,7 @@ export type UsageGetResult = {
  */
 export type AccountUsage = {
 	/**
-	 * wispd's id for the account (#114, #117).
+	 * plxd's id for the account (#114, #117).
 	 */
 	accountId: string,
 	/**
@@ -842,7 +842,7 @@ export type UsageLimitWindow = {
 	 */
 	resetsAt?: string,
 	/**
-	 * When wispd captured this snapshot.
+	 * When plxd captured this snapshot.
 	 */
 	capturedAt: string,
 };
@@ -904,7 +904,7 @@ export type UsageHistoryResult = {
  */
 export type AccountRuns = {
 	/**
-	 * wispd's id for the account (#114, #117).
+	 * plxd's id for the account (#114, #117).
 	 */
 	accountId: string,
 	/**
@@ -922,7 +922,7 @@ export type UsageHour = {
 	 */
 	hour: string,
 	/**
-	 * wispd's id for the account (#114, #117).
+	 * plxd's id for the account (#114, #117).
 	 */
 	accountId: string,
 	/**
@@ -975,12 +975,12 @@ export type AccountsDefaultsGetResult = {
 /**
  * An account a task can be routed to: the user's own login in a vendor CLI, or a stored key.
  *
- * A newer wispd may send a kind this version does not know. Treat that as absent rather than end
+ * A newer plxd may send a kind this version does not know. Treat that as absent rather than end
  * a `switch` over this type in an exhaustiveness assertion.
  */
 export type AccountChoice = { "kind": "subscription",
 	/**
-	 * The backend's name, as `host/health`'s running agents and wispd's logs use it.
+	 * The backend's name, as `host/health`'s running agents and plxd's logs use it.
 	 */
 	backend: string, } | { "kind": "key",
 	/**
@@ -1045,8 +1045,8 @@ export type ContextFile = {
 	 */
 	modifiedAt: string,
 	/**
-	 * Who wrote it last, such as `"app"` or an agent's run id, when wispd knows. Absent for a
-	 * file wispd has not seen written since it started, such as one already on disk at startup.
+	 * Who wrote it last, such as `"app"` or an agent's run id, when plxd knows. Absent for a
+	 * file plxd has not seen written since it started, such as one already on disk at startup.
 	 */
 	lastWriter?: string,
 };
@@ -1158,13 +1158,13 @@ export type AgentStartParams = {
 	 */
 	account?: AccountChoice,
 	/**
-	 * The coordinator thread starting the run, which `wispd mcp` sets for runs the coordinator
+	 * The coordinator thread starting the run, which `plxd mcp` sets for runs the coordinator
 	 * spawns (0019). The run keeps it, and a retry must repeat it.
 	 */
 	coordinatorThread?: CoordinatorThreadId,
 	/**
 	 * The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
-	 * it, `effort`, and `permission` only to a wispd that advertises `runOptions`. The run keeps
+	 * it, `effort`, and `permission` only to a plxd that advertises `runOptions`. The run keeps
 	 * all three when it resumes, and a retry must repeat them.
 	 */
 	model?: string,
@@ -1178,16 +1178,16 @@ export type AgentStartParams = {
 	 */
 	permission?: AgentPermission,
 	/**
-	 * Images for the prompt, sent only to a wispd that advertises `promptImages`. Its options
+	 * Images for the prompt, sent only to a plxd that advertises `promptImages`. Its options
 	 * give the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of `data`, past which
 	 * the request fails with `imageTooLarge`. With images, the prompt may be empty (RYA-193). A
-	 * retry must repeat them; wispd doesn't compare them.
+	 * retry must repeat them; plxd doesn't compare them.
 	 */
 	images?: Array<PromptImage>,
 	/**
 	 * Forward the run's permission requests to the client as `approvalRequested` items, which
 	 * `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
-	 * answers them, and only to a wispd that advertises `approvals`. Absent, a run in Manual,
+	 * answers them, and only to a plxd that advertises `approvals`. Absent, a run in Manual,
 	 * Auto, or Plan denies what would prompt, as before. A run with a `coordinatorThread` also
 	 * gets it when its coordinator has it. The run keeps it when it resumes, and a retry must
 	 * repeat it.
@@ -1217,13 +1217,13 @@ export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
  * What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
  * which `project/start` starts, is `noWrite`.
  *
- * A newer wispd may send a policy this version does not know; treat it as unknown.
+ * A newer plxd may send a policy this version does not know; treat it as unknown.
  */
 export type AgentPolicy = "workspaceWrite" | "noWrite";
 
 /**
  * A project's coordinator thread (M4, #195, decision 0019). Runs the coordinator starts
- * through its wisp tools carry it, so a client can tell them from runs it started itself.
+ * through its Parallax tools carry it, so a client can tell them from runs it started itself.
  */
 export type CoordinatorThreadId = string;
 
@@ -1293,7 +1293,7 @@ export type AgentRun = {
 	 */
 	accountId: string,
 	/**
-	 * Its worktree's branch, such as `wisp/1a2b3c4d`, once the worktree exists.
+	 * Its worktree's branch, such as `parallax/1a2b3c4d`, once the worktree exists.
 	 */
 	branch?: string,
 	/**
@@ -1315,11 +1315,11 @@ export type AgentRun = {
 	 */
 	error?: string,
 	/**
-	 * Its latest commit, once wispd made one.
+	 * Its latest commit, once plxd made one.
 	 */
 	diff?: DiffSummary,
 	/**
-	 * The coordinator thread that started it through its wisp tools. Absent for a run a client
+	 * The coordinator thread that started it through its Parallax tools. Absent for a run a client
 	 * started itself.
 	 */
 	coordinatorThread?: CoordinatorThreadId,
@@ -1355,13 +1355,13 @@ export type AgentRun = {
 /**
  * Where a run is.
  *
- * A newer wispd may send a status this version does not know; treat it as unknown, and don't
+ * A newer plxd may send a status this version does not know; treat it as unknown, and don't
  * end a `switch` over this type in an exhaustiveness assertion.
  */
 export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "accepted";
 
 /**
- * The commit wispd made for a run, compared with the commit its worktree was created from.
+ * The commit plxd made for a run, compared with the commit its worktree was created from.
  */
 export type DiffSummary = {
 	/**
@@ -1387,7 +1387,7 @@ export type DiffSummary = {
  *
  * A running agent gets it as its next turn. An agent that ended with a `sessionId` resumes
  * that session in its worktree, with the message as the prompt. Idempotent on `turnId` while
- * wispd runs.
+ * plxd runs.
  */
 export type AgentSendParams = {
 	/**
@@ -1403,9 +1403,9 @@ export type AgentSendParams = {
 	 */
 	text: string,
 	/**
-	 * A new model for the run and every later resume (RYA-163), sent only to a wispd that
+	 * A new model for the run and every later resume (RYA-163), sent only to a plxd that
 	 * advertises `sendModel`. It should be one the run's backend runs, since a session can't move
-	 * to another CLI; wispd can't check that, so another's fails the run with the CLI's own error.
+	 * to another CLI; plxd can't check that, so another's fails the run with the CLI's own error.
 	 * Absent, or the run's own, changes nothing. A different one fails with
 	 * `unsupportedOption` while the run's CLI is running, since it can't change mid-process.
 	 */
@@ -1466,7 +1466,7 @@ export type AgentListResult = {
 };
 
 /**
- * Params of `agent/events`: one run's events from wispd's log, for rebuilding its transcript
+ * Params of `agent/events`: one run's events from plxd's log, for rebuilding its transcript
  * after `resyncRequired` or a restart.
  */
 export type AgentEventsParams = {
@@ -1499,7 +1499,7 @@ export type AgentEventsResult = {
 };
 
 /**
- * An event from wispd's log, as `agent/events` returns it.
+ * An event from plxd's log, as `agent/events` returns it.
  */
 export type LoggedEvent = {
 	/**
@@ -1517,16 +1517,16 @@ export type LoggedEvent = {
 	/**
 	 * What happened.
 	 */
-	event: WispEvent,
+	event: ParallaxEvent,
 };
 
 /**
  * What happened, by `kind`.
  *
- * A newer wispd may send kinds that are not listed here. Skip those events but still count their
+ * A newer plxd may send kinds that are not listed here. Skip those events but still count their
  * `seq` as received, and don't end a `switch` over this type in an exhaustiveness assertion.
  */
-export type WispEvent = { "kind": "project.created",
+export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * The new project.
 	 */
@@ -1544,7 +1544,7 @@ export type WispEvent = { "kind": "project.created",
 	 */
 	runId: RunId,
 	/**
-	 * The run as it was created. wispd always sends it.
+	 * The run as it was created. plxd always sends it.
 	 */
 	run?: AgentRun, } | { "kind": "agent.updated",
 	/**
@@ -1632,7 +1632,7 @@ export type WispEvent = { "kind": "project.created",
 /**
  * Why a run failed, for code to match on.
  *
- * A newer wispd may send a kind this version does not know; treat it as unknown.
+ * A newer plxd may send a kind this version does not know; treat it as unknown.
  */
 export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation" | "unexpectedApiKey" | "vendorError" | "crashed" | "spawnFailed" | "commitFailed" | "internal";
 
@@ -1641,7 +1641,7 @@ export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation"
  */
 export type AgentMerge = {
 	/**
-	 * The commit the branch points at now: the run's commit, or wispd's merge commit.
+	 * The commit the branch points at now: the run's commit, or plxd's merge commit.
 	 */
 	commit: string,
 	/**
@@ -1658,14 +1658,14 @@ export type AgentMerge = {
 /**
  * How `agent/accept` brought a run's commit into the project's branch.
  *
- * A newer wispd may send a value this version does not know; treat it as unknown.
+ * A newer plxd may send a value this version does not know; treat it as unknown.
  */
 export type AgentMergeKind = "fastForward" | "merge" | "upToDate";
 
 /**
  * How one CLI process of a run ended.
  *
- * A newer wispd may send a status this version does not know; treat it as unknown.
+ * A newer plxd may send a status this version does not know; treat it as unknown.
  */
 export type AgentOutcome = { "status": "completed",
 	/**
@@ -1685,7 +1685,7 @@ export type AgentOutcome = { "status": "completed",
 /**
  * One thing in a run's transcript: a normalized event from its CLI (0004), by `kind`.
  *
- * A newer wispd may send kinds that are not listed here; skip them.
+ * A newer plxd may send kinds that are not listed here; skip them.
  */
 export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
@@ -1702,12 +1702,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	turnId?: TurnId,
 	/**
 	 * A follow-up's message, as `agent/send` took it, cut short when it is long. Absent for
-	 * the prompt's turn, whose text is the run's `prompt`, and in logs from before wispd
+	 * the prompt's turn, whose text is the run's `prompt`, and in logs from before plxd
 	 * recorded it.
 	 */
 	text?: string,
 	/**
-	 * True for a wake-up (RYA-42, decision 0025): a turn wispd sent a project's coordinator
+	 * True for a wake-up (RYA-42, decision 0025): a turn plxd sent a project's coordinator
 	 * on its own, not the user, because runs it started finished. `text` lists them.
 	 */
 	wake?: boolean,
@@ -1854,7 +1854,7 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 */
 	interactive?: boolean,
 	/**
-	 * When wispd denies it if nobody has answered, in RFC 3339 UTC.
+	 * When plxd denies it if nobody has answered, in RFC 3339 UTC.
 	 */
 	expiresAt: string, } | { "kind": "approvalResolved",
 	/**
@@ -1882,14 +1882,14 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 /**
  * Who or what decided a permission request.
  *
- * A newer wispd may send a value this version does not know; treat it as unknown.
+ * A newer plxd may send a value this version does not know; treat it as unknown.
  */
 export type AgentApprovalBy = "user" | "timeout" | "cancel" | "stop" | "agent";
 
 /**
  * What a permission request came to.
  *
- * A newer wispd may send a value this version does not know; treat it as unknown.
+ * A newer plxd may send a value this version does not know; treat it as unknown.
  */
 export type AgentApprovalDecision = "allowed" | "denied" | "expired" | "withdrawn";
 
@@ -1910,25 +1910,25 @@ export type AgentTodoItem = {
 /**
  * How far along a checklist item is.
  *
- * A newer wispd may send a status this version does not know; treat it as unknown.
+ * A newer plxd may send a status this version does not know; treat it as unknown.
  */
 export type AgentTodoStatus = "pending" | "inProgress" | "completed";
 
 /**
  * How a tool call ended.
  *
- * A newer wispd may send a status this version does not know; treat it as unknown.
+ * A newer plxd may send a status this version does not know; treat it as unknown.
  */
 export type AgentToolStatus = "ok" | "error" | "denied";
 
 /**
- * A permission request's id: a version 7 UUID that wispd generates when a run's CLI asks.
+ * A permission request's id: a version 7 UUID that plxd generates when a run's CLI asks.
  * `approvalRequested` carries it, and `agent/approve` and `approvalResolved` name it.
  */
 export type ApprovalId = string;
 
 /**
- * A stored image's id (RYA-191, decision 0026): a version 7 UUID that wispd generates once a
+ * A stored image's id (RYA-191, decision 0026): a version 7 UUID that plxd generates once a
  * message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
  */
 export type ImageId = string;
@@ -1955,7 +1955,7 @@ export type AgentRunState = {
 	 */
 	error?: string,
 	/**
-	 * Its latest commit, once wispd made one.
+	 * Its latest commit, once plxd made one.
 	 */
 	diff?: DiffSummary,
 	/**
@@ -1993,7 +1993,7 @@ export type Repo = {
 	 */
 	path: string,
 	/**
-	 * True for wispd's scratch entry, which holds the threads with no repo. Its `path` is the
+	 * True for plxd's scratch entry, which holds the threads with no repo. Its `path` is the
 	 * folder that holds each such thread's own scratch repository.
 	 */
 	scratch?: boolean,
@@ -2005,7 +2005,7 @@ export type Repo = {
 
 /**
  * A repo entry's id: a version 7 UUID that the client generates once and sends again on
- * every retry of `repo/add`. wispd generates the scratch entry's.
+ * every retry of `repo/add`. plxd generates the scratch entry's.
  */
 export type RepoId = string;
 
@@ -2066,7 +2066,7 @@ export type AgentDiffResult = {
 	base: string,
 	/**
 	 * The run's latest commit: the `head` side, and what `agent/accept` merges. Equal to `base`
-	 * until wispd has committed something for the run.
+	 * until plxd has committed something for the run.
 	 */
 	head: string,
 	/**
@@ -2127,7 +2127,7 @@ export type AgentDiffFile = {
 /**
  * How a file differs from the base.
  *
- * A newer wispd may send a status this version does not know; treat it as modified.
+ * A newer plxd may send a status this version does not know; treat it as modified.
  */
 export type AgentFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "typeChanged";
 
@@ -2176,7 +2176,7 @@ export type AgentFileParams = {
 /**
  * Which side of a run's diff to read.
  *
- * A newer client may send a side this version does not know; wispd refuses it.
+ * A newer client may send a side this version does not know; plxd refuses it.
  */
 export type AgentFileSide = "base" | "head";
 
@@ -2280,7 +2280,7 @@ export type AgentRequestChangesParams = {
 };
 
 /**
- * Params of `agent/openPr` (RYA-168): wispd pushes the run's branch to the repository's `origin`
+ * Params of `agent/openPr` (RYA-168): plxd pushes the run's branch to the repository's `origin`
  * on the host, as the user, and opens a pull request for it against the GitHub repository's
  * default branch with `gh`.
  *
@@ -2294,7 +2294,7 @@ export type AgentOpenPrParams = {
 	 */
 	runId: RunId,
 	/**
-	 * The pull request's title, such as the thread's. wispd takes its first line, cut to 256
+	 * The pull request's title, such as the thread's. plxd takes its first line, cut to 256
 	 * characters.
 	 */
 	title: string,
@@ -2471,9 +2471,9 @@ export type ThreadStartParams = {
 	 */
 	permission?: AgentPermission,
 	/**
-	 * Names the worktree's branch `wisp/<branchSlug>`: lowercase letters, digits, and hyphens,
+	 * Names the worktree's branch `parallax/<branchSlug>`: lowercase letters, digits, and hyphens,
 	 * no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
-	 * the run's short id after it. Absent names it `wisp/<short run id>`. Not part of what makes
+	 * the run's short id after it. Absent names it `parallax/<short run id>`. Not part of what makes
 	 * a retry with the same run id conflict.
 	 */
 	branchSlug?: string,
@@ -2648,7 +2648,7 @@ export type CancelRequestParams = {
 export type RequestId = number | string;
 
 /**
- * Params of `events/event`: one event from wispd's event log.
+ * Params of `events/event`: one event from plxd's event log.
  */
 export type EventsEventParams = {
 	/**
@@ -2656,7 +2656,7 @@ export type EventsEventParams = {
 	 */
 	subscription: SubscriptionId,
 	/**
-	 * The event's position in wispd's log. It increases by one for every change on the host,
+	 * The event's position in plxd's log. It increases by one for every change on the host,
 	 * across all projects.
 	 */
 	seq: number,
@@ -2671,11 +2671,11 @@ export type EventsEventParams = {
 	/**
 	 * What happened.
 	 */
-	event: WispEvent,
+	event: ParallaxEvent,
 };
 
 /**
- * The `data` of a wisp error (code -32000).
+ * The `data` of a Parallax error (code -32000).
  */
 export type ErrorData = {
 	/**
@@ -2689,16 +2689,16 @@ export type ErrorData = {
 };
 
 /**
- * What went wrong, in a wisp error's `data.kind`. Receivers match on it, never on the message.
+ * What went wrong, in a Parallax error's `data.kind`. Receivers match on it, never on the message.
  *
- * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
 export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it
- * from every wispd.
+ * from every plxd.
  */
 export type IncompatibleProtocolDetail = {
 	/**
@@ -2706,11 +2706,11 @@ export type IncompatibleProtocolDetail = {
 	 */
 	requested: ProtocolRange,
 	/**
-	 * The versions wispd speaks.
+	 * The versions plxd speaks.
 	 */
 	supported: ProtocolRange,
 	/**
-	 * wispd's release version, so the client can say which side to update.
+	 * plxd's release version, so the client can say which side to update.
 	 */
-	wispd: string,
+	plxd: string,
 };

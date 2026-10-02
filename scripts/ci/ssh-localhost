@@ -3,15 +3,15 @@
 # check-ssh-attach. It generates a throwaway client key and host
 # key, runs a user-level sshd of its own on a high port, and points a `Host localhost` block in
 # ~/.ssh/config at its own throwaway identity and known_hosts, so a client's fixed ssh argv
-# (`ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <host> wispd attach`,
+# (`ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <host> plxd attach`,
 # decision record 0007) never needs its own -i or -o UserKnownHostsFile to use them.
 #
 # Never runs outside a GitHub-hosted runner (a developer's machine, or a self-hosted runner, keeps its
 # own ~/.ssh untouched: gating on CI=true alone is not enough, since developers and tools often
 # export that too), and never fails the build on its own: whatever happens, it writes
-# WISP_E2E_SSH_READY=true or =false plus a reason to <status-file>, and the caller
+# PLX_E2E_SSH_READY=true or =false plus a reason to <status-file>, and the caller
 # (ci.yml's rust job) decides whether that is a skip or, with
-# WISP_E2E_REQUIRE_SSH=1, a failure. Readiness is proven by actually running `ssh localhost`, not
+# PLX_E2E_REQUIRE_SSH=1, a failure. Readiness is proven by actually running `ssh localhost`, not
 # assumed from having started sshd.
 set -eu
 
@@ -24,13 +24,13 @@ sshd_pid=""
 write_status() {
   ready=$1
   reason=${2:-}
-  printf 'WISP_E2E_SSH_READY=%s\n' "$ready" > "$status_file"
+  printf 'PLX_E2E_SSH_READY=%s\n' "$ready" > "$status_file"
   if [ -n "$reason" ]; then
     # Single line: the reason ends up in a check's failure/skip message.
-    printf 'WISP_E2E_SSH_REASON=%s\n' "$(printf '%s' "$reason" | tr '\n' ' ')" >> "$status_file"
+    printf 'PLX_E2E_SSH_REASON=%s\n' "$(printf '%s' "$reason" | tr '\n' ' ')" >> "$status_file"
   fi
   if [ -n "$sshd_pid" ]; then
-    printf 'WISP_E2E_SSHD_PID=%s\n' "$sshd_pid" >> "$status_file"
+    printf 'PLX_E2E_SSHD_PID=%s\n' "$sshd_pid" >> "$status_file"
   fi
 }
 
@@ -53,11 +53,11 @@ command -v ssh >/dev/null 2>&1 || skip "no ssh on PATH"
 command -v ssh-keygen >/dev/null 2>&1 || skip "no ssh-keygen on PATH"
 command -v /usr/sbin/sshd >/dev/null 2>&1 || skip "/usr/sbin/sshd is not present"
 
-state_dir=$(mktemp -d "${TMPDIR:-/tmp}/wisp-e2e-ssh.XXXXXX")
+state_dir=$(mktemp -d "${TMPDIR:-/tmp}/parallax-e2e-ssh.XXXXXX")
 identity="$state_dir/id_ed25519"
 known_hosts="$state_dir/known_hosts"
 : > "$known_hosts"
-ssh-keygen -t ed25519 -N '' -f "$identity" -C wisp-e2e-ci -q
+ssh-keygen -t ed25519 -N '' -f "$identity" -C parallax-e2e-ci -q
 
 # An unprivileged, high port of our own; nothing else on a fresh runner should be using it.
 port=2222
@@ -105,7 +105,7 @@ fi
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 {
-  echo "# wisp-e2e-ci: throwaway localhost ssh for #95, added by scripts/ci/ssh-localhost"
+  echo "# parallax-e2e-ci: throwaway localhost ssh for #95, added by scripts/ci/ssh-localhost"
   echo "Host localhost"
   echo "    Port $port"
   echo "    IdentityFile $identity"

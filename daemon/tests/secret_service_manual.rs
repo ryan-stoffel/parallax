@@ -5,25 +5,25 @@
 //! `secret-tool` (Debian and Ubuntu: `libsecret-tools`):
 //!
 //! ```sh
-//! cargo test -p wispd --test secret_service_manual -- --ignored --nocapture
+//! cargo test -p plxd --test secret_service_manual -- --ignored --nocapture
 //! ```
 //!
-//! It uses a throwaway, test-only service name, never `wispd::keystore::SERVICE`, so it can't
+//! It uses a throwaway, test-only service name, never `plxd::keystore::SERVICE`, so it can't
 //! disturb a real stored key, and it cleans up after itself. If it panics partway through, remove
 //! the leftover item by hand:
 //!
 //! ```sh
-//! secret-tool clear service io.github.ryan-stoffel.wisp.secret-service-manual-test
+//! secret-tool clear service io.github.ryan-stoffel.parallax.secret-service-manual-test
 //! ```
 
 #![cfg(target_os = "linux")]
 
 use std::process::Command;
 
-use wisp_protocol::AccountId;
-use wispd::keystore::{KeyStore, SecretServiceStore};
+use parallax_protocol::AccountId;
+use plxd::keystore::{KeyStore, SecretServiceStore};
 
-const TEST_SERVICE: &str = "io.github.ryan-stoffel.wisp.secret-service-manual-test";
+const TEST_SERVICE: &str = "io.github.ryan-stoffel.parallax.secret-service-manual-test";
 
 /// What `secret-tool lookup` reads for `service`/`account`, or `None` if it finds nothing: an
 /// outside check that the item really is in the Secret Service.
@@ -57,12 +57,12 @@ fn add_read_and_remove_a_throwaway_key() {
     assert_eq!(
         secret_tool_lookup(TEST_SERVICE, &account_text).as_deref(),
         Some(key),
-        "secret-tool should read the item wispd just wrote"
+        "secret-tool should read the item plxd just wrote"
     );
     assert_eq!(
         store.get(account).unwrap().as_deref().map(String::as_str),
         Some(key),
-        "wispd should read back exactly what it stored"
+        "plxd should read back exactly what it stored"
     );
 
     store

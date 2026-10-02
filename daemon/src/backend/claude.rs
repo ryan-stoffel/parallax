@@ -10,10 +10,10 @@
 //!   also keeps the file tools out of Claude Code's shared temp folder (RYA-176). As a second
 //!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
 //!   [`FailureKind::PolicyViolation`].
-//! - **A coordinator**, a no-write run with wispd's own MCP tools attached (0019), is full Claude
-//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `wispd mcp`
+//! - **A coordinator**, a no-write run with plxd's own MCP tools attached (0019), is full Claude
+//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `plxd mcp`
 //!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
-//!   with [`crate::mcp::ALLOWED_TOOLS`], so wispd's tools work in every mode, and [`TODO_TOOLS`],
+//!   with [`crate::mcp::ALLOWED_TOOLS`], so plxd's tools work in every mode, and [`TODO_TOOLS`],
 //!   so it keeps a plan on every model (RYA-249), then `--settings` with only [`settings_env`].
 //!   Its user and project settings, hooks, skills, plugins, and subagents all load, as in a
 //!   terminal. As a second check, a coordinator whose `system/init` reports another permission
@@ -33,7 +33,7 @@
 //!     paths, and no writes to git metadata. `failIfUnavailable` and
 //!     `allowUnsandboxedCommands: false` keep a command from ever running outside it. Commands,
 //!     `WebFetch`, and `WebSearch` reach any host but [`WORKER_DENIED_HOSTS`] (Ryan, #137), so
-//!     the unreadable paths are what keep secrets in. A worker in Plan that asks wispd also gets
+//!     the unreadable paths are what keep secrets in. A worker in Plan that asks plxd also gets
 //!     `ExitPlanMode`, to hand its plan over ([`hands_over_plans`]).
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
 //!
@@ -61,7 +61,7 @@
 //! ([`worker_temp`]). The rest of the run's folder stays hidden from commands, and the settings
 //! take back the paths the sandbox always lets them write ([`WORKER_DENIED_WRITES`]).
 //!
-//! The CLI's own `TMPDIR` stays wispd's. Claude Code keeps its sandbox's Linux proxy bridges
+//! The CLI's own `TMPDIR` stays plxd's. Claude Code keeps its sandbox's Linux proxy bridges
 //! there, which commands must reach, and Node's compile cache, which they must not write. In the
 //! run's folder the first would be hidden and cut commands off the network (RYA-107).
 //!
@@ -69,7 +69,7 @@
 //!
 //! Claude Code runs each Bash command through the user's `$SHELL`, and zsh reads `/etc/zshenv`
 //! and `~/.zshenv` for every command, so startup files that set `PATH` outright replace the
-//! `PATH` wispd gave the CLI. Claude Code's shell snapshot would put it back, but the snapshot
+//! `PATH` plxd gave the CLI. Claude Code's shell snapshot would put it back, but the snapshot
 //! sits in the configuration folder, which a worker's commands can't read (RYA-126). So a worker
 //! also gets [`ENV_FILE_ENV`]: [`write_env_file`] writes a script into the data folder's `tmp/`
 //! that puts the CLI's `PATH` back in front, which the CLI reads itself and runs before each
@@ -96,7 +96,7 @@
 //! own configuration folder. [`apply_credential`] then injects only what the account needs: the
 //! account's configuration folder for a subscription, or, for an API key account (#118), only
 //! [`API_KEY_ENV`] with the key [`key_account::resolve`](super::key_account::resolve) read from
-//! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it wispd
+//! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it plxd
 //! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
 //! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
 //! it. No run inherits [`SCRUB_ENV`]; a no-write run other than a coordinator sets it, so the
@@ -207,7 +207,7 @@ pub const NO_WRITE_ARGS: &[&str] = &[
 /// ([`commands_temp`]), which holds every session's files and which Claude Code otherwise lets it
 /// read outside its cwd (RYA-176). 0013 hides the same folder from workers. A `Read` rule covers
 /// `Glob` and `Grep` too. The folder is always in `/tmp`, because no no-write run gets
-/// [`TEMP_ENV`]: every agent CLI starts from wispd's allowlisted environment
+/// [`TEMP_ENV`]: every agent CLI starts from plxd's allowlisted environment
 /// (`agents::worker::agent_environment`, 0014), which drops an inherited one, and only a worker
 /// has one injected. Like every run's, it holds [`settings_env`].
 #[must_use]
@@ -307,7 +307,7 @@ pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
 /// in it runs without the worker sandbox (0027).
 pub const BYPASS_PERMISSION_MODE: &str = "bypassPermissions";
 
-/// The arguments, after `--permission-mode`, that make a run's CLI ask wispd over stdio before a
+/// The arguments, after `--permission-mode`, that make a run's CLI ask plxd over stdio before a
 /// tool call that would prompt, instead of denying it (RYA-222, 0031). Only runs that
 /// [`prompts`] get them.
 pub const PROMPT_TOOL_ARGS: &[&str] = &["--permission-prompt-tool", "stdio"];
@@ -335,7 +335,7 @@ pub const PLAN_WORKSPACE_WRITE_ARGS: &[&str] = &[
 ];
 
 /// Every [`AgentEffort`] but the fallback: `--effort` takes them all. Claude Code downgrades
-/// `xhigh` on models that lack it, and only warns about a level it doesn't know, so wispd sends
+/// `xhigh` on models that lack it, and only warns about a level it doesn't know, so plxd sends
 /// only these.
 const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Low,
@@ -403,11 +403,11 @@ pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
 const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")];
 
 /// Set to `1` for a no-write run, to keep credentials out of the CLI's own subprocesses, such as
-/// wispd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
+/// plxd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
 /// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
 /// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
 /// from a worker's commands instead, and [`SCRUBBED_VARS`] keeps an inherited one out. Managed
-/// settings can still set it, and their `env` beats wispd's, so on Linux
+/// settings can still set it, and their `env` beats plxd's, so on Linux
 /// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (RYA-112), and
 /// on every OS a worker whose `system/init` shows the permission mode it forces fails
 /// (RYA-118). A coordinator doesn't get it either: it would force `default`, where headless Claude
@@ -479,7 +479,7 @@ pub fn commands_temp(temp: &Path) -> PathBuf {
 pub const ENV_FILE_ENV: &str = "CLAUDE_ENV_FILE";
 
 /// Writes a worker's [`ENV_FILE_ENV`] script into `dir`, which no worker may read or write
-/// (wispd's data folder's `tmp/`), and returns its path, which deletes the file when dropped. The
+/// (plxd's data folder's `tmp/`), and returns its path, which deletes the file when dropped. The
 /// script puts `path`, the `PATH` the CLI started with, in front of whatever `PATH` the shell's
 /// startup files left (RYA-126). The file is new, has a random name, and only its owner may read
 /// or write it.
@@ -552,7 +552,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     let coordinator = request.coordinator_tools.is_some();
     if coordinator && request.policy != ToolPolicy::NoWrite {
         return Err(StartError::Invalid(
-            "wispd's coordinator tools are only for a no-write run".into(),
+            "plxd's coordinator tools are only for a no-write run".into(),
         ));
     }
     let bypass = request.policy == ToolPolicy::WorkspaceWrite
@@ -637,7 +637,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
 /// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders,
 /// the read-only git paths, and the commands' `TMPDIR` in the run's temp folder
 /// ([`commands_temp`], which Claude Code lets them write) stay readable inside an unreadable
-/// path, such as wispd's data folder, which holds the worktree, the context folder, and a normal
+/// path, such as plxd's data folder, which holds the worktree, the context folder, and a normal
 /// thread's scratch repository (#110). The rest of the temp folder stays hidden: the CLI's own
 /// unsandboxed processes keep files there. A second account's `config_home` is unreadable too.
 /// [`WORKER_DENIED_WRITES`] aren't writable. Like every run's, it holds [`settings_env`].
@@ -701,7 +701,7 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
         .collect()
 }
 
-/// Whether `request`'s CLI asks wispd before a tool call that would prompt (RYA-222, 0031): a
+/// Whether `request`'s CLI asks plxd before a tool call that would prompt (RYA-222, 0031): a
 /// worker, a thread, or a coordinator in Manual, Auto, or Plan, whose client answers
 /// ([`RunRequest::approvals`]). Accept Edits and Bypass Permissions don't ask about what they run,
 /// a plain no-write run denies anything not allowed (`dontAsk`), and a run without `approvals`
@@ -719,7 +719,7 @@ pub fn prompts(request: &RunRequest) -> bool {
 }
 
 /// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], RYA-243):
-/// a worker or a thread in Plan whose CLI asks wispd ([`prompts`]). Headless Claude Code offers
+/// a worker or a thread in Plan whose CLI asks plxd ([`prompts`]). Headless Claude Code offers
 /// the tool only to a run that asks a host, and asking with it is how the plan reaches the user
 /// (0031). The tool runs nothing and writes nothing in the worktree. Allowing it only moves the
 /// CLI to `default` (Manual), a mode a worker can start in, under the same `--restricted`,
@@ -839,7 +839,7 @@ impl Backend for ClaudeBackend {
         }
         if request.policy != ToolPolicy::NoWrite && !self.capabilities().worker_sandbox {
             return Err(StartError::Unsupported(
-                "wispd can't check Claude Code's worker sandbox on this OS yet (decision 0023)"
+                "plxd can't check Claude Code's worker sandbox on this OS yet (decision 0023)"
                     .into(),
             ));
         }

@@ -1,22 +1,21 @@
-# 0003: Wisp, `wisp`, and `wispd`
+# 0003: Parallax and `plxd`
 
-- Status: accepted; the `wisp` launcher went with the editor ([0020](0020-drop-the-editor-fork.md)), so there is no `wisp` command: the desktop app ([0022](0022-desktop-app.md)) is Wisp, and the daemon is `wispd`
-- Date: 2026-09-23
-- Issue: #17, #19
+- Status: accepted
+- Date: 2026-09-23, renamed 2026-10-01 ([RYA-262](https://linear.app/ryanstoffel/issue/RYA-262))
+- Issue: #17, #19, RYA-262
 
 ## Context
 
-The plan left two naming questions open: whether to confirm the name wisp, and whether the host daemon, `projectd`, is shared with Roster. Ryan answered both: Wisp is the name, and the daemon should use neither Roster nor the name `projectd`.
+The plan left two naming questions open: what the product is called, and whether the host daemon, `projectd`, is shared with Roster. The daemon uses neither Roster nor the name `projectd`. The working name was replaced by the final name, Parallax, in RYA-262.
 
 ## Decision
 
-- The product is **Wisp**. The Homebrew cask token, bundle identifiers, and data folders use `wisp`.
-- `wisp` is the editor's command-line launcher. The plan says "The command is `wisp`", and the editor is the user-facing program.
-- The host daemon is **`wispd`**. Ryan ruled out `projectd` without naming a replacement, so `wispd` is a default chosen in #17, and Ryan can override it. It lives in `daemon/` and is not shared with Roster (Ryan, #17).
-- Ryan confirmed the name (#19) without waiting for conflict checks. The GitHub, domain, and trademark checks listed in `docs/PLAN.md` no longer gate the release.
+- The product is **Parallax**: capitalized in prose and UI, `parallax` in code, paths, and package names.
+- The host daemon is **`plxd`**, always lowercase. It lives in `daemon/` and is not shared with Roster (Ryan, #17).
+- Identifiers: the app id is `dev.parallax.desktop`, the service label is `io.github.ryan-stoffel.parallax.plxd`, the data folder is `parallax` in each OS's data location (0023), environment variables start with `PLX_` or `PLXD_`, and the Homebrew cask is `parallax`.
+- There is no client CLI. The desktop app ([0022](0022-desktop-app.md)) is Parallax.
 
 ## Consequences
 
-- Where `docs/PLAN.md` says `projectd`, read `wispd`.
-- Two binaries ship: the editor app with its `wisp` launcher, and `wispd`. Nothing has to coordinate with another product.
-- The overlap with the Gleam web framework of the same name is accepted.
+- Where `docs/PLAN.md` says `projectd`, read `plxd`.
+- The rename is a clean break: data under the old name is not migrated, and an installed build under the old name does not update into Parallax.

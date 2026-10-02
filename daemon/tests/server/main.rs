@@ -1,6 +1,6 @@
-//! Integration tests: real servers in temporary folders, driven through `wisp_protocol`.
+//! Integration tests: real servers in temporary folders, driven through `parallax_protocol`.
 //!
-//! Most tests run the `wispd serve` binary. Tests of timers and limits that the command line
+//! Most tests run the `plxd serve` binary. Tests of timers and limits that the command line
 //! doesn't expose run the same server in-process with a shorter `Config`.
 //!
 //! Unix only: they stop servers with signals, check sockets and modes, and run shell-script

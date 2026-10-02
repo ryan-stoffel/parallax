@@ -1,4 +1,4 @@
-//! Logging with `tracing`, to `logs/wispd.log` in the data folder.
+//! Logging with `tracing`, to `logs/plxd.log` in the data folder.
 
 use std::fmt;
 use std::fs::{DirBuilder, File, OpenOptions};
@@ -9,14 +9,14 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Mutex;
 
+use parallax_protocol::jsonrpc::RequestId;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt as format;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use wisp_protocol::jsonrpc::RequestId;
 
 /// The environment variable that sets the log level when `--log-level` is not given.
-pub const LOG_LEVEL_ENV: &str = "WISPD_LOG";
+pub const LOG_LEVEL_ENV: &str = "PLXD_LOG";
 
 /// The log level when neither `--log-level` nor [`LOG_LEVEL_ENV`] is set.
 pub const DEFAULT_LOG_LEVEL: &str = "info";
@@ -63,7 +63,7 @@ impl fmt::Debug for UntrustedId<'_> {
 ///
 /// It is a level (`off`, `error`, `warn`, `info`, `debug`, or `trace`), or a comma-separated list
 /// of `target=level` directives with an optional bare level for everything else, such as
-/// `wispd=debug,warn`. Unlike `tracing-subscriber`'s own parser, a word that is not a level is an
+/// `plxd=debug,warn`. Unlike `tracing-subscriber`'s own parser, a word that is not a level is an
 /// error rather than a target name, so a typo can't silently turn logging off.
 #[derive(Clone, Debug)]
 pub struct LogFilter {
@@ -136,7 +136,7 @@ pub fn open_log_file(path: &Path) -> io::Result<File> {
 /// Sends log lines to the file at `path`, appending, and to stderr as well when stderr is a
 /// terminal.
 ///
-/// Lines go only to the file otherwise, because `wispd attach` and launchd point `serve`'s
+/// Lines go only to the file otherwise, because `plxd attach` and launchd point `serve`'s
 /// stderr at that same file to catch panics, and the lines would appear twice.
 ///
 /// # Errors
@@ -157,8 +157,8 @@ pub fn init(path: &Path, filter: &LogFilter) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use parallax_protocol::jsonrpc::RequestId;
     use tracing::Level;
-    use wisp_protocol::jsonrpc::RequestId;
 
     use super::{LogFilter, untrusted, untrusted_id};
 
@@ -172,38 +172,38 @@ mod tests {
 
     #[test]
     fn a_level_applies_to_every_target() {
-        assert!(allows("debug", "wispd::server", Level::DEBUG));
-        assert!(!allows("debug", "wispd::server", Level::TRACE));
+        assert!(allows("debug", "plxd::server", Level::DEBUG));
+        assert!(!allows("debug", "plxd::server", Level::TRACE));
         assert!(allows("INFO", "anything", Level::WARN));
-        assert!(!allows("off", "wispd", Level::ERROR));
+        assert!(!allows("off", "plxd", Level::ERROR));
     }
 
     #[test]
     fn targets_take_their_own_levels() {
-        let filter = "wispd=debug, warn";
-        assert!(allows(filter, "wispd::server", Level::DEBUG));
+        let filter = "plxd=debug, warn";
+        assert!(allows(filter, "plxd::server", Level::DEBUG));
         assert!(!allows(filter, "rusqlite", Level::INFO));
         assert!(allows(filter, "rusqlite", Level::WARN));
         assert_eq!(
             filter.parse::<LogFilter>().unwrap().to_string(),
-            "wispd=debug, warn"
+            "plxd=debug, warn"
         );
     }
 
     #[test]
     fn unknown_levels_are_errors() {
-        for bad in ["", "verbose", "wispd=loud", "=debug", "info,"] {
+        for bad in ["", "verbose", "plxd=loud", "=debug", "info,"] {
             assert!(bad.parse::<LogFilter>().is_err(), "{bad:?}");
         }
     }
 
     #[test]
     fn client_text_is_escaped_so_it_cant_forge_a_line() {
-        let forged = "wisp\n2026-09-24T00:00:00.000000Z ERROR forged";
+        let forged = "parallax\n2026-09-24T00:00:00.000000Z ERROR forged";
         let logged = format!("{:?}", untrusted(forged));
         assert!(!logged.contains('\n'), "{logged}");
-        assert!(logged.starts_with("\"wisp\\n2026"), "{logged}");
-        assert_eq!(format!("{:?}", untrusted("wisp")), "\"wisp\"");
+        assert!(logged.starts_with("\"parallax\\n2026"), "{logged}");
+        assert_eq!(format!("{:?}", untrusted("parallax")), "\"parallax\"");
     }
 
     #[test]

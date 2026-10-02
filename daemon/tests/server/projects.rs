@@ -3,16 +3,16 @@
 use std::fs;
 use std::path::Path;
 
-use rustix::process::Signal;
-use serde_json::json;
-use wisp_protocol::jsonrpc::{INTERNAL_ERROR, INVALID_PARAMS, Request};
-use wisp_protocol::methods::{HostHealth, ProjectCreate, ProjectList, ProjectUpdate};
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::{INTERNAL_ERROR, INVALID_PARAMS, Request};
+use parallax_protocol::methods::{HostHealth, ProjectCreate, ProjectList, ProjectUpdate};
+use parallax_protocol::{
     ErrorKind, HostHealthParams, Project, ProjectCreateParams, ProjectIcon, ProjectId,
     ProjectListParams, ProjectUpdateParams, ProjectUpdateResult, StoreState,
 };
+use rustix::process::Signal;
+use serde_json::json;
 
-use crate::support::{Client, Wispd, create_params, kind, temp_dir};
+use crate::support::{Client, Plxd, create_params, kind, temp_dir};
 
 fn icon(name: &str, color: Option<&str>) -> ProjectIcon {
     ProjectIcon {
@@ -36,8 +36,8 @@ fn update(
 #[tokio::test]
 async fn projects_are_created_listed_and_retried_idempotently() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     let empty = client
         .call::<ProjectList>(ProjectListParams {})
@@ -46,7 +46,7 @@ async fn projects_are_created_listed_and_retried_idempotently() {
     assert!(empty.projects.is_empty());
     assert_eq!(empty.seq, 0);
 
-    let params = create_params(dir.path(), "wisp");
+    let params = create_params(dir.path(), "parallax");
     let created = client
         .call::<ProjectCreate>(params.clone())
         .await
@@ -86,9 +86,9 @@ async fn projects_are_created_listed_and_retried_idempotently() {
 #[tokio::test]
 async fn a_create_that_reuses_an_id_with_other_params_is_an_id_conflict() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
-    let params = create_params(dir.path(), "wisp");
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    let params = create_params(dir.path(), "parallax");
     let created = client
         .call::<ProjectCreate>(params.clone())
         .await
@@ -118,11 +118,11 @@ async fn a_create_that_reuses_an_id_with_other_params_is_an_id_conflict() {
 #[tokio::test]
 async fn a_create_with_an_icon_stores_it_and_a_retry_must_match_it() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let params = ProjectCreateParams {
         icon: Some(icon("rocket", Some("green"))),
-        ..create_params(dir.path(), "wisp")
+        ..create_params(dir.path(), "parallax")
     };
     let created = client
         .call::<ProjectCreate>(params.clone())
@@ -172,24 +172,24 @@ async fn a_create_with_an_icon_stores_it_and_a_retry_must_match_it() {
 #[tokio::test]
 async fn projects_are_renamed_and_given_icons_without_moving_their_activity() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let created = client
-        .call::<ProjectCreate>(create_params(dir.path(), "wisp"))
+        .call::<ProjectCreate>(create_params(dir.path(), "parallax"))
         .await
         .unwrap()
         .project;
     assert_eq!(created.icon, None);
 
     let renamed = client
-        .call::<ProjectUpdate>(update(created.id, Some("Wisp app"), None))
+        .call::<ProjectUpdate>(update(created.id, Some("Parallax app"), None))
         .await
         .unwrap()
         .project;
     assert_eq!(
         renamed,
         Project {
-            name: "Wisp app".to_owned(),
+            name: "Parallax app".to_owned(),
             ..created.clone()
         },
         "only the name changes: not the repository, the icon, or updatedAt"
@@ -226,7 +226,7 @@ async fn projects_are_renamed_and_given_icons_without_moving_their_activity() {
 
     for unchanged in [
         update(created.id, None, None),
-        update(created.id, Some("Wisp app"), Some(icon("rocket", None))),
+        update(created.id, Some("Parallax app"), Some(icon("rocket", None))),
     ] {
         let same = client
             .call::<ProjectUpdate>(unchanged)
@@ -262,11 +262,11 @@ async fn projects_are_renamed_and_given_icons_without_moving_their_activity() {
 #[tokio::test]
 async fn an_update_of_an_unknown_project_is_project_not_found() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     for params in [
-        update(ProjectId::generate(), Some("wisp"), None),
+        update(ProjectId::generate(), Some("parallax"), None),
         update(ProjectId::generate(), None, Some(icon("rocket", None))),
         update(ProjectId::generate(), None, None),
     ] {
@@ -284,10 +284,10 @@ async fn an_update_of_an_unknown_project_is_project_not_found() {
 #[tokio::test]
 async fn invalid_update_params_are_refused_before_the_store() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let created = client
-        .call::<ProjectCreate>(create_params(dir.path(), "wisp"))
+        .call::<ProjectCreate>(create_params(dir.path(), "parallax"))
         .await
         .unwrap()
         .project;
@@ -348,14 +348,14 @@ async fn invalid_update_params_are_refused_before_the_store() {
 #[tokio::test]
 async fn invalid_create_params_are_refused_before_the_store() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     client
         .send_message(&Request {
             id: 1.into(),
             method: "project/create".to_owned(),
-            params: Some(json!({"id": "not-a-uuid", "name": "wisp", "repoPath": "/src"})),
+            params: Some(json!({"id": "not-a-uuid", "name": "parallax", "repoPath": "/src"})),
         })
         .await;
     let error = client.response().await.result.unwrap_err();
@@ -364,12 +364,12 @@ async fn invalid_create_params_are_refused_before_the_store() {
 
     let long_path = format!("/{}", "p".repeat(1024));
     for (name, repo_path) in [
-        ("wisp", "relative/path"),
+        ("parallax", "relative/path"),
         (" ", "/src"),
-        ("wisp", "/x\0y"),
+        ("parallax", "/x\0y"),
         ("wi\0sp", "/src"),
         (&"n".repeat(257), "/src"),
-        ("wisp", &long_path),
+        ("parallax", &long_path),
     ] {
         let params = ProjectCreateParams {
             name: name.to_owned(),
@@ -401,8 +401,8 @@ async fn invalid_create_params_are_refused_before_the_store() {
 #[tokio::test]
 async fn a_new_project_needs_a_repository_and_reports_its_branch() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     let plain = dir.path().join("plain");
     fs::create_dir(&plain).unwrap();
@@ -413,7 +413,7 @@ async fn a_new_project_needs_a_repository_and_reports_its_branch() {
     ] {
         let params = ProjectCreateParams {
             repo_path: path.to_str().unwrap().to_owned(),
-            ..create_params(dir.path(), "wisp")
+            ..create_params(dir.path(), "parallax")
         };
         let error = client.call::<ProjectCreate>(params).await.unwrap_err();
         assert_eq!(kind(&error), ErrorKind::NotARepository);
@@ -426,7 +426,7 @@ async fn a_new_project_needs_a_repository_and_reports_its_branch() {
     assert!(listed.projects.is_empty(), "nothing was created");
     assert_eq!(listed.seq, 0);
 
-    let params = create_params(dir.path(), "wisp");
+    let params = create_params(dir.path(), "parallax");
     let created = client
         .call::<ProjectCreate>(params.clone())
         .await
@@ -458,20 +458,20 @@ async fn a_new_project_needs_a_repository_and_reports_its_branch() {
 #[tokio::test]
 async fn projects_and_the_event_log_outlive_a_restart() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
     let first_log = client.initialize().await.unwrap().log_id;
     let created = client
-        .call::<ProjectCreate>(create_params(dir.path(), "wisp"))
+        .call::<ProjectCreate>(create_params(dir.path(), "parallax"))
         .await
         .unwrap()
         .project;
     drop(client);
-    wispd.signal(Signal::TERM);
-    assert!(wispd.exit().await.0.success());
+    plxd.signal(Signal::TERM);
+    assert!(plxd.exit().await.0.success());
 
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
     let second_log = client.initialize().await.unwrap().log_id;
     assert_eq!(
         first_log, second_log,
@@ -488,9 +488,9 @@ async fn projects_and_the_event_log_outlive_a_restart() {
 #[tokio::test]
 async fn a_store_that_cannot_open_is_reported_and_project_methods_fail() {
     let dir = temp_dir();
-    fs::create_dir(dir.path().join("wispd.sqlite3")).unwrap();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    fs::create_dir(dir.path().join("plxd.sqlite3")).unwrap();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
     let health = client
         .call::<HostHealth>(HostHealthParams {})

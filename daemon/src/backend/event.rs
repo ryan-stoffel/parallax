@@ -1,14 +1,14 @@
 //! The normalized events every backend turns its CLI's output into (0004's per-provider table).
 //!
-//! They serialize with a `kind` tag and camelCase fields, like 0007's `WispEvent`, so M3 can
+//! They serialize with a `kind` tag and camelCase fields, like 0007's `ParallaxEvent`, so M3 can
 //! store them and map them to `agent.*` notifications without another translation.
 
 use std::collections::BTreeMap;
 use std::ops::{Add, AddAssign};
 
 use jiff::Timestamp;
+use parallax_protocol::{ApprovalId, TurnId};
 use serde::{Deserialize, Serialize};
-use wisp_protocol::{ApprovalId, TurnId};
 
 /// One thing that happened in a run.
 ///
@@ -65,7 +65,7 @@ pub enum Event {
         /// The vendor's id for the call, which its [`Event::ToolResult`] repeats.
         call_id: String,
         /// The tool, in the vendor's naming, such as `Read`, `command_execution`, or
-        /// `mcp__wispd__plan`.
+        /// `mcp__plxd__plan`.
         name: String,
         /// The tool's input, as the vendor sent it.
         #[serde(default)]
@@ -162,7 +162,7 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         usage_totals: Vec<ModelUsage>,
     },
-    /// A kind this version does not know, read back from a newer wispd's records.
+    /// A kind this version does not know, read back from a newer plxd's records.
     #[serde(other)]
     Unknown,
 }
@@ -291,7 +291,7 @@ pub enum Outcome {
     Cancelled,
     /// It failed.
     Failed(Failure),
-    /// A status this version does not know, read back from a newer wispd's records.
+    /// A status this version does not know, read back from a newer plxd's records.
     #[serde(other)]
     Unknown,
 }
@@ -335,7 +335,7 @@ pub enum FailureKind {
     Crashed,
     /// A process the run needed could not be started.
     SpawnFailed,
-    /// A fault in wispd.
+    /// A fault in plxd.
     Internal,
     /// A kind this version does not know.
     #[serde(other)]

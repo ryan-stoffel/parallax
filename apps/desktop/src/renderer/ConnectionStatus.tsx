@@ -8,9 +8,9 @@ export function useConnection(hostId: string): ConnectionState | undefined {
   const [known, setKnown] = useState<{ hostId: string; state: ConnectionState }>();
   useEffect(() => {
     const set = (state: ConnectionState) => setKnown({ hostId, state });
-    const stop = window.wisp.onConnectionState((id, next) => id === hostId && set(next));
+    const stop = window.parallax.onConnectionState((id, next) => id === hostId && set(next));
     // It rejects only for a host just removed, whose views are going away.
-    window.wisp.connectionState(hostId).then(set, () => {});
+    window.parallax.connectionState(hostId).then(set, () => {});
     return stop;
   }, [hostId]);
   return known?.hostId === hostId ? known.state : undefined;
@@ -55,13 +55,13 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
         <span className="min-w-0 flex-1 truncate">
           {label}
           {state.status === "connected" && (
-            <span className="text-faint-foreground"> · wispd {state.wispd}</span>
+            <span className="text-faint-foreground"> · plxd {state.plxd}</span>
           )}
         </span>
         {failed && !state.retrying && (
           <button
             type="button"
-            onClick={() => void window.wisp.retry(hostId)}
+            onClick={() => void window.parallax.retry(hostId)}
             className="rounded px-1.5 text-foreground hover:bg-hover"
           >
             Retry

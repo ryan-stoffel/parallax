@@ -3,9 +3,9 @@
 //!
 //! A worker writes its cwd (its worktree), the project's shared context folder (0005), and its
 //! own temp folder (RYA-130). Its commands can't write git metadata or read credential stores,
-//! wispd's data folder, or any other run's temp. They do have network access (Ryan, #137), so the
+//! plxd's data folder, or any other run's temp. They do have network access (Ryan, #137), so the
 //! read denylist is what keeps a secret from leaving the machine. Each backend turns a
-//! [`WorkerSandbox`] into its own vendor's flags; wispd adds no OS sandbox of its own, because a
+//! [`WorkerSandbox`] into its own vendor's flags; plxd adds no OS sandbox of its own, because a
 //! vendor's sandbox can't start inside one (0013).
 
 use std::path::{Path, PathBuf};
@@ -159,7 +159,7 @@ fn unreadable_outside_home() -> Vec<PathBuf> {
 }
 
 /// The runtime folders to deny:
-/// - wispd's `$XDG_RUNTIME_DIR`. A value that isn't absolute is ignored, as the XDG Base
+/// - plxd's `$XDG_RUNTIME_DIR`. A value that isn't absolute is ignored, as the XDG Base
 ///   Directory spec says. An absolute one that isn't UTF-8 is kept, so [`worker_sandbox`] refuses
 ///   the run instead of leaving the folder readable.
 /// - `/run/user/<uid>`, where logind makes it. Tools fall back to it when the variable is unset,
@@ -182,7 +182,7 @@ fn runtime_dirs(xdg_runtime_dir: Option<std::ffi::OsString>, uid: u32) -> Vec<Pa
     dirs
 }
 
-/// The temp folder a worker's CLI uses: the `TMPDIR` it inherits from wispd (0014), or `/tmp`
+/// The temp folder a worker's CLI uses: the `TMPDIR` it inherits from plxd (0014), or `/tmp`
 /// when that is unset or empty, as Node and Bun's `os.tmpdir()` pick it.
 fn worker_temp_dir(tmpdir: Option<std::ffi::OsString>) -> PathBuf {
     tmpdir
@@ -213,16 +213,16 @@ pub struct WorkerSandbox {
     /// folder (0005).
     pub writable: Vec<PathBuf>,
     /// Paths inside the writable folders that commands may read but not write: the worktree's
-    /// `.git` file and the repository's git folder it points into. wispd commits for every
+    /// `.git` file and the repository's git folder it points into. plxd commits for every
     /// backend (0013).
     pub read_only: Vec<PathBuf>,
     /// Paths commands may not read: [`unreadable_in_home`], on Linux the user's runtime folder,
-    /// wispd's data folder, the folder that holds every run's temp folder, and Claude Code's
+    /// plxd's data folder, the folder that holds every run's temp folder, and Claude Code's
     /// `/tmp/claude-<uid>`, which every Claude Code session of this user shares. The cwd,
     /// [`WorkerSandbox::writable`], and the commands' `TMPDIR` in [`WorkerSandbox::temp`] stay
     /// readable where they fall inside one of these.
     pub unreadable: Vec<PathBuf>,
-    /// The run's own temp folder, which wispd makes before the CLI starts and removes when it
+    /// The run's own temp folder, which plxd makes before the CLI starts and removes when it
     /// exits (RYA-130). A backend points the vendor's temp setting at it (Claude Code's
     /// `CLAUDE_CODE_TMPDIR`), so its commands' `TMPDIR` is this folder or one inside it. The CLI
     /// keeps files of its own here too, so commands may use only their `TMPDIR` (for Claude Code,
@@ -234,7 +234,7 @@ impl WorkerSandbox {
     /// The v1 sandbox (0013) for a worker in `worktree`, a linked worktree whose `.git` file
     /// points into `git_dir`, the repository's shared git folder (`git rev-parse
     /// --git-common-dir`), and whose project's shared context folder is `context`. `home` is the
-    /// user's home folder, and `data_dir` wispd's data folder, which holds both the worktree and
+    /// user's home folder, and `data_dir` plxd's data folder, which holds both the worktree and
     /// the context folder. `temp` is the run's temp folder from [`super::run_temp::create`],
     /// `<root>/<run>`, so its parent holds every other run's.
     #[must_use]
@@ -352,23 +352,25 @@ mod tests {
     fn a_worktree_sandbox_writes_the_context_and_hides_secrets_and_the_data_folder() {
         let sandbox = WorkerSandbox::for_worktree(
             Path::new("/Users/u"),
-            Path::new("/Users/u/Library/Application Support/wisp"),
-            Path::new("/Users/u/Library/Application Support/wisp/worktrees/app-1a2b/run"),
+            Path::new("/Users/u/Library/Application Support/parallax"),
+            Path::new("/Users/u/Library/Application Support/parallax/worktrees/app-1a2b/run"),
             Path::new("/Users/u/src/app/.git"),
-            Path::new("/Users/u/Library/Application Support/wisp/context/p"),
+            Path::new("/Users/u/Library/Application Support/parallax/context/p"),
             // A fallback root in `$TMPDIR`, as when `/tmp` can't be written.
-            Path::new("/private/var/folders/x/T/wisp-625c7f6d/Ab12Cd"),
+            Path::new("/private/var/folders/x/T/parallax-625c7f6d/Ab12Cd"),
         );
         assert_eq!(
             sandbox.writable,
             [Path::new(
-                "/Users/u/Library/Application Support/wisp/context/p"
+                "/Users/u/Library/Application Support/parallax/context/p"
             )]
         );
         assert_eq!(
             sandbox.read_only,
             [
-                Path::new("/Users/u/Library/Application Support/wisp/worktrees/app-1a2b/run/.git"),
+                Path::new(
+                    "/Users/u/Library/Application Support/parallax/worktrees/app-1a2b/run/.git"
+                ),
                 Path::new("/Users/u/src/app/.git"),
             ]
         );
@@ -376,13 +378,13 @@ mod tests {
         assert!(
             sandbox
                 .unreadable
-                .contains(&"/Users/u/Library/Application Support/wisp".into())
+                .contains(&"/Users/u/Library/Application Support/parallax".into())
         );
         // Every other run's temp folder, and the one all of this user's Claude sessions share.
         assert!(
             sandbox
                 .unreadable
-                .contains(&"/private/var/folders/x/T/wisp-625c7f6d".into())
+                .contains(&"/private/var/folders/x/T/parallax-625c7f6d".into())
         );
         #[cfg(unix)]
         {
@@ -403,7 +405,7 @@ mod tests {
         );
         assert_eq!(
             sandbox.temp,
-            Path::new("/private/var/folders/x/T/wisp-625c7f6d/Ab12Cd")
+            Path::new("/private/var/folders/x/T/parallax-625c7f6d/Ab12Cd")
         );
     }
 
@@ -441,11 +443,11 @@ mod tests {
     fn a_temp_folder_inside_an_unreadable_path_is_found() {
         let mut sandbox = WorkerSandbox::for_worktree(
             Path::new("/home/u"),
-            Path::new("/home/u/.local/share/wisp"),
-            Path::new("/home/u/.local/share/wisp/worktrees/app-1a2b/run"),
+            Path::new("/home/u/.local/share/parallax"),
+            Path::new("/home/u/.local/share/parallax/worktrees/app-1a2b/run"),
             Path::new("/home/u/src/app/.git"),
-            Path::new("/home/u/.local/share/wisp/context/p"),
-            Path::new("/tmp/wisp-1a2b3c4d/Ab12Cd"),
+            Path::new("/home/u/.local/share/parallax/context/p"),
+            Path::new("/tmp/parallax-1a2b3c4d/Ab12Cd"),
         );
         sandbox.unreadable.push("/run/user/1000".into());
         assert_eq!(worker_temp_dir(None), Path::new("/tmp"));
@@ -456,7 +458,10 @@ mod tests {
         for (inside, denied) in [
             ("/run/user/1000", "/run/user/1000"),
             ("/run/user/1000/tmp", "/run/user/1000"),
-            ("/home/u/.local/share/wisp/tmp", "/home/u/.local/share/wisp"),
+            (
+                "/home/u/.local/share/parallax/tmp",
+                "/home/u/.local/share/parallax",
+            ),
         ] {
             let temp = worker_temp_dir(Some(inside.into()));
             assert_eq!(hiding_temp_dir(&sandbox, &temp), Some(Path::new(denied)));

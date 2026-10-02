@@ -15,7 +15,7 @@ export const periods: { value: Period; name: string }[] = [
 ];
 
 /**
- * How long after each answer the Providers and Usage pages ask for usage again. wispd sends no
+ * How long after each answer the Providers and Usage pages ask for usage again. plxd sends no
  * host-level usage or limit event, so this is what keeps them live while runs go.
  */
 const USAGE_POLL_MS = 5000;
@@ -23,7 +23,7 @@ const USAGE_POLL_MS = 5000;
 /**
  * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`, and
  * at once whenever `refresh` changes.
- * `usage` is undefined until it first answers, so a wispd without `usage/get` shows no usage at
+ * `usage` is undefined until it first answers, so a plxd without `usage/get` shows no usage at
  * all; a later failure keeps the last answer. `error` is the latest answer's, until one succeeds.
  */
 export function useUsage(
@@ -39,7 +39,7 @@ export function useUsage(
     let timer: ReturnType<typeof setTimeout> | undefined;
     // After each answer rather than on an interval, so a slow host never has two in flight.
     const load = async () => {
-      const answer = await window.wisp.request(hostId, "usage/get", {});
+      const answer = await window.parallax.request(hostId, "usage/get", {});
       if (stopped) return;
       if ("result" in answer) {
         setUsage(new Map(answer.result.accounts.map((a) => [a.accountId, a])));
@@ -58,7 +58,7 @@ export function useUsage(
 
 /**
  * An account's usage over `period`, then a line per limit window, for under its row's details.
- * `usage` is undefined for an account wispd has recorded nothing for.
+ * `usage` is undefined for an account plxd has recorded nothing for.
  */
 export function UsageLines({ usage, period }: { usage?: AccountUsage; period: Period }) {
   const spent = usage?.[period];
@@ -174,7 +174,7 @@ function duration(ms: number): string {
 const at = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-/** When a limit resets and when wispd heard about it, for a tooltip. */
+/** When a limit resets and when plxd heard about it, for a tooltip. */
 export function limitDetails(limit: UsageLimitWindow): string {
   const resets = limit.resetsAt ? `Resets ${at(limit.resetsAt)}. ` : "";
   return `${resets}Reported ${at(limit.capturedAt)}.`;

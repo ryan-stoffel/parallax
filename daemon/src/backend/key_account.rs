@@ -11,7 +11,7 @@
 //! Anthropic's keys run on Claude Code (#116) and `OpenAI`'s on Codex (RYA-38), and both are the
 //! same arm. Cursor (RYA-40) joins it once its backend exists.
 
-use wisp_protocol::{AccountId, Provider};
+use parallax_protocol::{AccountId, Provider};
 
 use super::{ApiKey, Credential};
 use crate::keystore::{KeyStore, KeyStoreError};
@@ -22,7 +22,7 @@ use crate::keystore::{KeyStore, KeyStoreError};
 /// # Errors
 ///
 /// [`KeyAccountError::KeychainUnavailable`] if `account` has no key, or the Keychain is locked or
-/// denies access. wispd can't tell those apart without prompting, and either way the fix is the
+/// denies access. plxd can't tell those apart without prompting, and either way the fix is the
 /// same: unlock the Keychain, or add the key again. [`KeyAccountError::NoBackend`] if `provider`
 /// has no backend yet. [`KeyAccountError::Keychain`] if the Keychain failed some other way.
 pub fn resolve(
@@ -62,7 +62,7 @@ pub enum KeyAccountError {
 
 #[cfg(test)]
 mod tests {
-    use wisp_protocol::{AccountId, Provider};
+    use parallax_protocol::{AccountId, Provider};
 
     use super::{KeyAccountError, resolve};
     use crate::backend::Credential;

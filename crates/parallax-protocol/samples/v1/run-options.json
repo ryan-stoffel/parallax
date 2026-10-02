@@ -1,0 +1,127 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/start",
+    "params": {
+      "runId": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+      "prompt": "Plan how to split the settings page.",
+      "model": "opus",
+      "effort": "xhigh",
+      "permission": "plan"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "thread": {
+        "id": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "createdAt": "2026-09-28T12:00:00Z"
+      },
+      "run": {
+        "id": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "prompt": "Plan how to split the settings page.",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "parallax/1a2b3c4d",
+        "worktreePath": "/Users/me/Library/Application Support/parallax/worktrees/parallax-5e6f7a8b/01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "model": "opus",
+        "effort": "xhigh",
+        "permission": "plan",
+        "createdAt": "2026-09-28T12:00:00Z",
+        "updatedAt": "2026-09-28T12:00:01Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/start",
+    "params": {
+      "runId": "01a0e2a1-2a3b-7c4d-8e5f-6a7b8c9d0e02",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "prompt": "Add a README that explains how to build the app.",
+      "policy": "workspaceWrite",
+      "account": {
+        "kind": "subscription",
+        "backend": "codex"
+      },
+      "effort": "max",
+      "permission": "edit"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "error": {
+      "code": -32000,
+      "message": "the codex backend can't run with effort max",
+      "data": {
+        "kind": "unsupportedOption"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "agent/send",
+    "params": {
+      "runId": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "turnId": "01a0e2a2-3a4b-7c5d-8e6f-7a8b9c0d1e03",
+      "text": "Now just write the summary.",
+      "model": "sonnet",
+      "effort": "low",
+      "permission": "plan"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "run": {
+        "id": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "prompt": "Plan how to split the settings page.",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "parallax/1a2b3c4d",
+        "worktreePath": "/Users/me/Library/Application Support/parallax/worktrees/parallax-5e6f7a8b/01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "model": "sonnet",
+        "effort": "low",
+        "permission": "plan",
+        "createdAt": "2026-09-28T12:00:00Z",
+        "updatedAt": "2026-09-28T12:05:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "agent/send",
+    "params": {
+      "runId": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "turnId": "01a0e2a3-4a5b-7c6d-8e7f-8a9b0c1d2e04",
+      "text": "Hurry up.",
+      "effort": "max"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32000,
+      "message": "the model, effort, and access can't change while the run is working; send the message again once it has finished",
+      "data": {
+        "kind": "unsupportedOption"
+      }
+    }
+  }
+]

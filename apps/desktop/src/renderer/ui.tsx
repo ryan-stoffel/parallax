@@ -13,7 +13,7 @@ import {
 
 /** A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere. */
 export const shortcut = (keys: string) =>
-  window.wisp.platform === "darwin" ? `⌘${keys.replace("Alt+", "⌥")}` : `Ctrl+${keys}`;
+  window.parallax.platform === "darwin" ? `⌘${keys.replace("Alt+", "⌥")}` : `Ctrl+${keys}`;
 
 /**
  * A square, icon-only toolbar button. `label` is its accessible name and tooltip; `aria-pressed`

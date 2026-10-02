@@ -43,7 +43,7 @@ pub fn unit_path(label: &str) -> Result<PathBuf, ServiceError> {
 
 /// Renders the user unit that runs `program serve` with [`DATA_DIR_ENV`] set to `data_dir`'s
 /// folder, the systemd twin of `launchd::render_plist`. stdout and stderr are appended to
-/// `logs/wispd.log` (0009), so a panic before `serve`'s own logger starts still lands there.
+/// `logs/plxd.log` (0009), so a panic before `serve`'s own logger starts still lands there.
 /// `append:` needs systemd 240; an older one ignores it and sends both to the journal.
 ///
 /// `Restart=on-failure` is `KeepAlive.SuccessfulExit=false`: systemd restarts `serve` after a
@@ -65,7 +65,7 @@ pub fn render_unit(program: &Path, data_dir: &DataDir) -> Result<String, Service
     let log = unit_text(&data_dir.log_file())?.replace('%', "%%");
     Ok(format!(
         "[Unit]\n\
-         Description=wispd, the wisp host daemon\n\
+         Description=plxd, the Parallax host daemon\n\
          \n\
          [Service]\n\
          Type=exec\n\
@@ -100,12 +100,12 @@ fn quote(text: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Installs or updates the user unit for `label`, running the current `wispd` binary's `serve`
+/// Installs or updates the user unit for `label`, running the current `plxd` binary's `serve`
 /// against `data_dir`, then enables and (re)starts it.
 ///
-/// Idempotent: run again, for example after wispd moves, to update the unit and restart the
+/// Idempotent: run again, for example after plxd moves, to update the unit and restart the
 /// service with it. `restart` waits for the old `serve` to stop before starting the new one, so
-/// the two never race for `wispd.lock`.
+/// the two never race for `plxd.lock`.
 ///
 /// # Errors
 ///
@@ -209,30 +209,30 @@ mod tests {
 
     #[test]
     fn unit_matches_the_golden_file() {
-        let data_dir = DataDir::new("/home/ryan/.local/share/wisp").unwrap();
-        let unit = render_unit(Path::new("/usr/local/bin/wispd"), &data_dir).unwrap();
+        let data_dir = DataDir::new("/home/ryan/.local/share/parallax").unwrap();
+        let unit = render_unit(Path::new("/usr/local/bin/plxd"), &data_dir).unwrap();
         let golden = include_str!("../../tests/golden/systemd.service");
         assert_eq!(unit, golden);
         assert_eq!(
             unit_name(DEFAULT_LABEL),
-            "io.github.ryan-stoffel.wisp.wispd.service"
+            "io.github.ryan-stoffel.parallax.plxd.service"
         );
     }
 
     #[test]
     fn special_characters_in_paths_are_quoted_and_escaped() {
         let data_dir = DataDir::new("/home/a b/100%/\"q\"").unwrap();
-        let unit = render_unit(Path::new("/opt/$x\\y/wispd"), &data_dir).unwrap();
+        let unit = render_unit(Path::new("/opt/$x\\y/plxd"), &data_dir).unwrap();
         assert!(
-            unit.contains("ExecStart=\"/opt/$$x\\\\y/wispd\" serve\n"),
+            unit.contains("ExecStart=\"/opt/$$x\\\\y/plxd\" serve\n"),
             "{unit}"
         );
         assert!(
-            unit.contains("Environment=\"WISPD_DATA_DIR=/home/a b/100%%/\\\"q\\\"\"\n"),
+            unit.contains("Environment=\"PLXD_DATA_DIR=/home/a b/100%%/\\\"q\\\"\"\n"),
             "{unit}"
         );
         assert!(
-            unit.contains("StandardOutput=append:/home/a b/100%%/\"q\"/logs/wispd.log\n"),
+            unit.contains("StandardOutput=append:/home/a b/100%%/\"q\"/logs/plxd.log\n"),
             "{unit}"
         );
         assert_eq!(quote("plain"), "\"plain\"");
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn a_path_with_a_line_break_is_refused() {
-        let data_dir = DataDir::new("/home/ryan/wisp").unwrap();
+        let data_dir = DataDir::new("/home/ryan/parallax").unwrap();
         let error = render_unit(Path::new("/bin/wi\nspd"), &data_dir).unwrap_err();
         assert!(matches!(error, ServiceError::UnitPath { .. }), "{error:?}");
     }

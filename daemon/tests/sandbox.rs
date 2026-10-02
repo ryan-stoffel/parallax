@@ -1,9 +1,9 @@
 //! Claude Code's worker sandbox, for real (0013). Runs the Claude Code named in
-//! `WISP_SANDBOX_CLAUDE` with the arguments wispd gives a worker, against a fake Messages API on
+//! `PLX_SANDBOX_CLAUDE` with the arguments plxd gives a worker, against a fake Messages API on
 //! 127.0.0.1 that asks for one Bash command, then checks what that command could do. Nothing
 //! reaches Anthropic, and no login is used.
 //!
-//! Skipped when `WISP_SANDBOX_CLAUDE` is unset. CI's Linux legs install bubblewrap, socat, and a
+//! Skipped when `PLX_SANDBOX_CLAUDE` is unset. CI's Linux legs install bubblewrap, socat, and a
 //! pinned Claude Code, and set it.
 #![cfg(unix)]
 
@@ -16,17 +16,17 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
 use common::{run_worker, tool_result, worker_request};
-use wispd::backend::RunRequest;
-use wispd::backend::claude::{commands_temp, worker_temp};
-use wispd::backend::run_temp;
-use wispd::paths::DataDir;
+use plxd::backend::RunRequest;
+use plxd::backend::claude::{commands_temp, worker_temp};
+use plxd::backend::run_temp;
+use plxd::paths::DataDir;
 
-const SECRET: &str = "wisp-sandbox-test-secret";
+const SECRET: &str = "parallax-sandbox-test-secret";
 
 #[tokio::test]
 async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_sockets() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: WISP_SANDBOX_CLAUDE doesn't name a Claude Code to test");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: PLX_SANDBOX_CLAUDE doesn't name a Claude Code to test");
         return;
     };
     let dir = tempfile::tempdir().unwrap();
@@ -46,7 +46,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
     ] {
         fs::create_dir_all(folder).unwrap();
     }
-    // A key in the home folder, and another project's context in wispd's data folder.
+    // A key in the home folder, and another project's context in plxd's data folder.
     fs::write(home.join(".ssh/id_ed25519"), format!("{SECRET}-key")).unwrap();
     fs::write(
         data.join("context/other/notes.md"),
@@ -96,7 +96,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
         &request,
         &root,
         &home,
-        &[("ANTHROPIC_API_KEY", "sk-ant-wisp-sandbox-test")],
+        &[("ANTHROPIC_API_KEY", "sk-ant-parallax-sandbox-test")],
     )
     .await;
 
@@ -137,8 +137,8 @@ fn probe_registry_login(probe: &mut String, request: &mut RunRequest, root: &Pat
 /// and it can't write the paths Claude Code's sandbox would always allow.
 #[tokio::test]
 async fn a_worker_s_temp_is_its_own() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: WISP_SANDBOX_CLAUDE doesn't name a Claude Code to test");
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: PLX_SANDBOX_CLAUDE doesn't name a Claude Code to test");
         return;
     };
     let dir = tempfile::tempdir().unwrap();
@@ -161,7 +161,7 @@ async fn a_worker_s_temp_is_its_own() {
     fs::write(worktree.join(".git"), git_file).unwrap();
     let (request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
     let temp = &request.sandbox.as_ref().unwrap().temp;
-    // Another run of the same wispd, and what another Claude Code session left in the shared
+    // Another run of the same plxd, and what another Claude Code session left in the shared
     // folder, which this makes if it's missing.
     let other = run_temp::create(&DataDir::new(&data).unwrap()).unwrap();
     fs::write(other.path().join("secret"), format!("{SECRET}-other-run")).unwrap();
@@ -171,7 +171,7 @@ async fn a_worker_s_temp_is_its_own() {
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
     }
     let session = tempfile::Builder::new()
-        .prefix("wisp-sandbox-test-")
+        .prefix("parallax-sandbox-test-")
         .tempdir_in(&shared)
         .unwrap();
     fs::write(session.path().join("output"), format!("{SECRET}-session")).unwrap();
@@ -187,7 +187,7 @@ async fn a_worker_s_temp_is_its_own() {
         session.path().join("planted"),
         home.join(".npm/_logs/planted"),
         home.join(".claude/debug/planted"),
-        PathBuf::from("/tmp/claude/wisp-sandbox-test"),
+        PathBuf::from("/tmp/claude/parallax-sandbox-test"),
     ];
     let mut probe = format!(
         "echo \"tmpdir=$TMPDIR\"\n\
@@ -206,7 +206,7 @@ async fn a_worker_s_temp_is_its_own() {
         &request,
         &root,
         &home,
-        &[("ANTHROPIC_API_KEY", "sk-ant-wisp-sandbox-test")],
+        &[("ANTHROPIC_API_KEY", "sk-ant-parallax-sandbox-test")],
     )
     .await;
     let written: Vec<&PathBuf> = planted.iter().filter(|file| file.exists()).collect();

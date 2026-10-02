@@ -6,7 +6,7 @@
 
 ## Context
 
-People want every `develop` build, or only released code, and wisp published neither. [0006](0006-release-versioning-and-packaging.md) is superseded by [0020](0020-drop-the-editor-fork.md), and RYA-64 hasn't chosen versions yet.
+People want every `develop` build, or only released code, and Parallax published neither. [0006](0006-release-versioning-and-packaging.md) is superseded by [0020](0020-drop-the-editor-fork.md), and RYA-64 hasn't chosen versions yet.
 
 ## Decision
 
@@ -27,6 +27,6 @@ People want every `develop` build, or only released code, and wisp published nei
 
 - Every push to `develop` adds a release, and nothing prunes them yet. Pruning old nightlies is a later issue.
 - If pushes queue, GitHub skips the ones between the running and the newest. Their PRs still appear in the newest release's notes.
-- Each release carries the app's installers for the five targets, the update metadata the updater reads ([0030](0030-release-versions.md)), and a `SHA256SUMS` file, built by the same workflow ([0029](0029-app-packaging.md)). There are no standalone `wispd` binaries on the releases.
+- Each release carries the app's installers for the five targets, the update metadata the updater reads ([0030](0030-release-versions.md)), and a `SHA256SUMS` file, built by the same workflow ([0029](0029-app-packaging.md)). There are no standalone `plxd` binaries on the releases.
 - **Publishing is per OS (RYA-211).** `plan` creates the release as a draft, with its notes. Each build attaches its own files as soon as it is done and then publishes the draft, so the first one done makes the release visible and macOS no longer waits for Windows. A failed build leaves its OS out of the release, which still goes out for the others, until its job is re-run. Until then, and while a slower build is still running, apps on that OS find the newest release without their update file and report that it has no update for them; they update once it arrives. `SHA256SUMS` is added last, once every build has attached, so a release without it is incomplete.
 - The existing `v0.1.0` and `v0.2.0` releases stay. A standard release becomes Latest after them.

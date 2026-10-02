@@ -2,12 +2,12 @@
 //! task's role falls back to when it doesn't name one outright. [`crate::routing`] is what
 //! actually reads these to route a task; this module only lets the editor see and change them.
 
-use tracing::error;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams, Role,
 };
-use wisp_store::{Store, StoreError};
+use parallax_store::{Store, StoreError};
+use tracing::error;
 
 use super::Context;
 use crate::store::{account_choice, role_default, role_text};
@@ -24,7 +24,7 @@ pub(crate) async fn get(
 }
 
 /// Checks `account` before storing it: a `Key` must be a real row in `accounts` (#117), and a
-/// `Subscription`'s backend must be one wispd knows. The check runs on the store's own thread, in
+/// `Subscription`'s backend must be one plxd knows. The check runs on the store's own thread, in
 /// the same job that writes the default, since a `Key` check reads the `accounts` table.
 pub(crate) async fn set(
     context: &Context,
@@ -60,7 +60,7 @@ pub(crate) fn read_defaults(db_store: &Store) -> Result<AccountsDefaultsGetResul
 fn read_one(
     db_store: &Store,
     role: Role,
-) -> Result<Option<wisp_protocol::AccountChoice>, ErrorObject> {
+) -> Result<Option<parallax_protocol::AccountChoice>, ErrorObject> {
     db_store
         .get_role_default(role_text(role))
         .map_err(|error| defaults_store_error(&error))?
@@ -75,16 +75,16 @@ fn defaults_store_error(error: &StoreError) -> ErrorObject {
 
 #[cfg(test)]
 mod tests {
-    use wisp_protocol::jsonrpc::INVALID_PARAMS;
-    use wisp_protocol::{AccountChoice, AccountId, Provider};
-    use wisp_store::{AccountFields, Store};
+    use parallax_protocol::jsonrpc::INVALID_PARAMS;
+    use parallax_protocol::{AccountChoice, AccountId, Provider};
+    use parallax_store::{AccountFields, Store};
 
     use super::read_defaults;
     use crate::store::{account_fields, role_default};
 
     fn temp_store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("wispd.sqlite3")).unwrap();
+        let store = Store::open(dir.path().join("plxd.sqlite3")).unwrap();
         (dir, store)
     }
 
@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn a_backend_wispd_does_not_know_is_refused() {
+    fn a_backend_plxd_does_not_know_is_refused() {
         let (_dir, store) = temp_store();
         let error = role_default(
             &store,

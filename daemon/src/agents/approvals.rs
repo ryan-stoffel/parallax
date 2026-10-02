@@ -4,22 +4,22 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
+use parallax_protocol::{AgentApprovalBy, AgentApprovalDecision, AgentApproveResult, ApprovalId};
 use serde_json::{Map, Value};
 use tokio::time::Instant;
-use wisp_protocol::{AgentApprovalBy, AgentApprovalDecision, AgentApproveResult, ApprovalId};
 
-/// How long a permission request waits for an answer before wispd denies it.
+/// How long a permission request waits for an answer before plxd denies it.
 pub(crate) const APPROVAL_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// What the agent is told when the user denies a request without a message.
 pub(super) const DENIED: &str = "The user denied permission for this tool call.";
 
 /// What the agent is told when nobody answered in time.
-pub(super) const EXPIRED: &str = "Nobody answered this permission request in time, so wisp \
+pub(super) const EXPIRED: &str = "Nobody answered this permission request in time, so Parallax \
                                   denied it. Carry on without it if you can, and say what you \
                                   needed it for.";
 
-/// What the agent is told when its run is cancelled or wispd stops while a request waits.
+/// What the agent is told when its run is cancelled or plxd stops while a request waits.
 pub(super) const STOPPED: &str = "The run was stopped while this permission request waited.";
 
 /// The input fields that name what a file tool works on: `file_path` (`Read`, `Write`, `Edit`),
@@ -31,7 +31,7 @@ pub(super) const PATH_FIELDS: &[&str] = &["file_path", "notebook_path", "path"];
 /// (RYA-243). A worker's edited input may leave it out, as a client that sends back only the
 /// edited `plan` does, but may not change or add it. Claude Code 2.1.283 ignores it and writes
 /// the file it chose, but that write is the CLI's own, which `--restricted` doesn't confine, so
-/// wispd doesn't rely on that (0031).
+/// plxd doesn't rely on that (0031).
 pub(super) const PLAN_PATH_FIELD: &str = "planFilePath";
 
 /// One run's permission requests, as long as its actor lives.
@@ -153,9 +153,9 @@ pub(super) fn ended(decision: AgentApprovalDecision, by: AgentApprovalBy) -> Age
 mod tests {
     use std::time::Duration;
 
+    use parallax_protocol::{AgentApprovalBy, AgentApprovalDecision, ApprovalId};
     use serde_json::json;
     use tokio::time::Instant;
-    use wisp_protocol::{AgentApprovalBy, AgentApprovalDecision, ApprovalId};
 
     use super::{Approvals, Lookup, ended, moves_paths};
 

@@ -7,15 +7,14 @@ use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::time::Duration;
 
+use parallax_protocol::methods::{HostHealth, ProjectCreate};
+use parallax_protocol::{HostHealthParams, ProjectCreateResult};
 use rustix::process::Signal;
 use sha2::{Digest, Sha256};
 use tokio::time::{Instant, sleep};
-use wisp_protocol::methods::{HostHealth, ProjectCreate};
-use wisp_protocol::{HostHealthParams, ProjectCreateResult};
 
 use crate::support::{
-    Client, InProcess, PATIENCE, Wispd, WriteLock, create_params, run_to_exit, socket_path,
-    temp_dir,
+    Client, InProcess, PATIENCE, Plxd, WriteLock, create_params, run_to_exit, socket_path, temp_dir,
 };
 
 const SETTLE: Duration = Duration::from_millis(300);
@@ -35,7 +34,7 @@ async fn eventually(what: &str, mut condition: impl FnMut() -> bool) {
 #[tokio::test]
 async fn a_second_instance_is_refused_and_the_first_keeps_serving() {
     let dir = temp_dir();
-    let first = Wispd::start(dir.path()).await;
+    let first = Plxd::start(dir.path()).await;
 
     let (status, stderr) = run_to_exit(dir.path(), &[]).await;
     assert_eq!(status.code(), Some(3), "{stderr}");
@@ -55,7 +54,7 @@ async fn a_stale_socket_is_replaced() {
     let socket = socket_path(dir.path());
     // A socket file nothing serves. It is a datagram socket because a stream listener here could
     // be inherited by another test's child before close-on-exec is set, and then accept the
-    // connects meant for wispd (#86). wispd removes any kind of socket.
+    // connects meant for plxd (#86). plxd removes any kind of socket.
     drop(UnixDatagram::bind(&socket).unwrap());
     assert!(
         fs::symlink_metadata(&socket)
@@ -64,8 +63,8 @@ async fn a_stale_socket_is_replaced() {
             .is_socket()
     );
 
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     client
         .call::<HostHealth>(HostHealthParams {})
         .await
@@ -108,16 +107,16 @@ async fn the_data_folder_socket_lock_and_log_are_private() {
     fs::create_dir(&data).unwrap();
     fs::set_permissions(&data, Permissions::from_mode(0o755)).unwrap();
 
-    let wispd = Wispd::start(&data).await;
+    let plxd = Plxd::start(&data).await;
     assert_eq!(mode(&data), 0o700);
-    assert_eq!(mode(&wispd.socket), 0o600);
-    let lock = data.join("wispd.lock");
+    assert_eq!(mode(&plxd.socket), 0o600);
+    let lock = data.join("plxd.lock");
     assert_eq!(mode(&lock), 0o600);
     assert_eq!(
         fs::read_to_string(&lock).unwrap(),
-        format!("{}\n", wispd.pid())
+        format!("{}\n", plxd.pid())
     );
-    assert_eq!(mode(&data.join("logs/wispd.log")), 0o600);
+    assert_eq!(mode(&data.join("logs/plxd.log")), 0o600);
     assert_eq!(mode(&data.join("logs")), 0o700);
 }
 
@@ -131,8 +130,8 @@ fn darwin_user_temp_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim_end())
 }
 
-/// With no `--data-dir`, Linux's data folder is `$XDG_DATA_HOME/wisp` when that is absolute, and
-/// `~/.local/share/wisp` otherwise (0023).
+/// With no `--data-dir`, Linux's data folder is `$XDG_DATA_HOME/parallax` when that is absolute, and
+/// `~/.local/share/parallax` otherwise (0023).
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn the_default_linux_data_folder_follows_xdg_data_home() {
@@ -140,23 +139,23 @@ async fn the_default_linux_data_folder_follows_xdg_data_home() {
 
     let home = temp_dir();
     let data_home = temp_dir();
-    let in_home = home.path().join(".local/share/wisp");
+    let in_home = home.path().join(".local/share/parallax");
     let cases = [
         (
             Some(data_home.path().to_str().unwrap()),
-            data_home.path().join("wisp"),
+            data_home.path().join("parallax"),
         ),
         (Some("relative/data"), in_home.clone()),
         (Some(""), in_home.clone()),
         (None, in_home),
     ];
     for (xdg_data_home, expected) in cases {
-        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_wispd"));
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_plxd"));
         command
             .arg("serve")
             .env("HOME", home.path())
-            .env_remove("WISPD_DATA_DIR")
-            .env_remove("WISPD_LOG")
+            .env_remove("PLXD_DATA_DIR")
+            .env_remove("PLXD_LOG")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -165,7 +164,7 @@ async fn the_default_linux_data_folder_follows_xdg_data_home() {
             None => command.env_remove("XDG_DATA_HOME"),
         };
         let mut child = command.spawn().unwrap();
-        let socket = expected.join("wispd.sock");
+        let socket = expected.join("plxd.sock");
         eventually(&format!("{} exists", socket.display()), || socket.exists()).await;
         let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
         kill_process(pid, Signal::TERM).unwrap();
@@ -191,14 +190,14 @@ async fn a_long_data_folder_puts_the_socket_in_the_per_user_fallback_folder() {
     let fallback = darwin_user_temp_dir();
     #[cfg(target_os = "linux")]
     let fallback = runtime.path().to_owned();
-    let expected = fallback.join(format!("wispd-{hash}.sock"));
-    assert!(data.join("wispd.sock").as_os_str().len() > 107);
+    let expected = fallback.join(format!("plxd-{hash}.sock"));
+    assert!(data.join("plxd.sock").as_os_str().len() > 107);
 
     let env = [("XDG_RUNTIME_DIR", runtime.path().to_str().unwrap())];
-    let wispd = Wispd::start_at(&data, expected.clone(), &[], &env).await;
-    assert_eq!(wispd.socket, expected);
+    let plxd = Plxd::start_at(&data, expected.clone(), &[], &env).await;
+    assert_eq!(plxd.socket, expected);
     assert_eq!(mode(&expected), 0o600);
-    assert!(!data.join("wispd.sock").exists());
+    assert!(!data.join("plxd.sock").exists());
     let mut client = Client::ready(&expected).await;
     client
         .call::<HostHealth>(HostHealthParams {})
@@ -206,8 +205,8 @@ async fn a_long_data_folder_puts_the_socket_in_the_per_user_fallback_folder() {
         .unwrap();
     drop(client);
 
-    wispd.signal(Signal::TERM);
-    assert!(wispd.exit().await.0.success());
+    plxd.signal(Signal::TERM);
+    assert!(plxd.exit().await.0.success());
     assert!(
         !expected.exists(),
         "the fallback socket is removed at shutdown"
@@ -217,17 +216,17 @@ async fn a_long_data_folder_puts_the_socket_in_the_per_user_fallback_folder() {
 #[tokio::test]
 async fn sigterm_finishes_the_requests_in_flight_then_cleans_up() {
     let dir = temp_dir();
-    let mut wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let mut plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
     let lock = WriteLock::take(dir.path());
-    let params = create_params(dir.path(), "wisp");
+    let params = create_params(dir.path(), "parallax");
     let create = client.send::<ProjectCreate>(params.clone()).await;
     sleep(SETTLE).await;
 
-    wispd.signal(Signal::TERM);
-    let socket = wispd.socket.clone();
+    plxd.signal(Signal::TERM);
+    let socket = plxd.socket.clone();
     eventually("the socket is removed", || !socket.exists()).await;
-    assert!(wispd.is_running(), "it waits for the request in flight");
+    assert!(plxd.is_running(), "it waits for the request in flight");
     assert!(std::os::unix::net::UnixStream::connect(&socket).is_err());
 
     lock.release();
@@ -237,10 +236,10 @@ async fn sigterm_finishes_the_requests_in_flight_then_cleans_up() {
     assert_eq!(created.project.id, params.id);
     assert!(client.closes_within(PATIENCE).await);
 
-    let (status, stderr) = wispd.exit().await;
+    let (status, stderr) = plxd.exit().await;
     assert!(status.success(), "{status} {stderr}");
-    assert!(!dir.path().join("wispd.lock").exists());
-    let log = fs::read_to_string(dir.path().join("logs/wispd.log")).unwrap();
+    assert!(!dir.path().join("plxd.lock").exists());
+    let log = fs::read_to_string(dir.path().join("logs/plxd.log")).unwrap();
     assert!(log.contains("SIGTERM"), "{log}");
     assert!(log.contains("stopped"), "{log}");
 }
@@ -248,8 +247,8 @@ async fn sigterm_finishes_the_requests_in_flight_then_cleans_up() {
 #[tokio::test]
 async fn sigterm_does_not_wait_out_the_grace_for_a_client_that_stopped_reading() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let socket = wispd.socket.clone();
+    let plxd = Plxd::start(dir.path()).await;
+    let socket = plxd.socket.clone();
     // Pipelines requests on its own thread and never reads the answers.
     let flood = std::thread::spawn(move || {
         let mut stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();
@@ -267,30 +266,30 @@ async fn sigterm_does_not_wait_out_the_grace_for_a_client_that_stopped_reading()
     sleep(SETTLE).await;
 
     let signalled = Instant::now();
-    wispd.signal(Signal::TERM);
-    let (status, stderr) = wispd.exit().await;
+    plxd.signal(Signal::TERM);
+    let (status, stderr) = plxd.exit().await;
     assert!(status.success(), "{status} {stderr}");
     assert!(
         signalled.elapsed() < Duration::from_secs(5),
         "took {:?}; the grace is 10 s",
         signalled.elapsed()
     );
-    flood.join().expect("the flood ends when wispd closes");
+    flood.join().expect("the flood ends when plxd closes");
 }
 
 #[tokio::test]
 async fn sigint_stops_the_server_and_closes_idle_connections() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
 
-    wispd.signal(Signal::INT);
+    plxd.signal(Signal::INT);
     assert!(client.closes_within(PATIENCE).await);
-    let socket = wispd.socket.clone();
-    let (status, stderr) = wispd.exit().await;
+    let socket = plxd.socket.clone();
+    let (status, stderr) = plxd.exit().await;
     assert!(status.success(), "{status} {stderr}");
     assert!(!socket.exists());
-    assert!(!dir.path().join("wispd.lock").exists());
+    assert!(!dir.path().join("plxd.lock").exists());
 }
 
 #[tokio::test]
@@ -343,16 +342,16 @@ async fn a_deleted_socket_is_bound_again() {
 
 async fn log_after_a_request(args: &[&str], env: &[(&str, &str)]) -> String {
     let dir = temp_dir();
-    let wispd = Wispd::start_with(dir.path(), args, env).await;
-    let mut client = Client::ready(&wispd.socket).await;
+    let plxd = Plxd::start_with(dir.path(), args, env).await;
+    let mut client = Client::ready(&plxd.socket).await;
     client
         .call::<HostHealth>(HostHealthParams {})
         .await
         .unwrap();
     drop(client);
-    wispd.signal(Signal::TERM);
-    assert!(wispd.exit().await.0.success());
-    fs::read_to_string(dir.path().join("logs/wispd.log")).unwrap()
+    plxd.signal(Signal::TERM);
+    assert!(plxd.exit().await.0.success());
+    fs::read_to_string(dir.path().join("logs/plxd.log")).unwrap()
 }
 
 #[tokio::test]
@@ -367,24 +366,24 @@ async fn logs_go_to_the_data_folder_at_the_level_from_the_flag_or_env() {
     let debug = log_after_a_request(&["--log-level", "debug"], &[]).await;
     assert!(debug.contains(" DEBUG "), "{debug}");
 
-    let warn = log_after_a_request(&[], &[("WISPD_LOG", "warn")]).await;
+    let warn = log_after_a_request(&[], &[("PLXD_LOG", "warn")]).await;
     assert!(!warn.contains("listening"), "{warn}");
 
-    let flag_wins = log_after_a_request(&["--log-level", "info"], &[("WISPD_LOG", "warn")]).await;
+    let flag_wins = log_after_a_request(&["--log-level", "info"], &[("PLXD_LOG", "warn")]).await;
     assert!(flag_wins.contains("listening"), "{flag_wins}");
 }
 
 #[tokio::test]
 async fn client_text_cant_forge_or_bloat_log_lines() {
     let dir = temp_dir();
-    let wispd = Wispd::start_with(dir.path(), &["--log-level", "debug"], &[]).await;
+    let plxd = Plxd::start_with(dir.path(), &["--log-level", "debug"], &[]).await;
     let forged = "2026-09-24T00:00:00.000000Z ERROR forged";
     let huge = "x".repeat(1_000_000);
     for (name, method) in [
-        (format!("wisp\n{forged}"), format!("a\n{forged}")),
+        (format!("parallax\n{forged}"), format!("a\n{forged}")),
         (huge.clone(), huge),
     ] {
-        let mut client = Client::connect(&wispd.socket).await;
+        let mut client = Client::connect(&plxd.socket).await;
         client
             .send_message(&serde_json::json!({
                 "jsonrpc": "2.0",
@@ -410,10 +409,10 @@ async fn client_text_cant_forge_or_bloat_log_lines() {
             .await
             .unwrap();
     }
-    wispd.signal(Signal::TERM);
-    assert!(wispd.exit().await.0.success());
+    plxd.signal(Signal::TERM);
+    assert!(plxd.exit().await.0.success());
 
-    let log = fs::read_to_string(dir.path().join("logs/wispd.log")).unwrap();
+    let log = fs::read_to_string(dir.path().join("logs/plxd.log")).unwrap();
     assert!(
         log.contains("ERROR forged"),
         "the text is logged, escaped: {log}"

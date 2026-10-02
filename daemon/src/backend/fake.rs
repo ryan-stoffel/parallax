@@ -20,7 +20,7 @@
 //! workspace-write run without a [`WorkerSandbox`](super::WorkerSandbox) (0013), though it
 //! enforces none of it.
 //!
-//! Outside unit tests, a `wispd` built with the `fake-backend` feature runs every worker on this
+//! Outside unit tests, a `plxd` built with the `fake-backend` feature runs every worker on this
 //! backend when [`SCRIPT_ENV`] names a script, for the app's end-to-end tests (RYA-16).
 
 use std::collections::{HashSet, VecDeque};
@@ -50,9 +50,9 @@ use super::{
 #[cfg(all(feature = "fake-backend", not(debug_assertions)))]
 compile_error!("the fake-backend feature is for test builds; never build a release with it");
 
-/// The variable naming a JSON script (a [`Script`]) that `wispd serve` runs every worker on,
+/// The variable naming a JSON script (a [`Script`]) that `plxd serve` runs every worker on,
 /// instead of a vendor CLI. Only builds with the `fake-backend` feature take it.
-pub const SCRIPT_ENV: &str = "WISPD_FAKE_BACKEND";
+pub const SCRIPT_ENV: &str = "PLXD_FAKE_BACKEND";
 
 /// The variable the fake CLI takes an API key from.
 pub const API_KEY_ENV: &str = "FAKE_API_KEY";
@@ -237,7 +237,7 @@ impl FakeBackend {
         self
     }
 
-    /// The fake `wispd serve` runs workers on: `None` when [`SCRIPT_ENV`] is unset, else one
+    /// The fake `plxd serve` runs workers on: `None` when [`SCRIPT_ENV`] is unset, else one
     /// playing the script it names through `launcher`.
     ///
     /// # Errors
@@ -252,7 +252,7 @@ impl FakeBackend {
         let Some(path) = path else { return Ok(None) };
         if !cfg!(feature = "fake-backend") {
             return Err(io::Error::other(format!(
-                "{SCRIPT_ENV} is set, but this wispd was built without the fake-backend feature, \
+                "{SCRIPT_ENV} is set, but this plxd was built without the fake-backend feature, \
                  which only test builds have; unset it"
             )));
         }

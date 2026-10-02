@@ -1,7 +1,7 @@
 //! Turning `codex exec --json` output into [`Event`]s, one line at a time.
 //!
 //! The shapes are `ThreadEvent` in `codex-rs/exec/src/exec_events.rs` at `rust-v0.157.1`, checked
-//! against real runs (0013). Fields wisp doesn't use are ignored, as 0004 asks, so a newer CLI
+//! against real runs (0013). Fields Parallax doesn't use are ignored, as 0004 asks, so a newer CLI
 //! that adds fields still parses.
 
 use std::collections::HashSet;
@@ -265,7 +265,7 @@ fn todo_items(item: &Map<String, Value>) -> Vec<TodoItem> {
 }
 
 /// `turn.completed.usage`: the thread's running totals. `OpenAI` counts cached input inside
-/// `input_tokens` and reasoning inside `output_tokens`; wisp's input excludes cache reads.
+/// `input_tokens` and reasoning inside `output_tokens`; Parallax's input excludes cache reads.
 fn usage_total(usage: &Value) -> Usage {
     let count = |key| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
     let cached = count("cached_input_tokens");

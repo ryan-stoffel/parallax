@@ -6,13 +6,13 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use tracing::{info, warn};
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
-    AgentRunResult, ErrorKind, ProjectCreateParams, ProjectCreateResult, ProjectIcon,
-    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult, WispEvent,
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    AgentRunResult, ErrorKind, ParallaxEvent, ProjectCreateParams, ProjectCreateResult,
+    ProjectIcon, ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
+    ProjectUpdateResult,
 };
+use tracing::{info, warn};
 
 use super::Context;
 use crate::agents::coordinator;
@@ -46,7 +46,7 @@ pub(crate) async fn list(
 /// Creates a project, or returns the one that already has this id and these params.
 ///
 /// `project.created` is appended only when the row is new. The store's thread is the only
-/// writer, since the lock admits one wispd per data folder, so the lookup before the create can't
+/// writer, since the lock admits one plxd per data folder, so the lookup before the create can't
 /// race another create.
 ///
 /// Only a new project's `repoPath` has to be a repository, so a retry still returns the project
@@ -69,7 +69,7 @@ pub(crate) async fn create(
                 .is_some();
             if !existed {
                 repo::check(Path::new(&fields.repo_path)).map_err(|error| {
-                    ErrorObject::wisp(ErrorKind::NotARepository, error.to_string())
+                    ErrorObject::parallax(ErrorKind::NotARepository, error.to_string())
                 })?;
             }
             let row = store
@@ -81,7 +81,7 @@ pub(crate) async fn create(
                 let seq = log.append_blocking(
                     project.created_at,
                     None,
-                    WispEvent::ProjectCreated {
+                    ParallaxEvent::ProjectCreated {
                         project: project.clone(),
                     },
                 );
@@ -142,7 +142,7 @@ pub(crate) async fn update(
                 let seq = log.append_blocking(
                     Timestamp::now(),
                     None,
-                    WispEvent::ProjectUpdated {
+                    ParallaxEvent::ProjectUpdated {
                         project: project.clone(),
                     },
                 );
@@ -153,16 +153,16 @@ pub(crate) async fn update(
         .await
 }
 
-/// The longest `name` wispd accepts, in bytes.
+/// The longest `name` plxd accepts, in bytes.
 const MAX_NAME_BYTES: usize = 256;
 
-/// The longest `repoPath` wispd accepts, in bytes: macOS's `PATH_MAX`.
+/// The longest `repoPath` plxd accepts, in bytes: macOS's `PATH_MAX`.
 const MAX_REPO_PATH_BYTES: usize = 1024;
 
-/// The longest icon name wispd accepts, in characters (0032).
+/// The longest icon name plxd accepts, in characters (0032).
 const MAX_ICON_NAME_CHARS: usize = 64;
 
-/// The longest icon color wispd accepts, in characters (0032).
+/// The longest icon color plxd accepts, in characters (0032).
 const MAX_ICON_COLOR_CHARS: usize = 32;
 
 // The limits also bound every `project.created` and `project.updated` event, and with it the
@@ -223,7 +223,7 @@ fn check_name(name: &str) -> Result<(), ErrorObject> {
     Ok(())
 }
 
-/// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0032). wispd never reads them, so
+/// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0032). plxd never reads them, so
 /// that is all it checks.
 fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
     check_key("icon.name", &icon.name, MAX_ICON_NAME_CHARS)?;
@@ -246,8 +246,8 @@ fn check_key(field: &str, key: &str, max: usize) -> Result<(), ErrorObject> {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use wisp_protocol::jsonrpc::INVALID_PARAMS;
-    use wisp_protocol::{ProjectCreateParams, ProjectIcon, ProjectId};
+    use parallax_protocol::jsonrpc::INVALID_PARAMS;
+    use parallax_protocol::{ProjectCreateParams, ProjectIcon, ProjectId};
 
     use super::{
         MAX_ICON_COLOR_CHARS, MAX_ICON_NAME_CHARS, MAX_NAME_BYTES, MAX_REPO_PATH_BYTES, check,
@@ -301,7 +301,7 @@ mod tests {
         }
         let error = check(&ProjectCreateParams {
             icon: Some(icon("Rocket", None)),
-            ..params("wisp", "/src/wisp")
+            ..params("parallax", "/src/parallax")
         })
         .unwrap_err();
         assert_eq!(
@@ -317,9 +317,9 @@ mod tests {
         assert!(check(&params(&longest_name, &longest_path)).is_ok());
         for (name, repo_path) in [
             (format!("{longest_name}n"), "/src".to_owned()),
-            ("wisp".to_owned(), format!("{longest_path}p")),
+            ("parallax".to_owned(), format!("{longest_path}p")),
             ("wi\0sp".to_owned(), "/src".to_owned()),
-            ("wisp".to_owned(), "/x\0y".to_owned()),
+            ("parallax".to_owned(), "/x\0y".to_owned()),
         ] {
             let error = check(&params(&name, &repo_path)).unwrap_err();
             assert_eq!(error.code, INVALID_PARAMS, "{name:?} {repo_path:?}");
@@ -328,16 +328,16 @@ mod tests {
 
     #[test]
     fn names_must_not_be_blank_and_paths_must_be_absolute_without_dot_segments() {
-        assert!(check(&params("wisp", "/src/wisp")).is_ok());
+        assert!(check(&params("parallax", "/src/parallax")).is_ok());
         for (name, repo_path) in [
             ("", "/src"),
             ("  ", "/src"),
-            ("wisp", "src/wisp"),
-            ("wisp", ""),
-            ("wisp", "/src/../etc"),
-            ("wisp", "/src/./app"),
-            ("wisp", "/src/app/.."),
-            ("wisp", "/src/app/."),
+            ("parallax", "src/parallax"),
+            ("parallax", ""),
+            ("parallax", "/src/../etc"),
+            ("parallax", "/src/./app"),
+            ("parallax", "/src/app/.."),
+            ("parallax", "/src/app/."),
         ] {
             let error = check(&params(name, repo_path)).unwrap_err();
             assert_eq!(error.code, INVALID_PARAMS, "{name:?} {repo_path:?}");

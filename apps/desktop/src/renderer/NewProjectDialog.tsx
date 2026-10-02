@@ -21,7 +21,7 @@ import { WorkspaceMenu, type Workspace } from "./WorkspaceMenu";
  * The Create Project dialog, a native modal <dialog> (focus trap and Escape come free), laid out
  * like Cursor's: the Project's icon and name, then its Workspace, a repository on any host. Open
  * it with `ref.current.showModal()`. Creating closes it and calls `onCreated` with the host it
- * was made on, and wispd's error stays in the dialog. The icon is a button that opens the icon
+ * was made on, and plxd's error stays in the dialog. The icon is a button that opens the icon
  * picker where the Workspace's host can keep one (`projectEdit`, 0032).
  */
 export function NewProjectDialog({
@@ -52,7 +52,7 @@ export function NewProjectDialog({
   const name = (typed ?? workspace?.repo.name ?? "").trim();
   const pickerId = useId();
   const [chosenIcon, setChosenIcon] = useState<ProjectIconValue>();
-  // The Workspace's host decides, since the Project is made there. Without `projectEdit` its wispd
+  // The Workspace's host decides, since the Project is made there. Without `projectEdit` its plxd
   // would drop an icon, so none is shown or sent.
   const connection = useConnection(workspace?.hostId ?? hostId);
   const iconable = connection?.status === "connected" && "projectEdit" in connection.capabilities;
@@ -65,10 +65,10 @@ export function NewProjectDialog({
 
   const chooseFolder = async () => {
     setError(undefined);
-    const path = await window.wisp.pickFolder();
+    const path = await window.parallax.pickFolder();
     if (!path) return;
-    // A fresh id is safe to retry with: wispd returns the entry a path already has.
-    const added = await window.wisp.request(localId, "repo/add", { id: uuidv7(), path });
+    // A fresh id is safe to retry with: plxd returns the entry a path already has.
+    const added = await window.parallax.request(localId, "repo/add", { id: uuidv7(), path });
     if ("error" in added) setError(describeError(added.error));
     else setChosen({ hostId: localId, repo: added.result.repo });
   };
@@ -207,7 +207,7 @@ async function createOn(
   hostId: string,
   { id, name, repoPath, icon }: ProjectCreateParams,
 ): Promise<Project | string> {
-  const answer = await window.wisp.request(hostId, "project/create", {
+  const answer = await window.parallax.request(hostId, "project/create", {
     id,
     name,
     repoPath,

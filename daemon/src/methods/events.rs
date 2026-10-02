@@ -1,8 +1,8 @@
 //! `events/subscribe` and `events/unsubscribe`, and the cursors that deliver a connection's
 //! events.
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
     ErrorKind, EventsEventParams, EventsSubscribeParams, ProjectId, SubscriptionId,
 };
 
@@ -44,7 +44,7 @@ pub(crate) async fn subscribe(
             })
             .await?;
         if !exists {
-            return Err(ErrorObject::wisp(
+            return Err(ErrorObject::parallax(
                 ErrorKind::ProjectNotFound,
                 format!("no project has id {project}"),
             ));
@@ -69,7 +69,7 @@ fn resync_required(after: u64, gone: Gone) -> ErrorObject {
             format!("seq {after} is not in this event log, whose last event is {head}")
         }
     };
-    ErrorObject::wisp(ErrorKind::ResyncRequired, message)
+    ErrorObject::parallax(ErrorKind::ResyncRequired, message)
 }
 
 /// A connection's subscriptions.
@@ -122,7 +122,7 @@ impl Cursors {
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
-    use wisp_protocol::{ProjectId, SubscriptionId, WispEvent};
+    use parallax_protocol::{ParallaxEvent, ProjectId, SubscriptionId};
 
     use super::{Cursor, Cursors};
     use crate::event_log::EventLog;
@@ -148,7 +148,7 @@ mod tests {
         let log = EventLog::new(10);
         let project = ProjectId::generate();
         for owner in [None, Some(project), None] {
-            log.append_blocking(Timestamp::now(), owner, WispEvent::Unknown);
+            log.append_blocking(Timestamp::now(), owner, ParallaxEvent::Unknown);
         }
         let host = cursor(None, 0);
         let (host_id, late_id) = (host.subscription, SubscriptionId::generate());
@@ -169,7 +169,7 @@ mod tests {
         expected.sort_by_key(|&(subscription, seq)| (seq, subscription));
         assert_eq!(delivered, expected);
 
-        log.append_blocking(Timestamp::now(), None, WispEvent::Unknown);
+        log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown);
         cursors.remove(host_id);
         assert_eq!(drain(&mut cursors, &log), [(late_id, 4)]);
     }
@@ -177,8 +177,8 @@ mod tests {
     #[test]
     fn a_cursor_behind_the_retention_is_reported() {
         let log = EventLog::new(1);
-        log.append_blocking(Timestamp::now(), None, WispEvent::Unknown);
-        log.append_blocking(Timestamp::now(), None, WispEvent::Unknown);
+        log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown);
+        log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown);
         let lagging = cursor(None, 0);
         let id = lagging.subscription;
         let mut cursors = Cursors::default();

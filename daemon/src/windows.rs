@@ -1,10 +1,10 @@
-//! Every Win32 call wispd makes that std and tokio don't wrap (0023). This is the only module
+//! Every Win32 call plxd makes that std and tokio don't wrap (0023). This is the only module
 //! allowed `unsafe` code, and every `unsafe` block says why it is sound.
 //!
 //! - [`create_pipe`]: a named pipe instance whose DACL grants only this user.
 //! - [`pipe_client_pid`], [`pipe_server_pid`], and [`runs_as_this_user`]: the SID checks on both
 //!   ends of the pipe.
-//! - [`stop_inheriting_handles`]: so a process wispd starts gets only the handles it is given.
+//! - [`stop_inheriting_handles`]: so a process plxd starts gets only the handles it is given.
 //! - [`Job`]: the job object an agent CLI runs in.
 
 #![allow(unsafe_code)]
@@ -233,7 +233,7 @@ pub fn stop_inheriting_handles() {
         }
         if flags & HANDLE_FLAG_INHERIT != 0 {
             // SAFETY: `handle` is one of this process's open handles, and only its inherit flag
-            // changes, which nothing else in wispd relies on.
+            // changes, which nothing else in plxd relies on.
             unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
         }
         seen += 1;
