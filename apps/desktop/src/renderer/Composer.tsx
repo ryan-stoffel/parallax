@@ -225,6 +225,30 @@ function matchPaths(paths: readonly string[], query: string): string[] {
 /** The commands the composer's own controls take, which no CLI gets (PLX-359). */
 const ownCommands = new Set(["model", "effort", "fast", "permissions"]);
 
+// Each CLI's commands by host, backend, and folder, kept while the app runs, so reopening a thread
+// doesn't start its CLI again. A failed fetch isn't kept, so the next `/` asks again.
+const commandLists = new Map<string, Promise<AgentCommand[]>>();
+
+/** The commands `agent/commands` lists for a thread on `backend`, once per host and folder. */
+function listCommands(
+  hostId: string,
+  backend: string,
+  repo: string | undefined,
+  runId: string | undefined,
+): Promise<AgentCommand[]> {
+  const key = `${hostId}/${backend}/${runId ?? repo ?? ""}`;
+  let list = commandLists.get(key);
+  if (!list) {
+    list = window.parallax.request(hostId, "agent/commands", { backend, repo, runId }).then((r) => {
+      if ("result" in r) return r.result.commands;
+      commandLists.delete(key);
+      return [];
+    });
+    commandLists.set(key, list);
+  }
+  return list;
+}
+
 /** A row of the `/` or `@` menu. */
 interface MenuEntry {
   key: string;
@@ -311,7 +335,8 @@ export interface ComposerProps {
   /**
    * Where the `/` and `@` menus' lists come from, on a plxd with `composerMenus`: the host, and
    * the thread's run or repo entry, whose folder they're read in. The commands are the CLI's that
-   * the message goes to; the files need a run or repo. Absent: no menus.
+   * the message goes to, fetched on the first `/` and kept while the app runs; the files need a run
+   * or repo, and are fetched on the first `@`. Absent: no menus.
    */
   menus?: { hostId: string; repo?: string; runId?: string };
 }
@@ -432,34 +457,42 @@ export function Composer({
   const [trigger, setTrigger] = useState<Trigger>();
   const [closedAt, setClosedAt] = useState<number>();
   const [active, setActive] = useState(0);
-  const [commands, setCommands] = useState<AgentCommand[]>([]);
-  const [paths, setPaths] = useState<string[]>([]);
+  // Each list with what it was fetched for, so a list for another backend or folder isn't shown.
+  const [commands, setCommands] = useState<{ key: string; list: AgentCommand[] }>();
+  const [paths, setPaths] = useState<{ key: string; list: string[] }>();
   const controls = useRef<HTMLFieldSetElement>(null);
   const menuId = useId();
   const { hostId, repo, runId } = menus ?? {};
-  // Once per backend the message goes to, and once for the files.
+  const folder = runId ?? repo ?? "";
+  const commandsKey =
+    hostId === undefined || target === undefined ? undefined : `${hostId}/${target}/${folder}`;
+  const pathsKey = hostId === undefined || !folder ? undefined : `${hostId}/${folder}`;
+  // Fetched on the first `/` or `@`, not before: listing commands starts the CLI.
+  const wantsCommands = trigger?.kind === "/" && commandsKey !== undefined;
+  const wantsPaths = trigger?.kind === "@" && pathsKey !== undefined;
   useEffect(() => {
-    setCommands([]);
-    if (hostId === undefined || target === undefined) return;
+    if (!wantsCommands || hostId === undefined || target === undefined) return;
     let live = true;
-    void window.parallax
-      .request(hostId, "agent/commands", { backend: target, repo, runId })
-      .then((r) => live && "result" in r && setCommands(r.result.commands));
+    void listCommands(hostId, target, repo, runId).then(
+      (list) => live && setCommands({ key: commandsKey, list }),
+    );
     return () => {
       live = false;
     };
-  }, [hostId, repo, runId, target]);
+  }, [wantsCommands, commandsKey, hostId, target, repo, runId]);
+  const hasPaths = paths?.key === pathsKey;
   useEffect(() => {
-    setPaths([]);
-    if (hostId === undefined || (repo === undefined && runId === undefined)) return;
+    if (!wantsPaths || hasPaths || hostId === undefined) return;
     let live = true;
     void window.parallax
       .request(hostId, "repo/files", { repo, runId })
-      .then((r) => live && "result" in r && setPaths(r.result.files));
+      .then((r) => live && setPaths({ key: pathsKey, list: "result" in r ? r.result.files : [] }));
     return () => {
       live = false;
     };
-  }, [hostId, repo, runId]);
+  }, [wantsPaths, hasPaths, pathsKey, hostId, repo, runId]);
+  const loadedCommands = commands && commands.key === commandsKey ? commands.list : undefined;
+  const loadedPaths = paths && hasPaths ? paths.list : undefined;
 
   // Puts `text` where the trigger is, as typed text, which Markdown leaves alone.
   const replaceTrigger = (at: Trigger, text: string) =>
@@ -510,7 +543,7 @@ export function Composer({
         },
       })),
       ...byName(
-        commands.filter((c) => !ownCommands.has(c.name)),
+        (loadedCommands ?? []).filter((c) => !ownCommands.has(c.name)),
         trigger.query,
         (c) => c.name,
       ).map((c, i) => ({
@@ -523,12 +556,18 @@ export function Composer({
       })),
     ];
   else if (trigger?.kind === "@")
-    entries = matchPaths(paths, trigger.query).map((path) => ({
+    entries = matchPaths(loadedPaths ?? [], trigger.query).map((path) => ({
       key: path,
       label: path,
       pick: () => replaceTrigger(trigger, `@${path} `),
     }));
-  const menuOpen = !!menus && !!trigger && trigger.from !== closedAt && entries.length > 0;
+  // What the menu still waits for, shown as a row of its own.
+  const loading =
+    (wantsCommands && !loadedCommands && "Loading commands…") ||
+    (wantsPaths && !loadedPaths && "Loading files…") ||
+    undefined;
+  const menuOpen =
+    !!menus && !!trigger && trigger.from !== closedAt && (entries.length > 0 || !!loading);
   const highlighted = Math.min(active, entries.length - 1);
   useEffect(() => {
     document.getElementById(`${menuId}-${highlighted}`)?.scrollIntoView?.({ block: "nearest" });
@@ -630,10 +669,11 @@ export function Composer({
         "aria-placeholder": placeholder,
         "aria-autocomplete": "list",
         "aria-expanded": String(menuOpen),
-        ...(menuOpen && {
-          "aria-controls": menuId,
-          "aria-activedescendant": `${menuId}-${highlighted}`,
-        }),
+        ...(menuOpen &&
+          entries.length > 0 && {
+            "aria-controls": menuId,
+            "aria-activedescendant": `${menuId}-${highlighted}`,
+          }),
         // It grows from three rows up to the cap, then scrolls. Its parent is anchored below it,
         // so it grows upward.
         class:
@@ -643,9 +683,11 @@ export function Composer({
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
         if (menuOpen && plain && !event.isComposing) {
           const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-          if (step) setActive((highlighted + step + entries.length) % entries.length);
+          if (event.key === "Escape") setClosedAt(trigger.from);
+          // Only a loading row: the keys do what they do without a menu.
+          else if (entries.length === 0) return false;
+          else if (step) setActive((highlighted + step + entries.length) % entries.length);
           else if (event.key === "Enter" || event.key === "Tab") entries[highlighted]!.pick();
-          else if (event.key === "Escape") setClosedAt(trigger.from);
           else return false;
           return true;
         }
@@ -807,6 +849,11 @@ export function Composer({
                 )}
               </div>
             ))}
+            {loading && (
+              <p role="status" className="px-2 py-1.5 text-[12px] text-faint-foreground">
+                {loading}
+              </p>
+            )}
           </div>
         )}
         {(images.length > 0 || imageError) && (

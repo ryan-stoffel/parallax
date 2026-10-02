@@ -87,7 +87,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 
@@ -465,13 +465,12 @@ impl Backend for CodexBackend {
     /// `codex app-server` on the default login, asked for `skills/list` ([`commands::codex`]).
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
         let spec = app_server::spec(&self.launcher, cwd, None);
-        let request = |id: u64, method: &str, params: Value| json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         Ok(Some(CommandsProbe {
             process: self.launcher.spawn(&spec)?,
             input: vec![
-                request(1, "initialize", app_server::initialize_params()),
+                commands::request(1, "initialize", &app_server::initialize_params()),
                 json!({"jsonrpc": "2.0", "method": "initialized"}),
-                request(commands::LIST_ID, "skills/list", json!({"cwds": [cwd]})),
+                commands::request(commands::LIST_ID, "skills/list", &json!({"cwds": [cwd]})),
             ],
             parse: commands::codex,
         }))

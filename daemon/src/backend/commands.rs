@@ -7,8 +7,8 @@
 //!
 //! - **Claude Code**: `claude -p` in stream-json, and an `initialize` control request, whose
 //!   `control_response` lists every command headless Claude Code takes, skills and plugins'
-//!   included. The user's `SessionStart` hooks run first. `clear` is left out, since it would
-//!   start a session plxd doesn't track. MCP prompts, which a later `commands_changed` adds,
+//!   included. The user's `SessionStart` hooks run first. `clear` and the commands only
+//!   Anthropic's server-launched sessions run are left out. MCP prompts, which a later `commands_changed` adds,
 //!   aren't listed.
 //! - **Codex**: `codex app-server`, `initialize`, `initialized`, and `skills/list` for the folder:
 //!   the enabled skills, which a `$name` in a message loads. Codex's own slash commands belong
@@ -80,7 +80,7 @@ pub async fn list(mut probe: CommandsProbe, limit: Duration) -> Result<Vec<Agent
         .unwrap_or_else(|_| Err(format!("it didn't list them within {limit:?}")))
 }
 
-/// Claude Code's answer to `initialize`: every command but `clear`.
+/// Claude Code's answer to `initialize`: every command it [`shown`].
 #[must_use]
 pub fn claude(message: &Value) -> Parsed {
     if message["type"] != "control_response" {
@@ -93,9 +93,22 @@ pub fn claude(message: &Value) -> Parsed {
     let commands = response.pointer("/response/commands")?.as_array()?;
     Some(Ok(commands
         .iter()
-        .filter(|c| c["name"] != "clear")
+        .filter(|c| c["name"].as_str().is_some_and(shown))
         .filter_map(|c| command("/", c))
         .collect()))
+}
+
+/// Whether a Claude Code command belongs in the menu: not `clear`, which would start a session
+/// plxd doesn't track, and not one only Anthropic's own server-launched sessions run (`__` names,
+/// `workflow-launch-exec`).
+fn shown(name: &str) -> bool {
+    name != "clear" && name != "workflow-launch-exec" && !name.starts_with("__")
+}
+
+/// One JSON-RPC request, for Codex's and Cursor's input.
+#[must_use]
+pub fn request(id: u64, method: &str, params: &Value) -> Value {
+    serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 }
 
 /// Codex's answer to `skills/list`: the enabled skills.
@@ -154,8 +167,6 @@ fn text(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use parallax_protocol::AgentCommand;
     use serde_json::Value;
 
@@ -174,8 +185,9 @@ mod tests {
     }
 
     #[test]
-    fn claude_lists_its_initialize_answer_without_clear() {
+    fn claude_lists_its_initialize_answer_without_clear_or_internal_commands() {
         let commands = first(include_str!("commands/fixtures/claude.jsonl"), claude).unwrap();
+        // The fixture also has `clear`, `__remote-workflow`, and `workflow-launch-exec`.
         assert_eq!(
             texts(&commands),
             [
@@ -222,6 +234,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn list_writes_the_input_and_reads_the_answer() {
+        use std::time::Duration;
+
         use super::{CommandsProbe, list};
         use crate::backend::process::{Environment, Launcher, ProcessSpec, StdinMode};
         use crate::paths::DataDir;

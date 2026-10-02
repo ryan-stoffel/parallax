@@ -221,15 +221,14 @@ impl Backend for CursorBackend {
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
         let mut spec = self.spec(cwd);
         spec.args = vec!["acp".into()];
-        let request = |id: u64, method: &str, params: Value| json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         Ok(Some(CommandsProbe {
             process: self.launcher.spawn(&spec)?,
             input: vec![
-                request(1, "initialize", initialize_params()),
-                request(
+                commands::request(1, "initialize", &initialize_params()),
+                commands::request(
                     commands::LIST_ID,
                     "session/new",
-                    json!({"cwd": cwd, "mcpServers": []}),
+                    &json!({"cwd": cwd, "mcpServers": []}),
                 ),
             ],
             parse: commands::cursor,
