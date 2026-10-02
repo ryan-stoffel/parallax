@@ -10,6 +10,7 @@ import {
   waitingApprovals,
   workedFor,
   type Item,
+  type Work,
 } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
@@ -224,6 +225,42 @@ test("messages split work rows and stay in order; a mid-run notice folds, and a 
 
   // A turn that ends on a tool ends with its last item, not the next turn's message.
   expect(groupWork([rows[3]!, rows[6]!])[0]).toMatchObject({ endedAt: at(10) });
+});
+
+test("a finished turn folds its interim messages and answered requests, leaving its last message", () => {
+  const at = (n: number) => `2026-01-01T00:00:${String(n).padStart(2, "0")}Z`;
+  const turn = [
+    { kind: "user", key: "u", text: "go", at: at(0) },
+    { kind: "assistant", key: "a1", text: "Picking a change.", at: at(1) },
+    { kind: "approval", key: "p", request: { toolName: "Bash" }, resolved: {}, at: at(2) },
+    { kind: "tool", key: "t", callId: "1", name: "Bash", at: at(3) },
+    { kind: "assistant", key: "a2", text: "Opened the PR.", at: at(9) },
+  ] as Item[];
+  const end = { kind: "end", key: "e", outcome: { status: "completed" }, at: at(10) } as Item;
+
+  const done = groupWork([...turn, end]);
+  expect(done.map((r) => r.key)).toEqual(["u", "work:a1", "a2", "e"]);
+  expect(done[1]).toMatchObject({ startedAt: at(1), endedAt: at(9) });
+  expect((done[1] as Work).items.map((i) => i.key)).toEqual(["a1", "p", "t"]);
+
+  // Still going: messages and requests split the work, as before.
+  expect(groupWork(turn).map((r) => r.key)).toEqual(["u", "a1", "p", "work:t", "a2"]);
+
+  // A follow-up runs in the same process, whose one end closes both turns.
+  const followUp = [
+    { kind: "user", key: "u2", text: "more", at: at(11) },
+    { kind: "assistant", key: "b1", text: "On it.", at: at(12) },
+    { kind: "assistant", key: "b2", text: "Done.", at: at(13) },
+  ] as Item[];
+  expect(groupWork([...turn, ...followUp, end]).map((r) => r.key)).toEqual([
+    "u",
+    "work:a1",
+    "a2",
+    "u2",
+    "work:b1",
+    "b2",
+    "e",
+  ]);
 });
 
 test("a coordinator's plxd tool that names a subagent gets its prompt's first line from an earlier answer", () => {
