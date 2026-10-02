@@ -481,20 +481,22 @@ async fn probe_github(launcher: &Launcher, timeout: Duration) -> GithubStatus {
         spec.inject.set("GH_PROMPT_DISABLED", "1");
         spec
     };
-    let (version_spec, auth_spec) = (
-        gh(&["--version"]),
-        // `--active`: a stale second account shouldn't read as signed out.
-        gh(&["auth", "status", "--active", "--hostname", "github.com"]),
-    );
-    let (version, auth) = tokio::join!(
-        run_spec(launcher, &version_spec, timeout),
-        run_spec(launcher, &auth_spec, timeout),
-    );
-    match version {
+    match run_spec(launcher, &gh(&["--version"]), timeout).await {
         Ok(ran) => status.version = gh_version(&ran.stdout),
         Err(note) => status.note = Some(note),
     }
-    match auth {
+    // `--active` (gh 2.57.0 and later) checks only the active account, so a stale second one
+    // doesn't read as signed out. Older gh refuses the flag.
+    let parse = crate::backend::claude::parse_version;
+    let active = status
+        .version
+        .as_deref()
+        .is_some_and(|v| parse(v) >= parse("2.57.0"));
+    let mut args = vec!["auth", "status", "--hostname", "github.com"];
+    if active {
+        args.push("--active");
+    }
+    match run_spec(launcher, &gh(&args), timeout).await {
         Ok(ran) => {
             status.signed_in = exit_code_signed_in(ran.exit_code);
             if status.signed_in == Some(true) {

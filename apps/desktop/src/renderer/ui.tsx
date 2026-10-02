@@ -40,6 +40,18 @@ export function appShortcut(e: KeyPress): Command | "row" | undefined {
   return keybinding ? commandOf(keybinding) : undefined;
 }
 
+/**
+ * Whether a press in a terminal is the app's alone. On macOS every app shortcut is. Elsewhere,
+ * where they're Ctrl, a plain Ctrl+letter one (Ctrl+N, Ctrl+S) stays the shell's, which readline
+ * and editors use; the terminal's toggle, Ctrl+1 to Ctrl+9, and any with Shift or Alt are the app's.
+ */
+export function terminalAppShortcut(e: KeyPress): boolean {
+  const command = appShortcut(e);
+  if (command === undefined) return false;
+  const mac = window.parallax.platform === "darwin";
+  return mac || command === "terminal" || command === "row" || e.shiftKey || e.altKey;
+}
+
 /** The 0-based row Mod+1 to Mod+9 picks, from the digit `e` presses with Mod and nothing else. */
 export function rowShortcut(e: KeyPress): number | undefined {
   const digit = /^Digit([1-9])$/.exec(e.code)?.[1];

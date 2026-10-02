@@ -5,7 +5,9 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import type { TerminalTarget } from "../preload/bridge";
-import { appShortcut } from "./ui";
+import { terminalAppShortcut } from "./ui";
+
+const mac = () => window.parallax.platform === "darwin";
 
 /**
  * An xterm.js terminal showing main's terminal `id`, which it opens on `target` when it mounts and
@@ -66,12 +68,13 @@ export function TerminalView({
     term.loadAddon(fit);
     // Links go to main, which opens https ones in the browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri)));
-    // The app's shortcuts (keybindings.ts) reach only the app, never the shell too. Outside
-    // macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac.
+    // The app's shortcuts reach only the app, but plain Ctrl+letter ones outside macOS, which stay
+    // the shell's (`terminalAppShortcut`). Outside macOS, Ctrl+V pastes and Ctrl+C copies a
+    // selection, as Cmd does on a Mac.
     term.attachCustomKeyEventHandler(
       (e) =>
-        appShortcut(e) === undefined &&
-        (window.parallax.platform === "darwin" ||
+        !terminalAppShortcut(e) &&
+        (mac() ||
           e.type !== "keydown" ||
           !e.ctrlKey ||
           !(e.key === "v" || (e.key === "c" && term.hasSelection()))),

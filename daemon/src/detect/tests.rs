@@ -461,3 +461,20 @@ fn gh_account_reads_the_pre_2_40_wording() {
         None
     );
 }
+
+#[tokio::test]
+async fn an_older_gh_is_asked_without_active_which_it_refuses() {
+    let fixture = Fixture::new();
+    fixture.install("gh", FAKE_GH);
+    let mut env = fixture.env();
+    env.set("FAKE_GH_VERSION", "2.45.0");
+    env.set(
+        "FAKE_CLI_STDOUT",
+        "github.com\n  ✓ Logged in to github.com account octocat (keyring)\n",
+    );
+    let detector = CliDetector::new(fixture.launcher(env), Duration::from_secs(2));
+    let gh = detector.github().await;
+    assert_eq!(gh.version.as_deref(), Some("2.45.0"));
+    assert_eq!(gh.signed_in, Some(true), "{gh:?}");
+    assert_eq!(gh.account.as_deref(), Some("octocat"));
+}
