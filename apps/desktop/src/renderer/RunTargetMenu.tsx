@@ -4,7 +4,10 @@ import { useId, useState, type ToggleEvent } from "react";
 import { localId, type Host } from "./hosts";
 import { MenuOption, menuButton, menuHeading, menuPanel, moveFocus, type PickerOption } from "./ui";
 
-const workspaces: PickerOption[] = [
+/** Where a new thread works: a worktree of its own, or the repository's own checkout. */
+export type Workspace = "worktree" | "checkout";
+
+const workspaces: (PickerOption & { value: Workspace })[] = [
   {
     value: "worktree",
     label: "New worktree",
@@ -24,13 +27,26 @@ export const hostIcon = (host: Host) => (host.destination ? <Server /> : <Laptop
 
 /**
  * Where a thread runs: which of Parallax's computers, and in a new worktree or the current checkout.
- * The menu stays open while you pick both. A placeholder: nothing here is sent yet, and plxd
- * starts every thread in a new worktree on the computer that got the request.
+ * The menu stays open while you pick both. The workspace is the caller's, which sends it with the
+ * thread; `checkoutUnavailable`, when set, says why Current checkout can't be picked. The computer
+ * is a placeholder: nothing here sends it yet, and the thread starts on the computer that got the
+ * request.
  */
-export function RunTargetMenu({ hosts, hostId }: { hosts: Host[]; hostId: string }) {
+export function RunTargetMenu({
+  hosts,
+  hostId,
+  workspace: workspaceChoice,
+  onWorkspaceChange,
+  checkoutUnavailable,
+}: {
+  hosts: Host[];
+  hostId: string;
+  workspace: Workspace;
+  onWorkspaceChange: (workspace: Workspace) => void;
+  checkoutUnavailable?: string;
+}) {
   const id = useId();
   const [hostChoice, setHostChoice] = useState(hostId);
-  const [workspaceChoice, setWorkspaceChoice] = useState("worktree");
   const host = hosts.find((h) => h.id === hostChoice) ?? hosts[0]!;
   const workspace = workspaces.find((w) => w.value === workspaceChoice)!;
   return (
@@ -90,14 +106,18 @@ export function RunTargetMenu({ hosts, hostId }: { hosts: Host[]; hostId: string
           <p aria-hidden className={menuHeading}>
             Workspace
           </p>
-          {workspaces.map((w) => (
-            <MenuOption
-              key={w.value}
-              option={w}
-              checked={w === workspace}
-              onClick={() => setWorkspaceChoice(w.value)}
-            />
-          ))}
+          {workspaces.map((w) => {
+            const unavailable = w.value === "checkout" ? checkoutUnavailable : undefined;
+            return (
+              <MenuOption
+                key={w.value}
+                option={unavailable ? { ...w, hint: unavailable } : w}
+                checked={w === workspace}
+                disabled={!!unavailable}
+                onClick={() => onWorkspaceChange(w.value)}
+              />
+            );
+          })}
         </div>
       </div>
     </>

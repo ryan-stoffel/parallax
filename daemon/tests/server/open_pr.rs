@@ -141,6 +141,7 @@ fn thread(repo: Option<RepoId>) -> ThreadStartParams {
         branch_slug: None,
         images: Vec::new(),
         approvals: false,
+        checkout: false,
     }
 }
 

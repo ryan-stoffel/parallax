@@ -61,6 +61,7 @@ pub(crate) async fn start(
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
         approvals,
+        checkout: false,
     };
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
         return Ok(run);

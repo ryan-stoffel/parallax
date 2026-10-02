@@ -1343,6 +1343,12 @@ export type AgentRun = {
 	 */
 	approvals?: boolean,
 	/**
+	 * True for a thread started with `checkout`: it works in its repository's own checkout, so it
+	 * has no `branch`, `worktreePath`, or `diff`, and its changes are left uncommitted there.
+	 * Absent means false.
+	 */
+	checkout?: boolean,
+	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -2485,6 +2491,13 @@ export type ThreadStartParams = {
 	 * Forward the agent's permission requests to the client, as `agent/start` takes it.
 	 */
 	approvals?: boolean,
+	/**
+	 * Work in the repo entry's own checkout, on whatever branch it has out, instead of in a new
+	 * worktree: the agent's changes land there, uncommitted, and `branchSlug` is ignored. Needs a
+	 * `repo`. Behind the `checkout` capability, since an older plxd would silently ignore it and
+	 * make a worktree.
+	 */
+	checkout?: boolean,
 };
 
 /**

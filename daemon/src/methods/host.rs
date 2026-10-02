@@ -92,6 +92,8 @@ pub(crate) fn initialize(
 /// of denying what would prompt.
 /// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
 /// and `project/create`, which an older plxd would silently drop.
+/// `checkout`: `thread/start` takes `checkout`, to work in the repo's own checkout instead of a
+/// new worktree, and `AgentRun` reports it; an older plxd would silently make a worktree.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -104,6 +106,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agentReview".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
         ("approvals".to_owned(), serde_json::Map::new()),
+        ("checkout".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),

@@ -178,7 +178,8 @@ impl Store {
 
     /// Records a normal thread in repo entry `repo_id`, with its run and the run's worktree, in
     /// one transaction, so none exists without the others. The run's `project_id` must be
-    /// `repo_id`.
+    /// `repo_id`. A run in the repository's own checkout ([`RunFields::checkout`]) has no
+    /// worktree, so `worktree` is `None` for it.
     ///
     /// # Errors
     ///
@@ -190,12 +191,14 @@ impl Store {
         repo_id: Uuid,
         fields: &RunFields,
         state: &RunState,
-        worktree: &WorktreeFields,
-    ) -> Result<(Thread, Run, Worktree), StoreError> {
+        worktree: Option<&WorktreeFields>,
+    ) -> Result<(Thread, Run, Option<Worktree>), StoreError> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let worktree = insert_worktree(&tx, id, worktree)?;
+        let worktree = worktree
+            .map(|worktree| insert_worktree(&tx, id, worktree))
+            .transpose()?;
         let run = insert_run(&tx, id, fields, state)?;
         let inserted = tx.execute(
             "INSERT INTO threads (id, repo_id, archived, created_at) VALUES (?1, ?2, 0, ?3)

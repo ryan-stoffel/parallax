@@ -30,6 +30,7 @@ fn run_fields(repo: Uuid) -> RunFields {
         effort: None,
         permission: None,
         approvals: false,
+        checkout: false,
     }
 }
 
@@ -120,14 +121,14 @@ fn a_thread_is_recorded_with_its_run_and_worktree_and_archives() {
             repo.id,
             &run_fields(repo.id),
             &state(),
-            &worktree_fields(id),
+            Some(&worktree_fields(id)),
         )
         .unwrap();
     assert_eq!(thread.id, id);
     assert_eq!(thread.repo_id, repo.id);
     assert!(!thread.archived);
     assert_eq!(run.fields.project_id, repo.id);
-    assert_eq!(worktree.id, id);
+    assert_eq!(worktree.unwrap().id, id);
     assert_eq!(store.list_runs(Some(repo.id)).unwrap(), vec![run]);
 
     let duplicate = store
@@ -136,7 +137,7 @@ fn a_thread_is_recorded_with_its_run_and_worktree_and_archives() {
             repo.id,
             &run_fields(repo.id),
             &state(),
-            &worktree_fields(id),
+            Some(&worktree_fields(id)),
         )
         .unwrap_err();
     assert!(matches!(duplicate, StoreError::IdConflict { .. }));
@@ -154,6 +155,30 @@ fn a_thread_is_recorded_with_its_run_and_worktree_and_archives() {
 }
 
 #[test]
+fn a_thread_in_the_current_checkout_is_recorded_with_no_worktree() {
+    let (_dir, mut store) = open();
+    let repo = store
+        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
+        .unwrap();
+    let id = Uuid::now_v7();
+    let fields = RunFields {
+        checkout: true,
+        ..run_fields(repo.id)
+    };
+    let (thread, run, worktree) = store
+        .create_thread_run(id, repo.id, &fields, &state(), None)
+        .unwrap();
+    assert_eq!(thread.id, id);
+    assert!(run.fields.checkout);
+    assert_eq!(worktree, None);
+    assert_eq!(store.get_worktree(id).unwrap(), None);
+    assert_eq!(store.get_run(id).unwrap(), Some(run));
+
+    assert!(store.delete_thread(id).unwrap());
+    assert_eq!(store.get_run(id).unwrap(), None);
+}
+
+#[test]
 fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     let (_dir, mut store) = open();
     let repo = store
@@ -167,7 +192,7 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
                 repo.id,
                 &run_fields(repo.id),
                 &state(),
-                &worktree_fields(id),
+                Some(&worktree_fields(id)),
             )
             .unwrap();
     }

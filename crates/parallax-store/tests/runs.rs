@@ -22,6 +22,7 @@ fn fields(project_id: Uuid) -> RunFields {
         effort: Some("high".to_owned()),
         permission: None,
         approvals: false,
+        checkout: false,
     }
 }
 
@@ -74,6 +75,23 @@ fn a_run_keeps_whether_it_forwards_permission_requests() {
         .unwrap();
     assert!(store.get_run(asking).unwrap().unwrap().fields.approvals);
     assert!(!store.get_run(quiet).unwrap().unwrap().fields.approvals);
+}
+
+/// A thread in the repository's own checkout keeps that, for every launch.
+#[test]
+fn a_run_keeps_whether_it_works_in_the_current_checkout() {
+    let (_dir, store) = open();
+    let (project, checkout, worktree) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let in_place = RunFields {
+        checkout: true,
+        ..fields(project)
+    };
+    store.create_run(checkout, &in_place, &starting()).unwrap();
+    store
+        .create_run(worktree, &fields(project), &starting())
+        .unwrap();
+    assert!(store.get_run(checkout).unwrap().unwrap().fields.checkout);
+    assert!(!store.get_run(worktree).unwrap().unwrap().fields.checkout);
 }
 
 #[test]

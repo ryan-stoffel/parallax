@@ -367,3 +367,50 @@ test("renames the project and picks its icon from its row, and both outlive a re
     { name: "ember app", icon: { name: "rocket", color: "green" } },
   ]);
 });
+
+test("starts a thread in the repository's current checkout, on its branch, with no worktree", async () => {
+  const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "quill");
+  mkdirSync(repo);
+  execFileSync("git", ["init", "-q", "--initial-branch=my-feature", repo]);
+  const identity = ["-c", "user.name=parallax", "-c", "user.email=parallax@localhost"];
+  execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  const params = { id: uuidv7(), path: repo };
+  const added = (await page.evaluate(
+    `window.parallax.request("local", "repo/add", ${JSON.stringify(params)})`,
+  )) as { result: { repo: { id: string } } };
+  expect(added).not.toHaveProperty("error");
+
+  await page.getByRole("button", { name: "quill", exact: true }).hover();
+  await page.getByRole("button", { name: "New thread in quill" }).click();
+  // The heading's accessible name spaces out the repository button inside it, so match its text.
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "What should we build in quill?",
+  );
+  await page.getByRole("button", { name: /^Runs on: .*, New worktree$/ }).click();
+  await page.getByRole("menuitemradio", { name: /^Current checkout/ }).click();
+  await expect(page.getByRole("button", { name: /^Runs on: .*, Current checkout$/ })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("current-checkout-picked.png") });
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("textbox", { name: "Message" }).fill("Tidy up the docs");
+  await page.getByRole("button", { name: "Send" }).click();
+  const transcript = page.getByRole("log", { name: "Transcript" });
+  await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
+  await expect(page.getByText("Current checkout", { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("current-checkout-thread.png") });
+
+  const listed = (await page.evaluate(
+    `window.parallax.request("local", "agent/list", { project: "${added.result.repo.id}" })`,
+  )) as { result: { runs: { checkout?: boolean; branch?: string; worktreePath?: string }[] } };
+  expect(listed.result.runs).toHaveLength(1);
+  expect(listed.result.runs[0]).toMatchObject({ checkout: true });
+  expect(listed.result.runs[0]).not.toHaveProperty("worktreePath");
+  expect(listed.result.runs[0]).not.toHaveProperty("branch");
+  expect(git("worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
+  expect(git("branch", "--show-current")).toBe("my-feature");
+
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(transcript.getByText("Stopped")).toBeVisible();
+});

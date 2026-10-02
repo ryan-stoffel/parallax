@@ -27,6 +27,10 @@ pub struct RunFields {
     /// Whether the run forwards its CLI's permission requests to the client (RYA-222, decision
     /// 0031). Fixed when the run is created.
     pub approvals: bool,
+    /// Whether the run works in its repository's own checkout, on the branch the user has out,
+    /// rather than in a worktree of its own. Such a run has no worktree row. Fixed when the run is
+    /// created.
+    pub checkout: bool,
 }
 
 /// A run's state, which changes as it runs.
@@ -75,7 +79,7 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
-                       approvals";
+                       approvals, checkout";
 
 struct RawRun {
     id: String,
@@ -103,6 +107,7 @@ struct RawRun {
     effort: Option<String>,
     permission: Option<String>,
     approvals: bool,
+    checkout: bool,
 }
 
 impl RawRun {
@@ -133,6 +138,7 @@ impl RawRun {
             effort: row.get(22)?,
             permission: row.get(23)?,
             approvals: row.get(24)?,
+            checkout: row.get(25)?,
         })
     }
 
@@ -168,6 +174,7 @@ impl RawRun {
                 effort: self.effort,
                 permission: self.permission,
                 approvals: self.approvals,
+                checkout: self.checkout,
             },
             state: RunState {
                 status: self.status,
@@ -362,9 +369,9 @@ pub(crate) fn insert_run(
         "INSERT INTO runs (id, project_id, prompt, requested_account, policy, backend,
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
-                           coordinator_thread, model, effort, permission, approvals)
+                           coordinator_thread, model, effort, permission, approvals, checkout)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
-                 ?17, ?18, ?19, ?20)
+                 ?17, ?18, ?19, ?20, ?21)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -387,6 +394,7 @@ pub(crate) fn insert_run(
             fields.effort,
             fields.permission,
             fields.approvals,
+            fields.checkout,
         ],
     )?;
     if inserted == 0 {

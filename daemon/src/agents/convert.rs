@@ -124,6 +124,7 @@ pub(crate) fn agent_run(
         effort: row.fields.effort.as_deref().and_then(option_value),
         permission: row.fields.permission.as_deref().and_then(option_value),
         approvals: row.fields.approvals,
+        checkout: row.fields.checkout,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })

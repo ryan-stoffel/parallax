@@ -13,6 +13,9 @@
 //! the project's repository (RYA-171) with plxd's tools and no sandbox, that worktree is checked
 //! after every turn (0004), it is never committed, and runs it started wake it when they finish
 //! (RYA-42, [`super::wake`]).
+//!
+//! A thread in its repository's own checkout has no worktree: every launch, a resume included,
+//! starts in the checkout, and it is never committed either.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -860,7 +863,7 @@ impl Actor {
         } else {
             Role::Worker
         };
-        let (prepared, _) =
+        let (prepared, repo_path) =
             match prepare(&self.daemon, self.project, self.id, Some(account), role).await {
                 Ok(prepared) => prepared,
                 Err(error)
@@ -916,10 +919,11 @@ impl Actor {
             session_id,
             usage_totals: totals.into_iter().map(model_usage).collect(),
         };
+        let paths = self.checkout_paths(&repo_path).await?;
         info!(run = %self.id, "resuming an agent run's session");
         let message = text.clone();
         if self
-            .launch(prepared, text, images, Some(turn_id), Some(resume), None)
+            .launch(prepared, text, images, Some(turn_id), Some(resume), paths)
             .await
         {
             // Only a turn that reached a CLI counts as sent: a retry after a failed start
@@ -1124,6 +1128,20 @@ impl Actor {
         Ok((temp, path))
     }
 
+    /// For a thread in its repository's own checkout, the paths it starts in: `repo_path`'s.
+    /// `None` for any other run, whose worktree [`Self::worker_paths`] finds.
+    async fn checkout_paths(
+        &self,
+        repo_path: &str,
+    ) -> Result<Option<(PathBuf, PathBuf)>, ErrorObject> {
+        if !self.row.fields.checkout {
+            return Ok(None);
+        }
+        super::checkout_paths(&self.daemon.agents, Path::new(repo_path))
+            .await
+            .map(Some)
+    }
+
     async fn worker_paths(&self) -> Result<(PathBuf, PathBuf), ErrorObject> {
         let Some(worktree) = &self.worktree else {
             return Err(super::run_accepted(self.id));
@@ -1287,7 +1305,8 @@ impl Actor {
             return;
         }
         let (mut outcome, mut status, mut error) = convert::outcome(outcome);
-        let committed = if self.is_coordinator() {
+        // A coordinator's worktree and a thread's checkout are never committed.
+        let committed = if self.is_coordinator() || self.row.fields.checkout {
             Ok(None)
         } else {
             self.commit().await
@@ -1576,6 +1595,7 @@ mod tests {
                 effort: None,
                 permission: None,
                 approvals: false,
+                checkout: false,
             },
             state: RunState {
                 status: "running".to_owned(),
