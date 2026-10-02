@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { CliKind } from "../protocol/generated/protocol";
-import { loginCommand, shellCommand } from "./terminal";
+import { loginCommand, shellCommand, terminalEnv } from "./terminal";
 
 const mini = { destination: "me@mini", ssh: "ssh" };
 
@@ -85,4 +85,12 @@ test("opens it on an SSH host after a cd, quoted for the host's shell", () => {
     ssh('cd /d "C:\\Users\\A B\\wt" && cmd'),
   );
   expect(shellCommand("/home/me/wt", mini, "win32").file).toBe("ssh.exe");
+});
+
+test("gives the terminal a UTF-8 LANG only when no locale is set", () => {
+  expect(terminalEnv({ HOME: "/Users/me" })).toEqual({ HOME: "/Users/me", LANG: "en_US.UTF-8" });
+  expect(terminalEnv({ LANG: "" })).toEqual({ LANG: "en_US.UTF-8" });
+  expect(terminalEnv({ LANG: "fr_FR.UTF-8" })).toEqual({ LANG: "fr_FR.UTF-8" });
+  expect(terminalEnv({ LC_CTYPE: "UTF-8" })).toEqual({ LC_CTYPE: "UTF-8" });
+  expect(terminalEnv({ LC_ALL: "C" })).toEqual({ LC_ALL: "C" });
 });
