@@ -6,15 +6,16 @@ import type { ThreadsState, ThreadsView } from "./threads";
 const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
 
 /**
- * A folder a terminal opens in, on a host: a thread's, or on New thread its repository's. `key`
- * names it across hosts, and a thread's ends its terminals when the thread is deleted.
+ * A folder a terminal opens in, on a host: a repository's checkout, or a No Repo thread's own.
+ * `key` names it across hosts, and a thread's ends its terminals when the thread is deleted.
  */
 export type ThreadFolder = { key: string; hostId: string; path: string; threadId?: string };
 
 /**
- * Thread `threadId`'s folder: its run's worktree, or its repository's checkout for a checkout
- * thread. Or with `repoId`, a repository's, for New thread. Undefined while there is none yet,
- * and for No Repo's New thread.
+ * Thread `threadId`'s folder: its repository's checkout, shared with the repository's other
+ * threads and New thread, never its worktree. A No Repo thread has its own scratch repository's,
+ * once its run made one. Or with `repoId`, a repository's, for New thread. Undefined while there
+ * is none yet, and for No Repo's New thread.
  */
 export function folderOf(
   hostId: string,
@@ -26,11 +27,10 @@ export function folderOf(
     return repo && { key: `${hostId}/new/${repo.id}`, hostId, path: repo.path };
   }
   const { threadId } = open;
-  const run = state.runs[threadId];
   const thread = state.threads.find((t) => t.id === threadId);
-  const path = run?.checkout
-    ? state.repos.find((r) => r.id === thread?.repo)?.path
-    : run?.worktreePath;
+  const repo = state.repos.find((r) => r.id === thread?.repo && !r.scratch);
+  if (repo) return folderOf(hostId, state, { repoId: repo.id });
+  const path = state.runs[threadId]?.worktreePath;
   return path === undefined ? undefined : { key: `${hostId}/${threadId}`, hostId, path, threadId };
 }
 
