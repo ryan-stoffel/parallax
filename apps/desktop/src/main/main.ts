@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell 
 import path from "node:path";
 
 import { THEME_PREFERENCES, type OpenTarget, type UpdateState } from "../preload/bridge";
+import { startAccount } from "./account";
 import {
   detectEditors,
   editorCommand,
@@ -222,6 +223,7 @@ void app.whenReady().then(() => {
   startHosts();
   // Under `pnpm dev`, Update follows develop, the nightly channel's branch (scripts/channels.mjs).
   if (!updater) process.send?.({ channel: "nightly" });
+  startAccount();
   // The end-to-end tests launch the app on CI machines, where a 490 MB download isn't wanted.
   if (!process.env["PLX_NO_NAMER"]) namer.warm();
   createWindow();

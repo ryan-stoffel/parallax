@@ -47,7 +47,7 @@ export type Selection =
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
 
-export type SettingsSection = "general" | "hosts" | "providers";
+export type SettingsSection = "account" | "general" | "hosts" | "providers";
 
 /**
  * The app frame: sidebar, then the chat or Settings, then the side panel.

@@ -103,6 +103,7 @@ beforeEach(() => {
     }),
   };
   window.parallax = {
+    onProfile: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async (hostId) =>

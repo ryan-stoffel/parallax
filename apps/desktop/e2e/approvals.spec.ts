@@ -24,7 +24,9 @@ test.afterAll(() => close(launched));
 
 test("answers a thread's permission requests from the card over the composer, and keeps them as lines", async () => {
   const { page } = launched;
-  await expect(page.getByRole("status").filter({ hasText: "Connected · plxd" })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(`window.parallax.connectionState("local").then((s) => s.status)`))
+    .toBe("connected");
   // As in app.spec.ts: the fake's account runs threads once it's the default.
   const set = await page.evaluate(`window.parallax.request("local", "accounts/defaults/set", {
     role: "worker",
