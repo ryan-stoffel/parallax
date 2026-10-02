@@ -702,6 +702,33 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   expect(sendAgain()).toBeUndefined();
 });
 
+test("a follow-up Stop puts back in the box offers no Send again once plxd drops it", async () => {
+  const { request, emit } = fakeBridge(4);
+  await renderChat();
+  type("Also mention the tests.");
+  await act(async () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const { turnId } = send[2] as { turnId: string };
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  expect(composer().textContent).toBe("Also mention the tests.");
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "followUpDropped", turnId }] },
+    },
+  });
+  expect([...document.querySelectorAll("button")].some((b) => b.textContent === "Send again")).toBe(
+    false,
+  );
+});
+
 test("a message a finished run couldn't take goes back in the box, with no loader", async () => {
   const send = async (text: string) => {
     type(text);

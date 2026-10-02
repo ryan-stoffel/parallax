@@ -92,7 +92,9 @@ import {
 import { useAgentRun, type SentMessage } from "./useAgentRun";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
-type Row = Item | { kind: "pending"; key: string; text: string; images?: PromptImage[] };
+type Row =
+  | Item
+  | { kind: "pending"; key: string; text: string; images?: PromptImage[]; turnId?: string };
 /** What the list shows: a turn's activity is folded into one `Work` row, its plan apart. */
 type ViewRow = Row | Work | PlanRow | ProposedPlanRow;
 
@@ -274,6 +276,7 @@ export function AgentChat({
         key: `pending:${turnId}`,
         text,
         images,
+        turnId,
       }));
     const all = [...items, ...pending];
     if (all.length > 0 || !prompt) return all;
@@ -296,7 +299,7 @@ export function AgentChat({
   );
   // The latest prompt while nothing from the agent follows it, which Stop puts back in the box:
   // its text, and its images when they were sent from here.
-  const unanswered = useMemo<SentMessage | undefined>(() => {
+  const unanswered = useMemo<(SentMessage & { turnId?: string }) | undefined>(() => {
     const at = rows.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
     const row = rows[at];
     if ((row?.kind !== "user" && row?.kind !== "pending") || (row.kind === "user" && row.wake))
@@ -306,8 +309,16 @@ export function AgentChat({
     const mine = row.kind === "user" && row.turnId ? sent.get(row.turnId) : undefined;
     const text = row.text ?? mine?.text;
     if (text == null) return undefined;
-    return { text, images: (row.kind === "pending" ? row.images : mine?.images) ?? [] };
+    const images = (row.kind === "pending" ? row.images : mine?.images) ?? [];
+    return { text, images, turnId: row.turnId };
   }, [rows, sent]);
+  // A stopped prompt goes back in the box, so if plxd drops it, it offers no Send again too.
+  const stop = async () => {
+    const back = unanswered;
+    const failed = await cancel();
+    if (!failed && back?.turnId) setResent((prev) => new Set(prev).add(back.turnId!));
+    return failed;
+  };
 
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
@@ -417,7 +428,7 @@ export function AgentChat({
         <Composer
           onSend={sendText}
           history={history}
-          onStop={isRunning(run?.status) ? cancel : undefined}
+          onStop={isRunning(run?.status) ? stop : undefined}
           unanswered={unanswered}
           disabledReason={disabledReason}
           tab={
