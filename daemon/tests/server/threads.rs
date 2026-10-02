@@ -188,6 +188,7 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
         branch_slug: None,
         images: Vec::new(),
         approvals: false,
+        checkout: false,
     }
 }
 
@@ -430,6 +431,107 @@ async fn a_thread_runs_in_a_worktree_of_its_repo_entry_and_lists_under_it() {
     let threads = runs.list().await;
     assert_eq!(threads.repos, [repo]);
     assert_eq!(threads.threads, [started.thread]);
+}
+
+#[tokio::test]
+async fn a_thread_in_the_current_checkout_works_on_the_branch_the_user_has_out() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    git(&path, &["checkout", "-q", "-b", "my-feature"]);
+    let head = git(&path, &["rev-parse", "HEAD"]);
+    // The user's own uncommitted work, which the thread must neither commit nor lose.
+    std::fs::write(path.join("README.md"), "hello, edited by the user\n").unwrap();
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+
+    let params = ThreadStartParams {
+        checkout: true,
+        branch_slug: Some("not-used".to_owned()),
+        ..start_params(Some(repo.id), "Write some notes")
+    };
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    assert!(started.run.checkout);
+    assert_eq!(started.run.branch, None, "no branch of its own");
+    assert_eq!(started.run.worktree_path, None, "no worktree of its own");
+    let retried = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    assert_eq!(retried.thread, started.thread, "idempotent on the run id");
+    let in_worktree = ThreadStartParams {
+        checkout: false,
+        ..params.clone()
+    };
+    let conflict = client.call::<ThreadStart>(in_worktree).await.unwrap_err();
+    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
+
+    let events = runs.until(updated_to(AgentStatus::Completed)).await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.event, ParallaxEvent::AgentDiffReady { .. })),
+        "nothing is committed, so there is no diff"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("NOTES.md")).unwrap(),
+        "Written in a thread.\n",
+        "the change lands in the user's checkout"
+    );
+    assert_eq!(git(&path, &["branch", "--show-current"]), "my-feature");
+    assert_eq!(
+        git(&path, &["rev-parse", "HEAD"]),
+        head,
+        "nothing is committed"
+    );
+    assert_eq!(
+        git(&path, &["status", "--porcelain"]),
+        "M README.md\n?? NOTES.md",
+        "the user's own edit is kept, uncommitted, beside the thread's"
+    );
+    assert_eq!(
+        git(&path, &["worktree", "list", "--porcelain"])
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count(),
+        1,
+        "no worktree was made"
+    );
+    assert!(!host.data().join("worktrees").join("app").exists());
+    assert_eq!(git(&path, &["branch", "--list", "parallax/*"]), "");
+
+    // A message resumes it in the same checkout.
+    std::fs::remove_file(path.join("NOTES.md")).unwrap();
+    client
+        .call::<AgentSend>(message(params.run_id, "Write them again"))
+        .await
+        .unwrap();
+    runs.until(updated_to(AgentStatus::Completed)).await;
+    assert!(
+        path.join("NOTES.md").is_file(),
+        "the resumed run wrote here"
+    );
+    assert_eq!(git(&path, &["rev-parse", "HEAD"]), head);
+
+    // Deleting the thread leaves the checkout and its changes alone.
+    client.delete(params.run_id).await.unwrap();
+    assert!(path.join("NOTES.md").is_file());
+    assert_eq!(git(&path, &["branch", "--show-current"]), "my-feature");
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "hello, edited by the user\n"
+    );
+}
+
+#[tokio::test]
+async fn a_thread_with_no_repo_has_no_checkout_to_work_in() {
+    let host = Host::start(fake(editing()));
+    let mut client = host.client().await;
+    let params = ThreadStartParams {
+        checkout: true,
+        ..start_params(None, "Jot something down")
+    };
+    let error = client.call::<ThreadStart>(params).await.unwrap_err();
+    assert_eq!(error.code, INVALID_PARAMS);
+    assert!(client.list().await.threads.is_empty());
 }
 
 #[tokio::test]

@@ -10,6 +10,10 @@
 //! Each thread with no repo gets its own scratch repository at `<data folder>/scratch/<run id>`,
 //! so one quick chat can't read another's work. They all belong to plxd's scratch entry, whose
 //! path is the `scratch` folder, made on first use.
+//!
+//! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,
+//! on the branch the user has out, and plxd leaves its changes there uncommitted. A thread with
+//! no repo has no checkout, so it can't ask for one.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -353,6 +357,7 @@ pub(crate) async fn start(
         branch_slug,
         images,
         approvals,
+        checkout,
     } = params;
     if let Some(slug) = &branch_slug
         && !valid_branch_slug(slug)
@@ -363,6 +368,11 @@ pub(crate) async fn start(
         ));
     }
     let entry = start_entry(&daemon, repo).await?;
+    if checkout && entry.fields.scratch {
+        return Err(ErrorObject::invalid_params(
+            "checkout needs a repo: a thread with no repo has no checkout to work in",
+        ));
+    }
     let scope = ProjectId::try_from(entry.id).map_err(|_| corrupt("repo entry", entry.id))?;
     // A retry, or a run id that is taken, needs no new scratch repository: `agents::create`
     // answers it from the existing run.
@@ -407,6 +417,7 @@ pub(crate) async fn start(
         thread: Some(NewThread {
             scratch: scratch.clone(),
             branch_slug,
+            checkout,
         }),
     };
     let created = match agents::create(Arc::clone(&daemon), new).await {

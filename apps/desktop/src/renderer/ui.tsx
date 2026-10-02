@@ -154,14 +154,19 @@ export interface PickerOption {
   divider?: boolean;
 }
 
-/** One choice in a menu: icon, label, and an optional description and hint, checked when chosen. */
+/**
+ * One choice in a menu: icon, label, and an optional description and hint, checked when chosen.
+ * A `disabled` one can't be picked, and its hint should say why.
+ */
 export function MenuOption({
   option: o,
   checked,
+  disabled,
   onClick,
 }: {
   option: PickerOption;
   checked: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -169,8 +174,9 @@ export function MenuOption({
       type="button"
       role="menuitemradio"
       aria-checked={checked}
+      disabled={disabled}
       onClick={onClick}
-      className={`${menuItem} ${o.description ? "items-start py-2" : ""}`}
+      className={`${menuItem} ${o.description ? "items-start py-2" : ""} disabled:opacity-50 disabled:hover:bg-transparent`}
     >
       {/* One line tall, so a two-line row's icon sits beside its label. */}
       {o.icon && <span className="grid h-5 place-items-center">{o.icon}</span>}

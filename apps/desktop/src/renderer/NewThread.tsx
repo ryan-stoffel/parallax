@@ -10,7 +10,7 @@ import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { imageCaps } from "./images";
 import type { RunOptions } from "./models";
-import { RunTargetMenu } from "./RunTargetMenu";
+import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { noRepo, type ThreadGroup } from "./threads";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
@@ -35,6 +35,7 @@ interface NewThreadProps {
     prompt: string,
     images: PromptImage[],
     options: RunOptions,
+    checkout: boolean,
     name?: ThreadName,
   ) => Promise<RpcError | undefined>;
   /** Whether the host's plxd takes a thread's model, effort, and permission (`runOptions`). */
@@ -51,6 +52,7 @@ interface Attempt {
   prompt: string;
   images: PromptImage[];
   options: RunOptions;
+  checkout: boolean;
   name: ThreadName;
 }
 
@@ -153,6 +155,16 @@ export function NewThread({
   const [starting, setStarting] = useState<{ prompt: string; images: PromptImage[] }>();
   const failed = useRef<Attempt>(undefined);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
+  const [workspace, setWorkspace] = useState<Workspace>("worktree");
+  // Only a repository has a checkout, and only a plxd that takes `checkout` would use it: an
+  // older one would make a worktree anyway.
+  const checkoutUnavailable =
+    group.id === noRepo
+      ? "needs a repo"
+      : connection?.status === "connected" && !("checkout" in connection.capabilities)
+        ? "needs a newer plxd"
+        : undefined;
+  const checkout = workspace === "checkout" && !checkoutUnavailable;
 
   // Focus the chosen account when the chooser opens, so a screen reader announces it.
   const chooser = useRef<HTMLFieldSetElement>(null);
@@ -175,6 +187,7 @@ export function NewThread({
       attempt.prompt,
       attempt.images,
       attempt.options,
+      attempt.checkout,
       attempt.name,
     );
     failed.current = error ? attempt : undefined;
@@ -227,7 +240,8 @@ export function NewThread({
       last.prompt === prompt &&
       last.images.length === images.length &&
       last.images.every((image, i) => image === images[i]) &&
-      JSON.stringify(last.options) === JSON.stringify(options)
+      JSON.stringify(last.options) === JSON.stringify(options) &&
+      last.checkout === checkout
         ? last
         : undefined;
     setStarting({ prompt, images });
@@ -239,6 +253,7 @@ export function NewThread({
       prompt,
       images,
       options,
+      checkout,
       name,
     });
     // On success the app opens the thread instead.
@@ -361,7 +376,13 @@ export function NewThread({
               </span>
             ) : (
               <>
-                <RunTargetMenu hosts={hosts} hostId={hostId} />
+                <RunTargetMenu
+                  hosts={hosts}
+                  hostId={hostId}
+                  workspace={checkout ? "checkout" : "worktree"}
+                  onWorkspaceChange={setWorkspace}
+                  checkoutUnavailable={checkoutUnavailable}
+                />
                 {/* Placeholder until plxd offers branches. */}
                 <Picker
                   label="Branch"

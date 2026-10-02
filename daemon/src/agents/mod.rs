@@ -23,6 +23,11 @@
 //! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
 //! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
 //! ([`wake`]).
+//!
+//! A thread started with `checkout` has no worktree either: it runs in its repo entry's own
+//! checkout, on the branch the user has out, in the same worker sandbox with that checkout as its
+//! cwd. plxd never commits it, since the checkout can hold the user's own uncommitted work, so its
+//! changes stay there for the user to review, and it has no diff to accept or open a PR from.
 
 mod actor;
 mod approvals;
@@ -56,7 +61,7 @@ use self::actor::{Actor, Command};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
 use self::convert::{STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
-use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
+use self::worker::{StoredKeyAccounts, ThreadFolder, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
@@ -529,44 +534,72 @@ async fn create_worktree(
     }
 }
 
+/// The canonical paths a run in `repo_path`'s own checkout needs, checked for the sandbox: the
+/// checkout, its cwd, and the repository's shared git folder, which stays read-only to it.
+pub(super) async fn checkout_paths(
+    agents: &Agents,
+    repo_path: &Path,
+) -> Result<(PathBuf, PathBuf), ErrorObject> {
+    let cwd = sandbox_path(repo_path, "the project's repository")?;
+    let common = agents
+        .worktrees
+        .git_common_dir(repo_path)
+        .await
+        .map_err(|error| worktree_failed(&error))?;
+    let common = sandbox_path(&common, "the repository's git folder")?;
+    Ok((cwd, common))
+}
+
 /// Records a new run and its worktree, with its thread row for a normal thread, in one
-/// transaction. If that fails, removes the worktree again.
+/// transaction. If that fails, removes the worktree again. A thread in the current checkout has
+/// no worktree (`created` is `None`); any other run must have one.
 async fn record(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     (fields, state): (RunFields, RunState),
     is_thread: bool,
     repo_path: &Path,
-    created: &CreatedWorktree,
+    created: Option<&CreatedWorktree>,
 ) -> Result<
     (
         parallax_store::Run,
-        parallax_store::Worktree,
+        Option<parallax_store::Worktree>,
         Option<parallax_store::Thread>,
     ),
     ErrorObject,
 > {
-    let worktree_fields = WorktreeFields {
+    let worktree_fields = created.map(|created| WorktreeFields {
         repo_path: repo_path.to_string_lossy().into_owned(),
         path: created.path.to_string_lossy().into_owned(),
         branch: created.branch.clone(),
         base: created.base.clone(),
         git_dir: created.git_dir.to_string_lossy().into_owned(),
         base_dirty: created.base_dirty,
-    };
+    });
     let scope = fields.project_id;
     let recorded = store(daemon, move |db| {
         if is_thread {
-            db.create_thread_run(run_id.into(), scope, &fields, &state, &worktree_fields)
-                .map(|(thread, run, worktree)| (run, worktree, Some(thread)))
+            db.create_thread_run(
+                run_id.into(),
+                scope,
+                &fields,
+                &state,
+                worktree_fields.as_ref(),
+            )
+            .map(|(thread, run, worktree)| (run, worktree, Some(thread)))
+            .map_err(|e| store_error(&e))
         } else {
+            let Some(worktree_fields) = worktree_fields else {
+                return Err(ErrorObject::internal_error("a worker has no worktree"));
+            };
             db.create_run_with_worktree(run_id.into(), &fields, &state, &worktree_fields)
-                .map(|(run, worktree)| (run, worktree, None))
+                .map(|(run, worktree)| (run, Some(worktree), None))
+                .map_err(|e| store_error(&e))
         }
-        .map_err(|e| store_error(&e))
     })
     .await;
     if recorded.is_err()
+        && let Some(created) = created
         && let Err(cleanup) = daemon
             .agents
             .worktrees
@@ -684,6 +717,8 @@ pub(crate) struct NewThread {
     pub scratch: Option<PathBuf>,
     /// The name after `parallax/` for the worktree's branch, already checked.
     pub branch_slug: Option<String>,
+    /// Work in the repo entry's own checkout instead of a worktree. Never set with `scratch`.
+    pub checkout: bool,
 }
 
 /// A created run, and its thread row for a normal thread.
@@ -720,6 +755,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
         approvals,
+        checkout: thread.as_ref().is_some_and(|thread| thread.checkout),
     };
 
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
@@ -739,8 +775,13 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         Some(scratch) => scratch.to_string_lossy().into_owned(),
         None => scope_path,
     };
-    let (created, worktree_path, git_common_dir) =
-        create_worktree(agents, Path::new(&repo_path), run_id, thread.as_ref()).await?;
+    let (created, (cwd, git_common_dir)) = if fields.checkout {
+        (None, checkout_paths(agents, Path::new(&repo_path)).await?)
+    } else {
+        let (created, worktree_path, git_common_dir) =
+            create_worktree(agents, Path::new(&repo_path), run_id, thread.as_ref()).await?;
+        (Some(created), (worktree_path, git_common_dir))
+    };
 
     fields.backend = prepared.resolved.backend().name().into();
     let state = RunState {
@@ -755,29 +796,24 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         (fields, state),
         is_thread,
         Path::new(&repo_path),
-        &created,
+        created.as_ref(),
     )
     .await?;
-    log_started(&daemon, project, agent_run(&row, Some(&worktree))?).await;
+    log_started(&daemon, project, agent_run(&row, worktree.as_ref())?).await;
     if let Some(thread) = &thread_row {
         crate::threads::log_started(&daemon, thread).await;
     }
-    info!(run = %run_id, project = %project, backend = %row.fields.backend, thread = is_thread, "created an agent run");
+    info!(run = %run_id, project = %project, backend = %row.fields.backend, thread = is_thread, checkout = row.fields.checkout, "created an agent run");
 
     // A run just created here has no sent turns yet.
-    let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+    let mut actor = Actor::new(Arc::clone(&daemon), row, worktree, HashMap::new());
     let Place::Worker { context, .. } = &prepared.place else {
         return Err(ErrorObject::internal_error(
             "a worker was prepared as a coordinator",
         ));
     };
-    let task = match &thread {
-        Some(thread) => {
-            worker::thread_prompt(&prompt, &worktree_path, context, thread.scratch.is_some())
-        }
-        None => worker::worker_prompt(&prompt, &worktree_path, context),
-    };
-    let paths = Some((worktree_path, git_common_dir));
+    let task = first_prompt(&prompt, thread.as_ref(), &cwd, context);
+    let paths = Some((cwd, git_common_dir));
     actor
         .launch(prepared, task, images, None, None, paths)
         .await;
@@ -788,6 +824,22 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         run: run?,
         thread: thread_row,
     })
+}
+
+/// A new run's first message: a thread's or a worker's limits, for its CLI started in `cwd`, then
+/// `prompt`.
+fn first_prompt(prompt: &str, thread: Option<&NewThread>, cwd: &Path, context: &Path) -> String {
+    let Some(thread) = thread else {
+        return worker::worker_prompt(prompt, cwd, context);
+    };
+    let folder = if thread.checkout {
+        ThreadFolder::Checkout
+    } else if thread.scratch.is_some() {
+        ThreadFolder::Scratch
+    } else {
+        ThreadFolder::Worktree
+    };
+    worker::thread_prompt(prompt, cwd, context, folder)
 }
 
 impl Agents {

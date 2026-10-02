@@ -299,29 +299,52 @@ pub(super) fn worker_prompt(task: &str, worktree: &Path, context: &Path) -> Stri
     )
 }
 
+/// The folder a normal thread works in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ThreadFolder {
+    /// A worktree of the user's repository, made for the thread.
+    Worktree,
+    /// A worktree of an empty scratch repository plxd made for a thread with no repo.
+    Scratch,
+    /// The user's repository's own checkout, on the branch they have out.
+    Checkout,
+}
+
 /// The first message of a normal thread (#110): the same limits as a worker's, for an agent the
-/// user talks to directly, then the user's message. `scratch` is true for a thread with no repo,
-/// whose repository plxd made empty for it.
-pub(super) fn thread_prompt(message: &str, worktree: &Path, notes: &Path, scratch: bool) -> String {
-    let place = if scratch {
-        format!(
-            "You are a Parallax agent. Your working folder is {worktree}, a git worktree of an empty \
-             scratch repository plxd made for this conversation; use it for any files you need.",
-            worktree = worktree.display(),
-        )
+/// user talks to directly, then the user's message. `cwd` is the folder `folder` names.
+pub(super) fn thread_prompt(
+    message: &str,
+    cwd: &Path,
+    notes: &Path,
+    folder: ThreadFolder,
+) -> String {
+    let cwd = cwd.display();
+    let place = match folder {
+        ThreadFolder::Scratch => format!(
+            "You are a Parallax agent. Your working folder is {cwd}, a git worktree of an empty \
+             scratch repository plxd made for this conversation; use it for any files you need."
+        ),
+        ThreadFolder::Worktree => format!(
+            "You are a Parallax agent in a git worktree at {cwd}, checked out for this \
+             conversation from the user's repository."
+        ),
+        ThreadFolder::Checkout => format!(
+            "You are a Parallax agent in the user's own checkout of their repository at {cwd}, \
+             on the branch they have out."
+        ),
+    };
+    let git = if folder == ThreadFolder::Checkout {
+        "Don't commit or change git history: your changes stay in the checkout, uncommitted, for \
+         the user to review."
     } else {
-        format!(
-            "You are a Parallax agent in a git worktree at {worktree}, checked out for this \
-             conversation from the user's repository.",
-            worktree = worktree.display(),
-        )
+        "Don't commit or change git history: Parallax commits your changes when you finish."
     };
     format!(
         "{place}\n\
          - You may write files only in that folder and in the notes folder at {notes}.\n\
          - Your commands have network access, but this Mac's own services (localhost) are \
          unreachable.\n\
-         - Don't commit or change git history: Parallax commits your changes when you finish.\n\
+         - {git}\n\
          - The repository's dependencies may not be installed.\n\
          \n\
          The user's message:\n{message}",
