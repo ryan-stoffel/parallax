@@ -198,7 +198,8 @@ export interface ComposerProps {
   /**
    * The backend the thread runs on: shows the model, effort, and access choices it can honor. A
    * new thread passes it only when plxd takes run options. Absent (or unknown): no choices, and
-   * none are sent.
+   * none are sent. A new thread's model of another provider starts it on that provider's
+   * subscription.
    */
   backend?: string;
   /**
@@ -263,8 +264,8 @@ export function Composer({
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const run = backend === undefined ? undefined : backends[backend];
   const runModels = models.filter((m) => m.provider === run?.provider);
-  // An open run can move to another provider; a new thread's account decides its own.
-  const choices = started ? models.filter((m) => !unavailable?.[m.provider]) : runModels;
+  // Any provider whose models aren't unavailable: an open run moves to it, a new thread starts there.
+  const choices = models.filter((m) => !unavailable?.[m.provider]);
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
     started &&
@@ -279,7 +280,10 @@ export function Composer({
   // Where the message goes: the run's backend, or the one that runs the picked model.
   const target =
     run && model && model.provider !== run.provider ? backendOf(model.provider) : backend;
-  const permissions = (target === undefined ? undefined : backends[target])?.permissions ?? [];
+  const targetBackend = target === undefined ? undefined : backends[target];
+  const permissions = targetBackend?.permissions ?? [];
+  // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
+  const efforts = targetBackend?.efforts !== false;
   const startedEffort = started?.effort ?? "high";
   const startedPermission = started?.permission ?? "edit";
   const effort = pickedEffort ?? startedEffort;
@@ -299,24 +303,26 @@ export function Composer({
     ...(context !== undefined && { contextWindow: context }),
     ...(hasFast && { fast }),
   };
+  const account = { kind: "subscription", backend: target! } as const;
   let options: RunOptions = {};
   if (run && started && model && target !== backend)
-    options = {
-      model: model.id,
-      effort,
-      permission,
-      ...speed,
-      account: { kind: "subscription", backend: target! },
-    };
+    options = { model: model.id, ...(efforts && { effort }), permission, ...speed, account };
   else if (run && started)
     options = {
       ...(model && model !== startedModel && { model: model.id }),
-      ...(effort !== startedEffort && { effort }),
+      ...(efforts && effort !== startedEffort && { effort }),
       ...(permission !== startedPermission && { permission }),
       ...(context !== undefined && context !== startedContext && { contextWindow: context }),
       ...(hasFast && fast !== startedFast && { fast }),
     };
-  else if (run) options = { ...(model && { model: model.id }), effort, permission, ...speed };
+  else if (run)
+    options = {
+      ...(model && { model: model.id }),
+      ...(efforts && { effort }),
+      permission,
+      ...speed,
+      ...(target !== backend && { account }),
+    };
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
   const empty = text.trim() === "" && images.length === 0;
@@ -557,27 +563,31 @@ export function Composer({
               >
                 {model && (
                   <>
-                    {/* An open run lists every provider, and can't pick those it can't move to. */}
+                    {/* Every provider, and an open run can't pick those it can't move to. */}
                     <ModelMenu
                       key={backend}
-                      models={started ? models : runModels}
-                      unavailable={started ? unavailable : undefined}
+                      models={models}
+                      unavailable={unavailable}
                       value={model}
                       onChange={setModel}
                     />
-                    {divider}
                   </>
                 )}
-                <EffortMenu
-                  value={effort}
-                  onChange={setEffort}
-                  contexts={contexts}
-                  context={context}
-                  onContext={setContext}
-                  fastMode={hasFast ? model!.provider : undefined}
-                  fast={fast}
-                  onFast={setFast}
-                />
+                {efforts && (
+                  <>
+                    {divider}
+                    <EffortMenu
+                      value={effort}
+                      onChange={setEffort}
+                      contexts={contexts}
+                      context={context}
+                      onContext={setContext}
+                      fastMode={hasFast ? model!.provider : undefined}
+                      fast={fast}
+                      onFast={setFast}
+                    />
+                  </>
+                )}
                 {/* One permission is no choice, so there's nothing to show. */}
                 {permissions.length > 1 && (
                   <>

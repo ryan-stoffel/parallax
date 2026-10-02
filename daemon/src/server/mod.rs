@@ -33,6 +33,7 @@ use crate::agents::{self, Agents};
 use crate::backend::Backend;
 use crate::backend::claude::ClaudeBackend;
 use crate::backend::codex::CodexBackend;
+use crate::backend::cursor::CursorBackend;
 use crate::backend::fake::FakeBackend;
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::run_temp;
@@ -312,6 +313,10 @@ impl Server {
             backends.register(
                 parallax_protocol::Provider::Openai,
                 Arc::new(CodexBackend::new(launcher.clone())),
+            );
+            backends.register(
+                parallax_protocol::Provider::Cursor,
+                Arc::new(CursorBackend::new(launcher.clone())),
             );
             backends
         });

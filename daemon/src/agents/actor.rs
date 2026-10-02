@@ -1828,6 +1828,7 @@ fn backend_name(backend: &str) -> &str {
     match backend {
         "claude" => "Claude Code",
         "codex" => "Codex",
+        "cursor" => "Cursor",
         other => other,
     }
 }

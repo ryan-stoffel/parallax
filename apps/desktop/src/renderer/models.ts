@@ -6,13 +6,15 @@ import type { AgentPermission, ThreadStartParams } from "../protocol/generated/p
 //   its baked-in model catalog. `--model` takes these as they are.
 // - codex-cli 0.157.1: the slugs ~/.codex/models_cache.json lists (visibility "list"), which
 //   `-m` takes.
+// - Cursor Agent 2026.10.01-14929f9: a model of each family `agent models` listed on 2026-10-01,
+//   by the ids `--model` takes, effort included (0036).
 // Context windows and fast mode, checked on Claude Code 2.1.286 and codex-cli 0.159.3: Claude's
 // models but Haiku run 1M natively and can be capped at 200K, and only Opus 5.5 has fast mode.
 // Codex's catalog gives every model 272K by default and all but GPT-5.5 up to 872K, and every one
 // the Fast service tier.
-// Cursor has no plxd backend, so it has no models here.
+// Cursor's backend maps neither, so its models offer none.
 
-export type Provider = "Claude" | "Codex";
+export type Provider = "Claude" | "Codex" | "Cursor";
 
 export interface Model {
   /** What the backend's CLI takes, sent as `thread/start`'s `model`. */
@@ -59,18 +61,30 @@ export const models: Model[] = [
   },
   { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "Codex", contexts: codex872K, fast: true },
   { id: "gpt-5.5", name: "GPT-5.5", provider: "Codex", contexts: [272_000], fast: true },
+  { id: "auto", name: "Auto", provider: "Cursor", contexts: [] },
+  { id: "composer-2.5", name: "Composer 2.5", provider: "Cursor", contexts: [], isNew: true },
+  { id: "composer-2.5-fast", name: "Composer 2.5 Fast", provider: "Cursor", contexts: [] },
+  { id: "claude-opus-5-5-medium", name: "Claude Opus 5.5", provider: "Cursor", contexts: [] },
+  { id: "claude-fable-5-1-high", name: "Claude Fable 5.1", provider: "Cursor", contexts: [] },
+  { id: "claude-sonnet-5-high", name: "Claude Sonnet 5", provider: "Cursor", contexts: [] },
+  { id: "gpt-5.6-sol-medium", name: "GPT-5.6 Sol", provider: "Cursor", contexts: [] },
+  { id: "gpt-5.5-medium", name: "GPT-5.5", provider: "Cursor", contexts: [] },
+  { id: "gpt-5.3-codex", name: "Codex 5.3", provider: "Cursor", contexts: [] },
+  { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro", provider: "Cursor", contexts: [] },
+  { id: "grok-4.7-high", name: "Grok 4.7 High", provider: "Cursor", contexts: [] },
+  { id: "kimi-k3-max", name: "Kimi K3", provider: "Cursor", contexts: [] },
 ];
 
 /**
  * The plxd backends a thread can run on, by name (`AccountChoice`'s `backend`): whose models
- * they take, the permissions they map, and whether they can run a Project's coordinator. Every
- * backend maps every effort (RYA-97, RYA-38).
- * ponytail: mirrors plxd's `Backend::permissions` and `Capabilities::coordinator`, which it
- * doesn't report yet (RYA-154).
+ * they take, the permissions they map, whether they can run a Project's coordinator, and whether
+ * they map efforts: every one but Cursor, whose model ids carry the effort (RYA-97, RYA-38, 0036).
+ * ponytail: mirrors plxd's `Backend::permissions`, `Backend::efforts`, and
+ * `Capabilities::coordinator`, which it doesn't report yet (RYA-154).
  */
 export const backends: Record<
   string,
-  { provider: Provider; permissions: AgentPermission[]; coordinator: boolean }
+  { provider: Provider; permissions: AgentPermission[]; coordinator: boolean; efforts?: false }
 > = {
   claude: {
     provider: "Claude",
@@ -78,6 +92,12 @@ export const backends: Record<
     coordinator: true,
   },
   codex: { provider: "Codex", permissions: ["edit"], coordinator: false },
+  cursor: {
+    provider: "Cursor",
+    permissions: ["edit", "plan", "bypass"],
+    coordinator: false,
+    efforts: false,
+  },
 };
 
 /** The backend that runs `provider`'s models. */
