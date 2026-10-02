@@ -265,10 +265,12 @@ export function Picker({
           popoverTarget={menuId}
           aria-haspopup="menu"
           aria-label={`${label}: ${current?.label ?? "none"}`}
-          className={menuButton}
+          title={current?.label}
+          // It can shrink, cutting a long choice (a branch name) short rather than widening its row.
+          className={`${menuButton} min-w-0`}
         >
           {current?.icon ?? icon}
-          {current?.label}
+          <span className="truncate">{current?.label}</span>
           <ChevronDown aria-hidden className="opacity-70" />
         </button>
       )}

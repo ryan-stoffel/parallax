@@ -132,6 +132,7 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
         model: None,
         effort: None,
         permission: None,
+        account: None,
         images: Vec::new(),
     }
 }

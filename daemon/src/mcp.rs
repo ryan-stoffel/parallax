@@ -456,6 +456,7 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     model: None,
                     effort: None,
                     permission: None,
+                    account: None,
                     images: Vec::new(),
                 })
                 .await?

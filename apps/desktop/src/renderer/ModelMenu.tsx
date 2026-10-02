@@ -26,22 +26,22 @@ const railButton =
 /**
  * The model picker: a button showing the chosen model that opens a searchable list of `models`,
  * with a rail to filter by favorites or provider. A native popover, so Escape and clicking away
- * close it, and it flips above the button when there's no room below. With `provider`, only its
- * models are listed, and the rail shows the other providers disabled, saying why on hover.
+ * close it, and it flips above the button when there's no room below. The models of providers in
+ * `unavailable` aren't listed, and the rail shows those providers disabled, saying why on hover.
  */
 export function ModelMenu({
   models: all,
-  provider,
+  unavailable = {},
   value: chosen,
   onChange,
 }: {
   models: Model[];
-  /** The only provider whose models can be picked: an open thread's, whose CLI can't change. */
-  provider?: Provider;
+  /** Providers whose models can't be picked here, by why. */
+  unavailable?: Partial<Record<Provider, string>>;
   value: Model;
   onChange: (model: Model) => void;
 }) {
-  const models = provider ? all.filter((m) => m.provider === provider) : all;
+  const models = all.filter((m) => !unavailable[m.provider]);
   const [favorites, setFavorites] = useState(() => new Set([keyOf(models[0]!)]));
   const [tab, setTab] = useState<"favorites" | Provider>(chosen.provider);
   const [query, setQuery] = useState("");
@@ -108,7 +108,7 @@ export function ModelMenu({
           <span aria-hidden className="my-1 h-px w-6 bg-border" />
           {[...new Set(all.map((m) => m.provider))].map((p) => {
             const ProviderLogo = providers[p];
-            const unavailable = provider !== undefined && p !== provider;
+            const why = unavailable[p];
             return (
               // A disabled button gets no pointer events, so its wrapper shows the tooltip.
               <span key={p} className="group relative flex">
@@ -116,20 +116,20 @@ export function ModelMenu({
                   type="button"
                   aria-label={p}
                   aria-pressed={!q && tab === p}
-                  disabled={unavailable}
-                  aria-describedby={unavailable ? `${id}-${p}` : undefined}
+                  disabled={!!why}
+                  aria-describedby={why ? `${id}-${p}` : undefined}
                   onClick={() => setTab(p)}
                   className={railButton}
                 >
                   <ProviderLogo />
                 </button>
-                {unavailable && (
+                {why && (
                   <span
                     id={`${id}-${p}`}
                     role="tooltip"
                     className="pointer-events-none invisible absolute top-1/2 left-full z-10 ml-2 w-56 -translate-y-1/2 rounded-md border border-border bg-surface px-2.5 py-1.5 text-[12px] text-foreground shadow-composer group-hover:visible"
                   >
-                    {p} is unavailable in this thread. Start a new thread to switch providers.
+                    {why}
                   </span>
                 )}
               </span>

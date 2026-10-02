@@ -28,7 +28,7 @@ import type {
 import { EffortMenu } from "./EffortMenu";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { ModelMenu } from "./ModelMenu";
-import { backends, models, type Model, type RunOptions } from "./models";
+import { backendOf, backends, models, type Model, type Provider, type RunOptions } from "./models";
 import { Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). Every mode but Bypass keeps a
@@ -203,10 +203,12 @@ export interface ComposerProps {
   backend?: string;
   /**
    * An open run's model, effort, and access (an unset one is the CLI's default). They start from
-   * the run's, and only one that differs from it is sent. Its model can change only within its
-   * provider, since a session can't move to another CLI.
+   * the run's, and only one that differs from it is sent. Another provider's model moves the run
+   * to that provider's subscription: all three go, with the account.
    */
   started?: Pick<AgentRun, "model" | "effort" | "permission">;
+  /** Providers an open run can't move to, by why, whose models it doesn't offer. */
+  unavailable?: Partial<Record<Provider, string>>;
   /** Why the model, effort, and access can't change right now, which turns them off. */
   optionsDisabled?: string;
   /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
@@ -234,6 +236,7 @@ export function Composer({
   footer,
   backend,
   started,
+  unavailable,
   optionsDisabled,
   imageCaps,
   manualDenied,
@@ -253,8 +256,9 @@ export function Composer({
   const [pickedPermission, setPermission] = useState<AgentPermission>();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const run = backend === undefined ? undefined : backends[backend];
-  const permissions = run?.permissions ?? [];
   const runModels = models.filter((m) => m.provider === run?.provider);
+  // An open run can move to another provider; a new thread's account decides its own.
+  const choices = started ? models.filter((m) => !unavailable?.[m.provider]) : runModels;
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
     started &&
@@ -264,14 +268,25 @@ export function Composer({
       name: started.model ?? "Default model",
       provider: run.provider,
     });
-  const model = runModels.find((m) => m === pickedModel) ?? startedModel ?? runModels[0];
+  const model = choices.find((m) => m === pickedModel) ?? startedModel ?? runModels[0];
+  // Where the message goes: the run's backend, or the one that runs the picked model.
+  const target =
+    run && model && model.provider !== run.provider ? backendOf(model.provider) : backend;
+  const permissions = (target === undefined ? undefined : backends[target])?.permissions ?? [];
   const startedEffort = started?.effort ?? "high";
   const startedPermission = started?.permission ?? "edit";
   const effort = pickedEffort ?? startedEffort;
   const wanted = pickedPermission ?? startedPermission;
   const permission = permissions.includes(wanted) ? wanted : "edit";
   let options: RunOptions = {};
-  if (run && started)
+  if (run && started && model && target !== backend)
+    options = {
+      model: model.id,
+      effort,
+      permission,
+      account: { kind: "subscription", backend: target! },
+    };
+  else if (run && started)
     options = {
       ...(model && model !== startedModel && { model: model.id }),
       ...(effort !== startedEffort && { effort }),
@@ -518,11 +533,11 @@ export function Composer({
               >
                 {model && (
                   <>
-                    {/* An open run lists every provider, and can pick only its own. */}
+                    {/* An open run lists every provider, and can't pick those it can't move to. */}
                     <ModelMenu
                       key={backend}
                       models={started ? models : runModels}
-                      provider={started && run.provider}
+                      unavailable={started ? unavailable : undefined}
                       value={model}
                       onChange={setModel}
                     />

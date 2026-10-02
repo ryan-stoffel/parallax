@@ -1410,10 +1410,12 @@ export type AgentSendParams = {
 	text: string,
 	/**
 	 * A new model for the run and every later resume (RYA-163), sent only to a plxd that
-	 * advertises `sendModel`. It should be one the run's backend runs, since a session can't move
-	 * to another CLI; plxd can't check that, so another's fails the run with the CLI's own error.
-	 * Absent, or the run's own, changes nothing. A different one fails with
-	 * `unsupportedOption` while the run's CLI is running, since it can't change mid-process.
+	 * advertises `sendModel`. It should be one the run's backend runs, or with `account`, that
+	 * account's; plxd can't check that, so another's fails the run with the CLI's own error.
+	 * Absent, or the run's own, changes nothing. While the run's CLI is running, a different one
+	 * waits with the message until the CLI exits, since it can't change mid-process, as does
+	 * every message sent after it; a plxd without `sendAccount` fails it with
+	 * `unsupportedOption` instead.
 	 */
 	model?: string,
 	/**
@@ -1424,6 +1426,16 @@ export type AgentSendParams = {
 	 * A new permission (RYA-161), as `effort`.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * A new account for the run and every later resume, sent only to a plxd that advertises
+	 * `sendAccount`, and waiting for a running CLI as `model` does. On the run's backend, the
+	 * session resumes on it. On another backend, the session can't move, so plxd starts a new
+	 * one there in the run's worktree, whose first message carries the conversation so far
+	 * before this one: the run keeps its id, transcript, and worktree, and takes the new
+	 * backend, with `model`, and the run's effort and permission where the backend maps them.
+	 * Absent, or the run's own, changes nothing.
+	 */
+	account?: AccountChoice,
 	/**
 	 * Images for the message, as `agent/start`'s.
 	 */
@@ -1952,6 +1964,11 @@ export type AgentRunState = {
 	 * The account it is charged to now.
 	 */
 	accountId: string,
+	/**
+	 * The backend it runs on, which `agent/send`'s `account` can move it to. Absent from a plxd
+	 * without `sendAccount`, whose runs never move.
+	 */
+	backend?: string,
 	/**
 	 * The vendor's session id, once the CLI reported it.
 	 */
