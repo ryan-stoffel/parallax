@@ -245,6 +245,22 @@ test("a finished turn folds its interim messages and answered requests, leaving 
 
   // Still going: messages and requests split the work, as before.
   expect(groupWork(turn).map((r) => r.key)).toEqual(["u", "a1", "p", "work:t", "a2"]);
+
+  // A follow-up runs in the same process, whose one end closes both turns.
+  const followUp = [
+    { kind: "user", key: "u2", text: "more", at: at(11) },
+    { kind: "assistant", key: "b1", text: "On it.", at: at(12) },
+    { kind: "assistant", key: "b2", text: "Done.", at: at(13) },
+  ] as Item[];
+  expect(groupWork([...turn, ...followUp, end]).map((r) => r.key)).toEqual([
+    "u",
+    "work:a1",
+    "a2",
+    "u2",
+    "work:b1",
+    "b2",
+    "e",
+  ]);
 });
 
 test("a coordinator's plxd tool that names a subagent gets its prompt's first line from an earlier answer", () => {

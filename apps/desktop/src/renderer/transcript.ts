@@ -371,20 +371,28 @@ export interface Work {
 
 /**
  * The rows of each turn an `end` row closes that fold into its work, as T3 Code shows a finished
- * turn (PLX-326): its messages before the last, and its answered permission requests. A turn
- * still going has no `end`, so its messages stream in place and its requests stay in view.
+ * turn (PLX-326): its messages before the last, and its answered permission requests. One CLI
+ * process can run several turns, as follow-ups arrive, so its `end` closes them all. A turn still
+ * going has no `end`, so its messages stream in place and its requests stay in view.
  */
 function finishedTurnRows(rows: readonly { kind: string }[]): Set<number> {
   const folds = new Set<number>();
+  // The current turn's messages and answered requests, and the earlier turns' that would fold.
   let turn: number[] = [];
+  let closed: number[] = [];
+  const close = () => {
+    const answer = turn.findLast((j) => rows[j]!.kind === "assistant");
+    closed.push(...turn.filter((j) => j !== answer));
+    turn = [];
+  };
   rows.forEach((row, i) => {
-    if (row.kind === "user" || row.kind === "pending") turn = [];
+    if (row.kind === "user" || row.kind === "pending") close();
     else if (row.kind === "assistant" || (row.kind === "approval" && (row as Approval).resolved))
       turn.push(i);
     else if (row.kind === "end") {
-      const answer = turn.findLast((j) => rows[j]!.kind === "assistant");
-      for (const j of turn) if (j !== answer) folds.add(j);
-      turn = [];
+      close();
+      for (const j of closed) folds.add(j);
+      closed = [];
     }
   });
   return folds;
