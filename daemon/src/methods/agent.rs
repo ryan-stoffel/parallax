@@ -1,20 +1,23 @@
 //! `agent/start`, `agent/send`, `agent/cancel`, `agent/list`, and `agent/events` (#156), behind
 //! the `agents` capability; the review methods (#157) behind `agentReview`; `agent/openPr`
-//! (RYA-168) behind `openPr`; `agent/image` (RYA-191) behind `promptImages`; and `agent/approve`
-//! (RYA-222) behind `approvals`. The runner itself is [`crate::agents`].
+//! (RYA-168) behind `openPr`; `agent/image` (RYA-191) behind `promptImages`; `agent/approve`
+//! (RYA-222) behind `approvals`; and `agent/gitStatus`, `agent/commit`, and `agent/push`
+//! (RYA-298) behind `git`. The runner itself is [`crate::agents`].
 
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
-    AgentApproveResult, AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
-    AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams, AgentListParams,
-    AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy, AgentRequestChangesParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind, LoggedEvent, PromptImage,
+    AgentApproveResult, AgentCancelParams, AgentCommitParams, AgentDiffParams, AgentDiffResult,
+    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentGitStatusParams,
+    AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult,
+    AgentPolicy, AgentPushParams, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
+    AgentStartParams, ErrorKind, GitStatus, LoggedEvent, PromptImage, RunId,
 };
 
 use super::Context;
+use crate::agents::GitAction;
 use crate::{agents, images};
 
 /// The longest prompt or message plxd takes, in bytes. It goes on the CLI's stdin, never in
@@ -248,6 +251,52 @@ pub(crate) async fn open_pr(
         .daemon
         .agents
         .detached(agents::open_pr(daemon, run_id, title, body))
+        .await
+}
+
+/// `agent/gitStatus` (RYA-298): through the run's actor, like `agent/commit` and `agent/push`.
+pub(crate) async fn git_status(
+    context: &Context,
+    params: AgentGitStatusParams,
+) -> Result<GitStatus, ErrorObject> {
+    git(context, params.run_id, GitAction::Status).await
+}
+
+/// `agent/commit`: the message checked here, then the commit through the run's actor.
+pub(crate) async fn commit(
+    context: &Context,
+    params: AgentCommitParams,
+) -> Result<GitStatus, ErrorObject> {
+    let AgentCommitParams { run_id, message } = params;
+    if message.trim().is_empty() {
+        return Err(ErrorObject::invalid_params("message must not be empty"));
+    }
+    if message.len() > MAX_PR_BODY_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "message must be at most {MAX_PR_BODY_BYTES} bytes"
+        )));
+    }
+    git(context, run_id, GitAction::Commit(message)).await
+}
+
+/// `agent/push`.
+pub(crate) async fn push(
+    context: &Context,
+    params: AgentPushParams,
+) -> Result<GitStatus, ErrorObject> {
+    git(context, params.run_id, GitAction::Push).await
+}
+
+async fn git(
+    context: &Context,
+    run_id: RunId,
+    action: GitAction,
+) -> Result<GitStatus, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    context
+        .daemon
+        .agents
+        .detached(agents::git(daemon, run_id, action))
         .await
 }
 

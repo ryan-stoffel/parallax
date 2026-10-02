@@ -172,6 +172,19 @@ export type ParallaxRequests = {
 	 */
 	"agent/openPr": { params: AgentOpenPrParams, result: AgentOpenPrResult },
 	/**
+	 * `agent/gitStatus`: the git state of a run's folder (RYA-298). Gated on the `git`
+	 * capability, like `agent/commit` and `agent/push`.
+	 */
+	"agent/gitStatus": { params: AgentGitStatusParams, result: GitStatus },
+	/**
+	 * `agent/commit`: stages everything in a finished run's folder and commits it.
+	 */
+	"agent/commit": { params: AgentCommitParams, result: GitStatus },
+	/**
+	 * `agent/push`: pushes a finished run's branch to `origin`, setting its upstream.
+	 */
+	"agent/push": { params: AgentPushParams, result: GitStatus },
+	/**
 	 * `agent/approve`: answers a run's permission request, from its `approvalRequested`
 	 * item, by allowing or denying the tool call (RYA-222, decision 0031). Idempotent on the
 	 * request. Gated on the `approvals` capability.
@@ -2392,7 +2405,8 @@ export type AgentRequestChangesParams = {
 export type AgentOpenPrParams = {
 	/**
 	 * The run. It must have finished, have a commit, and work in a repository: a thread with no
-	 * repo has no `origin`.
+	 * repo has no `origin`. A Current checkout thread instead pushes the branch its checkout has
+	 * out (RYA-298), and needs one: not a detached HEAD.
 	 */
 	runId: RunId,
 	/**
@@ -2414,6 +2428,67 @@ export type AgentOpenPrResult = {
 	 * The pull request's web URL.
 	 */
 	url: string,
+};
+
+/**
+ * Params of `agent/gitStatus`.
+ */
+export type AgentGitStatusParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * The git state of a run's folder: the result of `agent/gitStatus`, and of `agent/commit` and
+ * `agent/push` after they ran.
+ */
+export type GitStatus = {
+	/**
+	 * The branch checked out, or null on a detached HEAD.
+	 */
+	branch: string | null,
+	/**
+	 * How many paths have uncommitted changes, untracked ones included.
+	 */
+	changes: number,
+	/**
+	 * The branch's upstream, such as `origin/main`, or null when it has none.
+	 */
+	upstream: string | null,
+	/**
+	 * Commits not on the upstream, or with no upstream, not on any of `origin`'s branches.
+	 */
+	ahead: number,
+	/**
+	 * Whether the repository has an `origin` remote to push to.
+	 */
+	origin: boolean,
+};
+
+/**
+ * Params of `agent/commit`.
+ */
+export type AgentCommitParams = {
+	/**
+	 * The run. It must not be running.
+	 */
+	runId: RunId,
+	/**
+	 * The commit message, at most 64 KiB, not blank.
+	 */
+	message: string,
+};
+
+/**
+ * Params of `agent/push`.
+ */
+export type AgentPushParams = {
+	/**
+	 * The run. It must not be running, and its folder must have a branch checked out.
+	 */
+	runId: RunId,
 };
 
 /**
@@ -2935,7 +3010,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

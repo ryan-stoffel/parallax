@@ -23,10 +23,10 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestI
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
-    AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges,
-    AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
-    EventsUnsubscribe, HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList,
-    ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
+    AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentGitStatus, AgentImage, AgentList,
+    AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart, ContextList, ContextRead,
+    ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion, Initialize,
+    ProjectCreate, ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -207,6 +207,13 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentApprove::NAME => {
             handle::<AgentApprove, _, _>(request, |p| agent::approve(context, p)).await
         }
+        AgentGitStatus::NAME => {
+            handle::<AgentGitStatus, _, _>(request, |p| agent::git_status(context, p)).await
+        }
+        AgentCommit::NAME => {
+            handle::<AgentCommit, _, _>(request, |p| agent::commit(context, p)).await
+        }
+        AgentPush::NAME => handle::<AgentPush, _, _>(request, |p| agent::push(context, p)).await,
         _ => return None,
     })
 }

@@ -38,6 +38,7 @@ mod defaults;
 mod error;
 mod events;
 pub mod framing;
+mod git;
 mod handshake;
 mod host;
 mod id;
@@ -86,6 +87,7 @@ pub use events::{
     EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
     EventsUnsubscribeResult, LogId, ParallaxEvent, SubscriptionId,
 };
+pub use git::{AgentCommitParams, AgentGitStatusParams, AgentPushParams, GitStatus};
 pub use handshake::{
     Capabilities, ClientInfo, InitializeParams, InitializeProtocol, InitializeResult, ProtocolRange,
 };

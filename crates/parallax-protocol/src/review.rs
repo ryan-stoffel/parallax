@@ -256,7 +256,8 @@ pub struct AgentRequestChangesParams {
 #[serde(rename_all = "camelCase")]
 pub struct AgentOpenPrParams {
     /// The run. It must have finished, have a commit, and work in a repository: a thread with no
-    /// repo has no `origin`.
+    /// repo has no `origin`. A Current checkout thread instead pushes the branch its checkout has
+    /// out (RYA-298), and needs one: not a detached HEAD.
     pub run_id: RunId,
     /// The pull request's title, such as the thread's. plxd takes its first line, cut to 256
     /// characters.

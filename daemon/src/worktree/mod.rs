@@ -17,6 +17,7 @@
 //! [`WorktreeManager::diff_stat`]. A client reviews the commit through
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
 //! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (RYA-168).
+//! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (RYA-298).
 //!
 //! # Layout and naming
 //!
@@ -94,6 +95,7 @@
 //! repository's git folder — so this needs an unusual repository configuration to matter; #175
 //! tracks closing it.
 
+mod folder;
 mod pull_request;
 mod refs;
 mod review;
@@ -103,6 +105,7 @@ mod tests;
 #[cfg(all(test, windows))]
 mod windows_tests;
 
+pub use folder::{PushError, RunFolder};
 pub use pull_request::PrError;
 pub use review::{
     AcceptError, Accepted, Blob, CommitDiff, FileDiff, MAX_BLOB_BYTES, MergeHow, validate_repo_path,
@@ -690,42 +693,11 @@ impl WorktreeManager {
         repo_root: &Path,
         message: &str,
     ) -> Result<Option<Commit>, WorktreeError> {
-        self.stage_all(worktree_path, git_dir).await?;
-        let staged = self
-            .run_worktree_git_ok(worktree_path, git_dir, &["diff", "--cached", "--name-only"])
-            .await?;
-        if staged.trim().is_empty() {
-            return Ok(None);
-        }
-        let Some((name, email)) = self.resolve_identity(repo_root).await? else {
-            return Err(WorktreeError::MissingIdentity {
-                repo: repo_root.to_owned(),
-            });
-        };
-        let user_name_arg = format!("user.name={name}");
-        let user_email_arg = format!("user.email={email}");
-        self.run_worktree_git_ok(
-            worktree_path,
+        let folder = RunFolder::Worktree {
+            path: worktree_path,
             git_dir,
-            &[
-                "-c",
-                user_name_arg.as_str(),
-                "-c",
-                user_email_arg.as_str(),
-                "commit",
-                "--no-verify",
-                "--no-gpg-sign",
-                "--message",
-                message,
-            ],
-        )
-        .await?;
-        let sha = self
-            .run_worktree_git_ok(worktree_path, git_dir, &["rev-parse", "HEAD"])
-            .await?;
-        Ok(Some(Commit {
-            sha: sha.trim().to_owned(),
-        }))
+        };
+        self.commit(folder, repo_root, message).await
     }
 
     /// Removes `worktree_path` and its `branch` from `repo_path`'s repository.

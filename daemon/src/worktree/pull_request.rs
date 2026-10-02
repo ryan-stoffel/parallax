@@ -1,23 +1,18 @@
 //! Opening a pull request from a run's branch (RYA-168).
 //!
 //! [`WorktreeManager::open_pr`] works in the user's own checkout, as the user. It pushes the run's
-//! branch to `origin` through [`WorktreeManager::run_git`], so git uses the user's own
-//! configuration and credential helpers, runs no hooks, and never prompts. Then `gh`, with its own
+//! branch to `origin` with [`WorktreeManager::push`], setting its upstream. Then `gh`, with its own
 //! sign-in, returns the branch's open pull request, or opens one against the GitHub repository's
 //! default branch. `gh` is found on the same `PATH` as every other tool plxd runs.
 
 use std::ffi::OsString;
 use std::path::Path;
-use std::time::Duration;
 
 use tokio::time::timeout;
 
-use super::{WorktreeManager, collect, describe_failure};
+use super::folder::NETWORK_TIMEOUT;
+use super::{WorktreeManager, collect};
 use crate::backend::process::{ProcessSpec, SpawnError, StdinMode};
-
-/// How long the push, and each `gh` call, may take: both go over the network, and a push can
-/// carry a large branch.
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// `gh`'s exit code when it isn't signed in.
 const GH_AUTH_REQUIRED: i32 = 4;
@@ -51,38 +46,16 @@ impl WorktreeManager {
         title: &str,
         body: &str,
     ) -> Result<String, PrError> {
-        let push_error = |error: super::WorktreeError| PrError::Push(error.to_string());
-        let repo_root = self.repo_root(repo_path).await.map_err(push_error)?;
         let origin = self
-            .run_git(&repo_root, &["remote", "get-url", "origin"])
+            .push(repo_path, branch)
             .await
-            .map_err(push_error)?;
-        if !origin.success() {
-            return Err(PrError::Push(format!(
-                "{} has no origin to push to: {}",
-                repo_root.display(),
-                describe_failure(&origin)
-            )));
-        }
-        let origin = origin.stdout.trim().to_owned();
-        let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
-        let push = self
-            .run_git_for(&repo_root, &["push", "origin", &refspec], NETWORK_TIMEOUT)
-            .await
-            .map_err(push_error)?;
-        if !push.success() {
-            return Err(PrError::Push(format!(
-                "could not push {branch} to origin: {}",
-                describe_failure(&push)
-            )));
-        }
-
+            .map_err(|error| PrError::Push(error.0))?;
         // `--flag=value`, so a value is never read as a flag.
         let repo = format!("--repo={}", without_userinfo(&origin));
         let head = format!("--head={branch}");
         let open = self
             .gh(
-                &repo_root,
+                repo_path,
                 &[
                     "pr",
                     "list",
@@ -102,7 +75,7 @@ impl WorktreeManager {
         let title = format!("--title={title}");
         let body = format!("--body={body}");
         let created = self
-            .gh(&repo_root, &["pr", "create", &repo, &head, &title, &body])
+            .gh(repo_path, &["pr", "create", &repo, &head, &title, &body])
             .await?;
         // gh prints the new pull request's URL last, on stdout.
         created
