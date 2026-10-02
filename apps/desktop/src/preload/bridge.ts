@@ -27,9 +27,9 @@ export interface ParallaxBridge {
   setThemeSource(preference: ThemePreference): void;
   /**
    * Sets the Dock icon on macOS, or the windows' icon elsewhere, to a PNG data: URL drawn in the
-   * Appearance preset's colors. Null puts the app's own icon back on macOS.
+   * Appearance preset's colors.
    */
-  setAppIcon(png: string | null): void;
+  setAppIcon(png: string): void;
   /** Zooms this window's page, 1 being 100%: Settings > Appearance's text size. */
   setZoom(factor: number): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */

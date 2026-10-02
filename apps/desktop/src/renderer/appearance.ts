@@ -249,10 +249,8 @@ export function useAppearanceEffects() {
   }, [current]);
   useLayoutEffect(() => window.parallax.setZoom(current.uiSize / 13), [current.uiSize]);
   useLayoutEffect(() => {
-    // The default preset keeps the bundled icon on macOS, which draws it in glass. Elsewhere it's
-    // drawn too, since a window's icon can't go back to the bundled one.
-    const preset = presetOf(current.preset);
-    const bundled = preset.id === "parallax" && window.parallax.platform === "darwin";
-    window.parallax.setAppIcon(bundled ? null : (drawIcon(preset) ?? null));
+    // Every preset's, the default's too: the bundled icon's overlap isn't the mark's.
+    const png = drawIcon(presetOf(current.preset));
+    if (png) window.parallax.setAppIcon(png);
   }, [current.preset]);
 }

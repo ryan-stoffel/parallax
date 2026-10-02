@@ -243,12 +243,10 @@ ipcMain.on("parallax:theme", (_event, preference: unknown) => {
 // The icon in the Appearance preset's colors (appearance.ts), kept for windows opened later.
 let appIcon: NativeImage | undefined;
 ipcMain.on("parallax:appIcon", (_event, png: unknown) => {
-  if (png !== null && (typeof png !== "string" || !png.startsWith("data:image/png;base64,")))
-    return;
-  // An empty image puts the bundle's own icon back in the Dock.
-  appIcon = png === null ? undefined : nativeImage.createFromDataURL(png);
-  if (process.platform === "darwin") app.dock?.setIcon(appIcon ?? nativeImage.createEmpty());
-  else if (appIcon) for (const win of BrowserWindow.getAllWindows()) win.setIcon(appIcon);
+  if (typeof png !== "string" || !png.startsWith("data:image/png;base64,")) return;
+  appIcon = nativeImage.createFromDataURL(png);
+  if (process.platform === "darwin") app.dock?.setIcon(appIcon);
+  else for (const win of BrowserWindow.getAllWindows()) win.setIcon(appIcon);
 });
 // Fires for the setting above, and for an OS theme change while it's "system".
 nativeTheme.on("updated", () => {
