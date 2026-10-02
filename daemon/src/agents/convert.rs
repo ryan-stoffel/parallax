@@ -127,6 +127,7 @@ pub(crate) fn agent_run(
         fast: row.fields.fast,
         approvals: row.fields.approvals,
         checkout: row.fields.checkout,
+        pull_requests: state.pull_requests.clone(),
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -161,6 +162,7 @@ pub(super) fn run_state(row: &parallax_store::Run) -> AgentRunState {
         permission: row.fields.permission.as_deref().and_then(option_value),
         context_window: row.fields.context_window,
         fast: row.fields.fast,
+        pull_requests: state.pull_requests.clone(),
         updated_at: row.updated_at,
     }
 }

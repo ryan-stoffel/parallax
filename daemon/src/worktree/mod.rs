@@ -106,7 +106,7 @@ mod tests;
 mod windows_tests;
 
 pub use folder::{PushError, RunFolder};
-pub use pull_request::PrError;
+pub use pull_request::{PrError, github_pr_urls};
 pub use review::{
     AcceptError, Accepted, Blob, CommitDiff, FileDiff, MAX_BLOB_BYTES, MergeHow, validate_repo_path,
 };

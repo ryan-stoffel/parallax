@@ -19,6 +19,7 @@ mod lifecycle;
 mod mcp;
 mod open_pr;
 mod projects;
+mod pull_requests;
 mod requests;
 mod support;
 mod threads;

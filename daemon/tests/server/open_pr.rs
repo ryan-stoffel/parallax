@@ -6,10 +6,12 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::methods::{AgentCancel, AgentOpenPr, AgentStart, RepoAdd, ThreadStart};
+use parallax_protocol::methods::{
+    AgentCancel, AgentList, AgentOpenPr, AgentStart, RepoAdd, ThreadStart,
+};
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentOpenPrParams, AgentStatus, ErrorKind, ProjectId,
-    RepoAddParams, RepoId, RunId, ThreadStartParams,
+    AccountChoice, AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind,
+    ParallaxEvent, ProjectId, RepoAddParams, RepoId, RunId, ThreadStartParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, find_program};
@@ -25,7 +27,9 @@ const URL: &str = "https://github.com/example/app/pull/7";
 
 /// A folder that is plxd's whole `PATH`: the real git, and a fake `gh` that logs its arguments to
 /// `gh.log`, answers `pr list` with a fork's pull request from a branch of the same name, then the
-/// one `pr create` made, and fails as `gh-mode` says: `signed-out` (exit 4, as gh does) or `fail`.
+/// one `pr create` made, answers `pr view` with what [`Tools::view`] wrote, succeeds at `pr merge`,
+/// `pr ready`, and `pr close`, and fails as `gh-mode` says: `signed-out` (exit 4, as gh does) or
+/// `fail`.
 pub(crate) struct Tools(TempDir);
 
 impl Tools {
@@ -54,6 +58,8 @@ case "$1 $2" in
     fi
     echo "[$list]" ;;
   'pr create') echo '{URL}' > "$dir/pr"; echo 'Creating pull request' >&2; echo '{URL}' ;;
+  'pr view') while IFS= read -r line; do printf '%s\n' "$line"; done < "$dir/view.json" ;;
+  'pr merge' | 'pr ready' | 'pr close') ;;
   *) exit 1 ;;
 esac
 "#,
@@ -80,7 +86,12 @@ esac
             .collect()
     }
 
-    fn mode(&self, mode: &str) {
+    /// What `gh pr view` prints.
+    pub(crate) fn view(&self, json: &str) {
+        fs::write(self.0.path().join("view.json"), format!("{json}\n")).unwrap();
+    }
+
+    pub(crate) fn mode(&self, mode: &str) {
         fs::write(self.0.path().join("gh-mode"), mode).unwrap();
     }
 
@@ -210,6 +221,14 @@ async fn a_finished_run_pushes_its_branch_and_opens_one_pull_request() {
     assert_eq!(again.url, URL);
     assert_eq!(pushed(), git(&worktree, &["rev-parse", "HEAD"]));
     assert_eq!(tools.log().len(), 3, "a list, and no second create");
+
+    // The run links its pull request once (PLX-318).
+    let runs = client
+        .call::<AgentList>(AgentListParams::default())
+        .await
+        .unwrap()
+        .runs;
+    assert_eq!(runs[0].pull_requests, [URL]);
     host.server.stop().await;
 }
 
@@ -278,7 +297,12 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
     let started = client.call::<ThreadStart>(start).await.unwrap();
     let scope = ProjectId::try_from(uuid::Uuid::from(started.thread.repo)).unwrap();
     subscribe(&mut client, scope, 0).await;
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    // Not the first thread's `agent.updated` for the pull request it linked.
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+            if *run_id == scratch && state.status == AgentStatus::Completed)
+    })
+    .await;
     let error = client
         .call::<AgentOpenPr>(open(scratch, "Rewrite the README", None))
         .await

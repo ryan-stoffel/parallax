@@ -82,10 +82,11 @@ pub enum ErrorKind {
     /// failed. The message carries git's stderr.
     PushFailed,
     /// `gh` isn't installed on the host, or isn't signed in. The message says which, with gh's
-    /// stderr. The branch was pushed first.
+    /// stderr. For `agent/openPr`, the branch was pushed first.
     GhUnavailable,
     /// `gh` could not find or open the pull request, for example because `origin` isn't a GitHub
-    /// repository. The message carries gh's stderr. The branch was pushed first.
+    /// repository, or `pr/view` or `pr/act` failed, as for a merge GitHub refuses (PLX-318). The
+    /// message carries gh's stderr. For `agent/openPr`, the branch was pushed first.
     PrFailed,
     /// An image in `images` is over the per-image cap, or a message's images are over the
     /// per-message cap or count, which `promptImages`' options give (RYA-191). The message says
