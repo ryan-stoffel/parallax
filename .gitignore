@@ -17,3 +17,6 @@ apps/desktop/release/
 # Editors
 .idea/
 *.swp
+
+# Local git worktrees
+.worktrees/
