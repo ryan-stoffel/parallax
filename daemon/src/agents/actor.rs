@@ -488,7 +488,7 @@ impl Actor {
             self.stop_approvals(AgentApprovalBy::Cancel).await;
         }
         if let Some(live) = &self.live {
-            info!(run = %self.id, "cancelling an agent run to delete its thread");
+            info!(run = %self.id, "cancelling an agent run to delete it");
             live.run.cancel();
             while self.live.is_some() {
                 let event = next_event(&mut self.live).await;
