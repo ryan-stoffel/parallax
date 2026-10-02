@@ -1,6 +1,7 @@
-// The agent's plan (RYA-220): its checklist as a card with progress, a strip over the composer
-// while the run goes, and Claude Code's proposed plan. The checklist comes from plxd, as for
-// TodoWrite, or from Claude Code's task tools (RYA-248). Pure helpers first, then the components.
+// The agent's plan (RYA-220): its checklist as lines in the transcript, a strip over the
+// composer with its card while the run goes, and Claude Code's proposed plan. The checklist comes
+// from plxd, as for TodoWrite, or from Claude Code's task tools (RYA-248). Pure helpers first,
+// then the components.
 import { Ban, ChevronDown, ChevronUp, CircleX, ClipboardList, ListChecks } from "lucide-react";
 import {
   memo,
@@ -144,7 +145,7 @@ const checklists = new WeakMap<Item, Todo>();
  * The transcript with Claude Code's task tools as checklists (RYA-248). Claude Code 2.1.283 keeps
  * its plan with TaskCreate and TaskUpdate in place of TodoWrite, one step per call, in a list that
  * lasts the session, across turns and resumes. So after each call that changes it, the whole list
- * goes in as a checklist, as plxd puts one after TodoWrite, and the plan card and strip read it
+ * goes in as a checklist, as plxd puts one after TodoWrite, and the plan lines and strip read it
  * the same way. A list whose every step is done is put away when the next turn starts, as Claude
  * Code's own view of it is; a step a later TaskUpdate reopens comes back. The session rows go: a
  * new session, as an account fallback starts with ids from 1 again, starts a new list, and clears
@@ -205,7 +206,7 @@ const taskReads = ["TaskList", "TaskGet"];
  * stands for it, unless it failed, and so does a task tool's call (`withTaskLists`); TaskList and
  * TaskGet go unless they failed. `ExitPlanMode` becomes a proposed plan row, out of the work
  * around it. User rows split turns, and so does a proposed plan: the work that carries it out gets
- * its own card, under it.
+ * its own plan, under it.
  */
 export function withPlans<R extends { kind: string; key: string }>(
   transcript: readonly (Item | R)[],
@@ -256,7 +257,7 @@ export function withPlans<R extends { kind: string; key: string }>(
         const update = cached && cached.previous === last ? cached : { ...item, previous: last };
         updates.set(item, update);
         out.push(update);
-        // A cleared checklist leaves the card on the last plan it had.
+        // A cleared checklist leaves the plan on the last list it had.
         if (item.items.length > 0) plan.items = item.items;
       }
       last = item.items;
