@@ -681,27 +681,29 @@ pub(crate) async fn delete(
     Ok(ThreadDeleteResult {})
 }
 
-/// Deletes thread `run_id` once its CLI has exited: the thread, run, and worktree rows and the
-/// run's stored events in one transaction, its events in memory, then `worktree` and its
-/// branch, and for a thread with no repo its scratch repository and its own context folder.
-/// Startup's garbage collection removes a worktree folder that a crash left behind.
+/// Deletes run `run_id` once its CLI has exited: its rows and stored events in one transaction,
+/// its events in memory, then `worktree` and its branch. For a thread, also its thread row, and
+/// for a thread with no repo its scratch repository and its own context folder, then appends
+/// `thread.deleted`. A Project's run (`project/delete`, PLX-338) has no thread row and gets no
+/// event of its own. Startup's garbage collection removes a worktree folder that a crash left
+/// behind.
 pub(crate) async fn purge(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     worktree: Option<parallax_store::Worktree>,
 ) -> Result<(), ErrorObject> {
-    let (thread, scratch) = store(daemon, move |db| {
-        let thread = db
-            .get_thread(run_id.into())
-            .map_err(|e| store_error(&e))?
-            .ok_or_else(|| thread_not_found(run_id))?;
+    let thread = store(daemon, move |db| {
+        let Some(thread) = db.get_thread(run_id.into()).map_err(|e| store_error(&e))? else {
+            db.delete_run(run_id.into()).map_err(|e| store_error(&e))?;
+            return Ok(None);
+        };
         let scratch = db
             .get_repo(thread.repo_id)
             .map_err(|e| store_error(&e))?
             .is_some_and(|repo| repo.fields.scratch);
         db.delete_thread(run_id.into())
             .map_err(|e| store_error(&e))?;
-        Ok((thread, scratch))
+        Ok(Some((thread, scratch)))
     })
     .await?;
     daemon.log.purge_run(run_id);
@@ -716,13 +718,19 @@ pub(crate) async fn purge(
             )
             .await
     {
-        warn!(run = %run_id, %error, "could not remove a deleted thread's worktree");
+        warn!(run = %run_id, %error, "could not remove a deleted run's worktree");
     }
+    let Some((thread, scratch)) = thread else {
+        info!(run = %run_id, "deleted a project's run");
+        return Ok(());
+    };
     if scratch {
         if let Ok(root) = scratch_root(daemon) {
             remove_scratch(daemon, run_id, &root.join(run_id.to_string()));
         }
-        remove_context(daemon, run_id);
+        if let Ok(scope) = ProjectId::try_from(Uuid::from(run_id)) {
+            remove_context(daemon, scope);
+        }
     }
     let repo = RepoId::try_from(thread.repo_id).map_err(|_| corrupt("thread", thread.id))?;
     daemon
@@ -737,17 +745,15 @@ pub(crate) async fn purge(
     Ok(())
 }
 
-/// Removes a thread with no repo's own context folder, `context/<run id>`.
-fn remove_context(daemon: &Daemon, run_id: RunId) {
-    let Ok(scope) = ProjectId::try_from(Uuid::from(run_id)) else {
-        return;
-    };
+/// Removes `scope`'s shared context folder, `context/<scope>`: a deleted thread with no repo's
+/// own, or a deleted Project's (PLX-338).
+pub(crate) fn remove_context(daemon: &Daemon, scope: ProjectId) {
     let dir = daemon.data_dir.context_dir(scope);
     if !std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
         return;
     }
     if let Err(error) = std::fs::remove_dir_all(&dir) {
-        warn!(run = %run_id, %error, "could not remove a deleted thread's context folder");
+        warn!(%scope, %error, "could not remove a deleted scope's context folder");
     }
 }
 

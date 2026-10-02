@@ -110,7 +110,8 @@ pub(super) enum Command {
         action: GitAction,
         reply: oneshot::Sender<Result<GitStatus, ErrorObject>>,
     },
-    /// `thread/delete` (#110): stops the run's CLI, waits for it to exit, and deletes the thread.
+    /// `thread/delete` (#110) and `project/delete` (PLX-338): stops the run's CLI, waits for it to
+    /// exit, and deletes the run.
     Delete {
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
@@ -199,7 +200,8 @@ pub(super) struct Actor {
     /// Messages waiting for the running CLI to exit, oldest first.
     queued: VecDeque<Queued>,
     stopping: bool,
-    /// Set once `thread/delete` removed the run: the actor stops, refusing what is still queued.
+    /// Set once `thread/delete` or `project/delete` removed the run: the actor stops, refusing
+    /// what is still queued.
     deleted: bool,
     /// A coordinator's wake-ups (RYA-42).
     wakes: Wakes,
@@ -477,16 +479,16 @@ impl Actor {
         }
     }
 
-    /// `thread/delete`: cancels a running CLI and waits for it to exit and its changes to be
-    /// committed, then deletes the thread's rows, events, worktree, and scratch folders, and
-    /// drops this actor from the map. Running here, between commands, it never races a resume
-    /// or an accept.
+    /// `thread/delete` and `project/delete`: cancels a running CLI and waits for it to exit and
+    /// its changes to be committed, then deletes the run's rows, events, worktree, and a thread's
+    /// scratch folders ([`crate::threads::purge`]), and drops this actor from the map. Running
+    /// here, between commands, it never races a resume or an accept.
     async fn delete(&mut self) -> Result<(), ErrorObject> {
         if self.live.is_some() {
             self.stop_approvals(AgentApprovalBy::Cancel).await;
         }
         if let Some(live) = &self.live {
-            info!(run = %self.id, "cancelling an agent run to delete its thread");
+            info!(run = %self.id, "cancelling an agent run to delete it");
             live.run.cancel();
             while self.live.is_some() {
                 let event = next_event(&mut self.live).await;

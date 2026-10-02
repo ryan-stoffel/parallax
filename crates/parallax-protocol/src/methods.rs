@@ -40,12 +40,13 @@ use crate::{
     EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, HostHealthParams,
     HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams, InitializeResult,
     PrActParams, PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult,
-    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams, RepoAddResult, RepoRefsParams,
-    RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult,
+    ProjectDeleteParams, ProjectDeleteResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, PullRequest,
+    RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -265,6 +266,10 @@ method_table! {
         /// `pr/diff`: one of a run's linked pull requests' unified diff, read with `gh pr diff`
         /// and cut at a size cap (PLX-328). Gated on the `prDiff` capability.
         PrDiff = "pr/diff": PrViewParams => PrDiffResult;
+        /// `project/delete`: deletes a project with every run in it, stopping their CLIs first
+        /// (PLX-338). Fails with `projectNotFound` for an unknown project or a repo entry's id.
+        /// Gated on the `projectDelete` capability.
+        ProjectDelete = "project/delete": ProjectDeleteParams => ProjectDeleteResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -351,6 +356,7 @@ mod tests {
                 "pr/view",
                 "pr/act",
                 "pr/diff",
+                "project/delete",
                 "$/cancelRequest",
                 "events/event",
             ]

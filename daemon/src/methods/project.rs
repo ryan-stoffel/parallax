@@ -1,6 +1,7 @@
 //! `project/list`, `project/create`, `project/start`, which starts a project's coordinator behind
 //! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
-//! icon behind the `projectEdit` capability (RYA-227, 0032).
+//! icon behind the `projectEdit` capability (RYA-227, 0032), and `project/delete`, behind
+//! `projectDelete` (PLX-338).
 
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -9,14 +10,16 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentRunResult, ErrorKind, ParallaxEvent, ProjectCreateParams, ProjectCreateResult,
-    ProjectIcon, ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult,
+    ProjectDeleteParams, ProjectDeleteResult, ProjectIcon, ProjectId, ProjectListParams,
+    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, RunId,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::Context;
-use crate::agents::coordinator;
+use crate::agents::{self, coordinator};
 use crate::repo;
+use crate::server::Daemon;
 use crate::store::{self, store_error};
 
 /// Every project, oldest first, with the `seq` of the last event the list reflects.
@@ -151,6 +154,92 @@ pub(crate) async fn update(
             Ok(ProjectUpdateResult { project })
         })
         .await
+}
+
+/// Deletes a project (PLX-338), detached from the request as `thread/delete` is, so a dropped
+/// connection never leaves it half deleted.
+pub(crate) async fn delete(
+    context: &Context,
+    params: ProjectDeleteParams,
+) -> Result<ProjectDeleteResult, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    context
+        .daemon
+        .agents
+        .detached(remove(daemon, params.project))
+        .await
+}
+
+/// Deletes each of `project`'s runs through its actor, as `thread/delete` deletes a thread's,
+/// coordinators first so none starts another run meanwhile. Then, in one store job once no run is
+/// left, deletes the project's row and appends `project.deleted`, and last removes its shared
+/// context folder. It looks again after each pass, for a run a coordinator started while it was
+/// stopping; a worker is recorded only while its scope exists, so none can start after the row
+/// is gone. A crash midway leaves the project listed, and deleting it again finishes the job.
+async fn remove(
+    daemon: Arc<Daemon>,
+    project: ProjectId,
+) -> Result<ProjectDeleteResult, ErrorObject> {
+    loop {
+        let log = Arc::clone(&daemon.log);
+        let runs = daemon
+            .store
+            .run(&CancellationToken::new(), move |store| {
+                if store
+                    .get_project(project.into())
+                    .map_err(|error| store_error(&error))?
+                    .is_none()
+                {
+                    return Err(ErrorObject::parallax(
+                        ErrorKind::ProjectNotFound,
+                        format!("no project has id {project}"),
+                    ));
+                }
+                let mut runs = store
+                    .list_runs(Some(project.into()))
+                    .map_err(|error| store_error(&error))?;
+                if runs.is_empty() {
+                    store
+                        .delete_project(project.into())
+                        .map_err(|error| store_error(&error))?;
+                    let seq = log.append_blocking(
+                        Timestamp::now(),
+                        None,
+                        ParallaxEvent::ProjectDeleted { project },
+                    );
+                    info!(%project, seq, "deleted a project");
+                }
+                // A coordinator's thread is its own run (0024).
+                runs.sort_by_key(|run| run.fields.coordinator_thread != Some(run.id));
+                runs.into_iter()
+                    .map(|run| {
+                        RunId::try_from(run.id).map_err(|_| {
+                            ErrorObject::internal_error(format!(
+                                "the stored run {} has an invalid id",
+                                run.id
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .await?;
+        if runs.is_empty() {
+            break;
+        }
+        for run in runs {
+            match agents::delete(&daemon, run).await {
+                Ok(()) => {}
+                // Another `project/delete` got to it first.
+                Err(error)
+                    if error
+                        .parallax_data()
+                        .is_some_and(|data| data.kind == ErrorKind::RunNotFound) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    crate::threads::remove_context(&daemon, project);
+    Ok(ProjectDeleteResult {})
 }
 
 /// The longest `name` plxd accepts, in bytes.
