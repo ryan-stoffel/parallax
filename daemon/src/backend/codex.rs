@@ -87,10 +87,12 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 
 use self::stream::{Step, Translator};
+use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, Signal, SpawnError,
@@ -458,6 +460,21 @@ impl Backend for CodexBackend {
 
     fn fast_mode(&self) -> bool {
         true
+    }
+
+    /// `codex app-server` on the default login, asked for `skills/list` ([`commands::codex`]).
+    fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        let spec = app_server::spec(&self.launcher, cwd, None);
+        let request = |id: u64, method: &str, params: Value| json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        Ok(Some(CommandsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![
+                request(1, "initialize", app_server::initialize_params()),
+                json!({"jsonrpc": "2.0", "method": "initialized"}),
+                request(commands::LIST_ID, "skills/list", json!({"cwds": [cwd]})),
+            ],
+            parse: commands::codex,
+        }))
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {

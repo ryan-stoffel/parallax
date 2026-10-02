@@ -194,7 +194,7 @@ const MAX_ENTRIES: usize = 5000;
 /// worktree, or for a Current checkout thread, its repo entry's checkout, which is the user's own
 /// and has no pinned git folder. The folder itself must be a real folder, never a symlink; the
 /// folders above it are the host's own, such as macOS's symlinked `/var`.
-async fn run_folder(
+pub(crate) async fn run_folder(
     daemon: &Arc<Daemon>,
     id: RunId,
 ) -> Result<(PathBuf, Option<PathBuf>), ErrorObject> {

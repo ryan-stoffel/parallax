@@ -4,11 +4,13 @@
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
 //! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
-//! `project.rs`; PLX-318 `pullRequests` and PLX-328 `prDiff`: `pr.rs`), and `host.rs`
+//! `project.rs`; PLX-318 `pullRequests` and PLX-328 `prDiff`: `pr.rs`; PLX-359 `composerMenus`:
+//! `composer.rs`), and `host.rs`
 //! advertises the capability in `initialize`.
 
 mod accounts;
 mod agent;
+mod composer;
 mod context;
 mod defaults;
 mod events;
@@ -25,11 +27,11 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestI
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
-    AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus, AgentImage,
-    AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart, ContextList,
-    ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
-    Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete, ProjectList, ProjectStart,
-    ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
+    AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus,
+    AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart,
+    ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth,
+    HostVersion, Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete, ProjectList,
+    ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -224,6 +226,9 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
             handle::<AgentCommit, _, _>(request, |p| agent::commit(context, p)).await
         }
         AgentPush::NAME => handle::<AgentPush, _, _>(request, |p| agent::push(context, p)).await,
+        AgentCommands::NAME => {
+            handle::<AgentCommands, _, _>(request, |p| composer::list_commands(context, p)).await
+        }
         _ => return None,
     })
 }

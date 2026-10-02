@@ -58,6 +58,7 @@ mod tests;
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -66,6 +67,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 
 use self::stream::{Ask, AskKind, Step, Translator, permission_answer};
+use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, StdinMode, StdinPipe,
@@ -111,6 +113,24 @@ impl CursorBackend {
     pub fn new(launcher: Launcher) -> Self {
         Self { launcher }
     }
+
+    /// `agent` in `cwd` with no arguments yet, the inherited [`SCRUBBED_PREFIX`] variables
+    /// dropped, and stdin piped.
+    fn spec(&self, cwd: &Path) -> ProcessSpec {
+        let mut spec = ProcessSpec::new(PROGRAM, cwd);
+        spec.scrub = scrubbed(self.launcher.base());
+        spec.stdin = StdinMode::Piped;
+        spec
+    }
+}
+
+/// The ACP `initialize` params plxd sends: a client with no file system or terminal of its own.
+fn initialize_params() -> Value {
+    json!({
+        "protocolVersion": 1,
+        "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
+        "clientInfo": {"name": "plxd", "version": crate::version()},
+    })
 }
 
 /// The CLI's arguments for `request`.
@@ -197,14 +217,31 @@ impl Backend for CursorBackend {
         PERMISSIONS
     }
 
+    /// `agent acp`, with a new session for `cwd` ([`commands::cursor`]).
+    fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        let mut spec = self.spec(cwd);
+        spec.args = vec!["acp".into()];
+        let request = |id: u64, method: &str, params: Value| json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        Ok(Some(CommandsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![
+                request(1, "initialize", initialize_params()),
+                request(
+                    commands::LIST_ID,
+                    "session/new",
+                    json!({"cwd": cwd, "mcpServers": []}),
+                ),
+            ],
+            parse: commands::cursor,
+        }))
+    }
+
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
-        let mut spec = ProcessSpec::new(PROGRAM, &request.cwd);
+        let mut spec = self.spec(&request.cwd);
         spec.args = arguments(&request)?;
-        spec.scrub = scrubbed(self.launcher.base());
-        spec.stdin = StdinMode::Piped;
         let mut process = self.launcher.spawn(&spec)?;
 
         let switch = CancelSwitch::new();
@@ -370,15 +407,7 @@ struct Driver {
 
 impl Driver {
     async fn run(mut self) {
-        self.request(
-            "initialize",
-            &json!({
-                "protocolVersion": 1,
-                "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
-                "clientInfo": {"name": "plxd", "version": crate::version()},
-            }),
-            Request::Initialize,
-        );
+        self.request("initialize", &initialize_params(), Request::Initialize);
         let mut control_open = true;
         let mut answers_open = true;
         let exit = loop {
