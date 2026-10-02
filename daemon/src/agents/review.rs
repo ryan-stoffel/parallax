@@ -192,12 +192,13 @@ const MAX_ENTRIES: usize = 5000;
 
 /// The folder a run's files are read from, and the pinned git folder to read it with: its
 /// worktree, or for a Current checkout thread, its repo entry's checkout, which is the user's own
-/// and has no pinned git folder.
+/// and has no pinned git folder. The folder itself must be a real folder, never a symlink; the
+/// folders above it are the host's own, such as macOS's symlinked `/var`.
 async fn run_folder(
     daemon: &Arc<Daemon>,
     id: RunId,
 ) -> Result<(PathBuf, Option<PathBuf>), ErrorObject> {
-    store(daemon, move |db| {
+    let (root, git_dir) = store(daemon, move |db| {
         let row = db
             .get_run(id.into())
             .map_err(|error| store_error(&error))?
@@ -228,14 +229,26 @@ async fn run_folder(
             "run {id} has no folder of files to browse"
         )))
     })
-    .await
+    .await?;
+    let why = match tokio::fs::symlink_metadata(&root).await {
+        Ok(meta) if meta.is_dir() => return Ok((root, git_dir)),
+        Ok(_) => "isn't a folder",
+        Err(error) if error.kind() == IoErrorKind::NotFound => "is gone",
+        Err(error) => return Err(io_failed(&root, &error)),
+    };
+    Err(ErrorObject::parallax(
+        ErrorKind::WorktreeFailed,
+        format!("run {id}'s folder {} {why}", root.display()),
+    ))
 }
 
 /// `path`, already checked by [`validate_repo_path`], under `root`, with every folder on the way
-/// checked with `lstat` to be a real folder, so no symlink is followed. `None` when one is
-/// missing or isn't a folder. The last component is left unchecked.
-async fn under(root: &Path, path: &str) -> Result<Option<PathBuf>, ErrorObject> {
+/// checked with `lstat` to be a real folder, so no symlink is followed, and whether one of them
+/// holds a `.git`, as a submodule or a nested repository does. `None` when one is missing or isn't
+/// a folder. The last component is left unchecked.
+async fn under(root: &Path, path: &str) -> Result<Option<(PathBuf, bool)>, ErrorObject> {
     let mut at = root.to_path_buf();
+    let mut nested = false;
     let mut components = path.split('/').peekable();
     while let Some(component) = components.next() {
         at.push(component);
@@ -243,7 +256,9 @@ async fn under(root: &Path, path: &str) -> Result<Option<PathBuf>, ErrorObject> 
             break;
         }
         match tokio::fs::symlink_metadata(&at).await {
-            Ok(meta) if meta.is_dir() => {}
+            Ok(meta) if meta.is_dir() => {
+                nested = nested || tokio::fs::symlink_metadata(at.join(".git")).await.is_ok();
+            }
             Ok(meta) if meta.is_symlink() => {
                 return Err(ErrorObject::invalid_params(format!(
                     "path {path:?} goes through a symlink"
@@ -254,7 +269,7 @@ async fn under(root: &Path, path: &str) -> Result<Option<PathBuf>, ErrorObject> 
             Err(error) => return Err(io_failed(&at, &error)),
         }
     }
-    Ok(Some(at))
+    Ok(Some((at, nested)))
 }
 
 fn io_failed(path: &Path, error: &std::io::Error) -> ErrorObject {
@@ -277,7 +292,7 @@ async fn read_working(
         content: None,
         too_large: false,
     };
-    let Some(at) = under(root, &path).await? else {
+    let Some((at, _)) = under(root, &path).await? else {
         return Ok(missing(path));
     };
     let meta = match tokio::fs::symlink_metadata(&at).await {
@@ -285,35 +300,52 @@ async fn read_working(
         Err(error) if error.kind() == IoErrorKind::NotFound => return Ok(missing(path)),
         Err(error) => return Err(io_failed(&at, &error)),
     };
-    let bytes = if meta.is_symlink() {
+    let not_a_file = || ErrorObject::invalid_params(format!("path {path:?} is not a file"));
+    let (size, file) = if meta.is_symlink() {
         let target = tokio::fs::read_link(&at)
             .await
             .map_err(|error| io_failed(&at, &error))?;
-        Some(target.to_string_lossy().into_owned().into_bytes())
+        let target = target.to_string_lossy().into_owned().into_bytes();
+        (target.len() as u64, Err(target))
     } else if meta.is_file() {
-        None
+        // Checked again on the open handle: the agent can swap in a symlink or a FIFO meanwhile,
+        // which this open refuses rather than follows, or doesn't block on.
+        let mut options = tokio::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        options.custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+                .bits()
+                .cast_signed(),
+        );
+        let file = options
+            .open(&at)
+            .await
+            .map_err(|error| io_failed(&at, &error))?;
+        let meta = file
+            .metadata()
+            .await
+            .map_err(|error| io_failed(&at, &error))?;
+        if !meta.is_file() {
+            return Err(not_a_file());
+        }
+        (meta.len(), Ok(file))
     } else {
-        return Err(ErrorObject::invalid_params(format!(
-            "path {path:?} is not a file"
-        )));
+        return Err(not_a_file());
     };
-    let size = bytes.as_ref().map_or(meta.len(), |b| b.len() as u64);
     let too_large = size > MAX_BLOB_BYTES;
-    let content = if size_only || too_large {
-        None
-    } else if let Some(bytes) = bytes {
-        Some(bytes)
-    } else {
-        let file = tokio::fs::File::open(&at)
-            .await
-            .map_err(|error| io_failed(&at, &error))?;
-        let mut bytes = Vec::new();
-        // The agent can grow the file meanwhile; never read past the cap.
-        file.take(MAX_BLOB_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .await
-            .map_err(|error| io_failed(&at, &error))?;
-        (bytes.len() as u64 <= MAX_BLOB_BYTES).then_some(bytes)
+    let content = match file {
+        _ if size_only || too_large => None,
+        Err(target) => Some(target),
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            // The agent can grow the file meanwhile; never read past the cap.
+            file.take(MAX_BLOB_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|error| io_failed(&at, &error))?;
+            (bytes.len() as u64 <= MAX_BLOB_BYTES).then_some(bytes)
+        }
     };
     Ok(AgentFileResult {
         path,
@@ -338,9 +370,9 @@ pub(crate) async fn files(
     let (root, git_dir) = run_folder(daemon, run_id).await?;
     let shown = path.as_deref().unwrap_or("");
     let not_a_folder = || ErrorObject::invalid_params(format!("path {shown:?} is not a folder"));
-    let dir = match &path {
+    let (dir, mut nested) = match &path {
         Some(path) => under(&root, path).await?.ok_or_else(not_a_folder)?,
-        None => root.clone(),
+        None => (root.clone(), false),
     };
     match tokio::fs::symlink_metadata(&dir).await {
         Ok(meta) if meta.is_dir() => {}
@@ -369,6 +401,8 @@ pub(crate) async fn files(
             continue;
         };
         if name.eq_ignore_ascii_case(".git") {
+            // Below the run's folder, a `.git` means a submodule or a nested repository.
+            nested = nested || path.is_some();
             continue;
         }
         // `DirEntry::metadata` is `lstat`'s: a symlink stays a symlink.
@@ -392,14 +426,18 @@ pub(crate) async fn files(
         Some(path) => format!("{path}/{name}"),
         None => name.to_owned(),
     };
-    let paths: Vec<String> = entries.iter().map(|entry| relative(&entry.name)).collect();
-    let ignored = daemon
-        .agents
-        .worktrees
-        .ignored(&root, git_dir.as_deref(), &paths)
-        .await
-        .map_err(|error| worktree_failed(&error))?;
-    entries.retain(|entry| !ignored.contains(&relative(&entry.name)));
+    // Inside a submodule, the run's repository can't say what's ignored (`check-ignore` fails
+    // there), so its folders list everything.
+    if !nested {
+        let paths: Vec<String> = entries.iter().map(|entry| relative(&entry.name)).collect();
+        let ignored = daemon
+            .agents
+            .worktrees
+            .ignored(&root, git_dir.as_deref(), &paths)
+            .await
+            .map_err(|error| worktree_failed(&error))?;
+        entries.retain(|entry| !ignored.contains(&relative(&entry.name)));
+    }
     let truncated = entries.len() > MAX_ENTRIES;
     entries.truncate(MAX_ENTRIES);
     Ok(AgentFilesResult { entries, truncated })

@@ -503,7 +503,7 @@ impl WorktreeManager {
         spec.limits.max_line_bytes = self.max_git_line_bytes;
         let mut process = self.launcher.spawn(&spec)?;
         // `./` keeps a name such as `:!x` from reading as pathspec magic, which check-ignore
-        // refuses, and `--literal-pathspecs` with it.
+        // refuses.
         let input: Vec<u8> = paths
             .iter()
             .flat_map(|path| [b"./", path.as_bytes(), b"\0"].concat())

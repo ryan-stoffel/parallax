@@ -168,6 +168,26 @@ async fn a_worktree_threads_files_list_by_folder_without_git_or_ignored_entries(
 async fn a_checkout_threads_files_are_its_repositorys_checkout() {
     let host = Host::start(fake(editing()));
     let path = repo_with_ignores(host.work.path());
+    // A checked-out submodule, with a folder of its own.
+    let lib = real_repo(host.work.path(), "lib");
+    std::fs::create_dir(lib.join("docs")).unwrap();
+    std::fs::write(lib.join("docs/a.md"), "A\n").unwrap();
+    git(&lib, &["add", "-A"]);
+    git(&lib, &["commit", "-q", "-m", "docs"]);
+    let lib = lib.to_str().unwrap();
+    git(
+        &path,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            lib,
+            "vendor/lib",
+        ],
+    );
+    git(&path, &["commit", "-q", "-m", "lib"]);
     std::fs::write(path.join("README.md"), "edited by the user\n").unwrap();
     add_ignored_and_links(&path);
     let mut client = host.client().await;
@@ -185,13 +205,32 @@ async fn a_checkout_threads_files_are_its_repositorys_checkout() {
         names(&root),
         [
             (".gitignore", AgentEntryKind::File),
+            (".gitmodules", AgentEntryKind::File),
             (":!x", AgentEntryKind::File),
             ("NOTES.md", AgentEntryKind::File),
             ("README.md", AgentEntryKind::File),
             ("etc", AgentEntryKind::Symlink),
             ("hosts", AgentEntryKind::Symlink),
             ("src", AgentEntryKind::Dir),
+            ("vendor", AgentEntryKind::Dir),
         ]
+    );
+    // Inside the submodule, git's ignore rules are its own, so its folders list unfiltered.
+    let sub = list(&mut client, run_id, Some("vendor/lib")).await.unwrap();
+    assert_eq!(
+        names(&sub),
+        [
+            ("README.md", AgentEntryKind::File),
+            ("docs", AgentEntryKind::Dir)
+        ]
+    );
+    let docs = list(&mut client, run_id, Some("vendor/lib/docs"))
+        .await
+        .unwrap();
+    assert_eq!(names(&docs), [("a.md", AgentEntryKind::File)]);
+    assert_eq!(
+        text(&mut client, run_id, "vendor/lib/docs/a.md").await,
+        "A\n"
     );
     assert_eq!(
         text(&mut client, run_id, "README.md").await,
