@@ -280,7 +280,11 @@ function Hours({ hours }: { hours: number[] }) {
           {at(busiest)}
         </p>
       </div>
-      <div className="flex h-14 items-end gap-1">
+      <div
+        role="img"
+        aria-label={`Agents started in each hour of the day, most around ${at(busiest)}`}
+        className="flex h-14 items-end gap-1"
+      >
         {hours.map((agents, hour) => (
           <div
             key={hour}
