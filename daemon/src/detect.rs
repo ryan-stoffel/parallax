@@ -483,7 +483,8 @@ async fn probe_github(launcher: &Launcher, timeout: Duration) -> GithubStatus {
     };
     let (version_spec, auth_spec) = (
         gh(&["--version"]),
-        gh(&["auth", "status", "--hostname", "github.com"]),
+        // `--active`: a stale second account shouldn't read as signed out.
+        gh(&["auth", "status", "--active", "--hostname", "github.com"]),
     );
     let (version, auth) = tokio::join!(
         run_spec(launcher, &version_spec, timeout),

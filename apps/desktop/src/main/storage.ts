@@ -40,9 +40,14 @@ function items(): Record<Folder, { name: string; folder: string; files: string[]
   };
 }
 
-/** Chromium's caches in userData, which Clear empties. App data's size leaves them out. */
+/**
+ * Chromium's caches in userData, the app's and the side panel browser's (`persist:browser` in
+ * main.ts), which Clear empties. App data's size leaves them out.
+ */
 const cacheFolders = () =>
-  ["Cache", "Code Cache"].map((f) => path.join(app.getPath("userData"), f));
+  ["", "Partitions/browser"].flatMap((root) =>
+    ["Cache", "Code Cache"].map((f) => path.join(app.getPath("userData"), root, f)),
+  );
 
 /** Serves Settings > Storage: sizes, Show in folder by id (never a path), and Clear cache. */
 export function startStorage(): void {
@@ -66,7 +71,9 @@ export function startStorage(): void {
     if (item) await shell.openPath(item.folder);
   });
   ipcMain.handle("parallax:clearCache", async () => {
-    await session.defaultSession.clearCache();
-    await session.defaultSession.clearCodeCaches({});
+    for (const each of [session.defaultSession, session.fromPartition("persist:browser")]) {
+      await each.clearCache();
+      await each.clearCodeCaches({});
+    }
   });
 }

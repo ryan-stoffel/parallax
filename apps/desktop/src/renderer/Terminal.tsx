@@ -5,7 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import type { TerminalTarget } from "../preload/bridge";
-import { appShortcut, rowShortcut } from "./ui";
+import { appShortcut } from "./ui";
 
 /**
  * An xterm.js terminal showing main's terminal `id`, which it opens on `target` when it mounts and
@@ -66,20 +66,15 @@ export function TerminalView({
     term.loadAddon(fit);
     // Links go to main, which opens https ones in the browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri)));
-    // The terminal's toggle (keybindings.ts) reaches the app, which toggles the terminal drawer
-    // with it. Outside macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac,
-    // and Ctrl+1 to Ctrl+9 reach the app, which opens a sidebar row with them.
+    // The app's shortcuts (keybindings.ts) reach only the app, never the shell too. Outside
+    // macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac.
     term.attachCustomKeyEventHandler(
       (e) =>
-        appShortcut(e) !== "terminal" &&
+        appShortcut(e) === undefined &&
         (window.parallax.platform === "darwin" ||
           e.type !== "keydown" ||
           !e.ctrlKey ||
-          !(
-            e.key === "v" ||
-            (e.key === "c" && term.hasSelection()) ||
-            rowShortcut(e) !== undefined
-          )),
+          !(e.key === "v" || (e.key === "c" && term.hasSelection()))),
     );
     term.open(element);
     // Hidden, it has no size to fit; it fits once shown.
