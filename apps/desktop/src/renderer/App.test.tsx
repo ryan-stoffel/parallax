@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { UpdateState, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
-import { appShortcut } from "./ui";
+import { appShortcut, terminalAppShortcut } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // Only what the frame calls, so new bridge methods don't break this stub.
@@ -16,6 +16,12 @@ const bridge: Partial<ParallaxBridge> = {
   onConnectionState: () => () => {},
   hosts: async () => [],
   onHosts: () => () => {},
+  onLocalName: (listener: (name: string) => void) => {
+    listener("This Mac");
+    return () => {};
+  },
+  setZoom: () => {},
+  setAppIcon: () => {},
   openTargets: async () => [],
   openTargetIcons: async () => ({}),
   onProfile: () => () => {},
@@ -196,4 +202,17 @@ test("a packaged app's release shows its notes and download in a popover, then a
   expect(restart.open).toBe(true);
   act(() => restart.querySelector<HTMLButtonElement>('button[value="restart"]')!.click());
   expect(update).toHaveBeenCalledTimes(2);
+});
+
+test("in a terminal off macOS, plain Ctrl+letter shortcuts stay the shell's", () => {
+  bridge.platform = "linux";
+  const press = (init: KeyboardEventInit) =>
+    terminalAppShortcut(new KeyboardEvent("keydown", init));
+  expect(press({ code: "KeyN", ctrlKey: true })).toBe(false);
+  expect(press({ code: "KeyS", ctrlKey: true })).toBe(false);
+  expect(press({ code: "KeyN", ctrlKey: true, shiftKey: true })).toBe(true);
+  expect(press({ code: "KeyJ", ctrlKey: true })).toBe(true);
+  expect(press({ code: "Digit2", ctrlKey: true })).toBe(true);
+  bridge.platform = "darwin";
+  expect(press({ code: "KeyN", metaKey: true })).toBe(true);
 });

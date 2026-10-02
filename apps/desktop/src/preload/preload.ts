@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webFrame } from "electron";
 
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
@@ -30,6 +30,8 @@ const bridge: ParallaxBridge = {
   platform: process.platform,
   version: () => ipcRenderer.invoke("parallax:version") as Promise<string>,
   setThemeSource: (preference) => ipcRenderer.send("parallax:theme", preference),
+  setAppIcon: (png) => ipcRenderer.send("parallax:appIcon", png),
+  setZoom: (factor) => webFrame.setZoomFactor(factor),
   pickFolder: () => ipcRenderer.invoke("parallax:pickFolder") as Promise<string | null>,
   updatable: process.argv.includes("--parallax-updatable"),
   update: () => ipcRenderer.invoke("parallax:update") as Promise<string>,
@@ -73,6 +75,13 @@ const bridge: ParallaxBridge = {
     ipcRenderer.on("parallax:hosts", forward);
     return () => ipcRenderer.removeListener("parallax:hosts", forward);
   },
+  onLocalName(listener) {
+    const forward = (_event: unknown, name: string) => listener(name);
+    ipcRenderer.on("parallax:localName", forward);
+    void (ipcRenderer.invoke("parallax:localName") as Promise<string>).then(listener);
+    return () => ipcRenderer.removeListener("parallax:localName", forward);
+  },
+  renameLocal: (name) => ipcRenderer.invoke("parallax:renameLocal", name),
   saveHost: (host, id) => ipcRenderer.invoke("parallax:saveHost", host, id),
   removeHost: (id) => ipcRenderer.invoke("parallax:removeHost", id),
 
@@ -104,6 +113,9 @@ const bridge: ParallaxBridge = {
   },
   signIn: (create) => ipcRenderer.invoke("parallax:signIn", create),
   signOut: () => ipcRenderer.invoke("parallax:signOut"),
+  storage: () => ipcRenderer.invoke("parallax:storage"),
+  showFolder: (id) => ipcRenderer.invoke("parallax:showFolder", id),
+  clearCache: () => ipcRenderer.invoke("parallax:clearCache"),
 };
 
 contextBridge.exposeInMainWorld("parallax", bridge);
