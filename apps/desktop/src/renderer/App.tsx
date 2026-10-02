@@ -12,6 +12,7 @@ import { GitMenu } from "./GitMenu";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
+import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
@@ -585,6 +586,7 @@ function HostLoader({
     approvals: !!capabilities && "approvals" in capabilities,
     attention: !!capabilities && "threadAttention" in capabilities,
     editable: !!capabilities && "projectEdit" in capabilities,
+    iconImageBytes: iconImageBytes(connection),
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;
