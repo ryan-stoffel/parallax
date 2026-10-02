@@ -39,13 +39,13 @@ use crate::{
     ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
     EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, HostHealthParams,
     HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams, InitializeResult,
-    PrActParams, PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
-    PullRequest, RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
-    UsageHistoryResult,
+    PrActParams, PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult,
+    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
+    ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams, RepoAddResult, RepoRefsParams,
+    RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -262,6 +262,9 @@ method_table! {
         /// `pr/act`: merges, squashes, sets auto-merge on or off, drafts, readies, or closes one
         /// of a run's linked pull requests with `gh`, and returns it as it is after.
         PrAct = "pr/act": PrActParams => PullRequest;
+        /// `pr/diff`: one of a run's linked pull requests' unified diff, read with `gh pr diff`
+        /// and cut at a size cap (PLX-328). Gated on the `prDiff` capability.
+        PrDiff = "pr/diff": PrViewParams => PrDiffResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -347,6 +350,7 @@ mod tests {
                 "repo/refs",
                 "pr/view",
                 "pr/act",
+                "pr/diff",
                 "$/cancelRequest",
                 "events/event",
             ]

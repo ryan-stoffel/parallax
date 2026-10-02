@@ -1,0 +1,86 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "pr/view",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "url": "https://github.com/me/app/pull/42"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "number": 42,
+      "title": "Add a README",
+      "url": "https://github.com/me/app/pull/42",
+      "repo": "me/app",
+      "state": "merged",
+      "draft": false,
+      "author": "me",
+      "updatedAt": "2026-10-02T12:20:00Z",
+      "baseBranch": "main",
+      "headBranch": "parallax/add-readme",
+      "changedFiles": 1,
+      "additions": 2,
+      "deletions": 0,
+      "body": "Explains how to build the app.",
+      "comments": [],
+      "reviewRequests": [],
+      "labels": [],
+      "checks": [],
+      "createdAt": "2026-10-02T12:00:00Z",
+      "closedAt": "2026-10-02T12:20:00Z",
+      "mergedAt": "2026-10-02T12:20:00Z",
+      "mergedBy": "reviewer",
+      "commits": [
+        {
+          "oid": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "headline": "docs: add a README",
+          "author": "me",
+          "committedAt": "2026-10-02T11:58:00Z"
+        }
+      ],
+      "reviews": [
+        {
+          "author": "reviewer",
+          "state": "approved",
+          "submittedAt": "2026-10-02T12:15:00Z"
+        },
+        {
+          "author": "bot",
+          "state": "changesRequested",
+          "submittedAt": "2026-10-02T12:16:00Z"
+        },
+        {
+          "author": "bot",
+          "state": "commented",
+          "submittedAt": "2026-10-02T12:17:00Z"
+        },
+        {
+          "author": "bot",
+          "state": "dismissed",
+          "submittedAt": "2026-10-02T12:18:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "pr/diff",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "url": "https://github.com/me/app/pull/42"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "diff": "diff --git a/README.md b/README.md\nnew file mode 100644\nindex 0000000..e69de29\n--- /dev/null\n+++ b/README.md\n@@ -0,0 +1,2 @@\n+# App\n+Run `npm start`.\n",
+      "truncated": false
+    }
+  }
+]

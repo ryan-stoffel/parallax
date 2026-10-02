@@ -139,7 +139,12 @@ export function App() {
   const threadRun =
     selection.kind === "thread" ? threads.state.runs[selection.threadId] : undefined;
   const linksPrs = connected && "pullRequests" in connection.capabilities;
-  const prs = usePullRequests(host.id, threadRun?.id, (linksPrs && threadRun?.pullRequests) || []);
+  const prs = usePullRequests(
+    host.id,
+    threadRun?.id,
+    (linksPrs && threadRun?.pullRequests) || [],
+    connected && "prDiff" in connection.capabilities,
+  );
   const openPr = (url?: string) => {
     setPanelOpen(true);
     setShowPr({ url });

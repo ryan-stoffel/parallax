@@ -260,6 +260,11 @@ export type ParallaxRequests = {
 	 * of a run's linked pull requests with `gh`, and returns it as it is after.
 	 */
 	"pr/act": { params: PrActParams, result: PullRequest },
+	/**
+	 * `pr/diff`: one of a run's linked pull requests' unified diff, read with `gh pr diff`
+	 * and cut at a size cap (PLX-328). Gated on the `prDiff` capability.
+	 */
+	"pr/diff": { params: PrViewParams, result: PrDiffResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -3031,7 +3036,7 @@ export type RepoRef = {
 };
 
 /**
- * Params of `pr/view`.
+ * Params of `pr/view`, and of `pr/diff`.
  */
 export type PrViewParams = {
 	/**
@@ -3126,6 +3131,30 @@ export type PullRequest = {
 	 */
 	checksState?: PrCheckState,
 	/**
+	 * When it was opened, in RFC 3339 UTC. Absent from a plxd without `prDiff`.
+	 */
+	createdAt?: string,
+	/**
+	 * When it was closed or merged, in RFC 3339 UTC. Absent while it is open.
+	 */
+	closedAt?: string,
+	/**
+	 * When it was merged, in RFC 3339 UTC. Absent unless it is merged.
+	 */
+	mergedAt?: string,
+	/**
+	 * Who merged it. Absent unless it is merged.
+	 */
+	mergedBy?: string,
+	/**
+	 * Its commits, oldest first. Absent means none, or a plxd without `prDiff`.
+	 */
+	commits?: Array<PrCommit>,
+	/**
+	 * Its submitted reviews, oldest first. Absent means none, or a plxd without `prDiff`.
+	 */
+	reviews?: Array<PrReview>,
+	/**
 	 * Whether it can merge. Absent while GitHub is still working it out.
 	 */
 	mergeState?: PrMergeState,
@@ -3184,6 +3213,28 @@ export type PrComment = {
 };
 
 /**
+ * A commit on a pull request.
+ */
+export type PrCommit = {
+	/**
+	 * Its full hash.
+	 */
+	oid: string,
+	/**
+	 * Its message's first line.
+	 */
+	headline: string,
+	/**
+	 * Its first author's login, or name when they have no GitHub account.
+	 */
+	author: string,
+	/**
+	 * When it was committed, in RFC 3339 UTC.
+	 */
+	committedAt: string,
+};
+
+/**
  * How a pull request merges.
  *
  * A newer plxd may send a method this version does not know; treat it as unknown.
@@ -3196,6 +3247,31 @@ export type PrMergeMethod = "merge" | "squash" | "rebase";
  * A newer plxd may send a state this version does not know; treat it as unknown.
  */
 export type PrMergeState = "clean" | "unstable" | "hasHooks" | "behind" | "blocked" | "dirty" | "draft";
+
+/**
+ * A submitted review: who, what verdict, and when. Its text, if any, is also in `comments`.
+ */
+export type PrReview = {
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * Its verdict.
+	 */
+	state: PrReviewState,
+	/**
+	 * When it was submitted, in RFC 3339 UTC.
+	 */
+	submittedAt: string,
+};
+
+/**
+ * A review's verdict.
+ *
+ * A newer plxd may send a verdict this version does not know; treat it as unknown.
+ */
+export type PrReviewState = "approved" | "changesRequested" | "commented" | "dismissed";
 
 /**
  * Where a pull request is.
@@ -3228,6 +3304,20 @@ export type PrActParams = {
  * A newer client may send an action this version does not know; plxd refuses it.
  */
 export type PrAction = "merge" | "squash" | "autoMerge" | "disableAutoMerge" | "draft" | "ready" | "close";
+
+/**
+ * Result of `pr/diff`: a pull request's changes as one unified diff, as `gh pr diff` prints it.
+ */
+export type PrDiffResult = {
+	/**
+	 * Its unified diff, a `diff --git` section per file.
+	 */
+	diff: string,
+	/**
+	 * Whether `diff` was cut short, at a line's end, at plxd's size cap.
+	 */
+	truncated: boolean,
+};
 
 /**
  * Params of `$/cancelRequest`.

@@ -50,8 +50,8 @@ use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
     AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun,
     AgentRunState, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind,
-    GitStatus, ImageMediaType, ParallaxEvent, PrActParams, PrViewParams, ProjectId, PromptImage,
-    PullRequest, Role, RunId, TurnId,
+    GitStatus, ImageMediaType, ParallaxEvent, PrActParams, PrDiffResult, PrViewParams, ProjectId,
+    PromptImage, PullRequest, Role, RunId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
@@ -1165,6 +1165,22 @@ pub(crate) async fn view_pr(
         .agents
         .worktrees
         .view_pr(&url)
+        .await
+        .map_err(|error| pr_error(&error))
+}
+
+/// `pr/diff` (PLX-328): one of a run's linked pull requests' unified diff, read with `gh` as
+/// `pr/view` reads one.
+pub(crate) async fn diff_pr(
+    daemon: Arc<Daemon>,
+    params: PrViewParams,
+) -> Result<PrDiffResult, ErrorObject> {
+    let PrViewParams { run_id, url } = params;
+    linked(&daemon, run_id, &url).await?;
+    daemon
+        .agents
+        .worktrees
+        .diff_pr(&url)
         .await
         .map_err(|error| pr_error(&error))
 }

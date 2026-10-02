@@ -1,10 +1,11 @@
-//! `pr/view` and `pr/act` (PLX-318), behind the `pullRequests` capability. The runner reads and
-//! acts on a run's linked pull requests in [`crate::agents`].
+//! `pr/view` and `pr/act` (PLX-318), behind the `pullRequests` capability, and `pr/diff`
+//! (PLX-328), behind `prDiff`. The runner reads and acts on a run's linked pull requests in
+//! [`crate::agents`].
 
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{PrActParams, PrAction, PrViewParams, PullRequest};
+use parallax_protocol::{PrActParams, PrAction, PrDiffResult, PrViewParams, PullRequest};
 
 use super::Context;
 use crate::agents;
@@ -15,6 +16,14 @@ pub(crate) async fn view(
     params: PrViewParams,
 ) -> Result<PullRequest, ErrorObject> {
     agents::view_pr(Arc::clone(&context.daemon), params).await
+}
+
+/// `pr/diff`.
+pub(crate) async fn diff(
+    context: &Context,
+    params: PrViewParams,
+) -> Result<PrDiffResult, ErrorObject> {
+    agents::diff_pr(Arc::clone(&context.daemon), params).await
 }
 
 /// `pr/act`: an action this version knows, checked here. Detached, so a merge `gh` has started
