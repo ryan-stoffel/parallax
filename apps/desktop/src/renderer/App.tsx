@@ -586,6 +586,7 @@ function HostLoader({
     approvals: !!capabilities && "approvals" in capabilities,
     attention: !!capabilities && "threadAttention" in capabilities,
     editable: !!capabilities && "projectEdit" in capabilities,
+    deletable: !!capabilities && "projectDelete" in capabilities,
     iconImageBytes: iconImageBytes(connection),
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);

@@ -18,6 +18,7 @@ import type {
   Project,
   Repo,
   ParallaxEvent,
+  Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
 
@@ -83,6 +84,7 @@ const setState = (hostId: string, state: ConnectionState) => {
 beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
+  localStorage.clear();
   popoverSources = [];
   listeners = new Set();
   capabilities = {};
@@ -464,7 +466,7 @@ test("the Workspace menu searches every host's repositories, Enter picks the fir
 });
 
 const projectsList = () =>
-  document.querySelector<HTMLElement>('#sidebar [aria-label="Threads and Projects"]')!;
+  document.querySelector<HTMLElement>('#sidebar ul[aria-label="Projects"]')!;
 /** A Project's row in the sidebar, by its name. */
 const projectRow = (name: string) =>
   [...projectsList().querySelectorAll<HTMLLIElement>('li[data-kind="project"]')].find((li) =>
@@ -1516,4 +1518,186 @@ test("a subagent's chat pins the coordinator's request too, and a Project with n
     decision: "allow",
   });
   expect(pinned()).toBeNull();
+});
+
+// The sidebar's Projects section (PLX-340).
+const flaky: Thread = { id: "t-flaky", repo: parallax.id, createdAt: "2026-09-29T11:00:00Z" };
+/** A thread, newer than either Project, and ember's two finished subagents. */
+const withThread = () => {
+  const done = { status: "completed" as const };
+  answers["thread/list"] = () => ({ result: { repos: [parallax], threads: [flaky], seq: 7 } });
+  answers["agent/list"] = () => ({
+    result: {
+      runs: [
+        { ...coordinatorRun(flaky.id, "Fix the flaky test"), ...done, project: parallax.id },
+        subagent("a-1", "Plan", done),
+        subagent("a-2", "Ship", done),
+      ],
+      seq: 7,
+    },
+  });
+};
+/** Every row's title, in the sidebar's order. */
+const sidebarTitles = () =>
+  [...document.querySelectorAll("#sidebar li[data-kind] [data-title]")].map((t) => t.textContent);
+const sectionHeadings = () =>
+  [...document.querySelectorAll("#sidebar > div h2")].map((h) => h.textContent);
+const projectsToggle = () =>
+  document.querySelector<HTMLButtonElement>("#sidebar h2 button[aria-expanded]")!;
+const projectsSection = () =>
+  document.getElementById(projectsToggle().getAttribute("aria-controls")!)!;
+const newProjectButtons = () => [
+  ...document.querySelectorAll('#sidebar button[aria-label="New project"]'),
+];
+const statusOf = (title: string) =>
+  [...document.querySelectorAll("#sidebar li[data-kind]")]
+    .find((li) => li.querySelector("[data-title]")?.textContent === title)
+    ?.querySelector("[data-status]")?.textContent;
+const keyDown = (init: KeyboardEventInit) =>
+  act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", init)));
+const deleteDialog = () =>
+  document.querySelector<HTMLDialogElement>('[aria-labelledby="delete-title"]')!;
+
+test("Projects sit in a collapsible section above Threads, with New project in its heading, and stay collapsed after a reload", async () => {
+  withThread();
+  await renderApp();
+  expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
+  expect(sidebarTitles()).toEqual(["photon", "ember", "Fix the flaky test"]);
+  expect(newProjectButtons()).toHaveLength(1);
+  expect(newProjectButtons()[0]!.closest("h2")).not.toBeNull();
+
+  await click(projectsToggle());
+  expect(projectsToggle().getAttribute("aria-expanded")).toBe("false");
+  expect(projectsSection().hidden).toBe(true);
+
+  act(() => unmount());
+  await renderApp();
+  expect(projectsSection().hidden).toBe(true);
+  await click(projectsToggle());
+  expect(projectsSection().hidden).toBe(false);
+});
+
+test("with no Projects, there's no section and New project stays in the toolbar until one is created", async () => {
+  answers["project/list"] = () => ({ result: { projects: [], seq: 7 } });
+  await renderApp();
+  expect(sectionHeadings()).toEqual([]);
+  expect(newProjectButtons()).toHaveLength(1);
+  expect(newProjectButtons()[0]!.closest("h2")).toBeNull();
+
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s-1",
+        seq: 8,
+        time: "",
+        event: { kind: "project.created", project: project("ember", "2026-09-29T12:00:00Z") },
+      },
+    }),
+  );
+  expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
+  expect(newProjectButtons()[0]!.closest("h2")).not.toBeNull();
+});
+
+test("a Project row is one line, with no repo line, and its agents in its tooltip", async () => {
+  withThread();
+  await renderApp();
+  expect(rowButton("ember").textContent).toBe("ember3d");
+  expect(rowButton("ember").title).toBe("2 agents");
+  expect(rowButton("photon").hasAttribute("title")).toBe(false);
+});
+
+test("search, the repo filter, and Mod+number cover both sections, and a collapsed section's rows get no numbers", async () => {
+  withThread();
+  await renderApp();
+  const search = document.querySelector<HTMLInputElement>(
+    '#sidebar input[aria-label="Search threads and Projects"]',
+  )!;
+  typeInto(search, "fla");
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  expect(projectsSection().textContent).toBe("Nothing matches");
+  typeInto(search, "emb");
+  expect(sidebarTitles()).toEqual(["ember"]);
+  typeInto(search, "");
+
+  const repoChoice = (name: string) =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '#sidebar [role="menu"][aria-label="Repos"] [role="menuitemradio"]',
+      ),
+    ].find((b) => b.textContent === name);
+  // Neither Project's folder is a listed repository.
+  await click(repoChoice("No repo"));
+  expect(sidebarTitles()).toEqual(["photon", "ember"]);
+  await click(repoChoice("parallax"));
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  await click(repoChoice("All repos"));
+
+  await keyDown({ key: "Meta", metaKey: true });
+  expect(["photon", "ember", "Fix the flaky test"].map(statusOf)).toEqual(["⌘1", "⌘2", "⌘3"]);
+  await keyDown({ key: "2", code: "Digit2", metaKey: true });
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+
+  await click(projectsToggle());
+  await keyDown({ key: "Meta", metaKey: true });
+  expect(statusOf("Fix the flaky test")).toBe("⌘1");
+  await keyDown({ key: "1", code: "Digit1", metaKey: true });
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
+});
+
+test("Delete… asks first, shows plxd's error in the dialog, then deletes the open Project and leaves its page", async () => {
+  capabilities = { projectEdit: {}, projectDelete: {} };
+  withThread();
+  answers["project/delete"] = () => ({
+    error: { code: -32000, message: "The project's worktree is locked." },
+  });
+  await renderApp();
+  await click(rowButton("ember"));
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(
+    [...projectRow("ember").querySelectorAll('[role="menuitem"]')].map((b) => b.textContent),
+  ).toEqual(["Rename", "Change icon", "Delete…"]);
+  expect(menuItem("ember", "Delete…")!.className).toContain("text-danger");
+
+  await click(menuItem("ember", "Delete…"));
+  expect(deleteDialog().open).toBe(true);
+  expect(deleteDialog().querySelector("h2")!.textContent).toBe("Delete this Project?");
+  expect(deleteDialog().querySelector("p")!.textContent).toBe(
+    "“ember” goes for good, with its 2 agents' transcripts, worktrees, and branches. Running agents are stopped first.",
+  );
+  const confirm = () =>
+    [...deleteDialog().querySelectorAll("button")].find((b) => b.textContent === "Delete");
+  await click(confirm());
+  expect(deleteDialog().querySelector('[role="alert"]')!.textContent).toBe(
+    "The project's worktree is locked.",
+  );
+  expect(deleteDialog().open).toBe(true);
+
+  answers["project/delete"] = () => ({ result: {} });
+  await click(confirm());
+  expect(calls("project/delete")).toEqual([{ project: "p-ember" }, { project: "p-ember" }]);
+  expect(deleteDialog().open).toBe(false);
+  expect(sidebarTitles()).toEqual(["photon", "Fix the flaky test"]);
+  expect(crumbs().at(-1)).toBe("New thread");
+});
+
+test("without projectDelete there's no Delete…, and another client's project.deleted removes the row", async () => {
+  capabilities = { projectEdit: {} };
+  await renderApp();
+  expect(menuItem("ember", "Delete…")).toBeUndefined();
+
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s-1",
+        seq: 8,
+        time: "",
+        event: { kind: "project.deleted", project: "p-ember" },
+      },
+    }),
+  );
+  expect(sidebarTitles()).toEqual(["photon"]);
 });
