@@ -15,6 +15,34 @@ import {
 export const shortcut = (keys: string) =>
   window.parallax.platform === "darwin" ? `⌘${keys.replace("Alt+", "⌥")}` : `Ctrl+${keys}`;
 
+/** The parts of a key press shortcuts read, from a DOM or React keyboard event. */
+export type KeyPress = Pick<
+  globalThis.KeyboardEvent,
+  "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "code" | "key" | "getModifierState"
+>;
+
+/**
+ * The app's own shortcut `e` presses, if any: Mod+B the sidebar, Mod+Alt+B the side panel, Mod+J
+ * the terminal, Mod+N a new thread, Mod+, Settings, and Mod+O Open. App and OpenMenu act on them,
+ * and a repository action's keybinding can't be one.
+ */
+export function appShortcut(
+  e: KeyPress,
+): "sidebar" | "panel" | "terminal" | "newThread" | "settings" | "open" | undefined {
+  const mac = window.parallax.platform === "darwin";
+  if (!(mac ? e.metaKey : e.ctrlKey)) return undefined;
+  // Off macOS, AltGr arrives as Ctrl+Alt and types characters we must not eat. (macOS may report
+  // Option as AltGraph, and uses Cmd anyway.)
+  if (!mac && e.getModifierState("AltGraph")) return undefined;
+  if (e.code === "KeyB") return e.altKey ? "panel" : "sidebar";
+  if (e.altKey) return undefined;
+  if (e.code === "KeyJ") return "terminal";
+  if (e.code === "KeyN") return "newThread";
+  if (e.key === ",") return "settings";
+  if (e.code === "KeyO" && !e.shiftKey) return "open";
+  return undefined;
+}
+
 /**
  * A square, icon-only toolbar button. `label` is its accessible name and tooltip; `aria-pressed`
  * shows it on.

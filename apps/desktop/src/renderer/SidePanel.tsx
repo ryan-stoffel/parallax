@@ -71,7 +71,8 @@ const surfaces: Surface[] = [
  * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents`,
  * `context`, and `files` are those views, such as a Project's, in place of their empty states.
  * `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal view,
- * told whether it's shown and given its empty state.
+ * told whether it's shown and given its empty state. Each new `browse` opens the Browser
+ * view at its url.
  */
 export function SidePanel({
   open,
@@ -85,6 +86,7 @@ export function SidePanel({
   remoteHost,
   terminal,
   files,
+  browse,
 }: {
   open: boolean;
   onClose: () => void;
@@ -97,6 +99,7 @@ export function SidePanel({
   remoteHost?: string;
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
   files?: ReactNode;
+  browse?: { url: string };
 }) {
   // The open views in tab order, and the one shown; with none shown, the list is.
   const [tabs, setTabs] = useState<Surface[]>([]);
@@ -117,6 +120,11 @@ export function SidePanel({
     setActive(next);
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
   };
+  const [browsed, setBrowsed] = useState(browse);
+  if (browse !== browsed) {
+    setBrowsed(browse);
+    if (browse) openView(surfaces.find((s) => s.name === "Browser")!);
+  }
   const emptyOf = (s: Surface) => (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
       <s.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
@@ -126,7 +134,7 @@ export function SidePanel({
   );
   const viewOf = (s: Surface) =>
     s.name === "Browser" ? (
-      <Browser remoteHost={remoteHost} />
+      <Browser page={browse} remoteHost={remoteHost} />
     ) : s.name === "Agents" && agents ? (
       agents
     ) : s.name === "Context" && context ? (

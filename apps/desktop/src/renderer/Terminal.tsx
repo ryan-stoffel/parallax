@@ -8,8 +8,9 @@ import type { TerminalTarget } from "../preload/bridge";
 
 /**
  * An xterm.js terminal showing main's terminal `id`, which it opens on `target` when it mounts and
- * ends when it unmounts. What's typed and printed only passes between the two. `onEnd` gets an
- * error for people if it couldn't start, or nothing once what it ran exits. Its colors follow the
+ * ends when it unmounts. What's typed and printed only passes between the two. `onStart` is called
+ * once what it runs has started, and `onEnd` gets an error for people if it couldn't start, or
+ * nothing once what it ran exits. Its colors follow the
  * app theme, with `background` the CSS token behind it. Import it lazily: xterm.js is large.
  */
 export function TerminalView({
@@ -17,6 +18,7 @@ export function TerminalView({
   target,
   label,
   background = "--surface",
+  onStart,
   onEnd,
 }: {
   id: string;
@@ -24,9 +26,11 @@ export function TerminalView({
   /** The terminal's accessible name. */
   label: string;
   background?: string;
+  onStart?: () => void;
   onEnd?: (error?: string) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const began = useEffectEvent(() => onStart?.());
   const ended = useEffectEvent((error?: string) => onEnd?.(error));
   // The target when it mounted. Another target is another terminal: key it by its target.
   const opened = useRef(target);
@@ -77,12 +81,14 @@ export function TerminalView({
     // The `dark` class on <html> switches the theme's tokens (theme.ts).
     const themes = new MutationObserver(() => (term.options.theme = theme()));
     themes.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    let live = true;
     void window.parallax
       .openTerminal(id, opened.current, term.cols, term.rows)
-      .then((error) => error && ended(error));
+      .then((error) => live && (error ? ended(error) : began()));
     term.focus();
 
     return () => {
+      live = false;
       observer.disconnect();
       themes.disconnect();
       stop();
