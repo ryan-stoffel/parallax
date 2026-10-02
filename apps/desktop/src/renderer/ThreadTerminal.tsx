@@ -6,8 +6,8 @@ import type { ThreadsState, ThreadsView } from "./threads";
 const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
 
 /**
- * A folder a terminal opens in, on a host: a thread's, or on New thread its repository's. `key`
- * names it across hosts, and a thread's ends its terminals when the thread is deleted.
+ * A folder a terminal opens in, on a host: a repository's checkout, or a No Repo thread's own.
+ * `key` names it across hosts, and a thread's ends its terminals when the thread is deleted.
  */
 export type ThreadFolder = { key: string; hostId: string; path: string; threadId?: string };
 
