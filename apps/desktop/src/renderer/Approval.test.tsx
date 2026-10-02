@@ -543,6 +543,65 @@ test("a pinned plan opened in full scrolls inside the same bound", async () => {
   }
 });
 
+// Whether a frame in a column can give up height: it may shrink below its content, or it scrolls
+// or clips what it holds. happy-dom lays nothing out, so the classes stand in for the layout.
+const gives = (el: Element) => /\b(min-h-0|overflow-hidden|overflow-y-auto)\b/.test(el.className);
+const column = (el: Element) => el.classList.contains("flex") && el.classList.contains("flex-col");
+/** The chat's bottom block, which holds the pinned card and the composer, and the composer. */
+const bottom = () => {
+  const composer = document.getElementById("composer-input")!.closest("form")!.parentElement!;
+  return { block: composer.parentElement!, composer };
+};
+
+test("with the largest preview and a grown composer, the preview gives way, never the card's header and buttons or the composer", async () => {
+  const content = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
+  output(asked("a1", { toolName: "Write", input: { file_path: "/repo/notes.txt", content } }));
+  await renderChat();
+  await click(inCard("Show all 300 lines"));
+  // A column the window bounds, with the card and the composer in it.
+  const { block, composer } = bottom();
+  expect(block.contains(pinned())).toBe(true);
+  expect(column(block) && gives(block)).toBe(true);
+  // Every frame from there down to the preview can shrink, and the preview scrolls.
+  const preview = card()!.querySelector<HTMLElement>('[style*="max-height"]')!;
+  for (let el = preview.parentElement!; el !== block; el = el.parentElement!)
+    expect(column(el) && gives(el), el.outerHTML.slice(0, 120)).toBe(true);
+  expect(gives(preview)).toBe(true);
+  // The card's header and buttons, and the composer, keep their height.
+  for (const rigid of [card()!.firstElementChild!, inCard("Approve")!.parentElement!, composer])
+    expect(gives(rigid), rigid.outerHTML.slice(0, 120)).toBe(false);
+  // In a window too short even for those, the card's own box scrolls, so they stay inside it.
+  expect(card()!.className).toContain("border");
+  expect(card()!.className).toContain("overflow-y-auto");
+});
+
+test("so does a pinned plan opened in full: its body gives way, never its header or Approve plan", async () => {
+  const own = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get: () => 2000,
+  });
+  try {
+    output(asked("p1", { toolName: "ExitPlanMode", input: { plan }, interactive: true }));
+    await renderChat();
+    await click(inCard("Show full plan"));
+    const { block, composer } = bottom();
+    const body = pinned()!.querySelector<HTMLElement>(".proposed-plan")!.parentElement!;
+    for (let el = body.parentElement!; el !== block; el = el.parentElement!)
+      expect(column(el) && gives(el), el.outerHTML.slice(0, 120)).toBe(true);
+    expect(gives(body)).toBe(true);
+    const header = body.parentElement!.firstElementChild!;
+    for (const rigid of [header, inCard("Approve plan")!.parentElement!, composer])
+      expect(gives(rigid), rigid.outerHTML.slice(0, 120)).toBe(false);
+    // Too short even for those, the plan's box scrolls; it still clips what's wide, as before.
+    expect(body.parentElement!.className).toContain("overflow-x-hidden");
+    expect(body.parentElement!.className).toContain("overflow-y-auto");
+  } finally {
+    if (own) Object.defineProperty(HTMLElement.prototype, "scrollHeight", own);
+    else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+  }
+});
+
 // --- The card's previews ---
 
 const previewOf = (request: Partial<ApprovalRequest>) => {
@@ -676,7 +735,9 @@ function queue(asked: Asked[], answers = new Map<string, AnswerState>(), returnF
     </>
   );
 }
-const said = () => document.querySelector('[aria-live="polite"]')!.textContent;
+/** The polite status's text as it is, and as it reads, less the zero-width space it may end in. */
+const heard = () => document.querySelector('[aria-live="polite"]')!.textContent!;
+const said = () => heard().replace(/\u200b$/, "");
 
 test("a card takes focus only from nothing, and focus in it moves to the next card, then back", () => {
   const returned = vi.fn();
@@ -708,9 +769,10 @@ test("a card never takes focus from someone typing", () => {
   expect(said()).toBe("Approval needed: Bash: pnpm test a1.");
 });
 
-test("the card stays while its Deny note is open or its answer is on the way, though an older request arrives", async () => {
+test("the card on screen stays first for as long as it waits: requests that come after it queue behind it, older or not", async () => {
   const older = { runId: "other", approval: approval("a1", "2026-10-01T12:00:00Z") };
   const shownNow = { runId, approval: approval("b1", "2026-10-01T12:00:05Z") };
+  const newer = { runId, approval: approval("c1", "2026-10-01T12:00:09Z") };
   const rerender = render(queue([shownNow]));
   await act(async () => inCard("Deny")!.click());
   const note = pinned()!.querySelector("input")!;
@@ -722,21 +784,177 @@ test("the card stays while its Deny note is open or its answer is on the way, th
   rerender(queue([older, shownNow]));
   expect(card()!.textContent).toContain("pnpm test b1");
   expect(card()!.textContent).toContain("Needs approval · 1 of 2");
+  expect(said()).toBe("2 requests waiting.");
   expect(pinned()!.querySelector("input")).toBe(note);
   expect(note.value).toBe("Not t");
   expect(document.activeElement).toBe(note);
 
-  // Closing the note lets the queue take its order again.
+  // Closing the note leaves it in place, and so does a newer request.
   await act(async () => inCard("Cancel")!.click());
-  expect(card()!.textContent).toContain("pnpm test a1");
+  expect(card()!.textContent).toContain("pnpm test b1");
+  rerender(queue([older, shownNow, newer]));
+  expect(card()!.textContent).toContain("pnpm test b1");
+  expect(card()!.textContent).toContain("Needs approval · 1 of 3");
+  expect(said()).toBe("3 requests waiting.");
 
-  // So does an answer on its way, until it's back.
-  act(() => unmount());
-  const answering = new Map<string, AnswerState>([["b1", { state: "answering", choice: "allow" }]]);
-  const again = render(queue([shownNow], answering));
-  again(queue([older, shownNow], answering));
+  // As do its answer on the way, and one that fails.
+  const all = [older, shownNow, newer];
+  rerender(queue(all, new Map([["b1", { state: "answering", choice: "allow" }]])));
   expect(card()!.textContent).toContain("pnpm test b1");
   expect(inCard("Approving…")).toBeDefined();
+  rerender(queue(all, new Map([["b1", { state: "failed", choice: "allow", error: "busy" }]])));
+  expect(card()!.textContent).toContain("pnpm test b1");
+  expect(pinned()!.querySelector('[role="alert"]')).not.toBeNull();
+
+  // Once it's answered, the oldest of the rest takes its place.
+  const answered = new Map<string, AnswerState>([
+    ["b1", { state: "answered", resolved: { decision: "allowed", by: "user" } }],
+  ]);
+  rerender(queue([older, newer], answered));
+  expect(card()!.textContent).toContain("pnpm test a1");
+  expect(card()!.textContent).toContain("Needs approval · 1 of 2");
+});
+
+// --- A new card under a pointer ---
+
+/** A queue whose answers go to `answered`, by approval id and choice. */
+const answeringTo =
+  (answered: (approvalId: string, choice: string) => void) =>
+  (asked: Asked[], answers = new Map<string, AnswerState>()) => (
+    <ApprovalQueue
+      asked={asked}
+      answers={answers}
+      onAnswer={(a, choice) => answered(a.approval.request.approvalId, choice)}
+      onDismiss={() => {}}
+      describe={describeTool}
+      markdown={(text) => <p>{text}</p>}
+    />
+  );
+const done = (...ids: string[]) =>
+  new Map<string, AnswerState>(
+    ids.map((id) => [id, { state: "answered", resolved: { decision: "allowed", by: "user" } }]),
+  );
+/**
+ * A pointer's click, which has a click count where a key's has none. It comes `at` on the clock of
+ * `performance.now`, by default a second from now, well past the time a new card ignores clicks.
+ */
+const pointerClick = (el: Element, at = performance.now() + 1000) =>
+  act(() => {
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 });
+    Object.defineProperty(click, "timeStamp", { value: at });
+    el.dispatchEvent(click);
+  });
+/** A pointer event on the card's Approve: a mouse's with no button down, unless `init` says. */
+const pointer = (type: string, init: PointerEventInit = {}) =>
+  act(() => {
+    inCard("Approve")!.dispatchEvent(new PointerEvent(type, { bubbles: true, ...init }));
+  });
+
+test("a new card ignores a pointer's click until the pointer hovers over it; a key's click goes at once", () => {
+  const answered = vi.fn();
+  const show = answeringTo(answered);
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
+
+  // The first card appears under a pointer that was already there.
+  const rerender = render(show([one, two]));
+  pointerClick(inCard("Approve")!);
+  expect(answered).not.toHaveBeenCalled();
+  // Nothing looks turned off meanwhile.
+  expect(buttons().some((b) => b.disabled)).toBe(false);
+  pointer("pointermove");
+  pointerClick(inCard("Approve")!);
+  expect(answered).toHaveBeenLastCalledWith("a1", "allow");
+
+  // The next takes its place under the same pointer: a click meant for the first misses it.
+  rerender(show([two, three], done("a1")));
+  expect(card()!.textContent).toContain("pnpm test a2");
+  pointerClick(inCard("Approve")!);
+  pointerClick(inCard("Deny")!);
+  expect(answered).toHaveBeenCalledOnce();
+  expect(pinned()!.querySelector("input")).toBeNull();
+  // So does one that drifts a pixel while pressed: the press began on the first.
+  pointer("pointerdown", { buttons: 1 });
+  pointer("pointermove", { buttons: 1 });
+  pointerClick(inCard("Approve")!);
+  expect(answered).toHaveBeenCalledOnce();
+  // A key's click goes at once.
+  act(() => inCard("Approve")!.click());
+  expect(answered).toHaveBeenLastCalledWith("a2", "allow");
+  expect(answered).toHaveBeenCalledTimes(2);
+});
+
+test("a pen hovering as a card is replaced moves first, as a mouse does; a touch goes at once", () => {
+  const answered = vi.fn();
+  const show = answeringTo(answered);
+  const pen = { pointerType: "pen" };
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
+
+  // A pen hovers over the first card's Approve, and the first times out under it.
+  const rerender = render(show([one, two, three]));
+  pointer("pointermove", pen);
+  rerender(show([two, three]));
+  expect(card()!.textContent).toContain("pnpm test a2");
+  // Its tap, with no move since, was aimed at the first, and so was its press shifting in contact.
+  pointer("pointerdown", { ...pen, buttons: 1 });
+  pointerClick(inCard("Approve")!);
+  pointer("pointerdown", { ...pen, buttons: 1 });
+  pointer("pointermove", { ...pen, buttons: 1 });
+  pointerClick(inCard("Approve")!);
+  expect(answered).not.toHaveBeenCalled();
+  // Once it hovers over this card, its tap counts.
+  pointer("pointermove", pen);
+  pointer("pointerdown", { ...pen, buttons: 1 });
+  pointerClick(inCard("Approve")!);
+  expect(answered).toHaveBeenLastCalledWith("a2", "allow");
+
+  // A finger can't hover, so its touch is a contact of its own.
+  rerender(show([three], done("a2")));
+  pointer("pointerdown", { pointerType: "touch", buttons: 1 });
+  pointerClick(inCard("Approve")!);
+  expect(answered).toHaveBeenLastCalledWith("a3", "allow");
+  expect(answered).toHaveBeenCalledTimes(2);
+});
+
+test("a new card ignores a pointer's click for 300 ms after it shows, even after a hover or a touch; a key's goes at once", () => {
+  const answered = vi.fn();
+  const show = answeringTo(answered);
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
+  // The clock a card notes when it shows, and that clicks are stamped on.
+  const clock = vi.spyOn(performance, "now").mockReturnValue(5_000);
+  try {
+    const rerender = render(show([one, two, three]));
+    pointer("pointermove");
+    pointerClick(inCard("Approve")!, 5_299);
+    expect(answered).not.toHaveBeenCalled();
+    pointerClick(inCard("Approve")!, 5_300);
+    expect(answered).toHaveBeenLastCalledWith("a1", "allow");
+
+    // The next, shown at 9 s: a pointer already moving, or a finger, is still too soon for it.
+    clock.mockReturnValue(9_000);
+    rerender(show([two, three], done("a1")));
+    pointer("pointermove");
+    pointerClick(inCard("Approve")!, 9_120);
+    pointer("pointerdown", { pointerType: "touch", buttons: 1 });
+    pointerClick(inCard("Approve")!, 9_240);
+    expect(answered).toHaveBeenCalledOnce();
+    // A key's click goes at once.
+    act(() => inCard("Approve")!.click());
+    expect(answered).toHaveBeenLastCalledWith("a2", "allow");
+
+    // And a touch goes once the time is up.
+    rerender(show([three], done("a1", "a2")));
+    pointer("pointerdown", { pointerType: "touch", buttons: 1 });
+    pointerClick(inCard("Approve")!, 9_300);
+    expect(answered).toHaveBeenLastCalledWith("a3", "allow");
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test("a request that queues behind the card is announced by how many wait", () => {
@@ -753,6 +971,31 @@ test("a request that queues behind the card is announced by how many wait", () =
   // Fewer waiting behind it says nothing new.
   rerender(queue([one, three]));
   expect(said()).toBe("3 requests waiting.");
+});
+
+test("the status changes, so it's read again, when it says what it said before: 2 waiting, then 1, then 2", () => {
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
+  const rerender = render(queue([one]));
+  rerender(queue([one, two]));
+  expect(said()).toBe("2 requests waiting.");
+  const before = heard();
+  rerender(queue([one]));
+  expect(heard()).toBe(before);
+  rerender(queue([one, three]));
+  expect(said()).toBe("2 requests waiting.");
+  expect(heard()).not.toBe(before);
+});
+
+test("with nothing to say, the status is empty, without its zero-width space", () => {
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const rerender = render(queue([one]));
+  rerender(queue([one, two]));
+  // Both time out, with nothing answered here.
+  rerender(queue([]));
+  expect(heard()).toBe("");
 });
 
 test("another run's request names it, with a way to its chat", async () => {
