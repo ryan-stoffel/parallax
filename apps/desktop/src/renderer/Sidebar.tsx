@@ -516,24 +516,27 @@ export function ThreadList({
         ))}
         {hasProjects && (
           <>
-            <h2 className={`${sectionHeading} pr-0`}>
-              <button
-                type="button"
-                aria-expanded={!collapsed}
-                aria-controls={projectsId}
-                onClick={() => setCollapsed(!collapsed)}
-                className="flex flex-1 items-center gap-1 self-stretch text-left hover:text-foreground"
-              >
-                Projects
-                <ChevronRight
-                  aria-hidden
-                  className={`size-3.5 transition-transform ${collapsed ? "" : "rotate-90"}`}
-                />
-              </button>
+            {/* The heading holds only its toggle, so its name is just "Projects". */}
+            <div className={`${sectionHeading} pr-0`}>
+              <h2 className="flex flex-1 self-stretch">
+                <button
+                  type="button"
+                  aria-expanded={!collapsed}
+                  aria-controls={projectsId}
+                  onClick={() => setCollapsed(!collapsed)}
+                  className="flex flex-1 items-center gap-1 text-left hover:text-foreground"
+                >
+                  Projects
+                  <ChevronRight
+                    aria-hidden
+                    className={`size-3.5 transition-transform ${collapsed ? "" : "rotate-90"}`}
+                  />
+                </button>
+              </h2>
               <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
                 <Plus />
               </IconButton>
-            </h2>
+            </div>
             <div id={projectsId} hidden={collapsed}>
               <ul aria-label="Projects" className="flex flex-col gap-0.5">
                 {projects.map(row)}

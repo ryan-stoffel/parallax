@@ -1549,6 +1549,9 @@ const projectsSection = () =>
 const newProjectButtons = () => [
   ...document.querySelectorAll('#sidebar button[aria-label="New project"]'),
 ];
+/** Whether `button` sits beside the Projects heading, outside it, so the heading's name is just "Projects". */
+const besideProjectsHeading = (button: Element) =>
+  !button.closest("h2") && button.previousElementSibling?.textContent === "Projects";
 const statusOf = (title: string) =>
   [...document.querySelectorAll("#sidebar li[data-kind]")]
     .find((li) => li.querySelector("[data-title]")?.textContent === title)
@@ -1558,13 +1561,13 @@ const keyDown = (init: KeyboardEventInit) =>
 const deleteDialog = () =>
   document.querySelector<HTMLDialogElement>('[aria-labelledby="delete-title"]')!;
 
-test("Projects sit in a collapsible section above Threads, with New project in its heading, and stay collapsed after a reload", async () => {
+test("Projects sit in a collapsible section above Threads, with New project beside its heading, and stay collapsed after a reload", async () => {
   withThread();
   await renderApp();
   expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
   expect(sidebarTitles()).toEqual(["photon", "ember", "Fix the flaky test"]);
   expect(newProjectButtons()).toHaveLength(1);
-  expect(newProjectButtons()[0]!.closest("h2")).not.toBeNull();
+  expect(besideProjectsHeading(newProjectButtons()[0]!)).toBe(true);
 
   await click(projectsToggle());
   expect(projectsToggle().getAttribute("aria-expanded")).toBe("false");
@@ -1582,7 +1585,7 @@ test("with no Projects, there's no section and New project stays in the toolbar 
   await renderApp();
   expect(sectionHeadings()).toEqual([]);
   expect(newProjectButtons()).toHaveLength(1);
-  expect(newProjectButtons()[0]!.closest("h2")).toBeNull();
+  expect(besideProjectsHeading(newProjectButtons()[0]!)).toBe(false);
 
   await act(async () =>
     deliver({
@@ -1596,7 +1599,7 @@ test("with no Projects, there's no section and New project stays in the toolbar 
     }),
   );
   expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
-  expect(newProjectButtons()[0]!.closest("h2")).not.toBeNull();
+  expect(besideProjectsHeading(newProjectButtons()[0]!)).toBe(true);
 });
 
 test("a Project row is one line, with no repo line, and its agents in its tooltip", async () => {
@@ -1683,10 +1686,12 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
   expect(crumbs().at(-1)).toBe("New thread");
 });
 
-test("without projectDelete there's no Delete…, and another client's project.deleted removes the row", async () => {
+test("without projectDelete there's no Delete…, and another client's project.deleted removes the open Project's row and leaves its page", async () => {
   capabilities = { projectEdit: {} };
   await renderApp();
   expect(menuItem("ember", "Delete…")).toBeUndefined();
+  await click(rowButton("ember"));
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
 
   await act(async () =>
     deliver({
@@ -1699,5 +1704,7 @@ test("without projectDelete there's no Delete…, and another client's project.d
       },
     }),
   );
+  await settle();
   expect(sidebarTitles()).toEqual(["photon"]);
+  expect(crumbs().at(-1)).toBe("New thread");
 });
