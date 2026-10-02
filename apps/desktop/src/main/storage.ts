@@ -40,6 +40,10 @@ function items(): Record<Folder, { name: string; folder: string; files: string[]
   };
 }
 
+/** Chromium's caches in userData, which Clear empties. App data's size leaves them out. */
+const cacheFolders = () =>
+  ["Cache", "Code Cache"].map((f) => path.join(app.getPath("userData"), f));
+
 /** Serves Settings > Storage: sizes, Show in folder by id (never a path), and Clear cache. */
 export function startStorage(): void {
   ipcMain.handle("parallax:storage", async (): Promise<StorageItem[]> => {
@@ -52,7 +56,9 @@ export function startStorage(): void {
         bytes: (await Promise.all(files.map(sizeOf))).reduce((a, b) => a + b, 0),
       })),
     );
-    const cache = await session.defaultSession.getCacheSize();
+    const cache = (await Promise.all(cacheFolders().map(sizeOf))).reduce((a, b) => a + b, 0);
+    const appData = listed.find((item) => item.id === "app")!;
+    appData.bytes -= cache;
     return [...listed, { id: "cache", name: "Cache", folder: "", bytes: cache }];
   });
   ipcMain.handle("parallax:showFolder", async (_event, id: unknown) => {

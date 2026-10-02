@@ -127,8 +127,15 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
         >
           <PanelLeftClose />
         </IconButton>
-  Palette,
-  PanelLeftClose,
+        <button
+          type="button"
+          onClick={onNewThread}
+          className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-[14px] font-semibold tracking-tight text-foreground hover:bg-hover"
+        >
+          <ParallaxMark className="size-5" />
+          Parallax
+        </button>
+        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
           <SquarePen />
         </IconButton>
       </TopBar>

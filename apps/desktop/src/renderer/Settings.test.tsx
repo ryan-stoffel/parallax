@@ -454,3 +454,54 @@ test("Connections renames this computer", async () => {
   await act(async () => input.form!.requestSubmit());
   expect(renameLocal).toHaveBeenCalledWith("macbook");
 });
+
+test("Typography's sizes and Word wrap are kept, and Advanced takes any font's name", async () => {
+  await renderSettings("appearance");
+  const select = (label: string) =>
+    document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+  const change = (element: HTMLSelectElement | HTMLInputElement, value: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")!.set!.call(
+        element,
+        value,
+      );
+      element.dispatchEvent(
+        new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }),
+      );
+    });
+  change(select("Interface font size"), "16");
+  change(select("Monospace font size"), "14");
+  await click(
+    document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Word wrap"]')!,
+  );
+  await click(document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Advanced"]')!);
+  change(
+    document.querySelector<HTMLInputElement>('input[aria-label="Monospace font"]')!,
+    "Berkeley Mono",
+  );
+  expect(JSON.parse(localStorage.getItem("parallax.appearance")!)).toMatchObject({
+    uiSize: 16,
+    codeSize: 14,
+    wordWrap: false,
+    codeFont: "Berkeley Mono",
+  });
+  localStorage.removeItem("parallax.appearance");
+});
+
+test("the last provider on can't be turned off", async () => {
+  localStorage.setItem("parallax.disabledProviders", JSON.stringify(["codex", "cursor"]));
+  vi.resetModules();
+  const { Settings: Fresh } = await import("./Settings");
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root.render(<Fresh section="providers" theme="system" onThemeChange={() => {}} />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await settle();
+  const toggle = (name: string) =>
+    document.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="Use ${name}"]`)!;
+  expect(toggle("Claude Code").disabled).toBe(true);
+  expect(toggle("Codex").disabled).toBe(false);
+  localStorage.removeItem("parallax.disabledProviders");
+});

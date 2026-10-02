@@ -180,6 +180,39 @@
   --danger: #f0883e;
 }
 
+/* Tailwind's motion-safe and motion-reduce follow .reduce-motion, which also covers the OS's
+   setting (appearance.ts). */
+@custom-variant motion-safe (&:where(:root:not(.reduce-motion) *));
+@custom-variant motion-reduce (&:where(:root.reduce-motion *));
+:root.reduce-motion .animate-pulse {
+  animation: none;
+}
+
+/* Long lines in code blocks, diffs, and file previews (.code-lines) wrap under .word-wrap, from
+   Settings > Appearance, or else run on and their box (.code-scroll) scrolls. Unlayered, so they
+   win over the elements' own whitespace utilities. */
+:root.word-wrap .code-lines {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+:root:not(.word-wrap) .code-lines {
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+:root:not(.word-wrap) .code-scroll {
+  overflow-x: auto;
+}
+:root:not(.word-wrap) .code-scroll > * {
+  width: max-content;
+  min-width: 100%;
+}
+/* The monospace size from Appearance, as a zoom on the outermost code, so each keeps its size
+   relative to the rest. The terminal takes the size itself (Terminal.tsx). */
+:is(.font-mono, pre):not(:is(.font-mono, pre, .xterm) *) {
+  zoom: var(--code-zoom, 1);
+}
+
 @theme inline {
   /* A font the user picked in Appearance comes first. */
   --font-sans: var(--ui-font, -apple-system), BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;

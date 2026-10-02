@@ -47,13 +47,18 @@ export function TerminalView({
         cursor: color("--foreground"),
       };
     };
-    // The code font from Settings > Appearance comes first.
-    const codeFont = getComputedStyle(element).getPropertyValue("--code-font").trim();
+    // The monospace font and size from Settings > Appearance (appearance.ts), on <html>.
+    const font = () => {
+      const style = getComputedStyle(document.documentElement);
+      const family = style.getPropertyValue("--code-font").trim();
+      return {
+        // Last, the bundled Nerd Font icons (index.css), for the glyphs no system font has.
+        fontFamily: `${family && `${family}, `}ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"`,
+        fontSize: Number(style.getPropertyValue("--code-size")) || 12,
+      };
+    };
     const term = new Terminal({
-      // The code font from Settings > Appearance first, and last the bundled Nerd Font icons
-      // (index.css), for the glyphs no system font has.
-      fontFamily: `${codeFont && `${codeFont}, `}ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"`,
-      fontSize: 12,
+      ...font(),
       cursorBlink: true,
       theme: theme(),
     });
@@ -89,9 +94,17 @@ export function TerminalView({
     term.onResize(({ cols, rows }) => window.parallax.resizeTerminal(id, cols, rows));
     const observer = new ResizeObserver(fitShown);
     observer.observe(element);
-    // The `dark` class on <html> switches the theme's tokens (theme.ts).
-    const themes = new MutationObserver(() => (term.options.theme = theme()));
-    themes.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    // The `dark` class on <html> switches the theme's tokens (theme.ts), and its style holds the
+    // monospace font and size.
+    const themes = new MutationObserver(() => {
+      term.options.theme = theme();
+      Object.assign(term.options, font());
+      fitShown();
+    });
+    themes.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
     let live = true;
     // The shell starts once the Nerd Font icons have loaded: xterm.js measures a glyph's width
     // once, so an icon drawn before its font arrives would stay a cell off.

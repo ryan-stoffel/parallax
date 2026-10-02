@@ -57,11 +57,15 @@ export type Appearance = {
   preset: string;
   /** "system" follows the OS's Increase contrast. */
   contrast: "system" | "standard" | "more";
-  /** The page's zoom, 1 being 100%. */
-  zoom: number;
   /** A font family name, or empty for the system's. */
   uiFont: string;
+  /** The interface's text size in px; the page zooms to it from the 13 px it's drawn at. */
+  uiSize: number;
   codeFont: string;
+  /** Code's text size in px, the terminal's as it is, the rest zoomed from 12 px. */
+  codeSize: number;
+  /** Whether long lines wrap in code blocks, diffs, and file previews. */
+  wordWrap: boolean;
   /** "system" follows the OS's Reduce motion. Either way `.reduce-motion` on <html> says so. */
   motion: "system" | "reduce";
   /** The pair that marks added and removed, done and failed. */
@@ -71,14 +75,75 @@ export type Appearance = {
 export const defaults: Appearance = {
   preset: "parallax",
   contrast: "system",
-  zoom: 1,
   uiFont: "",
+  uiSize: 13,
   codeFont: "",
+  codeSize: 12,
+  wordWrap: true,
   motion: "system",
   diffColors: "redGreen",
 };
 
-export const zooms = [0.9, 1, 1.1, 1.25, 1.5];
+export const uiSizes = [11, 12, 13, 14, 15, 16, 18, 20];
+export const codeSizes = [10, 11, 12, 13, 14, 15, 16, 18];
+
+/**
+ * The fonts Appearance offers, those installed here among these, after the system's. Typing a
+ * name under Advanced takes any other.
+ */
+const uiCandidates = [
+  "Inter",
+  "Helvetica Neue",
+  "Arial",
+  "Avenir Next",
+  "Segoe UI",
+  "Roboto",
+  "Atkinson Hyperlegible",
+  "Lexend",
+  "IBM Plex Sans",
+  "Open Sans",
+  "Verdana",
+  "Ubuntu",
+  "Noto Sans",
+];
+const codeCandidates = [
+  "SF Mono",
+  "Menlo",
+  "Monaco",
+  "JetBrains Mono",
+  "Fira Code",
+  "Cascadia Code",
+  "Consolas",
+  "Source Code Pro",
+  "IBM Plex Mono",
+  "Hack",
+  "Ubuntu Mono",
+  "DejaVu Sans Mono",
+  "Courier New",
+];
+
+/**
+ * Whether `name` is installed: text in it measures unlike each generic fallback's. False where
+ * there's no canvas to measure with.
+ */
+function isInstalled(name: string): boolean {
+  const ctx = document.createElement("canvas").getContext("2d");
+  if (!ctx) return false;
+  const sample = "mmmmmmmmmmlli10OQ@#";
+  return ["monospace", "serif", "sans-serif"].some((generic) => {
+    ctx.font = `72px ${generic}`;
+    const base = ctx.measureText(sample).width;
+    ctx.font = `72px "${name}", ${generic}`;
+    return ctx.measureText(sample).width !== base;
+  });
+}
+
+let installed: { ui: string[]; code: string[] } | undefined;
+/** The candidate fonts installed on this computer, measured once. */
+export function installedFonts() {
+  installed ??= { ui: uiCandidates.filter(isInstalled), code: codeCandidates.filter(isInstalled) };
+  return installed;
+}
 
 const appearance = stored("parallax.appearance", defaults, merged);
 
@@ -111,6 +176,9 @@ export function applyAppearance(appearance: Appearance) {
   else root.style.removeProperty("--ui-font");
   if (code) root.style.setProperty("--code-font", `"${code}"`);
   else root.style.removeProperty("--code-font");
+  root.style.setProperty("--code-size", String(appearance.codeSize));
+  root.style.setProperty("--code-zoom", String(appearance.codeSize / 12));
+  root.classList.toggle("word-wrap", appearance.wordWrap);
   const more =
     appearance.contrast === "more" ||
     (appearance.contrast === "system" && matchMedia("(prefers-contrast: more)").matches);
@@ -124,7 +192,7 @@ export function applyAppearance(appearance: Appearance) {
 
 /**
  * Draws the app icon in `preset`'s colors as a PNG data: URL: the two circles on a dark tile,
- * the overlap the front color at 80% over the back one, as design/icon's flat renders are.
+ * their overlap light, as the sidebar's ParallaxMark is in dark mode.
  */
 export function drawIcon(preset: Preset, size = 512): string | undefined {
   const canvas = document.createElement("canvas");
@@ -151,11 +219,11 @@ export function drawIcon(preset: Preset, size = 512): string | undefined {
   ctx.fillStyle = back;
   circle(624);
   ctx.fill();
+  // The overlap as ParallaxMark draws it in dark mode, light on the dark tile (index.css).
   ctx.save();
   circle(624);
   ctx.clip();
-  ctx.globalAlpha = 0.8;
-  ctx.fillStyle = front;
+  ctx.fillStyle = "#e4e4e7";
   circle(400);
   ctx.fill();
   ctx.restore();
@@ -179,10 +247,12 @@ export function useAppearanceEffects() {
       for (const m of media) m.removeEventListener("change", apply);
     };
   }, [current]);
-  useLayoutEffect(() => window.parallax.setZoom(current.zoom), [current.zoom]);
+  useLayoutEffect(() => window.parallax.setZoom(current.uiSize / 13), [current.uiSize]);
   useLayoutEffect(() => {
-    // The default preset keeps the bundled icon, which macOS draws in glass.
+    // The default preset keeps the bundled icon on macOS, which draws it in glass. Elsewhere it's
+    // drawn too, since a window's icon can't go back to the bundled one.
     const preset = presetOf(current.preset);
-    window.parallax.setAppIcon(preset.id === "parallax" ? null : (drawIcon(preset) ?? null));
+    const bundled = preset.id === "parallax" && window.parallax.platform === "darwin";
+    window.parallax.setAppIcon(bundled ? null : (drawIcon(preset) ?? null));
   }, [current.preset]);
 }

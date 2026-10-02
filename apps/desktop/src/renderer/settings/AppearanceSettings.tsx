@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type CSSProperties } from "react";
 
 import type { ThemePreference } from "../../preload/bridge";
 import {
@@ -6,12 +6,13 @@ import {
   presets,
   setAppearance,
   useAppearance,
-  zooms,
   type Appearance,
   type Preset,
 } from "../appearance";
+import { ParallaxMark } from "../logos";
 import { Segmented } from "../ui";
-import { PageTitle, Row, rowField, Section, Switch } from "./parts";
+import { PageTitle, Row, Section, Switch } from "./parts";
+import { TypographySettings } from "./TypographySettings";
 
 // A preview's colors, fixed, so each card shows its mode whatever the app is in.
 const swatches = {
@@ -62,14 +63,10 @@ function SchemePreview({ mode, preset }: { mode: "light" | "dark"; preset: Prese
   );
 }
 
-/** The app icon's two circles in `preset`'s colors, the front one over the back one. */
-export function PresetMark({ preset, size = 44 }: { preset: Preset; size?: number }) {
-  return (
-    <svg aria-hidden viewBox="0 0 24 24" width={size} height={size}>
-      <circle cx="14.5" cy="14.5" r="7" fill={preset.marks[1]} opacity="0.85" />
-      <circle cx="9.5" cy="9.5" r="7" fill={preset.marks[0]} opacity="0.85" />
-    </svg>
-  );
+/** The app's mark in `preset`'s colors, its overlap as the sidebar's is in this scheme. */
+function PresetMark({ preset }: { preset: Preset }) {
+  const colors = { "--mark-blue": preset.marks[0], "--mark-coral": preset.marks[1] };
+  return <ParallaxMark className="size-11" style={colors as CSSProperties} />;
 }
 
 const schemes: { value: ThemePreference; name: string }[] = [
@@ -83,7 +80,7 @@ const card =
 
 /**
  * Settings > Appearance: the color scheme, the color preset, and how the interface reads:
- * contrast, size, fonts, motion, and the colors for added and removed.
+ * contrast, motion, the colors for added and removed, and typography.
  */
 export function AppearanceSettings({
   theme,
@@ -168,14 +165,6 @@ export function AppearanceSettings({
             onChange={(contrast) => set({ contrast })}
           />
         </Row>
-        <Row title="Text size" description="Makes text and controls larger or smaller.">
-          <Segmented
-            label="Text size"
-            options={zooms.map((z) => ({ value: String(z), name: `${Math.round(z * 100)}%` }))}
-            value={String(appearance.zoom)}
-            onChange={(zoom) => set({ zoom: Number(zoom) })}
-          />
-        </Row>
         <Row
           title="Reduce motion"
           description="Stops animations. Also on whenever your OS asks for less motion."
@@ -202,28 +191,7 @@ export function AppearanceSettings({
         </Row>
       </Section>
 
-      <Section title="Typography">
-        <Row title="Interface font" description="Any font installed on this computer.">
-          <input
-            aria-label="Interface font"
-            value={appearance.uiFont}
-            onChange={(e) => set({ uiFont: e.target.value })}
-            placeholder="System font"
-            spellCheck={false}
-            className={rowField}
-          />
-        </Row>
-        <Row title="Code font" description="For code, diffs, and the terminal.">
-          <input
-            aria-label="Code font"
-            value={appearance.codeFont}
-            onChange={(e) => set({ codeFont: e.target.value })}
-            placeholder="System monospace"
-            spellCheck={false}
-            className={`${rowField} font-mono`}
-          />
-        </Row>
-      </Section>
+      <TypographySettings />
     </>
   );
 }

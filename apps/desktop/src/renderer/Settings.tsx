@@ -358,43 +358,33 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
                 const name = cliInfo[cli.cli]?.name ?? cli.cli;
                 const enabled = !off.includes(cli.cli);
                 return (
-                  // The switch sits beside the tab, not in it: a button can't hold a button.
-                  <div
+                  <button
                     key={cli.cli}
-                    className={`flex items-center gap-2 rounded-lg pr-3 hover:bg-hover ${on ? "bg-selected" : ""}`}
+                    id={`${tabs}-${cli.cli}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    aria-controls={`${tabs}-${cli.cli}-pane`}
+                    tabIndex={on ? 0 : -1}
+                    onClick={() => setSelected(cli.cli)}
+                    className={`flex items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-hover aria-selected:bg-selected ${enabled ? "" : "opacity-60"}`}
                   >
-                    <button
-                      id={`${tabs}-${cli.cli}`}
-                      type="button"
-                      role="tab"
-                      aria-selected={on}
-                      aria-controls={`${tabs}-${cli.cli}-pane`}
-                      tabIndex={on ? 0 : -1}
-                      onClick={() => setSelected(cli.cli)}
-                      className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg py-2.5 pl-3 text-left ${enabled ? "" : "opacity-60"}`}
-                    >
-                      {Logo && <Logo className="mt-0.5 size-4 shrink-0" />}
-                      <span className="min-w-0">
-                        <span className="flex items-baseline gap-2">
-                          <span className="shrink-0 text-[13px] font-medium">{name}</span>
-                          {cli.version && (
-                            <span className="truncate font-mono text-[11.5px] text-faint-foreground">
-                              {cli.version}
-                            </span>
-                          )}
-                        </span>
-                        <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
-                          <StatusDot tone={enabled ? cliTone(cli) : "off"} />
-                          {enabled ? cliStatus(cli) : "Off"}
-                        </span>
+                    {Logo && <Logo className="mt-0.5 size-4 shrink-0" />}
+                    <span className="min-w-0">
+                      <span className="flex items-baseline gap-2">
+                        <span className="shrink-0 text-[13px] font-medium">{name}</span>
+                        {cli.version && (
+                          <span className="truncate font-mono text-[11.5px] text-faint-foreground">
+                            {cli.version}
+                          </span>
+                        )}
                       </span>
-                    </button>
-                    <Switch
-                      label={`Use ${name}`}
-                      checked={enabled}
-                      onChange={(next) => setCliEnabled(cli.cli, next)}
-                    />
-                  </div>
+                      <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+                        <StatusDot tone={enabled ? cliTone(cli) : "off"} />
+                        {enabled ? cliStatus(cli) : "Off"}
+                      </span>
+                    </span>
+                  </button>
                 );
               })}
             </div>
@@ -467,7 +457,10 @@ function ProviderPane({
   const keyProvider = info?.keyProvider;
   const provider = backends[cli.cli]?.provider;
   const offered = provider ? models.filter((m) => m.provider === provider) : [];
-  const enabled = !useDisabledClis().includes(cli.cli);
+  const off = useDisabledClis();
+  const enabled = !off.includes(cli.cli);
+  // One provider stays on, so a new thread always has one to start on.
+  const last = enabled && Object.keys(backends).every((c) => c === cli.cli || off.includes(c));
 
   let action: ReactNode;
   if (!cli.installed)
@@ -504,6 +497,18 @@ function ProviderPane({
             {cli.version}
           </span>
         )}
+        <label
+          className="ml-auto flex items-center gap-2 text-[12.5px] text-muted-foreground"
+          title={last ? "One provider stays on, for new threads." : undefined}
+        >
+          {enabled ? "On" : "Off"}
+          <Switch
+            label={`Use ${name}`}
+            checked={enabled}
+            disabled={last}
+            onChange={(next) => setCliEnabled(cli.cli, next)}
+          />
+        </label>
       </div>
       {!enabled && (
         <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-[12.5px] text-muted-foreground">
