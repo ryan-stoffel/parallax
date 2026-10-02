@@ -278,7 +278,7 @@ export function App() {
     }
   };
 
-  // The app's shortcuts (ui.tsx), but Mod+O, which OpenMenu takes, and Mod+1 to Mod+9, which
+  // The app's shortcuts (ui.tsx), but Open, which OpenMenu takes, and Mod+1 to Mod+9, which
   // ThreadList takes.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -293,6 +293,7 @@ export function App() {
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
+      else if (command === "usage") openOnHost(host.id, { kind: "usage" });
       else return;
       e.preventDefault();
     };

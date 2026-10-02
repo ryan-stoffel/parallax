@@ -23,10 +23,11 @@ export type KeyPress = Pick<
 >;
 
 /**
- * The app's own shortcut `e` presses, if any: Mod+B the sidebar, Mod+Alt+B the side panel, Mod+J
- * the terminal, Mod+N the new thread picker, Mod+Shift+N a new thread with no repo, Mod+1 to
- * Mod+9 a sidebar row (`rowShortcut`), Mod+, Settings, and Mod+O Open. App, ThreadList, and
- * OpenMenu act on them, and a repository action's keybinding can't be one.
+ * The app's own shortcut `e` presses, if any: Mod+B or Mod+S the sidebar, Mod+Alt+B the side
+ * panel, Mod+J or Ctrl+Shift+` (Ctrl on macOS too) the terminal, Mod+N the new thread picker,
+ * Mod+Shift+N a new thread with no repo, Mod+1 to Mod+9 a sidebar row (`rowShortcut`), Mod+,
+ * Settings, Mod+O or Mod+Alt+O Open, and Mod+Alt+U Usage. App, ThreadList, and OpenMenu act on
+ * them, and a repository action's keybinding can't be one.
  */
 export function appShortcut(
   e: KeyPress,
@@ -39,14 +40,21 @@ export function appShortcut(
   | "row"
   | "settings"
   | "open"
+  | "usage"
   | undefined {
+  if (isTerminalToggle(e)) return "terminal";
   const mac = window.parallax.platform === "darwin";
   if (!(mac ? e.metaKey : e.ctrlKey)) return undefined;
   // Off macOS, AltGr arrives as Ctrl+Alt and types characters we must not eat. (macOS may report
   // Option as AltGraph, and uses Cmd anyway.)
   if (!mac && e.getModifierState("AltGraph")) return undefined;
   if (e.code === "KeyB") return e.altKey ? "panel" : "sidebar";
-  if (e.altKey) return undefined;
+  if (e.altKey) {
+    if (e.code === "KeyO") return "open";
+    if (e.code === "KeyU") return "usage";
+    return undefined;
+  }
+  if (e.code === "KeyS") return "sidebar";
   if (e.code === "KeyJ") return "terminal";
   if (e.code === "KeyN") return e.shiftKey ? "noRepoThread" : "newThread";
   if (rowShortcut(e) !== undefined) return "row";
@@ -54,6 +62,10 @@ export function appShortcut(
   if (e.code === "KeyO" && !e.shiftKey) return "open";
   return undefined;
 }
+
+/** Whether `e` is Ctrl+Shift+`, which toggles the terminal on every OS. */
+export const isTerminalToggle = (e: KeyPress) =>
+  e.code === "Backquote" && e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
 
 /** The 0-based row Mod+1 to Mod+9 picks, from the digit `e` presses with Mod and nothing else. */
 export function rowShortcut(e: KeyPress): number | undefined {
