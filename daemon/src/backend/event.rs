@@ -20,12 +20,12 @@ use serde::{Deserialize, Serialize};
     rename_all_fields = "camelCase"
 )]
 pub enum Event {
-    /// The CLI started or resumed its session: Claude's and Cursor's `system/init`, Codex's
-    /// `thread.started`.
+    /// The CLI started or resumed its session: Claude's `system/init`, Codex's `thread.started`,
+    /// Cursor's `session/new` or `session/load` response.
     SessionStarted {
         /// The vendor's id for the session, which a later run passes as
         /// [`RunRequest::resume`](super::RunRequest::resume): Claude's `session_id`, Codex's
-        /// `thread_id`, or Cursor's `chatId`.
+        /// `thread_id`, or Cursor's `sessionId`.
         session_id: String,
         /// The model the CLI chose, when it says.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -106,7 +106,7 @@ pub enum Event {
     Usage(ModelUsage),
     /// The latest state of one of the account's limit windows.
     RateLimit(LimitWindow),
-    /// A turn ended: Claude's and Cursor's `result`, Codex's `turn.completed`.
+    /// A turn ended: Claude's `result`, Codex's `turn.completed`, Cursor's `session/prompt` response.
     TurnFinished {
         /// The turn's id, as its [`Event::TurnStarted`] had it.
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -25,8 +25,8 @@ const spring = "duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]";
 /** A context window's size, such as `200K` or `1M`. */
 const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
 
-// What each provider calls fast mode, and its two settings.
-const fastNames: Record<Provider, { label: string; on: string; off: string }> = {
+// What each provider with fast mode calls it, and its two settings. Cursor has none (0036).
+const fastNames: Partial<Record<Provider, { label: string; on: string; off: string }>> = {
   Claude: { label: "Fast mode", on: "On", off: "Off" },
   Codex: { label: "Speed", on: "Fast", off: "Standard" },
 };

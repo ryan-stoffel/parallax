@@ -8,13 +8,14 @@ import {
   type ToggleEvent,
 } from "react";
 
-import { ClaudeLogo, OpenAILogo } from "./logos";
+import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import type { Model, Provider } from "./models";
 import { menuButton, menuPanel, moveFocus } from "./ui";
 
 const providers: Record<Provider, ComponentType<SVGProps<SVGSVGElement>>> = {
   Claude: ClaudeLogo,
   Codex: OpenAILogo,
+  Cursor: CursorLogo,
 };
 
 // The same model can run under two providers, so a model is known by both.

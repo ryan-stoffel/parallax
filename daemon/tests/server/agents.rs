@@ -1149,7 +1149,11 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     );
     backends.register(
         Provider::Openai,
-        Arc::new(plxd::backend::codex::CodexBackend::new(launcher)),
+        Arc::new(plxd::backend::codex::CodexBackend::new(launcher.clone())),
+    );
+    backends.register(
+        Provider::Cursor,
+        Arc::new(plxd::backend::cursor::CursorBackend::new(launcher)),
     );
     config.backends = Some(backends);
     let server = InProcess::start(config);
@@ -1181,6 +1185,18 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
         .unwrap_err();
     assert_eq!(kind(&codex), ErrorKind::WorkerUnavailable);
     assert!(codex.message.contains("RYA-145"), "{}", codex.message);
+
+    // Cursor runs only threads (0036), so a project's worker never routes to it.
+    let cursor = client
+        .call::<AgentStart>(AgentStartParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "cursor".to_owned(),
+            }),
+            ..start_params(project.id, "Fix it")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&cursor), ErrorKind::WorkerUnavailable);
 
     server.stop().await;
 }
