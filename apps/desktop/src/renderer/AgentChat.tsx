@@ -1391,8 +1391,8 @@ function namedTool(item: Extract<Item, { kind: "tool" }>) {
   return undefined;
 }
 
-// Tools whose input reads better as a permission request shows it: a command, or an edit's diff.
-const previewed = new Set(["Bash", "Edit", "MultiEdit", "Write"]);
+// Tools whose input reads better as a permission request shows it: an edit's diff.
+const previewed = new Set(["Edit", "MultiEdit", "Write"]);
 
 /** Whether a tool's input arrived whole, not cut for size. */
 const isWhole = (input?: JsonValue): input is JsonValue =>
@@ -1567,16 +1567,22 @@ function CodeBlock({
   );
 }
 
-/** A unified diff's lines, as a permission request draws an edit: hunk and file headers as bands. */
+/**
+ * A unified diff's lines, as a permission request draws an edit. Hunk headers, and the file headers
+ * before a file's first hunk, are bands, so a removed `-- comment` inside a hunk stays removed.
+ */
 function DiffLines({ text }: { text: string }) {
+  let inHunk = false;
   return (
     <div className="overflow-x-auto py-1.5 font-mono text-[12px] leading-relaxed">
       {text
         .replace(/\n$/, "")
         .split("\n")
         .map((line, i) => {
+          if (line.startsWith("diff ")) inHunk = false;
+          if (line.startsWith("@@")) inHunk = true;
           const op = line[0];
-          if (/^(@@|\+\+\+|---|diff |index )/.test(line))
+          if (line.startsWith("@@") || (!inHunk && /^(\+\+\+|---|diff |index )/.test(line)))
             return (
               <div key={i} className={`${diffBand} whitespace-pre-wrap`}>
                 {line}

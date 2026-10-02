@@ -188,16 +188,20 @@ test("a code block names its language, highlights it, and copies its text", asyn
 test("a diff code block shows added and removed lines, and copies the diff", async () => {
   const writeText = vi.fn(async () => {});
   vi.stubGlobal("navigator", { clipboard: { writeText } });
-  const diff = "@@ -1,2 +1,2 @@\n-old\n+new\n same\n";
+  const diff = "--- a/q.sql\n+++ b/q.sql\n@@ -1,3 +1,2 @@\n-old\n--- a note\n+new\n same\n";
   row({ kind: "assistant", key: "a", text: `\`\`\`diff\n${diff}\`\`\`` });
-  const lines = [...document.querySelectorAll(".font-mono.py-1\\.5 > div")];
+  // The block's header, then its lines.
+  const lines = [...document.querySelector(".markdown > div")!.lastElementChild!.children];
   expect(lines.map((l) => l.textContent)).toEqual([
-    "@@ -1,2 +1,2 @@",
+    "--- a/q.sql",
+    "+++ b/q.sql",
+    "@@ -1,3 +1,2 @@",
     "−Removed: old",
+    "−Removed: -- a note",
     "+Added: new",
     " same",
   ]);
-  expect(lines[2]!.className).toContain("bg-added/10");
+  expect(lines[5]!.className).toContain("bg-added/10");
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Copy code"]')!.click(),
   );
