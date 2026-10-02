@@ -198,7 +198,11 @@ pub(crate) fn with_extra_path(
         .get("PATH")
         .map(|path| std::env::split_paths(path).collect())
         .unwrap_or_default();
-    let login = login.into_iter().flat_map(std::env::split_paths);
+    // An rc file's empty or relative entry would resolve in the agent's worktree.
+    let login = login
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| dir.is_absolute());
     let in_home = home
         .filter(|home| home.is_absolute())
         .into_iter()
@@ -460,7 +464,7 @@ mod tests {
     fn a_minimal_path_is_filled_in_after_the_users_own_folders() {
         let mut env = Environment::empty();
         env.set("PATH", "/usr/bin:/custom/bin");
-        let login = OsStr::new("/run/current-system/sw/bin:/usr/bin");
+        let login = OsStr::new("/run/current-system/sw/bin::.:/usr/bin");
         let env = with_extra_path(env, Some(Path::new("/Users/me")), Some(login));
         let mut expected = vec![
             "/usr/bin",
