@@ -321,7 +321,7 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
 
   await crumbs.getByRole("button", { name: "ember" }).click();
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
-  await expect(transcript.getByText("From parallax: subagents finished")).toBeVisible();
+  await expect(transcript.getByText("From Parallax: subagents finished")).toBeVisible();
 });
 
 test("renames the project and picks its icon from its row, and both outlive a reload (RYA-230)", async () => {

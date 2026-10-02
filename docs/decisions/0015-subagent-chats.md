@@ -18,7 +18,7 @@
 
 ### A default chat agent is required to send
 
-Upstream's `ChatService.sendRequest` rejects every request when no chat agent is the default for its location and mode, even one addressed to a session type's own agent. Without Copilot, parallax has none. So the `parallax.agent` chat agent registers as the default for agent-mode chat in the Chat location. It answers a request for any chat that isn't a subagent with an error.
+Upstream's `ChatService.sendRequest` rejects every request when no chat agent is the default for its location and mode, even one addressed to a session type's own agent. Without Copilot, Parallax has none. So the `parallax.agent` chat agent registers as the default for agent-mode chat in the Chat location. It answers a request for any chat that isn't a subagent with an error.
 
 - `chat.enabled` (`ChatContextKeys.enabled`) is now true in the Agents window, as it is upstream with Copilot.
 - The coordinator can't send, since its type needs its own models and has none (M2, M4).

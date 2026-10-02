@@ -62,7 +62,7 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   renderApp();
   // Update is only for `pnpm dev`.
-  expect(button("Update parallax")).toBeNull();
+  expect(button("Update Parallax")).toBeNull();
 
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
@@ -97,9 +97,9 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   const status = () =>
     [...document.querySelectorAll('#sidebar [role="status"]')].map((s) => s.textContent);
   expect(status()).toContain("Updating…");
-  expect(button("Update parallax")!.disabled).toBe(true);
+  expect(button("Update Parallax")!.disabled).toBe(true);
   await act(async () => answer("Updated to abc1234"));
   act(() => publish({}));
   expect(status()).toContain("Updated to abc1234");
-  expect(button("Update parallax")!.disabled).toBe(false);
+  expect(button("Update Parallax")!.disabled).toBe(false);
 });

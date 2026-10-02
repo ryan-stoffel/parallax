@@ -584,7 +584,7 @@ export const RowView = memo(function RowView({
             summary={
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <Workflow aria-hidden className="size-3.5" />
-                From parallax: subagents finished
+                From Parallax: subagents finished
               </span>
             }
           >

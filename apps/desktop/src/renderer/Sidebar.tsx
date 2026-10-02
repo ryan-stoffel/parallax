@@ -527,7 +527,7 @@ function Footer({
         {window.parallax.updatable && (
           <span className="ml-auto">
             <IconButton
-              label={ready ? `Update ready: ${state.ready}` : (state.note ?? "Update parallax")}
+              label={ready ? `Update ready: ${state.ready}` : (state.note ?? "Update Parallax")}
               disabled={updating}
               onClick={() => void runUpdate()}
             >

@@ -129,7 +129,7 @@ test("a wake-up reads as from Parallax, with its message folded away", () => {
     text: "Parallax, not the user: runs you started finished.",
     wake: true,
   });
-  expect(document.querySelector("summary")!.textContent).toBe("From parallax: subagents finished");
+  expect(document.querySelector("summary")!.textContent).toBe("From Parallax: subagents finished");
   expect(document.querySelector("details")!.open).toBe(false);
   expect(document.querySelector(".bg-selected")).toBeNull();
 });
