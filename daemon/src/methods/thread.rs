@@ -1,15 +1,18 @@
 //! `thread/list`, `repo/add`, `thread/start`, `thread/archive`, and `thread/delete` (#110),
-//! behind the `threads` capability. The logic is [`crate::threads`].
+//! behind the `threads` capability, and `thread/update` and `repo/update` (0033), behind
+//! `threadAttention`. The logic is [`crate::threads`].
 
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::methods::{
-    RepoAdd, RequestMethod, ThreadArchive, ThreadDelete, ThreadList, ThreadStart,
+    RepoAdd, RepoUpdate, RequestMethod, ThreadArchive, ThreadDelete, ThreadList, ThreadStart,
+    ThreadUpdate,
 };
 use parallax_protocol::{
-    RepoAddParams, RepoAddResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    RepoAddParams, RepoAddResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams,
+    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadListParams,
+    ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 use serde_json::Value;
 
@@ -30,6 +33,8 @@ pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Val
         ThreadArchive::NAME => {
             handle::<ThreadArchive, _, _>(request, |p| archive(context, p)).await
         }
+        ThreadUpdate::NAME => handle::<ThreadUpdate, _, _>(request, |p| update(context, p)).await,
+        RepoUpdate::NAME => handle::<RepoUpdate, _, _>(request, |p| update_repo(context, p)).await,
         ThreadDelete::NAME => handle::<ThreadDelete, _, _>(request, |p| delete(context, p)).await,
         other => Err(ErrorObject::method_not_found(other)),
     }
@@ -64,6 +69,20 @@ async fn archive(
     params: ThreadArchiveParams,
 ) -> Result<ThreadArchiveResult, ErrorObject> {
     threads::archive(&context.daemon, params).await
+}
+
+async fn update(
+    context: &Context,
+    params: ThreadUpdateParams,
+) -> Result<ThreadUpdateResult, ErrorObject> {
+    threads::update(&context.daemon, params).await
+}
+
+async fn update_repo(
+    context: &Context,
+    params: RepoUpdateParams,
+) -> Result<RepoUpdateResult, ErrorObject> {
+    threads::update_repo(&context.daemon, params).await
 }
 
 async fn delete(

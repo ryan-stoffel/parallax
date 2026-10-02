@@ -1224,9 +1224,11 @@ impl Actor {
     async fn record_turn(&mut self, turn_id: TurnId, text: String) {
         self.turns.insert(turn_id, text.clone());
         let (run_id, id) = (self.row.id, self.id);
+        let log = Arc::clone(&self.daemon.log);
         let stored = store(&self.daemon, move |db| {
             db.record_turn(run_id, turn_id.into(), &text)
-                .map_err(|error| store_error(&error))
+                .map_err(|error| store_error(&error))?;
+            crate::threads::prompted(db, &log, run_id)
         })
         .await;
         if let Err(error) = stored {

@@ -1,0 +1,116 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "events/subscribe",
+    "params": { "after": 0 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "subscription": "01a0f755-f5e8-74c2-993d-c1660d1cd77b" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/update",
+    "params": {
+      "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5eb",
+      "seen": true,
+      "snoozedUntil": "2026-10-02T16:00:00Z"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "thread": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5eb",
+        "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+        "createdAt": "2026-10-01T12:00:00Z",
+        "seenAt": "2026-10-01T12:30:00Z",
+        "snoozedUntil": "2026-10-02T16:00:00Z",
+        "lastPromptAt": "2026-10-01T12:10:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f755-f5e8-74c2-993d-c1660d1cd77b",
+      "seq": 1,
+      "time": "2026-10-01T12:30:00Z",
+      "event": {
+        "kind": "thread.updated",
+        "thread": {
+          "id": "01a0f755-f200-74dd-8cfc-06d0b225c5eb",
+          "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+          "createdAt": "2026-10-01T12:00:00Z",
+          "seenAt": "2026-10-01T12:30:00Z",
+          "snoozedUntil": "2026-10-02T16:00:00Z",
+          "lastPromptAt": "2026-10-01T12:10:00Z"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "repo/update",
+    "params": {
+      "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+      "icon": { "name": "flame", "color": "orange" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "repo": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+        "name": "app",
+        "path": "/Users/me/src/app",
+        "icon": { "name": "flame", "color": "orange" },
+        "createdAt": "2026-10-01T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f755-f5e8-74c2-993d-c1660d1cd77b",
+      "seq": 2,
+      "time": "2026-10-01T12:31:00Z",
+      "event": {
+        "kind": "repo.updated",
+        "repo": {
+          "id": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+          "name": "app",
+          "path": "/Users/me/src/app",
+          "icon": { "name": "flame", "color": "orange" },
+          "createdAt": "2026-10-01T12:00:00Z"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "repo/update",
+    "params": {
+      "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ed",
+      "icon": { "name": "flame" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32000,
+      "message": "no repo entry has id 01a0f755-f200-74dd-8cfc-06d0b225c5ed",
+      "data": { "kind": "repoNotFound" }
+    }
+  }
+]

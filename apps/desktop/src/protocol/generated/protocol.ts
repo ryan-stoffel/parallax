@@ -198,6 +198,16 @@ export type ParallaxRequests = {
 	 */
 	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
 	/**
+	 * `thread/update`: marks a normal thread seen or snoozes it (0033). Gated on the
+	 * `threadAttention` capability.
+	 */
+	"thread/update": { params: ThreadUpdateParams, result: ThreadUpdateResult },
+	/**
+	 * `repo/update`: sets a repo entry's icon (0033). Gated on the `threadAttention`
+	 * capability.
+	 */
+	"repo/update": { params: RepoUpdateParams, result: RepoUpdateResult },
+	/**
 	 * `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
 	 * stopping its CLI first if it runs.
 	 */
@@ -1628,6 +1638,10 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * The entry.
 	 */
+	repo: Repo, } | { "kind": "repo.updated",
+	/**
+	 * The entry as it stands.
+	 */
 	repo: Repo, } | { "kind": "thread.started",
 	/**
 	 * The thread.
@@ -2021,6 +2035,11 @@ export type Repo = {
 	 */
 	scratch?: boolean,
 	/**
+	 * The icon the user chose, in a project's shape (0032), behind the `threadAttention`
+	 * capability (0033). Absent means the app's default: the name's initials.
+	 */
+	icon?: ProjectIcon,
+	/**
 	 * When the entry was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -2052,6 +2071,20 @@ export type Thread = {
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
+	/**
+	 * When a client last marked it seen with `thread/update` (0033). The app counts a run that
+	 * stopped after this as one the user hasn't seen. Absent if never.
+	 */
+	seenAt?: string,
+	/**
+	 * Until when the user snoozed it (0033). A time in the past means it isn't snoozed.
+	 */
+	snoozedUntil?: string,
+	/**
+	 * When its newest message was sent: its newest turn, or its creation (0033). Absent from a
+	 * plxd without `threadAttention`.
+	 */
+	lastPromptAt?: string,
 };
 
 /**
@@ -2553,6 +2586,65 @@ export type ThreadArchiveResult = {
 	 * The thread as it stands.
 	 */
 	thread: Thread,
+};
+
+/**
+ * Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
+ * `threadAttention` capability.
+ *
+ * `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
+ * past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
+ * Fails with `threadNotFound` for an unknown thread.
+ */
+export type ThreadUpdateParams = {
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * True to mark it seen now.
+	 */
+	seen?: boolean,
+	/**
+	 * Snoozes it until this time, in RFC 3339 UTC.
+	 */
+	snoozedUntil?: string,
+};
+
+/**
+ * Result of `thread/update`.
+ */
+export type ThreadUpdateResult = {
+	/**
+	 * The thread as it stands.
+	 */
+	thread: Thread,
+};
+
+/**
+ * Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
+ * behind the `threadAttention` capability. A change appends `repo.updated`. Fails with
+ * `repoNotFound` for an unknown entry.
+ */
+export type RepoUpdateParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+	/**
+	 * Its new icon, checked as `project/update` checks a project's.
+	 */
+	icon: ProjectIcon,
+};
+
+/**
+ * Result of `repo/update`.
+ */
+export type RepoUpdateResult = {
+	/**
+	 * The entry as it stands.
+	 */
+	repo: Repo,
 };
 
 /**

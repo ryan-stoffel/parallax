@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::error::StoreError;
 use crate::runs::insert_run;
 use crate::worktree::insert_worktree;
-use crate::{Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
+use crate::{ProjectIcon, Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
 
 /// What registering a repo entry takes (#110).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,8 @@ pub struct RepoFields {
 pub struct Repo {
     pub id: Uuid,
     pub fields: RepoFields,
+    /// Its icon, in a project's shape (decision record 0033), stored as the client sent it.
+    pub icon: Option<ProjectIcon>,
     pub created_at: Timestamp,
 }
 
@@ -32,23 +34,39 @@ pub struct Thread {
     pub repo_id: Uuid,
     pub archived: bool,
     pub created_at: Timestamp,
+    /// When the user last saw it (decision record 0033).
+    pub seen_at: Option<Timestamp>,
+    /// Until when the user snoozed it. A time in the past means it isn't snoozed.
+    pub snoozed_until: Option<Timestamp>,
+    /// When its newest message was sent: its newest recorded turn, or its creation.
+    pub last_prompt_at: Timestamp,
 }
 
-const REPO_COLUMNS: &str = "id, name, path, scratch, created_at";
-const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at";
+const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, icon_name, icon_color";
+const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
+    COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at)";
 
-fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<(String, String, String, bool, String)> {
+/// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
+type RawRepo = (String, String, String, bool, String, Option<ProjectIcon>);
+
+fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
+    let icon_name: Option<String> = row.get(5)?;
+    let icon_color: Option<String> = row.get(6)?;
     Ok((
         row.get(0)?,
         row.get(1)?,
         row.get(2)?,
         row.get(3)?,
         row.get(4)?,
+        icon_name.map(|name| ProjectIcon {
+            name,
+            color: icon_color,
+        }),
     ))
 }
 
-fn into_repo(raw: (String, String, String, bool, String)) -> Result<Repo, StoreError> {
-    let (id, name, path, scratch, created_at) = raw;
+fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
+    let (id, name, path, scratch, created_at, icon) = raw;
     Ok(Repo {
         id: Uuid::parse_str(&id)?,
         fields: RepoFields {
@@ -56,21 +74,44 @@ fn into_repo(raw: (String, String, String, bool, String)) -> Result<Repo, StoreE
             path,
             scratch,
         },
+        icon,
         created_at: timestamp::parse(&created_at)?,
     })
 }
 
-fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<(String, String, bool, String)> {
-    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+/// A thread's columns as TEXT, before the fallible conversion to [`Thread`].
+type RawThread = (
+    String,
+    String,
+    bool,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
+fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
 }
 
-fn into_thread(raw: (String, String, bool, String)) -> Result<Thread, StoreError> {
-    let (id, repo_id, archived, created_at) = raw;
+fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
+    let (id, repo_id, archived, created_at, seen_at, snoozed_until, last_prompt_at) = raw;
     Ok(Thread {
         id: Uuid::parse_str(&id)?,
         repo_id: Uuid::parse_str(&repo_id)?,
         archived,
         created_at: timestamp::parse(&created_at)?,
+        seen_at: seen_at.as_deref().map(timestamp::parse).transpose()?,
+        snoozed_until: snoozed_until.as_deref().map(timestamp::parse).transpose()?,
+        last_prompt_at: timestamp::parse(&last_prompt_at)?,
     })
 }
 
@@ -253,6 +294,57 @@ impl Store {
             return Err(StoreError::NotFound { id });
         }
         fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })
+    }
+
+    /// Marks thread `id` seen now when `seen`, and snoozes it until `snoozed_until` when that is
+    /// set (decision record 0033). Returns the thread and whether anything changed.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no thread has `id`, or a database error.
+    pub fn update_thread(
+        &self,
+        id: Uuid,
+        seen: bool,
+        snoozed_until: Option<Timestamp>,
+    ) -> Result<(Thread, bool), StoreError> {
+        let key = id.to_string();
+        let mut changed = 0;
+        if seen {
+            changed += self.conn.execute(
+                "UPDATE threads SET seen_at = ?2 WHERE id = ?1",
+                params![key, timestamp::now()],
+            )?;
+        }
+        if let Some(until) = snoozed_until {
+            changed += self.conn.execute(
+                "UPDATE threads SET snoozed_until = ?2 WHERE id = ?1 \
+                 AND snoozed_until IS NOT ?2",
+                params![key, timestamp::format(until)],
+            )?;
+        }
+        let thread = fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })?;
+        Ok((thread, changed > 0))
+    }
+
+    /// Sets repo entry `id`'s icon, replacing the whole icon. Returns the entry and whether it
+    /// changed.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
+    pub fn set_repo_icon(&self, id: Uuid, icon: &ProjectIcon) -> Result<(Repo, bool), StoreError> {
+        let key = id.to_string();
+        let before = fetch_repo(&self.conn, "id = ?1", &key)?.ok_or(StoreError::NotFound { id })?;
+        if before.icon.as_ref() == Some(icon) {
+            return Ok((before, false));
+        }
+        self.conn.execute(
+            "UPDATE repos SET icon_name = ?2, icon_color = ?3 WHERE id = ?1",
+            params![key, icon.name, icon.color],
+        )?;
+        let repo = fetch_repo(&self.conn, "id = ?1", &key)?.ok_or(StoreError::NotFound { id })?;
+        Ok((repo, true))
     }
 
     /// Deletes thread `id` with its run, its worktree row, its stored events, its sent turns, and

@@ -225,7 +225,7 @@ fn check_name(name: &str) -> Result<(), ErrorObject> {
 
 /// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0032). plxd never reads them, so
 /// that is all it checks.
-fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
+pub(crate) fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
     check_key("icon.name", &icon.name, MAX_ICON_NAME_CHARS)?;
     if let Some(color) = &icon.color {
         check_key("icon.color", color, MAX_ICON_COLOR_CHARS)?;

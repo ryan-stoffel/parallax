@@ -186,6 +186,12 @@ pub enum ParallaxEvent {
         /// The entry.
         repo: Repo,
     },
+    /// `repo/update` changed a repo entry's icon (0033). Host-level.
+    #[serde(rename = "repo.updated")]
+    RepoUpdated {
+        /// The entry as it stands.
+        repo: Repo,
+    },
     /// `thread/start` started a normal thread (#110). Host-level; its run's `agent.*` events go
     /// to its repo entry's id.
     #[serde(rename = "thread.started")]
@@ -193,7 +199,8 @@ pub enum ParallaxEvent {
         /// The thread.
         thread: Thread,
     },
-    /// A thread was archived or brought back (#110). Host-level.
+    /// A thread was archived or brought back (#110), marked seen or snoozed, or sent a message
+    /// (0033). Host-level.
     #[serde(rename = "thread.updated")]
     ThreadUpdated {
         /// The thread as it stands.
