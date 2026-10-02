@@ -106,8 +106,8 @@ pub fn mode(
 /// # Errors
 ///
 /// [`StartError::Unsupported`] for an API key account, a permission [`mode`] doesn't map, or an
-/// effort or context window Codex doesn't know; [`StartError::Invalid`] for an empty message or a model or resume
-/// id that can't be an argument; and the spawn's error.
+/// effort or context window Codex doesn't know; [`StartError::Invalid`] for an empty message or a
+/// model or resume id that can't be an argument; and the spawn's error.
 pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started, StartError> {
     if request.prompt.is_empty() && request.images.is_empty() {
         return Err(StartError::Invalid("the prompt is empty".into()));
@@ -119,46 +119,8 @@ pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started,
                 .into(),
         ));
     };
-    let (mut approval_policy, sandbox, mut reviewer) = mode(request.permission)?;
-    // A client that can't show a request: Codex's own sandbox holds the thread, and nothing asks,
-    // as a Claude thread without `approvals` keeps its sandbox (0034).
-    if !request.approvals {
-        (approval_policy, reviewer) = ("never", None);
-    }
+    let (thread_method, thread) = thread_params(&request)?;
     let effort = request.effort.map(effort_level).transpose()?;
-    if let Some(model) = &request.model {
-        check_argument("model", model)?;
-    }
-    let mut thread = json!({
-        "cwd": request.cwd,
-        "approvalPolicy": approval_policy,
-        "sandbox": sandbox,
-        "model": request.model,
-    });
-    if let Some(reviewer) = reviewer {
-        thread["approvalsReviewer"] = reviewer.into();
-    }
-    if let Some(tokens) = request.context_window {
-        if !CONTEXT_WINDOWS.contains(&tokens) {
-            return Err(StartError::Unsupported(format!(
-                "Codex has no {tokens}-token context window"
-            )));
-        }
-        thread["config"] = json!({ "model_context_window": tokens });
-    }
-    if let Some(fast) = request.fast {
-        // The catalog's tier named "Fast" is `priority`, as for exec.
-        thread["serviceTier"] = if fast { "priority" } else { "default" }.into();
-    }
-    let thread_method = match &request.resume {
-        Some(resume) => {
-            check_argument("resume id", &resume.session_id)?;
-            thread["threadId"] = resume.session_id.clone().into();
-            thread["excludeTurns"] = true.into();
-            "thread/resume"
-        }
-        None => "thread/start",
-    };
     let temp_dir = launcher.data_dir().temp_dir();
     let (images, image_paths) = write_images(&temp_dir, &request.images)
         .map_err(SpawnError::Io)?
@@ -219,6 +181,51 @@ pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started,
         run: Arc::new(handle),
         events,
     })
+}
+
+/// `thread/start`, or `thread/resume` for a run that resumes a thread, and its params: the cwd,
+/// the mode ([`mode`]), the model, the context window, and fast mode.
+fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartError> {
+    let (mut approval_policy, sandbox, mut reviewer) = mode(request.permission)?;
+    // A client that can't show a request: Codex's own sandbox holds the thread, and nothing asks,
+    // as a Claude thread without `approvals` keeps its sandbox (0034).
+    if !request.approvals {
+        (approval_policy, reviewer) = ("never", None);
+    }
+    if let Some(model) = &request.model {
+        check_argument("model", model)?;
+    }
+    let mut thread = json!({
+        "cwd": request.cwd,
+        "approvalPolicy": approval_policy,
+        "sandbox": sandbox,
+        "model": request.model,
+    });
+    if let Some(reviewer) = reviewer {
+        thread["approvalsReviewer"] = reviewer.into();
+    }
+    if let Some(tokens) = request.context_window {
+        if !CONTEXT_WINDOWS.contains(&tokens) {
+            return Err(StartError::Unsupported(format!(
+                "Codex has no {tokens}-token context window"
+            )));
+        }
+        thread["config"] = json!({ "model_context_window": tokens });
+    }
+    if let Some(fast) = request.fast {
+        // The catalog's tier named "Fast" is `priority`, as for exec.
+        thread["serviceTier"] = if fast { "priority" } else { "default" }.into();
+    }
+    let thread_method = match &request.resume {
+        Some(resume) => {
+            check_argument("resume id", &resume.session_id)?;
+            thread["threadId"] = resume.session_id.clone().into();
+            thread["excludeTurns"] = true.into();
+            "thread/resume"
+        }
+        None => "thread/start",
+    };
+    Ok((thread_method, thread))
 }
 
 /// A turn's `input`: its images as `localImage` files, then its text, if any.
