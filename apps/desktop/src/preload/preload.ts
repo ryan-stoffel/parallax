@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   ConnectionState,
+  Profile,
   SshHost,
   SubscriptionMessage,
   TerminalMessage,
@@ -90,6 +91,18 @@ const bridge: ParallaxBridge = {
   openTargets: (hostId) => ipcRenderer.invoke("parallax:openTargets", hostId),
   openFolder: (hostId, target, folder) =>
     ipcRenderer.invoke("parallax:openFolder", hostId, target, folder),
+
+  onProfile(listener) {
+    const forward = (_event: unknown, profile: Profile | null) => listener(profile);
+    ipcRenderer.on("parallax:profile", forward);
+    void (ipcRenderer.invoke("parallax:profile") as Promise<Profile | null>).then(listener);
+    return () => ipcRenderer.removeListener("parallax:profile", forward);
+  },
+  signInWith: (provider) => ipcRenderer.invoke("parallax:signInWith", provider),
+  signInWithEmail: (email, password) =>
+    ipcRenderer.invoke("parallax:signInWithEmail", email, password),
+  signUp: (account) => ipcRenderer.invoke("parallax:signUp", account),
+  signOut: () => ipcRenderer.invoke("parallax:signOut"),
 };
 
 contextBridge.exposeInMainWorld("parallax", bridge);

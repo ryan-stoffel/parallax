@@ -21,7 +21,7 @@ Goals:
 
 Non-goals:
 
-* A hosted cloud service
+* A hosted cloud service, except Parallax accounts ([0034](decisions/0034-accounts.md))
 * An editor. The Code - OSS fork was dropped ([0020](decisions/0020-drop-the-editor-fork.md)).
 * Slack triggers
 

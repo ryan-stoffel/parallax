@@ -11,6 +11,7 @@ import {
   CircleCheck,
   CirclePause,
   CircleSlash,
+  CircleUser,
   Ellipsis,
   FileDiff,
   Folder,
@@ -62,6 +63,7 @@ import {
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { Avatar, useProfile } from "./profile";
 import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
@@ -694,13 +696,23 @@ function RepoFilterMenu({
   );
 }
 
-/** The footer's buttons: Settings, Usage, and Update when `updatable` (Update.tsx). */
+/**
+ * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
+ * initials (0034), Settings, Usage, and Update when `updatable` (Update.tsx).
+ */
 function Footer({
   onOpenSettings,
   onOpenUsage,
 }: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {
+  const profile = useProfile();
   return (
     <div className="flex items-center gap-1">
+      <IconButton
+        label={profile ? profile.name || profile.email : "Profile"}
+        onClick={() => onOpenSettings("account")}
+      >
+        {profile ? <Avatar profile={profile} size={22} /> : <CircleUser />}
+      </IconButton>
       <IconButton label="Settings" keys="," onClick={() => onOpenSettings("general")}>
         <Settings />
       </IconButton>
@@ -1292,6 +1304,7 @@ export function age(time: string, now = Date.now()): string {
 
 /** Each Settings section's name, in the nav's order. */
 export const settingsNames: Record<SettingsSection, string> = {
+  account: "Account",
   general: "General",
   hosts: "Hosts",
   providers: "Providers",

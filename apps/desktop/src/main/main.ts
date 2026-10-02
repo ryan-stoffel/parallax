@@ -10,6 +10,7 @@ import {
   launch,
   type Editor,
 } from "./editors";
+import { startAccount } from "./account";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
@@ -222,6 +223,7 @@ void app.whenReady().then(() => {
   startHosts();
   // Under `pnpm dev`, Update follows develop, the nightly channel's branch (scripts/channels.mjs).
   if (!updater) process.send?.({ channel: "nightly" });
+  startAccount();
   // The end-to-end tests launch the app on CI machines, where a 490 MB download isn't wanted.
   if (!process.env["PLX_NO_NAMER"]) namer.warm();
   createWindow();
