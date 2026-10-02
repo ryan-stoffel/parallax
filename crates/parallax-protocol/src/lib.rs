@@ -74,7 +74,7 @@ pub use approval::{
 };
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,
-    CliKind, DetectedCli,
+    CliKind, DetectedCli, GithubStatus, GithubStatusParams,
 };
 pub use composer::{
     AgentCommand, AgentCommandsParams, AgentCommandsResult, RepoFilesParams, RepoFilesResult,

@@ -322,7 +322,7 @@ function cut(text: string, all: boolean) {
 const codeBox =
   "overflow-x-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-[12px] leading-relaxed";
 const diffBox =
-  "overflow-x-auto rounded-xl border border-border bg-code py-1.5 font-mono text-[12px] leading-relaxed";
+  "code-scroll overflow-x-auto rounded-xl border border-border bg-code py-1.5 font-mono text-[12px] leading-relaxed";
 
 /** Show all, or Show less, for a preview cut short. */
 function ShowAll({ all, onToggle, lines }: { all: boolean; onToggle: () => void; lines?: number }) {
@@ -394,7 +394,7 @@ export function DiffRow({ op, text }: { op: " " | "+" | "-"; text: string }) {
         {op === "-" ? "−" : op}
       </span>
       {op !== " " && <span className="sr-only">{op === "+" ? "Added: " : "Removed: "}</span>}
-      <span className="min-w-0 break-words whitespace-pre-wrap">{text || " "}</span>
+      <span className="code-lines min-w-0 break-words whitespace-pre-wrap">{text || " "}</span>
     </div>
   );
 }

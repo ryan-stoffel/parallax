@@ -1285,11 +1285,13 @@ test("the musing changes its word on the wall clock, while screen readers keep h
 
 test("under reduced motion, the musing keeps its word", () => {
   vi.useFakeTimers({ now: 2400 * 8000 });
-  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduced-motion") }));
+  // appearance.ts sets it under the OS's Reduce motion or the app's own.
+  document.documentElement.classList.add("reduce-motion");
   render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
   expect(vi.getTimerCount()).toBe(0);
   act(() => void vi.advanceTimersByTime(4800));
   expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
+  document.documentElement.classList.remove("reduce-motion");
 });
 
 test("a running chat that loses plxd shows no loader", async () => {
