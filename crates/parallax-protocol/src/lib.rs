@@ -101,8 +101,8 @@ pub use project::{
     ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use pull_request::{
-    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrMergeMethod, PrMergeState, PrState,
-    PrViewParams, PullRequest,
+    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
+    PrMergeState, PrReview, PrReviewState, PrState, PrViewParams, PullRequest,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,
