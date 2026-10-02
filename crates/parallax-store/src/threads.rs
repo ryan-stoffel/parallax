@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::error::StoreError;
 use crate::project::{icon_columns, icon_from_row};
-use crate::runs::insert_run;
+use crate::runs::{delete_run_rows, insert_run};
 use crate::worktree::insert_worktree;
 use crate::{ProjectIcon, Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
 
@@ -346,24 +346,18 @@ impl Store {
         Ok((repo, true))
     }
 
-    /// Deletes thread `id` with its run, its worktree row, its stored events, its sent turns, and
-    /// its images (#190, RYA-191: `turns` and `images` have no foreign key to `runs`, so nothing
-    /// else removes them), in one transaction. Returns whether the thread existed.
+    /// Deletes thread `id` with its run and every row [`Store::delete_run`] deletes (#190,
+    /// RYA-191), in one transaction. Returns whether the thread existed.
     ///
     /// # Errors
     ///
     /// A database error.
     pub fn delete_thread(&mut self, id: Uuid) -> Result<bool, StoreError> {
-        let key = id.to_string();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existed = tx.execute("DELETE FROM threads WHERE id = ?1", params![key])? > 0;
-        tx.execute("DELETE FROM runs WHERE id = ?1", params![key])?;
-        tx.execute("DELETE FROM worktrees WHERE id = ?1", params![key])?;
-        tx.execute("DELETE FROM events WHERE run_id = ?1", params![key])?;
-        tx.execute("DELETE FROM turns WHERE run_id = ?1", params![key])?;
-        tx.execute("DELETE FROM images WHERE run_id = ?1", params![key])?;
+        let existed = tx.execute("DELETE FROM threads WHERE id = ?1", params![id.to_string()])? > 0;
+        delete_run_rows(&tx, id)?;
         tx.commit()?;
         Ok(existed)
     }

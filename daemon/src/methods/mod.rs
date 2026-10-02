@@ -3,7 +3,8 @@
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
-//! `projectEdit`: `project/update` in `project.rs`; PLX-318 `pullRequests` and PLX-328 `prDiff`: `pr.rs`), and `host.rs`
+//! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
+//! `project.rs`; PLX-318 `pullRequests` and PLX-328 `prDiff`: `pr.rs`), and `host.rs`
 //! advertises the capability in `initialize`.
 
 mod accounts;
@@ -27,8 +28,8 @@ use parallax_protocol::methods::{
     AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus, AgentImage,
     AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart, ContextList,
     ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
-    Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectList, ProjectStart, ProjectUpdate,
-    RequestMethod, UsageGet, UsageHistory,
+    Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete, ProjectList, ProjectStart,
+    ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -178,6 +179,9 @@ async fn project_method(
         }
         ProjectUpdate::NAME => {
             handle::<ProjectUpdate, _, _>(request, |p| project::update(context, p)).await
+        }
+        ProjectDelete::NAME => {
+            handle::<ProjectDelete, _, _>(request, |p| project::delete(context, p)).await
         }
         _ => return None,
     })

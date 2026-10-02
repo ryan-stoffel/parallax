@@ -1,0 +1,52 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "events/subscribe",
+    "params": { "after": 4 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "subscription": "01a0f755-f5e8-74c2-993d-c1660d1cd77b" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "project/delete",
+    "params": { "project": "01a0f755-f200-74dd-8cfc-06d0b225c5ea" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f755-f5e8-74c2-993d-c1660d1cd77b",
+      "seq": 5,
+      "time": "2026-10-02T12:00:00Z",
+      "event": {
+        "kind": "project.deleted",
+        "project": "01a0f755-f200-74dd-8cfc-06d0b225c5ea"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "project/delete",
+    "params": { "project": "01a0f755-f200-74dd-8cfc-06d0b225c5ea" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32000,
+      "message": "no project has id 01a0f755-f200-74dd-8cfc-06d0b225c5ea",
+      "data": { "kind": "projectNotFound" }
+    }
+  }
+]

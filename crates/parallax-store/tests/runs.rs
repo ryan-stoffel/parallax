@@ -1,5 +1,6 @@
 use parallax_store::{
-    RunAccept, RunFields, RunState, Store, StoreError, StoredEvent, WorktreeFields,
+    RunAccept, RunFields, RunState, Store, StoreError, StoredEvent, StoredImage, WakeState,
+    WorktreeFields,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -376,6 +377,51 @@ fn a_run_and_its_worktree_are_created_together_or_not_at_all() {
             .is_err()
     );
     assert_eq!(store.get_worktree(run_only).unwrap(), None);
+}
+
+/// PLX-338: `project/delete` removes each of a Project's runs with every row kept for it.
+#[test]
+fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
+    let (_dir, mut store) = open();
+    let project = Uuid::now_v7();
+    let [kept, gone] = [Uuid::now_v7(), Uuid::now_v7()];
+    let image = Uuid::now_v7();
+    for (seq, id) in [(1, kept), (2, gone)] {
+        store
+            .create_run_with_worktree(id, &fields(project), &starting(), &worktree_fields())
+            .unwrap();
+        store.append_event(&event(seq, Some(id))).unwrap();
+        store.record_turn(id, Uuid::now_v7(), "carry on").unwrap();
+        let stored = StoredImage {
+            media_type: "image/png".to_owned(),
+            data: "iVBORw0KGgo=".to_owned(),
+        };
+        store.add_images(id, &[(image, stored)]).unwrap();
+        let wakes = WakeState {
+            in_a_row: 2,
+            paused: true,
+        };
+        store.set_wake_state(id, wakes).unwrap();
+    }
+
+    assert!(store.delete_run(gone).unwrap());
+    assert!(
+        !store.delete_run(gone).unwrap(),
+        "deleting again does nothing"
+    );
+    assert_eq!(store.get_run(gone).unwrap(), None);
+    assert_eq!(store.get_worktree(gone).unwrap(), None);
+    assert!(store.run_events(gone, 0, 10, 1 << 20).unwrap().0.is_empty());
+    assert_eq!(store.run_turns(gone).unwrap(), []);
+    assert_eq!(store.image(gone, image).unwrap(), None);
+    assert_eq!(store.wake_state(gone).unwrap(), WakeState::default());
+
+    assert!(store.get_run(kept).unwrap().is_some());
+    assert!(store.get_worktree(kept).unwrap().is_some());
+    assert_eq!(store.run_events(kept, 0, 10, 1 << 20).unwrap().0.len(), 1);
+    assert_eq!(store.run_turns(kept).unwrap().len(), 1);
+    assert!(store.image(kept, image).unwrap().is_some());
+    assert!(store.wake_state(kept).unwrap().paused);
 }
 
 #[test]

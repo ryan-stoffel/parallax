@@ -97,6 +97,7 @@ pub(crate) fn initialize(
 /// and `project/create`, which an older plxd would silently drop.
 /// `iconImages` (PLX-339, 0038): `image` on a project's or repo entry's `icon`, which an older
 /// plxd would silently drop. Its option `maxBytes` is the cap on the image's base64 `data`.
+/// `projectDelete` (PLX-338): `project/delete` and `project.deleted`.
 /// `threadAttention` (RYA-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
 /// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
 /// `checkout`: `thread/start` takes `checkout`, to work in the repo's own checkout instead of a
@@ -137,6 +138,7 @@ fn capabilities_advertised() -> Capabilities {
         ),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
+        ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("pullRequests".to_owned(), serde_json::Map::new()),

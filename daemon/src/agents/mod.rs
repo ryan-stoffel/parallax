@@ -670,6 +670,19 @@ async fn record(
     });
     let scope = fields.project_id;
     let recorded = store(daemon, move |db| {
+        // `prepare_run` read the scope in an earlier job: a Project that `project/delete` removed
+        // since gets no run (PLX-338).
+        if db
+            .get_project(scope)
+            .map_err(|e| store_error(&e))?
+            .is_none()
+            && db.get_repo(scope).map_err(|e| store_error(&e))?.is_none()
+        {
+            return Err(ErrorObject::parallax(
+                ErrorKind::ProjectNotFound,
+                format!("no project has id {scope}"),
+            ));
+        }
         if is_thread {
             db.create_thread_run(
                 run_id.into(),
@@ -1017,8 +1030,8 @@ async fn ask<T>(
     let (reply, answer) = oneshot::channel();
     let mut command = command(reply);
     let stopping = || ErrorObject::internal_error("plxd is stopping");
-    // An actor that `thread/delete` just stopped has closed its channel: look the run up again,
-    // which then finds it gone.
+    // An actor that `thread/delete` or `project/delete` just stopped has closed its channel: look
+    // the run up again, which then finds it gone.
     for _ in 0..2 {
         let actor = actor_for(daemon, id).await?;
         match actor.send(command).await {
@@ -1116,8 +1129,8 @@ pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObjec
     )
 }
 
-/// `thread/delete`'s part in the runner: through the run's actor, which stops a running CLI
-/// first and never races the run's own resume, commit, or accept.
+/// `thread/delete`'s and `project/delete`'s part in the runner: deletes a run through its actor,
+/// which stops a running CLI first and never races the run's own resume, commit, or accept.
 pub(crate) async fn delete(daemon: &Arc<Daemon>, id: RunId) -> Result<(), ErrorObject> {
     ask(daemon, id, |reply| Command::Delete { reply }).await
 }
