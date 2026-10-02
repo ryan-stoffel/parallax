@@ -12,9 +12,14 @@ import {
   type ToggleEvent,
 } from "react";
 
-/** A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere. */
+/**
+ * A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere, and
+ * "Shift+N" is "⌘⇧N" on macOS.
+ */
 export const shortcut = (keys: string) =>
-  window.parallax.platform === "darwin" ? `⌘${keys.replace("Alt+", "⌥")}` : `Ctrl+${keys}`;
+  window.parallax.platform === "darwin"
+    ? `⌘${keys.replace("Alt+", "⌥").replace("Shift+", "⇧")}`
+    : `Ctrl+${keys}`;
 
 /** The parts of a key press shortcuts read, from a DOM or React keyboard event. */
 export type KeyPress = Pick<
