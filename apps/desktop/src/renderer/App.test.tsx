@@ -62,6 +62,22 @@ test("the side panel toggle reports and flips the panel's state", () => {
   expect(panel.hidden).toBe(true);
 });
 
+test("the sidebar's title opens a new thread", () => {
+  renderApp();
+  const crumbs = () =>
+    [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
+  act(() =>
+    document.querySelector<HTMLButtonElement>('#sidebar button[aria-label="Usage"]')!.click(),
+  );
+  expect(crumbs()[0]).toBe("Usage");
+
+  const title = [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
+    (b) => b.textContent === "Parallax",
+  )!;
+  act(() => title.click());
+  expect(crumbs().at(-1)).toBe("New thread");
+});
+
 test("the footer's Usage opens the Usage page, and Update shows when it's ready and its answer", async () => {
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
