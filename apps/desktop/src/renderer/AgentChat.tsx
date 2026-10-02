@@ -310,7 +310,8 @@ export function AgentChat({
     const text = row.text ?? mine?.text;
     if (text == null) return undefined;
     const images = (row.kind === "pending" ? row.images : mine?.images) ?? [];
-    return { text, images, turnId: row.turnId };
+    // Only one still on its way can be dropped, and so offer Send again.
+    return { text, images, turnId: row.kind === "pending" ? row.turnId : undefined };
   }, [rows, sent]);
   // A stopped prompt goes back in the box, so if plxd drops it, it offers no Send again too.
   const stop = async () => {
