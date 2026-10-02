@@ -263,13 +263,16 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const command = appShortcut(e);
+      // A new thread waits for an open dialog, the picker included, to close.
+      const dialog = !!document.querySelector("dialog[open]");
       if (command === "panel") setPanelOpen((open) => !open);
       else if (command === "sidebar") setSidebarOpen((open) => !open);
       else if (command === "terminal" && folder) toggleDrawer();
       else if (command === "newThread") {
-        if (!picker.current?.open) picker.current?.showModal();
-      } else if (command === "noRepoThread") newThread(noRepo);
-      else if (command === "settings") openSettings("general");
+        if (!dialog) picker.current?.showModal();
+      } else if (command === "noRepoThread") {
+        if (!dialog) newThread(noRepo);
+      } else if (command === "settings") openSettings("general");
       else return;
       e.preventDefault();
     };

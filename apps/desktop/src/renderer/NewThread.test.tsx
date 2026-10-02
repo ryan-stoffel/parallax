@@ -769,6 +769,21 @@ describe("a host with no usable default account for threads", () => {
     expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   });
 
+  test("Continue after Cmd+Enter opens the thread, so the prompt can't start it twice", async () => {
+    accounts([cli("claude", true)], [key("Work", "anthropic")]);
+    await renderApp();
+    act(() => void composer().editor!.commands.setContent("Tidy the README"));
+    await act(async () => {
+      composer().dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+      );
+    });
+    await settle();
+    await act(async () => button("Continue")!.click());
+    await settle();
+    expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
+  });
+
   test("a default naming a removed key account asks again", async () => {
     failure = "accountNotFound";
     accounts([cli("claude", true)], [key("Work", "anthropic")]);

@@ -295,7 +295,8 @@ export function NewThread({
   const continueWith = async (option: AccountOption) => {
     setChoosing(true);
     setChooseError(undefined);
-    const error = await runOn(failed.current!, option);
+    // Continue is a click on New Thread, so the thread opens, even after a Cmd/Ctrl+Enter.
+    const error = await runOn({ ...failed.current!, background: false }, option);
     setChoosing(false);
     if (error) setChooseError(error);
   };
