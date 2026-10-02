@@ -44,6 +44,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "accounts/refresh": true,
   "usage/get": true,
   "usage/history": true,
+  "usage/daily": true,
   "accounts/defaults/get": true,
   "accounts/defaults/set": true,
   "context/list": true,

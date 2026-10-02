@@ -33,6 +33,8 @@ tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
 uuid.workspace = true
 parallax-protocol = { path = "../crates/parallax-protocol" }
 parallax-store = { path = "../crates/parallax-store" }
+# Reads Cursor desktop's sign-in for `usage/daily` (0039). The store already builds it.
+rusqlite = { version = "0.32", features = ["bundled"] }
 zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
@@ -67,5 +69,4 @@ keyring-core = "1.0.0"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 
 [dev-dependencies]
-rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { workspace = true, features = ["process"] }

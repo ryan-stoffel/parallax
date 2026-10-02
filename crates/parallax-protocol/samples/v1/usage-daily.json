@@ -1,0 +1,44 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "usage/daily",
+    "params": {
+      "since": "2026-09-30",
+      "timeZone": "America/Los_Angeles"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "days": [
+        {
+          "date": "2026-09-30",
+          "agent": "claude",
+          "model": "claude-opus-5-5",
+          "inputTokens": 7154,
+          "outputTokens": 2105052,
+          "cacheReadTokens": 634392348,
+          "cacheWriteTokens": 15216785,
+          "costUsdMicros": 261065533
+        },
+        {
+          "date": "2026-10-01",
+          "agent": "cursor",
+          "model": "composer-2.5-fast",
+          "inputTokens": 989,
+          "outputTokens": 48,
+          "cacheReadTokens": 62592,
+          "cacheWriteTokens": 0
+        }
+      ],
+      "problems": [
+        {
+          "source": "ccusage",
+          "message": "Install Node.js or ccusage on this host to see Claude Code and Codex usage."
+        }
+      ]
+    }
+  }
+]

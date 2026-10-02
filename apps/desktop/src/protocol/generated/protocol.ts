@@ -90,6 +90,12 @@ export type ParallaxRequests = {
 	 */
 	"usage/history": { params: UsageHistoryParams, result: UsageHistoryResult },
 	/**
+	 * `usage/daily`: every Claude Code, Codex, and Cursor session's tokens and cost on this
+	 * host since a local day, per local day, agent, and model (0039), and each source that
+	 * failed.
+	 */
+	"usage/daily": { params: UsageDailyParams, result: UsageDailyResult },
+	/**
 	 * `accounts/defaults/get`: this host's default account for the coordinator role and for
 	 * a worker role, absent where none is set (#119).
 	 */
@@ -1037,6 +1043,96 @@ export type UsageHour = {
 	 */
 	costUsdMicros?: number,
 };
+
+/**
+ * Params of `usage/daily`.
+ */
+export type UsageDailyParams = {
+	/**
+	 * The first local day of the range, such as `2026-09-30`. The range ends today.
+	 */
+	since: string,
+	/**
+	 * The IANA time zone whose local days the usage is grouped by, such as
+	 * `America/Los_Angeles`.
+	 */
+	timeZone: string,
+};
+
+/**
+ * Result of `usage/daily`.
+ */
+export type UsageDailyResult = {
+	/**
+	 * Usage per local day, agent, and model. Days with no usage are left out.
+	 */
+	days: Array<UsageDay>,
+	/**
+	 * Each source that failed, so the others still show.
+	 */
+	problems: Array<UsageProblem>,
+};
+
+/**
+ * One agent's usage of one model on one local day, from every session on the host, not only
+ * runs plxd started (0039).
+ */
+export type UsageDay = {
+	/**
+	 * The local day.
+	 */
+	date: string,
+	/**
+	 * The agent: Claude Code, Codex, or Cursor.
+	 */
+	agent: CliKind,
+	/**
+	 * The model, as the agent names it.
+	 */
+	model: string,
+	/**
+	 * Input tokens, not counting cache reads and writes.
+	 */
+	inputTokens: number,
+	/**
+	 * Output tokens, including reasoning.
+	 */
+	outputTokens: number,
+	/**
+	 * Input tokens read from the prompt cache.
+	 */
+	cacheReadTokens: number,
+	/**
+	 * Input tokens written to the prompt cache.
+	 */
+	cacheWriteTokens: number,
+	/**
+	 * The cost, when the source priced it.
+	 */
+	costUsdMicros?: number,
+};
+
+/**
+ * A source of `usage/daily` that failed, and why, for people.
+ */
+export type UsageProblem = {
+	/**
+	 * Which source.
+	 */
+	source: UsageSource,
+	/**
+	 * What went wrong, written for people, such as "Install Node.js or ccusage on this host to
+	 * see Claude Code and Codex usage."
+	 */
+	message: string,
+};
+
+/**
+ * Where `usage/daily` gets usage from.
+ *
+ * A newer plxd may send sources that are not listed here. Treat those as unknown.
+ */
+export type UsageSource = "ccusage" | "cursor";
 
 /**
  * Params of `accounts/defaults/get`.

@@ -136,7 +136,6 @@ impl CliDetector {
     }
 
     /// The launcher probes run through, whose environment agents' CLIs start from.
-    #[cfg(target_os = "linux")]
     pub(crate) fn launcher(&self) -> &Launcher {
         &self.launcher
     }
@@ -201,14 +200,16 @@ pub(crate) async fn run(
 ) -> Result<Ran, String> {
     let mut spec = probe_spec(program);
     spec.args = args.iter().map(|arg| (*arg).into()).collect();
-    run_spec(launcher, &spec, timeout).await
+    run_spec(launcher, &spec, b"", timeout).await
 }
 
 /// [`run`] for a caller that builds its own `spec`, such as one that scrubs more of the
-/// environment.
+/// environment. When `spec` pipes stdin, `input` is written to it and it's closed, within the
+/// timeout: the way to hand a process a secret, which `ps` would show in its arguments.
 pub(crate) async fn run_spec(
     launcher: &Launcher,
     spec: &ProcessSpec,
+    input: &[u8],
     timeout: Duration,
 ) -> Result<Ran, String> {
     let mut process = match launcher.spawn(spec) {
@@ -221,7 +222,12 @@ pub(crate) async fn run_spec(
     let mut stdout = String::new();
     let mut exit_code = None;
     let mut stderr_tail = String::new();
+    let stdin = process.take_stdin();
     let collected = tokio::time::timeout(timeout, async {
+        if let Some(mut stdin) = stdin {
+            // A process that exits without reading it all is still answered below.
+            let _ = stdin.write_all(input).await;
+        }
         while let Some(output) = process.next().await {
             match output {
                 Output::Line(bytes) => {

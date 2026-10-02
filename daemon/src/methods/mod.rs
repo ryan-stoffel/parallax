@@ -29,7 +29,7 @@ use parallax_protocol::methods::{
     AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart, ContextList,
     ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
     Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete, ProjectList, ProjectStart,
-    ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
+    ProjectUpdate, RequestMethod, UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -100,6 +100,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         UsageGet::NAME => handle::<UsageGet, _, _>(&request, |p| usage::get(&context, p)).await,
         UsageHistory::NAME => {
             handle::<UsageHistory, _, _>(&request, |p| usage::history(&context, p)).await
+        }
+        UsageDaily::NAME => {
+            handle::<UsageDaily, _, _>(&request, |p| usage::daily(&context, p)).await
         }
         AccountsDefaultsGet::NAME => {
             handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
