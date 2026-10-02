@@ -576,6 +576,8 @@ function Context({ request }: { request: ApprovalRequest }) {
 // scrolls, so the card's buttons and the composer stay in view. Where a grown composer leaves less
 // room, it gives way further: the chat's bottom block is a column bounded by the window, and each
 // frame down to the preview may shrink (`min-h-0`) while the header, buttons, and composer don't.
+// In a window too short even for those, the card's own box scrolls, so nothing spills onto the
+// composer or out of the card's border.
 const pinnedMaxHeight = "45vh";
 
 const quietButton =
@@ -782,7 +784,7 @@ function ApprovalCard({
       tabIndex={-1}
       aria-labelledby={titleId}
       aria-describedby={statusId}
-      className="flex min-h-0 flex-col rounded-xl border border-border bg-surface focus-visible:outline-none"
+      className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface focus-visible:outline-none"
     >
       <div className="flex items-center gap-2 px-4 pt-3 text-[13px]">
         <tool.Icon aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
@@ -925,21 +927,27 @@ function PlanApprovalCard({
   );
 }
 
+// How long a new card ignores a pointer's clicks after it shows, in ms.
+const freshMs = 300;
+
 /**
  * The pinned card's frame, keyed by request so each one rises into place. As it leaves the page,
  * it says whether focus was in it, so the next card or the composer can take it (`onLeave`). Focus
  * on the body counts, as when the button pressed turned off while its answer went.
  *
- * A card that takes another's place under a still pointer would take a click meant for that one,
- * so it ignores a pointer's clicks until the pointer moves over it or a finger touches it. A card
- * swapped in under a still mouse or a hovering pen gets no pointermove. A key's click (`detail` 0)
- * always goes, since a new card's focus starts on its frame, never on a button, and nothing looks
- * turned off meanwhile.
+ * A card that takes another's place under a pointer would take a click meant for that one, so it
+ * ignores a pointer's clicks until the pointer hovers over it, moving with no button down, or a
+ * finger touches it. A card swapped in under a still mouse or a hovering pen gets no pointermove,
+ * and a move during the press (a click's drift, a pen's pressure) doesn't count, since the press
+ * began on the card before it. It also ignores them for `freshMs` after it shows, about the time
+ * it takes to see the change. A key's click (`detail` 0) always goes, since a new card's focus
+ * starts on its frame, never on a button, and nothing looks turned off meanwhile.
  */
 function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [leave] = useState(() => onLeave);
   const moved = useRef(false);
+  const [shownAt] = useState(() => performance.now());
   useLayoutEffect(() => {
     const el = ref.current!;
     return () => {
@@ -950,8 +958,8 @@ function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNod
   return (
     <div
       ref={ref}
-      onPointerMove={() => {
-        moved.current = true;
+      onPointerMove={(e) => {
+        if (e.buttons === 0) moved.current = true;
       }}
       // A touch is a fresh contact, which can't have been meant for another card. A pen can hover
       // as a mouse does, so like a mouse it moves first.
@@ -959,7 +967,7 @@ function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNod
         if (e.pointerType === "touch") moved.current = true;
       }}
       onClickCapture={(e) => {
-        if (moved.current || e.detail === 0) return;
+        if (e.detail === 0 || (moved.current && e.timeStamp - shownAt >= freshMs)) return;
         e.preventDefault();
         e.stopPropagation();
       }}
@@ -1073,7 +1081,7 @@ export function ApprovalQueue({
     <>
       {/* Always on the page, so a screen reader hears what changes in it. */}
       <p aria-live="polite" aria-atomic="true" className="sr-only">
-        {said.text + (said.times % 2 ? "\u200b" : "")}
+        {said.text && said.text + (said.times % 2 ? "\u200b" : "")}
       </p>
       {head && props && (
         <section aria-label="Approval requests" className="mb-3 flex min-h-0 flex-col">

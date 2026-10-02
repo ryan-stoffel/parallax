@@ -570,6 +570,9 @@ test("with the largest preview and a grown composer, the preview gives way, neve
   // The card's header and buttons, and the composer, keep their height.
   for (const rigid of [card()!.firstElementChild!, inCard("Approve")!.parentElement!, composer])
     expect(gives(rigid), rigid.outerHTML.slice(0, 120)).toBe(false);
+  // In a window too short even for those, the card's own box scrolls, so they stay inside it.
+  expect(card()!.className).toContain("border");
+  expect(card()!.className).toContain("overflow-y-auto");
 });
 
 test("so does a pinned plan opened in full: its body gives way, never its header or Approve plan", async () => {
@@ -590,6 +593,9 @@ test("so does a pinned plan opened in full: its body gives way, never its header
     const header = body.parentElement!.firstElementChild!;
     for (const rigid of [header, inCard("Approve plan")!.parentElement!, composer])
       expect(gives(rigid), rigid.outerHTML.slice(0, 120)).toBe(false);
+    // Too short even for those, the plan's box scrolls; it still clips what's wide, as before.
+    expect(body.parentElement!.className).toContain("overflow-x-hidden");
+    expect(body.parentElement!.className).toContain("overflow-y-auto");
   } finally {
     if (own) Object.defineProperty(HTMLElement.prototype, "scrollHeight", own);
     else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
@@ -828,18 +834,23 @@ const done = (...ids: string[]) =>
   new Map<string, AnswerState>(
     ids.map((id) => [id, { state: "answered", resolved: { decision: "allowed", by: "user" } }]),
   );
-// A pointer's click has a click count; a key's has none.
-const pointerClick = (el: Element) =>
+/**
+ * A pointer's click, which has a click count where a key's has none. It comes `at` on the clock of
+ * `performance.now`, by default a second from now, well past the time a new card ignores clicks.
+ */
+const pointerClick = (el: Element, at = performance.now() + 1000) =>
   act(() => {
-    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 });
+    Object.defineProperty(click, "timeStamp", { value: at });
+    el.dispatchEvent(click);
   });
-/** A pointer event on the card's Approve, a mouse's unless `init` says otherwise. */
+/** A pointer event on the card's Approve: a mouse's with no button down, unless `init` says. */
 const pointer = (type: string, init: PointerEventInit = {}) =>
   act(() => {
     inCard("Approve")!.dispatchEvent(new PointerEvent(type, { bubbles: true, ...init }));
   });
 
-test("a new card ignores a pointer's click until the pointer moves over it; a key's click goes at once", () => {
+test("a new card ignores a pointer's click until the pointer hovers over it; a key's click goes at once", () => {
   const answered = vi.fn();
   const show = answeringTo(answered);
   const one = { runId, approval: approval("a1") };
@@ -863,6 +874,11 @@ test("a new card ignores a pointer's click until the pointer moves over it; a ke
   pointerClick(inCard("Deny")!);
   expect(answered).toHaveBeenCalledOnce();
   expect(pinned()!.querySelector("input")).toBeNull();
+  // So does one that drifts a pixel while pressed: the press began on the first.
+  pointer("pointerdown", { buttons: 1 });
+  pointer("pointermove", { buttons: 1 });
+  pointerClick(inCard("Approve")!);
+  expect(answered).toHaveBeenCalledOnce();
   // A key's click goes at once.
   act(() => inCard("Approve")!.click());
   expect(answered).toHaveBeenLastCalledWith("a2", "allow");
@@ -882,21 +898,63 @@ test("a pen hovering as a card is replaced moves first, as a mouse does; a touch
   pointer("pointermove", pen);
   rerender(show([two, three]));
   expect(card()!.textContent).toContain("pnpm test a2");
-  // Its tap, with no move since, was aimed at the first.
-  pointer("pointerdown", pen);
+  // Its tap, with no move since, was aimed at the first, and so was its press shifting in contact.
+  pointer("pointerdown", { ...pen, buttons: 1 });
+  pointerClick(inCard("Approve")!);
+  pointer("pointerdown", { ...pen, buttons: 1 });
+  pointer("pointermove", { ...pen, buttons: 1 });
   pointerClick(inCard("Approve")!);
   expect(answered).not.toHaveBeenCalled();
+  // Once it hovers over this card, its tap counts.
   pointer("pointermove", pen);
-  pointer("pointerdown", pen);
+  pointer("pointerdown", { ...pen, buttons: 1 });
   pointerClick(inCard("Approve")!);
   expect(answered).toHaveBeenLastCalledWith("a2", "allow");
 
   // A finger can't hover, so its touch is a contact of its own.
   rerender(show([three], done("a2")));
-  pointer("pointerdown", { pointerType: "touch" });
+  pointer("pointerdown", { pointerType: "touch", buttons: 1 });
   pointerClick(inCard("Approve")!);
   expect(answered).toHaveBeenLastCalledWith("a3", "allow");
   expect(answered).toHaveBeenCalledTimes(2);
+});
+
+test("a new card ignores a pointer's click for 300 ms after it shows, even after a hover or a touch; a key's goes at once", () => {
+  const answered = vi.fn();
+  const show = answeringTo(answered);
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const three = { runId, approval: approval("a3", "2026-10-01T12:00:02Z") };
+  // The clock a card notes when it shows, and that clicks are stamped on.
+  const clock = vi.spyOn(performance, "now").mockReturnValue(5_000);
+  try {
+    const rerender = render(show([one, two, three]));
+    pointer("pointermove");
+    pointerClick(inCard("Approve")!, 5_299);
+    expect(answered).not.toHaveBeenCalled();
+    pointerClick(inCard("Approve")!, 5_300);
+    expect(answered).toHaveBeenLastCalledWith("a1", "allow");
+
+    // The next, shown at 9 s: a pointer already moving, or a finger, is still too soon for it.
+    clock.mockReturnValue(9_000);
+    rerender(show([two, three], done("a1")));
+    pointer("pointermove");
+    pointerClick(inCard("Approve")!, 9_120);
+    pointer("pointerdown", { pointerType: "touch", buttons: 1 });
+    pointerClick(inCard("Approve")!, 9_240);
+    expect(answered).toHaveBeenCalledOnce();
+    // A key's click goes at once.
+    act(() => inCard("Approve")!.click());
+    expect(answered).toHaveBeenLastCalledWith("a2", "allow");
+
+    // And a touch goes once the time is up.
+    rerender(show([three], done("a1", "a2")));
+    pointer("pointerdown", { pointerType: "touch", buttons: 1 });
+    pointerClick(inCard("Approve")!, 9_300);
+    expect(answered).toHaveBeenLastCalledWith("a3", "allow");
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test("a request that queues behind the card is announced by how many wait", () => {
@@ -928,6 +986,16 @@ test("the status changes, so it's read again, when it says what it said before: 
   rerender(queue([one, three]));
   expect(said()).toBe("2 requests waiting.");
   expect(heard()).not.toBe(before);
+});
+
+test("with nothing to say, the status is empty, without its zero-width space", () => {
+  const one = { runId, approval: approval("a1") };
+  const two = { runId, approval: approval("a2", "2026-10-01T12:00:01Z") };
+  const rerender = render(queue([one]));
+  rerender(queue([one, two]));
+  // Both time out, with nothing answered here.
+  rerender(queue([]));
+  expect(heard()).toBe("");
 });
 
 test("another run's request names it, with a way to its chat", async () => {

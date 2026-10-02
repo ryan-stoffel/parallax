@@ -615,7 +615,8 @@ const slack = 46;
  * Claude Code's proposed plan as a card: `children` is the plan, rendered. Past about 16 lines it
  * folds behind a fade, with Show full plan, and opens when focus moves into it; the transcript
  * keeps whether it's open, by `id`. `actions` go at its foot, such as approving it (RYA-196).
- * Pinned in less room than it wants, the plan gives way, never its header or actions (RYA-259).
+ * Pinned in less room than it wants, the plan gives way, never its header or actions, and in less
+ * room than those need, the card scrolls (RYA-259).
  */
 export function ProposedPlan({
   id,
@@ -662,7 +663,7 @@ export function ProposedPlan({
     <div
       role="group"
       aria-labelledby={verdict ? `${headingId} ${verdictId}` : headingId}
-      className="flex flex-col overflow-hidden rounded-xl border border-border bg-surface"
+      className="flex flex-col overflow-x-hidden overflow-y-auto rounded-xl border border-border bg-surface"
     >
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-[13px]">
         <ClipboardList aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />

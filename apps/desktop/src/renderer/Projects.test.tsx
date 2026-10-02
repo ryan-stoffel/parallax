@@ -259,6 +259,11 @@ test("a Project is one row that opens its chat: its repository and branch, with 
   expect(row?.getAttribute("aria-current")).toBe("page");
   const main = document.querySelector("main")!;
   expect(main.querySelector("h2")?.textContent).toBe("ember");
+  // In a short window it gives way to a pinned card and the composer, wrapping out of view whole
+  // rather than cut in two (RYA-259).
+  const welcome = main.querySelector("h2")!.parentElement!.parentElement!;
+  for (const name of ["min-h-0", "flex-wrap", "overflow-hidden"])
+    expect(welcome.classList.contains(name)).toBe(true);
   expect(main.textContent).toContain("/src/ember");
   expect(main.textContent).toContain("main");
   expect(composer()!.getAttribute("aria-placeholder")).toBe(

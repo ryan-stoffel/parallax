@@ -43,11 +43,17 @@ test("answers a thread's permission requests from the card over the composer, an
   // The answer as the fake read it, a JSON line with keys in any order.
   const echoed = (...fields: string[]) =>
     fields.reduce((p, field) => p.filter({ hasText: field }), transcript.locator("p"));
+  // A new card ignores a pointer's clicks for 300 ms after it shows (RYA-259), so the first click
+  // on each card waits that out once the card is seen.
+  const settle = () => page.waitForTimeout(400);
 
   // First a long file, its preview opened in full, under a composer grown to its cap (RYA-259):
   // the preview gives way, so the card's Approve and the composer's controls stay in view.
   const approve = pinned.getByRole("button", { name: "Approve", exact: true });
-  await pinned.getByRole("button", { name: "Show all 40 lines" }).click();
+  const showAll = pinned.getByRole("button", { name: "Show all 40 lines" });
+  await expect(showAll).toBeVisible();
+  await settle();
+  await showAll.click();
   const message = page.getByRole("textbox", { name: "Message" });
   const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n");
   await launched.app.evaluate(({ clipboard }, text) => clipboard.writeText(text), lines);
@@ -71,6 +77,7 @@ test("answers a thread's permission requests from the card over the composer, an
   await expect(pinned.getByText("pnpm test", { exact: true })).toBeVisible();
   await expect(pinned).toContainText("Always allow adds Bash(pnpm test:*)");
   await expect(transcript.getByText("Waiting for approval", { exact: true })).toBeVisible();
+  await settle();
   await pinned.getByRole("button", { name: "Always allow" }).click();
   await expect(transcript.getByText("Always allowed", { exact: true })).toBeVisible();
   await expect(echoed('"decision":"allow"', '"always":true')).toBeVisible();
@@ -78,6 +85,7 @@ test("answers a thread's permission requests from the card over the composer, an
   // Then the plan, sent back with a note.
   await expect(pinned.getByText("Proposed plan")).toBeVisible();
   await expect(pinned.getByText("Tag the release.")).toBeVisible();
+  await settle();
   await pinned.getByRole("button", { name: "Keep planning" }).click();
   const note = pinned.getByRole("textbox", { name: "What should change" });
   await expect(note).toBeFocused();
