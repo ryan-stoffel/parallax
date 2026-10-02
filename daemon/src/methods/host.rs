@@ -81,7 +81,10 @@ pub(crate) fn initialize(
 /// `model`, `effort`, and `permission`, which an older plxd would silently ignore (0007), and
 /// `sendOptions` (RYA-161): `agent/send` takes `effort` and `permission`, likewise, and its
 /// successor `sendModel` (RYA-163): `agent/send` also takes `model`, which a `sendOptions`-only
-/// plxd would silently ignore. M4 adds `coordinator` (RYA-41, 0024): `project/start` and
+/// plxd would silently ignore, and `sendAccount`: `agent/send` also takes `account`, which can move
+/// a run to another backend, a message changing the model, effort, permission, or account waits
+/// for a running CLI to exit instead of failing, and `agent.updated` reports the run's `backend`.
+/// M4 adds `coordinator` (RYA-41, 0024): `project/start` and
 /// `Project.coordinator`, and `openPr` (RYA-168): `agent/openPr`. `promptImages` (RYA-191, 0026):
 /// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
 /// older plxd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
@@ -112,6 +115,7 @@ fn capabilities_advertised() -> Capabilities {
         ("projectEdit".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("runOptions".to_owned(), serde_json::Map::new()),
+        ("sendAccount".to_owned(), serde_json::Map::new()),
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),

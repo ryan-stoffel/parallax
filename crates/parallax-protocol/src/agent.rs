@@ -274,6 +274,11 @@ pub struct AgentRunState {
     pub status: AgentStatus,
     /// The account it is charged to now.
     pub account_id: String,
+    /// The backend it runs on, which `agent/send`'s `account` can move it to. Absent from a plxd
+    /// without `sendAccount`, whose runs never move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub backend: Option<String>,
     /// The vendor's session id, once the CLI reported it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -691,10 +696,12 @@ pub struct AgentSendParams {
     /// The message.
     pub text: String,
     /// A new model for the run and every later resume (RYA-163), sent only to a plxd that
-    /// advertises `sendModel`. It should be one the run's backend runs, since a session can't move
-    /// to another CLI; plxd can't check that, so another's fails the run with the CLI's own error.
-    /// Absent, or the run's own, changes nothing. A different one fails with
-    /// `unsupportedOption` while the run's CLI is running, since it can't change mid-process.
+    /// advertises `sendModel`. It should be one the run's backend runs, or with `account`, that
+    /// account's; plxd can't check that, so another's fails the run with the CLI's own error.
+    /// Absent, or the run's own, changes nothing. While the run's CLI is running, a different one
+    /// waits with the message until the CLI exits, since it can't change mid-process, as does
+    /// every message sent after it; a plxd without `sendAccount` fails it with
+    /// `unsupportedOption` instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub model: Option<String>,
@@ -706,6 +713,16 @@ pub struct AgentSendParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// A new account for the run and every later resume, sent only to a plxd that advertises
+    /// `sendAccount`, and waiting for a running CLI as `model` does. On the run's backend, the
+    /// session resumes on it. On another backend, the session can't move, so plxd starts a new
+    /// one there in the run's worktree, whose first message carries the conversation so far
+    /// before this one: the run keeps its id, transcript, and worktree, and takes the new
+    /// backend, with `model`, and the run's effort and permission where the backend maps them.
+    /// Absent, or the run's own, changes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<AccountChoice>,
     /// Images for the message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,

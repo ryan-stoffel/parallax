@@ -65,9 +65,9 @@ export function ProjectChat({
         <span className="truncate">{project.repoPath}</span>
       </span>
       {project.branch && (
-        <span className={tabItem}>
+        <span className={tabItem} title={project.branch}>
           <GitBranch aria-hidden />
-          {project.branch}
+          <span className="truncate">{project.branch}</span>
         </span>
       )}
     </>

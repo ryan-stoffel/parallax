@@ -150,6 +150,7 @@ pub(super) fn run_state(row: &parallax_store::Run) -> AgentRunState {
     AgentRunState {
         status: status(&state.status),
         account_id: state.account_id.clone(),
+        backend: Some(row.fields.backend.clone()),
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),
