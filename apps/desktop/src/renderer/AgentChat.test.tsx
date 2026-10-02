@@ -1299,7 +1299,7 @@ const todoWrite = (n: number, done: number): Item[] => [
   { kind: "todo", key: `t${n}`, items: checklist(done) },
 ];
 
-test("a turn's plan is one card where it began, its updates lines in the work, its proposal a card", () => {
+test("a turn's plan is one line where it began, its updates lines in the work, its proposal a card", () => {
   const rows: Item[] = [
     { kind: "user", key: "u", text: "go" },
     { kind: "reasoning", key: "r", text: "A plan first." },
@@ -1324,7 +1324,7 @@ test("a turn's plan is one card where it began, its updates lines in the work, i
     "go",
     "Workedbriefly",
     "ProposedplanShipitReadBuild",
-    "Plan2of2doneDone:ReadDone:Build",
+    "Madeaplan2of2done",
     "Workedbriefly",
     "Done.",
   ]);
@@ -1339,7 +1339,7 @@ test("a turn's plan is one card where it began, its updates lines in the work, i
   expect(transcriptText()).not.toContain("TodoWrite");
 });
 
-test("Claude Code's task tools make the same card and lines as TodoWrite, and their rows go", () => {
+test("Claude Code's task tools make the same lines as TodoWrite, and their rows go", () => {
   // As plxd logs them from Claude Code 2.1.283: each call, with its result's text.
   const task = (
     key: string,
@@ -1383,7 +1383,7 @@ test("Claude Code's task tools make the same card and lines as TodoWrite, and th
   expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
     "go",
     "Workedbriefly",
-    "Plan2of2doneDone:ReadDone:Build",
+    "Madeaplan2of2done",
     "Workedbriefly",
     "Done.",
   ]);
@@ -1400,7 +1400,7 @@ test("Claude Code's task tools make the same card and lines as TodoWrite, and th
   expect(transcriptText()).not.toMatch(/Task(Create|Update|List)/);
 });
 
-test("while a run goes, only its latest plan moves, and the work after a plan muses until it starts", () => {
+test("while a run goes, the work after a plan muses until it starts", () => {
   const rows: Item[] = [
     { kind: "user", key: "u1", text: "go" },
     { kind: "todo", key: "t1", items: checklist(0) },
@@ -1409,8 +1409,6 @@ test("while a run goes, only its latest plan moves, and the work after a plan mu
     ...todoWrite(2, 1),
   ];
   render(<TranscriptView rows={rows} sent={new Map()} live />);
-  const cards = [...document.querySelectorAll('[role="group"]')];
-  expect(cards.map((c) => c.querySelectorAll(".loader").length)).toEqual([0, 1]);
   // After the plan, a work row for what comes next.
   const last = [...document.querySelectorAll("[data-index]")].at(-1)!;
   expect(last.querySelector("button[aria-expanded] .sr-only")!.textContent).toBe("Working");
@@ -1439,14 +1437,12 @@ test("while the run works on a plan, a strip over the composer shows it, until a
   expect(strip()).toBeNull();
   act(() => unmount());
 
-  // Losing plxd stalls it: no strip, and nothing moves in the card.
-  const card = () => document.querySelector('[role="log"] [role="group"]')!;
+  // Losing plxd stalls it: no strip.
   const third = fakeBridge(4);
   await renderChat();
-  expect(card().querySelector(".loader")).not.toBeNull();
+  expect(strip()).not.toBeNull();
   third.connect({ status: "connecting" });
   expect(strip()).toBeNull();
-  expect(card().querySelector(".loader")).toBeNull();
 });
 
 test("a bar beside the transcript for each prompt shows it and its reply, and scrolls back to it", () => {
