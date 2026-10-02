@@ -48,8 +48,10 @@ test("serves the page, and signs in with email only from the page the app opened
   expect(page.headers.get("content-security-policy")).toContain("script-src 'nonce-");
   expect(await page.text()).toContain('href="/oauth/github"');
 
-  // Without the secret's cookie, from another site, or from another local program.
+  // Without the secret's cookie, with the spent secret, from another site, or from another local
+  // program.
   expect((await fetch(base)).status).toBe(403);
+  expect((await fetch(url, { redirect: "manual" })).status).toBe(403);
   const body = JSON.stringify({ email: "a@b.c", password: "right" });
   const headers = { origin: new URL(base).origin, "content-type": "application/json" };
   expect((await fetch(`${base}email`, { method: "POST", headers, body })).status).toBe(403);
