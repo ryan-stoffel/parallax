@@ -432,7 +432,10 @@ async fn a_signed_in_gh_reports_its_version_and_account() {
 #[tokio::test]
 async fn a_signed_out_gh_reports_no_account_and_a_missing_one_nothing_at_all() {
     let fixture = Fixture::new();
-    let detector = CliDetector::new(fixture.launcher(fixture.env()), Duration::from_secs(2));
+    // Only the sandbox's bin: CI's Linux runners have a real gh in /usr/bin.
+    let mut env = fixture.env();
+    env.set("PATH", fixture.bin.display().to_string());
+    let detector = CliDetector::new(fixture.launcher(env), Duration::from_secs(2));
     let gh = detector.github().await;
     assert!(!gh.installed);
     assert_eq!((gh.version, gh.signed_in, gh.note), (None, None, None));
