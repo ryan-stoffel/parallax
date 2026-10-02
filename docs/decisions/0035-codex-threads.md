@@ -66,4 +66,15 @@ With `approvals` (0031), each request is an `approvalRequested` item:
 
 ## Evidence
 
-EVIDENCE
+On 2026-10-01 and 2026-10-02, on macOS 27.0 with codex-cli 0.159.3 and Ryan's own ChatGPT Plus login, `plxd serve` with a fresh data folder ran Codex threads that a client started over `plxd attach` with `approvals: true`, in new worktrees of a scratch repository, and allowed every request:
+
+| Thread | Asked | Result |
+| --- | --- | --- |
+| Manual | Name from the instructions; list skills; append a line to `README.md` and commit | "Ryan Thomas Stoffel" from the global `AGENTS.md`; the user's own skills, plugins' included; every command arrived as a `command_execution` request, each allow reached Codex, and the commit landed in the worktree |
+| The same thread, a follow-up sent while the first request waited | The commit's short hash | Ran as the next turn in the same process, with its own `turnStarted` and `turnFinished`: "`dc6d557`" |
+| The same thread, a follow-up after the run finished | The last commit's message | Resumed the same Codex thread id: "e2e manual" |
+| Accept Edits | Append a line with `apply_patch` and commit | The reads and the patch ran without asking; the commit asked to leave the sandbox, with Codex's reason, and the allow committed it |
+
+Hand probes of `codex app-server` in the same way showed the rest of the user's configuration loading: `mcpServer/startupStatus/updated` for the user's MCP servers from `config.toml` (`node_repl` ready), and `hook/started` for the user's `hooks.json` and a plugin's hooks. The first plxd attempt, after those probes used up the Plus 5-hour window, failed its turn with "You've hit your usage limit", which the run reported as `rateLimited`.
+
+`daemon/src/backend/codex/app_server/translate.rs` replays turns and approval requests trimmed from real runs, and `daemon/src/backend/codex/app_server/tests.rs` runs a fake `codex app-server` process through the backend: a Manual thread's approval round trip and a follow-up in the live process, and a resumed thread without `approvals` that never asks and declines what Codex does.
