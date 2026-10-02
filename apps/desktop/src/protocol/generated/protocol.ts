@@ -281,6 +281,12 @@ export type ParallaxRequests = {
 	 * composer's `@` menu.
 	 */
 	"repo/files": { params: RepoFilesParams, result: RepoFilesResult },
+	/**
+	 * `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
+	 * github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
+	 * `githubStatus` capability.
+	 */
+	"github/status": { params: GithubStatusParams, result: GithubStatus },
 };
 
 /** Notifications, which get no response, by method. */
@@ -3448,6 +3454,45 @@ export type RepoFilesResult = {
 	 * Whether there were more than the cap.
 	 */
 	truncated: boolean,
+};
+
+/**
+ * Params of `github/status`.
+ */
+export type GithubStatusParams = Record<symbol, never>;
+
+/**
+ * The GitHub CLI (`gh`) on the host: the result of `github/status`.
+ *
+ * Every field but `installed` and `checkedAt` is best-effort: a field plxd could not read is
+ * absent rather than a guess.
+ */
+export type GithubStatus = {
+	/**
+	 * Whether `gh` resolves on the `PATH` plxd itself uses (#96).
+	 */
+	installed: boolean,
+	/**
+	 * Its version, such as `2.100.0`, from `gh --version`.
+	 */
+	version?: string,
+	/**
+	 * Whether `gh` is signed in to github.com. Absent when installed but plxd could not tell (a
+	 * timeout, or an exit code `gh auth status` doesn't use).
+	 */
+	signedIn?: boolean,
+	/**
+	 * The signed-in github.com login, when `gh auth status` names it.
+	 */
+	account?: string,
+	/**
+	 * Why a field above is missing, such as `"timed out after 5s"`. Never set on a clean read.
+	 */
+	note?: string,
+	/**
+	 * When plxd read this.
+	 */
+	checkedAt: string,
 };
 
 /**

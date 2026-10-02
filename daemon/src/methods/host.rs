@@ -117,6 +117,7 @@ pub(crate) fn initialize(
 /// and `reviews` on `PullRequest`, which an older plxd never fills.
 /// `composerMenus` (PLX-359): `agent/commands` and `repo/files`, for the composer's `/` and `@`
 /// menus.
+/// `githubStatus` (PLX-336): `github/status`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -139,6 +140,7 @@ fn capabilities_advertised() -> Capabilities {
             "iconImages".to_owned(),
             serde_json::Map::from_iter([("maxBytes".to_owned(), images::MAX_ICON_BYTES.into())]),
         ),
+        ("githubStatus".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),
