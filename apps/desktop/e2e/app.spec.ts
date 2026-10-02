@@ -101,15 +101,14 @@ test("opens a terminal in the thread's folder, kept while hidden (RYA-295)", asy
   await page.keyboard.type("git branch --show-current\r");
   await expect(terminal).toContainText(branch);
 
-  // Mod+J hides it and shows it again, with the same session.
-  const transcript = page.getByRole("log", { name: "Transcript" });
-  await transcript.click();
+  // Mod+J hides it from inside the terminal, and shows it again with the same session.
   await page.keyboard.press("ControlOrMeta+j");
   await expect(terminal).toBeHidden();
   await page.keyboard.press("ControlOrMeta+j");
   await expect(terminal).toContainText(branch);
-  await transcript.click();
+  await terminal.click();
   await page.keyboard.press("ControlOrMeta+j");
+  await expect(terminal).toBeHidden();
 });
 
 // Runs the Edit menu's Copy or Paste as its Cmd/Ctrl+C or V does, which a synthetic keypress can't.

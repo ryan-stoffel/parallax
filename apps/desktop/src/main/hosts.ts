@@ -222,6 +222,9 @@ export const savedHost = (id: string): SshHost | undefined =>
 async function folderCommand(hostId: string, folder: string): Promise<Command | string> {
   if (!connections.has(hostId)) return "That host isn't in Parallax anymore.";
   const saved = settings.hosts.find((h) => h.id === hostId);
+  // A Windows path, which can't hold a `"`, goes to the host in double quotes.
+  if (saved && /^[a-z]:\\/i.test(folder) && folder.includes('"'))
+    return `${folder} isn't a folder.`;
   if (saved)
     return shellCommand(folder, { destination: saved.destination, ssh: settings.ssh ?? "ssh" });
   const isFolder =

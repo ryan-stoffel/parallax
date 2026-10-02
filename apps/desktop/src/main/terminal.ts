@@ -93,8 +93,11 @@ function quote(path: string): string {
   return `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
-/** A terminal. `pty` is unset while its command is still being found. */
-type Session = { pty?: IPty };
+/**
+ * A terminal. `pty` is unset while its command is still being found; `size` is the last one asked
+ * for, which it starts at.
+ */
+type Session = { pty?: IPty; size: { cols: number; rows: number } };
 /** Each window's terminals, by the id it gave each. */
 const sessions = new Map<WebContents, Map<string, Session>>();
 
@@ -112,7 +115,7 @@ export async function openTerminal(
 ): Promise<string | undefined> {
   closeTerminal(sender, id);
   const own = windowSessions(sender);
-  const session: Session = {};
+  const session: Session = { size: { cols, rows } };
   own.set(id, session);
   const current = () => own.get(id) === session;
   const send = (message: TerminalMessage) => {
@@ -129,8 +132,7 @@ export async function openTerminal(
     }
     const pty = spawn(found.file, found.args, {
       name: "xterm-256color",
-      cols,
-      rows,
+      ...session.size,
       cwd: found.cwd ?? os.homedir(),
       env: process.env,
     });
@@ -153,7 +155,10 @@ export function writeTerminal(sender: WebContents, id: string, data: string): vo
 
 export function resizeTerminal(sender: WebContents, id: string, cols: number, rows: number): void {
   try {
-    sessions.get(sender)?.get(id)?.pty?.resize(cols, rows);
+    const session = sessions.get(sender)?.get(id);
+    if (!session) return;
+    session.size = { cols, rows };
+    session.pty?.resize(cols, rows);
   } catch {
     // It exited, and its exit is on the way.
   }

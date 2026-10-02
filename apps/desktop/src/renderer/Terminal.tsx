@@ -52,13 +52,14 @@ export function TerminalView({
     term.loadAddon(fit);
     // Links go to main, which opens https ones in the browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri)));
-    // Outside macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac.
+    // Outside macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac, and
+    // Ctrl+J reaches the app, which toggles the terminal drawer with it.
     term.attachCustomKeyEventHandler(
       (e) =>
         window.parallax.platform === "darwin" ||
         e.type !== "keydown" ||
         !e.ctrlKey ||
-        !(e.key === "v" || (e.key === "c" && term.hasSelection())),
+        !(e.key === "v" || (e.key === "c" && term.hasSelection()) || e.code === "KeyJ"),
     );
     term.open(element);
     // Hidden, it has no size to fit; it fits once shown.
