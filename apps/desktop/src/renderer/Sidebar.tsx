@@ -71,7 +71,17 @@ import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
 import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
-import { IconButton, menuItem, menuPanel, moveFocus, openOnContextMenu, TopBar } from "./ui";
+import {
+  IconButton,
+  menuItem,
+  menuPanel,
+  moveFocus,
+  openOnContextMenu,
+  RowBadge,
+  rowShortcut,
+  TopBar,
+  useModHeld,
+} from "./ui";
 import { UpdateButton } from "./Update";
 
 const row =
@@ -298,6 +308,27 @@ export function ThreadList({
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
 
+  // Mod+1 to Mod+9 open the list's first nine rows, which show their badges while Mod is held.
+  const modHeld = useModHeld();
+  const openItem = (item: Item) =>
+    onSelect(
+      item.host.id,
+      item.kind === "thread"
+        ? { kind: "thread", threadId: item.thread.id }
+        : { kind: "project", projectId: item.project.id },
+    );
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const n = rowShortcut(e);
+      const item = n === undefined ? undefined : listed[n];
+      if (!item || document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      openItem(item);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
   const showCard = (item: Item, row: HTMLElement) => {
     window.clearTimeout(cardTimer.current);
     const place = () => {
@@ -315,6 +346,8 @@ export function ThreadList({
   };
 
   const row = (item: Item) => {
+    const n = modHeld ? listed.indexOf(item) : -1;
+    const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
     const selected =
       item.host.id === host.id &&
       (item.kind === "thread"
@@ -330,8 +363,9 @@ export function ThreadList({
           attention={item.attention}
           host={many ? item.host : undefined}
           selected={selected}
+          badge={badge}
           editable={item.view.editable}
-          onOpen={() => onSelect(item.host.id, { kind: "project", projectId: item.project.id })}
+          onOpen={() => openItem(item)}
           onUpdate={async (change) =>
             setActionError(await item.view.updateProject(item.project.id, change))
           }
@@ -347,8 +381,9 @@ export function ThreadList({
         repo={item.repo}
         attention={item.attention}
         selected={selected}
+        badge={badge}
         snoozable={view.attention}
-        onOpen={() => onSelect(item.host.id, { kind: "thread", threadId: t.id })}
+        onOpen={() => openItem(item)}
         onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
         onSnooze={async (until) =>
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
@@ -737,6 +772,7 @@ function ProjectRow({
   attention,
   host,
   selected,
+  badge,
   editable,
   onOpen,
   onUpdate,
@@ -748,6 +784,8 @@ function ProjectRow({
   /** Its host, named when there is more than one. */
   host?: Host;
   selected: boolean;
+  /** Its Mod+number badge, shown in place of its status while Mod is held. */
+  badge?: ReactNode;
   editable: boolean;
   onOpen: () => void;
   /** Sends `project/update`, and settles once plxd has answered. */
@@ -834,14 +872,15 @@ function ProjectRow({
             repo={repo}
             host={host}
             status={
-              attention === "settled" ? (
+              badge ??
+              (attention === "settled" ? (
                 age(project.updatedAt)
               ) : (
                 <AttentionBadge
                   attention={attention}
                   count={runs.filter((r) => isRunning(r.status)).length}
                 />
-              )
+              ))
             }
             hideStatus={editable}
           />
@@ -980,6 +1019,7 @@ function ThreadRow({
   repo,
   attention,
   selected,
+  badge,
   snoozable,
   onOpen,
   onArchive,
@@ -994,6 +1034,8 @@ function ThreadRow({
   repo?: Repo;
   attention: Attention;
   selected: boolean;
+  /** Its Mod+number badge, shown in place of its status while Mod is held. */
+  badge?: ReactNode;
   /** Whether its plxd keeps seen and snooze state (`threadAttention`). */
   snoozable: boolean;
   onOpen: () => void;
@@ -1025,11 +1067,12 @@ function ThreadRow({
     </>
   );
   const status =
-    attention === "settled" ? (
+    badge ??
+    (attention === "settled" ? (
       age(lastPrompt(thread))
     ) : (
       <AttentionBadge attention={attention} since={lastPrompt(thread)} />
-    );
+    ));
   return (
     <li
       data-kind="thread"
