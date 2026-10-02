@@ -403,10 +403,11 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
           const last = i === items.length - 1;
           const Tag = onClick ? "button" : "span";
           return (
-            // The slash is CSS content, so it stays out of the crumb's text.
+            // The slash is CSS content, so it stays out of the crumb's text. A long name before
+            // the last, such as a computer's, is cut short rather than pushing the rest away.
             <li
               key={i}
-              className={`flex min-w-0 items-center gap-2 ${last ? "" : "shrink-0"} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""}`}
+              className={`flex min-w-0 items-center gap-2 ${last ? "" : "max-w-48 shrink-0"} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""}`}
             >
               <Tag
                 {...(onClick && { type: "button", onClick })}
@@ -414,7 +415,9 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
                 className={`flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${last ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "rounded-md hover:text-foreground" : ""}`}
               >
                 {icon}
-                <span className="truncate">{label}</span>
+                <span className="truncate" title={typeof label === "string" ? label : undefined}>
+                  {label}
+                </span>
               </Tag>
             </li>
           );
