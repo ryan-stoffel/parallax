@@ -16,11 +16,30 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function render(value: ProjectIconValue | undefined, onPick = vi.fn()) {
+function render(value: ProjectIconValue | undefined, onPick = vi.fn(), maxImageBytes?: number) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root!.render(<IconPicker id="picker" value={value} onPick={onPick} />));
+  act(() =>
+    root!.render(
+      <IconPicker id="picker" value={value} onPick={onPick} maxImageBytes={maxImageBytes} />,
+    ),
+  );
   return onPick;
 }
+
+// happy-dom decodes and draws no images: a 300 x 200 bitmap, and a canvas that records the draw
+// and encodes to `encoded`.
+let encoded = "data:image/webp;base64,UklGRg==";
+const draws: unknown[][] = [];
+vi.stubGlobal("createImageBitmap", async () => ({ width: 300, height: 200, close() {} }));
+HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement) {
+  return { drawImage: (...args: unknown[]) => draws.push([this.width, this.height, ...args]) };
+} as never;
+HTMLCanvasElement.prototype.toDataURL = (type?: string) =>
+  type === "image/webp" ? encoded : "data:image/png;base64,";
+afterEach(() => {
+  encoded = "data:image/webp;base64,UklGRg==";
+  draws.length = 0;
+});
 
 const panel = () => document.getElementById("picker")!;
 // happy-dom has no popovers, so the panel gets the events a browser sends as it opens or closes:
@@ -203,4 +222,82 @@ test("Down goes from the search box to the current icon, arrows move in the grid
   press("ArrowRight");
   press("ArrowDown");
   expect(document.activeElement?.getAttribute("aria-label")).toBe("Dog");
+});
+
+const uploadButton = () =>
+  panel().querySelector<HTMLButtonElement>('button[aria-label="Upload image"]');
+/** Picks `file` in the picker's file input, as the file dialog does, and waits for its read. */
+const upload = (file: File) =>
+  act(async () => {
+    const input = panel().querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve));
+  });
+const png = () => new File(["x"], "logo.png", { type: "image/png" });
+
+test("Upload image shows only with the host's cap, and sends the image cropped square as a 128 px WebP", async () => {
+  render({ name: "rocket", color: "green" });
+  toggle("open");
+  expect(uploadButton()).toBeNull();
+  toggle("closed");
+
+  const onPick = render({ name: "rocket", color: "green" }, vi.fn(), 65536);
+  toggle("open");
+  expect(uploadButton()!.getAttribute("aria-pressed")).toBe("false");
+  expect(panel().querySelector('input[type="file"]')!.getAttribute("accept")).toBe(
+    "image/png,image/jpeg,image/gif,image/webp",
+  );
+  await upload(png());
+  // The 300 x 200 image's middle 200 x 200, onto a 128 px canvas.
+  expect(draws).toEqual([[128, 128, expect.anything(), 50, 0, 200, 200, 0, 0, 128, 128]]);
+  // The glyph and color stay under it (0038).
+  expect(onPick).toHaveBeenLastCalledWith({
+    name: "rocket",
+    color: "green",
+    image: { mediaType: "image/webp", data: "UklGRg==" },
+  });
+  // The upload is the one selected.
+  expect(uploadButton()!.getAttribute("aria-pressed")).toBe("true");
+  expect(uploadButton()!.querySelector("img")!.getAttribute("src")).toBe(encoded);
+  expect(selected()).toEqual([]);
+  expect(checkedColor()).toBeUndefined();
+});
+
+test("a glyph or a color picked after an upload replaces the image", async () => {
+  const image = { mediaType: "image/webp" as const, data: "UklGRg==" };
+  const onPick = render({ name: "rocket", color: "green", image }, vi.fn(), 65536);
+  toggle("open");
+  expect(uploadButton()!.getAttribute("aria-pressed")).toBe("true");
+  click(option("Bug"));
+  expect(onPick).toHaveBeenLastCalledWith({ name: "bug", color: "green" });
+  expect(uploadButton()!.getAttribute("aria-pressed")).toBe("false");
+  expect(selected()).toEqual(["Bug"]);
+
+  await upload(png());
+  click(swatch("Violet"));
+  expect(onPick).toHaveBeenLastCalledWith({ name: "bug", color: "violet" });
+});
+
+test("a file that isn't an image plxd takes, can't be read, or is over the cap says so in the picker", async () => {
+  const onPick = render(undefined, vi.fn(), 8);
+  toggle("open");
+  const alert = () => panel().querySelector('[role="alert"]')?.textContent;
+
+  await upload(new File(["x"], "logo.svg", { type: "image/svg+xml" }));
+  expect(alert()).toBe("Only PNG, JPEG, GIF, and WebP images can be used.");
+
+  encoded = "data:image/webp;base64,UklGRkJCQkJC";
+  await upload(png());
+  expect(alert()).toBe("That image is too large for an icon.");
+
+  vi.stubGlobal("createImageBitmap", async () => Promise.reject(new Error("bad image")));
+  await upload(png());
+  expect(alert()).toBe("That image couldn't be read.");
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 300, height: 200, close() {} }));
+  expect(onPick).not.toHaveBeenCalled();
+
+  // A pick clears it.
+  click(option("Star"));
+  expect(alert()).toBeUndefined();
 });

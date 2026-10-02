@@ -2,7 +2,7 @@
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import type {
   ConnectionState,
@@ -693,6 +693,60 @@ test("another client's project.updated renames a row and changes its icon, in th
     "rocket",
     "text-project-green",
   ]);
+});
+
+test("with iconImages, Change icon uploads an image, and a Project's and its repo's images draw in the row, the breadcrumb, and the chat", async () => {
+  capabilities = { projectEdit: {}, iconImages: { maxBytes: 65536 } };
+  const logo = { mediaType: "image/webp" as const, data: "UklGRg==" };
+  const repoLogo = { mediaType: "image/png" as const, data: "iVBORw==" };
+  answers["thread/list"] = () => ({
+    result: {
+      repos: [{ ...repo("ember", "/src/ember"), icon: { name: "rocket", image: repoLogo } }],
+      threads: [],
+      seq: 7,
+    },
+  });
+  answers["project/update"] = updates;
+  // happy-dom decodes and draws no images.
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 64, close() {} }));
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage() {},
+  } as never);
+  vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+    `data:image/webp;base64,${logo.data}`,
+  );
+  await renderApp();
+
+  await click(menuItem("ember", "Change icon"));
+  const input = iconPicker(projectRow("ember"))!.querySelector<HTMLInputElement>(
+    'input[type="file"]',
+  )!;
+  Object.defineProperty(input, "files", {
+    value: [new File(["x"], "logo.png", { type: "image/png" })],
+  });
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await settle();
+  expect(calls("project/update")).toEqual([
+    { project: "p-ember", icon: { name: "folder-kanban", image: logo } },
+  ]);
+
+  const drawn = (within: Element | null | undefined) =>
+    [...(within?.querySelectorAll("svg[data-icon-image] image") ?? [])].map((i) =>
+      i.getAttribute("href"),
+    );
+  const projectUrl = `data:image/webp;base64,${logo.data}`;
+  const repoUrl = `data:image/png;base64,${repoLogo.data}`;
+  // The row's repo, then the Project.
+  expect(drawn(rowButton("ember"))).toEqual([repoUrl, projectUrl]);
+  await click(rowButton("ember"));
+  expect(drawn(document.querySelector('[aria-label="Breadcrumb"]'))).toEqual([projectUrl]);
+  expect(drawn(document.querySelector("main svg.size-10")?.parentElement)).toEqual([projectUrl]);
 });
 
 test("an icon name or color this app doesn't know draws FolderKanban or the accent in its place", async () => {

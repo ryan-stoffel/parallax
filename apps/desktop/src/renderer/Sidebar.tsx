@@ -66,6 +66,7 @@ import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
 import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
+import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
@@ -157,8 +158,9 @@ interface ThreadListProps {
 }
 
 /**
- * A Project's icon, in the sidebar, the breadcrumb, its chat, and Create Project: its glyph in its
- * color, or `FolderKanban` in the accent for none, or for a name or color this app doesn't know.
+ * A Project's icon, in the sidebar, the breadcrumb, its chat, and Create Project: its uploaded
+ * image as a rounded square (0038), else its glyph in its color, or `FolderKanban` in the accent
+ * for none, or for a name or color this app doesn't know.
  */
 export function ProjectIcon({
   icon,
@@ -167,6 +169,25 @@ export function ProjectIcon({
   icon?: ProjectIconValue;
   className?: string;
 }) {
+  // An <svg> like the glyph's, so every place's glyph size (`[&_svg]:size-*`) fits the image too.
+  if (icon?.image)
+    return (
+      <svg
+        aria-hidden
+        data-icon-image
+        viewBox="0 0 24 24"
+        width={24}
+        height={24}
+        className={`[clip-path:inset(0_round_22%)] ${className}`}
+      >
+        <image
+          href={imageUrl(icon.image)}
+          width={24}
+          height={24}
+          preserveAspectRatio="xMidYMid slice"
+        />
+      </svg>
+    );
   const { Icon, color } = iconLook(icon);
   return <Icon aria-hidden className={`${color} ${className}`} />;
 }
@@ -373,6 +394,7 @@ export function ThreadList({
           selected={selected}
           badge={badge}
           editable={item.view.editable}
+          iconImageBytes={item.view.iconImageBytes}
           onOpen={() => openItem(item)}
           onUpdate={async (change) =>
             setActionError(await item.view.updateProject(item.project.id, change))
@@ -734,6 +756,7 @@ function RepoFilterMenu({
         id={pickerId}
         value={editing?.repo.icon}
         onPick={(icon) => editing && void editing.view.updateRepo(editing.repo.id, icon)}
+        maxImageBytes={editing?.view.iconImageBytes}
       />
     </>
   );
@@ -782,6 +805,7 @@ function ProjectRow({
   selected,
   badge,
   editable,
+  iconImageBytes,
   onOpen,
   onUpdate,
 }: {
@@ -795,6 +819,8 @@ function ProjectRow({
   /** Its Mod+number badge, shown in place of its status while Mod is held. */
   badge?: ReactNode;
   editable: boolean;
+  /** Its host's cap on an icon image, where its plxd keeps them. */
+  iconImageBytes?: number;
   onOpen: () => void;
   /** Sends `project/update`, and settles once plxd has answered. */
   onUpdate: (change: ProjectChange) => Promise<void>;
@@ -965,6 +991,7 @@ function ProjectRow({
           id={pickerId}
           value={project.icon}
           onPick={(next) => void onUpdate({ icon: next })}
+          maxImageBytes={iconImageBytes}
         />
       )}
     </li>
