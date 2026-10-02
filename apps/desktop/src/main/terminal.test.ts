@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { CliKind } from "../protocol/generated/protocol";
-import { loginCommand } from "./terminal";
+import { loginCommand, shellCommand } from "./terminal";
 
 const mini = { destination: "me@mini", ssh: "ssh" };
 
@@ -53,4 +53,36 @@ test("runs ssh.exe on Windows, where node-pty won't add the extension", () => {
   const custom = { ...mini, ssh: "C:\\Tools\\ssh.exe" };
   expect(loginCommand("codex", path, custom, "win32").file).toBe("C:\\Tools\\ssh.exe");
   expect(loginCommand("codex", path, mini, "linux").file).toBe("ssh");
+});
+
+test("opens the login shell in a folder here: $SHELL -l, or PowerShell on Windows", () => {
+  const env = { SHELL: "/bin/zsh" };
+  expect(shellCommand("/repo/wt", undefined, "darwin", env)).toEqual({
+    file: "/bin/zsh",
+    args: ["-l"],
+    cwd: "/repo/wt",
+  });
+  expect(shellCommand("/repo/wt", undefined, "linux", {}).file).toBe("/bin/sh");
+  expect(shellCommand("C:\\repo\\wt", undefined, "win32", env)).toEqual({
+    file: "powershell.exe",
+    args: ["-NoLogo"],
+    cwd: "C:\\repo\\wt",
+  });
+});
+
+test("opens it on an SSH host after a cd, quoted for the host's shell", () => {
+  const ssh = (remote: string) => ({
+    file: "ssh",
+    args: ["-t", "-e", "none", "-o", "ControlPath=none", "--", "me@mini", remote],
+  });
+  expect(shellCommand("/home/me/wt", mini, "darwin")).toEqual(
+    ssh(`cd /home/me/wt && exec "$SHELL" -l`),
+  );
+  expect(shellCommand("/home/it's me/wt", mini, "linux")).toEqual(
+    ssh(`cd '/home/it'\\''s me/wt' && exec "$SHELL" -l`),
+  );
+  expect(shellCommand("C:\\Users\\A B\\wt", mini, "darwin")).toEqual(
+    ssh('cd /d "C:\\Users\\A B\\wt" && cmd'),
+  );
+  expect(shellCommand("/home/me/wt", mini, "win32").file).toBe("ssh.exe");
 });

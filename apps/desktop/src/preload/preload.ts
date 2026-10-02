@@ -18,6 +18,12 @@ ipcRenderer.on("parallax:subscription", (_event, key: string, message: Subscript
   listener?.(message);
 });
 
+// Each terminal's listener, by its id: one each, since each id has one view.
+const terminals = new Map<string, (message: TerminalMessage) => void>();
+ipcRenderer.on("parallax:terminal", (_event, id: string, message: TerminalMessage) =>
+  terminals.get(id)?.(message),
+);
+
 // The renderer's only way into the app, exposed as `window.parallax`.
 const bridge: ParallaxBridge = {
   platform: process.platform,
@@ -69,15 +75,16 @@ const bridge: ParallaxBridge = {
   saveHost: (host, id) => ipcRenderer.invoke("parallax:saveHost", host, id),
   removeHost: (id) => ipcRenderer.invoke("parallax:removeHost", id),
 
-  openTerminal: (hostId, cli, cols, rows) =>
-    ipcRenderer.invoke("parallax:openTerminal", hostId, cli, cols, rows),
-  terminalInput: (data) => ipcRenderer.send("parallax:terminalInput", data),
-  resizeTerminal: (cols, rows) => ipcRenderer.send("parallax:resizeTerminal", cols, rows),
-  closeTerminal: () => ipcRenderer.send("parallax:closeTerminal"),
-  onTerminal(listener) {
-    const forward = (_event: unknown, message: TerminalMessage) => listener(message);
-    ipcRenderer.on("parallax:terminal", forward);
-    return () => ipcRenderer.removeListener("parallax:terminal", forward);
+  openTerminal: (id, target, cols, rows) =>
+    ipcRenderer.invoke("parallax:openTerminal", id, target, cols, rows),
+  terminalInput: (id, data) => ipcRenderer.send("parallax:terminalInput", id, data),
+  resizeTerminal: (id, cols, rows) => ipcRenderer.send("parallax:resizeTerminal", id, cols, rows),
+  closeTerminal: (id) => ipcRenderer.send("parallax:closeTerminal", id),
+  onTerminal(id, listener) {
+    terminals.set(id, listener);
+    return () => {
+      if (terminals.get(id) === listener) terminals.delete(id);
+    };
   },
 
   openTargets: (hostId) => ipcRenderer.invoke("parallax:openTargets", hostId),
