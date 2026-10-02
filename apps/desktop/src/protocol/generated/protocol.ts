@@ -1214,8 +1214,9 @@ export type AgentStartParams = {
 	/**
 	 * Forward the run's permission requests to the client as `approvalRequested` items, which
 	 * `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
-	 * answers them, and only to a plxd that advertises `approvals`. Absent, a run in Manual,
-	 * Auto, or Plan denies what would prompt, as before. A run with a `coordinatorThread` also
+	 * answers them, and only to a plxd that advertises `approvals`. A thread with it is full
+	 * Claude Code and also asks in Accept Edits (0034). Absent, a run in Manual, Auto, or Plan
+	 * denies what would prompt, and a thread keeps the worker sandbox, as before. A run with a `coordinatorThread` also
 	 * gets it when its coordinator has it. The run keeps it when it resumes, and a retry must
 	 * repeat it.
 	 */
@@ -2536,7 +2537,8 @@ export type RepoAddResult = {
 
 /**
  * Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
- * starts a worker, with the same sandbox (0013).
+ * starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
+ * worker sandbox (0034); without it, it keeps the worker's sandbox (0013).
  *
  * Idempotent on `runId`: the same id with the same params returns the run; with different
  * params it fails with `idConflict`.
@@ -2568,7 +2570,7 @@ export type ThreadStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * How the agent may act inside its sandbox, as `agent/start` takes it.
+	 * Claude Code's permission mode for the agent, as `agent/start` takes it.
 	 */
 	permission?: AgentPermission,
 	/**

@@ -2116,7 +2116,7 @@ fn a_no_write_run_allows_only_the_read_tools() {
 /// `--restricted`, `--tools`, `--strict-mcp-config`, or sandbox settings, so the user's settings,
 /// skills, and MCP servers load. It asks plxd in Accept Edits too, since nothing sandboxes its
 /// commands, and in Plan it has `ExitPlanMode` without a `--tools` list. Its init may list any
-/// tool. A worker keeps its sandbox.
+/// tool. A worker keeps its sandbox, and so does a thread whose client can't answer requests.
 #[test]
 fn a_thread_is_full_claude_code_in_every_mode() {
     let cwd = Path::new("/Users/u/wt");
@@ -2157,6 +2157,15 @@ fn a_thread_is_full_claude_code_in_every_mode() {
         assert_eq!(super::prompts(&request), asks, "{permission:?}");
         assert!(!super::hands_over_plans(&request));
     }
+    let unanswered = RunRequest {
+        approvals: false,
+        ..thread.clone()
+    };
+    assert!(
+        super::arguments(&unanswered)
+            .unwrap()
+            .contains(&"--restricted".into())
+    );
     let worker = RunRequest {
         thread: false,
         ..thread

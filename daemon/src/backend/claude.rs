@@ -21,7 +21,8 @@
 //!   mode fails with [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
 //!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
-//!   each writable folder. A normal thread in any mode (0034), and a worker in
+//!   each writable folder. A normal thread in any mode whose client answers permission requests
+//!   (0034), and a worker in
 //!   [`AgentPermission::Bypass`] (0027), are full Claude Code instead, as on the user's own
 //!   machine ([`unsandboxed`]): only the permission mode, `--allowedTools` with [`TODO_TOOLS`],
 //!   `--add-dir`, and `--settings` with only [`settings_env`], with no sandbox, so the user's
@@ -720,12 +721,22 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
 }
 
 /// Whether `request` runs as full Claude Code with no worker sandbox, though it may write: a
-/// normal thread in any mode (0034), or a worker in [`AgentPermission::Bypass`] (0027). Its
-/// tools, settings, and MCP servers are whatever the user's configuration loads.
+/// normal thread in any mode whose client answers permission requests ([`full_thread`], 0034),
+/// or a worker in [`AgentPermission::Bypass`] (0027). Its tools, settings, and MCP servers are
+/// whatever the user's configuration loads.
 #[must_use]
 pub fn unsandboxed(request: &RunRequest) -> bool {
     request.policy == ToolPolicy::WorkspaceWrite
-        && (request.thread || request.permission == Some(AgentPermission::Bypass))
+        && (full_thread(request) || request.permission == Some(AgentPermission::Bypass))
+}
+
+/// Whether `request` is a normal thread that runs as full Claude Code (0034): one whose client
+/// answers permission requests. Without `approvals`, such as a thread started before the app
+/// showed them, its commands would be denied wherever they'd prompt, so it keeps the worker
+/// sandbox, where they run without asking, as before.
+#[must_use]
+pub fn full_thread(request: &RunRequest) -> bool {
+    request.thread && request.approvals
 }
 
 /// Whether `request`'s CLI asks plxd before a tool call that would prompt (RYA-222, 0031): a
@@ -740,7 +751,7 @@ pub fn prompts(request: &RunRequest) -> bool {
     let plain_no_write =
         request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none();
     let thread_edits =
-        request.thread && matches!(request.permission, None | Some(AgentPermission::Edit));
+        full_thread(request) && matches!(request.permission, None | Some(AgentPermission::Edit));
     request.approvals
         && !plain_no_write
         && (thread_edits
@@ -762,7 +773,7 @@ pub fn prompts(request: &RunRequest) -> bool {
 #[must_use]
 pub fn hands_over_plans(request: &RunRequest) -> bool {
     request.policy == ToolPolicy::WorkspaceWrite
-        && !request.thread
+        && !full_thread(request)
         && request.permission == Some(AgentPermission::Plan)
         && prompts(request)
 }
@@ -889,6 +900,7 @@ impl Backend for ClaudeBackend {
         spec.args = arguments(&request)?;
         let asks = prompts(&request);
         let plan_exit = hands_over_plans(&request);
+        let full = full_thread(&request);
         if let Some(sandbox) = worker_sandbox(&request)? {
             spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
         }
@@ -943,7 +955,7 @@ impl Backend for ClaudeBackend {
             stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
                 .with_coordinator_tools(request.coordinator_tools.is_some())
-                .with_thread(request.thread)
+                .with_thread(full)
                 .with_permission_mode(permission_mode(request.permission)?)
                 .with_prompts(asks)
                 .with_plan_exit(plan_exit),

@@ -880,12 +880,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
 
     // A run just created here has no sent turns yet.
     let mut actor = Actor::new(Arc::clone(&daemon), row, worktree, HashMap::new());
-    let Place::Worker { context, .. } = &prepared.place else {
-        return Err(ErrorObject::internal_error(
-            "a worker was prepared as a coordinator",
-        ));
-    };
-    let task = first_prompt(&prompt, thread.as_ref(), &cwd, context);
+    let task = first_prompt(&prompt, &prepared.place, &cwd)?;
     let paths = Some((cwd, git_common_dir));
     actor
         .launch(prepared, task, images, None, None, paths)
@@ -900,12 +895,16 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
 }
 
 /// A new run's first message: a worker's limits, for its CLI started in `cwd`, then `prompt`. A
-/// thread's is `prompt` as the user wrote it, as in Claude Code (0034).
-fn first_prompt(prompt: &str, thread: Option<&NewThread>, cwd: &Path, context: &Path) -> String {
-    if thread.is_some() {
-        return prompt.to_owned();
+/// thread's (a run whose scope is a repo entry) is `prompt` as the user wrote it, as in Claude
+/// Code (0034).
+fn first_prompt(prompt: &str, place: &Place, cwd: &Path) -> Result<String, ErrorObject> {
+    match place {
+        Place::Worker { thread: true, .. } => Ok(prompt.to_owned()),
+        Place::Worker { context, .. } => Ok(worker::worker_prompt(prompt, cwd, context)),
+        Place::Coordinator { .. } => Err(ErrorObject::internal_error(
+            "a worker was prepared as a coordinator",
+        )),
     }
-    worker::worker_prompt(prompt, cwd, context)
 }
 
 impl Agents {
