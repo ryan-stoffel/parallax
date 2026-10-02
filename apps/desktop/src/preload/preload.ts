@@ -89,6 +89,7 @@ const bridge: ParallaxBridge = {
   },
 
   openTargets: (hostId) => ipcRenderer.invoke("parallax:openTargets", hostId),
+  openTargetIcons: () => ipcRenderer.invoke("parallax:openTargetIcons"),
   openFolder: (hostId, target, folder) =>
     ipcRenderer.invoke("parallax:openFolder", hostId, target, folder),
 

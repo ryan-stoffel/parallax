@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { expect, test } from "vite-plus/test";
 
-import { detectEditors, editorCommand, isDirectory, isFolderPath } from "./editors";
+import { appBundle, detectEditors, editorCommand, isDirectory, isFolderPath } from "./editors";
 
 const only =
   (...files: string[]) =>
@@ -78,4 +78,19 @@ test("opens only a directory on this computer, never a file it would run", () =>
   expect(isDirectory(folder)).toBe(true);
   expect(isDirectory(file)).toBe(false);
   expect(isDirectory(path.join(folder, "gone"))).toBe(false);
+});
+
+test("appBundle finds the .app a program is in, after symlinks", () => {
+  const links: Record<string, string> = {
+    "/usr/local/bin/code": "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+  };
+  const realpath = (file: string) => links[file] ?? file;
+  expect(appBundle("/Applications/Cursor.app/Contents/Resources/app/bin/cursor", realpath)).toBe(
+    "/Applications/Cursor.app",
+  );
+  expect(appBundle("/usr/local/bin/code", realpath)).toBe("/Applications/Visual Studio Code.app");
+  expect(appBundle("/System/Library/CoreServices/Finder.app", realpath)).toBe(
+    "/System/Library/CoreServices/Finder.app",
+  );
+  expect(appBundle("/opt/homebrew/bin/cursor", realpath)).toBeUndefined();
 });
