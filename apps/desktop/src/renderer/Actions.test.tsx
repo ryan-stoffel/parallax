@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, useEffect } from "react";
+import { act, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
@@ -13,10 +13,17 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLElement.prototype.hidePopover = () => {};
 HTMLElement.prototype.showPopover = () => {};
 
-// xterm.js doesn't run in happy-dom: a terminal here starts as soon as it mounts.
+// xterm.js doesn't run in happy-dom: a terminal here starts as soon as it mounts, and `shell.exit`
+// ends the last one started.
+const shell = vi.hoisted(() => ({ exit: () => {} }));
 vi.mock("./Terminal", () => ({
-  TerminalView: ({ onStart }: { onStart?: () => void }) => {
-    useEffect(() => onStart?.(), [onStart]);
+  TerminalView: ({ onStart, onEnd }: { onStart?: () => void; onEnd?: () => void }) => {
+    // Once per mount, as the real one opens its terminal.
+    const props = useRef({ onStart, onEnd });
+    useEffect(() => {
+      props.current.onStart?.();
+      shell.exit = () => props.current.onEnd?.();
+    }, []);
     return null;
   },
 }));
@@ -69,6 +76,20 @@ test("a keybinding is its modifiers and key code, written the OS's way", () => {
   expect(formatKeybinding("Ctrl+Shift+Meta+Digit1")).toBe("⌃⇧⌘1");
   window.parallax = { platform: "linux" } as ParallaxBridge;
   expect(formatKeybinding("Ctrl+Alt+KeyR")).toBe("Ctrl+Alt+R");
+  // Off macOS, AltGr arrives as Ctrl+Alt and types a character.
+  const altGr = e({ key: "@", code: "KeyQ", ctrlKey: true, altKey: true });
+  altGr.getModifierState = (key: string) => key === "AltGraph";
+  expect(keybindingOf(altGr)).toBeUndefined();
+});
+
+test("stored entries that aren't actions are dropped", () => {
+  localStorage.setItem(
+    "parallax:actions:local/r1",
+    JSON.stringify([null, 3, { id: "a", name: "Test" }, { id: "b", name: "Dev", command: "x" }]),
+  );
+  expect(readActions("local", "r1").map((a) => a.id)).toEqual(["b"]);
+  render(<Actions hostId="local" repoId="r1" canRun onRun={() => {}} />);
+  expect(button("Dev")).toBeDefined();
 });
 
 test("Add action saves an action for the repository, refusing the app's shortcuts", () => {
@@ -87,6 +108,10 @@ test("Add action saves an action for the repository, refusing the app's shortcut
   window.removeEventListener("keydown", sidebar);
   expect(sidebar).not.toHaveBeenCalled();
   expect(dialog()!.textContent).toContain("⌘B is one of Parallax's shortcuts.");
+  press(keybindingField(), { key: "c", code: "KeyC", metaKey: true });
+  expect(dialog()!.textContent).toContain("⌘C is an editing shortcut.");
+  press(keybindingField(), { key: "Enter", code: "Enter", metaKey: true });
+  expect(dialog()!.textContent).toContain("⌘Enter is an editing shortcut.");
   expect(keybindingField().value).toBe("");
   press(keybindingField(), { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
   expect(keybindingField().value).toBe("⇧⌘T");
@@ -195,6 +220,15 @@ test("a command waits for the drawer's shell to start, then runs in it", async (
   expect(terminalInput).toHaveBeenCalledWith("drawer:local/t1", "pnpm test\r");
   runInDrawer(folder, "pnpm dev");
   expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t1", "pnpm dev\r");
+
+  // Once the shell exits, commands wait for Restart, which runs only the latest.
+  act(() => shell.exit());
+  runInDrawer(folder, "pnpm lint");
+  runInDrawer(folder, "pnpm build");
+  expect(terminalInput).toHaveBeenCalledTimes(2);
+  act(() => button("Restart").click());
+  expect(terminalInput).toHaveBeenCalledTimes(3);
+  expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t1", "pnpm build\r");
 });
 
 test("a preview opens the side panel's Browser view at its URL", () => {

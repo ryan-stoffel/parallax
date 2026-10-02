@@ -37,20 +37,21 @@ export function folderOf(
 /** The drawer's terminal id for a folder, to type or run a command in it with `terminalInput`. */
 export const drawerTerminalId = (folder: ThreadFolder) => `drawer:${folder.key}`;
 
-// The terminals whose shell runs, and what to type into each once it does, by terminal id. Main
-// drops input to a terminal that hasn't started.
+// The terminals whose shell runs, and the command to run in each once it does, by terminal id.
+// Main drops input to a terminal that hasn't started. A shell that exits drops its queue, and only
+// the latest command waits for its restart.
 const running = new Set<string>();
 const queued = new Map<string, string>();
 
 /**
- * Runs `command` in `folder`'s drawer terminal: now if its shell runs, else once it starts. Open
- * the drawer on `folder` too, so it starts.
+ * Runs `command` in `folder`'s drawer terminal: now if its shell runs, else once it starts, in
+ * place of any command already waiting. Open the drawer on `folder` too, so it starts.
  */
 export function runInDrawer(folder: ThreadFolder, command: string) {
   const id = drawerTerminalId(folder);
   const input = `${command}\r`;
   if (running.has(id)) window.parallax.terminalInput(id, input);
-  else queued.set(id, (queued.get(id) ?? "") + input);
+  else queued.set(id, input);
 }
 
 function started(id: string) {
@@ -145,6 +146,7 @@ function PooledTerminal({
             onStart={() => started(id)}
             onEnd={(error) => {
               running.delete(id);
+              queued.delete(id);
               setEnd({ error });
             }}
           />

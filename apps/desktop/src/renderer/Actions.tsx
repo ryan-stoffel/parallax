@@ -76,10 +76,22 @@ const storageKey = (hostId: string, repoId: string) => `parallax:actions:${hostI
 export function readActions(hostId: string, repoId: string): RepoAction[] {
   try {
     const stored = JSON.parse(localStorage.getItem(storageKey(hostId, repoId)) ?? "[]") as unknown;
-    return Array.isArray(stored) ? (stored as RepoAction[]) : [];
+    // Entries without an id, name, and command are dropped, so a bad one can't break the top bar.
+    return Array.isArray(stored) ? stored.filter(isAction) : [];
   } catch {
     return [];
   }
+}
+
+function isAction(value: unknown): value is RepoAction {
+  const a = value as Partial<RepoAction> | null;
+  return (
+    typeof a === "object" &&
+    a !== null &&
+    typeof a.id === "string" &&
+    typeof a.name === "string" &&
+    typeof a.command === "string"
+  );
 }
 
 function writeActions(hostId: string, repoId: string, actions: RepoAction[]) {
@@ -94,13 +106,18 @@ const modifiers = ["Control", "Alt", "Shift", "Meta", "AltGraph"];
 
 /**
  * The keybinding a press makes, as its modifiers then its key's code, e.g. "Ctrl+Shift+KeyT".
- * Undefined for a lone modifier, and for a press without Cmd or Ctrl, which would type.
+ * Undefined for a lone modifier, for a press without Cmd or Ctrl, which would type, and off macOS
+ * for AltGr, which arrives as Ctrl+Alt and types characters (as in `appShortcut`).
  */
 export function keybindingOf(e: KeyPress): string | undefined {
   if (modifiers.includes(e.key) || !(e.metaKey || e.ctrlKey)) return undefined;
+  if (window.parallax.platform !== "darwin" && e.getModifierState("AltGraph")) return undefined;
   const held = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta"];
   return [...held.filter(Boolean), e.code].join("+");
 }
+
+// Cmd or Ctrl with these sends a message, or copies, pastes, cuts, undoes, or selects all.
+const editingKeys = ["Enter", "NumpadEnter", "KeyC", "KeyV", "KeyX", "KeyZ", "KeyA"];
 
 const macSymbols: Record<string, string> = { Ctrl: "⌃", Alt: "⌥", Shift: "⇧", Meta: "⌘" };
 
@@ -337,6 +354,7 @@ export function ActionDialog({
     const shown = formatKeybinding(next);
     const taken = others.find((a) => a.keybinding === next);
     if (appShortcut(e)) return setRefused(`${shown} is one of Parallax's shortcuts.`);
+    if (editingKeys.includes(e.code)) return setRefused(`${shown} is an editing shortcut.`);
     if (taken) return setRefused(`${shown} already runs ${taken.name}.`);
     setRefused(undefined);
     setKeybinding(next);
