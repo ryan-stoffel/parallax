@@ -1,4 +1,4 @@
-import { PanelLeft, PanelRight, Workflow } from "lucide-react";
+import { PanelBottom, PanelLeft, PanelRight, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
@@ -18,6 +18,7 @@ import { attentionOf } from "./attention";
 import { useSnoozeAlarms } from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
+import { folderOf, TerminalDrawer, TerminalPool, useDeleted } from "./ThreadTerminal";
 import {
   asksOf,
   groupOf,
@@ -65,6 +66,8 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelExpanded, setPanelExpanded] = useState(false);
+  // The folders whose terminal drawer is open, by key (ThreadTerminal.tsx).
+  const [drawers, setDrawers] = useState<ReadonlySet<string>>(new Set());
   // A quiet note for the thread New Thread just started, such as the account it picked.
   const [notice, setNotice] = useState<{ threadId: string; text: string }>();
 
@@ -218,7 +221,25 @@ export function App() {
         ? undefined
         : "Connecting to plxd…";
 
-  // Mod+B: sidebar. Mod+Alt+B: side panel. Mod+N: new thread. Mod+,: Settings.
+  // The open thread's folder, or the new thread's repository's, where its terminals open.
+  const folder =
+    settings || selection.kind === "usage" || selection.kind === "project"
+      ? undefined
+      : folderOf(
+          host.id,
+          threads.state,
+          selection.kind === "thread" ? { threadId: selection.threadId } : { repoId: group.id },
+        );
+  const deleted = useDeleted(views);
+  const drawerOpen = !!folder && drawers.has(folder.key);
+  const toggleDrawer = () => {
+    if (!folder) return;
+    const next = new Set(drawers);
+    if (!next.delete(folder.key)) next.add(folder.key);
+    setDrawers(next);
+  };
+
+  // Mod+B: sidebar. Mod+Alt+B: side panel. Mod+J: terminal. Mod+N: new thread. Mod+,: Settings.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const mac = window.parallax.platform === "darwin";
@@ -228,6 +249,7 @@ export function App() {
       if (!mac && e.getModifierState("AltGraph")) return;
       if (e.code === "KeyB" && e.altKey) setPanelOpen((open) => !open);
       else if (e.code === "KeyB") setSidebarOpen((open) => !open);
+      else if (e.code === "KeyJ" && !e.altKey && folder) toggleDrawer();
       else if (e.code === "KeyN" && !e.altKey) newThread();
       else if (e.key === "," && !e.altKey) openSettings("general");
       else return;
@@ -321,6 +343,17 @@ export function App() {
                     run={threads.state.runs[selection.threadId]}
                   />
                 )}
+                {folder && (
+                  <IconButton
+                    label={drawerOpen ? "Hide terminal" : "Show terminal"}
+                    keys="J"
+                    aria-pressed={drawerOpen}
+                    aria-controls="terminal-drawer"
+                    onClick={toggleDrawer}
+                  >
+                    <PanelBottom />
+                  </IconButton>
+                )}
                 {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
                 {!panelOpen && (
                   <IconButton
@@ -391,6 +424,8 @@ export function App() {
             )}
           </>
         )}
+        {/* Outside the views, so the terminals live on behind Settings and Usage. */}
+        <TerminalDrawer open={drawerOpen} folder={folder} deleted={deleted} />
       </main>
 
       <SidePanel
@@ -424,6 +459,15 @@ export function App() {
             />
           )
         }
+        terminal={(shown, empty) => (
+          <TerminalPool
+            prefix="panel"
+            label="Side panel terminal"
+            active={shown ? folder : undefined}
+            deleted={deleted}
+            empty={empty}
+          />
+        )}
       />
     </div>
   );

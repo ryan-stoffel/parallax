@@ -47,7 +47,12 @@ const surfaces: Surface[] = [
     key: "A",
     empty: { title: "No agents running", hint: "Subagents this thread starts show up here." },
   },
-  { name: "Terminal", icon: Terminal, key: "T" },
+  {
+    name: "Terminal",
+    icon: Terminal,
+    key: "T",
+    empty: { title: "No folder here", hint: "A thread's terminal opens in its folder." },
+  },
   { name: "Files", icon: FolderTree, key: "F" },
   { name: "Browser", icon: Globe, key: "B" },
 ];
@@ -60,7 +65,8 @@ const surfaces: Surface[] = [
  * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
  * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents` and
  * `context` are those views, such as a Project's, in place of their empty states. `remoteHost` is
- * the open host's name when it's an SSH host.
+ * the open host's name when it's an SSH host. `terminal` draws the Terminal view, told whether
+ * it's shown and given its empty state.
  */
 export function SidePanel({
   open,
@@ -72,6 +78,7 @@ export function SidePanel({
   agents,
   context,
   remoteHost,
+  terminal,
 }: {
   open: boolean;
   onClose: () => void;
@@ -82,6 +89,7 @@ export function SidePanel({
   agents?: ReactNode;
   context?: ReactNode;
   remoteHost?: string;
+  terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
 }) {
   // The open views in tab order, and the one shown; with none shown, the list is.
   const [tabs, setTabs] = useState<Surface[]>([]);
@@ -102,6 +110,13 @@ export function SidePanel({
     setActive(next);
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
   };
+  const emptyOf = (s: Surface) => (
+    <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
+      <s.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
+      <p className="text-[13px] font-medium text-foreground">{s.empty?.title}</p>
+      <p className="text-[12.5px] text-muted-foreground">{s.empty?.hint}</p>
+    </div>
+  );
   const viewOf = (s: Surface) =>
     s.name === "Browser" ? (
       <Browser remoteHost={remoteHost} />
@@ -109,12 +124,10 @@ export function SidePanel({
       agents
     ) : s.name === "Context" && context ? (
       context
+    ) : s.name === "Terminal" && terminal ? (
+      terminal(open && s === active, emptyOf(s))
     ) : (
-      <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
-        <s.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
-        <p className="text-[13px] font-medium text-foreground">{s.empty?.title}</p>
-        <p className="text-[12.5px] text-muted-foreground">{s.empty?.hint}</p>
-      </div>
+      emptyOf(s)
     );
 
   return (
