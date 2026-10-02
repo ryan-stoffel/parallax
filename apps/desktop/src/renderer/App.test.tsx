@@ -97,11 +97,13 @@ test("Mod+S toggles the sidebar, and Mod+Alt+U opens the Usage page", () => {
   expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
 });
 
-test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens", () => {
+test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not Mod+O or Mod+B", () => {
   const press = (init: KeyboardEventInit) => appShortcut(new KeyboardEvent("keydown", init));
   expect(press({ code: "Backquote", ctrlKey: true, shiftKey: true })).toBe("terminal");
   expect(press({ code: "Backquote", metaKey: true, shiftKey: true })).toBeUndefined();
   expect(press({ code: "KeyO", metaKey: true, altKey: true })).toBe("open");
+  expect(press({ code: "KeyO", metaKey: true })).toBeUndefined();
+  expect(press({ code: "KeyB", metaKey: true })).toBeUndefined();
 });
 
 test("the footer's Usage opens the Usage page, and Update shows when it's ready and its answer", async () => {

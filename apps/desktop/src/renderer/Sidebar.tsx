@@ -111,7 +111,7 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
       <TopBar className="traffic-light-inset">
         <IconButton
           label="Hide sidebar"
-          keys="B"
+          keys="S"
           aria-expanded
           aria-controls="sidebar"
           onClick={onClose}

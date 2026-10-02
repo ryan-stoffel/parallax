@@ -23,10 +23,10 @@ export type KeyPress = Pick<
 >;
 
 /**
- * The app's own shortcut `e` presses, if any: Mod+B or Mod+S the sidebar, Mod+Alt+B the side
- * panel, Mod+J or Ctrl+Shift+` (Ctrl on macOS too) the terminal, Mod+N the new thread picker,
- * Mod+Shift+N a new thread with no repo, Mod+1 to Mod+9 a sidebar row (`rowShortcut`), Mod+,
- * Settings, Mod+O or Mod+Alt+O Open, and Mod+Alt+U Usage. App, ThreadList, and OpenMenu act on
+ * The app's own shortcut `e` presses, if any: Mod+S the sidebar, Mod+Alt+B the side panel, Mod+J
+ * or Ctrl+Shift+` (Ctrl on macOS too) the terminal, Mod+N the new thread picker, Mod+Shift+N a new
+ * thread with no repo, Mod+1 to Mod+9 a sidebar row (`rowShortcut`), Mod+, Settings, Mod+Alt+O
+ * Open, and Mod+Alt+U Usage. App, ThreadList, and OpenMenu act on
  * them, and a repository action's keybinding can't be one.
  */
 export function appShortcut(
@@ -48,8 +48,8 @@ export function appShortcut(
   // Off macOS, AltGr arrives as Ctrl+Alt and types characters we must not eat. (macOS may report
   // Option as AltGraph, and uses Cmd anyway.)
   if (!mac && e.getModifierState("AltGraph")) return undefined;
-  if (e.code === "KeyB") return e.altKey ? "panel" : "sidebar";
   if (e.altKey) {
+    if (e.code === "KeyB") return "panel";
     if (e.code === "KeyO") return "open";
     if (e.code === "KeyU") return "usage";
     return undefined;
@@ -59,7 +59,6 @@ export function appShortcut(
   if (e.code === "KeyN") return e.shiftKey ? "noRepoThread" : "newThread";
   if (rowShortcut(e) !== undefined) return "row";
   if (e.key === ",") return "settings";
-  if (e.code === "KeyO" && !e.shiftKey) return "open";
   return undefined;
 }
 

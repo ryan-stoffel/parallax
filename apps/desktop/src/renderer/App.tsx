@@ -305,7 +305,7 @@ export function App() {
   const showSidebar = !sidebarOpen && (
     <IconButton
       label="Show sidebar"
-      keys="B"
+      keys="S"
       aria-expanded={false}
       aria-controls="sidebar"
       onClick={() => setSidebarOpen(true)}
