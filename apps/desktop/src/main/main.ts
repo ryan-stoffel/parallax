@@ -1,9 +1,20 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  nativeTheme,
+  session,
+  shell,
+} from "electron";
 import path from "node:path";
 
 import { THEME_PREFERENCES, type OpenTarget, type UpdateState } from "../preload/bridge";
 import { startAccount } from "./account";
 import {
+  appBundle,
   detectEditors,
   editorCommand,
   isDirectory,
@@ -177,6 +188,27 @@ function openTargets(hostId: unknown): OpenTarget[] {
   return local ? [...found, "files"] : found;
 }
 ipcMain.handle("parallax:openTargets", (_event, hostId: unknown) => openTargets(hostId));
+// The Open targets' own app icons on macOS, as data URLs, found once. Quick Look, since
+// `app.getFileIcon` gives a `.app` bundle a placeholder icon. A target without one keeps its mark.
+let targetIcons: Promise<Partial<Record<OpenTarget, string>>> | undefined;
+async function openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>> {
+  if (process.platform !== "darwin") return {};
+  const apps = { ...installedEditors(), files: "/System/Library/CoreServices/Finder.app" };
+  const icons = await Promise.all(
+    Object.entries(apps).map(async ([target, program]) => {
+      try {
+        const bundle = appBundle(program);
+        if (!bundle) return [];
+        const icon = await nativeImage.createThumbnailFromPath(bundle, { width: 64, height: 64 });
+        return [[target, icon.toDataURL()]];
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return Object.fromEntries(icons.flat());
+}
+ipcMain.handle("parallax:openTargetIcons", () => (targetIcons ??= openTargetIcons()));
 ipcMain.handle(
   "parallax:openFolder",
   async (event, hostId: unknown, target: unknown, folder: unknown) => {

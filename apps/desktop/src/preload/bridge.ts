@@ -117,6 +117,8 @@ export interface ParallaxBridge {
    * manager for this computer's own folders. Empty for an unknown host.
    */
   openTargets(hostId: string): Promise<OpenTarget[]>;
+  /** The Open targets' own app icons as data URLs: macOS only, and only those it could read. */
+  openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>>;
   /** Opens a host's folder with `target`. Main shows a dialog when it can't. */
   openFolder(hostId: string, target: OpenTarget, folder: string): Promise<void>;
 
