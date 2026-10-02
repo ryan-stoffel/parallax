@@ -38,15 +38,15 @@ use crate::{
     AgentStartParams, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
     ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
     EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
-    HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams,
-    InitializeResult, PrActParams, PrDiffResult, PrViewParams, ProjectCreateParams,
-    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
-    PullRequest, RepoAddParams, RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams,
-    RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult,
+    GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult, HostVersionParams,
+    HostVersionResult, InitializeParams, InitializeResult, PrActParams, PrDiffResult, PrViewParams,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
+    ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams, RepoAddResult, RepoFilesParams,
+    RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -276,6 +276,10 @@ method_table! {
         /// `repo/files`: a thread's files that git tracks or doesn't ignore, capped, for the
         /// composer's `@` menu.
         RepoFiles = "repo/files": RepoFilesParams => RepoFilesResult;
+        /// `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
+        /// github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
+        /// `githubStatus` capability.
+        GithubStatusGet = "github/status": GithubStatusParams => GithubStatus;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -365,6 +369,7 @@ mod tests {
                 "project/delete",
                 "agent/commands",
                 "repo/files",
+                "github/status",
                 "$/cancelRequest",
                 "events/event",
             ]

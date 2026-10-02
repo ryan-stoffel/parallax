@@ -486,11 +486,11 @@ function DiffFileView({
         </label>
       </div>
       {!shut && (
-        <div className="pb-1 font-mono text-[12px] leading-5">
+        <div className="code-scroll pb-1 font-mono text-[12px] leading-5">
           {file.binary && <p className="px-3 text-faint-foreground">Binary file not shown</p>}
           {file.lines.map((line, i) =>
             line.op === "@" ? (
-              <div key={i} className={`${diffBand} break-all whitespace-pre-wrap`}>
+              <div key={i} className={`${diffBand} code-lines break-all whitespace-pre-wrap`}>
                 {line.text}
               </div>
             ) : (
@@ -513,7 +513,7 @@ function DiffFileView({
                 {line.op !== " " && (
                   <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
                 )}
-                <span className="min-w-0 pr-3 break-all whitespace-pre-wrap">
+                <span className="code-lines min-w-0 pr-3 break-all whitespace-pre-wrap">
                   {line.text || " "}
                 </span>
               </div>

@@ -29,7 +29,15 @@ import type {
 import { EffortMenu } from "./EffortMenu";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { ModelMenu } from "./ModelMenu";
-import { backendOf, backends, models, type Model, type Provider, type RunOptions } from "./models";
+import {
+  backendOf,
+  backends,
+  models,
+  useDisabledClis,
+  type Model,
+  type Provider,
+  type RunOptions,
+} from "./models";
 import { menuItem, Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
@@ -393,8 +401,16 @@ export function Composer({
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const run = backend === undefined ? undefined : backends[backend];
   const runModels = models.filter((m) => m.provider === run?.provider);
+  // Providers turned off in Settings, but an open run's own, which it keeps.
+  const off = useDisabledClis();
+  const blocked = { ...unavailable };
+  for (const cli of off) {
+    const p = backends[cli]?.provider;
+    if (p && !(started && p === run?.provider))
+      blocked[p] ??= `${p} is turned off in Settings > Providers.`;
+  }
   // Any provider whose models aren't unavailable: an open run moves to it, a new thread starts there.
-  const choices = models.filter((m) => !unavailable?.[m.provider]);
+  const choices = models.filter((m) => !blocked[m.provider]);
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
     started &&
@@ -405,7 +421,11 @@ export function Composer({
       provider: run.provider,
       contexts: [],
     });
-  const model = choices.find((m) => m === pickedModel) ?? startedModel ?? runModels[0];
+  const model =
+    choices.find((m) => m === pickedModel) ??
+    startedModel ??
+    runModels.find((m) => choices.includes(m)) ??
+    choices[0];
   // Where the message goes: the run's backend, or the one that runs the picked model.
   const target =
     run && model && model.provider !== run.provider ? backendOf(model.provider) : backend;
@@ -932,7 +952,7 @@ export function Composer({
                     <ModelMenu
                       key={backend}
                       models={models}
-                      unavailable={unavailable}
+                      unavailable={blocked}
                       value={model}
                       onChange={setModel}
                     />

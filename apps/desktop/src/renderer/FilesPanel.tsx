@@ -183,7 +183,7 @@ function FileView({ hostId, runId, path }: { hostId: string; runId: string; path
     return (
       <pre
         aria-label={path}
-        className="min-h-0 flex-1 overflow-auto px-4 pt-2 pb-4 font-mono text-[12px] leading-[1.6] text-foreground"
+        className="code-lines min-h-0 flex-1 overflow-auto px-4 pt-2 pb-4 font-mono text-[12px] leading-[1.6] text-foreground"
       >
         {shown.text}
       </pre>

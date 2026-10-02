@@ -312,7 +312,7 @@ export function TerminalDrawer({
             <Plus />
           </IconButton>
           <div className="ml-auto">
-            <IconButton label="Hide terminal" keys="J" onClick={onClose}>
+            <IconButton label="Hide terminal" command="terminal" onClick={onClose}>
               <X />
             </IconButton>
           </div>

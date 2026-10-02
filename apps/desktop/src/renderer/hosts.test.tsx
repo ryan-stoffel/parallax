@@ -45,6 +45,13 @@ beforeEach(() => {
     request: request as unknown as ParallaxBridge["request"],
     hosts: async () => [mini],
     onHosts: () => () => {},
+    onLocalName: (listener: (name: string) => void) => {
+      listener("This Mac");
+      return () => {};
+    },
+    setZoom: () => {},
+    setAppIcon: () => {},
+    version: async () => "1.0.0",
     openTargets: async () => [],
     openTargetIcons: async () => ({}),
     saveHost,
@@ -113,29 +120,33 @@ test("every connected host's threads are one list, newest prompt first, each ope
   expect(rows()[0]!.getAttribute("aria-current")).toBe("page");
 });
 
-test("a host that can't connect adds nothing to the list, and Settings shows why", async () => {
+test("a host that can't connect adds nothing to the list, and Connections shows why", async () => {
   await renderApp();
   expect(rows()).toEqual([]);
   expect(request.mock.calls.some(([host]) => host === mini.id)).toBe(false);
   await act(async () => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: true }));
   });
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Hosts")!);
+  await click(
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Connections")!,
+  );
   expect(document.querySelector("main")!.textContent).toContain("Mac mini");
 });
 
-test("Settings' Add host opens the form, which shows the main process's error", async () => {
+test("Connections' Add host opens the form, which shows the main process's error", async () => {
   await renderApp();
   await act(async () => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: true }));
   });
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Hosts")!);
+  await click(
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Connections")!,
+  );
   await click(
     [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (b) => b.textContent === "Add host",
     )!,
   );
-  expect(document.querySelector("h1")!.textContent).toBe("Hosts");
+  expect(document.querySelector("h1")!.textContent).toBe("Connections");
 
   const form = document.querySelector<HTMLFormElement>('form[aria-label="Add host"]')!;
   form.querySelector<HTMLInputElement>('[name="name"]')!.value = "Studio";
@@ -155,9 +166,11 @@ test("a failed remove shows the main process's message", async () => {
   window.parallax.removeHost = async () => "Parallax couldn't save its settings: EACCES";
   await renderApp();
   await act(async () => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: true }));
   });
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Hosts")!);
+  await click(
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Connections")!,
+  );
   expect(document.querySelector('form[aria-label="Add host"]')).toBeNull();
 
   await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Remove")!);

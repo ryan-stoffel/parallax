@@ -1028,7 +1028,7 @@ function Musing() {
   const [tick, setTick] = useState(() => Math.floor(Date.now() / musingMs));
   const [first] = useState(tick);
   useEffect(() => {
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (document.documentElement.classList.contains("reduce-motion")) return;
     const timer = setTimeout(
       () => setTick(Math.max(tick + 1, Math.floor(Date.now() / musingMs))),
       musingMs - (Date.now() % musingMs),
@@ -1562,7 +1562,7 @@ function CodeBlock({
       {language === "diff" || language === "patch" ? (
         <DiffLines text={text} />
       ) : (
-        <pre className="overflow-x-auto px-3.5 py-3 font-mono text-[12.5px] leading-relaxed">
+        <pre className="code-lines overflow-x-auto px-3.5 py-3 font-mono text-[12.5px] leading-relaxed">
           {children}
         </pre>
       )}
@@ -1577,7 +1577,7 @@ function CodeBlock({
 function DiffLines({ text }: { text: string }) {
   let inHunk = false;
   return (
-    <div className="overflow-x-auto py-1.5 font-mono text-[12px] leading-relaxed">
+    <div className="code-scroll overflow-x-auto py-1.5 font-mono text-[12px] leading-relaxed">
       {text
         .replace(/\n$/, "")
         .split("\n")

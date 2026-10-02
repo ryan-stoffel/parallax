@@ -4,7 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
-import { Actions, formatKeybinding, keybindingOf, readActions, type RepoAction } from "./Actions";
+import { Actions, readActions, type RepoAction } from "./Actions";
+import { formatKeybinding, keybindingOf } from "./keybindings";
 import { SidePanel } from "./SidePanel";
 import { runInDrawer, TerminalDrawer, type ThreadFolder } from "./ThreadTerminal";
 
