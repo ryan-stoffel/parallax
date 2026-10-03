@@ -80,6 +80,22 @@ export type ParallaxRequests = {
 	 */
 	"accounts/refresh": { params: AccountsRefreshParams, result: AccountsRefreshResult },
 	/**
+	 * `providers/list`: this host's provider instances (0040), each with its detected state
+	 * and models. May answer from a short-lived cache unless `refresh` is set. Gated on the
+	 * `providers` capability.
+	 */
+	"providers/list": { params: ProvidersListParams, result: ProvidersListResult },
+	/**
+	 * `providers/save`: adds an instance, or replaces the one with its id, and returns every
+	 * instance. A secret variable sent without a value keeps its stored one.
+	 */
+	"providers/save": { params: ProvidersSaveParams, result: ProvidersListResult },
+	/**
+	 * `providers/remove`: removes an instance the user added, and its secrets, and returns
+	 * every instance. Fails with `invalidParams` for a built-in one.
+	 */
+	"providers/remove": { params: ProvidersRemoveParams, result: ProvidersListResult },
+	/**
 	 * `usage/get`: per-account tokens and cost for today and this week (local time on this
 	 * host), and the latest limit windows.
 	 */
@@ -890,6 +906,197 @@ export type AccountsRefreshResult = {
 };
 
 /**
+ * Params of `providers/list`.
+ */
+export type ProvidersListParams = {
+	/**
+	 * Probe every instance again instead of answering from plxd's cache.
+	 */
+	refresh: boolean,
+};
+
+/**
+ * Result of `providers/list`, and of `providers/save` and `providers/remove`.
+ */
+export type ProvidersListResult = {
+	/**
+	 * Every instance, the built-in ones first, then in the order they were added.
+	 */
+	providers: Array<ProviderInfo>,
+	/**
+	 * When the slowest of these was probed.
+	 */
+	checkedAt: string,
+};
+
+/**
+ * An instance's detected state, and what it offers.
+ */
+export type ProviderInfo = {
+	/**
+	 * Its settings.
+	 */
+	instance: ProviderInstance,
+	/**
+	 * Whether its program resolves on the host.
+	 */
+	installed: boolean,
+	/**
+	 * The program's resolved path, when installed.
+	 */
+	path?: string,
+	/**
+	 * The agent's version, when plxd could read it.
+	 */
+	version?: string,
+	/**
+	 * Whether it is signed in, or `null` when plxd can't tell.
+	 */
+	signedIn?: boolean,
+	/**
+	 * Who it is signed in as, or the plan, where the agent says.
+	 */
+	account?: string,
+	/**
+	 * Why something above is missing or uncertain.
+	 */
+	note?: string,
+	/**
+	 * The models plxd found for it, without the user's own.
+	 */
+	models: Array<ProviderModel>,
+	/**
+	 * The permissions a thread on it may ask for.
+	 */
+	permissions: Array<AgentPermission>,
+	/**
+	 * Whether it takes `thread/start`'s `effort`.
+	 */
+	efforts: boolean,
+	/**
+	 * Whether it can run a Project's coordinator.
+	 */
+	coordinator: boolean,
+	/**
+	 * The command that signs it in, run in a terminal on the host, if it has one.
+	 */
+	login?: Array<string>,
+};
+
+/**
+ * A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
+ * which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
+ * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
+
+/**
+ * An instance's settings, as the user sees and edits them.
+ */
+export type ProviderInstance = {
+	/**
+	 * A stable id: lowercase letters, digits, and `-`. The built-in instances are `claude`,
+	 * `codex`, and `cursor`.
+	 */
+	id: string,
+	/**
+	 * What runs it.
+	 */
+	kind: ProviderKind,
+	/**
+	 * What people see, such as `Codex` or `Work Codex`.
+	 */
+	name: string,
+	/**
+	 * Whether threads may start on it. A disabled instance keeps its settings.
+	 */
+	enabled: boolean,
+	/**
+	 * The program, a name on the host's `PATH` or an absolute path. Absent: the kind's own.
+	 */
+	program?: string,
+	/**
+	 * The agent's home or configuration folder, such as `CODEX_HOME`, for a kind that has one.
+	 */
+	home?: string,
+	/**
+	 * Arguments added after the kind's own. For an `acp` instance, every argument.
+	 */
+	args: Array<string>,
+	/**
+	 * Variables its runs get, set last.
+	 */
+	env: Array<ProviderEnvVar>,
+	/**
+	 * Models the user added, offered beside the ones plxd finds.
+	 */
+	models: Array<ProviderModel>,
+};
+
+/**
+ * One environment variable an instance's runs get.
+ */
+export type ProviderEnvVar = {
+	/**
+	 * The variable's name.
+	 */
+	name: string,
+	/**
+	 * Its value. plxd never sends a secret's value back: a listed secret has none, and an
+	 * update that leaves it out keeps the stored one.
+	 */
+	value?: string,
+	/**
+	 * Kept in the host's keychain instead of plxd's settings, such as an API key.
+	 */
+	secret: boolean,
+};
+
+/**
+ * What runs an instance, and the defaults it starts from.
+ *
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown, so a `switch`
+ * over this type must not end in an exhaustiveness assertion.
+ */
+export type ProviderKind = "claude" | "codex" | "cursor" | "antigravity" | "opencode" | "pi" | "omp" | "grokBuild" | "hermes" | "ollamaCloud" | "openRouter" | "localModel" | "acp";
+
+/**
+ * A model an instance offers.
+ */
+export type ProviderModel = {
+	/**
+	 * What the agent takes, sent as `thread/start`'s `model`.
+	 */
+	id: string,
+	/**
+	 * What people see.
+	 */
+	name: string,
+};
+
+/**
+ * Params of `providers/save`: adds an instance, or replaces the one with its id.
+ */
+export type ProvidersSaveParams = {
+	/**
+	 * The instance as it should be.
+	 */
+	instance: ProviderInstance,
+};
+
+/**
+ * Params of `providers/remove`. A built-in instance can't be removed, only disabled.
+ */
+export type ProvidersRemoveParams = {
+	/**
+	 * The instance's id.
+	 */
+	id: string,
+};
+
+/**
  * Params of `usage/get`.
  *
  * Empty: plxd has no account registry yet (#114, #117, #118 are still open, and #113's
@@ -1414,15 +1621,6 @@ export type AgentStartParams = {
  * A newer peer may send a level this version does not know; treat it as unknown.
  */
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
-
-/**
- * A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
- * which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
- * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
- *
- * A newer peer may send a value this version does not know; treat it as unknown.
- */
-export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
 
 /**
  * What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
