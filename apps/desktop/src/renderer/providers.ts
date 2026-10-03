@@ -1,4 +1,4 @@
-import { Bot, Cpu, Feather } from "lucide-react";
+import { Bot, Cpu } from "lucide-react";
 import { useEffect, useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
@@ -10,10 +10,13 @@ import type {
 } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import {
+  AmpLogo,
   AntigravityLogo,
   ClaudeLogo,
+  ClineLogo,
   CursorLogo,
   GrokLogo,
+  HermesLogo,
   OhMyPiLogo,
   OllamaLogo,
   OpenAILogo,
@@ -122,7 +125,7 @@ export const kinds: Record<string, Kind> = {
   pi: { name: "Pi", Logo: PiLogo, program: "npx", wholeArgs: true },
   omp: { name: "Oh My Pi", Logo: OhMyPiLogo, program: "omp" },
   grokBuild: { name: "Grok Build", Logo: GrokLogo, program: "grok" },
-  hermes: { name: "Hermes Agent", Logo: Feather, program: "hermes" },
+  hermes: { name: "Hermes Agent", Logo: HermesLogo, program: "hermes" },
   ollamaCloud: { name: "Ollama Cloud", Logo: OllamaLogo, program: "claude" },
   openRouter: { name: "OpenRouter", Logo: OpenRouterLogo, program: "claude" },
   localModel: { name: "Local model", Logo: Cpu, program: "claude" },
@@ -132,6 +135,19 @@ export const kinds: Record<string, Kind> = {
 /** `kind`'s entry, or the generic ACP one for a kind this app doesn't know. */
 export const kindOf = (kind: string): Kind => kinds[kind] ?? kinds["acp"]!;
 
+/** ACP agents with a mark of their own, known by their name or program. */
+const acpLogos: [RegExp, Logo][] = [
+  [/\bamp\b/i, AmpLogo],
+  [/\bcline\b/i, ClineLogo],
+];
+
+/** An instance's logo: its kind's, or for an ACP agent with a mark of its own, that one. */
+export function logoOf(instance: { kind: string; name: string; program?: string }): Logo {
+  const own = `${instance.name} ${instance.program ?? ""}`;
+  const known = instance.kind === "acp" && acpLogos.find(([name]) => name.test(own));
+  return known ? known[1] : kindOf(instance.kind).Logo;
+}
+
 /**
  * The logo of the instance a run's `backend` names, on any host whose instances are listed: its
  * kind's, or undefined for a backend no list has yet.
@@ -139,7 +155,7 @@ export const kindOf = (kind: string): Kind => kinds[kind] ?? kinds["acp"]!;
 export function instanceLogo(backend: string): Logo | undefined {
   for (const list of lists.values()) {
     const info = list.providers.find((p) => p.instance.id === backend);
-    if (info) return kindOf(info.instance.kind).Logo;
+    if (info) return logoOf(info.instance);
   }
   return undefined;
 }

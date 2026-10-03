@@ -34,6 +34,7 @@ import { Avatar, useProfile } from "./profile";
 import {
   builtInIds,
   kindOf,
+  logoOf,
   loadProviders,
   removeProvider,
   saveProvider,
@@ -774,7 +775,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
             >
               {list.map((info) => {
                 const { instance } = info;
-                const { Logo } = kindOf(instance.kind);
+                const Logo = logoOf(instance);
                 const chosen = info === current;
                 // One instance stays on, so a new thread always has one to start on.
                 const last = instance.enabled && on.length === 1;
@@ -922,6 +923,7 @@ function InstancePane({
 }) {
   const { instance } = info;
   const kind = kindOf(instance.kind);
+  const KindLogo = logoOf(instance);
   const homeVar = HOME_VARS[instance.kind];
   const builtIn = builtInIds.includes(instance.id);
   // The host's keys are for the built-in Claude Code and Codex.
@@ -937,7 +939,7 @@ function InstancePane({
   return (
     <div id={id} role="tabpanel" aria-labelledby={tabId} hidden={hidden} className="min-w-0">
       <div className="mb-5 flex items-center gap-2.5">
-        <kind.Logo className="size-5 shrink-0" />
+        <KindLogo className="size-5 shrink-0" />
         <h2 className="truncate text-[15px] font-semibold">{instance.name}</h2>
         {info.version && (
           <span className="ml-auto truncate font-mono text-[12px] text-muted-foreground">

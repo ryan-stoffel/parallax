@@ -9,7 +9,7 @@ import {
   type Model,
   type Provider,
 } from "./models";
-import { kindOf } from "./providers";
+import { kindOf, logoOf } from "./providers";
 import { menuButton, menuPanel, moveFocus } from "./ui";
 
 // The same model can run on two instances, so a model is known by both.
@@ -43,7 +43,10 @@ export function ModelMenu({
   const starred = (m: Model) =>
     !!prefs[prefsKey(catalog.hostId, m.provider)]?.favorites?.includes(m.id);
   const instance = (id: Provider) => catalog.instances.find((i) => i.id === id);
-  const logoOf = (id: Provider) => kindOf(instance(id)?.kind ?? id).Logo;
+  const logo = (id: Provider) => {
+    const found = instance(id);
+    return found ? logoOf(found) : kindOf(id).Logo;
+  };
   const nameOf = (id: Provider) => instance(id)?.name ?? id;
   // An instance's id, or null for Favorites.
   const [tab, setTab] = useState<Provider | null>(chosen.provider);
@@ -56,7 +59,7 @@ export function ModelMenu({
   const shown = models.filter((m) =>
     q ? m.name.toLowerCase().includes(q) : tab === null ? starred(m) : m.provider === tab,
   );
-  const Logo = logoOf(chosen.provider);
+  const Logo = logo(chosen.provider);
 
   const pick = (m: Model) => {
     onChange(m);
@@ -99,7 +102,7 @@ export function ModelMenu({
           </button>
           <span aria-hidden className="my-1 h-px w-6 bg-border" />
           {[...new Set(all.map((m) => m.provider))].map((p) => {
-            const ProviderLogo = logoOf(p);
+            const ProviderLogo = logo(p);
             const why = unavailable[p];
             return (
               // A disabled button gets no pointer events, so its wrapper shows the tooltip.
@@ -146,7 +149,7 @@ export function ModelMenu({
           </label>
           <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
             {shown.map((m) => {
-              const ProviderLogo = logoOf(m.provider);
+              const ProviderLogo = logo(m.provider);
               const key = keyOf(m);
               const favorite = starred(m);
               return (
