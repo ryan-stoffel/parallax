@@ -271,8 +271,8 @@ impl Providers {
     pub fn load(
         data_dir: &Path,
         keys: Arc<dyn KeyStore>,
-        launcher: Launcher,
-        registry: BackendRegistry,
+        launcher: &Launcher,
+        registry: &BackendRegistry,
     ) -> Self {
         let file = data_dir.join("providers.json");
         let saved: Option<Vec<Stored>> = std::fs::read(&file)
@@ -284,7 +284,7 @@ impl Providers {
         let mut stored = saved.unwrap_or_default();
         for (id, kind, name) in BUILT_IN {
             let program = preset(*kind).map_or("", |preset| preset.program);
-            if first && detect::resolve(&launcher, program).is_some() {
+            if first && detect::resolve(launcher, program).is_some() {
                 let instance = ProviderInstance {
                     id: (*id).to_owned(),
                     kind: *kind,
@@ -309,8 +309,8 @@ impl Providers {
         let providers = Self {
             file,
             keys,
-            launcher,
-            registry,
+            launcher: launcher.clone(),
+            registry: registry.clone(),
             defaults,
             stored: Mutex::new(Vec::new()),
             cache: Mutex::new(HashMap::new()),
@@ -1243,7 +1243,7 @@ mod tests {
             Environment::empty(),
         );
         let registry = BackendRegistry::new();
-        let providers = Providers::load(dir, keys, launcher, registry.clone());
+        let providers = Providers::load(dir, keys, &launcher, &registry);
         (providers, registry)
     }
 
@@ -1360,13 +1360,17 @@ mod tests {
                 Environment::empty(),
             )
         };
-        let providers =
-            Providers::load(dir.path(), keys.clone(), launcher(), BackendRegistry::new());
+        let providers = Providers::load(
+            dir.path(),
+            keys.clone(),
+            &launcher(),
+            &BackendRegistry::new(),
+        );
         providers.save(ollama()).await.unwrap();
         let before = keys.reads.load(std::sync::atomic::Ordering::SeqCst);
 
         let registry = BackendRegistry::new();
-        let reloaded = Providers::load(dir.path(), keys.clone(), launcher(), registry.clone());
+        let reloaded = Providers::load(dir.path(), keys.clone(), &launcher(), &registry);
         let detector = crate::detect::CliDetector::new(launcher(), crate::detect::PROBE_TIMEOUT);
         let listed = reloaded.list(&detector, true).await;
         assert!(listed.providers.iter().any(|p| p.instance.id == "ollama"));
@@ -1396,7 +1400,7 @@ mod tests {
 
         let mut registry = BackendRegistry::new();
         startup(&mut registry);
-        let providers = Providers::load(dir.path(), keys(), launcher(), registry.clone());
+        let providers = Providers::load(dir.path(), keys(), &launcher(), &registry);
         let ids: Vec<String> = providers
             .stored
             .lock()
@@ -1418,7 +1422,7 @@ mod tests {
 
         let mut registry = BackendRegistry::new();
         startup(&mut registry);
-        let reloaded = Providers::load(dir.path(), keys(), launcher(), registry.clone());
+        let reloaded = Providers::load(dir.path(), keys(), &launcher(), &registry);
         assert!(reloaded.stored.lock().await.is_empty(), "not seeded again");
         assert!(registry.by_backend_name("codex").is_none());
     }
