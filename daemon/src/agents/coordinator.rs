@@ -58,6 +58,8 @@ pub(crate) async fn start(
         policy: NO_WRITE.to_owned(),
         backend: String::new(),
         coordinator_thread: Some(Uuid::from(run_id)),
+        // Its own thread, never its own parent (0041).
+        parent: None,
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),

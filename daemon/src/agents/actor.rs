@@ -2065,6 +2065,7 @@ mod tests {
                 policy: "workspaceWrite".to_owned(),
                 backend: "fake".to_owned(),
                 coordinator_thread: None,
+                parent: None,
                 model: None,
                 effort: None,
                 permission: None,

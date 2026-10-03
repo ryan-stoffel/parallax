@@ -20,6 +20,10 @@ pub struct RunFields {
     pub backend: String,
     /// The coordinator thread that started the run (#195), or `None` for a client's own run.
     pub coordinator_thread: Option<Uuid>,
+    /// The run that launched this one (PLX-369, decision 0041): a coordinator's thread for its
+    /// subagents, or the parent a client named for a thread. `None` for a top-level run, and once
+    /// the parent is deleted.
+    pub parent: Option<Uuid>,
     /// The model, effort, and permission the run asked for (RYA-97), each `None` for the CLI's
     /// default. Effort and permission are their protocol names, such as `high` and `plan`.
     pub model: Option<String>,
@@ -87,7 +91,7 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
-                       approvals, checkout, context_window, fast, pull_requests";
+                       approvals, checkout, context_window, fast, pull_requests, parent";
 
 struct RawRun {
     id: String,
@@ -119,6 +123,7 @@ struct RawRun {
     context_window: Option<u32>,
     fast: Option<bool>,
     pull_requests: String,
+    parent: Option<String>,
 }
 
 impl RawRun {
@@ -153,6 +158,7 @@ impl RawRun {
             context_window: row.get(26)?,
             fast: row.get(27)?,
             pull_requests: row.get(28)?,
+            parent: row.get(29)?,
         })
     }
 
@@ -184,6 +190,7 @@ impl RawRun {
                     .as_deref()
                     .map(Uuid::parse_str)
                     .transpose()?,
+                parent: self.parent.as_deref().map(Uuid::parse_str).transpose()?,
                 model: self.model,
                 effort: self.effort,
                 permission: self.permission,
@@ -410,9 +417,9 @@ pub(crate) fn insert_run(
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
                            coordinator_thread, model, effort, permission, approvals, checkout,
-                           context_window, fast)
+                           context_window, fast, parent)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
-                 ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -438,6 +445,7 @@ pub(crate) fn insert_run(
             fields.checkout,
             fields.context_window,
             fields.fast,
+            fields.parent.map(|id| id.to_string()),
         ],
     )?;
     if inserted == 0 {
@@ -447,7 +455,8 @@ pub(crate) fn insert_run(
 }
 
 /// Deletes run `id`'s rows in every table that keeps them. None of them has a foreign key to
-/// `runs`, so nothing else removes them. Returns whether the run row existed.
+/// `runs`, so nothing else removes them. Its children lose their parent and its forks their fork
+/// origin, so nothing points at a run that is gone (PLX-369). Returns whether the run row existed.
 pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, StoreError> {
     let key = id.to_string();
     let existed = conn.execute("DELETE FROM runs WHERE id = ?1", params![key])? > 0;
@@ -458,5 +467,14 @@ pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, Store
             params![key],
         )?;
     }
+    conn.execute(
+        "UPDATE runs SET parent = NULL WHERE parent = ?1",
+        params![key],
+    )?;
+    conn.execute(
+        "UPDATE threads SET forked_from_run = NULL, forked_from_turn = NULL \
+         WHERE forked_from_run = ?1",
+        params![key],
+    )?;
     Ok(existed)
 }

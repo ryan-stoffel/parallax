@@ -61,6 +61,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("sendModel".to_owned(), serde_json::Map::new()),
             ("sendOptions".to_owned(), serde_json::Map::new()),
             ("threadAttention".to_owned(), serde_json::Map::new()),
+            ("threadLineage".to_owned(), serde_json::Map::new()),
             ("threads".to_owned(), serde_json::Map::new()),
         ]))
     );
