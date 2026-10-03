@@ -1,0 +1,102 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/search",
+    "params": {
+      "query": "flaky attach",
+      "limit": 5
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "threads": [
+        {
+          "id": "01a0f200-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+          "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+          "createdAt": "2026-10-03T12:00:00Z",
+          "lastPromptAt": "2026-10-03T12:05:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/start",
+    "params": {
+      "runId": "01a0f200-2b3c-7d4e-9f50-6a7b8c9d0e02",
+      "prompt": "Use what we learned there",
+      "threads": ["01a0f200-1a2b-7c3d-8e4f-5a6b7c8d9e01"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "thread": {
+        "id": "01a0f200-2b3c-7d4e-9f50-6a7b8c9d0e02",
+        "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "createdAt": "2026-10-03T12:10:00Z",
+        "lastPromptAt": "2026-10-03T12:10:00Z"
+      },
+      "run": {
+        "id": "01a0f200-2b3c-7d4e-9f50-6a7b8c9d0e02",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "prompt": "Use what we learned there",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "parallax/2b3c4d5e",
+        "worktreePath": "/Users/me/Library/Application Support/parallax/worktrees/parallax-5e6f7a8b/01a0f200-2b3c-7d4e-9f50-6a7b8c9d0e02",
+        "createdAt": "2026-10-03T12:10:00Z",
+        "updatedAt": "2026-10-03T12:10:01Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f200-3c4d-7e5f-8a61-7b8c9d0e1f03",
+      "seq": 52,
+      "time": "2026-10-03T12:10:01Z",
+      "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0f200-2b3c-7d4e-9f50-6a7b8c9d0e02",
+        "items": [
+          {
+            "kind": "turnStarted",
+            "threads": ["01a0f200-1a2b-7c3d-8e4f-5a6b7c8d9e01"]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "agent/send",
+    "params": {
+      "runId": "01a0f200-2b3c-7d4e-9f50-6a7b8c9d0e02",
+      "turnId": "01a0f200-4d5e-7f60-9b72-8c9d0e1f2a04",
+      "text": "And this one too",
+      "threads": ["01a0f200-5e6f-7a71-8c83-9d0e1f2a3b05"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32000,
+      "message": "no thread has run id 01a0f200-5e6f-7a71-8c83-9d0e1f2a3b05",
+      "data": {
+        "kind": "threadNotFound"
+      }
+    }
+  }
+]

@@ -28,7 +28,8 @@ use parallax_protocol::{
     ErrorKind, ForkedFrom, MAX_THREAD_TITLE_BYTES, ParallaxEvent, ProjectId, Repo, RepoAddParams,
     RepoAddResult, RepoId, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
     RunId, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
-    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnId,
+    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, TurnId,
 };
 use parallax_store::{RepoFields, ThreadFields, ThreadUpdate};
 use tokio_util::sync::CancellationToken;
@@ -48,6 +49,13 @@ const SCRATCH_DIR: &str = "scratch";
 const SCRATCH_NAME: &str = "No Repo";
 
 const MAX_PATH_BYTES: usize = 1024;
+
+/// How many threads `thread/search` returns by default, and at most.
+const DEFAULT_SEARCH_LIMIT: u32 = 20;
+const MAX_SEARCH_LIMIT: u32 = 100;
+
+/// The longest query `thread/search` takes, in bytes.
+const MAX_QUERY_BYTES: usize = 1024;
 
 async fn store<T: Send + 'static>(
     daemon: &Daemon,
@@ -429,6 +437,7 @@ pub(crate) async fn start(
         checkout,
         base,
         checkout_ref,
+        threads,
     } = params;
     if let Some(slug) = &branch_slug
         && !valid_branch_slug(slug)
@@ -465,6 +474,7 @@ pub(crate) async fn start(
         scope,
         prompt,
         images,
+        threads,
         account,
         coordinator_thread: None,
         options: RunOptions {
@@ -589,6 +599,35 @@ fn remove_scratch(daemon: &Daemon, run_id: RunId, dir: &Path) {
     if let Err(error) = std::fs::remove_dir_all(&expected) {
         warn!(run = %run_id, %error, "could not remove a thread's scratch repository");
     }
+}
+
+/// `thread/search` (PLX-372): the threads whose messages contain the query, trimmed, the one with
+/// the newest message first.
+pub(crate) async fn search(
+    daemon: &Arc<Daemon>,
+    params: ThreadSearchParams,
+) -> Result<ThreadSearchResult, ErrorObject> {
+    let query = params.query.trim().to_owned();
+    if query.is_empty() {
+        return Err(ErrorObject::invalid_params("query must not be empty"));
+    }
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "query must be at most {MAX_QUERY_BYTES} bytes"
+        )));
+    }
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_SEARCH_LIMIT)
+        .min(MAX_SEARCH_LIMIT) as usize;
+    store(daemon, move |db| {
+        let rows = db
+            .search_threads(&query, limit)
+            .map_err(|e| store_error(&e))?;
+        let threads = rows.iter().map(thread_entry).collect::<Result<_, _>>()?;
+        Ok(ThreadSearchResult { threads })
+    })
+    .await
 }
 
 /// `thread/archive`.

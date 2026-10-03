@@ -287,6 +287,101 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     assert!(store.image(kept, image).unwrap().is_some());
 }
 
+#[test]
+fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls_newest_first() {
+    let (_dir, mut store) = open();
+    let repo = store
+        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
+        .unwrap();
+    let thread = |store: &mut Store, prompt: &str| {
+        let id = Uuid::now_v7();
+        let fields = RunFields {
+            prompt: prompt.to_owned(),
+            ..run_fields(repo.id)
+        };
+        store
+            .create_thread_run(
+                id,
+                repo.id,
+                &fields,
+                &state(),
+                Some(&worktree_fields(id)),
+                &ThreadFields::default(),
+            )
+            .unwrap();
+        id
+    };
+    let output = |store: &mut Store, seq, run, items: &str| {
+        let payload = format!(r#"{{"kind":"agent.output","runId":"{run}","items":{items}}}"#);
+        store
+            .append_event(&StoredEvent {
+                seq,
+                time: "2026-09-26T12:00:00Z".parse().unwrap(),
+                project_id: Some(repo.id),
+                run_id: Some(run),
+                kind: "agent.output".to_owned(),
+                payload,
+            })
+            .unwrap();
+    };
+    let prompted = thread(&mut store, "Fix the flaky attach test.");
+    let followed_up = thread(&mut store, "Rename the sidebar");
+    store
+        .record_turn(followed_up, Uuid::now_v7(), "Also the 50% case")
+        .unwrap();
+    let replied = thread(&mut store, "Look into CI");
+    output(
+        &mut store,
+        1,
+        replied,
+        r#"[{"kind":"text","text":"The \"flaky\" attach test passes now"}]"#,
+    );
+    let tool_only = thread(&mut store, "Read the logs");
+    let titled = thread(&mut store, "Go");
+    let title = ThreadUpdate {
+        title: Some(Some("Quarantine the attach test".to_owned())),
+        ..ThreadUpdate::default()
+    };
+    store.update_thread(titled, &title).unwrap();
+    output(
+        &mut store,
+        2,
+        tool_only,
+        r#"[{"kind":"toolCall","callId":"1","name":"Bash","input":{"command":"grep flaky"}},
+            {"kind":"toolResult","callId":"1","status":"ok","output":"flaky"}]"#,
+    );
+    let ids = |store: &Store, query: &str, limit| -> Vec<Uuid> {
+        store
+            .search_threads(query, limit)
+            .unwrap()
+            .iter()
+            .map(|thread| thread.id)
+            .collect()
+    };
+
+    assert_eq!(
+        ids(&store, "FLAKY", 10),
+        [replied, prompted],
+        "case-insensitive, newest message first, and a tool call's text doesn't count"
+    );
+    assert_eq!(
+        ids(&store, "\"flaky\"", 10),
+        [replied],
+        "a reply's JSON-escaped text still matches"
+    );
+    assert_eq!(ids(&store, "50%", 10), [followed_up], "a follow-up matches");
+    assert!(
+        ids(&store, "5_", 10).is_empty(),
+        "`_` is literal, not a wildcard"
+    );
+    assert_eq!(ids(&store, "flaky", 1), [replied], "the limit holds");
+    assert_eq!(
+        ids(&store, "attach test", 10),
+        [titled, replied, prompted],
+        "a title matches"
+    );
+}
+
 /// Two branches each added a migration: a database that has a newer version but is missing an
 /// older one, as when #157's migration 8 lands after this one, still gets the older one.
 #[test]
