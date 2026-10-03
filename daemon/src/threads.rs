@@ -764,11 +764,12 @@ fn still_running(run_id: RunId, turn: TurnId) -> ErrorObject {
 ///
 /// Only the parent's own recorded turns mark turns: a `turnStarted` a fork copied from its own
 /// parent is part of its prompt's turn, `first`. The copy ends at `turn`'s `turnFinished`, which
-/// for the prompt's turn has no turn id. A follow-up's `turnStarted` can come before the end of
-/// the turn it followed, as Claude Code's driver reports it once written, so a later turn's
-/// `turnStarted` is skipped. A turn that never logged its end, such as one that was stopped, ends
-/// where the next turn started. A fork's prompt's turn has no end of its own, so it counts as
-/// found.
+/// for the prompt's turn has no turn id, or else at the `agent.finished` of the CLI that ran it,
+/// as a stopped, interrupted, or usage-limited turn logs no `turnFinished`. A follow-up's
+/// `turnStarted` can come before the end of the turn it followed, as Claude Code's driver
+/// reports it once written, so a later turn's `turnStarted` is skipped. A turn with neither end,
+/// as when plxd itself died, ends where the next turn started. A fork's prompt's turn has no end
+/// of its own, so it counts as found.
 fn transcript_until(
     events: &[ParallaxEvent],
     turn: TurnId,
@@ -788,8 +789,13 @@ fn transcript_until(
     let mut next = None;
     let mut found = false;
     'events: for (index, event) in events.iter().enumerate() {
-        let ParallaxEvent::AgentOutput { items, .. } = event else {
-            continue;
+        let items = match event {
+            ParallaxEvent::AgentOutput { items, .. } => items,
+            ParallaxEvent::AgentFinished { .. } if reached && end.is_some() => {
+                found = true;
+                break;
+            }
+            _ => continue,
         };
         for item in items {
             match item {

@@ -1435,10 +1435,12 @@ impl Actor {
     }
 
     /// The parent of a fork that has sent nothing yet (0050), for its first CLI on `resolved`'s
-    /// backend and account: its backend, and its session to continue a copy of when the backend
-    /// can fork and the parent still runs on that backend and account, isn't running, and has
-    /// had no turn since the one the fork was made at. With no session the fork takes a handoff
-    /// (0014) from its own log, which starts with the parent's transcript up to that turn.
+    /// backend and account: the backend its conversation ran on, which for a parent that is a
+    /// fork with no session yet is that of its nearest forked-from thread with one, and its
+    /// session to continue a copy of when the backend can fork and the parent still runs on that
+    /// backend and account, isn't running, and has had no turn since the one the fork was made
+    /// at. With no session the fork takes a handoff (0014) from its own log, which starts with
+    /// the parent's transcript up to that turn.
     async fn fork_source(
         &self,
         resolved: &routing::Resolved,
@@ -1470,12 +1472,23 @@ impl Actor {
                 ![convert::RUNNING, convert::STARTING].contains(&parent.state.status.as_str());
             let same = parent.fields.backend == backend && parent.state.account_id == account_id;
             let unmoved = latest.unwrap_or(from.run) == from.turn;
+            // Fork origins only point at older runs, so this ends.
+            let mut ran = parent.clone();
+            while ran.state.session_id.is_none()
+                && let Some(from) = db
+                    .get_thread(ran.id)
+                    .map_err(error)?
+                    .and_then(|t| t.fields.forked_from)
+                && let Some(run) = db.get_run(from.run).map_err(error)?
+            {
+                ran = run;
+            }
             Ok(Some(ForkSource {
                 session_id: parent
                     .state
                     .session_id
                     .filter(|_| can_fork && idle && same && unmoved),
-                backend: parent.fields.backend,
+                backend: ran.fields.backend,
             }))
         })
         .await

@@ -442,3 +442,95 @@ async fn a_fresh_fork_forks_with_all_it_copied() {
     assert_eq!(texts(&items), ["Done.", "Done."]);
     host.server.stop().await;
 }
+
+/// A fork at a turn that was stopped mid-turn, after the user had followed it up: the turn ends at
+/// its CLI's `agent.finished`, as a stopped turn logs no `turnFinished`, so the fork copies all of
+/// it, even while a later turn runs.
+#[tokio::test]
+async fn a_fork_at_a_stopped_turn_copies_it_while_a_later_turn_runs() {
+    let steps = [
+        Step::Init {
+            session_id: "thread-1".to_owned(),
+            model: None,
+        },
+        Step::Emit(Event::Text {
+            message_id: None,
+            text: "Working.".to_owned(),
+        }),
+        Step::AwaitFollowUp,
+        Step::Emit(Event::Text {
+            message_id: None,
+            text: "The first turn's end.".to_owned(),
+        }),
+        Step::Hang,
+    ];
+    let (host, _, _) = host_running(&steps);
+    let mut client = host.client().await;
+    let parent = client
+        .call::<ThreadStart>(start_params(None, "Write the notes"))
+        .await
+        .unwrap();
+    let run_id = parent.thread.id;
+    client.subscribe(0, Some(scope(parent.thread.repo))).await;
+    client.until(text(run_id, "Working.")).await;
+    client
+        .call::<AgentSend>(message(run_id, "Now the tests"))
+        .await
+        .unwrap();
+    client.until(text(run_id, "The first turn's end.")).await;
+    client
+        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
+        .await
+        .unwrap();
+    client.until(updated_to(AgentStatus::Cancelled)).await;
+    client
+        .call::<AgentSend>(message(run_id, "And the docs"))
+        .await
+        .unwrap();
+    client.until(updated_to(AgentStatus::Running)).await;
+
+    let params = ThreadForkParams {
+        turn_id: Some(first_turn(run_id)),
+        ..fork_params(run_id)
+    };
+    client.call::<ThreadFork>(params.clone()).await.unwrap();
+    let (_, items) = transcript(&mut client, params.new_run_id).await;
+    assert!(follow_ups(&items).is_empty(), "{items:?}");
+    assert_eq!(
+        texts(&items),
+        ["Working.", "Now the tests", "The first turn's end."]
+    );
+    host.server.stop().await;
+}
+
+/// A fork of a fork that never ran hands over from the backend the conversation ran on, not the
+/// one the first fork was made for.
+#[tokio::test]
+async fn a_fork_of_an_unrun_fork_hands_over_from_where_the_conversation_ran() {
+    let (host, _, other) = host();
+    let mut client = host.client().await;
+    let (parent, _) = two_turns(&mut client, start_params(None, "Write the notes")).await;
+    let first = ThreadForkParams {
+        account: Some(AccountChoice::Subscription {
+            backend: "other".to_owned(),
+        }),
+        ..fork_params(parent.thread.id)
+    };
+    client.call::<ThreadFork>(first.clone()).await.unwrap();
+    let second = fork_params(first.new_run_id);
+    let forked = client.call::<ThreadFork>(second.clone()).await.unwrap();
+    assert_eq!(forked.run.backend, "other");
+
+    client
+        .call::<AgentSend>(message(second.new_run_id, "Carry on"))
+        .await
+        .unwrap();
+    client.until(finished(second.new_run_id)).await;
+    let start = other.lock().unwrap().last().cloned().unwrap();
+    assert!(
+        start.prompt.contains("began with another agent, on fake,"),
+        "{}",
+        start.prompt
+    );
+    host.server.stop().await;
+}
