@@ -1,6 +1,6 @@
 # 0024: A project's coordinator chat is a no-write run in the project's repository
 
-- Status: accepted; where it runs amended by RYA-171; wake-ups are in [0025](0025-coordinator-wake-ups.md); where it runs, its per-turn check, and its fixed permission superseded by [0027](0027-claude-permission-modes.md)
+- Status: accepted; where it runs amended by RYA-171; wake-ups are in [0025](0025-coordinator-wake-ups.md); where it runs, its per-turn check, and its fixed permission superseded by [0027](0027-claude-permission-modes.md); any provider runs it, in a worktree at the integration branch's tip, since [0042](0042-project-children-are-threads.md)
 - Date: 2026-09-29
 - Issue: RYA-41
 
