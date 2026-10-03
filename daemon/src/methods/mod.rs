@@ -4,10 +4,10 @@
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
 //! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
-//! `project.rs`; PLX-318 `pullRequests` and PLX-328 `prDiff`: `pr.rs`; PLX-359 `composerMenus`:
-//! `composer.rs`; PLX-336 `githubStatus`: `github/status` in `accounts.rs`; PLX-423
-//! `githubSetup`: `github/install`, `github/signIn`, and `github/signInCancel` there too), and
-//! `host.rs` advertises the capability in `initialize`.
+//! `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
+//! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
+//! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
+//! `github/signInCancel` there too), and `host.rs` advertises the capability in `initialize`.
 
 mod accounts;
 mod agent;
@@ -32,9 +32,10 @@ use parallax_protocol::methods::{
     AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
     AgentResumeNow, AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
     EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet,
-    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, Initialize, PrAct, PrDiff, PrView,
-    ProjectCreate, ProjectDelete, ProjectList, ProjectStart, ProjectUpdate, ProvidersList,
-    ProvidersRemove, ProvidersSave, RequestMethod, UsageDaily, UsageGet, UsageHistory,
+    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, Initialize, PrAct, PrDiff, PrLink,
+    PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectList, ProjectStart, ProjectUpdate,
+    ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod, UsageDaily, UsageGet,
+    UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -128,6 +129,10 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         PrView::NAME => handle::<PrView, _, _>(&request, |p| pr::view(&context, p)).await,
         PrAct::NAME => handle::<PrAct, _, _>(&request, |p| pr::act(&context, p)).await,
         PrDiff::NAME => handle::<PrDiff, _, _>(&request, |p| pr::diff(&context, p)).await,
+        PrLink::NAME => handle::<PrLink, _, _>(&request, |p| pr::link(&context, p, true)).await,
+        PrUnlink::NAME => {
+            handle::<PrUnlink, _, _>(&request, |p| pr::link(&context, p, false)).await
+        }
         name if name.starts_with("github/") => github_method(&context, &request)
             .await
             .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
