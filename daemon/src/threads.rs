@@ -11,6 +11,10 @@
 //! so one quick chat can't read another's work. They all belong to plxd's scratch entry, whose
 //! path is the `scratch` folder, made on first use.
 //!
+//! A thread can have a parent, the run that launched it, a fork origin, a title, and a settled
+//! flag (decision 0041). Deleting a run leaves its children with no parent and its forks with no
+//! origin.
+//!
 //! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,
 //! on the branch the user has out or the one `checkoutRef` switches it to, and plxd leaves its
 //! changes there uncommitted. A thread with no repo has no checkout, so it can't ask for one.
@@ -21,12 +25,12 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, ParallaxEvent, ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId,
-    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, RunId, Thread,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
-    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
+    ErrorKind, ForkedFrom, MAX_THREAD_TITLE_BYTES, ParallaxEvent, ProjectId, Repo, RepoAddParams,
+    RepoAddResult, RepoId, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
+    RunId, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnId,
 };
-use parallax_store::RepoFields;
+use parallax_store::{RepoFields, ThreadFields, ThreadUpdate};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -74,15 +78,42 @@ pub(crate) fn repo_entry(row: parallax_store::Repo) -> Result<Repo, ErrorObject>
 
 /// A store row as the protocol's thread.
 pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, ErrorObject> {
+    let run = |id: Uuid| RunId::try_from(id).map_err(|_| corrupt("thread", row.id));
+    let forked_from = row
+        .fields
+        .forked_from
+        .map(|from| {
+            Ok::<_, ErrorObject>(ForkedFrom {
+                run: run(from.run)?,
+                turn: TurnId::try_from(from.turn).map_err(|_| corrupt("thread", row.id))?,
+            })
+        })
+        .transpose()?;
     Ok(Thread {
-        id: RunId::try_from(row.id).map_err(|_| corrupt("thread", row.id))?,
+        id: run(row.id)?,
         repo: RepoId::try_from(row.repo_id).map_err(|_| corrupt("thread", row.id))?,
         archived: row.archived,
         created_at: row.created_at,
         seen_at: row.seen_at,
         snoozed_until: row.snoozed_until,
         last_prompt_at: Some(row.last_prompt_at),
+        parent: row.parent.map(run).transpose()?,
+        forked_from,
+        title: row.fields.title.clone(),
+        settled: row.settled,
     })
+}
+
+/// A title as `thread/start` and `thread/update` take it: trimmed, with empty meaning none, and
+/// at most [`MAX_THREAD_TITLE_BYTES`] bytes.
+fn check_title(title: &str) -> Result<Option<String>, ErrorObject> {
+    let title = title.trim();
+    if title.len() > MAX_THREAD_TITLE_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "title must be at most {MAX_THREAD_TITLE_BYTES} bytes"
+        )));
+    }
+    Ok((!title.is_empty()).then(|| title.to_owned()))
 }
 
 fn thread_not_found(id: RunId) -> ErrorObject {
@@ -383,6 +414,8 @@ pub(crate) async fn start(
     let ThreadStartParams {
         run_id,
         repo,
+        parent,
+        title,
         prompt,
         account,
         model,
@@ -406,6 +439,7 @@ pub(crate) async fn start(
         ));
     }
     let git_ref = git_ref(checkout, base, checkout_ref)?;
+    let title = title.as_deref().map(check_title).transpose()?.flatten();
     let entry = start_entry(&daemon, repo).await?;
     if checkout && entry.fields.scratch {
         return Err(ErrorObject::invalid_params(
@@ -421,6 +455,10 @@ pub(crate) async fn start(
             .map_err(|e| store_error(&e))
     })
     .await?;
+    // A retry is answered from its run, whatever became of its parent since.
+    if !taken {
+        check_parent(&daemon, parent).await?;
+    }
     let scratch = scratch_dir(&daemon, &entry, run_id, taken).await?;
     let new = NewRun {
         run_id,
@@ -442,6 +480,11 @@ pub(crate) async fn start(
             branch_slug,
             checkout,
             git_ref,
+            parent,
+            fields: ThreadFields {
+                forked_from: None,
+                title,
+            },
         }),
     };
     let created = match agents::create(Arc::clone(&daemon), new).await {
@@ -463,6 +506,20 @@ pub(crate) async fn start(
         thread: thread_entry(thread)?,
         run: created.run,
     })
+}
+
+/// Fails with `runNotFound` unless `parent`, when set, is a run that exists (0041).
+async fn check_parent(daemon: &Daemon, parent: Option<RunId>) -> Result<(), ErrorObject> {
+    let Some(parent) = parent else {
+        return Ok(());
+    };
+    store(daemon, move |db| {
+        db.get_run(parent.into())
+            .map_err(|e| store_error(&e))?
+            .map(drop)
+            .ok_or_else(|| agents::run_not_found(parent))
+    })
+    .await
 }
 
 /// The ref a thread starts from: `base` for a worktree, `checkoutRef` with `checkout`, checked as
@@ -570,8 +627,8 @@ pub(crate) async fn archive(
     .await
 }
 
-/// `thread/update`: marks a thread seen or snoozes it (0033), appending `thread.updated` when
-/// anything changed.
+/// `thread/update`: marks a thread seen or snoozes it (0033), or sets its title or settled flag
+/// (0041), appending `thread.updated` when anything changed.
 pub(crate) async fn update(
     daemon: &Arc<Daemon>,
     params: ThreadUpdateParams,
@@ -580,15 +637,23 @@ pub(crate) async fn update(
         run_id,
         seen,
         snoozed_until,
+        title,
+        settled,
     } = params;
+    let update = ThreadUpdate {
+        seen,
+        snoozed_until,
+        title: title.as_deref().map(check_title).transpose()?,
+        settled,
+    };
     let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
-        let (row, changed) = db
-            .update_thread(run_id.into(), seen, snoozed_until)
-            .map_err(|error| match error {
-                parallax_store::StoreError::NotFound { .. } => thread_not_found(run_id),
-                other => store_error(&other),
-            })?;
+        let (row, changed) =
+            db.update_thread(run_id.into(), &update)
+                .map_err(|error| match error {
+                    parallax_store::StoreError::NotFound { .. } => thread_not_found(run_id),
+                    other => store_error(&other),
+                })?;
         let thread = thread_entry(&row)?;
         if changed {
             log.append_blocking(
@@ -685,25 +750,50 @@ pub(crate) async fn delete(
 /// its events in memory, then `worktree` and its branch. For a thread, also its thread row, and
 /// for a thread with no repo its scratch repository and its own context folder, then appends
 /// `thread.deleted`. A Project's run (`project/delete`, PLX-338) has no thread row and gets no
-/// event of its own. Startup's garbage collection removes a worktree folder that a crash left
-/// behind.
+/// event of its own. The store clears the run from its children's parent and its forks' origin,
+/// and each such thread gets `thread.updated` (0041). Startup's garbage collection removes a
+/// worktree folder that a crash left behind.
 pub(crate) async fn purge(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     worktree: Option<parallax_store::Worktree>,
 ) -> Result<(), ErrorObject> {
+    let log = Arc::clone(&daemon.log);
     let thread = store(daemon, move |db| {
-        let Some(thread) = db.get_thread(run_id.into()).map_err(|e| store_error(&e))? else {
-            db.delete_run(run_id.into()).map_err(|e| store_error(&e))?;
-            return Ok(None);
-        };
-        let scratch = db
-            .get_repo(thread.repo_id)
+        let id = Uuid::from(run_id);
+        let children: Vec<Uuid> = db
+            .list_threads()
             .map_err(|e| store_error(&e))?
-            .is_some_and(|repo| repo.fields.scratch);
-        db.delete_thread(run_id.into())
-            .map_err(|e| store_error(&e))?;
-        Ok(Some((thread, scratch)))
+            .into_iter()
+            .filter(|thread| {
+                thread.parent == Some(id)
+                    || thread.fields.forked_from.is_some_and(|from| from.run == id)
+            })
+            .map(|thread| thread.id)
+            .collect();
+        let deleted = if let Some(thread) = db.get_thread(id).map_err(|e| store_error(&e))? {
+            let scratch = db
+                .get_repo(thread.repo_id)
+                .map_err(|e| store_error(&e))?
+                .is_some_and(|repo| repo.fields.scratch);
+            db.delete_thread(id).map_err(|e| store_error(&e))?;
+            Some((thread, scratch))
+        } else {
+            db.delete_run(id).map_err(|e| store_error(&e))?;
+            None
+        };
+        for child in children {
+            if let Some(row) = db.get_thread(child).map_err(|e| store_error(&e))? {
+                log.append_blocking(
+                    Timestamp::now(),
+                    None,
+                    ParallaxEvent::ThreadUpdated {
+                        thread: thread_entry(&row)?,
+                    },
+                );
+            }
+        }
+        Ok(deleted)
     })
     .await?;
     daemon.log.purge_run(run_id);

@@ -53,7 +53,7 @@ use parallax_protocol::{
     GitStatus, ImageMediaType, ParallaxEvent, PrActParams, PrDiffResult, PrViewParams, ProjectId,
     PromptImage, PullRequest, Role, RunId, TurnId,
 };
-use parallax_store::{RunFields, RunState, StoreError, WorktreeFields};
+use parallax_store::{RunFields, RunState, StoreError, ThreadFields, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -288,7 +288,7 @@ pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
     ErrorObject::internal_error(format!("the project store failed: {error}"))
 }
 
-pub(super) fn run_not_found(id: RunId) -> ErrorObject {
+pub(crate) fn run_not_found(id: RunId) -> ErrorObject {
     ErrorObject::parallax(ErrorKind::RunNotFound, format!("no agent run has id {id}"))
 }
 
@@ -548,7 +548,7 @@ fn worktree_failed(error: &WorktreeError) -> ErrorObject {
 
 /// The run `run_id` already is, for a retry of `agent/start` that asks for the same `fields`, or
 /// `idConflict` if they differ. The backend isn't compared: routing resolves it, not the
-/// request. `None` for a new run.
+/// request, and neither is a parent the store no longer has. `None` for a new run.
 async fn existing(
     daemon: &Arc<Daemon>,
     run_id: RunId,
@@ -567,8 +567,11 @@ async fn existing(
     let Some((row, worktree)) = found else {
         return Ok(None);
     };
+    // An empty stored parent isn't compared: deleting the parent cleared it (0041), and a retry
+    // still names it.
     let stored = RunFields {
         backend: fields.backend.clone(),
+        parent: row.fields.parent.or(fields.parent),
         ..row.fields.clone()
     };
     if stored != *fields {
@@ -576,8 +579,8 @@ async fn existing(
             ErrorKind::IdConflict,
             format!(
                 "run {run_id} exists with a different project, prompt, account, policy, \
-                 coordinator thread, model, effort, permission, context window, fast mode, or \
-                 approvals"
+                 coordinator thread, parent, model, effort, permission, context window, fast mode, \
+                 or approvals"
             ),
         ));
     }
@@ -642,14 +645,14 @@ pub(super) async fn checkout_paths(
     Ok((cwd, common))
 }
 
-/// Records a new run and its worktree, with its thread row for a normal thread, in one
-/// transaction. If that fails, removes the worktree again. A thread in the current checkout has
-/// no worktree (`created` is `None`); any other run must have one.
+/// Records a new run and its worktree, with its thread row for a normal thread (`thread` is
+/// `Some`), in one transaction. If that fails, removes the worktree again. A thread in the
+/// current checkout has no worktree (`created` is `None`); any other run must have one.
 async fn record(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     (fields, state): (RunFields, RunState),
-    is_thread: bool,
+    thread: Option<ThreadFields>,
     repo_path: &Path,
     created: Option<&CreatedWorktree>,
 ) -> Result<
@@ -683,13 +686,14 @@ async fn record(
                 format!("no project has id {scope}"),
             ));
         }
-        if is_thread {
+        if let Some(thread) = &thread {
             db.create_thread_run(
                 run_id.into(),
                 scope,
                 &fields,
                 &state,
                 worktree_fields.as_ref(),
+                thread,
             )
             .map(|(thread, run, worktree)| (run, worktree, Some(thread)))
             .map_err(|e| store_error(&e))
@@ -831,12 +835,25 @@ pub(crate) struct NewThread {
     /// The ref the worktree starts from, or with `checkout`, the ref the checkout switches to
     /// first. Already checked.
     pub git_ref: Option<String>,
+    /// The run that launches it (0041), already checked to exist.
+    pub parent: Option<RunId>,
+    /// Its fork origin and title (0041), already checked.
+    pub fields: ThreadFields,
 }
 
 /// A created run, and its thread row for a normal thread.
 pub(crate) struct CreatedRun {
     pub run: AgentRun,
     pub thread: Option<parallax_store::Thread>,
+}
+
+/// A new run's parent (0041): the one its thread names, or the coordinator that starts it, whose
+/// subagents are its children.
+fn parent(thread: Option<&NewThread>, coordinator: Option<CoordinatorThreadId>) -> Option<Uuid> {
+    thread
+        .and_then(|thread| thread.parent)
+        .map(Uuid::from)
+        .or(coordinator.map(Uuid::from))
 }
 
 /// Creates and starts a run: see the module documentation. Idempotent on the run id.
@@ -863,6 +880,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         policy: WORKSPACE_WRITE.to_owned(),
         backend: String::new(),
         coordinator_thread: coordinator_thread.map(Uuid::from),
+        parent: parent(thread.as_ref(), coordinator_thread),
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
@@ -919,7 +937,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         &daemon,
         run_id,
         (fields, state),
-        is_thread,
+        thread.map(|thread| thread.fields),
         Path::new(&repo_path),
         created.as_ref(),
     )
@@ -1376,6 +1394,7 @@ mod tests {
             policy: super::WORKSPACE_WRITE.to_owned(),
             backend: "fake".to_owned(),
             coordinator_thread: None,
+            parent: None,
             model: None,
             effort: None,
             permission: None,
@@ -1389,7 +1408,7 @@ mod tests {
             &daemon,
             run_id,
             (run, state),
-            false,
+            None,
             Path::new("/src/app"),
             None,
         )

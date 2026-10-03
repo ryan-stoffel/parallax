@@ -37,7 +37,7 @@ pub use events::StoredEvent;
 pub use images::StoredImage;
 pub use project::{Project, ProjectEdit, ProjectFields, ProjectIcon};
 pub use runs::{Run, RunAccept, RunFields, RunState};
-pub use threads::{Repo, RepoFields, Thread};
+pub use threads::{ForkedFrom, Repo, RepoFields, Thread, ThreadFields, ThreadUpdate};
 pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageHour, UsageSummary};
 pub use wakes::WakeState;
 pub use worktree::{Worktree, WorktreeFields};
