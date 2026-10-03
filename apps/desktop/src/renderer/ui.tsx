@@ -402,7 +402,7 @@ export function Picker({
 export interface Crumb {
   label: string;
   icon?: ReactNode;
-  /** Makes it a link back to that page. */
+  /** Makes it a button to that page, such as back to a coordinator or on to New thread. */
   onClick?: () => void;
 }
 
