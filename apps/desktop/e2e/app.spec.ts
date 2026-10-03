@@ -533,7 +533,7 @@ test("attaches another thread with @, sends it with the message, and opens it fr
   await page.reload();
   // At its left edge: a short row's hover actions cover its middle.
   await page.getByRole("button", { name: /Tidy up the docs/ }).click({ position: { x: 8, y: 8 } });
-  const sent = transcript.getByRole("button", { name: "Open Tidy up the README" });
+  const sent = transcript.getByRole("button", { name: /Tidy up the README/ });
   await expect(sent).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("thread-sent.png") });
   await sent.click();
