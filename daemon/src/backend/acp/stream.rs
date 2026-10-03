@@ -219,11 +219,14 @@ impl Translator {
                     .collect();
                 vec![Step::Emit(Event::TodoList { items })]
             }
-            // Cursor's own bookkeeping, and the user's own message echoed in a replay.
+            // Agents' own bookkeeping (a turn's tokens come on its answer instead), and the user's
+            // own message echoed in a replay.
             Some(
                 "available_commands_update"
                 | "session_info_update"
                 | "current_mode_update"
+                | "config_option_update"
+                | "usage_update"
                 | "user_message_chunk"
                 | "subagent_spawned"
                 | "subagent_state_update",

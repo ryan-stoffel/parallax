@@ -129,6 +129,18 @@ export const kinds: Record<string, Kind> = {
 /** `kind`'s entry, or the generic ACP one for a kind this app doesn't know. */
 export const kindOf = (kind: string): Kind => kinds[kind] ?? kinds["acp"]!;
 
+/**
+ * The logo of the instance a run's `backend` names, on any host whose instances are listed: its
+ * kind's, or undefined for a backend no list has yet.
+ */
+export function instanceLogo(backend: string): Logo | undefined {
+  for (const list of lists.values()) {
+    const info = list.providers.find((p) => p.instance.id === backend);
+    if (info) return kindOf(info.instance.kind).Logo;
+  }
+  return undefined;
+}
+
 /** The instances every plxd has, which can be turned off but not removed. */
 export const builtInIds = ["claude", "codex", "cursor"];
 

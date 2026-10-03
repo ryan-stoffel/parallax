@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentRun, ParallaxEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
+import { instanceLogo } from "./providers";
 import { backendLogos, statusLooks } from "./Sidebar";
 import { titleOf, waitingSince } from "./threads";
 import {
@@ -201,7 +202,7 @@ function AgentRow({
   onOpen: () => void;
 }) {
   const look = statusLooks[run.status] ?? statusLooks.completed!;
-  const Logo = backendLogos[run.backend];
+  const Logo = backendLogos[run.backend] ?? instanceLogo(run.backend);
   return (
     <li>
       <button

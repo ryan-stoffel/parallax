@@ -42,7 +42,8 @@
 //!
 //! Message chunks are text deltas; thinking chunks join into one `Reasoning`; tool calls are named
 //! for the Claude Code tools the app draws (`Bash`, `Read`, `Edit`, `Grep`, `WebFetch`); todo and
-//! plan updates are todo lists. ACP reports no token usage, so an ACP run has none.
+//! plan updates are todo lists. A turn's tokens are its `session/prompt` answer's `usage`, which
+//! `OpenCode` sends and Cursor doesn't.
 //!
 //! # Cancel
 //!
@@ -65,7 +66,7 @@ use tokio::sync::{Notify, mpsc};
 
 use self::stream::{Ask, AskKind, Step, Translator, permission_answer};
 use super::commands::{self, CommandsProbe};
-use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
+use super::event::{Event, Failure, FailureKind, ModelUsage, Outcome, Usage, WarningKind};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, StdinMode, StdinPipe,
 };
@@ -414,6 +415,7 @@ impl Backend for AcpBackend {
             mode,
             model,
             mode_option: None,
+            session_model: None,
             session: None,
             modes_pending: 0,
             prompts: VecDeque::from([Prompt::new(
@@ -532,6 +534,8 @@ struct Driver {
     model: Option<String>,
     /// The session's mode config option, for an agent that takes its mode as one (`OpenCode`).
     mode_option: Option<String>,
+    /// The session's model, as `SessionStarted` named it, for its usage.
+    session_model: Option<String>,
     /// The session's id, once `session/new` or `session/load` answered.
     session: Option<String>,
     /// `session/set_mode` and model requests not yet answered; prompts wait for them.
@@ -726,9 +730,10 @@ impl Driver {
                     .and_then(Value::as_str)
                     .map(str::to_owned);
                 let model = self.model.take();
+                self.session_model = model.clone().or(current);
                 self.emit(Event::SessionStarted {
                     session_id: session.clone(),
-                    model: model.clone().or(current),
+                    model: self.session_model.clone(),
                     api_key_source: None,
                 })
                 .await;
@@ -759,6 +764,11 @@ impl Driver {
                 }
                 for event in self.translator.unfinished() {
                     self.emit(event).await;
+                }
+                // The turn's tokens, from agents that report them on the answer (`OpenCode`).
+                if let Some(usage) = turn_usage(&value) {
+                    let model = self.session_model.clone();
+                    self.emit(Event::Usage(ModelUsage { model, usage })).await;
                 }
                 self.results += 1;
                 let result = self.translator.take_text();
@@ -933,6 +943,20 @@ impl Driver {
         };
         failed(failure, Some(&exit))
     }
+}
+
+/// A `session/prompt` answer's `usage`, ACP's per-turn token counts, if it has any.
+fn turn_usage(answer: &Value) -> Option<Usage> {
+    let usage = answer.get("usage")?;
+    let count = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or_default();
+    let usage = Usage {
+        input_tokens: count("inputTokens"),
+        output_tokens: count("outputTokens") + count("thoughtTokens"),
+        cache_read_tokens: count("cachedReadTokens"),
+        cache_write_tokens: count("cachedWriteTokens"),
+        cost_usd_micros: None,
+    };
+    (usage != Usage::default()).then_some(usage)
 }
 
 /// The id of the config option of `category` that a `session/new` or `session/load` answer
