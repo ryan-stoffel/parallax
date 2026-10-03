@@ -244,7 +244,7 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
 
 /**
  * What signs in to provider instance `id` on a host: its `login` argv from the host's plxd, run as
- * it is, with its home's variable set, so a second Codex signs in to its own `CODEX_HOME`. A
+ * it is, with its `loginEnv` and its home's variable set, so a second Codex signs in to its own `CODEX_HOME`. A
  * program that's the one plxd found runs from where it found it, as a CLI's sign-in does.
  * Resolves to an error for people.
  */
@@ -262,7 +262,10 @@ async function providerSignInCommand(hostId: string, id: string): Promise<Comman
   if (!program) return "That provider has no sign-in on this host.";
   const { kind, home } = found.instance;
   const homeVar = HOME_VARS[kind];
-  const env = homeVar && home ? { [homeVar]: home } : {};
+  const env = {
+    ...Object.fromEntries((found.loginEnv ?? []).map((v) => [v.name, v.value ?? ""])),
+    ...(homeVar && home ? { [homeVar]: home } : {}),
+  };
   const own = found.path && /[^/\\]+$/.exec(found.path)?.[0].replace(/\.\w+$/, "") === program;
   return loginCommand(kind, own ? found.path! : program, ssh, undefined, args, env);
 }

@@ -87,8 +87,11 @@ export function useProviders(hostId: string | undefined): ProvidersListResult | 
     if (hostId === undefined) return;
     const check = (state: ConnectionState) => {
       if (state.status !== "connected") return;
-      if ("providers" in state.capabilities) void loadProviders(hostId);
-      else if (lists.has(hostId)) put(hostId, undefined);
+      // Probing every instance starts each ACP agent, so a view only loads a list the host has
+      // none of yet; Settings lists them again, and probes on Refresh.
+      if ("providers" in state.capabilities) {
+        if (!lists.has(hostId)) void loadProviders(hostId);
+      } else if (lists.has(hostId)) put(hostId, undefined);
     };
     const stop = window.parallax.onConnectionState((id, state) => id === hostId && check(state));
     // It rejects only for a host just removed, whose views are going away.

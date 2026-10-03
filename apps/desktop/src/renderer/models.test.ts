@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
-import { catalogOf } from "./models";
+import { catalogOf, instanceModels } from "./models";
 
 const info = (instance: Partial<ProviderInstance>, rest: Partial<ProviderInfo> = {}) =>
   ({
@@ -62,4 +62,9 @@ test("an older plxd's catalog is the built-in one, turned off as this computer s
     ["cursor", false],
   ]);
   expect(catalog.models[0]).toMatchObject({ id: "claude-opus-5-5", provider: "claude" });
+});
+
+test("an instance that lists no models offers its agent's default, which sends no model", () => {
+  const models = instanceModels(info({ id: "amp", name: "Amp" }));
+  expect(models.map((m) => [m.id, m.name, m.provider])).toEqual([["", "Default model", "amp"]]);
 });

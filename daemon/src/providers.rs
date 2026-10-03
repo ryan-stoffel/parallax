@@ -19,8 +19,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountId, AgentPermission, CliKind, ProviderInfo, ProviderInstance, ProviderKind,
-    ProviderModel, ProvidersListResult,
+    AccountId, AgentPermission, CliKind, ProviderEnvVar, ProviderInfo, ProviderInstance,
+    ProviderKind, ProviderModel, ProvidersListResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -253,6 +253,8 @@ struct Found {
     models: Vec<ProviderModel>,
     /// The command that signs it in, from the agent's own sign-in methods.
     login: Option<Vec<String>>,
+    /// The variables an ACP agent runs with, none secret, which its sign-in gets too.
+    login_env: Option<Vec<(OsString, OsString)>>,
 }
 
 /// This host's provider instances.
@@ -263,6 +265,9 @@ pub struct Providers {
     registry: BackendRegistry,
     stored: Mutex<Vec<Stored>>,
     cache: Mutex<HashMap<String, (Instant, Found)>>,
+    /// The backends plxd registered at startup under the built-in instances' ids, which a
+    /// built-in instance with no settings runs.
+    defaults: HashMap<String, Arc<dyn Backend>>,
 }
 
 impl std::fmt::Debug for Providers {
@@ -309,11 +314,16 @@ impl Providers {
                 );
             }
         }
+        let defaults = BUILT_IN
+            .iter()
+            .filter_map(|(id, ..)| Some(((*id).to_owned(), registry.by_backend_name(id)?.1)))
+            .collect();
         let providers = Self {
             file,
             keys,
             launcher,
             registry,
+            defaults,
             stored: Mutex::new(Vec::new()),
             cache: Mutex::new(HashMap::new()),
         };
@@ -352,23 +362,32 @@ impl Providers {
     /// file or the keychain can't be written.
     pub async fn save(&self, mut instance: ProviderInstance) -> Result<(), ErrorObject> {
         check(&instance)?;
-        let mut stored = self.stored.lock().await;
-        let old = stored.iter().position(|s| s.instance.id == instance.id);
-        if let Some(i) = old
-            && stored[i].instance.kind != instance.kind
+        // The list isn't locked while the keychain may wait on the user.
+        let old = self
+            .stored
+            .lock()
+            .await
+            .iter()
+            .find(|s| s.instance.id == instance.id)
+            .cloned();
+        if old
+            .as_ref()
+            .is_some_and(|old| old.instance.kind != instance.kind)
         {
             return Err(ErrorObject::invalid_params(
                 "an instance's kind can't change; add a new instance instead",
             ));
         }
-        let secret_id = self
-            .save_secrets(old.map(|i| &stored[i]), &mut instance)
-            .await?;
+        let secret_id = self.save_secrets(old.as_ref(), &mut instance).await?;
         let entry = Stored {
             instance,
             secrets: secret_id,
         };
-        match old {
+        let mut stored = self.stored.lock().await;
+        match stored
+            .iter()
+            .position(|s| s.instance.id == entry.instance.id)
+        {
             Some(i) => stored[i] = entry.clone(),
             None => stored.push(entry.clone()),
         }
@@ -449,11 +468,14 @@ impl Providers {
             return Err(ErrorObject::invalid_params(format!("no provider {id}")));
         };
         let entry = stored.remove(i);
-        if let Some(secrets) = entry.secrets {
-            let _ = self.keys.delete(secrets);
-        }
         self.write(&stored)?;
         self.registry.remove(id);
+        drop(stored);
+        if let Some(secrets) = entry.secrets {
+            let keys = Arc::clone(&self.keys);
+            // Off the runtime's threads, as the keychain may wait on the user.
+            let _ = tokio::task::spawn_blocking(move || keys.delete(secrets)).await;
+        }
         Ok(())
     }
 
@@ -485,7 +507,8 @@ impl Providers {
             && instance.home.is_none()
             && instance.args.is_empty()
             && instance.env.is_empty();
-        if plain && self.registry.by_backend_name(&instance.id).is_some() {
+        if plain && let Some(default) = self.defaults.get(&instance.id) {
+            self.registry.set(Arc::clone(default));
             return;
         }
         let Some(backend) = build(&self.launcher, entry, plain_env(entry)) else {
@@ -562,9 +585,16 @@ impl Providers {
                     .unwrap_or_else(|| "pi".to_owned()),
                 _ => program.clone(),
             };
-            // Antigravity's server prints its build, not a version: its `initialize` says it.
+            // Antigravity's server prints its build, not a version, and `npx` or `uvx` would print
+            // their own: the agent's `initialize` says it instead.
+            let launcher_program = ["npx", "uvx"].iter().any(|launcher| {
+                Path::new(&program)
+                    .file_stem()
+                    .is_some_and(|stem| stem == *launcher)
+            });
             let version = match instance.kind {
                 ProviderKind::Antigravity => None,
+                ProviderKind::Acp if launcher_program => None,
                 _ => detect::run(&self.launcher, &versioned, &["--version"], PROBE_TIMEOUT)
                     .await
                     .ok()
@@ -595,7 +625,7 @@ impl Providers {
                     (**agent).clone(),
                     overrides(entry, env.clone()),
                 );
-                acp_probe(&self.launcher, &agent, &env, &mut found).await;
+                acp_probe(&self.launcher, &agent, &mut found).await;
             }
             _ => {}
         }
@@ -770,6 +800,10 @@ impl Backend for WithSecrets {
         self.plain.full_thread()
     }
 
+    fn cli(&self) -> Option<CliKind> {
+        self.plain.cli()
+    }
+
     fn context_windows(&self) -> &'static [u32] {
         self.plain.context_windows()
     }
@@ -782,7 +816,8 @@ impl Backend for WithSecrets {
         &self,
         cwd: &Path,
     ) -> Result<Option<crate::backend::CommandsProbe>, crate::backend::StartError> {
-        self.full().commands(cwd)
+        // A command list needs no key, so it never waits on the keychain.
+        self.plain.commands(cwd)
     }
 }
 
@@ -903,12 +938,8 @@ async fn models_from(
 /// signs in, from `initialize`, and whether it is signed in and its models, from `session/new`.
 /// The agent is killed once it answers, or after [`PROBE_TIMEOUT`]. A browser it would open for
 /// a sign-in is never opened: that waits for the user's Sign in.
-async fn acp_probe(
-    launcher: &Launcher,
-    agent: &AcpAgent,
-    plain_env: &[(OsString, OsString)],
-    found: &mut Found,
-) {
+async fn acp_probe(launcher: &Launcher, agent: &AcpAgent, found: &mut Found) {
+    found.login_env = Some(agent.env.clone());
     let home = std::env::home_dir().unwrap_or_else(std::env::temp_dir);
     let mut spec = ProcessSpec::new(&agent.program, &home);
     spec.args.clone_from(&agent.args);
@@ -954,7 +985,7 @@ async fn acp_probe(
             };
             if message["id"] == 1 {
                 let result = &message["result"];
-                found.login = login_of(agent, plain_env, &result["authMethods"]);
+                found.login = login_of(agent, &result["authMethods"]);
                 if found.version.is_none() {
                     found.version = result["agentInfo"]["version"].as_str().map(str::to_owned);
                 }
@@ -994,34 +1025,19 @@ async fn acp_probe(
 
 /// The command that signs in to `agent`, from its `initialize` answer's `authMethods`: a terminal
 /// method's arguments after the agent's own command, or else `plxd acp-login` with the first
-/// method the agent runs itself (ACP's `agent` type), for a browser sign-in. Only `plain_env`, the
-/// instance's variables that aren't secret, go before it.
-fn login_of(
-    agent: &AcpAgent,
-    plain_env: &[(OsString, OsString)],
-    methods: &Value,
-) -> Option<Vec<String>> {
+/// method the agent runs itself (ACP's `agent` type), for a browser sign-in. Its variables go in
+/// `ProviderInfo::login_env`.
+fn login_of(agent: &AcpAgent, methods: &Value) -> Option<Vec<String>> {
     let methods = methods.as_array()?;
     let command = || {
         std::iter::once(&agent.program)
             .chain(&agent.args)
             .map(|arg| arg.to_string_lossy().into_owned())
     };
-    let env = plain_env
-        .iter()
-        .map(|(name, value)| format!("{}={}", name.to_string_lossy(), value.to_string_lossy()))
-        .collect::<Vec<_>>();
-    let prefix = || {
-        (!env.is_empty())
-            .then(|| std::iter::once("env".to_owned()).chain(env.iter().cloned()))
-            .into_iter()
-            .flatten()
-    };
     if let Some(terminal) = methods.iter().find(|m| m["type"] == "terminal") {
         let args = terminal["args"].as_array().into_iter().flatten();
         return Some(
-            prefix()
-                .chain(command())
+            command()
                 .chain(args.filter_map(|arg| arg.as_str().map(str::to_owned)))
                 .collect(),
         );
@@ -1033,16 +1049,16 @@ fn login_of(
         .as_str()?;
     let plxd = std::env::current_exe().ok()?;
     Some(
-        prefix()
-            .chain([
-                plxd.to_string_lossy().into_owned(),
-                "acp-login".to_owned(),
-                "--method".to_owned(),
-                method.to_owned(),
-                "--".to_owned(),
-            ])
-            .chain(command())
-            .collect(),
+        [
+            plxd.to_string_lossy().into_owned(),
+            "acp-login".to_owned(),
+            "--method".to_owned(),
+            method.to_owned(),
+            "--".to_owned(),
+        ]
+        .into_iter()
+        .chain(command())
+        .collect(),
     )
 }
 
@@ -1162,6 +1178,25 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
             .collect()
     });
     let login = login.or(found.login);
+    let login_env = found.login_env.map_or_else(
+        || {
+            instance
+                .env
+                .iter()
+                .filter(|var| !var.secret && var.value.is_some())
+                .cloned()
+                .collect()
+        },
+        |env| {
+            env.into_iter()
+                .map(|(name, value)| ProviderEnvVar {
+                    name: name.to_string_lossy().into_owned(),
+                    value: Some(value.to_string_lossy().into_owned()),
+                    secret: false,
+                })
+                .collect()
+        },
+    );
     let mut instance = instance;
     for var in &mut instance.env {
         if var.secret {
@@ -1181,6 +1216,7 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
         efforts,
         coordinator,
         login,
+        login_env,
     }
 }
 

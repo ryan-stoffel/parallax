@@ -452,10 +452,16 @@ export function Composer({
   const account = { kind: "subscription", backend: target! } as const;
   let options: RunOptions = {};
   if (run && started && model && target !== backend)
-    options = { model: model.id, ...(efforts && { effort }), permission, ...speed, account };
+    options = {
+      ...(model.id && { model: model.id }),
+      ...(efforts && { effort }),
+      permission,
+      ...speed,
+      account,
+    };
   else if (run && started)
     options = {
-      ...(model && model !== startedModel && { model: model.id }),
+      ...(model?.id && model !== startedModel && { model: model.id }),
       ...(efforts && effort !== startedEffort && { effort }),
       ...(permission !== startedPermission && { permission }),
       ...(context !== undefined && context !== startedContext && { contextWindow: context }),
@@ -463,7 +469,7 @@ export function Composer({
     };
   else if (run)
     options = {
-      ...(model && { model: model.id }),
+      ...(model?.id && { model: model.id }),
       ...(efforts && { effort }),
       permission,
       ...speed,

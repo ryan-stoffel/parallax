@@ -12,7 +12,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{AccountId, CliKind, DetectedCli, ErrorKind, Provider};
 
 use crate::backend::Backend;
-use crate::backend::claude::{self, WORKER_MIN_VERSION, parse_version};
+use crate::backend::claude::{WORKER_MIN_VERSION, parse_version};
 use crate::backend::codex;
 use crate::backend::process::Environment;
 use crate::paths::without_verbatim_prefix;
@@ -241,7 +241,7 @@ pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().worker_sandbox {
         return Ok(());
     }
-    let why = if backend.name() == codex::PROGRAM {
+    let why = if backend.cli() == Some(CliKind::Codex) {
         "Codex workers are turned off until RYA-145 keeps their commands out of the shared temp \
          folders"
             .to_owned()
@@ -303,11 +303,7 @@ pub(super) async fn check_linux_sandbox(
 
 /// The detected CLI a backend runs, if plxd checks its version before starting a worker.
 pub(super) fn cli_of(backend: &dyn Backend) -> Option<CliKind> {
-    match backend.name() {
-        claude::PROGRAM => Some(CliKind::Claude),
-        codex::PROGRAM => Some(CliKind::Codex),
-        _ => None,
-    }
+    backend.cli()
 }
 
 /// Characters the vendors read as wildcards in a sandbox path (0013).

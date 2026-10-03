@@ -198,16 +198,18 @@ const builtIns: Omit<Instance, "enabled">[] = [
 
 /**
  * An instance's models before this device's choices: its kind's built-in catalog, then those plxd
- * found, then the user's own, each id once.
+ * found, then the user's own, each id once. One that lists none offers its agent's own default,
+ * whose empty id sends no `model`.
  */
 export function instanceModels(info: ProviderInfo): Model[] {
   const { instance } = info;
   const seen = new Set<string>();
-  return [
+  const listed = [
     ...models.filter((m) => m.provider === instance.kind),
     ...info.models.map((m) => ({ ...m, contexts: [] })),
     ...instance.models.map((m) => ({ ...m, contexts: [] })),
-  ]
+  ];
+  return (listed.length ? listed : [{ id: "", name: "Default model", contexts: [] }])
     .filter((m) => !seen.has(m.id) && !!seen.add(m.id))
     .map((m) => ({
       ...m,

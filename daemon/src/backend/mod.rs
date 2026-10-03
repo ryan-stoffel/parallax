@@ -87,6 +87,12 @@ pub trait Backend: Send + Sync {
         &[]
     }
 
+    /// The vendor CLI it runs, which plxd checks before starting a worker on it (0013), whatever
+    /// the instance's name (0040). None by default.
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        None
+    }
+
     /// Whether a thread on it runs as the full agent with no worker sandbox to check (0035,
     /// 0036, 0038), and nothing else runs on it. Not by default.
     fn full_thread(&self) -> bool {

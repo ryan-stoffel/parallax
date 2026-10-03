@@ -498,7 +498,11 @@ impl Prompt {
 enum Request {
     Initialize,
     Session,
-    Mode,
+    /// A model or mode switch. A `required` one, the mode a permission sets, fails the run when
+    /// the agent refuses it, rather than run the turn in another mode.
+    Mode {
+        required: bool,
+    },
     Prompt(Prompt),
 }
 
@@ -679,9 +683,15 @@ impl Driver {
         let value = match result {
             Ok(value) => value,
             Err(message) => {
-                if matches!(request, Request::Mode) {
+                if let Request::Mode { required } = request {
                     self.modes_pending = self.modes_pending.saturating_sub(1);
-                    self.emit(Event::Notice { detail: message }).await;
+                    if !required {
+                        self.emit(Event::Notice { detail: message }).await;
+                        return;
+                    }
+                    let message = format!("{} couldn't switch modes: {message}", self.agent.label);
+                    self.failure = Some(failure(FailureKind::VendorError, message));
+                    self.close();
                     return;
                 }
                 // The session or a turn failed: the run ends with it. Every prompt's turn has
@@ -713,7 +723,7 @@ impl Driver {
                 }
             }
             Request::Session => self.session_started(&value).await,
-            Request::Mode => self.modes_pending = self.modes_pending.saturating_sub(1),
+            Request::Mode { .. } => self.modes_pending = self.modes_pending.saturating_sub(1),
             Request::Prompt(prompt) => {
                 self.in_flight = None;
                 if value.get("stopReason").and_then(Value::as_str) == Some("cancelled") {
@@ -780,7 +790,7 @@ impl Driver {
             self.set_model(&session, value, &model);
         }
         if let Some(mode) = self.mode.take() {
-            self.set_mode(&session, &mode);
+            self.set_mode(&session, &mode, true);
         }
         self.session = Some(session);
     }
@@ -791,23 +801,35 @@ impl Driver {
         self.modes_pending += 1;
         if let Some(id) = config_option(answer, "model") {
             let params = json!({"sessionId": session, "configId": id, "value": model});
-            self.request("session/set_config_option", &params, Request::Mode);
+            self.request(
+                "session/set_config_option",
+                &params,
+                Request::Mode { required: false },
+            );
         } else {
             let params = json!({"sessionId": session, "modelId": model});
-            self.request("session/set_model", &params, Request::Mode);
+            self.request(
+                "session/set_model",
+                &params,
+                Request::Mode { required: false },
+            );
         }
     }
 
     /// Switches the session to `mode`: through its mode config option when it has one, else
     /// with `session/set_mode`.
-    fn set_mode(&mut self, session: &str, mode: &str) {
+    fn set_mode(&mut self, session: &str, mode: &str, required: bool) {
         self.modes_pending += 1;
         if let Some(id) = self.mode_option.clone() {
             let params = json!({"sessionId": session, "configId": id, "value": mode});
-            self.request("session/set_config_option", &params, Request::Mode);
+            self.request(
+                "session/set_config_option",
+                &params,
+                Request::Mode { required },
+            );
         } else {
             let params = json!({"sessionId": session, "modeId": mode});
-            self.request("session/set_mode", &params, Request::Mode);
+            self.request("session/set_mode", &params, Request::Mode { required });
         }
     }
 
@@ -870,7 +892,7 @@ impl Driver {
             && let Some(session) = self.session.clone()
             && let Some(mode) = self.agent.edit_mode.clone()
         {
-            self.set_mode(&session, &mode);
+            self.set_mode(&session, &mode, false);
         }
         if interrupt && let Some(session) = self.session.clone() {
             self.write(&json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session}}));

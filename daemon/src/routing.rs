@@ -35,12 +35,13 @@ use crate::keystore::KeyStore;
 
 /// Every backend plxd can route to: by name, which a subscription `AccountChoice` names, and by
 /// the provider whose key accounts it takes (0004: a backend takes both a subscription login and
-/// a key account for the same provider). Provider instances (0040) add and replace named
-/// backends while plxd runs, so clones share one table.
+/// a key account for the same provider). Provider instances (0040) add, replace, and remove named
+/// backends while plxd runs, so clones share one table; key accounts keep the backends registered
+/// at startup, whatever an instance of the same name sets or turns off.
 #[derive(Clone, Default)]
 pub struct BackendRegistry {
-    /// The name of the backend that takes each provider's key accounts.
-    by_provider: HashMap<Provider, String>,
+    /// The backend that takes each provider's key accounts.
+    by_provider: HashMap<Provider, Arc<dyn Backend>>,
     by_name: Arc<std::sync::RwLock<HashMap<String, Arc<dyn Backend>>>>,
 }
 
@@ -60,12 +61,12 @@ impl BackendRegistry {
 
     /// Registers `backend` as the one that takes `provider`'s credentials, under its name.
     pub fn register(&mut self, provider: Provider, backend: Arc<dyn Backend>) -> &mut Self {
-        self.by_provider.insert(provider, backend.name().to_owned());
+        self.by_provider.insert(provider, Arc::clone(&backend));
         self.set(backend);
         self
     }
 
-    /// Adds `backend` under its name, or replaces the one with that name, for key accounts too.
+    /// Adds `backend` under its name, or replaces the one with that name, for subscriptions only.
     pub fn set(&self, backend: Arc<dyn Backend>) {
         self.by_name
             .write()
@@ -84,12 +85,7 @@ impl BackendRegistry {
     /// The backend registered for `provider`.
     #[must_use]
     pub fn by_provider(&self, provider: Provider) -> Option<Arc<dyn Backend>> {
-        let name = self.by_provider.get(&provider)?;
-        self.by_name
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(name)
-            .cloned()
+        self.by_provider.get(&provider).cloned()
     }
 
     /// The backend whose [`Backend::name`] is `name`, such as `claude`, and the provider whose
@@ -105,7 +101,7 @@ impl BackendRegistry {
         let provider = self
             .by_provider
             .iter()
-            .find(|(_, registered)| *registered == name)
+            .find(|(_, registered)| registered.name() == name)
             .map_or(Provider::Unknown, |(provider, _)| *provider);
         Some((provider, backend))
     }

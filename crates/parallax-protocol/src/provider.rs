@@ -150,6 +150,10 @@ pub struct ProviderInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub login: Option<Vec<String>>,
+    /// Variables the sign-in command runs with, none of them secret: the agent's own and the
+    /// instance's. The home folder's variable isn't among them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub login_env: Vec<ProviderEnvVar>,
 }
 
 /// Params of `providers/list`.

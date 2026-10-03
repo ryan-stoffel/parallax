@@ -931,6 +931,10 @@ impl Backend for ClaudeBackend {
         self.overrides.name.as_deref().unwrap_or(PROGRAM)
     }
 
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        Some(parallax_protocol::CliKind::Claude)
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             follow_ups: true,

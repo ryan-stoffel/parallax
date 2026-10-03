@@ -981,6 +981,11 @@ export type ProviderInfo = {
 	 * The command that signs it in, run in a terminal on the host, if it has one.
 	 */
 	login?: Array<string>,
+	/**
+	 * Variables the sign-in command runs with, none of them secret: the agent's own and the
+	 * instance's. The home folder's variable isn't among them.
+	 */
+	loginEnv?: Array<ProviderEnvVar>,
 };
 
 /**
@@ -991,6 +996,25 @@ export type ProviderInfo = {
  * A newer peer may send a value this version does not know; treat it as unknown.
  */
 export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
+
+/**
+ * One environment variable an instance's runs get.
+ */
+export type ProviderEnvVar = {
+	/**
+	 * The variable's name.
+	 */
+	name: string,
+	/**
+	 * Its value. plxd never sends a secret's value back: a listed secret has none, and an
+	 * update that leaves it out keeps the stored one.
+	 */
+	value?: string,
+	/**
+	 * Kept in the host's keychain instead of plxd's settings, such as an API key.
+	 */
+	secret: boolean,
+};
 
 /**
  * An instance's settings, as the user sees and edits them.
@@ -1033,25 +1057,6 @@ export type ProviderInstance = {
 	 * Models the user added, offered beside the ones plxd finds.
 	 */
 	models: Array<ProviderModel>,
-};
-
-/**
- * One environment variable an instance's runs get.
- */
-export type ProviderEnvVar = {
-	/**
-	 * The variable's name.
-	 */
-	name: string,
-	/**
-	 * Its value. plxd never sends a secret's value back: a listed secret has none, and an
-	 * update that leaves it out keeps the stored one.
-	 */
-	value?: string,
-	/**
-	 * Kept in the host's keychain instead of plxd's settings, such as an API key.
-	 */
-	secret: boolean,
 };
 
 /**

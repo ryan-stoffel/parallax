@@ -33,6 +33,9 @@ fn fixture(name: &str) -> &'static str {
         "cancel" => include_str!("fixtures/cancel.jsonl"),
         "interrupt" => include_str!("fixtures/interrupt.jsonl"),
         "plan-denied" => include_str!("fixtures/plan-denied.jsonl"),
+        "opencode" => include_str!("fixtures/opencode.jsonl"),
+        "hermes" => include_str!("fixtures/hermes.jsonl"),
+        "plan-refused" => include_str!("fixtures/plan-refused.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -57,6 +60,11 @@ fn cursor() -> AcpAgent {
 
 impl Fake {
     fn new(fixture_name: &str) -> Self {
+        Self::with_agent(fixture_name, cursor())
+    }
+
+    /// The fake as `agent`, whose program is the fake `agent` on `PATH`.
+    fn with_agent(fixture_name: &str, agent: AcpAgent) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let bin = root.join("bin");
@@ -78,7 +86,7 @@ impl Fake {
         let launcher = Launcher::new(DataDir::new(root.join("data")).unwrap(), base);
         Self {
             dir,
-            backend: AcpBackend::new(launcher, cursor()),
+            backend: AcpBackend::new(launcher, agent),
         }
     }
 
@@ -614,4 +622,109 @@ fn only_a_threads_subscription_runs_on_cursor() {
     bypass.permission = Some(AgentPermission::Bypass);
     bypass.model = None;
     assert_eq!(arguments(&cursor(), &bypass).unwrap(), ["--force", "acp"]);
+}
+
+/// An agent configured as 0040's presets describe one that takes everything over ACP: no model or
+/// bypass flag, and `modes` for its permissions.
+fn acp_only(modes: Vec<(AgentPermission, String)>) -> AcpAgent {
+    AcpAgent {
+        modes,
+        edit_mode: Some("build".into()),
+        ..AcpAgent::new("agent", "Some Agent", "agent", &["acp"])
+    }
+}
+
+#[tokio::test]
+async fn a_model_and_mode_go_as_config_options_and_an_open_call_closes_with_the_turn() {
+    let fake = Fake::with_agent(
+        "opencode",
+        acp_only(vec![(AgentPermission::Plan, "plan".into())]),
+    );
+    let mut request = fake.request();
+    request.model = Some("opencode/big-pickle".into());
+    request.permission = Some(AgentPermission::Plan);
+    let events = run(&fake, request, allow, None).await;
+
+    let sent = fake.stdin();
+    let options: Vec<(&str, &str)> = sent
+        .iter()
+        .filter(|m| m["method"] == "session/set_config_option")
+        .map(|m| {
+            let p = &m["params"];
+            (
+                p["configId"].as_str().unwrap(),
+                p["value"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        options,
+        [("model", "opencode/big-pickle"), ("mode", "plan")]
+    );
+    assert!(sent.iter().all(|m| m["method"] != "session/set_model"));
+    assert_eq!(status_of(&events, "call_1"), Some(&ToolStatus::Error));
+    let usage: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Usage(usage) => Some(usage),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].model.as_deref(), Some("opencode/big-pickle"));
+    assert_eq!(
+        (usage[0].usage.input_tokens, usage[0].usage.output_tokens),
+        (100, 30)
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e, Event::Warning { .. })),
+        "usage_update is bookkeeping, not an unknown event"
+    );
+    assert!(matches!(outcome(&events), Outcome::Completed { .. }));
+}
+
+#[tokio::test]
+async fn without_config_options_the_model_and_mode_go_as_their_own_methods() {
+    let fake = Fake::with_agent(
+        "hermes",
+        acp_only(vec![(AgentPermission::Edit, "accept_edits".into())]),
+    );
+    let mut request = fake.request();
+    request.model = Some("custom:qwen3-4b".into());
+    let events = run(&fake, request, allow, None).await;
+
+    let sent = fake.stdin();
+    let set_model = sent
+        .iter()
+        .find(|m| m["method"] == "session/set_model")
+        .unwrap();
+    assert_eq!(set_model["params"]["modelId"], "custom:qwen3-4b");
+    let set_mode = sent
+        .iter()
+        .find(|m| m["method"] == "session/set_mode")
+        .unwrap();
+    assert_eq!(set_mode["params"]["modeId"], "accept_edits");
+    assert!(matches!(outcome(&events), Outcome::Completed { .. }));
+}
+
+#[tokio::test]
+async fn a_plan_mode_the_agent_refuses_fails_the_run_before_its_prompt() {
+    let fake = Fake::with_agent(
+        "plan-refused",
+        acp_only(vec![(AgentPermission::Plan, "plan".into())]),
+    );
+    let mut request = fake.request();
+    request.model = None;
+    request.permission = Some(AgentPermission::Plan);
+    let events = run(&fake, request, allow, None).await;
+
+    assert!(fake.stdin().iter().all(|m| m["method"] != "session/prompt"));
+    let Outcome::Failed(failure) = outcome(&events) else {
+        panic!("expected a failure, got {:?}", outcome(&events));
+    };
+    assert!(
+        failure.message.contains("unknown mode plan"),
+        "{}",
+        failure.message
+    );
 }

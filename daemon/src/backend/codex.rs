@@ -466,6 +466,10 @@ impl Backend for CodexBackend {
         true
     }
 
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        Some(parallax_protocol::CliKind::Codex)
+    }
+
     fn permissions(&self) -> &[AgentPermission] {
         app_server::PERMISSIONS
     }
