@@ -1847,11 +1847,11 @@ fn session_account(account_id: &str) -> AccountChoice {
 /// About the most of the conversation a new session is told, in bytes: its latest messages.
 const HISTORY_BYTES: usize = 64 * 1024;
 
+/// What a [`conversation`] cut to its cap starts with. One that isn't cut starts with who spoke.
+pub(super) const LEFT_OUT: &str = "(Earlier messages are left out.)\n\n";
+
 /// Every event run `run` logged, oldest first.
-pub(super) async fn logged_events(
-    daemon: &Daemon,
-    run: RunId,
-) -> Result<Vec<ParallaxEvent>, ErrorObject> {
+async fn logged_events(daemon: &Daemon, run: RunId) -> Result<Vec<ParallaxEvent>, ErrorObject> {
     let log = Arc::clone(&daemon.log);
     tokio::task::spawn_blocking(move || {
         let mut events = Vec::new();
@@ -1929,7 +1929,7 @@ pub(super) fn conversation(events: &[ParallaxEvent], cap: usize) -> String {
     kept.reverse();
     let conversation = kept.join("\n\n");
     if cut {
-        format!("(Earlier messages are left out.)\n\n{conversation}")
+        format!("{LEFT_OUT}{conversation}")
     } else {
         conversation
     }

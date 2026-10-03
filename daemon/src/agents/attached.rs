@@ -6,12 +6,14 @@
 //! conversation, without tool calls, and cut from the front to [`SUMMARY_BYTES`]. The transcript
 //! keeps the user's own text, and the message's `turnStarted` lists the threads.
 
+use std::collections::VecDeque;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{ErrorKind, RunId};
 
-use super::actor::{conversation, logged_events};
+use super::actor::{LEFT_OUT, conversation};
 use super::{store, store_error};
 use crate::server::Daemon;
 
@@ -20,6 +22,9 @@ pub(crate) const MAX_THREADS: usize = 8;
 
 /// About the most of one thread's conversation its summary holds, in bytes: its latest messages.
 pub(crate) const SUMMARY_BYTES: usize = 32 * 1024;
+
+/// How many of a thread's events [`summary`] reads at a time, newest first.
+const PAGE_EVENTS: usize = 100;
 
 /// `threads` without repeats, in order, after checking there are at most [`MAX_THREADS`] and
 /// each is a thread on this host (`threadNotFound` otherwise).
@@ -71,10 +76,83 @@ pub(super) async fn prompt(
          it, oldest first, without tool calls:\n\n",
     );
     for &id in threads {
-        let events = logged_events(daemon, id).await?;
-        let summary = conversation(&events, SUMMARY_BYTES);
+        let summary = summary(daemon, id).await?;
         let _ = write!(prompt, "<thread id=\"{id}\">\n{summary}\n</thread>\n\n");
     }
     let _ = write!(prompt, "The user's message:\n{text}");
     Ok(prompt)
+}
+
+/// Thread `id`'s conversation, cut to [`SUMMARY_BYTES`]. Its events are read newest first, a page
+/// at a time, and only until the messages read fill the cap, so a long thread's older events,
+/// tool output included, are never loaded.
+async fn summary(daemon: &Daemon, id: RunId) -> Result<String, ErrorObject> {
+    let log = Arc::clone(&daemon.log);
+    tokio::task::spawn_blocking(move || {
+        let mut events = VecDeque::new();
+        let mut before = u64::MAX;
+        loop {
+            let page = log.run_events_before(id, before, PAGE_EVENTS)?;
+            let last = page.len() < PAGE_EVENTS;
+            if let Some(oldest) = page.last() {
+                before = oldest.seq;
+            }
+            for entry in page {
+                events.push_front(entry.event.clone());
+            }
+            let summary = conversation(events.make_contiguous(), SUMMARY_BYTES);
+            if last || summary.starts_with(LEFT_OUT) {
+                return Ok(summary);
+            }
+        }
+    })
+    .await
+    .map_err(ErrorObject::internal_error)?
+    .map_err(|error| store_error(&error))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use jiff::Timestamp;
+    use parallax_protocol::{AgentOutputItem, ParallaxEvent, RunId};
+
+    use super::{LEFT_OUT, PAGE_EVENTS, SUMMARY_BYTES, summary};
+    use crate::server::Daemon;
+
+    /// A thread longer than the cap is read newest first, here two pages of its three, and keeps
+    /// its latest messages. A short one is read whole.
+    #[tokio::test]
+    async fn a_summary_keeps_the_latest_messages_across_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (long, short) = (RunId::generate(), RunId::generate());
+        let said = |run_id, text: String| ParallaxEvent::AgentOutput {
+            run_id,
+            items: vec![AgentOutputItem::Text {
+                message_id: None,
+                text,
+            }],
+        };
+        for i in 0..PAGE_EVENTS * 3 {
+            let text = format!("{i:03}{}", "x".repeat(200));
+            daemon
+                .log
+                .append(Timestamp::now(), None, said(long, text))
+                .await;
+        }
+        daemon
+            .log
+            .append(Timestamp::now(), None, said(short, "Hi".to_owned()))
+            .await;
+
+        let kept = summary(&daemon, long).await.unwrap();
+        assert!(kept.starts_with(LEFT_OUT), "{}", &kept[..80]);
+        let newest = format!("{}{}", PAGE_EVENTS * 3 - 1, "x".repeat(200));
+        assert!(kept.ends_with(&newest));
+        // The cap counts messages, not the blank lines between them.
+        assert!(kept.len() <= SUMMARY_BYTES + 1024, "{}", kept.len());
+        assert_eq!(summary(&daemon, short).await.unwrap(), "Agent:\nHi");
+    }
 }

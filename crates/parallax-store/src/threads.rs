@@ -80,9 +80,9 @@ pub struct ThreadUpdate {
 const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
     icon_name, icon_color, icon_image_type, icon_image_data";
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
-    COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at), \
-    (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, forked_from_turn, \
-    title, settled";
+    COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
+    AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
+    forked_from_turn, title, settled";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (String, String, String, bool, String, Option<ProjectIcon>);
@@ -386,7 +386,7 @@ impl Store {
                     AND events.payload LIKE ?2 ESCAPE '\\'
                     AND json_extract(item.value, '$.kind') = 'text'
                     AND json_extract(item.value, '$.text') LIKE ?1 ESCAPE '\\')
-             ORDER BY 7 DESC, id DESC LIMIT ?3"
+             ORDER BY last_prompt_at DESC, id DESC LIMIT ?3"
         ))?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let rows = stmt.query_map(params![pattern, payload_pattern, limit], thread_from_row)?;
