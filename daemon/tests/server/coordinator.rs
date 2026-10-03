@@ -614,6 +614,10 @@ async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted
     let store =
         parallax_store::Store::open(DataDir::new(host.dir.path()).unwrap().store_file()).unwrap();
     assert_eq!(store.wake_state(coordinator.id.into()).unwrap().in_a_row, 1);
+    // The coordinator's run is its worker's parent, and its own has none (0041).
+    let parent = |id: RunId| store.get_run(id.into()).unwrap().unwrap().fields.parent;
+    assert_eq!(parent(worker), Some(coordinator.id.into()));
+    assert_eq!(parent(coordinator.id), None);
 }
 
 /// RYA-178: the user stops the coordinator while a run it started is running, then plxd

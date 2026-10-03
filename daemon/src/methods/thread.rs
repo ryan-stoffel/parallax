@@ -1,6 +1,7 @@
 //! `thread/list`, `repo/add`, `thread/start`, `thread/archive`, and `thread/delete` (#110),
 //! behind the `threads` capability, `thread/update` and `repo/update` (0033), behind
-//! `threadAttention`, and `repo/refs`, behind `repoRefs`. The logic is [`crate::threads`].
+//! `threadAttention` (and `threadLineage` for its title and settled flag, 0041), and `repo/refs`,
+//! behind `repoRefs`. The logic is [`crate::threads`].
 //! `repo/files` is `composer.rs`'s, behind `composerMenus`.
 
 use std::sync::Arc;

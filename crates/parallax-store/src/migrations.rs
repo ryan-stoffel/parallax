@@ -321,6 +321,21 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE repos ADD COLUMN icon_image_type TEXT;
         ALTER TABLE repos ADD COLUMN icon_image_data TEXT;",
     },
+    // Thread lineage (PLX-369, decision 0041). `runs.parent` is the run that launched a run, on
+    // `runs` because a coordinator's subagents have no thread row: existing runs a coordinator
+    // started get its thread as their parent, except the coordinator itself, which carries its
+    // own id (0024). A thread's fork origin (a run and a turn), title, and settled flag go on
+    // `threads`. No foreign keys, like the rest: deleting a run clears these on its children.
+    Migration {
+        version: 23,
+        sql: "ALTER TABLE runs ADD COLUMN parent TEXT;
+        UPDATE runs SET parent = coordinator_thread
+            WHERE coordinator_thread IS NOT NULL AND coordinator_thread != id;
+        ALTER TABLE threads ADD COLUMN forked_from_run TEXT;
+        ALTER TABLE threads ADD COLUMN forked_from_turn TEXT;
+        ALTER TABLE threads ADD COLUMN title TEXT;
+        ALTER TABLE threads ADD COLUMN settled INTEGER NOT NULL DEFAULT 0;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
