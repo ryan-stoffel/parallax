@@ -372,6 +372,7 @@ export function App() {
             onOpenProject={openProject}
             onOpenSettings={openSettings}
             onDelete={deleteThread}
+            onNewThread={() => newThread()}
           />
         )}
       </Sidebar>
