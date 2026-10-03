@@ -106,10 +106,12 @@ export function AccountSettings({ listed }: { listed: { host: Host; view: Thread
         <HostUsage key={h.id} host={h} since={since} onLoad={onUsage} />
       ))}
       <ProfileCard profile={profile} activity={activity} repos={repos} hosts={hosts.length} />
-      <div className="mb-8 grid gap-3 @2xl:grid-cols-2">
-        <Hours hours={activity.hours} />
-        <Models activity={activity} />
-      </div>
+      {activity.agents > 0 && (
+        <div className="mb-8 grid gap-3 @2xl:grid-cols-2">
+          <Hours hours={activity.hours} />
+          <Models activity={activity} />
+        </div>
+      )}
       <Heatmap activity={activity} now={now} />
       <Tokens hosts={hosts} usage={usage} now={now} />
       {profile && (
