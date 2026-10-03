@@ -33,6 +33,7 @@ const bridge: ParallaxBridge = {
   setAppIcon: (png) => ipcRenderer.send("parallax:appIcon", png),
   setZoom: (factor) => webFrame.setZoomFactor(factor),
   pickFolder: () => ipcRenderer.invoke("parallax:pickFolder") as Promise<string | null>,
+  copyPicture: (rect) => ipcRenderer.invoke("parallax:copyPicture", rect) as Promise<void>,
   updatable: process.argv.includes("--parallax-updatable"),
   update: () => ipcRenderer.invoke("parallax:update") as Promise<string>,
   onUpdateState(listener) {

@@ -664,6 +664,7 @@ export function ThreadList({
         <Footer
           onOpenSettings={onOpenSettings}
           onOpenUsage={() => onSelect(host.id, { kind: "usage" })}
+          onOpenProfile={() => onSelect(host.id, { kind: "profile" })}
         />
       </div>
     </>
@@ -869,19 +870,23 @@ function RepoFilterMenu({
 }
 
 /**
- * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
+ * The footer's buttons: Profile, which opens the Profile page and shows the account's picture or
  * initials (0037), Settings, Usage, and Update when `updatable` (Update.tsx).
  */
 function Footer({
   onOpenSettings,
   onOpenUsage,
-}: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {
+  onOpenProfile,
+}: Pick<ThreadListProps, "onOpenSettings"> & {
+  onOpenUsage: () => void;
+  onOpenProfile: () => void;
+}) {
   const profile = useProfile();
   return (
     <div className="flex items-center gap-1">
       <IconButton
         label={profile ? profile.name || profile.email : "Profile"}
-        onClick={() => onOpenSettings("account")}
+        onClick={onOpenProfile}
       >
         {profile ? <Avatar profile={profile} size={22} /> : <CircleUser />}
       </IconButton>
