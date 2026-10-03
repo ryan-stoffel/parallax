@@ -160,6 +160,7 @@ export function ProjectChat({
           newThread
           onSend={send}
           backend={backend}
+          hostId={hostId}
           disabledReason={disabledReason}
           tab={tab}
           imageCaps={imageCaps(connection)}

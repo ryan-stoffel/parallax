@@ -131,6 +131,8 @@ pub(crate) fn initialize(
 /// `autoResume` (PLX-371, 0049): `agent/resumeNow`, `agent/autoResume`, `host/settings/get` and
 /// `host/settings/set`, the `waiting` status, and `resumeAt` and `autoResume` on `AgentRun` and
 /// `agent.updated`.
+/// `providers` (0040): `providers/list`, `providers/save`, and `providers/remove`, and a
+/// subscription `AccountChoice` naming any enabled instance.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -159,6 +161,7 @@ fn capabilities_advertised() -> Capabilities {
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
+        ("providers".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("pullRequests".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),

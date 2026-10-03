@@ -8,13 +8,19 @@ import {
   Menu,
   nativeImage,
   nativeTheme,
+  net,
   session,
   shell,
   type NativeImage,
 } from "electron";
 import path from "node:path";
 
-import { THEME_PREFERENCES, type OpenTarget, type UpdateState } from "../preload/bridge";
+import {
+  THEME_PREFERENCES,
+  type OpenTarget,
+  type RegistryAgent,
+  type UpdateState,
+} from "../preload/bridge";
 import { startAccount } from "./account";
 import {
   appBundle,
@@ -257,6 +263,54 @@ ipcMain.handle(
       });
   },
 );
+
+// Settings > Providers' Add provider: the ACP Registry's agents, fetched once while the app runs,
+// or again after a failure. Only entries with an id and a name pass, and only https links.
+const registryUrl = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
+let registry: Promise<RegistryAgent[] | string> | undefined;
+async function fetchRegistry(): Promise<RegistryAgent[] | string> {
+  try {
+    const response = await net.fetch(registryUrl);
+    if (!response.ok) throw new Error(`it answered ${response.status}`);
+    const { agents } = (await response.json()) as { agents?: unknown };
+    if (!Array.isArray(agents)) throw new Error("it lists no agents");
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const https = (url: unknown) =>
+      typeof url === "string" && url.startsWith("https://") ? url : undefined;
+    // The renderer masks with each icon, and a CSS mask needs CORS the CDN doesn't send, so the
+    // icons go over as data URLs. One that fails to load is left out.
+    const icon = async (url: unknown) => {
+      const from = https(url);
+      if (!from) return undefined;
+      const svg = await net.fetch(from).then(
+        (r) => (r.ok ? r.text() : ""),
+        () => "",
+      );
+      return svg ? `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}` : undefined;
+    };
+    const icons = await Promise.all(agents.map((a: Record<string, unknown>) => icon(a?.["icon"])));
+    return agents.flatMap((a: Record<string, unknown>, i) =>
+      typeof a?.["id"] === "string" && typeof a["name"] === "string"
+        ? [
+            {
+              id: a["id"],
+              name: a["name"],
+              version: text(a["version"]),
+              description: text(a["description"]),
+              icon: icons[i],
+              repository: https(a["repository"]),
+              website: https(a["website"]),
+              distribution: (a["distribution"] ?? {}) as RegistryAgent["distribution"],
+            },
+          ]
+        : [],
+    );
+  } catch (error) {
+    registry = undefined;
+    return `Parallax couldn't read the ACP Registry: ${(error as Error).message}.`;
+  }
+}
+ipcMain.handle("parallax:acpRegistry", () => (registry ??= fetchRegistry()));
 
 // The renderer's Appearance setting. Native UI follows it.
 ipcMain.on("parallax:theme", (_event, preference: unknown) => {
