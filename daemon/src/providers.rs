@@ -562,11 +562,15 @@ impl Providers {
                     .unwrap_or_else(|| "pi".to_owned()),
                 _ => program.clone(),
             };
-            let version = detect::run(&self.launcher, &versioned, &["--version"], PROBE_TIMEOUT)
-                .await
-                .ok()
-                .filter(|ran| ran.exit_code == Some(0))
-                .and_then(|ran| version_of(&ran.stdout));
+            // Antigravity's server prints its build, not a version: its `initialize` says it.
+            let version = match instance.kind {
+                ProviderKind::Antigravity => None,
+                _ => detect::run(&self.launcher, &versioned, &["--version"], PROBE_TIMEOUT)
+                    .await
+                    .ok()
+                    .filter(|ran| ran.exit_code == Some(0))
+                    .and_then(|ran| version_of(&ran.stdout)),
+            };
             Found {
                 installed: true,
                 path: Some(path.display().to_string()),
@@ -949,7 +953,11 @@ async fn acp_probe(
                 None => return,
             };
             if message["id"] == 1 {
-                found.login = login_of(agent, plain_env, &message["result"]["authMethods"]);
+                let result = &message["result"];
+                found.login = login_of(agent, plain_env, &result["authMethods"]);
+                if found.version.is_none() {
+                    found.version = result["agentInfo"]["version"].as_str().map(str::to_owned);
+                }
                 continue;
             }
             if message["id"] != 2 {
