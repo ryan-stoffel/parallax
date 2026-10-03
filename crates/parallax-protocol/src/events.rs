@@ -5,7 +5,8 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::{
     AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun, AgentRunState,
-    ContextFile, DiffSummary, InboxItem, Project, ProjectId, Repo, RepoId, RunId, Thread,
+    ContextFile, DiffSummary, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId, RunId,
+    Thread,
 };
 
 uuid_v7_id! {
@@ -192,6 +193,15 @@ pub enum ParallaxEvent {
     InboxAdded {
         /// The new item.
         item: InboxItem,
+    },
+    /// A run's queue of waiting messages changed (PLX-370, decision 0048): one was queued,
+    /// edited, reordered, cancelled, steered, sent, or dropped.
+    #[serde(rename = "queue.updated")]
+    QueueUpdated {
+        /// The run's id.
+        run_id: RunId,
+        /// The queue as it is now, first to be sent first.
+        messages: Vec<QueuedMessage>,
     },
     /// `repo/add` registered a repository for normal threads, or plxd made its scratch entry
     /// (#110). Host-level.

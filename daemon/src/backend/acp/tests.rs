@@ -36,6 +36,7 @@ fn fixture(name: &str) -> &'static str {
         "opencode" => include_str!("fixtures/opencode.jsonl"),
         "hermes" => include_str!("fixtures/hermes.jsonl"),
         "plan-refused" => include_str!("fixtures/plan-refused.jsonl"),
+        "steer" => include_str!("fixtures/steer.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -216,6 +217,7 @@ async fn approved() -> (Fake, Vec<Event>, FollowUp) {
         turn_id: TurnId::generate(),
         text: "And one more thing.".into(),
         images: Vec::new(),
+        steer: false,
     };
     let events = run(&fake, fake.request(), allow, Some(follow_up.clone())).await;
     (fake, events, follow_up)
@@ -727,5 +729,79 @@ async fn a_plan_mode_the_agent_refuses_fails_the_run_before_its_prompt() {
         failure.message.contains("unknown mode plan"),
         "{}",
         failure.message
+    );
+}
+
+/// PLX-370: ACP can't add to a running turn, so a steer cancels it, and goes as the next prompt
+/// once the cancelled turn has ended.
+#[tokio::test]
+async fn a_steer_cancels_the_running_turn_and_goes_next() {
+    let fake = Fake::new("steer");
+    let started = fake.backend.start(fake.request()).unwrap();
+    let mut stream = started.events;
+    let mut events = Vec::new();
+    loop {
+        let event = next(&mut stream).await;
+        let running = matches!(&event, Event::ToolCall { call_id, .. } if call_id == "tool_s");
+        events.push(event);
+        if running {
+            break;
+        }
+    }
+    let steer = TurnId::generate();
+    started
+        .run
+        .send(FollowUp {
+            turn_id: steer,
+            text: "Change of plan: reply BANANA instead.".into(),
+            images: Vec::new(),
+            steer: true,
+        })
+        .unwrap();
+    loop {
+        let event = next(&mut stream).await;
+        let terminal = event.is_terminal();
+        events.push(event);
+        if terminal {
+            break;
+        }
+    }
+    let first = Some(TURN.parse().unwrap());
+    let turns: Vec<&Event> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::TurnStarted { .. } | Event::TurnFinished { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            &Event::TurnStarted { turn_id: first },
+            &Event::TurnFinished {
+                turn_id: first,
+                result: None
+            },
+            &Event::TurnStarted {
+                turn_id: Some(steer)
+            },
+            &Event::TurnFinished {
+                turn_id: Some(steer),
+                result: Some("BANANA".into())
+            },
+        ]
+    );
+    let stdin = fake.stdin();
+    assert_eq!(
+        stdin[3],
+        json!({"jsonrpc": "2.0", "method": "session/cancel",
+               "params": {"sessionId": "0cb4faa6-1a77-49e3-a4c7-572c1a178f9a"}})
+    );
+    assert_eq!(stdin[4]["method"], "session/prompt");
+    assert_eq!(
+        stdin[4]["params"]["prompt"][0]["text"],
+        "Change of plan: reply BANANA instead."
     );
 }
