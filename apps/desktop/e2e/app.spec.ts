@@ -544,3 +544,66 @@ test("attaches another thread with @, sends it with the message, and opens it fr
     "Tidy up the README",
   );
 });
+
+test("switches between a thread and the one it launched, by chip, crumb, and shortcut (PLX-374)", async () => {
+  // A parent and the child it launched, as an agent would with thread_launch (0041).
+  const start = async (title: string, parent?: string) => {
+    const params = { runId: uuidv7(), prompt: title, title, ...(parent && { parent }) };
+    const answer = await page.evaluate(
+      `window.parallax.request("local", "thread/start", ${JSON.stringify(params)})`,
+    );
+    expect(answer).not.toHaveProperty("error");
+    return params.runId;
+  };
+  // The chips get the top bar's room with the side panel closed; the end checks it open.
+  const hidePanel = page.getByRole("button", { name: "Hide side panel" });
+  if (await hidePanel.isVisible()) await hidePanel.click();
+  const parent = await start("Plan the release");
+  await start("Write the changelog", parent);
+
+  // The child nests under its parent, collapsed.
+  await page
+    .locator("#sidebar li[data-kind='thread'] > button")
+    .filter({ hasText: "Plan the release" })
+    .click();
+  const sidebar = page.getByRole("navigation", { name: "Sidebar" });
+  const group = sidebar.getByRole("button", { name: /^1 thread/ });
+  await expect(group).toHaveAttribute("aria-expanded", "false");
+  const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+  const current = breadcrumb.locator('ol > li > [aria-current="page"]');
+  await expect(current).toHaveText("Plan the release");
+
+  // Its chip opens the child, whose parent crumb goes back.
+  const chips = breadcrumb.getByRole("group", { name: "Child threads" });
+  await chips.getByRole("button", { name: "Write the changelog" }).click();
+  const siblings = breadcrumb.getByRole("group", { name: "Sibling threads" });
+  await expect(siblings.getByRole("button", { name: "Write the changelog" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(group).toHaveAttribute("aria-expanded", "true");
+  await breadcrumb.getByRole("button", { name: "Plan the release" }).click();
+  await expect(current).toHaveText("Plan the release");
+
+  // Mod+Alt+Right opens the first child, and Mod+Alt+Up its parent.
+  await page.keyboard.press("ControlOrMeta+Alt+ArrowRight");
+  await expect(siblings).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+Alt+ArrowUp");
+  await expect(current).toHaveText("Plan the release");
+
+  // At the default window size with the side panel open, the trail shrinks to +N, which still
+  // takes a click (Playwright fails it when the top bar's buttons cover it) and opens the tree.
+  // A screen smaller than the window, as on some CI runners, leaves no room to check.
+  await page.getByRole("button", { name: "Show side panel" }).click();
+  const width = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]!;
+    window.setSize(1200, 800);
+    return window.getSize()[0];
+  });
+  if (width === 1200) {
+    await chips.getByRole("button", { name: "1 more threads" }).click();
+    const tree = page.getByRole("dialog", { name: "Thread tree" });
+    await tree.getByRole("button", { name: /Write the changelog/ }).click();
+    await expect(siblings).toBeVisible();
+  }
+});
