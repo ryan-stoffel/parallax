@@ -288,7 +288,7 @@ void app.whenReady().then(() => {
   browserSession.setPermissionCheckHandler(() => false);
   startHosts();
   startStorage();
-  // Under `pnpm dev`, Update follows develop, the nightly channel's branch (scripts/channels.mjs).
+  // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
   startAccount();
   // The end-to-end tests launch the app on CI machines, where a 490 MB download isn't wanted.

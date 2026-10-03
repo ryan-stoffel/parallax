@@ -1,6 +1,6 @@
 # 0028: Nightly and standard releases
 
-- Status: accepted; channel setting superseded by RYA-286 (below); tags superseded by [0030](0030-release-versions.md); all-or-nothing publishing superseded by RYA-211 (below)
+- Status: accepted; channel setting superseded by RYA-286 (below); tags superseded by [0030](0030-release-versions.md); all-or-nothing publishing superseded by RYA-211 (below); the push trigger and the `develop`/`main` split are superseded by [0051](0051-promote-a-nightly.md)
 - Date: 2026-09-29
 - Issue: RYA-203
 
