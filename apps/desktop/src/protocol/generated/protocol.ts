@@ -983,7 +983,7 @@ export type ProviderInfo = {
 	login?: Array<string>,
 	/**
 	 * Variables the sign-in command runs with, none of them secret: the agent's own and the
-	 * instance's. The home folder's variable isn't among them.
+	 * instance's, and for an ACP agent its home folder's.
 	 */
 	loginEnv?: Array<ProviderEnvVar>,
 };

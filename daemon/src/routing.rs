@@ -186,6 +186,9 @@ fn enforced_policy(role: Role, policy: ToolPolicy) -> ToolPolicy {
 /// from [`Resolved::role`] regardless of what `policy()` already says.
 pub struct Resolved {
     backend: Arc<dyn Backend>,
+    /// The backend a key-account fallback runs on: the provider's startup one (0040), not an
+    /// instance's settings.
+    key_backend: Option<Arc<dyn Backend>>,
     provider: Provider,
     selection: Selection,
     role: Role,
@@ -227,6 +230,7 @@ impl std::fmt::Debug for Resolved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Resolved")
             .field("backend", &self.backend.name())
+            .field("key_backend", &self.key_backend.as_ref().map(|b| b.name()))
             .field("provider", &self.provider)
             .field("selection", &self.selection)
             .field("role", &self.role)
@@ -312,6 +316,7 @@ pub fn resolve(
     };
     Ok(Resolved {
         backend,
+        key_backend: backends.by_provider(provider),
         provider,
         selection,
         role,
@@ -342,6 +347,7 @@ pub fn start(
 ) -> Result<Started, StartError> {
     let Resolved {
         backend,
+        key_backend,
         provider,
         selection,
         role,
@@ -378,7 +384,7 @@ pub fn start(
     let run = Arc::new(FallbackRun::new(Arc::clone(&started.run)));
     let plan = FallbackPlan {
         keys,
-        backend,
+        backend: key_backend.unwrap_or(backend),
         provider,
         account_id: fallback_id,
         run: Arc::clone(&run),
