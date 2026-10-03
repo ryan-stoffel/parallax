@@ -1,6 +1,6 @@
 # 0025: Runs a coordinator started wake it when they finish
 
-- Status: accepted; restarts added by RYA-178
+- Status: accepted; restarts added by RYA-178; the cap is 100, and a child's start and its `ask` also wake a Project's coordinator, since [0043](0043-project-inbox-and-autonomy.md#wake-ups)
 - Date: 2026-09-29
 - Issue: RYA-42, RYA-178
 

@@ -1,6 +1,6 @@
 # 0027: Every Claude thread uses Claude Code's permission modes
 
-- Status: accepted; supersedes in part [0004](0004-subscription-providers.md) (the coordinator's no-write flags), [0013](0013-worker-sandbox.md) (a worker in Bypass Permissions runs without the sandbox), [0019](0019-coordinator-mcp-tools.md) (the coordinator's flags), and [0024](0024-coordinator-chat.md) (where the coordinator runs, its per-turn check, and its fixed permission); Manual, Auto, and Plan ask the app instead of denying what would prompt when the app asks for that ([0031](0031-permission-requests.md))
+- Status: accepted; supersedes in part [0004](0004-subscription-providers.md) (the coordinator's no-write flags), [0013](0013-worker-sandbox.md) (a worker in Bypass Permissions runs without the sandbox), [0019](0019-coordinator-mcp-tools.md) (the coordinator's flags), and [0024](0024-coordinator-chat.md) (where the coordinator runs, its per-turn check, and its fixed permission); Manual, Auto, and Plan ask the app instead of denying what would prompt when the app asks for that ([0031](0031-permission-requests.md)); the coordinator's worktree and its children's mode are [0042](0042-project-children-are-threads.md)'s
 - Date: 2026-09-29
 - Issue: RYA-188; RYA-249 for [the todo tools](#the-todo-tools); RYA-251 for the task list's `--settings`
 
