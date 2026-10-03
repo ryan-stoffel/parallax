@@ -423,6 +423,7 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     images: Vec::new(),
                     // plxd gives the run its coordinator's (0031).
                     approvals: false,
+                    threads: Vec::new(),
                 })
                 .await?
                 .run;
@@ -462,6 +463,7 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     fast: None,
                     account: None,
                     images: Vec::new(),
+                    threads: Vec::new(),
                 })
                 .await?
                 .run;

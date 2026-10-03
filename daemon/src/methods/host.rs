@@ -13,6 +13,7 @@ use parallax_protocol::{
 use tracing::info;
 
 use super::Context;
+use crate::agents::attached;
 use crate::images;
 use crate::logging::untrusted;
 use crate::server::Daemon;
@@ -121,6 +122,10 @@ pub(crate) fn initialize(
 /// `composerMenus` (PLX-359): `agent/commands` and `repo/files`, for the composer's `/` and `@`
 /// menus.
 /// `githubStatus` (PLX-336): `github/status`.
+/// `threadContext` (PLX-372, 0047): `thread/search`, and `agent/start`, `thread/start`, and
+/// `agent/send` take `threads`, which an older plxd would silently drop, and `turnStarted` lists
+/// them. Its options are the caps: `maxThreads` per message, and `maxSummaryBytes` of each
+/// thread's summary.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -156,6 +161,13 @@ fn capabilities_advertised() -> Capabilities {
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),
         ("threadAttention".to_owned(), serde_json::Map::new()),
+        (
+            "threadContext".to_owned(),
+            serde_json::Map::from_iter([
+                ("maxThreads".to_owned(), attached::MAX_THREADS.into()),
+                ("maxSummaryBytes".to_owned(), attached::SUMMARY_BYTES.into()),
+            ]),
+        ),
         ("threadLineage".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
     ]))
