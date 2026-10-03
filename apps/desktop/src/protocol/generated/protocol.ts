@@ -224,8 +224,9 @@ export type ParallaxRequests = {
 	 */
 	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
 	/**
-	 * `thread/update`: marks a normal thread seen or snoozes it (0033). Gated on the
-	 * `threadAttention` capability.
+	 * `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the
+	 * `threadAttention` capability, or sets its title or settled flag (0041), gated on
+	 * `threadLineage`.
 	 */
 	"thread/update": { params: ThreadUpdateParams, result: ThreadUpdateResult },
 	/**
@@ -2306,6 +2307,37 @@ export type Thread = {
 	 * plxd without `threadAttention`.
 	 */
 	lastPromptAt?: string,
+	/**
+	 * The run that launched it (0041), from `thread/start`'s `parent`. Absent for a thread the
+	 * user started, and once the parent is deleted.
+	 */
+	parent?: RunId,
+	/**
+	 * The run and turn it was forked from (0041). Absent once that run is deleted.
+	 */
+	forkedFrom?: ForkedFrom,
+	/**
+	 * Its title (0041). Absent leaves it to the client, which shows its prompt's first line.
+	 */
+	title?: string,
+	/**
+	 * Whether the user or an agent marked it settled: nothing left to do (0041).
+	 */
+	settled?: boolean,
+};
+
+/**
+ * Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
+ */
+export type ForkedFrom = {
+	/**
+	 * The run it was forked from.
+	 */
+	run: RunId,
+	/**
+	 * The turn of that run it was forked at.
+	 */
+	turn: TurnId,
 };
 
 /**
@@ -2846,6 +2878,16 @@ export type ThreadStartParams = {
 	 */
 	repo?: RepoId,
 	/**
+	 * The run that launches it, recorded as its parent (0041). It must exist, or the start fails
+	 * with `runNotFound`. Behind `threadLineage`.
+	 */
+	parent?: RunId,
+	/**
+	 * Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
+	 * conflict, since the title can change. Behind `threadLineage`.
+	 */
+	title?: string,
+	/**
 	 * The first message.
 	 */
 	prompt: string,
@@ -2951,7 +2993,8 @@ export type ThreadArchiveResult = {
 
 /**
  * Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
- * `threadAttention` capability.
+ * `threadAttention` capability, or sets its title or settled flag (0041), behind
+ * `threadLineage`.
  *
  * `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
  * past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
@@ -2970,6 +3013,15 @@ export type ThreadUpdateParams = {
 	 * Snoozes it until this time, in RFC 3339 UTC.
 	 */
 	snoozedUntil?: string,
+	/**
+	 * Its new title, trimmed. Empty clears it. At most [`MAX_THREAD_TITLE_BYTES`] bytes, or it
+	 * fails with `invalidParams`.
+	 */
+	title?: string,
+	/**
+	 * True to mark it settled, false to clear that.
+	 */
+	settled?: boolean,
 };
 
 /**

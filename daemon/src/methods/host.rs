@@ -100,6 +100,9 @@ pub(crate) fn initialize(
 /// `projectDelete` (PLX-338): `project/delete` and `project.deleted`.
 /// `threadAttention` (RYA-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
 /// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
+/// `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on `Thread`,
+/// `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`, which an
+/// older plxd would silently drop.
 /// `checkout`: `thread/start` takes `checkout`, to work in the repo's own checkout instead of a
 /// new worktree, and `AgentRun` reports it; an older plxd would silently make a worktree.
 /// `repoRefs`: `repo/refs`, and `thread/start` takes `base` and `checkoutRef`, which an older plxd
@@ -153,6 +156,7 @@ fn capabilities_advertised() -> Capabilities {
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),
         ("threadAttention".to_owned(), serde_json::Map::new()),
+        ("threadLineage".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
     ]))
 }

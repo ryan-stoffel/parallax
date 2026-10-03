@@ -183,10 +183,27 @@ fn message(run_id: RunId, text: &str) -> AgentSendParams {
     }
 }
 
+/// `thread/update` params that mark `run_id` seen or snooze it (0033), and change nothing else.
+fn attention(
+    run_id: RunId,
+    seen: bool,
+    snoozed_until: Option<jiff::Timestamp>,
+) -> ThreadUpdateParams {
+    ThreadUpdateParams {
+        run_id,
+        seen,
+        snoozed_until,
+        title: None,
+        settled: None,
+    }
+}
+
 fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
     ThreadStartParams {
         run_id: RunId::generate(),
         repo,
+        parent: None,
+        title: None,
         prompt: prompt.to_owned(),
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
@@ -1822,11 +1839,7 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
 
     let until: jiff::Timestamp = "2030-01-01T09:00:00Z".parse().unwrap();
     let updated = client
-        .call::<ThreadUpdate>(ThreadUpdateParams {
-            run_id: params.run_id,
-            seen: true,
-            snoozed_until: Some(until),
-        })
+        .call::<ThreadUpdate>(attention(params.run_id, true, Some(until)))
         .await
         .unwrap()
         .thread;
@@ -1837,11 +1850,7 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
         .await;
     // The same snooze again changes nothing.
     let again = client
-        .call::<ThreadUpdate>(ThreadUpdateParams {
-            run_id: params.run_id,
-            seen: false,
-            snoozed_until: Some(until),
-        })
+        .call::<ThreadUpdate>(attention(params.run_id, false, Some(until)))
         .await
         .unwrap()
         .thread;
@@ -1899,12 +1908,115 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
         .unwrap_err();
     assert_eq!(kind(&missing), ErrorKind::RepoNotFound);
     let missing = client
-        .call::<ThreadUpdate>(ThreadUpdateParams {
-            run_id: RunId::generate(),
-            seen: true,
-            snoozed_until: None,
-        })
+        .call::<ThreadUpdate>(attention(RunId::generate(), true, None))
         .await
         .unwrap_err();
     assert_eq!(kind(&missing), ErrorKind::ThreadNotFound);
+}
+
+/// Lineage (0041): a thread started with a parent and a title lists them, `thread/update` renames
+/// and settles it with `thread.updated`, and deleting its parent leaves it with none.
+#[tokio::test]
+async fn a_child_thread_keeps_its_parent_and_title_until_the_parent_is_deleted() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let parent = start_params(Some(repo.id), "Plan the work");
+    client.call::<ThreadStart>(parent.clone()).await.unwrap();
+
+    let orphan = client
+        .call::<ThreadStart>(ThreadStartParams {
+            parent: Some(RunId::generate()),
+            ..start_params(Some(repo.id), "Nobody launched this")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&orphan), ErrorKind::RunNotFound);
+    let child = ThreadStartParams {
+        parent: Some(parent.run_id),
+        title: Some("  Write the tests ".to_owned()),
+        ..start_params(Some(repo.id), "Write the tests")
+    };
+    let started = client
+        .call::<ThreadStart>(child.clone())
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(started.parent, Some(parent.run_id));
+    assert_eq!(started.title.as_deref(), Some("Write the tests"));
+    assert!(!started.settled);
+    let reparented = client
+        .call::<ThreadStart>(ThreadStartParams {
+            parent: None,
+            ..child.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&reparented), ErrorKind::IdConflict);
+
+    let seq = client.list().await.seq;
+    client.subscribe(seq, None).await;
+    let update = |title: &str, settled| ThreadUpdateParams {
+        run_id: child.run_id,
+        seen: false,
+        snoozed_until: None,
+        title: Some(title.to_owned()),
+        settled,
+    };
+    let updated = client
+        .call::<ThreadUpdate>(update("Test attach", Some(true)))
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(updated.title.as_deref(), Some("Test attach"));
+    assert!(updated.settled);
+    client
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadUpdated { thread } if *thread == updated))
+        .await;
+    let long = "t".repeat(parallax_protocol::MAX_THREAD_TITLE_BYTES + 1);
+    let too_long = client
+        .call::<ThreadUpdate>(update(&long, None))
+        .await
+        .unwrap_err();
+    assert_eq!(too_long.code, INVALID_PARAMS, "{too_long:?}");
+
+    client.delete(parent.run_id).await.unwrap();
+    client
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadUpdated { thread } if thread.id == child.run_id && thread.parent.is_none()))
+        .await;
+    let threads = client.list().await.threads;
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].parent, None);
+    assert_eq!(threads[0].title.as_deref(), Some("Test attach"));
+
+    let cleared = client
+        .call::<ThreadUpdate>(update("", Some(false)))
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(cleared.title, None);
+    assert!(!cleared.settled);
+}
+
+/// A `thread/start` retried after its parent was deleted returns the thread, now with no parent,
+/// rather than `idConflict` (0041).
+#[tokio::test]
+async fn a_retried_start_whose_parent_was_deleted_returns_the_thread() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let parent = start_params(Some(repo.id), "Plan the work");
+    client.call::<ThreadStart>(parent.clone()).await.unwrap();
+    let child = ThreadStartParams {
+        parent: Some(parent.run_id),
+        ..start_params(Some(repo.id), "Write the tests")
+    };
+    client.call::<ThreadStart>(child.clone()).await.unwrap();
+
+    client.delete(parent.run_id).await.unwrap();
+    let retried = client.call::<ThreadStart>(child.clone()).await.unwrap();
+    assert_eq!(retried.thread.id, child.run_id);
+    assert_eq!(retried.thread.parent, None);
 }
