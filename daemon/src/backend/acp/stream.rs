@@ -134,12 +134,8 @@ impl Translator {
             (None, Some(id)) => match id.as_u64() {
                 Some(id) => {
                     let result = match message.get("error") {
-                        Some(error) => {
-                            Err(error.get("message").and_then(Value::as_str).map_or_else(
-                                || format!("{} returned an error", self.label),
-                                str::to_owned,
-                            ))
-                        }
+                        Some(error) => Err(error_text(error)
+                            .unwrap_or_else(|| format!("{} returned an error", self.label))),
                         None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
                     };
                     steps.push(Step::Response { id, result });
@@ -478,6 +474,16 @@ pub(super) fn permission_answer(id: &Value, option: Option<&str>) -> Value {
         None => json!({"outcome": "cancelled"}),
     };
     json!({"jsonrpc": "2.0", "id": id, "result": {"outcome": outcome}})
+}
+
+/// What a JSON-RPC error says: its `data.details`, which Hermes Agent puts under a generic
+/// "Internal error", or else its `message`.
+pub fn error_text(error: &Value) -> Option<String> {
+    error
+        .pointer("/data/details")
+        .or_else(|| error.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 fn error(id: &Value, message: &str) -> Value {

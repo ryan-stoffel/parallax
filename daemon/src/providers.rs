@@ -566,7 +566,17 @@ impl Providers {
                     ..Found::default()
                 };
             };
-            let version = detect::run(&self.launcher, &program, &["--version"], PROBE_TIMEOUT)
+            // Pi runs through `npx pi-acp`, so its version is the `pi` the adapter runs.
+            let versioned = match instance.kind {
+                ProviderKind::Pi => instance
+                    .env
+                    .iter()
+                    .find(|var| var.name == "PI_ACP_PI_COMMAND")
+                    .and_then(|var| var.value.clone())
+                    .unwrap_or_else(|| "pi".to_owned()),
+                _ => program.clone(),
+            };
+            let version = detect::run(&self.launcher, &versioned, &["--version"], PROBE_TIMEOUT)
                 .await
                 .ok()
                 .filter(|ran| ran.exit_code == Some(0))
@@ -614,7 +624,14 @@ impl Providers {
             }
             (Driver::Acp(agent), _) if instance.kind != ProviderKind::Cursor => {
                 let agent = acp_for(instance, &preset, (**agent).clone(), self.overrides(entry));
-                acp_probe(&self.launcher, &agent, &mut found).await;
+                // A secret never goes on a command line, where `ps` would show it.
+                let plain: Vec<(OsString, OsString)> = instance
+                    .env
+                    .iter()
+                    .filter(|var| !var.secret)
+                    .filter_map(|var| Some((var.name.clone().into(), var.value.clone()?.into())))
+                    .collect();
+                acp_probe(&self.launcher, &agent, &plain, &mut found).await;
             }
             _ => {}
         }
@@ -669,15 +686,17 @@ fn acp_for(
     agent
 }
 
-/// The first version-looking word of `text`, such as `1.0.39` from `grok 1.0.39`.
+/// The first version-looking word of `text`, such as `1.0.39` from `grok 1.0.39` or `18.5.0`
+/// from `omp/18.5.0`.
 fn version_of(text: &str) -> Option<String> {
     let line = text.lines().find(|line| !line.trim().is_empty())?;
-    line.split_whitespace()
+    let words = || line.split(|c: char| c.is_whitespace() || c == '/');
+    words()
         .find(|word| {
             word.trim_start_matches('v')
                 .starts_with(|c: char| c.is_ascii_digit())
         })
-        .or_else(|| line.split_whitespace().last())
+        .or_else(|| words().last())
         .map(|word| word.trim_start_matches('v').to_owned())
 }
 
@@ -735,7 +754,12 @@ async fn models_from(
 /// signs in, from `initialize`, and whether it is signed in and its models, from `session/new`.
 /// The agent is killed once it answers, or after [`PROBE_TIMEOUT`]. A browser it would open for
 /// a sign-in is never opened: that waits for the user's Sign in.
-async fn acp_probe(launcher: &Launcher, agent: &AcpAgent, found: &mut Found) {
+async fn acp_probe(
+    launcher: &Launcher,
+    agent: &AcpAgent,
+    plain_env: &[(OsString, OsString)],
+    found: &mut Found,
+) {
     let home = std::env::home_dir().unwrap_or_else(std::env::temp_dir);
     let mut spec = ProcessSpec::new(&agent.program, &home);
     spec.args.clone_from(&agent.args);
@@ -780,7 +804,7 @@ async fn acp_probe(launcher: &Launcher, agent: &AcpAgent, found: &mut Found) {
                 None => return,
             };
             if message["id"] == 1 {
-                found.login = login_of(agent, &message["result"]["authMethods"]);
+                found.login = login_of(agent, plain_env, &message["result"]["authMethods"]);
                 continue;
             }
             if message["id"] != 2 {
@@ -798,9 +822,7 @@ async fn acp_probe(launcher: &Launcher, agent: &AcpAgent, found: &mut Found) {
                 {
                     found.signed_in = Some(false);
                 }
-                Some(error) => {
-                    found.note = error["message"].as_str().map(str::to_owned);
-                }
+                Some(error) => found.note = acp::error_text(error),
                 None => {
                     found.signed_in = Some(true);
                     found.models = session_models(&message["result"]);
@@ -819,16 +841,20 @@ async fn acp_probe(launcher: &Launcher, agent: &AcpAgent, found: &mut Found) {
 
 /// The command that signs in to `agent`, from its `initialize` answer's `authMethods`: a terminal
 /// method's arguments after the agent's own command, or else `plxd acp-login` with the first
-/// method the agent runs itself (ACP's `agent` type), for a browser sign-in.
-fn login_of(agent: &AcpAgent, methods: &Value) -> Option<Vec<String>> {
+/// method the agent runs itself (ACP's `agent` type), for a browser sign-in. Only `plain_env`, the
+/// instance's variables that aren't secret, go before it.
+fn login_of(
+    agent: &AcpAgent,
+    plain_env: &[(OsString, OsString)],
+    methods: &Value,
+) -> Option<Vec<String>> {
     let methods = methods.as_array()?;
     let command = || {
         std::iter::once(&agent.program)
             .chain(&agent.args)
             .map(|arg| arg.to_string_lossy().into_owned())
     };
-    let env = agent
-        .env
+    let env = plain_env
         .iter()
         .map(|(name, value)| format!("{}={}", name.to_string_lossy(), value.to_string_lossy()))
         .collect::<Vec<_>>();

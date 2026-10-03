@@ -51,6 +51,8 @@
 //! process group if it is still running after the grace period.
 
 mod stream;
+
+pub use self::stream::error_text;
 #[cfg(all(test, unix))]
 mod tests;
 
