@@ -440,8 +440,9 @@ export function Breadcrumb({ items, trail }: { items: Crumb[]; trail?: ReactNode
           const last = i === items.length - 1;
           const current = last && !onClick;
           const Tag = onClick ? "button" : "span";
-          // Before a trail, the last crumb keeps to 14rem, and gives way last: the crumbs between
-          // give way first, so the trail keeps room for its chips or +N.
+          // Before a trail, which asks for 8rem, the last crumb keeps to 14rem and gives way last:
+          // the first and then the crumbs between give way first, so the trail keeps room for a
+          // chip, or at least +N.
           const room = last
             ? trail
               ? "max-w-56 min-w-16"
@@ -473,7 +474,7 @@ export function Breadcrumb({ items, trail }: { items: Crumb[]; trail?: ReactNode
           );
         })}
         {trail && (
-          <li className="flex min-w-12 flex-1 items-center gap-1.5 before:text-faint-foreground before:content-['›']">
+          <li className="flex min-w-12 flex-[1_1_8rem] items-center gap-1.5 before:text-faint-foreground before:content-['›']">
             {trail}
           </li>
         )}

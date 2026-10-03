@@ -570,7 +570,7 @@ test("switches between a thread and the one it launched, by chip, crumb, and sho
   const group = sidebar.getByRole("button", { name: /^1 thread/ });
   await expect(group).toHaveAttribute("aria-expanded", "false");
   const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
-  const current = breadcrumb.locator('li > [aria-current="page"]');
+  const current = breadcrumb.locator('ol > li > [aria-current="page"]');
   await expect(current).toHaveText("Plan the release");
 
   // Its chip opens the child, whose parent crumb goes back.

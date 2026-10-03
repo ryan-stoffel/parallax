@@ -10,10 +10,11 @@ import { asksOf, childrenOf, type ThreadsState } from "./threads";
 import { isRunning, statusLabel } from "./transcript";
 import { menuPanel } from "./ui";
 
-// How many chips the top bar shows before the rest go behind +N, and the room each takes at
-// most (a chip is at most 9rem, plus its gap), and +N's.
+// How many chips the top bar shows before the rest go behind +N, the room each takes at most (a
+// chip is at most 9rem, plus its gap), the least a lone chip cut short needs, and +N's.
 const maxChips = 4;
 const chipRoom = 146;
+const minChipRoom = 80;
 const moreRoom = 40;
 
 /** An element's width, kept current. Infinite where nothing lays it out, as in tests. */
@@ -91,7 +92,8 @@ export function LineageTrail({
   const width = useWidth(group);
   // As many as fit, up to four; +N takes its room once any are left out, and stands alone when
   // none fit, since its tree lists them all.
-  const fit = (room: number) => Math.max(0, Math.floor(room / chipRoom));
+  const fit = (room: number) =>
+    room >= chipRoom ? Math.floor(room / chipRoom) : room >= minChipRoom ? 1 : 0;
   const count = Math.min(
     maxChips,
     fit(width) >= chips.length ? chips.length : fit(width - moreRoom),
