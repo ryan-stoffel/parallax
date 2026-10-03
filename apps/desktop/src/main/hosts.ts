@@ -95,6 +95,8 @@ const rendererMethods: Record<RendererMethod, true> = {
   "github/install": true,
   "github/signIn": true,
   "github/signInCancel": true,
+  "inbox/list": true,
+  "inbox/seen": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */
