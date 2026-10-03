@@ -441,29 +441,16 @@ impl Providers {
             .unwrap_or_default())
     }
 
-    /// Every variable `entry` sets, secrets included.
+    /// Every variable `entry` sets, secrets included, read from the keychain.
+    #[cfg(test)]
     fn env(&self, entry: &Stored) -> Vec<(OsString, OsString)> {
-        let secrets = entry
-            .secrets
-            .and_then(|id| self.secrets(id).ok())
-            .unwrap_or_default();
-        entry
-            .instance
-            .env
-            .iter()
-            .filter_map(|var| {
-                let value = if var.secret {
-                    secrets.get(&var.name).cloned()
-                } else {
-                    var.value.clone()
-                }?;
-                Some((var.name.clone().into(), value.into()))
-            })
-            .collect()
+        full_env(self.keys.as_ref(), entry)
     }
 
     /// Puts `entry`'s backend in the registry, or takes it out while it's off. A built-in
-    /// instance with nothing set keeps the backend registered at startup.
+    /// instance with nothing set keeps the backend registered at startup. One with secrets reads
+    /// them from the keychain only when a run starts, so neither plxd's start nor a list waits on
+    /// the keychain, which can ask the user first.
     fn register(&self, entry: &Stored) {
         let instance = &entry.instance;
         if !instance.enabled {
@@ -478,43 +465,19 @@ impl Providers {
         if plain && self.registry.by_backend_name(&instance.id).is_some() {
             return;
         }
-        if let Some(backend) = self.backend(entry) {
+        let Some(backend) = build(&self.launcher, entry, plain_env(entry)) else {
+            return;
+        };
+        if entry.instance.env.iter().any(|var| var.secret) {
+            self.registry.set(Arc::new(WithSecrets {
+                plain: backend,
+                keys: Arc::clone(&self.keys),
+                launcher: self.launcher.clone(),
+                entry: entry.clone(),
+            }));
+        } else {
             self.registry.set(backend);
         }
-    }
-
-    /// What `entry` changes about its kind's backend.
-    fn overrides(&self, entry: &Stored) -> Overrides {
-        let instance = &entry.instance;
-        Overrides {
-            name: Some(instance.id.clone()),
-            program: instance.program.as_ref().map(Into::into),
-            home: instance.home.as_ref().map(PathBuf::from),
-            args: instance.args.iter().map(Into::into).collect(),
-            env: self.env(entry),
-        }
-    }
-
-    /// The backend that runs `entry`.
-    fn backend(&self, entry: &Stored) -> Option<Arc<dyn Backend>> {
-        let instance = &entry.instance;
-        let preset = preset(instance.kind)?;
-        let launcher = self.launcher.clone();
-        let overrides = self.overrides(entry);
-        Some(match &preset.driver {
-            Driver::Claude => {
-                let mut overrides = overrides;
-                if overrides.program.is_none() && preset.program != "claude" {
-                    overrides.program = Some(preset.program.into());
-                }
-                Arc::new(ClaudeBackend::new(launcher).with_overrides(overrides))
-            }
-            Driver::Codex => Arc::new(CodexBackend::new(launcher).with_overrides(overrides)),
-            Driver::Acp(agent) => Arc::new(AcpBackend::new(
-                launcher,
-                acp_for(instance, &preset, (**agent).clone(), overrides),
-            )),
-        })
     }
 
     /// `entry`'s state: from the cache while it's fresh, else probed.
@@ -591,9 +554,9 @@ impl Providers {
         if !found.installed {
             return found;
         }
-        let env = self.env(entry);
+        let env = plain_env(entry);
         match (&preset.driver, preset.models_url) {
-            (Driver::Claude, Some((url, key))) => {
+            (Driver::Claude, Some((url, key_name))) => {
                 let url = instance
                     .env
                     .iter()
@@ -606,36 +569,169 @@ impl Providers {
                     );
                 let key = env
                     .iter()
-                    .find(|(name, _)| name == key)
+                    .find(|(name, _)| name == key_name)
                     .map(|(_, value)| value.to_string_lossy().into_owned());
-                match key.as_deref().filter(|key| !key.is_empty()) {
-                    None => {
-                        found.signed_in = Some(false);
-                        found.note = Some("Add the service's API key".into());
-                    }
-                    Some(key) => match models_from(&self.launcher, &url, key).await {
-                        Ok(models) => {
-                            found.signed_in = Some(true);
-                            found.models = models;
-                        }
-                        Err(error) => found.note = Some(error),
-                    },
+                // A secret key isn't read to list: the services list models without one.
+                let has_secret = entry.secrets.is_some()
+                    && instance
+                        .env
+                        .iter()
+                        .any(|var| var.secret && var.name == key_name);
+                let key = key.filter(|key| !key.is_empty());
+                match models_from(&self.launcher, &url, key.as_deref()).await {
+                    Ok(models) => found.models = models,
+                    Err(error) => found.note = Some(error),
+                }
+                found.signed_in = Some(has_secret || key.is_some());
+                if found.signed_in == Some(false) {
+                    found.note = Some("Add the service's API key".into());
                 }
             }
             (Driver::Acp(agent), _) if instance.kind != ProviderKind::Cursor => {
-                let agent = acp_for(instance, &preset, (**agent).clone(), self.overrides(entry));
-                // A secret never goes on a command line, where `ps` would show it.
-                let plain: Vec<(OsString, OsString)> = instance
-                    .env
-                    .iter()
-                    .filter(|var| !var.secret)
-                    .filter_map(|var| Some((var.name.clone().into(), var.value.clone()?.into())))
-                    .collect();
-                acp_probe(&self.launcher, &agent, &plain, &mut found).await;
+                // Probed without its secrets, which only a run reads, and which never go on the
+                // sign-in command line, where `ps` would show them.
+                let agent = acp_for(
+                    instance,
+                    &preset,
+                    (**agent).clone(),
+                    overrides(entry, env.clone()),
+                );
+                acp_probe(&self.launcher, &agent, &env, &mut found).await;
             }
             _ => {}
         }
         found
+    }
+}
+
+/// `entry`'s variables that aren't secret.
+fn plain_env(entry: &Stored) -> Vec<(OsString, OsString)> {
+    entry
+        .instance
+        .env
+        .iter()
+        .filter(|var| !var.secret)
+        .filter_map(|var| Some((var.name.clone().into(), var.value.clone()?.into())))
+        .collect()
+}
+
+/// Every variable `entry` sets, its secrets read from `keys`. A secret that can't be read is
+/// left out, and the agent then fails as signed out.
+fn full_env(keys: &dyn KeyStore, entry: &Stored) -> Vec<(OsString, OsString)> {
+    let secrets: HashMap<String, String> = entry
+        .secrets
+        .and_then(|id| keys.get(id).ok().flatten())
+        .and_then(|text| serde_json::from_str(text.as_str()).ok())
+        .unwrap_or_default();
+    entry
+        .instance
+        .env
+        .iter()
+        .filter_map(|var| {
+            let value = if var.secret {
+                secrets.get(&var.name).cloned()
+            } else {
+                var.value.clone()
+            }?;
+            Some((var.name.clone().into(), value.into()))
+        })
+        .collect()
+}
+
+/// What `entry` changes about its kind's backend, with the variables `env`.
+fn overrides(entry: &Stored, env: Vec<(OsString, OsString)>) -> Overrides {
+    let instance = &entry.instance;
+    Overrides {
+        name: Some(instance.id.clone()),
+        program: instance.program.as_ref().map(Into::into),
+        home: instance.home.as_ref().map(PathBuf::from),
+        args: instance.args.iter().map(Into::into).collect(),
+        env,
+    }
+}
+
+/// The backend that runs `entry` with the variables `env`.
+fn build(
+    launcher: &Launcher,
+    entry: &Stored,
+    env: Vec<(OsString, OsString)>,
+) -> Option<Arc<dyn Backend>> {
+    let instance = &entry.instance;
+    let preset = preset(instance.kind)?;
+    let launcher = launcher.clone();
+    let mut overrides = overrides(entry, env);
+    Some(match &preset.driver {
+        Driver::Claude => {
+            if overrides.program.is_none() && preset.program != "claude" {
+                overrides.program = Some(preset.program.into());
+            }
+            Arc::new(ClaudeBackend::new(launcher).with_overrides(overrides))
+        }
+        Driver::Codex => Arc::new(CodexBackend::new(launcher).with_overrides(overrides)),
+        Driver::Acp(agent) => Arc::new(AcpBackend::new(
+            launcher,
+            acp_for(instance, &preset, (**agent).clone(), overrides),
+        )),
+    })
+}
+
+/// An instance's backend that reads its secrets from the keychain when a run starts: `plain`,
+/// built without them, answers everything else.
+struct WithSecrets {
+    plain: Arc<dyn Backend>,
+    keys: Arc<dyn KeyStore>,
+    launcher: Launcher,
+    entry: Stored,
+}
+
+impl WithSecrets {
+    fn full(&self) -> Arc<dyn Backend> {
+        let env = full_env(self.keys.as_ref(), &self.entry);
+        build(&self.launcher, &self.entry, env).unwrap_or_else(|| Arc::clone(&self.plain))
+    }
+}
+
+impl Backend for WithSecrets {
+    fn name(&self) -> &str {
+        self.plain.name()
+    }
+
+    fn capabilities(&self) -> crate::backend::Capabilities {
+        self.plain.capabilities()
+    }
+
+    fn start(
+        &self,
+        request: crate::backend::RunRequest,
+    ) -> Result<crate::backend::Started, crate::backend::StartError> {
+        self.full().start(request)
+    }
+
+    fn efforts(&self) -> &'static [parallax_protocol::AgentEffort] {
+        self.plain.efforts()
+    }
+
+    fn permissions(&self) -> &[AgentPermission] {
+        self.plain.permissions()
+    }
+
+    fn full_thread(&self) -> bool {
+        self.plain.full_thread()
+    }
+
+    fn context_windows(&self) -> &'static [u32] {
+        self.plain.context_windows()
+    }
+
+    fn fast_mode(&self) -> bool {
+        self.plain.fast_mode()
+    }
+
+    fn commands(
+        &self,
+        cwd: &Path,
+    ) -> Result<Option<crate::backend::CommandsProbe>, crate::backend::StartError> {
+        self.full().commands(cwd)
     }
 }
 
@@ -705,7 +801,7 @@ fn version_of(text: &str) -> Option<String> {
 async fn models_from(
     launcher: &Launcher,
     url: &str,
-    key: &str,
+    key: Option<&str>,
 ) -> Result<Vec<ProviderModel>, String> {
     let mut spec = ProcessSpec::new("curl", std::env::temp_dir());
     // The key goes on stdin as a curl config line, so `ps` never shows it.
@@ -714,7 +810,9 @@ async fn models_from(
         .map(Into::into)
         .collect();
     spec.stdin = StdinMode::Piped;
-    let config = format!("header = \"Authorization: Bearer {key}\"\n");
+    let config = key
+        .map(|key| format!("header = \"Authorization: Bearer {key}\"\n"))
+        .unwrap_or_default();
     let ran = detect::run_spec(launcher, &spec, config.as_bytes(), PROBE_TIMEOUT).await?;
     if ran.exit_code != Some(0) {
         return Err(format!("couldn't reach {url}: {}", ran.stderr_tail.trim()));
@@ -1138,6 +1236,62 @@ mod tests {
                 .any(|(name, value)| name == "ANTHROPIC_AUTH_TOKEN" && value == "ollama-key")
         );
         assert!(registry.by_backend_name("ollama").is_some());
+    }
+
+    /// A keychain that counts its reads.
+    #[derive(Default)]
+    struct Counting {
+        store: MemoryKeyStore,
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl KeyStore for Counting {
+        fn set(
+            &self,
+            account: parallax_protocol::AccountId,
+            key: &str,
+        ) -> Result<(), crate::keystore::KeyStoreError> {
+            self.store.set(account, key)
+        }
+
+        fn get(
+            &self,
+            account: parallax_protocol::AccountId,
+        ) -> Result<Option<zeroize::Zeroizing<String>>, crate::keystore::KeyStoreError> {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.store.get(account)
+        }
+
+        fn delete(
+            &self,
+            account: parallax_protocol::AccountId,
+        ) -> Result<(), crate::keystore::KeyStoreError> {
+            self.store.delete(account)
+        }
+    }
+
+    #[tokio::test]
+    async fn starting_and_listing_never_read_the_keychain() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = Arc::new(Counting::default());
+        let launcher = || {
+            Launcher::new(
+                DataDir::new(dir.path().join("data")).unwrap(),
+                Environment::empty(),
+            )
+        };
+        let providers =
+            Providers::load(dir.path(), keys.clone(), launcher(), BackendRegistry::new());
+        providers.save(ollama()).await.unwrap();
+        let before = keys.reads.load(std::sync::atomic::Ordering::SeqCst);
+
+        let registry = BackendRegistry::new();
+        let reloaded = Providers::load(dir.path(), keys.clone(), launcher(), registry.clone());
+        let detector = crate::detect::CliDetector::new(launcher(), crate::detect::PROBE_TIMEOUT);
+        let listed = reloaded.list(&detector, true).await;
+        assert!(listed.providers.iter().any(|p| p.instance.id == "ollama"));
+        assert!(registry.by_backend_name("ollama").is_some());
+        assert_eq!(keys.reads.load(std::sync::atomic::Ordering::SeqCst), before);
     }
 
     #[tokio::test]
