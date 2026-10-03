@@ -128,3 +128,76 @@ pub struct AccountRuns {
     /// Runs with at least one usage delta in the range.
     pub runs: u32,
 }
+
+/// Params of `usage/daily`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageDailyParams {
+    /// The first local day of the range, such as `2026-09-30`. The range ends today.
+    pub since: jiff::civil::Date,
+    /// The IANA time zone whose local days the usage is grouped by, such as
+    /// `America/Los_Angeles`.
+    pub time_zone: String,
+}
+
+/// Result of `usage/daily`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageDailyResult {
+    /// Usage per local day, agent, and model. Days with no usage are left out.
+    pub days: Vec<UsageDay>,
+    /// Each source that failed, so the others still show.
+    pub problems: Vec<UsageProblem>,
+}
+
+/// One agent's usage of one model on one local day, from every session on the host, not only
+/// runs plxd started (0039).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageDay {
+    /// The local day.
+    pub date: jiff::civil::Date,
+    /// The agent: Claude Code, Codex, or Cursor.
+    pub agent: crate::CliKind,
+    /// The model, as the agent names it.
+    pub model: String,
+    /// Input tokens, not counting cache reads and writes.
+    pub input_tokens: u64,
+    /// Output tokens, including reasoning.
+    pub output_tokens: u64,
+    /// Input tokens read from the prompt cache.
+    pub cache_read_tokens: u64,
+    /// Input tokens written to the prompt cache.
+    pub cache_write_tokens: u64,
+    /// The cost, when the source priced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cost_usd_micros: Option<u64>,
+}
+
+/// A source of `usage/daily` that failed, and why, for people.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProblem {
+    /// Which source.
+    pub source: UsageSource,
+    /// What went wrong, written for people, such as "Install Node.js or ccusage on this host to
+    /// see Claude Code and Codex usage."
+    pub message: String,
+}
+
+/// Where `usage/daily` gets usage from.
+///
+/// A newer plxd may send sources that are not listed here. Treat those as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageSource {
+    /// `ccusage`, for Claude Code and Codex.
+    Ccusage,
+    /// Cursor's usage API.
+    Cursor,
+    /// A source this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}

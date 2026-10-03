@@ -23,10 +23,10 @@ import {
 import type { RpcError } from "../preload/bridge";
 import {
   ErrorCodes,
-  type AccountRuns,
   type KeyAccount,
   type Provider,
-  type UsageHour,
+  type UsageDailyResult,
+  type UsageDay,
   type UsageLimitWindow,
 } from "../protocol/generated/protocol";
 import { statusLabel, useConnection } from "./ConnectionStatus";
@@ -43,25 +43,26 @@ const views: { value: View; name: string }[] = [
   { value: "limits", name: "Limits" },
 ];
 
-/** How far back Cost and Tokens look: the past 24 hours by the hour, or whole local days. */
-export type Range = "24h" | "7d" | "30d" | "90d";
+/** How far back Cost and Tokens look: whole local days ending today. */
+export type Range = "today" | "7d" | "30d" | "90d";
 const ranges: { value: Range; name: string }[] = [
-  { value: "24h", name: "Past 24h" },
+  { value: "today", name: "Today" },
   { value: "7d", name: "7 days" },
   { value: "30d", name: "30 days" },
   { value: "90d", name: "90 days" },
 ];
-const rangeDays = { "7d": 7, "30d": 30, "90d": 90 };
-const rangeWords: Record<Range, string> = {
-  "24h": "24 hours",
-  "7d": "7 days",
-  "30d": "30 days",
-  "90d": "90 days",
+const rangeDays: Record<Range, number> = { today: 1, "7d": 7, "30d": 30, "90d": 90 };
+/** The range, and the one before it, in words. */
+const rangeWords: Record<Range, { past: string; previous: string }> = {
+  today: { past: "today", previous: "yesterday" },
+  "7d": { past: "in the past 7 days", previous: "in the previous 7 days" },
+  "30d": { past: "in the past 30 days", previous: "in the previous 30 days" },
+  "90d": { past: "in the past 90 days", previous: "in the previous 90 days" },
 };
 
 type Logo = ComponentType<SVGProps<SVGSVGElement>>;
 
-/** The backends that run accounts (0012). A subscription account's id is its backend's. */
+/** The backends that run accounts (0012), and the agents `usage/daily` counts. */
 export type Backend = "claude" | "codex" | "cursor";
 const backends: Record<Backend, { name: string; Logo: Logo }> = {
   claude: { name: "Claude Code", Logo: ClaudeLogo },
@@ -82,8 +83,8 @@ function backendOf(accountId: string, keys: KeyAccount[]): Backend | undefined {
 }
 
 /**
- * A host's API keys, to name their accounts and tell their backend, asked again whenever
- * `refresh` changes. Empty until they answer.
+ * A host's API keys, to name their accounts on Limits and tell their backend, asked again
+ * whenever `refresh` changes. Empty until they answer.
  */
 function useKeys(hostId: string, connected: boolean, refresh?: number): KeyAccount[] {
   const [keys, setKeys] = useState<KeyAccount[]>([]);
@@ -122,34 +123,44 @@ function dayStart(at: number): number {
   return d.getTime();
 }
 
+/** `at`'s local day, as `usage/daily` names days: `2026-09-30`. */
+export function localDate(at: number): string {
+  const d = new Date(at);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+/** The local midnight a `usage/daily` day starts at. */
+function startOf(date: string): number {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(year!, month! - 1, day).getTime();
+}
+
 /**
- * Where `range` starts at `now`, and its chart's buckets by start time: the last 24 hours for
- * Past 24h, otherwise whole local days ending today. `previous` are the buckets of the range of
- * the same length just before it, to compare with. Its last bucket is only compared up to
- * `until`, as far into it as `now` is into the range's last, since that one isn't over yet.
+ * `range`'s whole local days ending today at `now`, by start time. `previous` are the days of
+ * the range of the same length just before it, to compare with. Its last day counts only its
+ * `partial` (0 to 1), as far into it as `now` is into today, since today isn't over.
  */
 export function buckets(
   range: Range,
   now: number,
-): { starts: number[]; previous: number[]; until: number; hourly: boolean } {
-  if (range === "24h") {
-    // ponytail: UTC hours, which are local hours except in half-hour time zones.
-    const hour = Math.floor(now / HOUR) * HOUR;
-    const run = (back: number) =>
-      Array.from({ length: 24 }, (_, i) => hour - (back + 23 - i) * HOUR);
-    return { starts: run(0), previous: run(24), until: now - 24 * HOUR, hourly: true };
-  }
+): { starts: number[]; previous: number[]; partial: number } {
   const days = rangeDays[range];
+  // By the calendar, so midnight holds across a daylight saving change.
   const run = (back: number) =>
     Array.from({ length: days }, (_, i) => {
       const d = new Date(now);
       d.setDate(d.getDate() - (back + days - 1 - i));
       return dayStart(d.getTime());
     });
-  // By the calendar, so the clock time holds across a daylight saving change.
-  const until = new Date(now);
-  until.setDate(until.getDate() - days);
-  return { starts: run(0), previous: run(days), until: until.getTime(), hourly: false };
+  const today = dayStart(now);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return {
+    starts: run(0),
+    previous: run(days),
+    partial: (now - today) / (tomorrow.getTime() - today),
+  };
 }
 
 /** Tokens by kind and the cost reported for them. `unpriced` counts tokens no cost came with. */
@@ -172,109 +183,73 @@ const zero = (): Measures => ({
 });
 export const tokensOf = (m: Measures) => m.input + m.output + m.cacheRead + m.cacheWrite;
 
-/** Adds `h` to `m`, or the `scale` of it that falls in a span, as if spread over its hour. */
-function add(m: Measures, h: UsageHour, scale = 1) {
-  m.input += h.inputTokens * scale;
-  m.output += h.outputTokens * scale;
-  m.cacheRead += h.cacheReadTokens * scale;
-  m.cacheWrite += h.cacheWriteTokens * scale;
-  if (h.costUsdMicros === undefined)
-    m.unpriced += (h.inputTokens + h.outputTokens + h.cacheReadTokens + h.cacheWriteTokens) * scale;
-  else m.cost += h.costUsdMicros * scale;
-}
-
-/**
- * One host's `usage/history`, with its API keys to tell each account's backend. `previous` is a
- * second answer's hours, reaching back over the range before, when the host gave one.
- */
-export interface HostHistory {
-  hours: UsageHour[];
-  runs: AccountRuns[];
-  keys: KeyAccount[];
-  previous?: UsageHour[];
+/** Adds `d` to `m`, or the `scale` of it that falls in a part of its day. */
+function add(m: Measures, d: UsageDay, scale = 1) {
+  m.input += d.inputTokens * scale;
+  m.output += d.outputTokens * scale;
+  m.cacheRead += d.cacheReadTokens * scale;
+  m.cacheWrite += d.cacheWriteTokens * scale;
+  if (d.costUsdMicros === undefined)
+    m.unpriced += (d.inputTokens + d.outputTokens + d.cacheReadTokens + d.cacheWriteTokens) * scale;
+  else m.cost += d.costUsdMicros * scale;
 }
 
 export interface Summary {
   total: Measures;
-  /** The range before, of the same length, when every history reaches back over it. */
-  previous?: Measures;
-  threads: number;
+  /** The range before, of the same length, its last day only as far as today has come. */
+  previous: Measures;
   /** Per bucket of `starts`. */
   byBucket: Measures[];
   /** In `backends`' order, only those with usage. */
-  backends: { backend: Backend; threads: number; total: Measures; byBucket: Measures[] }[];
+  backends: { backend: Backend; total: Measures; byBucket: Measures[] }[];
   models: { backend?: Backend; model: string; total: Measures; byBucket: Measures[] }[];
 }
 
 /**
- * Every host's history summed by backend, model, and bucket, and over the `previous` buckets up
- * to `until`. The hour that holds `until` counts only for the part of it before, as the range's
- * own last hour holds only the part so far. An hour outside the buckets, from an answer for a
- * longer range, is left out.
+ * Every host's days summed by agent, model, and bucket, and over the `previous` buckets, the
+ * last of them only its `partial`. A day outside both is left out.
  */
 export function summarize(
-  histories: HostHistory[],
+  days: UsageDay[],
   starts: number[],
-  hourly: boolean,
-  previous: number[] = [],
-  until = Infinity,
+  previous: number[],
+  partial: number,
 ): Summary {
   const index = new Map(starts.map((start, i) => [start, i]));
+  const earlier = new Set(previous);
   const total = zero();
+  const before = zero();
   const byBucket = starts.map(zero);
   const perBackend = new Map<Backend, Summary["backends"][number]>();
   const perModel = new Map<string, Summary["models"][number]>();
-  const backendEntry = (backend: Backend) => {
-    let entry = perBackend.get(backend);
-    if (!entry)
-      perBackend.set(
-        backend,
-        (entry = { backend, threads: 0, total: zero(), byBucket: starts.map(zero) }),
-      );
-    return entry;
-  };
-  let threads = 0;
-  for (const { hours, runs, keys } of histories) {
-    for (const r of runs) {
-      threads += r.runs;
-      const backend = backendOf(r.accountId, keys);
-      if (backend) backendEntry(backend).threads += r.runs;
-    }
-    for (const h of hours) {
-      const at = Date.parse(h.hour);
-      const i = index.get(hourly ? at : dayStart(at));
-      if (i === undefined) continue;
-      add(total, h);
-      add(byBucket[i]!, h);
-      const backend = backendOf(h.accountId, keys);
-      if (backend) {
-        const entry = backendEntry(backend);
-        add(entry.total, h);
-        add(entry.byBucket[i]!, h);
-      }
-      const model = h.model ?? "Unknown model";
-      const key = `${backend}/${model}`;
-      let entry = perModel.get(key);
+  for (const d of days) {
+    const at = startOf(d.date);
+    if (earlier.has(at)) add(before, d, at === previous.at(-1) ? partial : 1);
+    const i = index.get(at);
+    if (i === undefined) continue;
+    add(total, d);
+    add(byBucket[i]!, d);
+    const backend = d.agent in backends ? (d.agent as Backend) : undefined;
+    if (backend) {
+      let entry = perBackend.get(backend);
       if (!entry)
-        perModel.set(key, (entry = { backend, model, total: zero(), byBucket: starts.map(zero) }));
-      add(entry.total, h);
-      add(entry.byBucket[i]!, h);
+        perBackend.set(backend, (entry = { backend, total: zero(), byBucket: starts.map(zero) }));
+      add(entry.total, d);
+      add(entry.byBucket[i]!, d);
     }
-  }
-  let before: Measures | undefined;
-  if (previous.length > 0 && histories.length > 0 && histories.every((h) => h.previous)) {
-    const earlier = new Set(previous);
-    before = zero();
-    for (const h of histories.flatMap((h) => h.previous!)) {
-      const at = Date.parse(h.hour);
-      if (at < until && earlier.has(hourly ? at : dayStart(at)))
-        add(before, h, Math.min(1, (until - at) / HOUR));
-    }
+    const key = `${backend}/${d.model}`;
+    let entry = perModel.get(key);
+    if (!entry)
+      perModel.set(
+        key,
+        (entry = { backend, model: d.model, total: zero(), byBucket: starts.map(zero) }),
+      );
+    add(entry.total, d);
+    add(entry.byBucket[i]!, d);
   }
   return {
     total,
-    ...(before && { previous: before }),
-    threads,
+    previous: before,
     byBucket,
     backends: (Object.keys(backends) as Backend[]).flatMap((b) => perBackend.get(b) ?? []),
     models: [...perModel.values()],
@@ -386,14 +361,18 @@ const signedPercent = new Intl.NumberFormat("en", {
 });
 /** "+18.2%", or "−6.7%" with a true minus. */
 const signed = (fraction: number) => signedPercent.format(fraction).replace("-", "−");
+const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
 
 /** The chart's fills for its parts, bottom up (index.css). */
 const fills = ["bg-chart-1", "bg-chart-2", "bg-chart-3"];
 const card = "rounded-xl border border-border bg-surface";
+/** A strip of figures in one card, split by hairlines. */
+const strip = "grid gap-px overflow-hidden rounded-xl border border-border bg-border";
+const heading = "mb-2.5 text-[13px] font-medium text-muted-foreground";
 
 /**
  * The Usage page, from the sidebar's Usage button. The top bar always has the view, the range
- * (disabled on Limits, which is always now), and Refresh. Cost and Tokens sum `usage/history`
+ * (disabled on Limits, which is always now), and Refresh. Cost and Tokens sum `usage/daily`
  * across every host; Limits shows each host's accounts' windows from `usage/get`.
  */
 export function UsagePage({
@@ -448,17 +427,19 @@ export function UsagePage({
   );
 }
 
-/** A host's history for `since`, or, without one, that it's on its way. */
+/** A host's days since `since`, or, without them, that they're on their way. */
 interface Loaded {
   since: string;
-  history?: HostHistory;
+  days?: UsageDay[];
 }
 
-/** What Cost and Tokens draw: a range's buckets, and the histories in for them so far. */
+/** What Cost and Tokens draw: a range's buckets, and the days in for them so far. */
 interface Frame {
   range: Range;
   span: ReturnType<typeof buckets>;
-  histories: HostHistory[];
+  /** Every host's that answered, together. */
+  days: UsageDay[];
+  answered: number;
   loading: boolean;
 }
 
@@ -475,8 +456,8 @@ function History({
   now: number;
 }) {
   const span = useMemo(() => buckets(range, now), [range, now]);
-  const since = new Date(span.starts[0]!).toISOString();
-  const before = new Date(span.previous[0]!).toISOString();
+  // One request covers the range and the one before it.
+  const since = localDate(span.previous[0]!);
   const [loaded, setLoaded] = useState<Record<string, Loaded | undefined>>({});
   // Here rather than in Breakdown, which unmounts while a new range loads.
   const [by, setBy] = useState<BreakdownBy>("model");
@@ -485,21 +466,24 @@ function History({
     [],
   );
   const frame = useMemo<Frame>(() => {
-    const histories: HostHistory[] = [];
+    const days: UsageDay[] = [];
+    let answered = 0;
     let loading = false;
     for (const h of hosts) {
       const state = loaded[h.id];
-      if (state?.history && state.since === since) histories.push(state.history);
-      else if (state) loading = true;
+      if (state?.days && state.since === since) {
+        days.push(...state.days);
+        answered++;
+      } else if (state) loading = true;
     }
-    return { range, span, histories, loading };
+    return { range, span, days, answered, loading };
   }, [hosts, loaded, since, range, span]);
   // The last frame with usage, shown dimmed while another range loads, so nothing jumps.
   const [held, setHeld] = useState<Frame>();
   useEffect(() => {
-    if (frame.histories.length > 0) setHeld(frame);
+    if (frame.answered > 0) setHeld(frame);
   }, [frame]);
-  const shown = frame.histories.length > 0 ? frame : frame.loading ? held : undefined;
+  const shown = frame.answered > 0 ? frame : frame.loading ? held : undefined;
 
   return (
     <>
@@ -507,12 +491,11 @@ function History({
           their answers and ask again) as the rest appears. Refresh reaches them through `now`. */}
       <div>
         {hosts.map((h) => (
-          <HostHistoryLoader
+          <HostUsageLoader
             key={h.id}
             host={h}
             named={hosts.length > 1}
             since={since}
-            before={before}
             refresh={now}
             onLoad={onLoad}
           />
@@ -532,91 +515,72 @@ function History({
 }
 
 /**
- * Asks one host for its history since `since`, and since `before` for the range before it, once
- * it's connected, and again whenever they or `refresh` change, and hands it to `onLoad` (without
- * a history while it waits, and undefined when it has none to give). A refresh keeps the last
- * answer until the next arrives; a new `since` drops it, since its hours and run counts are for
- * another range. Shows why the host has nothing, if it doesn't.
+ * Asks one host for its days since `since` in this time zone once it's connected, and again
+ * whenever `since` or `refresh` change, and hands them to `onLoad` (without days while it waits,
+ * and undefined when it has none to give). A refresh keeps the last answer until the next
+ * arrives; a new `since` drops it, since its days are for another range. Shows why the host has
+ * nothing, if it doesn't, and each source it couldn't read.
  */
-function HostHistoryLoader({
+function HostUsageLoader({
   host,
   named,
   since,
-  before,
   refresh,
   onLoad,
 }: {
   host: Host;
   named: boolean;
   since: string;
-  before: string;
   refresh: number;
   onLoad: (hostId: string, state?: Loaded) => void;
 }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
-  const keys = useKeys(host.id, connected, refresh);
-  const [answer, setAnswer] = useState<{
-    since: string;
-    value: Omit<HostHistory, "keys"> | RpcError;
-  }>();
+  const [answer, setAnswer] = useState<{ since: string; value: UsageDailyResult | RpcError }>();
   useEffect(() => {
     if (!connected) return;
     let stopped = false;
-    // The range's own answer, for its run counts; the longer one is only for the range before.
-    void Promise.all([
-      window.parallax.request(host.id, "usage/history", { since }),
-      window.parallax.request(host.id, "usage/history", { since: before }),
-    ]).then(([range, longer]) => {
-      if (stopped) return;
-      setAnswer({
-        since,
-        value:
-          "result" in range
-            ? { ...range.result, ...("result" in longer && { previous: longer.result.hours }) }
-            : range.error,
-      });
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    void window.parallax.request(host.id, "usage/daily", { since, timeZone }).then((answer) => {
+      if (!stopped) setAnswer({ since, value: "result" in answer ? answer.result : answer.error });
     });
     return () => {
       stopped = true;
     };
-  }, [host.id, connected, since, before, refresh]);
+  }, [host.id, connected, since, refresh]);
   const current = answer?.since === since ? answer.value : undefined;
-  const history = connected && current && "hours" in current ? current : undefined;
+  const result = connected && current && "days" in current ? current : undefined;
   const waiting = connected && !current;
   useEffect(
-    () =>
-      onLoad(
-        host.id,
-        history ? { since, history: { ...history, keys } } : waiting ? { since } : undefined,
-      ),
-    [host.id, since, history, waiting, keys, onLoad],
+    () => onLoad(host.id, result ? { since, days: result.days } : waiting ? { since } : undefined),
+    [host.id, since, result, waiting, onLoad],
   );
 
   // One host's wait is the page's skeleton; with several, each says so.
-  const note =
+  const status =
     hostStatus(connection) ??
     (!current
       ? named
         ? "Loading…"
         : undefined
-      : "hours" in current
+      : "days" in current
         ? undefined
         : usageError(current));
-  if (!note) return null;
-  return (
-    <p className="mb-6 text-[13px] text-muted-foreground">
+  const notes = status ? [status] : (result?.problems.map((p) => p.message) ?? []);
+  return notes.map((note) => (
+    <p key={note} className="mb-6 text-[13px] text-muted-foreground">
       {named && `${host.name}: `}
       {note}
     </p>
-  );
+  ));
 }
 
 type BreakdownBy = "model" | "time";
 
 /**
- * A range's usage: a summary strip, the stacked bars, then a breakdown by model or by bucket
- * beside the providers and the tokens by kind. `stale` dims it while another range loads.
+ * A range's usage, each part a full-width row: a summary strip, the chart, a card per provider,
+ * the tokens by kind, then a breakdown by model or by day. `stale` dims it while another range
+ * loads.
  */
 function Dashboard({
   frame,
@@ -631,12 +595,14 @@ function Dashboard({
   by: BreakdownBy;
   onBy: (by: BreakdownBy) => void;
 }) {
-  const { range, span, histories } = frame;
-  const { starts, hourly } = span;
+  const { range, span, days } = frame;
+  const { starts } = span;
+  const today = range === "today";
+  const words = rangeWords[range];
   // Once per answer, not on every render; Cost and Tokens share it.
   const summary = useMemo(
-    () => summarize(histories, starts, hourly, span.previous, span.until),
-    [histories, starts, hourly, span],
+    () => summarize(days, starts, span.previous, span.partial),
+    [days, starts, span],
   );
   const cost = view === "cost";
   const measure = (m: Measures) => (cost ? m.cost : tokensOf(m));
@@ -655,21 +621,17 @@ function Dashboard({
   const name = (start: number, long = false) =>
     new Date(start).toLocaleString(
       "en",
-      hourly
-        ? long
-          ? { weekday: "short", hour: "numeric" }
-          : { hour: "numeric" }
-        : long
-          ? { weekday: "short", month: "short", day: "numeric" }
-          : starts.length <= 7
-            ? { weekday: "short" }
-            : { month: "short", day: "numeric" },
+      long
+        ? { weekday: "short", month: "short", day: "numeric" }
+        : starts.length <= 7
+          ? { weekday: "short" }
+          : { month: "short", day: "numeric" },
     );
 
   if (tokensOf(summary.total) === 0)
     return (
-      <Empty title={`No usage in the past ${rangeWords[range]}`}>
-        Tokens and cost show here once an agent runs.
+      <Empty title={`No usage ${words.past}`}>
+        Claude Code, Codex, and Cursor usage on your hosts shows here.
       </Empty>
     );
 
@@ -677,24 +639,28 @@ function Dashboard({
   const parts = stack(rows, measure);
   const lead = rows[0]?.share ? rows[0] : undefined;
   // A range with no reported cost has no change to show, rather than −100%.
-  const delta =
-    whole > 0 ? change(whole, summary.previous && measure(summary.previous)) : undefined;
+  const delta = whole > 0 ? change(whole, measure(summary.previous)) : undefined;
 
-  let note = `${summary.threads} ${summary.threads === 1 ? "thread" : "threads"}`;
+  let note = plural(summary.backends.length, "provider");
+  if (!today)
+    note += ` · ${plural(summary.byBucket.filter((m) => tokensOf(m) > 0).length, "active day")}`;
   if (cost && summary.total.unpriced > 0)
     note += ` · ${percent(summary.total.unpriced, tokensOf(summary.total))} of tokens have no reported cost`;
 
   const DeltaIcon = !delta ? Minus : delta > 0 ? ArrowUpRight : ArrowDownRight;
   const LeadLogo = lead?.model.backend && backends[lead.model.backend].Logo;
   const none = <span className="text-[26px] text-faint-foreground">—</span>;
-  const chartTitle = `${hourly ? "Hourly" : "Daily"} ${cost ? "cost" : "processed tokens"}`;
+  const chartTitle = today
+    ? `${cost ? "Cost" : "Processed tokens"} by model today`
+    : `Daily ${cost ? "cost" : "processed tokens"}`;
+  const processed = tokensOf(summary.total);
 
   return (
     <div
       aria-busy={stale || undefined}
       className={`flex flex-col gap-5 transition-opacity ${stale ? "opacity-45" : ""}`}
     >
-      <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border @2xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_minmax(0,5fr)]">
+      <dl className={`${strip} @2xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_minmax(0,5fr)]`}>
         <Stat label={cost ? "Total cost" : "Processed tokens"} note={note}>
           {whole > 0 ? (
             <span className="text-[40px] font-semibold tracking-tight">{shown(summary.total)}</span>
@@ -707,11 +673,9 @@ function Dashboard({
           note={
             whole === 0
               ? "No reported cost in this range"
-              : !summary.previous
-                ? "Nothing to compare with"
-                : delta === undefined
-                  ? `No ${cost ? "reported cost" : "usage"} in the previous ${rangeWords[range]}`
-                  : `From ${format(Math.round(measure(summary.previous)))} in the previous ${rangeWords[range]}`
+              : delta === undefined
+                ? `No ${cost ? "reported cost" : "usage"} ${words.previous}`
+                : `From ${format(Math.round(measure(summary.previous)))} ${words.previous}`
           }
         >
           {delta === undefined ? (
@@ -744,7 +708,20 @@ function Dashboard({
         </Stat>
       </dl>
 
-      {whole > 0 ? (
+      {whole === 0 ? (
+        <figure className={`${card} min-w-0 px-6 pt-5 pb-5`}>
+          <figcaption className="text-[14px] font-medium">{chartTitle}</figcaption>
+          <Empty title="No vendor reported a cost in this range" plain>
+            Tokens still count: see them under Tokens.
+          </Empty>
+        </figure>
+      ) : today ? (
+        // One day is one bar, so Today shows only how it splits.
+        <figure className={`${card} min-w-0 px-6 pt-5 pb-5`}>
+          <figcaption className="text-[14px] font-medium">{chartTitle}</figcaption>
+          <Split parts={parts} whole={whole} format={format} />
+        </figure>
+      ) : (
         <Bars
           // Its own per range, so a new range's bars rise together.
           key={range}
@@ -763,114 +740,128 @@ function Dashboard({
         >
           {parts.length > 1 && <Split parts={parts} whole={whole} format={format} />}
         </Bars>
-      ) : (
-        <figure className={`${card} min-w-0 px-6 pt-5 pb-5`}>
-          <figcaption className="text-[14px] font-medium">{chartTitle}</figcaption>
-          <Empty title="No vendor reported a cost in this range" plain>
-            Tokens still count: see them under Tokens.
-          </Empty>
-        </figure>
       )}
 
-      <div className="grid items-start gap-5 @3xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <Breakdown
-          by={by}
-          onBy={onBy}
-          unit={hourly ? "Hour" : "Day"}
-          what={cost ? "Cost" : "Tokens"}
-          rows={
-            by === "model"
-              ? rows.map(({ model, share, part }) => {
-                  const Logo = model.backend && backends[model.backend].Logo;
-                  return {
-                    key: `${model.backend}/${model.model}`,
-                    name: model.model,
-                    icon: Logo && <Logo aria-hidden className="size-4 shrink-0" />,
-                    value: shown(model.total),
-                    share,
-                    fill: fills[part]!,
-                    other: unreported(model.total)
-                      ? `No reported cost · ${other(model.total)}`
-                      : other(model.total),
-                  };
-                })
-              : starts
-                  .map((start, i) => ({ start, total: summary.byBucket[i]! }))
-                  .filter((t) => tokensOf(t.total) > 0)
-                  .reverse()
-                  .map((t) => ({
-                    key: String(t.start),
-                    name: name(t.start, true),
-                    value: shown(t.total),
-                    ...(!unreported(t.total) && whole > 0 && { share: measure(t.total) / whole }),
-                    fill: fills[0]!,
-                    other: other(t.total),
-                  }))
-          }
-        />
-        <div className="flex flex-col gap-5">
-          <section aria-label="Providers" className={`${card} px-6 py-4`}>
-            <h2 className="pt-1 pb-2 text-[14px] font-medium">Providers</h2>
-            <ul>
-              {summary.backends.map(({ backend, threads, total }) => {
-                const { name, Logo } = backends[backend];
-                return (
-                  <li key={backend} className="border-t border-border py-3">
-                    <div className="flex items-center gap-2.5 text-[13.5px]">
-                      <Logo aria-hidden className="size-4.5 shrink-0" />
-                      <span className="truncate font-medium">{name}</span>
-                      <span className="shrink-0 text-[12.5px] whitespace-nowrap text-muted-foreground">
-                        {threads} {threads === 1 ? "thread" : "threads"}
-                      </span>
-                      <span className="ml-auto pl-3 font-medium whitespace-nowrap tabular-nums">
-                        {shown(total)}
-                      </span>
-                    </div>
-                    <p className="mt-1 pl-7 text-[12.5px] text-muted-foreground">
-                      {unreported(total)
-                        ? "No reported cost"
-                        : `${percent(measure(total), whole)} of ${what}`}{" "}
-                      · {other(total)}
-                    </p>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-          <section aria-label="Tokens by kind" className={`${card} px-6 py-4`}>
-            <h2 className="pt-1 pb-2 text-[14px] font-medium">Tokens by kind</h2>
-            <dl>
-              {(
-                [
-                  ["Processed tokens", tokensOf(summary.total)],
-                  ["Cached input", summary.total.cacheRead],
-                  ["Uncached input", summary.total.input],
-                  ["Cache writes", summary.total.cacheWrite],
-                  ["Output", summary.total.output],
-                ] as const
-              ).map(([name, n]) => (
-                <div
-                  key={name}
-                  className="flex items-center justify-between border-t border-border py-2.5 text-[13px]"
-                >
-                  <dt className="text-muted-foreground">{name}</dt>
-                  <dd title={n.toLocaleString()} className="font-medium tabular-nums">
-                    {tokenCount.format(n)}
-                  </dd>
+      <section aria-label="Providers">
+        <h2 className={heading}>Providers</h2>
+        {/* One row of equal cards when there's room, however many providers. */}
+        <ul
+          className="grid gap-5 @2xl:grid-cols-[repeat(var(--n),minmax(0,1fr))]"
+          style={{ "--n": summary.backends.length } as CSSProperties}
+        >
+          {summary.backends.map(({ backend, total }) => {
+            const { name, Logo } = backends[backend];
+            const share = unreported(total) || whole === 0 ? undefined : measure(total) / whole;
+            return (
+              <li key={backend} aria-label={name} className={`${card} min-w-0 px-6 pt-4.5 pb-5`}>
+                <div className="flex items-center gap-2.5 text-[13.5px] font-medium">
+                  <Logo aria-hidden className="size-4.5 shrink-0" />
+                  <span className="truncate">{name}</span>
                 </div>
-              ))}
-            </dl>
-          </section>
-        </div>
-      </div>
+                <p className="mt-3.5 text-[26px] leading-none font-semibold tracking-tight tabular-nums">
+                  {shown(total)}
+                </p>
+                <div aria-hidden className="mt-4 h-1 overflow-hidden rounded-full bg-selected">
+                  {share !== undefined && (
+                    <div
+                      className="usage-fill h-full min-w-[3px] rounded-full bg-chart-1"
+                      style={{ width: `${share * 100}%` }}
+                    />
+                  )}
+                </div>
+                <p className="mt-2.5 truncate text-[12.5px] text-muted-foreground">
+                  {share === undefined ? "No reported cost" : `${percent(share, 1)} of ${what}`} ·{" "}
+                  {other(total)}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section aria-label="Tokens by kind">
+        <h2 className={heading}>Tokens by kind</h2>
+        <dl className={`${strip} grid-cols-2 @2xl:grid-cols-5`}>
+          {(
+            [
+              ["Processed tokens", processed],
+              ["Cached input", summary.total.cacheRead],
+              ["Uncached input", summary.total.input],
+              ["Cache writes", summary.total.cacheWrite],
+              ["Output", summary.total.output],
+            ] as const
+          ).map(([label, n], i) => (
+            <Stat
+              key={label}
+              label={label}
+              note={i === 0 ? "Every kind" : `${percent(n, processed)} of processed`}
+              // The total spans the row while the kinds sit two to a row.
+              className={i === 0 ? "col-span-2 @2xl:col-span-1" : ""}
+            >
+              <span
+                title={n.toLocaleString()}
+                className="text-[22px] font-semibold tracking-tight tabular-nums"
+              >
+                {tokenCount.format(n)}
+              </span>
+            </Stat>
+          ))}
+        </dl>
+      </section>
+
+      <Breakdown
+        by={today ? "model" : by}
+        onBy={onBy}
+        unit={today ? undefined : "Day"}
+        what={cost ? "Cost" : "Tokens"}
+        rows={
+          today || by === "model"
+            ? rows.map(({ model, share, part }) => {
+                const Logo = model.backend && backends[model.backend].Logo;
+                return {
+                  key: `${model.backend}/${model.model}`,
+                  name: model.model,
+                  icon: Logo && <Logo aria-hidden className="size-4 shrink-0" />,
+                  value: shown(model.total),
+                  share,
+                  fill: fills[part]!,
+                  other: unreported(model.total)
+                    ? `No reported cost · ${other(model.total)}`
+                    : other(model.total),
+                };
+              })
+            : starts
+                .map((start, i) => ({ start, total: summary.byBucket[i]! }))
+                .filter((t) => tokensOf(t.total) > 0)
+                .reverse()
+                .map((t) => ({
+                  key: String(t.start),
+                  name: name(t.start, true),
+                  value: shown(t.total),
+                  ...(!unreported(t.total) && whole > 0 && { share: measure(t.total) / whole }),
+                  fill: fills[0]!,
+                  other: other(t.total),
+                }))
+        }
+      />
     </div>
   );
 }
 
-/** One figure in the summary strip: a label, the figure, and a line under it. */
-function Stat({ label, note, children }: { label: string; note: string; children: ReactNode }) {
+/** One figure in a strip: a label, the figure, and a line under it. */
+function Stat({
+  label,
+  note,
+  className = "",
+  children,
+}: {
+  label: string;
+  note: string;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="flex min-w-0 flex-col bg-surface px-6 pt-5 pb-5">
+    <div className={`flex min-w-0 flex-col bg-surface px-6 pt-5 pb-5 ${className}`}>
       <dt className="text-[12.5px] text-muted-foreground">{label}</dt>
       <dd className="mt-3 flex h-11 min-w-0 items-center leading-none">{children}</dd>
       <dd className="mt-2 text-[12.5px] text-pretty text-muted-foreground">{note}</dd>
@@ -1189,7 +1180,10 @@ function Split({
   );
 }
 
-/** The range's usage by model (largest first) or by day or hour (latest first), each with a share bar. */
+/**
+ * The range's usage by model (largest first) or by `unit` (latest first), each with a share bar.
+ * Without a `unit`, only by model.
+ */
 function Breakdown({
   by,
   onBy,
@@ -1199,7 +1193,7 @@ function Breakdown({
 }: {
   by: BreakdownBy;
   onBy: (by: BreakdownBy) => void;
-  unit: string;
+  unit?: string;
   /** What the value is: "Cost" or "Tokens". */
   what: string;
   rows: {
@@ -1218,15 +1212,17 @@ function Breakdown({
     <section aria-label="Breakdown" className={`${card} min-w-0 px-6 py-4`}>
       <div className="flex items-center justify-between gap-3 pb-3">
         <h2 className="text-[14px] font-medium">Breakdown</h2>
-        <Segmented
-          label="Breakdown by"
-          options={[
-            { value: "model", name: "Model" },
-            { value: "time", name: unit },
-          ]}
-          value={by}
-          onChange={onBy}
-        />
+        {unit && (
+          <Segmented
+            label="Breakdown by"
+            options={[
+              { value: "model", name: "Model" },
+              { value: "time", name: unit },
+            ]}
+            value={by}
+            onChange={onBy}
+          />
+        )}
       </div>
       <div className="flex gap-2.5 border-t border-border pt-3 pb-1 text-[12px] text-faint-foreground">
         <span>{by === "model" ? "Model" : unit}</span>
@@ -1305,7 +1301,7 @@ function DashboardSkeleton() {
   const block = "rounded-md bg-selected";
   return (
     <div aria-hidden className="flex flex-col gap-5 motion-safe:animate-pulse">
-      <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border @2xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_minmax(0,5fr)]">
+      <div className={`${strip} @2xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_minmax(0,5fr)]`}>
         {[36, 24, 32].map((w, i) => (
           <div key={i} className="bg-surface px-6 py-5">
             <div className={`h-3 w-24 ${block}`} />

@@ -4,11 +4,12 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
-import type { UsageHour } from "../protocol/generated/protocol";
+import type { UsageDay } from "../protocol/generated/protocol";
 import {
   attribute,
   buckets,
   change,
+  localDate,
   niceTop,
   resetTime,
   stack,
@@ -22,84 +23,63 @@ import {
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
 const midnight = (at: number) => new Date(at).setHours(0, 0, 0, 0);
 
-test("ranges end now: the last 24 hours, or whole local days ending today", () => {
-  const now = Date.parse("2026-09-29T19:42:00Z");
-  const day = buckets("24h", now);
-  expect(day.hourly).toBe(true);
-  expect(day.starts).toHaveLength(24);
-  expect(day.starts.at(-1)).toBe(Date.parse("2026-09-29T19:00:00Z"));
-  expect(day.starts[0]).toBe(Date.parse("2026-09-28T20:00:00Z"));
+/** A day of `tokens` input tokens on `at`'s local day, costing `cost` micro-dollars when it says. */
+const usage = (at: number, agent: string, model: string, tokens: number, cost?: number) =>
+  ({
+    date: localDate(at),
+    agent: agent as UsageDay["agent"],
+    model,
+    inputTokens: tokens,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    ...(cost !== undefined && { costUsdMicros: cost }),
+  }) satisfies UsageDay;
 
-  const week = buckets("7d", now);
-  expect(week.hourly).toBe(false);
-  expect(week.starts).toHaveLength(7);
-  expect(week.starts.at(-1)).toBe(midnight(now));
-  expect(week.starts.every((s) => midnight(s) === s)).toBe(true);
-});
-
-test("the range before is as long, ends where the range starts, and counts up to as far in", () => {
-  const now = Date.parse("2026-09-29T19:42:00Z");
-  const day = buckets("24h", now);
-  expect(day.previous).toHaveLength(24);
-  expect(day.previous.at(-1)).toBe(day.starts[0]! - HOUR);
-  expect(day.previous[0]).toBe(Date.parse("2026-09-27T20:00:00Z"));
-  expect(day.until).toBe(Date.parse("2026-09-28T19:42:00Z"));
+test("ranges are whole local days ending today, and the range before is as long", () => {
+  const now = new Date(2026, 8, 29, 18, 0).getTime();
+  const today = buckets("today", now);
+  expect(today.starts).toEqual([midnight(now)]);
+  expect(today.previous).toEqual([midnight(now - DAY)]);
+  expect(today.partial).toBe(0.75);
 
   const month = buckets("30d", now);
+  expect(month.starts).toHaveLength(30);
+  expect(month.starts.at(-1)).toBe(midnight(now));
   expect(month.previous).toHaveLength(30);
-  expect(month.previous.every((s) => midnight(s) === s)).toBe(true);
-  const before = new Date(month.starts[0]!);
-  before.setDate(before.getDate() - 1);
-  expect(month.previous.at(-1)).toBe(before.getTime());
+  expect([...month.previous, ...month.starts].every((s) => midnight(s) === s)).toBe(true);
   expect(new Set([...month.previous, ...month.starts]).size).toBe(60);
-  // As far into the range before's last day as now is into today.
-  expect(month.until - midnight(month.until)).toBe(now - midnight(now));
-  expect(midnight(month.until)).toBe(month.previous.at(-1));
+  expect(month.previous.at(-1)).toBe(midnight(month.starts[0]! - HOUR));
+  expect(localDate(month.previous[0]!)).toBe("2026-08-01");
 });
 
-/**
- * `range`'s summary over a flat `tokens` an hour from well before it to `now`, the current hour
- * holding only the part of it so far.
- */
-function flat(range: Range, now: number, tokens = 10) {
+/** `range`'s summary over a flat `tokens` a day, today holding only the part of it so far. */
+function flat(range: Range, now: number, tokens = 100) {
   const span = buckets(range, now);
-  const current = Math.floor(now / HOUR) * HOUR;
-  const hours: UsageHour[] = [];
-  for (let at = Math.floor(span.previous[0]! / HOUR) * HOUR - 24 * HOUR; at <= now; at += HOUR) {
-    const n = at === current ? (tokens * (now - current)) / HOUR : tokens;
-    hours.push(usage(at, "claude", "opus", n, n * 100));
-  }
-  const history = {
-    hours: hours.filter((h) => Date.parse(h.hour) >= span.starts[0]!),
-    runs: [],
-    keys: [],
-    previous: hours,
-  };
-  return {
-    span,
-    summary: summarize([history], span.starts, span.hourly, span.previous, span.until),
-  };
+  const days = [...span.previous, ...span.starts].map((start) =>
+    usage(start, "claude", "opus", start === span.starts.at(-1) ? tokens * span.partial : tokens),
+  );
+  return { span, summary: summarize(days, span.starts, span.previous, span.partial) };
 }
 
-test("a flat rate shows no change at any time of day, though the range's last hour isn't over", () => {
+test("a flat rate shows no change at any time of day, though today isn't over", () => {
   for (const clock of [
     [0, 30],
-    [9, 0, 30],
     [9, 5],
-    [9, 30],
     [16, 55],
     [23, 50],
   ] as const)
-    for (const range of ["24h", "7d", "30d"] as const) {
+    for (const range of ["today", "7d", "30d"] as const) {
       const now = new Date(2026, 8, 29, ...clock).getTime();
       const { summary } = flat(range, now);
-      expect(change(summary.total.cost, summary.previous!.cost)).toBeCloseTo(0, 10);
+      expect(change(tokensOf(summary.total), tokensOf(summary.previous))).toBeCloseTo(0, 10);
     }
 });
 
-test("days stay local days across a daylight saving change, and the change stays within an hour", () => {
+test("days stay local days across a daylight saving change", () => {
   // Node follows a change to TZ at once.
   vi.stubEnv("TZ", "America/New_York");
   try {
@@ -110,122 +90,46 @@ test("days stay local days across a daylight saving change, and the change stays
     expect(span.starts.every((s) => new Date(s).getHours() === 0)).toBe(true);
     const lengths = span.starts.slice(1).map((s, i) => (s - span.starts[i]!) / HOUR);
     expect(lengths.sort((a, b) => a - b)).toEqual([24, 24, 24, 24, 24, 25]);
-    expect(new Date(span.until).getHours()).toBe(14);
-    expect(new Date(span.until).getDate()).toBe(27);
-    // The range really is an hour longer than the range before.
-    expect(tokensOf(summary.total) - tokensOf(summary.previous!)).toBeCloseTo(10);
+    expect(summary.byBucket.every((m) => tokensOf(m) > 0)).toBe(true);
   } finally {
     vi.unstubAllEnvs();
   }
 });
 
-test("history sums by backend, model, and bucket, and keeps unreported cost apart", () => {
-  const now = Date.parse("2026-09-29T19:42:00Z");
-  const { starts, hourly } = buckets("24h", now);
-  const hour = (at: number, accountId: string, model: string, tokens: number, cost?: number) =>
-    ({
-      hour: new Date(at).toISOString(),
-      accountId,
-      model,
-      inputTokens: tokens,
-      outputTokens: 0,
-      cacheReadTokens: tokens,
-      cacheWriteTokens: 0,
-      ...(cost !== undefined && { costUsdMicros: cost }),
-    }) satisfies UsageHour;
+test("days sum by agent, model, and bucket, keep unreported cost apart, and count the range before", () => {
+  const now = new Date(2026, 8, 29, 12, 0).getTime();
+  const { starts, previous, partial } = buckets("7d", now);
   const last = starts.at(-1)!;
   const summary = summarize(
     [
-      {
-        hours: [
-          // Before the range: from an answer for a longer one.
-          hour(starts[0]! - HOUR, "claude", "opus", 1000, 1_000_000),
-          hour(last - HOUR, "claude", "opus", 100, 2_000_000),
-          hour(last, "claude", "opus", 50, 1_000_000),
-          hour(last, "codex", "gpt", 10),
-          // An API key's account counts under its provider's backend.
-          hour(last, "key-1", "sonnet", 5, 500_000),
-        ],
-        runs: [
-          { accountId: "claude", runs: 3 },
-          { accountId: "codex", runs: 1 },
-        ],
-        keys: [
-          {
-            id: "key-1",
-            provider: "anthropic",
-            label: "Work",
-            maskedKey: "sk-…1",
-            createdAt: "2026-09-01T00:00:00Z",
-          },
-        ],
-      },
+      // Before the range before: left out.
+      usage(previous[0]! - DAY, "claude", "opus", 1000, 9_000_000),
+      usage(previous[0]!, "claude", "opus", 40, 4_000_000),
+      // The range before's last day counts only as far as today has come.
+      usage(previous.at(-1)!, "codex", "gpt", 10),
+      usage(last - DAY, "claude", "opus", 100, 2_000_000),
+      usage(last, "claude", "opus", 50, 1_000_000),
+      usage(last, "codex", "gpt", 10),
+      usage(last, "cursor", "composer", 5, 500_000),
     ],
     starts,
-    hourly,
+    previous,
+    partial,
   );
-  expect(tokensOf(summary.total)).toBe(2 * (100 + 50 + 10 + 5));
+  expect(tokensOf(summary.total)).toBe(100 + 50 + 10 + 5);
   expect(summary.total.cost).toBe(3_500_000);
-  expect(summary.total.unpriced).toBe(20);
-  expect(summary.threads).toBe(4);
-  expect(summary.backends.map((b) => [b.backend, b.threads, tokensOf(b.total)])).toEqual([
-    ["claude", 3, 310],
-    ["codex", 1, 20],
+  expect(summary.total.unpriced).toBe(10);
+  expect(summary.previous).toMatchObject({ input: 45, cost: 4_000_000, unpriced: 5 });
+  expect(summary.backends.map((b) => [b.backend, tokensOf(b.total)])).toEqual([
+    ["claude", 150],
+    ["codex", 10],
+    ["cursor", 5],
   ]);
-  expect(tokensOf(summary.byBucket.at(-1)!)).toBe(130);
-  expect(tokensOf(summary.byBucket.at(-2)!)).toBe(200);
-  expect(summary.models.map((m) => m.model).sort()).toEqual(["gpt", "opus", "sonnet"]);
+  expect(tokensOf(summary.byBucket.at(-1)!)).toBe(65);
+  expect(tokensOf(summary.byBucket.at(-2)!)).toBe(100);
+  expect(summary.models.map((m) => m.model).sort()).toEqual(["composer", "gpt", "opus"]);
   const opus = summary.models.find((m) => m.model === "opus")!;
   expect(opus.byBucket.map((m) => m.cost).slice(-2)).toEqual([2_000_000, 1_000_000]);
-  // Without a second answer, there's nothing to compare with.
-  expect(summary.previous).toBeUndefined();
-});
-
-/** An hour of `tokens` input tokens, costing `cost` micro-dollars when it says. */
-const usage = (at: number, accountId: string, model: string, tokens: number, cost?: number) =>
-  ({
-    hour: new Date(at).toISOString(),
-    accountId,
-    model,
-    inputTokens: tokens,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    ...(cost !== undefined && { costUsdMicros: cost }),
-  }) satisfies UsageHour;
-
-test("the range before sums only its own hours, and only when every host reached back", () => {
-  const now = Date.parse("2026-09-29T19:42:00Z");
-  const { starts, previous, hourly } = buckets("24h", now);
-  const earlier = [
-    // Before the range before: left out.
-    usage(previous[0]! - HOUR, "claude", "opus", 1000, 9_000_000),
-    usage(previous[0]!, "claude", "opus", 40, 4_000_000),
-    usage(previous.at(-1)!, "codex", "gpt", 10),
-    // In the range itself: the longer answer has it too, but it isn't the range before.
-    usage(starts[0]!, "claude", "opus", 30, 3_000_000),
-  ];
-  const host = (hours: UsageHour[], previous?: UsageHour[]) => ({
-    hours,
-    runs: [],
-    keys: [],
-    ...(previous && { previous }),
-  });
-  const summary = summarize(
-    [host([usage(starts[0]!, "claude", "opus", 30, 3_000_000)], earlier)],
-    starts,
-    hourly,
-    previous,
-  );
-  expect(summary.previous).toMatchObject({ input: 50, cost: 4_000_000, unpriced: 10 });
-  expect(summary.total).toMatchObject({ input: 30, cost: 3_000_000 });
-  expect(
-    summarize([host([], earlier), host([])], starts, hourly, previous).previous,
-  ).toBeUndefined();
-  // Hours from `until` on are past the point the range has reached.
-  expect(
-    summarize([host([], earlier)], starts, hourly, previous, previous.at(-1)!).previous,
-  ).toMatchObject({ input: 40, unpriced: 0 });
 });
 
 test("a change is a fraction of the range before, and needs a range before with some", () => {
@@ -238,27 +142,18 @@ test("a change is a fraction of the range before, and needs a range before with 
 
 test("models rank by the measure, share the whole, and the chart stacks two and the rest", () => {
   const now = Date.parse("2026-09-29T19:42:00Z");
-  const { starts, hourly } = buckets("24h", now);
+  const { starts, previous, partial } = buckets("7d", now);
+  const sum = (days: UsageDay[]) => summarize(days, starts, previous, partial);
   const [first, last] = [starts[0]!, starts.at(-1)!];
-  const summary = summarize(
-    [
-      {
-        hours: [
-          usage(first, "claude", "opus", 100, 6_000_000),
-          usage(last, "claude", "opus", 100, 2_000_000),
-          usage(first, "claude", "sonnet", 300, 1_000_000),
-          usage(last, "claude", "haiku", 50, 500_000),
-          usage(first, "claude", "haiku-2", 60, 500_000),
-          // No reported cost, but the most tokens.
-          usage(last, "codex", "gpt", 1000),
-        ],
-        runs: [],
-        keys: [],
-      },
-    ],
-    starts,
-    hourly,
-  );
+  const summary = sum([
+    usage(first, "claude", "opus", 100, 6_000_000),
+    usage(last, "claude", "opus", 100, 2_000_000),
+    usage(first, "claude", "sonnet", 300, 1_000_000),
+    usage(last, "claude", "haiku", 50, 500_000),
+    usage(first, "claude", "haiku-2", 60, 500_000),
+    // No reported cost, but the most tokens.
+    usage(last, "codex", "gpt", 1000),
+  ]);
   const cost = (m: Measures) => m.cost;
   const unreported = (m: Measures) => m.cost === 0 && m.unpriced > 0;
   const rows = attribute(summary.models, cost, unreported);
@@ -305,21 +200,11 @@ test("models rank by the measure, share the whole, and the chart stacks two and 
     "haiku",
   ]);
 
-  // A tie on both measures falls to the name, whatever order the hours came in.
-  const tied = summarize(
-    [
-      {
-        hours: [
-          usage(last, "claude", "b-model", 10, 100),
-          usage(last, "claude", "a-model", 10, 100),
-        ],
-        runs: [],
-        keys: [],
-      },
-    ],
-    starts,
-    hourly,
-  );
+  // A tie on both measures falls to the name, whatever order the days came in.
+  const tied = sum([
+    usage(last, "claude", "b-model", 10, 100),
+    usage(last, "claude", "a-model", 10, 100),
+  ]);
   expect(attribute(tied.models, cost).map((r) => [r.model.model, r.part])).toEqual([
     ["a-model", 0],
     ["b-model", 1],
@@ -374,24 +259,24 @@ async function renderPage(
   await settle();
 }
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
-const history =
-  (hours: UsageHour[]) =>
+/** `usage/daily`'s answer from `days`, with `problems`. */
+const daily =
+  (days: UsageDay[], problems: { source: "ccusage" | "cursor"; message: string }[] = []) =>
   ({ since }: Record<string, unknown>) => ({
-    hours: hours.filter((h) => h.hour >= (since as string)),
-    runs: [{ accountId: "claude", runs: 2 }],
+    days: days.filter((d) => d.date >= (since as string)),
+    problems,
   });
 
-// The last whole hour, which every range covers.
-const lastHour = Math.floor(Date.now() / HOUR) * HOUR - HOUR;
+const now = Date.now();
 
 test("Cost leads with the total, its change, and the busiest model, and reads each bar out", async () => {
   await renderPage({
     "accounts/keys/list": () => ({ accounts: [] }),
-    "usage/history": history([
+    "usage/daily": daily([
       // In the 30 days before.
-      usage(lastHour - 40 * 24 * HOUR, "claude", "opus", 80, 2_000_000),
-      usage(lastHour, "claude", "opus", 100, 2_000_000),
-      usage(lastHour, "claude", "sonnet", 50, 1_000_000),
+      usage(now - 40 * DAY, "claude", "opus", 80, 2_000_000),
+      usage(now, "claude", "opus", 100, 2_000_000),
+      usage(now, "claude", "sonnet", 50, 1_000_000),
     ]),
   });
   const strip = document.querySelector("dl")!.textContent;
@@ -474,10 +359,10 @@ test("Cost leads with the total, its change, and the busiest model, and reads ea
 test("an answer for a range left behind doesn't replace the range shown", async () => {
   let release = () => {};
   let hold: Promise<void> | undefined;
-  const answer = history([usage(lastHour, "claude", "opus", 100, 2_000_000)]);
+  const answer = daily([usage(now, "claude", "opus", 100, 2_000_000)]);
   await renderPage({
     "accounts/keys/list": () => ({ accounts: [] }),
-    "usage/history": async (params) => {
+    "usage/daily": async (params) => {
       // Only the requests made while it's set wait for it.
       const wait = hold;
       await wait;
@@ -502,10 +387,10 @@ test("an answer for a range left behind doesn't replace the range shown", async 
 test("a new range keeps the last one in view, dimmed, until its answer comes", async () => {
   let release = () => {};
   let hold: Promise<void> | undefined;
-  const answer = history([usage(lastHour, "claude", "opus", 100, 2_000_000)]);
+  const answer = daily([usage(now, "claude", "opus", 100, 2_000_000)]);
   await renderPage({
     "accounts/keys/list": () => ({ accounts: [] }),
-    "usage/history": async (params) => {
+    "usage/daily": async (params) => {
       await hold;
       return answer(params);
     },
@@ -523,6 +408,31 @@ test("a new range keeps the last one in view, dimmed, until its answer comes", a
   expect(document.querySelectorAll("[data-bar]")).toHaveLength(7);
 });
 
+test("Today shows how the day splits, not one bar, and a source's problem beside the rest", async () => {
+  await renderPage({
+    "usage/daily": daily(
+      [
+        usage(now, "claude", "opus", 100, 3_000_000),
+        usage(now, "cursor", "composer", 50, 1_000_000),
+      ],
+      [{ source: "ccusage", message: "Install Node.js or ccusage on this host." }],
+    ),
+  });
+  act(() => document.querySelector<HTMLInputElement>('input[value="today"]')!.click());
+  await settle();
+  expect(document.body.textContent).toContain("Install Node.js or ccusage on this host.");
+  expect(document.querySelectorAll("[data-bar]")).toHaveLength(0);
+  expect(document.querySelector("figure")!.textContent).toContain("Cost by model today");
+  expect(document.querySelector("figure")!.textContent).toContain("composer$1.0025.0%");
+  // One day has nothing to break down by day.
+  expect(document.querySelector('fieldset[aria-label="Breakdown by"]')).toBeNull();
+  const providers = [...document.querySelectorAll('section[aria-label="Providers"] li')];
+  expect(providers.map((p) => p.textContent)).toEqual([
+    "Claude Code$3.0075.0% of cost · 100 tokens",
+    "Cursor$1.0025.0% of cost · 50 tokens",
+  ]);
+});
+
 test("Limits show each window as a meter, in amber and then red near its cap", async () => {
   const limit = (window: string, usedPercent: number) => ({
     window,
@@ -533,7 +443,7 @@ test("Limits show each window as a meter, in amber and then red near its cap", a
   const none = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   await renderPage({
     "accounts/keys/list": () => ({ accounts: [] }),
-    "usage/history": history([]),
+    "usage/daily": daily([]),
     "usage/get": () => ({
       accounts: [
         {

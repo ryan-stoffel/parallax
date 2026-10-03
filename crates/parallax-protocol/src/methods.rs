@@ -46,7 +46,8 @@ use crate::{
     RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
     ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
     ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -158,6 +159,10 @@ method_table! {
         /// `usage/history`: tokens and cost since a time, summed per UTC hour, account, and
         /// model, and each account's run count over the same range.
         UsageHistory = "usage/history": UsageHistoryParams => UsageHistoryResult;
+        /// `usage/daily`: every Claude Code, Codex, and Cursor session's tokens and cost on this
+        /// host since a local day, per local day, agent, and model (0039), and each source that
+        /// failed.
+        UsageDaily = "usage/daily": UsageDailyParams => UsageDailyResult;
         /// `accounts/defaults/get`: this host's default account for the coordinator role and for
         /// a worker role, absent where none is set (#119).
         AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
@@ -332,6 +337,7 @@ mod tests {
                 "accounts/refresh",
                 "usage/get",
                 "usage/history",
+                "usage/daily",
                 "accounts/defaults/get",
                 "accounts/defaults/set",
                 "context/list",

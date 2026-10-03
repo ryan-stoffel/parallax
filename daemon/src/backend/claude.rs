@@ -163,6 +163,7 @@ use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 
+pub(crate) use self::stream::micros as usd_micros;
 pub(crate) use self::stream::version as parse_version;
 use self::stream::{Ask, Step, Translator, TurnDone};
 use super::commands::{self, CommandsProbe};
