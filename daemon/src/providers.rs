@@ -58,7 +58,7 @@ enum Driver {
 struct Preset {
     program: &'static str,
     driver: Driver,
-    /// Arguments after the program that sign it in, in a terminal on the host. Empty: none.
+    /// The command that signs it in, in a terminal on the host. Empty: none.
     login: &'static [&'static str],
     /// The variable the instance's home folder sets, for an ACP agent.
     home_env: Option<&'static str>,
@@ -72,7 +72,6 @@ fn acp_agent(label: &str, program: &str, args: &[&str]) -> AcpAgent {
 }
 
 /// The defaults of `kind`. `None` for a kind this plxd doesn't know.
-#[expect(clippy::too_many_lines, reason = "one table of every kind's defaults")]
 fn preset(kind: ProviderKind) -> Option<Preset> {
     let base = |program, driver| Preset {
         program,
@@ -81,52 +80,76 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
         home_env: None,
         models_url: None,
     };
+    let plan = |edit: &str| (vec![(AgentPermission::Plan, "plan".to_owned())], Some(edit.to_owned()));
     Some(match kind {
         ProviderKind::Claude => Preset {
-            login: &["auth", "login"],
+            login: &["claude", "auth", "login"],
             ..base("claude", Driver::Claude)
         },
         ProviderKind::Codex => Preset {
-            login: &["login"],
+            login: &["codex", "login"],
             ..base("codex", Driver::Codex)
         },
-        ProviderKind::Cursor => Preset {
-            login: &["login"],
-            ..base("agent",
-                Driver::Acp(AcpAgent {
-                    scrub: vec!["CURSOR_".into()],
-                    model_flag: Some("--model".into()),
-                    bypass_flag: Some("--force".into()),
-                    plan_mode: Some("plan".into()),
-                    edit_mode: Some("agent".into()),
-                    ..acp_agent("Cursor Agent", "agent", &["acp"])
-                }),
-            )
-        },
-        ProviderKind::Opencode => Preset {
-            login: &["auth", "login"],
-            home_env: Some("OPENCODE_CONFIG_DIR"),
-            ..base("opencode",
-                Driver::Acp(AcpAgent {
-                    plan_mode: Some("plan".into()),
-                    edit_mode: Some("build".into()),
-                    ..acp_agent("OpenCode", "opencode", &["acp"])
-                }),
-            )
-        },
+        ProviderKind::Cursor => {
+            let (modes, edit_mode) = plan("agent");
+            Preset {
+                login: &["agent", "login"],
+                ..base(
+                    "agent",
+                    Driver::Acp(AcpAgent {
+                        scrub: vec!["CURSOR_".into()],
+                        model_flag: Some("--model".into()),
+                        bypass_flag: Some("--force".into()),
+                        modes,
+                        edit_mode,
+                        ..acp_agent("Cursor Agent", "agent", &["acp"])
+                    }),
+                )
+            }
+        }
+        ProviderKind::Opencode => {
+            let (modes, edit_mode) = plan("build");
+            Preset {
+                login: &["opencode", "auth", "login"],
+                home_env: Some("OPENCODE_CONFIG_DIR"),
+                ..base(
+                    "opencode",
+                    Driver::Acp(AcpAgent {
+                        modes,
+                        edit_mode,
+                        ..acp_agent("OpenCode", "opencode", &["acp"])
+                    }),
+                )
+            }
+        }
+        // Pi has no ACP of its own: `pi-acp` runs `pi --mode rpc`. Pi before 0.81 needs
+        // `pi-acp@0.0.27`, which an instance's arguments pick.
         ProviderKind::Pi => Preset {
-            ..base("pi-acp",
-                Driver::Acp(acp_agent("Pi", "pi-acp", &[])),
+            login: &["pi"],
+            ..base(
+                "npx",
+                Driver::Acp(acp_agent("Pi", "npx", &["-y", "pi-acp@0.0.34"])),
             )
         },
-        ProviderKind::Omp => Preset {
-            ..base("omp",
-                Driver::Acp(acp_agent("Oh My Pi", "omp", &["acp"])),
-            )
-        },
+        ProviderKind::Omp => {
+            let (modes, edit_mode) = plan("default");
+            Preset {
+                login: &["omp", "login"],
+                home_env: Some("PI_CODING_AGENT_DIR"),
+                ..base(
+                    "omp",
+                    Driver::Acp(AcpAgent {
+                        modes,
+                        edit_mode,
+                        ..acp_agent("Oh My Pi", "omp", &["acp"])
+                    }),
+                )
+            }
+        }
         ProviderKind::GrokBuild => Preset {
-            login: &["login"],
-            ..base("grok",
+            login: &["grok", "login"],
+            ..base(
+                "grok",
                 Driver::Acp(AcpAgent {
                     scrub: vec!["XAI_".into()],
                     model_flag: Some("--model".into()),
@@ -135,11 +158,20 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
                 }),
             )
         },
+        // Hermes Agent's modes are its edit approval policy.
         ProviderKind::Hermes => Preset {
-            login: &["setup", "--portal"],
+            login: &["hermes", "setup", "--portal"],
             home_env: Some("HERMES_HOME"),
-            ..base("hermes",
-                Driver::Acp(acp_agent("Hermes Agent", "hermes", &["acp"])),
+            ..base(
+                "hermes",
+                Driver::Acp(AcpAgent {
+                    modes: vec![
+                        (AgentPermission::Manual, "default".into()),
+                        (AgentPermission::Edit, "accept_edits".into()),
+                        (AgentPermission::Bypass, "dont_ask".into()),
+                    ],
+                    ..acp_agent("Hermes Agent", "hermes", &["acp"])
+                }),
             )
         },
         ProviderKind::OllamaCloud => Preset {
@@ -593,10 +625,14 @@ fn acp_for(
         agent.label.clone_from(&instance.name);
     }
     agent.program = program_of(instance, preset).into();
-    if instance.kind == ProviderKind::Acp {
-        agent.args = overrides.args;
-    } else {
-        agent.args.extend(overrides.args);
+    // An ACP agent's, and Pi's adapter's, arguments are the whole list; another kind's follow
+    // its own.
+    match instance.kind {
+        ProviderKind::Acp | ProviderKind::Pi if !overrides.args.is_empty() => {
+            agent.args = overrides.args;
+        }
+        ProviderKind::Acp | ProviderKind::Pi => {}
+        _ => agent.args.extend(overrides.args),
     }
     agent.env = overrides.env;
     if let (Some(name), Some(home)) = (preset.home_env, &instance.home) {
@@ -702,12 +738,14 @@ async fn acp_probe(
                         continue;
                     }
                     if let Some(error) = message.get("error") {
-                        let text = error["message"].as_str().unwrap_or_default();
-                        let lower = text.to_ascii_lowercase();
-                        if error["code"] == -32000 || lower.contains("auth") || lower.contains("login")
+                        // pi-acp answers ACP's -32000; Hermes Agent says so in its data.
+                        let lower = error.to_string().to_ascii_lowercase();
+                        if error["code"] == -32000
+                            || ["auth", "login", "not connected"].iter().any(|w| lower.contains(w))
                         {
                             return Ok((false, Vec::new()));
                         }
+                        let text = error["message"].as_str().unwrap_or_default();
                         return Err(text.to_owned());
                     }
                     return Ok((true, session_models(&message["result"])));
@@ -827,9 +865,15 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
         Some(Driver::Acp(agent)) => (agent.permissions(), false, false),
         None => (vec![AgentPermission::Edit], false, false),
     };
+    // The login runs the instance's own program where it is the kind's.
     let login = preset.filter(|p| !p.login.is_empty()).map(|p| {
-        std::iter::once(program_of(&instance, &p))
-            .chain(p.login.iter().map(|arg| (*arg).to_owned()))
+        p.login
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| match &instance.program {
+                Some(program) if i == 0 && *arg == p.program => program.clone(),
+                _ => (*arg).to_owned(),
+            })
             .collect()
     });
     let mut instance = instance;

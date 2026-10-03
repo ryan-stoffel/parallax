@@ -49,7 +49,7 @@ fn cursor() -> AcpAgent {
         scrub: vec!["CURSOR_".into()],
         model_flag: Some("--model".into()),
         bypass_flag: Some("--force".into()),
-        plan_mode: Some("plan".into()),
+        modes: vec![(AgentPermission::Plan, "plan".into())],
         edit_mode: Some("agent".into()),
         ..AcpAgent::new("cursor", "Cursor Agent", "agent", &["acp"])
     }

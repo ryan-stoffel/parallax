@@ -65,6 +65,8 @@ struct Call {
     input: Map<String, Value>,
     /// Its `ToolCall` event was sent.
     reported: bool,
+    /// Its `ToolResult` event was sent.
+    finished: bool,
 }
 
 /// The state that reading one run's output needs.
@@ -166,6 +168,28 @@ impl Translator {
         })
     }
 
+    /// A failed result for every call reported but never finished, at the end of a turn: some
+    /// agents leave a call pending (Hermes Agent's denied edit), and the app would wait on it.
+    pub fn unfinished(&mut self) -> Vec<Event> {
+        let mut events = Vec::new();
+        for (id, call) in &mut self.calls {
+            if call.reported && !call.finished {
+                call.finished = true;
+                let status = if self.denied.contains(id) {
+                    ToolStatus::Denied
+                } else {
+                    ToolStatus::Error
+                };
+                events.push(Event::ToolResult {
+                    call_id: id.clone(),
+                    status,
+                    output: None,
+                });
+            }
+        }
+        events
+    }
+
     /// The turn's result, its text since the last tool call, and starts the next turn's.
     pub fn take_text(&mut self) -> Option<String> {
         let text = std::mem::take(&mut self.text);
@@ -238,8 +262,10 @@ impl Translator {
             steps.extend(self.report(id));
         }
         if let Some(status @ ("completed" | "failed")) = status
-            && self.calls.get(id).is_some_and(|call| call.reported)
+            && let Some(call) = self.calls.get_mut(id)
+            && call.reported
         {
+            call.finished = true;
             let output = update.get("rawOutput");
             let failed = status == "failed"
                 || output

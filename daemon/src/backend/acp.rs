@@ -99,10 +99,10 @@ pub struct AcpAgent {
     pub model_flag: Option<String>,
     /// The flag that runs every tool without asking, such as Cursor's `--force`.
     pub bypass_flag: Option<String>,
-    /// The session mode Bypass sets, for an agent with one instead of a flag.
-    pub bypass_mode: Option<String>,
-    /// The session mode Plan sets, such as `plan`. `None`: the agent offers no Plan.
-    pub plan_mode: Option<String>,
+    /// The session mode each permission sets once the session starts, such as Plan's `plan` or
+    /// Hermes Agent's `accept_edits` for Edit. A permission listed here, or Bypass with a
+    /// [`Self::bypass_flag`], is one the agent maps; Edit always is, with no mode set.
+    pub modes: Vec<(AgentPermission, String)>,
     /// The session mode an approved plan switches back to, such as Cursor's `agent`.
     pub edit_mode: Option<String>,
 }
@@ -120,23 +120,29 @@ impl AcpAgent {
             scrub: Vec::new(),
             model_flag: None,
             bypass_flag: None,
-            bypass_mode: None,
-            plan_mode: None,
+            modes: Vec::new(),
             edit_mode: None,
         }
     }
 
-    /// The permissions it maps: Edit always, Plan with a plan mode, and Bypass with a flag or mode.
+    /// The permissions it maps, in Claude Code's picker order: Edit always, those with a mode,
+    /// and Bypass with a flag.
     #[must_use]
     pub fn permissions(&self) -> Vec<AgentPermission> {
-        let mut permissions = vec![AgentPermission::Edit];
-        if self.plan_mode.is_some() {
-            permissions.push(AgentPermission::Plan);
-        }
-        if self.bypass_flag.is_some() || self.bypass_mode.is_some() {
-            permissions.push(AgentPermission::Bypass);
-        }
-        permissions
+        [
+            AgentPermission::Auto,
+            AgentPermission::Manual,
+            AgentPermission::Edit,
+            AgentPermission::Plan,
+            AgentPermission::Bypass,
+        ]
+        .into_iter()
+        .filter(|permission| {
+            *permission == AgentPermission::Edit
+                || (*permission == AgentPermission::Bypass && self.bypass_flag.is_some())
+                || self.modes.iter().any(|(mapped, _)| mapped == permission)
+        })
+        .collect()
     }
 }
 
@@ -330,13 +336,14 @@ impl Backend for AcpBackend {
             .model
             .clone()
             .filter(|_| self.agent.model_flag.is_none());
-        let mode = match permission {
-            AgentPermission::Plan => self.agent.plan_mode.clone(),
-            AgentPermission::Bypass if self.agent.bypass_flag.is_none() => {
-                self.agent.bypass_mode.clone()
-            }
-            _ => None,
-        };
+        // A bypass flag already set Bypass on the command line.
+        let mode = self
+            .agent
+            .modes
+            .iter()
+            .find(|(mapped, _)| *mapped == permission)
+            .filter(|_| !(permission == AgentPermission::Bypass && self.agent.bypass_flag.is_some()))
+            .map(|(_, mode)| mode.clone());
         let driver = Driver {
             agent: Arc::clone(&self.agent),
             process,
@@ -354,6 +361,7 @@ impl Backend for AcpBackend {
             resume: request.resume.map(|resume| resume.session_id),
             mode,
             model,
+            mode_option: None,
             session: None,
             modes_pending: 0,
             prompts: VecDeque::from([Prompt::new(
@@ -470,6 +478,8 @@ struct Driver {
     mode: Option<String>,
     /// The model to set over ACP once the session starts.
     model: Option<String>,
+    /// The session's mode config option, for an agent that takes its mode as one (OpenCode).
+    mode_option: Option<String>,
     /// The session's id, once `session/new` or `session/load` answered.
     session: Option<String>,
     /// `session/set_mode` and model requests not yet answered; prompts wait for them.
@@ -670,6 +680,7 @@ impl Driver {
                     api_key_source: None,
                 })
                 .await;
+                self.mode_option = config_option(&value, "mode");
                 if let Some(model) = model {
                     self.set_model(&session, &value, &model);
                 }
@@ -694,6 +705,9 @@ impl Driver {
                     });
                     return;
                 }
+                for event in self.translator.unfinished() {
+                    self.emit(event).await;
+                }
                 self.results += 1;
                 let result = self.translator.take_text();
                 self.last_result.clone_from(&result);
@@ -707,14 +721,7 @@ impl Driver {
     /// lists one, else with `session/set_model`.
     fn set_model(&mut self, session: &str, answer: &Value, model: &str) {
         self.modes_pending += 1;
-        let option = answer
-            .get("configOptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find(|option| option.get("category").and_then(Value::as_str) == Some("model"))
-            .and_then(|option| option.get("id").and_then(Value::as_str));
-        match option {
+        match config_option(answer, "model") {
             Some(id) => {
                 let params = json!({"sessionId": session, "configId": id, "value": model});
                 self.request("session/set_config_option", &params, Request::Mode);
@@ -726,10 +733,20 @@ impl Driver {
         }
     }
 
+    /// Switches the session to `mode`: through its mode config option when it has one, else
+    /// with `session/set_mode`.
     fn set_mode(&mut self, session: &str, mode: &str) {
         self.modes_pending += 1;
-        let params = json!({"sessionId": session, "modeId": mode});
-        self.request("session/set_mode", &params, Request::Mode);
+        match self.mode_option.clone() {
+            Some(id) => {
+                let params = json!({"sessionId": session, "configId": id, "value": mode});
+                self.request("session/set_config_option", &params, Request::Mode);
+            }
+            None => {
+                let params = json!({"sessionId": session, "modeId": mode});
+                self.request("session/set_mode", &params, Request::Mode);
+            }
+        }
     }
 
     /// Writes `answer` to the CLI, if it still waits on the request. A denial that interrupts
@@ -870,6 +887,19 @@ impl Driver {
     }
 }
 
+/// The id of the config option of `category` that a `session/new` or `session/load` answer
+/// lists, such as OpenCode's `model` and `mode`.
+fn config_option(answer: &Value, category: &str) -> Option<String> {
+    answer
+        .get("configOptions")?
+        .as_array()?
+        .iter()
+        .find(|option| option.get("category").and_then(Value::as_str) == Some(category))?
+        .get("id")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 /// What kind of failure an agent's message describes: an "Authentication required" error, or a
 /// usage limit, which routing falls back on (0012).
 fn classify(message: &str) -> FailureKind {
@@ -877,6 +907,7 @@ fn classify(message: &str) -> FailureKind {
     if lower.contains("authentication required")
         || lower.contains("not logged in")
         || lower.contains("agent login")
+        || lower.contains("not connected to any ai provider")
     {
         FailureKind::NotSignedIn
     } else if lower.contains("rate limit") || lower.contains("usage limit") {
