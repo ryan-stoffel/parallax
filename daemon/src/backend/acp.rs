@@ -712,42 +712,7 @@ impl Driver {
                     }
                 }
             }
-            Request::Session => {
-                self.translator.replaying = false;
-                let session = value
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .or_else(|| self.resume.clone());
-                let Some(session) = session else {
-                    self.failure = Some(failure(
-                        FailureKind::VendorError,
-                        format!("{} started no session", self.agent.label),
-                    ));
-                    self.close();
-                    return;
-                };
-                let current = value
-                    .pointer("/models/currentModelId")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let model = self.model.take();
-                self.session_model = model.clone().or(current);
-                self.emit(Event::SessionStarted {
-                    session_id: session.clone(),
-                    model: self.session_model.clone(),
-                    api_key_source: None,
-                })
-                .await;
-                self.mode_option = config_option(&value, "mode");
-                if let Some(model) = model {
-                    self.set_model(&session, &value, &model);
-                }
-                if let Some(mode) = self.mode.take() {
-                    self.set_mode(&session, &mode);
-                }
-                self.session = Some(session);
-            }
+            Request::Session => self.session_started(&value).await,
             Request::Mode => self.modes_pending = self.modes_pending.saturating_sub(1),
             Request::Prompt(prompt) => {
                 self.in_flight = None;
@@ -779,6 +744,45 @@ impl Driver {
                 self.emit(Event::TurnFinished { turn_id, result }).await;
             }
         }
+    }
+
+    /// `session/new` or `session/load` answered: reports the session, then sets its model and
+    /// mode.
+    async fn session_started(&mut self, value: &Value) {
+        self.translator.replaying = false;
+        let session = value
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| self.resume.clone());
+        let Some(session) = session else {
+            self.failure = Some(failure(
+                FailureKind::VendorError,
+                format!("{} started no session", self.agent.label),
+            ));
+            self.close();
+            return;
+        };
+        let current = value
+            .pointer("/models/currentModelId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let model = self.model.take();
+        self.session_model = model.clone().or(current);
+        self.emit(Event::SessionStarted {
+            session_id: session.clone(),
+            model: self.session_model.clone(),
+            api_key_source: None,
+        })
+        .await;
+        self.mode_option = config_option(value, "mode");
+        if let Some(model) = model {
+            self.set_model(&session, value, &model);
+        }
+        if let Some(mode) = self.mode.take() {
+            self.set_mode(&session, &mode);
+        }
+        self.session = Some(session);
     }
 
     /// Picks `model` for the session: through its model config option when `session`'s answer

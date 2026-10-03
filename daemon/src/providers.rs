@@ -557,35 +557,7 @@ impl Providers {
         let env = plain_env(entry);
         match (&preset.driver, preset.models_url) {
             (Driver::Claude, Some((url, key_name))) => {
-                let url = instance
-                    .env
-                    .iter()
-                    .find(|var| var.name == "ANTHROPIC_BASE_URL")
-                    .and_then(|var| var.value.as_deref())
-                    .filter(|base| !url.starts_with(base.trim_end_matches('/')))
-                    .map_or_else(
-                        || url.to_owned(),
-                        |base| format!("{}/v1/models", base.trim_end_matches('/')),
-                    );
-                let key = env
-                    .iter()
-                    .find(|(name, _)| name == key_name)
-                    .map(|(_, value)| value.to_string_lossy().into_owned());
-                // A secret key isn't read to list: the services list models without one.
-                let has_secret = entry.secrets.is_some()
-                    && instance
-                        .env
-                        .iter()
-                        .any(|var| var.secret && var.name == key_name);
-                let key = key.filter(|key| !key.is_empty());
-                match models_from(&self.launcher, &url, key.as_deref()).await {
-                    Ok(models) => found.models = models,
-                    Err(error) => found.note = Some(error),
-                }
-                found.signed_in = Some(has_secret || key.is_some());
-                if found.signed_in == Some(false) {
-                    found.note = Some("Add the service's API key".into());
-                }
+                probe_service(&self.launcher, entry, &env, url, key_name, &mut found).await;
             }
             (Driver::Acp(agent), _) if instance.kind != ProviderKind::Cursor => {
                 // Probed without its secrets, which only a run reads, and which never go on the
@@ -601,6 +573,48 @@ impl Providers {
             _ => {}
         }
         found
+    }
+}
+
+/// A model service's models, listed from `url` or from `/v1/models` at the instance's own
+/// `ANTHROPIC_BASE_URL`, and whether it has its key, `key_name`: a secret it isn't read for,
+/// since the services list models without one, or a plain value among `env`.
+async fn probe_service(
+    launcher: &Launcher,
+    entry: &Stored,
+    env: &[(OsString, OsString)],
+    url: &str,
+    key_name: &str,
+    found: &mut Found,
+) {
+    let instance = &entry.instance;
+    let url = instance
+        .env
+        .iter()
+        .find(|var| var.name == "ANTHROPIC_BASE_URL")
+        .and_then(|var| var.value.as_deref())
+        .filter(|base| !url.starts_with(base.trim_end_matches('/')))
+        .map_or_else(
+            || url.to_owned(),
+            |base| format!("{}/v1/models", base.trim_end_matches('/')),
+        );
+    let key = env
+        .iter()
+        .find(|(name, _)| name == key_name)
+        .map(|(_, value)| value.to_string_lossy().into_owned())
+        .filter(|key| !key.is_empty());
+    let has_secret = entry.secrets.is_some()
+        && instance
+            .env
+            .iter()
+            .any(|var| var.secret && var.name == key_name);
+    match models_from(launcher, &url, key.as_deref()).await {
+        Ok(models) => found.models = models,
+        Err(error) => found.note = Some(error),
+    }
+    found.signed_in = Some(has_secret || key.is_some());
+    if found.signed_in == Some(false) {
+        found.note = Some("Add the service's API key".into());
     }
 }
 
@@ -792,7 +806,7 @@ fn version_of(text: &str) -> Option<String> {
             word.trim_start_matches('v')
                 .starts_with(|c: char| c.is_ascii_digit())
         })
-        .or_else(|| words().last())
+        .or_else(|| words().next_back())
         .map(|word| word.trim_start_matches('v').to_owned())
 }
 
