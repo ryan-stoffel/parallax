@@ -1,0 +1,13 @@
+# Synthetic, in Hermes Agent 0.21.5's shapes (0040): legacy `models` and `modes` with no config options, so the model goes as session/set_model and Edit's mode as session/set_mode.
+@read
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"agentInfo":{"name":"hermes-agent","version":"0.21.5"},"authMethods":[{"id":"custom","name":"custom runtime credentials"}]}}
+@read
+{"jsonrpc":"2.0","id":2,"result":{"sessionId":"h_1","models":{"currentModelId":"custom:qwen3-4b","availableModels":[{"modelId":"custom:qwen3-4b","name":"Custom endpoint · qwen3-4b"}]},"modes":{"currentModeId":"default","availableModes":[{"id":"default"},{"id":"accept_edits"},{"id":"dont_ask"}]}}}
+@read
+@read
+{"jsonrpc":"2.0","id":3,"result":{}}
+{"jsonrpc":"2.0","id":4,"result":{}}
+@read
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"h_1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}}}
+{"jsonrpc":"2.0","id":5,"result":{"stopReason":"end_turn"}}
+@eof

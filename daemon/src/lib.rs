@@ -56,6 +56,7 @@ pub mod logging;
 pub mod mcp;
 mod methods;
 pub mod paths;
+pub mod providers;
 mod repo;
 pub mod routing;
 pub mod server;

@@ -14,7 +14,8 @@ import type { UsageHour } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { ParallaxMark } from "./logos";
-import { backends, models } from "./models";
+import { models } from "./models";
+import { instanceName, kinds } from "./providers";
 import { activityOf, Avatar, dayKey, rhythmOf, useProfile, type Activity } from "./profile";
 import { backendLogos } from "./Sidebar";
 import type { ThreadsView } from "./threads";
@@ -393,7 +394,7 @@ function Models({ activity }: { activity: Activity }) {
           const Logo = backendLogos[backend];
           const name = model
             ? (models.find((m) => m.id === model)?.name ?? model)
-            : `${backends[backend]?.provider ?? backend} default`;
+            : `${instanceName(backend) ?? kinds[backend]?.name ?? backend} default`;
           return (
             <li
               key={`${backend}/${model ?? ""}`}

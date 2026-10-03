@@ -248,7 +248,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await page.getByRole("button", { name: "Providers" }).click();
   const codex = page.getByRole("tab", { name: /^Codex/ });
   await codex.click();
-  await expect(codex).toHaveText("CodexNot signed in");
+  await expect(codex).toHaveText("CodexNot authenticated");
   await page.getByRole("button", { name: "Sign in to Codex" }).click();
 
   const terminal = page.getByRole("group", { name: "Codex sign-in terminal" });
@@ -257,7 +257,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await page.keyboard.press("Enter");
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
   // The sign-in's end ran accounts/refresh, which found the fake signed in.
-  await expect(codex).toHaveText("CodexSigned in");
+  await expect(codex).toHaveText("CodexAuthenticated");
 });
 
 test("creates a project on a repository it adds, and opens it (RYA-166)", async () => {

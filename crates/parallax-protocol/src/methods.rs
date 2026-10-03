@@ -42,12 +42,13 @@ use crate::{
     HostVersionResult, InitializeParams, InitializeResult, PrActParams, PrDiffResult, PrViewParams,
     ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
     ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams, RepoAddResult, RepoFilesParams,
-    RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult,
+    ProjectUpdateResult, PromptImage, ProvidersListParams, ProvidersListResult,
+    ProvidersRemoveParams, ProvidersSaveParams, PullRequest, RepoAddParams, RepoAddResult,
+    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -153,6 +154,16 @@ method_table! {
         /// `accounts/refresh`: like `accounts/list`, but always probes again instead of using the
         /// cache. Gated on the `agentClis` capability.
         AccountsRefresh = "accounts/refresh": AccountsRefreshParams => AccountsRefreshResult;
+        /// `providers/list`: this host's provider instances (0040), each with its detected state
+        /// and models. May answer from a short-lived cache unless `refresh` is set. Gated on the
+        /// `providers` capability.
+        ProvidersList = "providers/list": ProvidersListParams => ProvidersListResult;
+        /// `providers/save`: adds an instance, or replaces the one with its id, and returns every
+        /// instance. A secret variable sent without a value keeps its stored one.
+        ProvidersSave = "providers/save": ProvidersSaveParams => ProvidersListResult;
+        /// `providers/remove`: removes an instance the user added, and its secrets, and returns
+        /// every instance. Fails with `invalidParams` for a built-in one.
+        ProvidersRemove = "providers/remove": ProvidersRemoveParams => ProvidersListResult;
         /// `usage/get`: per-account tokens and cost for today and this week (local time on this
         /// host), and the latest limit windows.
         UsageGet = "usage/get": UsageGetParams => UsageGetResult;
@@ -335,6 +346,9 @@ mod tests {
                 "accounts/keys/remove",
                 "accounts/list",
                 "accounts/refresh",
+                "providers/list",
+                "providers/save",
+                "providers/remove",
                 "usage/get",
                 "usage/history",
                 "usage/daily",

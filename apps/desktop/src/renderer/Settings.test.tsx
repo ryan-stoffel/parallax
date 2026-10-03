@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge";
+import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
 import type { SettingsSection } from "./App";
 import { models } from "./models";
 import { Settings } from "./Settings";
@@ -136,7 +137,7 @@ test("lists the host's CLIs, and shows the chosen one's account, API keys, and m
   expect(rows("Account")).toEqual(["Signed in · Max"]);
   expect(rows("Anthropic API keys")).toEqual(["WorkAnthropic API key · sk-ant-...abcdRemove"]);
   expect(rows("Models")).toEqual(
-    models.filter((m) => m.provider === "Claude").map((m) => m.name + m.id),
+    models.filter((m) => m.provider === "claude").map((m) => m.name + m.id),
   );
 
   // Down moves to the next tab and chooses it.
@@ -504,4 +505,212 @@ test("the last provider on can't be turned off", async () => {
   expect(toggle("Claude Code").disabled).toBe(true);
   expect(toggle("Codex").disabled).toBe(false);
   localStorage.removeItem("parallax.disabledProviders");
+});
+
+describe("on a plxd with providers", () => {
+  const instance = (id: string, kind: ProviderKind, name: string): ProviderInstance => ({
+    id,
+    kind,
+    name,
+    enabled: true,
+    args: [],
+    env: [],
+    models: [],
+  });
+  let listed: ProviderInfo[];
+  const result = () => ({ result: { providers: listed, checkedAt: "2026-09-28T12:00:00Z" } });
+  // The instance the last `providers/save` sent.
+  const saved = () => calls("providers/save").at(-1)!.params["instance"];
+
+  beforeEach(() => {
+    states["local"] = { ...states["local"]!, capabilities: { providers: {} } } as ConnectionState;
+    listed = [
+      {
+        instance: instance("claude", "claude", "Claude Code"),
+        installed: true,
+        version: "2.1.281",
+        signedIn: true,
+        account: "ryan@example.com",
+        models: [],
+        permissions: ["edit"],
+        efforts: true,
+        coordinator: true,
+        login: ["claude", "auth", "login"],
+      },
+      {
+        instance: instance("codex", "codex", "Codex"),
+        installed: true,
+        signedIn: false,
+        models: [],
+        permissions: ["edit"],
+        efforts: true,
+        coordinator: false,
+        login: ["codex", "login"],
+      },
+    ];
+    answers["providers/list"] = result;
+    answers["providers/save"] = (p) => {
+      const next = p["instance"] as ProviderInstance;
+      const i = listed.findIndex((each) => each.instance.id === next.id);
+      const entry = { ...(listed[i] ?? listed[1]!), instance: next };
+      listed = i < 0 ? [...listed, entry] : listed.map((each, j) => (j === i ? entry : each));
+      return result();
+    };
+    window.parallax.acpRegistry = async () => [
+      {
+        id: "pi-acp",
+        name: "pi ACP",
+        version: "0.0.34",
+        description: "Pi over ACP",
+        distribution: { npx: { package: "pi-acp@0.0.34" } },
+      },
+      {
+        id: "gemini",
+        name: "Gemini CLI",
+        version: "0.62.0",
+        description: "Google's agent in the terminal",
+        repository: "https://github.com/google-gemini/gemini-cli",
+        distribution: { npx: { package: "@google/gemini-cli@0.62.0", args: ["--acp"] } },
+      },
+    ];
+  });
+  afterEach(() => {
+    states["local"] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} };
+  });
+
+  test("lists the host's instances, and a switch turns one off on the host", async () => {
+    await renderSettings();
+    expect(tabs()).toEqual([
+      "Claude Code2.1.281Authenticated · ryan@example.com",
+      "CodexNot authenticated",
+    ]);
+    expect(rows("Account")[0]).toBe("Display nameAuthenticated as ryan@example.com");
+    expect(calls("accounts/list")).toEqual([]);
+
+    await click(
+      document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Use Codex"]')!,
+    );
+    expect(saved()).toEqual({ ...instance("codex", "codex", "Codex"), enabled: false });
+    expect(tabs()[1]).toBe("CodexOff");
+    // One stays on, for new threads.
+    expect(
+      document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Use Claude Code"]')!
+        .disabled,
+    ).toBe(true);
+  });
+
+  const dialog = () => document.querySelector("dialog")!;
+  const next = async () => {
+    await act(async () => dialog().querySelector("form")!.requestSubmit());
+    await settle();
+  };
+
+  test("adds a model service with its key as a secret", async () => {
+    await renderSettings();
+    await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+    // A card goes on to its identity.
+    await click(button(dialog(), "OpenRouterClaude Code on any model"));
+    const id = [...dialog().querySelectorAll("input")][1]!;
+    expect(id.value).toBe("openrouter");
+    await next();
+    const key = dialog().querySelector<HTMLInputElement>(
+      '[aria-label="Value of ANTHROPIC_AUTH_TOKEN"]',
+    )!;
+    expect(key.type).toBe("password");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+        key,
+        "sk-or-1",
+      );
+      key.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await next();
+    expect(saved()).toEqual({
+      id: "openrouter",
+      kind: "openRouter",
+      name: "OpenRouter",
+      enabled: true,
+      args: [],
+      env: [
+        { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", secret: false },
+        { name: "ANTHROPIC_AUTH_TOKEN", value: "sk-or-1", secret: true },
+      ],
+      models: [],
+    });
+    expect(document.querySelector("dialog")).toBeNull();
+    expect(tab("OpenRouter").getAttribute("aria-selected")).toBe("true");
+  });
+
+  test("adds an ACP Registry agent that runs with npx", async () => {
+    await renderSettings();
+    await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+    await click(dialog().querySelector<HTMLElement>('[aria-label="Add Gemini CLI"]')!);
+    await next();
+    await next();
+    expect(saved()).toEqual({
+      id: "gemini-cli",
+      kind: "acp",
+      name: "Gemini CLI",
+      enabled: true,
+      program: "npx",
+      args: ["-y", "@google/gemini-cli@0.62.0", "--acp"],
+      env: [],
+      models: [],
+    });
+  });
+
+  test("an empty host offers Add provider", async () => {
+    listed = [];
+    await renderSettings();
+    expect(tabs()).toEqual([]);
+    expect(document.body.textContent).toContain("No providers on This Mac yet.");
+    await click(button(document.body, "Add provider"));
+    expect(dialog()).not.toBeNull();
+  });
+
+  test("a registry agent plxd tunes is added as its kind, with its defaults", async () => {
+    await renderSettings();
+    await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+    await click(dialog().querySelector<HTMLElement>('[aria-label="Add pi ACP"]')!);
+    await next();
+    await next();
+    expect(saved()).toEqual({
+      id: "pi",
+      kind: "pi",
+      name: "Pi",
+      enabled: true,
+      args: ["-y", "pi-acp@0.0.34"],
+      env: [{ name: "PI_ACP_PI_COMMAND", value: "pi", secret: false }],
+      models: [],
+    });
+  });
+
+  test("a version choice writes its fields, and is read back from them", async () => {
+    listed = [
+      {
+        ...listed[1]!,
+        instance: {
+          ...instance("pi", "pi", "Pi"),
+          args: ["-y", "pi-acp@0.0.34"],
+          env: [
+            { name: "PI_ACP_PI_COMMAND", value: "pi", secret: false },
+            { name: "TOKEN", secret: true },
+          ],
+        },
+      },
+    ];
+    await renderSettings();
+    const version = (label: string) =>
+      section("Version").querySelector<HTMLInputElement>(`[value="${label}"]`)!;
+    expect(version("1.0").checked).toBe(true);
+    await click(version("0.x"));
+    expect(saved()).toMatchObject({
+      args: ["-y", "pi-acp@0.0.27"],
+      env: [
+        { name: "TOKEN", secret: true },
+        { name: "PI_ACP_PI_COMMAND", value: "pi-0.73", secret: false },
+      ],
+    });
+    expect(version("0.x").checked).toBe(true);
+  });
 });

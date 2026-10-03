@@ -29,15 +29,7 @@ import type {
 import { EffortMenu } from "./EffortMenu";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { ModelMenu } from "./ModelMenu";
-import {
-  backendOf,
-  backends,
-  models,
-  useDisabledClis,
-  type Model,
-  type Provider,
-  type RunOptions,
-} from "./models";
+import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { menuItem, Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
@@ -321,7 +313,12 @@ export interface ComposerProps {
   started?: Pick<AgentRun, "model" | "effort" | "permission" | "contextWindow" | "fast">;
   /** Whether the host's plxd takes a context window and fast mode (`contextAndFast`). */
   contextAndFast?: boolean;
-  /** Providers the thread can't run on, by why, whose models it doesn't offer: those an open run
+  /**
+   * The host the thread runs on, whose provider instances and models it offers (`useCatalog`).
+   * Absent: the built-in ones.
+   */
+  hostId?: string;
+  /** Instances the thread can't run on, by why, whose models it doesn't offer: those an open run
    * can't move to, or a new thread can't start on. */
   unavailable?: Partial<Record<Provider, string>>;
   /** Why the model, effort, and access can't change right now, which turns them off. */
@@ -373,6 +370,7 @@ export function Composer({
   backend,
   started,
   contextAndFast,
+  hostId: host,
   unavailable,
   optionsDisabled,
   imageCaps,
@@ -399,18 +397,17 @@ export function Composer({
   const [pickedContext, setContext] = useState<number>();
   const [pickedFast, setFast] = useState<boolean>();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
-  const run = backend === undefined ? undefined : backends[backend];
-  const runModels = models.filter((m) => m.provider === run?.provider);
-  // Providers turned off in Settings, but an open run's own, which it keeps.
-  const off = useDisabledClis();
-  const blocked = { ...unavailable };
-  for (const cli of off) {
-    const p = backends[cli]?.provider;
-    if (p && !(started && p === run?.provider))
-      blocked[p] ??= `${p} is turned off in Settings > Providers.`;
-  }
-  // Any provider whose models aren't unavailable: an open run moves to it, a new thread starts there.
-  const choices = models.filter((m) => !blocked[m.provider]);
+  const catalog = useCatalog(host);
+  const instanceOf = (id: string | undefined) => catalog.instances.find((i) => i.id === id);
+  const run = instanceOf(backend);
+  const runModels = catalog.models.filter((m) => m.provider === run?.id);
+  // Instances turned off in Settings, but an open run's own, which it keeps.
+  const blocked: Partial<Record<Provider, string>> = { ...unavailable };
+  for (const i of catalog.instances)
+    if (!i.enabled && !(started && i === run))
+      blocked[i.id] ??= `${i.name} is turned off in Settings > Providers.`;
+  // Any instance whose models aren't unavailable: an open run moves to it, a new thread starts there.
+  const choices = catalog.models.filter((m) => !blocked[m.provider]);
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
     started &&
@@ -418,18 +415,18 @@ export function Composer({
     (runModels.find((m) => m.id === started.model) ?? {
       id: started.model ?? "",
       name: started.model ?? "Default model",
-      provider: run.provider,
+      provider: run.id,
       contexts: [],
     });
+  // A pick is kept by its instance and id, since the catalog's models are made again as it changes.
   const model =
-    choices.find((m) => m === pickedModel) ??
+    choices.find((m) => m.provider === pickedModel?.provider && m.id === pickedModel.id) ??
     startedModel ??
     runModels.find((m) => choices.includes(m)) ??
     choices[0];
-  // Where the message goes: the run's backend, or the one that runs the picked model.
-  const target =
-    run && model && model.provider !== run.provider ? backendOf(model.provider) : backend;
-  const targetBackend = target === undefined ? undefined : backends[target];
+  // Where the message goes: the run's backend, or the instance that runs the picked model.
+  const target = run && model && model.provider !== run.id ? model.provider : backend;
+  const targetBackend = instanceOf(target);
   const permissions = targetBackend?.permissions ?? [];
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
@@ -455,10 +452,16 @@ export function Composer({
   const account = { kind: "subscription", backend: target! } as const;
   let options: RunOptions = {};
   if (run && started && model && target !== backend)
-    options = { model: model.id, ...(efforts && { effort }), permission, ...speed, account };
+    options = {
+      ...(model.id && { model: model.id }),
+      ...(efforts && { effort }),
+      permission,
+      ...speed,
+      account,
+    };
   else if (run && started)
     options = {
-      ...(model && model !== startedModel && { model: model.id }),
+      ...(model?.id && model !== startedModel && { model: model.id }),
       ...(efforts && effort !== startedEffort && { effort }),
       ...(permission !== startedPermission && { permission }),
       ...(context !== undefined && context !== startedContext && { contextWindow: context }),
@@ -466,7 +469,7 @@ export function Composer({
     };
   else if (run)
     options = {
-      ...(model && { model: model.id }),
+      ...(model?.id && { model: model.id }),
       ...(efforts && { effort }),
       permission,
       ...speed,
@@ -951,7 +954,7 @@ export function Composer({
                     {/* Every provider, and an open run can't pick those it can't move to. */}
                     <ModelMenu
                       key={backend}
-                      models={models}
+                      catalog={catalog}
                       unavailable={blocked}
                       value={model}
                       onChange={setModel}
@@ -967,7 +970,7 @@ export function Composer({
                       contexts={contexts}
                       context={context}
                       onContext={setContext}
-                      fastMode={hasFast ? model!.provider : undefined}
+                      fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
                       fast={fast}
                       onFast={setFast}
                     />

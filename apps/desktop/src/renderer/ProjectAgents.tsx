@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentRun, ParallaxEvent } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
+import { instanceLogo, instanceName } from "./providers";
 import { backendLogos, statusLooks } from "./Sidebar";
 import { titleOf, waitingSince } from "./threads";
 import {
@@ -201,7 +202,7 @@ function AgentRow({
   onOpen: () => void;
 }) {
   const look = statusLooks[run.status] ?? statusLooks.completed!;
-  const Logo = backendLogos[run.backend];
+  const Logo = backendLogos[run.backend] ?? instanceLogo(run.backend);
   return (
     <li>
       <button
@@ -241,7 +242,7 @@ function AgentRow({
           )}
           <span className="ml-auto flex shrink-0 items-center gap-1">
             {Logo && <Logo />}
-            {accountLabel(run.accountId)}
+            {instanceName(run.accountId) ?? accountLabel(run.accountId)}
           </span>
         </span>
       </button>

@@ -175,8 +175,8 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Answer, AnswerError, ApprovalId, Backend, CancelSwitch,
-    Capabilities, Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, PromptImage, Run,
-    RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
+    Capabilities, Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, Overrides, PromptImage,
+    Run, RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
     WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::mcp;
@@ -413,6 +413,16 @@ pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// string as [`API_KEY_ENV`] (0004's table), but the two names are checked independently.
 pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
 
+/// The variables that pick the model behind each of Claude Code's aliases, background tasks, and
+/// subagents, which a run on a model service sets to its own model.
+const GATEWAY_MODEL_ENV: &[&str] = &[
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+];
+
 /// Variables every run gets: report a startup failure as a `result` instead of on stderr alone.
 const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")];
 
@@ -518,6 +528,7 @@ pub struct ClaudeBackend {
     program: OsString,
     cancel: CancelPolicy,
     limits: OutputLimits,
+    overrides: Overrides,
 }
 
 impl ClaudeBackend {
@@ -529,7 +540,20 @@ impl ClaudeBackend {
             program: PROGRAM.into(),
             cancel: CancelPolicy::default(),
             limits: OutputLimits::default(),
+            overrides: Overrides::default(),
         }
+    }
+
+    /// Runs as a provider instance (0040): its name, program, folder, arguments, and variables,
+    /// such as a model service's `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, which Claude
+    /// Code reports as `apiKeySource` `none`, as it does a login.
+    #[must_use]
+    pub fn with_overrides(mut self, overrides: Overrides) -> Self {
+        if let Some(program) = &overrides.program {
+            self.program.clone_from(program);
+        }
+        self.overrides = overrides;
+        self
     }
 
     /// Runs `program`, a name on `PATH` or an absolute path, instead of `claude`.
@@ -537,6 +561,26 @@ impl ClaudeBackend {
     pub fn with_program(mut self, program: impl Into<OsString>) -> Self {
         self.program = program.into();
         self
+    }
+
+    /// For an instance that points Claude Code at another endpoint (a model service, 0040):
+    /// every model alias, background tasks', and subagents' model become the run's `model`,
+    /// which the endpoint serves, unless the instance set them; and the user's settings can't
+    /// route it elsewhere.
+    fn pin_gateway_model(&self, spec: &mut ProcessSpec, model: Option<&str>) {
+        let set = |name: &str| self.overrides.env.iter().any(|(var, _)| var == name);
+        if !set("ANTHROPIC_BASE_URL") {
+            return;
+        }
+        spec.inject.set("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
+        let Some(model) = model else {
+            return;
+        };
+        for name in GATEWAY_MODEL_ENV {
+            if !set(name) {
+                spec.inject.set(name, model);
+            }
+        }
     }
 
     /// Cancels with `policy` instead of `SIGINT` and a 10 s grace period.
@@ -563,8 +607,17 @@ impl ClaudeBackend {
     ) -> Result<(ProcessSpec, &'static str), StartError> {
         let mut spec = ProcessSpec::new(self.program.clone(), cwd);
         spec.scrub = scrubbed(self.launcher.base());
-        let key_source = apply_credential(credential, &mut spec)?;
+        let credential = match credential {
+            Credential::Subscription { .. } => Credential::Subscription {
+                config_home: self.overrides.config_home(credential),
+            },
+            Credential::ApiKey(_) => credential.clone(),
+        };
+        let key_source = apply_credential(&credential, &mut spec)?;
         for (name, value) in ALWAYS_SET {
+            spec.inject.set(name, value);
+        }
+        for (name, value) in &self.overrides.env {
             spec.inject.set(name, value);
         }
         spec.stdin = StdinMode::Piped;
@@ -874,8 +927,12 @@ pub fn apply_credential(
 }
 
 impl Backend for ClaudeBackend {
-    fn name(&self) -> &'static str {
-        "claude"
+    fn name(&self) -> &str {
+        self.overrides.name.as_deref().unwrap_or(PROGRAM)
+    }
+
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        Some(parallax_protocol::CliKind::Claude)
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -893,7 +950,7 @@ impl Backend for ClaudeBackend {
         EFFORTS
     }
 
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         PERMISSIONS
     }
 
@@ -910,6 +967,7 @@ impl Backend for ClaudeBackend {
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
         let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
         spec.args = BASE_ARGS.iter().map(OsString::from).collect();
+        spec.args.extend(self.overrides.args.iter().cloned());
         Ok(Some(CommandsProbe {
             process: self.launcher.spawn(&spec)?,
             input: vec![json!({
@@ -935,6 +993,8 @@ impl Backend for ClaudeBackend {
         let (mut spec, expected_key_source) =
             self.spec(&request.cwd, &request.account.credential)?;
         spec.args = arguments(&request)?;
+        spec.args.extend(self.overrides.args.iter().cloned());
+        self.pin_gateway_model(&mut spec, request.model.as_deref());
         let asks = prompts(&request);
         let plan_exit = hands_over_plans(&request);
         let full = full_thread(&request);

@@ -33,7 +33,6 @@ use crate::agents::{self, Agents};
 use crate::backend::Backend;
 use crate::backend::claude::ClaudeBackend;
 use crate::backend::codex::CodexBackend;
-use crate::backend::cursor::CursorBackend;
 use crate::backend::fake::FakeBackend;
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::run_temp;
@@ -43,6 +42,7 @@ use crate::event_log::EventLog;
 use crate::keystore::{self, KeyStore};
 use crate::methods;
 use crate::paths::DataDir;
+use crate::providers::Providers;
 use crate::routing::BackendRegistry;
 use crate::store::StoreHandle;
 use crate::worktree::WorktreeManager;
@@ -224,6 +224,8 @@ pub(crate) struct Daemon {
     pub context: ContextIndex,
     /// Agent runs (#156).
     pub agents: Agents,
+    /// Provider instances (0040), whose backends are in `agents`' registry.
+    pub providers: Providers,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -318,12 +320,19 @@ impl Server {
             );
             backends.register(
                 parallax_protocol::Provider::Cursor,
-                Arc::new(CursorBackend::new(launcher.clone())),
+                Arc::new(crate::providers::cursor_backend(launcher.clone())),
             );
             backends
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
         let store = StoreHandle::open(&data_dir.store_file());
+        let keys = keystore::system_store();
+        let providers = Providers::load(
+            data_dir.root(),
+            Arc::clone(&keys),
+            launcher.clone(),
+            backends.clone(),
+        );
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
             log: Arc::new(EventLog::open(
@@ -340,10 +349,11 @@ impl Server {
                 max_requests_in_flight: config.max_requests_in_flight.max(1),
                 outbound_queue: config.outbound_queue.max(1),
             },
-            keys: keystore::system_store(),
+            keys,
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
             agents: Agents::new(backends, worktrees).with_approval_timeout(config.approval_timeout),
+            providers,
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -592,6 +602,9 @@ impl Daemon {
         );
         let worktrees = WorktreeManager::new(launcher.clone(), dir);
         let store = StoreHandle::open(&dir.join("plxd.sqlite3"));
+        let keys: Arc<dyn KeyStore> = Arc::new(crate::keystore::MemoryKeyStore::new());
+        let backends = BackendRegistry::new();
+        let providers = Providers::load(dir, Arc::clone(&keys), launcher.clone(), backends.clone());
         Arc::new(Self {
             started: Instant::now(),
             log: Arc::new(EventLog::open(
@@ -608,10 +621,11 @@ impl Daemon {
                 max_requests_in_flight: 32,
                 outbound_queue: 32,
             },
-            keys: Arc::new(crate::keystore::MemoryKeyStore::new()),
+            keys,
             data_dir: DataDir::new(dir).unwrap(),
             context: ContextIndex::default(),
-            agents: Agents::new(BackendRegistry::new(), worktrees),
+            agents: Agents::new(backends, worktrees),
+            providers,
         })
     }
 }

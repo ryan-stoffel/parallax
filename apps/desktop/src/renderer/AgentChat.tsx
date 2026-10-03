@@ -70,7 +70,7 @@ import { describeError } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { GitHubLogo, LinearLogo } from "./logos";
-import { backendOf, backends, models, type Provider, type RunOptions } from "./models";
+import { useCatalog, type Provider, type RunOptions } from "./models";
 import {
   latestPlan,
   PlanStrip,
@@ -185,6 +185,7 @@ export function AgentChat({
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
+  const catalog = useCatalog(hostId);
   const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
   // Permission requests (RYA-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
@@ -346,17 +347,16 @@ export function AgentChat({
     optionsDisabled = "This host's plxd can't change a thread's model, effort, or access";
   else if (isRunning(run?.status) && !moves)
     optionsDisabled = "The model, effort, and access can change once it finishes";
-  // The providers the run can't move to, by why: any but its own on a plxd that can't move runs,
-  // and for a coordinator, those whose backend can't run one.
+  // The instances the run can't move to, by why: any but its own on a plxd that can't move runs,
+  // and for a coordinator, those that can't run one.
   const unavailable: Partial<Record<Provider, string>> = {};
-  const own = run && backends[run.backend]?.provider;
-  for (const p of new Set(models.map((m) => m.provider)))
-    if (p === own) continue;
+  for (const i of catalog.instances)
+    if (i.id === run?.backend) continue;
     else if (!moves)
-      unavailable[p] =
-        `${p} is unavailable in this thread. Start a new thread to switch providers.`;
-    else if (run?.policy === "noWrite" && !backends[backendOf(p)]?.coordinator)
-      unavailable[p] = `${p} can't run a Project's coordinator yet.`;
+      unavailable[i.id] =
+        `${i.name} is unavailable in this thread. Start a new thread to switch providers.`;
+    else if (run?.policy === "noWrite" && !i.coordinator)
+      unavailable[i.id] = `${i.name} can't run a Project's coordinator yet.`;
   // Manual's requests come here only from a run that asked for them, on a plxd that sends them.
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
@@ -458,6 +458,7 @@ export function AgentChat({
           }
           backend={run?.backend}
           started={run}
+          hostId={hostId}
           contextAndFast={connected && "contextAndFast" in connection.capabilities}
           unavailable={unavailable}
           optionsDisabled={optionsDisabled}

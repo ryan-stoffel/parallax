@@ -424,6 +424,7 @@ export function NewThread({
           onSendInBackground={(prompt, options, images) => send(prompt, options, images, true)}
           // Hidden while starting, as the opened thread's composer has none.
           backend={runOptions && starting === undefined ? backend : undefined}
+          hostId={hostId}
           contextAndFast={
             connection?.status === "connected" && "contextAndFast" in connection.capabilities
           }
