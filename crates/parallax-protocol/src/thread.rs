@@ -9,6 +9,9 @@
 //! `agent/list`, `agent/send`, `agent/cancel`, `agent/events`, `events/subscribe`, and every
 //! `agent.*` event take a repo entry's id as they take a project's. What threads add is the repo
 //! entries, the archived flag, and host-level `repo.*` and `thread.*` events.
+//!
+//! Since 0041, behind `threadLineage`, a thread also has a parent (the run that launched it), a
+//! fork origin, a title, and a settled flag.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -16,8 +19,11 @@ use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, PromptImage, RunId,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, PromptImage, RunId, TurnId,
 };
+
+/// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
+pub const MAX_THREAD_TITLE_BYTES: usize = 256;
 
 uuid_v7_id! {
     /// A repo entry's id: a version 7 UUID that the client generates once and sends again on
@@ -75,10 +81,37 @@ pub struct Thread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_prompt_at: Option<Timestamp>,
+    /// The run that launched it (0041), from `thread/start`'s `parent`. Absent for a thread the
+    /// user started, and once the parent is deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<RunId>,
+    /// The run and turn it was forked from (0041). Absent once that run is deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub forked_from: Option<ForkedFrom>,
+    /// Its title (0041). Absent leaves it to the client, which shows its prompt's first line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// Whether the user or an agent marked it settled: nothing left to do (0041).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub settled: bool,
+}
+
+/// Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkedFrom {
+    /// The run it was forked from.
+    pub run: RunId,
+    /// The turn of that run it was forked at.
+    pub turn: TurnId,
 }
 
 /// Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
-/// `threadAttention` capability.
+/// `threadAttention` capability, or sets its title or settled flag (0041), behind
+/// `threadLineage`.
 ///
 /// `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
 /// past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
@@ -95,6 +128,15 @@ pub struct ThreadUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub snoozed_until: Option<Timestamp>,
+    /// Its new title, trimmed. Empty clears it. At most [`MAX_THREAD_TITLE_BYTES`] bytes, or it
+    /// fails with `invalidParams`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// True to mark it settled, false to clear that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub settled: Option<bool>,
 }
 
 /// Result of `thread/update`.
@@ -182,6 +224,16 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub repo: Option<RepoId>,
+    /// The run that launches it, recorded as its parent (0041). It must exist, or the start fails
+    /// with `runNotFound`. Behind `threadLineage`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<RunId>,
+    /// Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
+    /// conflict, since the title can change. Behind `threadLineage`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
     /// The first message.
     pub prompt: String,
     /// The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
@@ -359,9 +411,14 @@ mod tests {
             seen_at: None,
             snoozed_until: None,
             last_prompt_at: None,
+            parent: None,
+            forked_from: None,
+            title: None,
+            settled: false,
         };
         let value = serde_json::to_value(&thread).unwrap();
         assert!(value.get("archived").is_none(), "{value}");
+        assert!(value.get("settled").is_none(), "{value}");
         let archived: Thread = serde_json::from_value(json!({
             "id": thread.id,
             "repo": repo.id,

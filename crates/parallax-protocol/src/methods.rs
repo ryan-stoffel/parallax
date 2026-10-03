@@ -241,8 +241,9 @@ method_table! {
         ThreadStart = "thread/start": ThreadStartParams => ThreadStartResult;
         /// `thread/archive`: archives a normal thread or brings it back.
         ThreadArchive = "thread/archive": ThreadArchiveParams => ThreadArchiveResult;
-        /// `thread/update`: marks a normal thread seen or snoozes it (0033). Gated on the
-        /// `threadAttention` capability.
+        /// `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the
+        /// `threadAttention` capability, or sets its title or settled flag (0041), gated on
+        /// `threadLineage`.
         ThreadUpdate = "thread/update": ThreadUpdateParams => ThreadUpdateResult;
         /// `repo/update`: sets a repo entry's icon (0033). Gated on the `threadAttention`
         /// capability.
