@@ -328,6 +328,7 @@ impl Backend for AcpBackend {
             reports_cost: false,
             rate_limits: false,
             worker_sandbox: false,
+            fork: false,
         }
     }
 
@@ -358,6 +359,11 @@ impl Backend for AcpBackend {
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        if request.resume.as_ref().is_some_and(|resume| resume.fork) {
+            return Err(StartError::Unsupported(
+                "Cursor Agent can't fork a session".into(),
+            ));
+        }
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
