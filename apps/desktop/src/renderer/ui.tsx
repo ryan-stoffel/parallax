@@ -431,21 +431,26 @@ export interface Crumb {
  */
 export function Breadcrumb({ items, trail }: { items: Crumb[]; trail?: ReactNode }) {
   return (
-    // A trail takes the room the crumbs leave, and fits itself to it.
-    <nav aria-label="Breadcrumb" className={`min-w-0 ${trail ? "flex-1" : ""}`}>
+    // A trail takes the room the crumbs leave, and fits itself to it. A pane too narrow even for
+    // the crumbs' minimum widths, below the default window with the side panel open, cuts them
+    // off rather than sliding them under the top bar's buttons.
+    <nav aria-label="Breadcrumb" className={`min-w-0 overflow-x-clip ${trail ? "flex-1" : ""}`}>
       <ol className="flex min-w-0 items-center gap-2 text-[13px]">
         {items.map(({ label, icon, onClick }, i) => {
           const last = i === items.length - 1;
           const current = last && !onClick;
           const Tag = onClick ? "button" : "span";
-          // Before a trail, the last crumb keeps to 14rem, and gives way last.
+          // Before a trail, the last crumb keeps to 14rem, and gives way last: the crumbs between
+          // give way first, so the trail keeps room for its chips or +N.
           const room = last
             ? trail
-              ? "max-w-56 min-w-20"
+              ? "max-w-56 min-w-16"
               : ""
             : i === 0
               ? "max-w-48 min-w-10 shrink-[100]"
-              : "max-w-48 shrink-0";
+              : trail
+                ? "max-w-48 min-w-10 shrink-[10]"
+                : "max-w-48 shrink-0";
           return (
             // The slash is CSS content, so it stays out of the crumb's text. Crumbs before the
             // last are cut short at 12rem, and the first, such as a computer's name, gives way
@@ -468,7 +473,7 @@ export function Breadcrumb({ items, trail }: { items: Crumb[]; trail?: ReactNode
           );
         })}
         {trail && (
-          <li className="flex min-w-28 flex-1 items-center gap-1.5 before:text-faint-foreground before:content-['›']">
+          <li className="flex min-w-12 flex-1 items-center gap-1.5 before:text-faint-foreground before:content-['›']">
             {trail}
           </li>
         )}

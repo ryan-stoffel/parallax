@@ -66,8 +66,8 @@ function statusText(attention: Attention, run?: AgentRun) {
 /**
  * The top bar's chips for a thread's lineage (0041), after its title crumb: one per child, or as
  * a child, one per sibling with its own underlined. Each is a status dot, the provider's logo,
- * and the title cut short. At most four show, the open one always among them, and `+N` opens the
- * whole tree from `root`.
+ * and the title cut short. At most four show, as many as fit, the open one among them, and `+N`
+ * opens the whole tree from `root`, alone when no chip fits.
  */
 export function LineageTrail({
   state,
@@ -89,15 +89,18 @@ export function LineageTrail({
 }) {
   const group = useRef<HTMLDivElement>(null);
   const width = useWidth(group);
-  // As many as fit, up to four, and at least one; +N takes its room once any are left out.
-  const fit = (room: number) => Math.floor(room / chipRoom);
-  const count = Math.max(
-    1,
-    Math.min(maxChips, fit(width) >= chips.length ? chips.length : fit(width - moreRoom)),
+  // As many as fit, up to four; +N takes its room once any are left out, and stands alone when
+  // none fit, since its tree lists them all.
+  const fit = (room: number) => Math.max(0, Math.floor(room / chipRoom));
+  const count = Math.min(
+    maxChips,
+    fit(width) >= chips.length ? chips.length : fit(width - moreRoom),
   );
   let shown = chips.slice(0, count);
   const current = chips.find((c) => c.id === active);
-  if (current && !shown.includes(current)) shown = [...chips.slice(0, count - 1), current];
+  if (count > 0 && current && !shown.includes(current)) {
+    shown = [...chips.slice(0, count - 1), current];
+  }
   const more = chips.length - shown.length;
   const attention = (t: Thread) => attentionOf(t, state.runs[t.id], asksOf(state, t.id));
   return (

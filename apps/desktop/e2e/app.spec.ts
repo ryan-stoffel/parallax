@@ -555,6 +555,9 @@ test("switches between a thread and the one it launched, by chip, crumb, and sho
     expect(answer).not.toHaveProperty("error");
     return params.runId;
   };
+  // The chips get the top bar's room with the side panel closed; the end checks it open.
+  const hidePanel = page.getByRole("button", { name: "Hide side panel" });
+  if (await hidePanel.isVisible()) await hidePanel.click();
   const parent = await start("Plan the release");
   await start("Write the changelog", parent);
 
@@ -587,4 +590,20 @@ test("switches between a thread and the one it launched, by chip, crumb, and sho
   await expect(siblings).toBeVisible();
   await page.keyboard.press("ControlOrMeta+Alt+ArrowUp");
   await expect(current).toHaveText("Plan the release");
+
+  // At the default window size with the side panel open, the trail shrinks to +N, which still
+  // takes a click (Playwright fails it when the top bar's buttons cover it) and opens the tree.
+  // A screen smaller than the window, as on some CI runners, leaves no room to check.
+  await page.getByRole("button", { name: "Show side panel" }).click();
+  const width = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]!;
+    window.setSize(1200, 800);
+    return window.getSize()[0];
+  });
+  if (width === 1200) {
+    await chips.getByRole("button", { name: "1 more threads" }).click();
+    const tree = page.getByRole("dialog", { name: "Thread tree" });
+    await tree.getByRole("button", { name: /Write the changelog/ }).click();
+    await expect(siblings).toBeVisible();
+  }
 });
