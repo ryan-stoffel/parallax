@@ -20,7 +20,7 @@ use crate::agents::{
     Conn, Host, create, end_turn, fake, fake_backend, has_item, init, items, outcomes,
     project_params, send_params, start_params, subscribe, text, until, updated_to,
 };
-use crate::support::{WriteLock, kind, temp_dir};
+use crate::support::{kind, temp_dir};
 
 /// A run's script that reports its session, then works on its first turn until cancelled.
 fn busy() -> Vec<Step> {
@@ -225,14 +225,24 @@ async fn a_message_that_cant_be_stored_is_refused() {
     client.call::<AgentStart>(params).await.unwrap();
     until(&mut client, working()).await;
 
-    // The store's write waits out its busy timeout, then fails.
-    let lock = WriteLock::take(host.dir.path());
+    // The store refuses the queue's write at once. Holding SQLite's write lock instead would
+    // make every write, the event log's included, wait out the 5 s busy timeout in turn, which
+    // can outlast the client's patience.
+    rusqlite::Connection::open(host.dir.path().join("plxd.sqlite3"))
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER refuse_queued BEFORE INSERT ON queued
+             BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;",
+        )
+        .unwrap();
     let refused = client
         .call::<AgentSend>(send_params(run_id, TurnId::generate(), "Then this"))
         .await
         .unwrap_err();
-    lock.release();
-    assert!(refused.message.contains("store"), "{refused:?}");
+    assert!(
+        refused.message.contains("refused by the test"),
+        "{refused:?}"
+    );
     assert_eq!(queue(&mut client, run_id).await, []);
     host.server.stop().await;
 }

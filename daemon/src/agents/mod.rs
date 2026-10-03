@@ -58,8 +58,8 @@ use parallax_protocol::{
     AgentDelivery, AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentOutputItem,
     AgentPermission, AgentRun, AgentRunState, AgentSendParams, AgentStartParams, ApprovalId,
     CoordinatorThreadId, ErrorKind, GitStatus, ImageMediaType, ParallaxEvent, PrActParams,
-    PrDiffResult, PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest, QueueResult, Role,
-    RunId, TurnId,
+    PrDiffResult, PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest,
+    QueueResult, Role, RunId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, ThreadFields, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
