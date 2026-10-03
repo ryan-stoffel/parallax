@@ -1,9 +1,9 @@
 //! Provider instances (0040): `providers/*`.
 //!
 //! A provider instance is one configured way to run agents on a host: a built-in agent CLI
-//! (Claude Code, Codex, Cursor), an agent added from a preset (OpenCode, Antigravity, Pi, ...),
+//! (Claude Code, Codex, Cursor), an agent added from a preset (`OpenCode`, Antigravity, Pi, ...),
 //! an ACP agent from the registry or entered by hand, or a model service run through an agent
-//! (Ollama Cloud, OpenRouter, a local model). Its id is the backend name a subscription
+//! (Ollama Cloud, `OpenRouter`, a local model). Its id is the backend name a subscription
 //! `AccountChoice` names, so a thread starts on an instance the way it started on `claude`.
 
 use jiff::Timestamp;
@@ -27,7 +27,7 @@ pub enum ProviderKind {
     Cursor,
     /// Google Antigravity, `agy`.
     Antigravity,
-    /// OpenCode, `opencode acp`.
+    /// `OpenCode`, `opencode acp`.
     Opencode,
     /// Pi, through its ACP adapter.
     Pi,
@@ -39,7 +39,7 @@ pub enum ProviderKind {
     Hermes,
     /// Ollama Cloud's models through an agent.
     OllamaCloud,
-    /// OpenRouter's models through an agent.
+    /// `OpenRouter`'s models through an agent.
     OpenRouter,
     /// A model served on this host or the network, through an agent.
     LocalModel,

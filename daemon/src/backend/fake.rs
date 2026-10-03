@@ -269,7 +269,7 @@ impl FakeBackend {
 }
 
 impl Backend for FakeBackend {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "fake"
     }
 

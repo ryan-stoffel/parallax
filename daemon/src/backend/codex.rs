@@ -102,8 +102,7 @@ use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
     EventSink, ImageMediaType, Overrides, PromptImage, RunHandle, RunRequest, StartError, Started,
-    ToolPolicy,
-    TurnId, WorkerSandbox, check_argument, prepend_path_line,
+    ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::images;
 

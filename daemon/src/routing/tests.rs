@@ -110,7 +110,7 @@ impl ScriptedBackend {
 }
 
 impl Backend for ScriptedBackend {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "claude"
     }
 

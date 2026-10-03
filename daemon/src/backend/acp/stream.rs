@@ -134,13 +134,12 @@ impl Translator {
             (None, Some(id)) => match id.as_u64() {
                 Some(id) => {
                     let result = match message.get("error") {
-                        Some(error) => Err(error
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .map_or_else(
+                        Some(error) => {
+                            Err(error.get("message").and_then(Value::as_str).map_or_else(
                                 || format!("{} returned an error", self.label),
                                 str::to_owned,
-                            )),
+                            ))
+                        }
                         None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
                     };
                     steps.push(Step::Response { id, result });

@@ -600,10 +600,16 @@ fn only_a_threads_subscription_runs_on_cursor() {
     ));
     let mut key = fake.request();
     key.account.credential = Credential::ApiKey(ApiKey::new("k".into()));
-    assert!(matches!(arguments(&cursor(), &key), Err(StartError::Unsupported(_))));
+    assert!(matches!(
+        arguments(&cursor(), &key),
+        Err(StartError::Unsupported(_))
+    ));
     let mut auto = fake.request();
     auto.permission = Some(AgentPermission::Auto);
-    assert!(matches!(arguments(&cursor(), &auto), Err(StartError::Unsupported(_))));
+    assert!(matches!(
+        arguments(&cursor(), &auto),
+        Err(StartError::Unsupported(_))
+    ));
     let mut bypass = fake.request();
     bypass.permission = Some(AgentPermission::Bypass);
     bypass.model = None;

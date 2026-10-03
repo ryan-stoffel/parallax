@@ -19,8 +19,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountId, AgentPermission, CliKind, ProviderInfo, ProviderInstance,
-    ProviderKind, ProviderModel, ProvidersListResult,
+    AccountId, AgentPermission, CliKind, ProviderInfo, ProviderInstance, ProviderKind,
+    ProviderModel, ProvidersListResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -50,7 +50,7 @@ enum Driver {
     /// Codex's `app-server`.
     Codex,
     /// An ACP agent.
-    Acp(AcpAgent),
+    Acp(Box<AcpAgent>),
 }
 
 /// A kind's defaults.
@@ -62,7 +62,7 @@ struct Preset {
     login: &'static [&'static str],
     /// The variable the instance's home folder sets, for an ACP agent.
     home_env: Option<&'static str>,
-    /// Where a model service lists its models, OpenAI style, and the variable that holds its key.
+    /// Where a model service lists its models, `OpenAI` style, and the variable that holds its key.
     models_url: Option<(&'static str, &'static str)>,
 }
 
@@ -72,6 +72,7 @@ fn acp_agent(label: &str, program: &str, args: &[&str]) -> AcpAgent {
 }
 
 /// The defaults of `kind`. `None` for a kind this plxd doesn't know.
+#[expect(clippy::too_many_lines, reason = "one table of every kind's defaults")]
 fn preset(kind: ProviderKind) -> Option<Preset> {
     let base = |program, driver| Preset {
         program,
@@ -80,7 +81,12 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
         home_env: None,
         models_url: None,
     };
-    let plan = |edit: &str| (vec![(AgentPermission::Plan, "plan".to_owned())], Some(edit.to_owned()));
+    let plan = |edit: &str| {
+        (
+            vec![(AgentPermission::Plan, "plan".to_owned())],
+            Some(edit.to_owned()),
+        )
+    };
     Some(match kind {
         ProviderKind::Claude => Preset {
             login: &["claude", "auth", "login"],
@@ -96,14 +102,14 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
                 login: &["agent", "login"],
                 ..base(
                     "agent",
-                    Driver::Acp(AcpAgent {
+                    Driver::Acp(Box::new(AcpAgent {
                         scrub: vec!["CURSOR_".into()],
                         model_flag: Some("--model".into()),
                         bypass_flag: Some("--force".into()),
                         modes,
                         edit_mode,
                         ..acp_agent("Cursor Agent", "agent", &["acp"])
-                    }),
+                    })),
                 )
             }
         }
@@ -114,11 +120,11 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
                 home_env: Some("OPENCODE_CONFIG_DIR"),
                 ..base(
                     "opencode",
-                    Driver::Acp(AcpAgent {
+                    Driver::Acp(Box::new(AcpAgent {
                         modes,
                         edit_mode,
                         ..acp_agent("OpenCode", "opencode", &["acp"])
-                    }),
+                    })),
                 )
             }
         }
@@ -128,7 +134,7 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
             login: &["pi"],
             ..base(
                 "npx",
-                Driver::Acp(acp_agent("Pi", "npx", &["-y", "pi-acp@0.0.34"])),
+                Driver::Acp(Box::new(acp_agent("Pi", "npx", &["-y", "pi-acp@0.0.34"]))),
             )
         },
         ProviderKind::Omp => {
@@ -138,11 +144,11 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
                 home_env: Some("PI_CODING_AGENT_DIR"),
                 ..base(
                     "omp",
-                    Driver::Acp(AcpAgent {
+                    Driver::Acp(Box::new(AcpAgent {
                         modes,
                         edit_mode,
                         ..acp_agent("Oh My Pi", "omp", &["acp"])
-                    }),
+                    })),
                 )
             }
         }
@@ -150,12 +156,12 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
             login: &["grok", "login"],
             ..base(
                 "grok",
-                Driver::Acp(AcpAgent {
+                Driver::Acp(Box::new(AcpAgent {
                     scrub: vec!["XAI_".into()],
                     model_flag: Some("--model".into()),
                     bypass_flag: Some("--always-approve".into()),
                     ..acp_agent("Grok Build", "grok", &["agent", "stdio"])
-                }),
+                })),
             )
         },
         // Hermes Agent's modes are its edit approval policy.
@@ -164,14 +170,14 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
             home_env: Some("HERMES_HOME"),
             ..base(
                 "hermes",
-                Driver::Acp(AcpAgent {
+                Driver::Acp(Box::new(AcpAgent {
                     modes: vec![
                         (AgentPermission::Manual, "default".into()),
                         (AgentPermission::Edit, "accept_edits".into()),
                         (AgentPermission::Bypass, "dont_ask".into()),
                     ],
                     ..acp_agent("Hermes Agent", "hermes", &["acp"])
-                }),
+                })),
             )
         },
         ProviderKind::OllamaCloud => Preset {
@@ -189,8 +195,21 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
             models_url: Some(("http://127.0.0.1:8080/v1/models", "ANTHROPIC_AUTH_TOKEN")),
             ..base("claude", Driver::Claude)
         },
-        ProviderKind::Acp => base("", Driver::Acp(acp_agent("", "", &[]))),
-        ProviderKind::Antigravity | ProviderKind::Unknown => return None,
+        // Google's own ACP server for Antigravity, the way it lets other apps run Antigravity
+        // (`agy` itself bars third-party clients on a personal account). It signs in itself.
+        ProviderKind::Antigravity => Preset {
+            home_env: Some("GEMINI_HOME"),
+            ..base(
+                "agy_acp_server.par",
+                Driver::Acp(Box::new(AcpAgent {
+                    scrub: vec!["GEMINI_".into(), "GOOGLE_".into()],
+                    env: vec![("AGY_ACP_FORCE_FILE_STORAGE".into(), "1".into())],
+                    ..acp_agent("Antigravity", "agy_acp_server.par", &[])
+                })),
+            )
+        },
+        ProviderKind::Acp => base("", Driver::Acp(Box::new(acp_agent("", "", &[])))),
+        ProviderKind::Unknown => return None,
     })
 }
 
@@ -232,6 +251,8 @@ struct Found {
     account: Option<String>,
     note: Option<String>,
     models: Vec<ProviderModel>,
+    /// The command that signs it in, from the agent's own sign-in methods.
+    login: Option<Vec<String>>,
 }
 
 /// This host's provider instances.
@@ -279,10 +300,13 @@ impl Providers {
                     env: Vec::new(),
                     models: Vec::new(),
                 };
-                stored.insert(i.min(stored.len()), Stored {
-                    instance,
-                    secrets: None,
-                });
+                stored.insert(
+                    i.min(stored.len()),
+                    Stored {
+                        instance,
+                        secrets: None,
+                    },
+                );
             }
         }
         let providers = Self {
@@ -304,7 +328,9 @@ impl Providers {
     /// [`CACHE_TTL`], or all of them with `refresh`.
     pub async fn list(&self, detector: &CliDetector, refresh: bool) -> ProvidersListResult {
         let stored = self.stored.lock().await.clone();
-        let probes = stored.iter().map(|entry| self.found(detector, entry, refresh));
+        let probes = stored
+            .iter()
+            .map(|entry| self.found(detector, entry, refresh));
         let found = futures_util::future::join_all(probes).await;
         let providers = stored
             .into_iter()
@@ -486,7 +512,7 @@ impl Providers {
             Driver::Codex => Arc::new(CodexBackend::new(launcher).with_overrides(overrides)),
             Driver::Acp(agent) => Arc::new(AcpBackend::new(
                 launcher,
-                acp_for(instance, &preset, agent.clone(), overrides),
+                acp_for(instance, &preset, (**agent).clone(), overrides),
             )),
         })
     }
@@ -517,42 +543,39 @@ impl Providers {
             };
         };
         let default_program = detected_cli(&instance.id).filter(|_| instance.program.is_none());
-        let mut found = match default_program {
-            Some(cli) => {
-                let detected = if refresh {
-                    detector.refresh_one(cli).await
-                } else {
-                    detector.get(cli).await
-                };
-                Found {
-                    installed: detected.installed,
-                    path: detected.path,
-                    version: detected.version,
-                    signed_in: detected.signed_in,
-                    account: detected.plan,
-                    note: detected.note,
-                    models: Vec::new(),
-                }
+        let mut found = if let Some(cli) = default_program {
+            let detected = if refresh {
+                detector.refresh_one(cli).await
+            } else {
+                detector.get(cli).await
+            };
+            Found {
+                installed: detected.installed,
+                path: detected.path,
+                version: detected.version,
+                signed_in: detected.signed_in,
+                account: detected.plan,
+                note: detected.note,
+                ..Found::default()
             }
-            None => {
-                let program = program_of(instance, &preset);
-                let Some(path) = detect::resolve(&self.launcher, &program) else {
-                    return Found {
-                        note: Some(format!("{program} isn't installed on this host")),
-                        ..Found::default()
-                    };
-                };
-                let version = detect::run(&self.launcher, &program, &["--version"], PROBE_TIMEOUT)
-                    .await
-                    .ok()
-                    .filter(|ran| ran.exit_code == Some(0))
-                    .and_then(|ran| version_of(&ran.stdout));
-                Found {
-                    installed: true,
-                    path: Some(path.display().to_string()),
-                    version,
+        } else {
+            let program = program_of(instance, &preset);
+            let Some(path) = detect::resolve(&self.launcher, &program) else {
+                return Found {
+                    note: Some(format!("{program} isn't installed on this host")),
                     ..Found::default()
-                }
+                };
+            };
+            let version = detect::run(&self.launcher, &program, &["--version"], PROBE_TIMEOUT)
+                .await
+                .ok()
+                .filter(|ran| ran.exit_code == Some(0))
+                .and_then(|ran| version_of(&ran.stdout));
+            Found {
+                installed: true,
+                path: Some(path.display().to_string()),
+                version,
+                ..Found::default()
             }
         };
         if !found.installed {
@@ -590,14 +613,8 @@ impl Providers {
                 }
             }
             (Driver::Acp(agent), _) if instance.kind != ProviderKind::Cursor => {
-                let agent = acp_for(instance, &preset, agent.clone(), self.overrides(entry));
-                match acp_probe(&self.launcher, &agent).await {
-                    Ok((signed_in, models)) => {
-                        found.signed_in = Some(signed_in);
-                        found.models = models;
-                    }
-                    Err(error) => found.note = Some(error),
-                }
+                let agent = acp_for(instance, &preset, (**agent).clone(), self.overrides(entry));
+                acp_probe(&self.launcher, &agent, &mut found).await;
             }
             _ => {}
         }
@@ -634,9 +651,20 @@ fn acp_for(
         ProviderKind::Acp | ProviderKind::Pi => {}
         _ => agent.args.extend(overrides.args),
     }
-    agent.env = overrides.env;
+    agent.env.extend(overrides.env);
     if let (Some(name), Some(home)) = (preset.home_env, &instance.home) {
         agent.env.push((name.into(), home.into()));
+    }
+    // Antigravity's server finds its harness beside it.
+    if instance.kind == ProviderKind::Antigravity
+        && let Some(dir) = Path::new(&agent.program)
+            .parent()
+            .filter(|dir| dir.is_absolute())
+    {
+        let harness = dir.join("localharness_external");
+        agent
+            .env
+            .push(("ANTIGRAVITY_HARNESS_PATH".into(), harness.into()));
     }
     agent
 }
@@ -645,7 +673,10 @@ fn acp_for(
 fn version_of(text: &str) -> Option<String> {
     let line = text.lines().find(|line| !line.trim().is_empty())?;
     line.split_whitespace()
-        .find(|word| word.trim_start_matches('v').starts_with(|c: char| c.is_ascii_digit()))
+        .find(|word| {
+            word.trim_start_matches('v')
+                .starts_with(|c: char| c.is_ascii_digit())
+        })
         .or_else(|| line.split_whitespace().last())
         .map(|word| word.trim_start_matches('v').to_owned())
 }
@@ -700,67 +731,140 @@ async fn models_from(
         .collect())
 }
 
-/// Starts `agent`, opens a session in the user's home, and reads whether it is signed in and
-/// the models its `session/new` answer lists. The agent is killed once it answers.
-async fn acp_probe(
-    launcher: &Launcher,
-    agent: &AcpAgent,
-) -> Result<(bool, Vec<ProviderModel>), String> {
+/// Starts `agent`, opens a session in the user's home, and reads what its answers say: how it
+/// signs in, from `initialize`, and whether it is signed in and its models, from `session/new`.
+/// The agent is killed once it answers, or after [`PROBE_TIMEOUT`]. A browser it would open for
+/// a sign-in is never opened: that waits for the user's Sign in.
+async fn acp_probe(launcher: &Launcher, agent: &AcpAgent, found: &mut Found) {
     let home = std::env::home_dir().unwrap_or_else(std::env::temp_dir);
     let mut spec = ProcessSpec::new(&agent.program, &home);
     spec.args.clone_from(&agent.args);
     spec.scrub = acp::scrubbed(launcher.base(), &agent.scrub);
     spec.inject = agent.env.iter().cloned().collect();
+    spec.inject.set("BROWSER", "/usr/bin/true");
     spec.stdin = StdinMode::Piped;
-    let mut process = launcher
-        .spawn(&spec)
-        .map_err(|error| format!("couldn't start it: {error}"))?;
+    let mut process = match launcher.spawn(&spec) {
+        Ok(process) => process,
+        Err(error) => {
+            found.note = Some(format!("couldn't start it: {error}"));
+            return;
+        }
+    };
     let mut stdin = process.take_stdin();
     let input = [
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": acp::initialize_params()}),
         json!({"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": home, "mcpServers": []}}),
     ]
     .iter()
-    .map(|message| format!("{message}\n"))
-    .collect::<String>();
+    .fold(String::new(), |mut input, message| {
+        input.push_str(&message.to_string());
+        input.push('\n');
+        input
+    });
     let read = async {
         if let Some(pipe) = &mut stdin {
             use tokio::io::AsyncWriteExt;
             let _ = pipe.write_all(input.as_bytes()).await;
         }
         loop {
-            match process.next().await {
-                Some(Output::Line(line)) => {
-                    let Ok(message) = serde_json::from_slice::<Value>(&line) else {
-                        continue;
-                    };
-                    if message["id"] != 2 {
-                        continue;
-                    }
-                    if let Some(error) = message.get("error") {
-                        // pi-acp answers ACP's -32000; Hermes Agent says so in its data.
-                        let lower = error.to_string().to_ascii_lowercase();
-                        if error["code"] == -32000
-                            || ["auth", "login", "not connected"].iter().any(|w| lower.contains(w))
-                        {
-                            return Ok((false, Vec::new()));
-                        }
-                        let text = error["message"].as_str().unwrap_or_default();
-                        return Err(text.to_owned());
-                    }
-                    return Ok((true, session_models(&message["result"])));
-                }
-                Some(Output::Oversized { .. }) => {}
+            let message = match process.next().await {
+                Some(Output::Line(line)) => match serde_json::from_slice::<Value>(&line) {
+                    Ok(message) => message,
+                    Err(_) => continue,
+                },
+                Some(Output::Oversized { .. }) => continue,
                 Some(Output::Exited(exit)) => {
-                    return Err(format!("it exited: {}", exit.stderr_tail.trim()));
+                    found.note = Some(format!("it exited: {}", exit.stderr_tail.trim()));
+                    return;
                 }
-                None => return Err("it exited".to_owned()),
+                None => return,
+            };
+            if message["id"] == 1 {
+                found.login = login_of(agent, &message["result"]["authMethods"]);
+                continue;
             }
+            if message["id"] != 2 {
+                continue;
+            }
+            match message.get("error") {
+                // pi-acp answers ACP's -32000; Hermes Agent says so in its data.
+                Some(error)
+                    if error["code"] == -32000 || {
+                        let lower = error.to_string().to_ascii_lowercase();
+                        ["auth", "login", "not connected"]
+                            .iter()
+                            .any(|w| lower.contains(w))
+                    } =>
+                {
+                    found.signed_in = Some(false);
+                }
+                Some(error) => {
+                    found.note = error["message"].as_str().map(str::to_owned);
+                }
+                None => {
+                    found.signed_in = Some(true);
+                    found.models = session_models(&message["result"]);
+                }
+            }
+            return;
         }
     };
-    tokio::time::timeout(PROBE_TIMEOUT, read)
-        .await
-        .unwrap_or_else(|_| Err(format!("it didn't open a session within {PROBE_TIMEOUT:?}")))
+    if tokio::time::timeout(PROBE_TIMEOUT, read).await.is_err() {
+        found.note = Some(format!(
+            "it didn't open a session within {}s; it may be waiting for you to sign in",
+            PROBE_TIMEOUT.as_secs()
+        ));
+    }
+}
+
+/// The command that signs in to `agent`, from its `initialize` answer's `authMethods`: a terminal
+/// method's arguments after the agent's own command, or else `plxd acp-login` with the first
+/// method the agent runs itself (ACP's `agent` type), for a browser sign-in.
+fn login_of(agent: &AcpAgent, methods: &Value) -> Option<Vec<String>> {
+    let methods = methods.as_array()?;
+    let command = || {
+        std::iter::once(&agent.program)
+            .chain(&agent.args)
+            .map(|arg| arg.to_string_lossy().into_owned())
+    };
+    let env = agent
+        .env
+        .iter()
+        .map(|(name, value)| format!("{}={}", name.to_string_lossy(), value.to_string_lossy()))
+        .collect::<Vec<_>>();
+    let prefix = || {
+        (!env.is_empty())
+            .then(|| std::iter::once("env".to_owned()).chain(env.iter().cloned()))
+            .into_iter()
+            .flatten()
+    };
+    if let Some(terminal) = methods.iter().find(|m| m["type"] == "terminal") {
+        let args = terminal["args"].as_array().into_iter().flatten();
+        return Some(
+            prefix()
+                .chain(command())
+                .chain(args.filter_map(|arg| arg.as_str().map(str::to_owned)))
+                .collect(),
+        );
+    }
+    let method = methods
+        .iter()
+        .find(|m| m.get("type").is_none_or(|kind| kind == "agent"))?
+        .get("id")?
+        .as_str()?;
+    let plxd = std::env::current_exe().ok()?;
+    Some(
+        prefix()
+            .chain([
+                plxd.to_string_lossy().into_owned(),
+                "acp-login".to_owned(),
+                "--method".to_owned(),
+                method.to_owned(),
+                "--".to_owned(),
+            ])
+            .chain(command())
+            .collect(),
+    )
 }
 
 /// The models a `session/new` answer lists: ACP's `models`, or its model config option.
@@ -824,7 +928,8 @@ fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
         ));
     }
     for model in &instance.models {
-        check_argument("model", &model.id).map_err(|e| ErrorObject::invalid_params(e.to_string()))?;
+        check_argument("model", &model.id)
+            .map_err(|e| ErrorObject::invalid_params(e.to_string()))?;
     }
     for var in &instance.env {
         if var.name.is_empty() || var.name.contains(['=', '\0']) {
@@ -865,7 +970,8 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
         Some(Driver::Acp(agent)) => (agent.permissions(), false, false),
         None => (vec![AgentPermission::Edit], false, false),
     };
-    // The login runs the instance's own program where it is the kind's.
+    // The login runs the instance's own program where it is the kind's. An agent without a
+    // preset login says how it signs in.
     let login = preset.filter(|p| !p.login.is_empty()).map(|p| {
         p.login
             .iter()
@@ -876,6 +982,7 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
             })
             .collect()
     });
+    let login = login.or(found.login);
     let mut instance = instance;
     for var in &mut instance.env {
         if var.secret {
@@ -902,15 +1009,157 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
 /// `agent acp` (0036).
 #[must_use]
 pub fn cursor_backend(launcher: Launcher) -> AcpBackend {
-    let agent = match preset(ProviderKind::Cursor).map(|preset| preset.driver) {
-        Some(Driver::Acp(agent)) => agent,
-        _ => unreachable!("Cursor's preset is an ACP agent"),
+    let Some(Driver::Acp(agent)) = preset(ProviderKind::Cursor).map(|preset| preset.driver) else {
+        unreachable!("Cursor's preset is an ACP agent");
     };
     AcpBackend::new(
         launcher,
         AcpAgent {
             name: "cursor".into(),
-            ..agent
+            ..*agent
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use parallax_protocol::{ProviderEnvVar, ProviderInstance, ProviderKind};
+
+    use super::{Providers, Stored};
+    use crate::backend::process::{Environment, Launcher};
+    use crate::keystore::{KeyStore, MemoryKeyStore};
+    use crate::paths::DataDir;
+    use crate::routing::BackendRegistry;
+
+    fn load(dir: &std::path::Path, keys: Arc<MemoryKeyStore>) -> (Providers, BackendRegistry) {
+        let launcher = Launcher::new(
+            DataDir::new(dir.join("data")).unwrap(),
+            Environment::empty(),
+        );
+        let registry = BackendRegistry::new();
+        let providers = Providers::load(dir, keys, launcher, registry.clone());
+        (providers, registry)
+    }
+
+    fn ollama() -> ProviderInstance {
+        ProviderInstance {
+            id: "ollama".into(),
+            kind: ProviderKind::OllamaCloud,
+            name: "Ollama Cloud".into(),
+            enabled: true,
+            program: None,
+            home: None,
+            args: Vec::new(),
+            env: vec![
+                ProviderEnvVar {
+                    name: "ANTHROPIC_BASE_URL".into(),
+                    value: Some("https://ollama.com".into()),
+                    secret: false,
+                },
+                ProviderEnvVar {
+                    name: "ANTHROPIC_AUTH_TOKEN".into(),
+                    value: Some("ollama-key".into()),
+                    secret: true,
+                },
+            ],
+            models: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_saved_instance_keeps_its_secret_in_the_keychain_and_routes_by_its_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = Arc::new(MemoryKeyStore::new());
+        let (providers, registry) = load(dir.path(), Arc::clone(&keys));
+        providers.save(ollama()).await.unwrap();
+
+        let file = std::fs::read_to_string(dir.path().join("providers.json")).unwrap();
+        assert!(
+            !file.contains("ollama-key"),
+            "the key stays out of the file"
+        );
+        let stored: Vec<Stored> = serde_json::from_str(&file).unwrap();
+        let secrets = stored
+            .iter()
+            .find(|s| s.instance.id == "ollama")
+            .unwrap()
+            .secrets;
+        let kept = keys.get(secrets.unwrap()).unwrap().unwrap();
+        assert!(kept.contains("ollama-key"));
+        assert_eq!(
+            registry.by_backend_name("ollama").unwrap().1.name(),
+            "ollama"
+        );
+
+        // Saving again without the value keeps it; a reload registers it again.
+        let mut edited = ollama();
+        edited.env[1].value = None;
+        edited.name = "Ollama".into();
+        providers.save(edited).await.unwrap();
+        let (reloaded, registry) = load(dir.path(), keys);
+        let entry = reloaded
+            .stored
+            .lock()
+            .await
+            .iter()
+            .find(|s| s.instance.id == "ollama")
+            .cloned();
+        let env = reloaded.env(&entry.unwrap());
+        assert!(
+            env.iter()
+                .any(|(name, value)| name == "ANTHROPIC_AUTH_TOKEN" && value == "ollama-key")
+        );
+        assert!(registry.by_backend_name("ollama").is_some());
+    }
+
+    #[tokio::test]
+    async fn built_in_instances_exist_and_can_only_be_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let (providers, registry) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
+        let ids: Vec<String> = providers
+            .stored
+            .lock()
+            .await
+            .iter()
+            .map(|s| s.instance.id.clone())
+            .collect();
+        assert_eq!(ids, ["claude", "codex", "cursor"]);
+        assert!(providers.remove("codex").await.is_err());
+
+        providers.save(ollama()).await.unwrap();
+        let mut off = ollama();
+        off.enabled = false;
+        providers.save(off).await.unwrap();
+        assert!(
+            registry.by_backend_name("ollama").is_none(),
+            "a disabled instance doesn't route"
+        );
+        providers.remove("ollama").await.unwrap();
+        let file = std::fs::read_to_string(dir.path().join("providers.json")).unwrap();
+        assert!(!file.contains("\"ollama\""));
+    }
+
+    #[tokio::test]
+    async fn an_unusable_instance_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (providers, _) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
+        let mut bad = ollama();
+        bad.id = "Not An Id".into();
+        assert!(providers.save(bad).await.is_err());
+        let mut acp = ollama();
+        acp.kind = ProviderKind::Acp;
+        acp.id = "amp".into();
+        assert!(
+            providers.save(acp).await.is_err(),
+            "an ACP agent needs its program"
+        );
+        let mut claude = ollama();
+        claude.id = "claude".into();
+        assert!(
+            providers.save(claude).await.is_err(),
+            "a built-in keeps its kind"
+        );
+    }
 }

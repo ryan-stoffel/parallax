@@ -413,6 +413,16 @@ pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// string as [`API_KEY_ENV`] (0004's table), but the two names are checked independently.
 pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
 
+/// The variables that pick the model behind each of Claude Code's aliases, background tasks, and
+/// subagents, which a run on a model service sets to its own model.
+const GATEWAY_MODEL_ENV: &[&str] = &[
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+];
+
 /// Variables every run gets: report a startup failure as a `result` instead of on stderr alone.
 const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")];
 
@@ -551,6 +561,26 @@ impl ClaudeBackend {
     pub fn with_program(mut self, program: impl Into<OsString>) -> Self {
         self.program = program.into();
         self
+    }
+
+    /// For an instance that points Claude Code at another endpoint (a model service, 0040):
+    /// every model alias, background tasks', and subagents' model become the run's `model`,
+    /// which the endpoint serves, unless the instance set them; and the user's settings can't
+    /// route it elsewhere.
+    fn pin_gateway_model(&self, spec: &mut ProcessSpec, model: Option<&str>) {
+        let set = |name: &str| self.overrides.env.iter().any(|(var, _)| var == name);
+        if !set("ANTHROPIC_BASE_URL") {
+            return;
+        }
+        spec.inject.set("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
+        let Some(model) = model else {
+            return;
+        };
+        for name in GATEWAY_MODEL_ENV {
+            if !set(name) {
+                spec.inject.set(name, model);
+            }
+        }
     }
 
     /// Cancels with `policy` instead of `SIGINT` and a 10 s grace period.
@@ -960,6 +990,7 @@ impl Backend for ClaudeBackend {
             self.spec(&request.cwd, &request.account.credential)?;
         spec.args = arguments(&request)?;
         spec.args.extend(self.overrides.args.iter().cloned());
+        self.pin_gateway_model(&mut spec, request.model.as_deref());
         let asks = prompts(&request);
         let plan_exit = hands_over_plans(&request);
         let full = full_thread(&request);

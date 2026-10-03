@@ -1444,7 +1444,7 @@ impl Other {
 }
 
 impl Backend for Other {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "other"
     }
 

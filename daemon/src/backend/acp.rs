@@ -1,6 +1,6 @@
 //! The ACP backend: runs any agent that speaks the Agent Client Protocol (ACP) as a thread's
 //! full agent, the way Claude threads run full Claude Code (0034, 0036, 0040). Cursor Agent
-//! (`agent acp`) was the first; OpenCode, OMP, Hermes Agent, Grok Build, and the agents in the
+//! (`agent acp`) was the first; `OpenCode`, OMP, Hermes Agent, Grok Build, and the agents in the
 //! ACP registry run the same way, each described by an [`AcpAgent`].
 //!
 //! # The command
@@ -184,13 +184,63 @@ impl AcpBackend {
     }
 }
 
-/// The ACP `initialize` params plxd sends: a client with no file system or terminal of its own.
+/// The ACP `initialize` params plxd sends: a client with no file system or terminal of its own
+/// for the agent's tools, that can run an agent's terminal sign-in (the app's sign-in terminal,
+/// 0040).
+#[must_use]
 pub fn initialize_params() -> Value {
     json!({
         "protocolVersion": 1,
-        "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
+        "clientCapabilities": {
+            "fs": {"readTextFile": false, "writeTextFile": false},
+            "terminal": false,
+            "auth": {"terminal": true},
+            "_meta": {"terminal-auth": true},
+        },
         "clientInfo": {"name": "plxd", "version": crate::version()},
     })
+}
+
+/// Signs in to the ACP agent `program args` with its sign-in method `method`, one the agent runs
+/// itself, such as a browser OAuth flow: `initialize`, then `authenticate`, waiting as long as the
+/// user takes. For `plxd acp-login`, which the app's sign-in terminal runs (0040).
+///
+/// # Errors
+///
+/// What the agent answered instead, or why it couldn't be asked.
+pub fn authenticate(program: &OsStr, args: &[OsString], method: &str) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("couldn't start {}: {error}", program.display()))?;
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    let messages = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": initialize_params()}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "authenticate", "params": {"methodId": method}}),
+    ];
+    for message in messages {
+        writeln!(stdin, "{message}").map_err(|error| error.to_string())?;
+    }
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let answer = BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .find(|message| message["id"] == 2);
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    match answer {
+        Some(answer) if answer.get("error").is_none() => Ok(()),
+        Some(answer) => Err(answer["error"]["message"]
+            .as_str()
+            .unwrap_or("the agent refused")
+            .to_owned()),
+        None => Err("the agent exited without answering".to_owned()),
+    }
 }
 
 /// `agent`'s arguments for `request`.
@@ -342,7 +392,9 @@ impl Backend for AcpBackend {
             .modes
             .iter()
             .find(|(mapped, _)| *mapped == permission)
-            .filter(|_| !(permission == AgentPermission::Bypass && self.agent.bypass_flag.is_some()))
+            .filter(|_| {
+                !(permission == AgentPermission::Bypass && self.agent.bypass_flag.is_some())
+            })
             .map(|(_, mode)| mode.clone());
         let driver = Driver {
             agent: Arc::clone(&self.agent),
@@ -478,7 +530,7 @@ struct Driver {
     mode: Option<String>,
     /// The model to set over ACP once the session starts.
     model: Option<String>,
-    /// The session's mode config option, for an agent that takes its mode as one (OpenCode).
+    /// The session's mode config option, for an agent that takes its mode as one (`OpenCode`).
     mode_option: Option<String>,
     /// The session's id, once `session/new` or `session/load` answered.
     session: Option<String>,
@@ -721,15 +773,12 @@ impl Driver {
     /// lists one, else with `session/set_model`.
     fn set_model(&mut self, session: &str, answer: &Value, model: &str) {
         self.modes_pending += 1;
-        match config_option(answer, "model") {
-            Some(id) => {
-                let params = json!({"sessionId": session, "configId": id, "value": model});
-                self.request("session/set_config_option", &params, Request::Mode);
-            }
-            None => {
-                let params = json!({"sessionId": session, "modelId": model});
-                self.request("session/set_model", &params, Request::Mode);
-            }
+        if let Some(id) = config_option(answer, "model") {
+            let params = json!({"sessionId": session, "configId": id, "value": model});
+            self.request("session/set_config_option", &params, Request::Mode);
+        } else {
+            let params = json!({"sessionId": session, "modelId": model});
+            self.request("session/set_model", &params, Request::Mode);
         }
     }
 
@@ -737,15 +786,12 @@ impl Driver {
     /// with `session/set_mode`.
     fn set_mode(&mut self, session: &str, mode: &str) {
         self.modes_pending += 1;
-        match self.mode_option.clone() {
-            Some(id) => {
-                let params = json!({"sessionId": session, "configId": id, "value": mode});
-                self.request("session/set_config_option", &params, Request::Mode);
-            }
-            None => {
-                let params = json!({"sessionId": session, "modeId": mode});
-                self.request("session/set_mode", &params, Request::Mode);
-            }
+        if let Some(id) = self.mode_option.clone() {
+            let params = json!({"sessionId": session, "configId": id, "value": mode});
+            self.request("session/set_config_option", &params, Request::Mode);
+        } else {
+            let params = json!({"sessionId": session, "modeId": mode});
+            self.request("session/set_mode", &params, Request::Mode);
         }
     }
 
@@ -876,7 +922,9 @@ impl Driver {
             ),
             _ => {
                 let message = match (exit.info.code, exit.info.signal) {
-                    (_, Some(signal)) => format!("{} was killed by signal {signal}", self.agent.label),
+                    (_, Some(signal)) => {
+                        format!("{} was killed by signal {signal}", self.agent.label)
+                    }
                     (Some(code), None) => format!("{} exited with code {code}", self.agent.label),
                     (None, None) => format!("{} ended in an unknown way", self.agent.label),
                 };
@@ -888,7 +936,7 @@ impl Driver {
 }
 
 /// The id of the config option of `category` that a `session/new` or `session/load` answer
-/// lists, such as OpenCode's `model` and `mode`.
+/// lists, such as `OpenCode`'s `model` and `mode`.
 fn config_option(answer: &Value, category: &str) -> Option<String> {
     answer
         .get("configOptions")?
