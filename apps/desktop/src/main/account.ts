@@ -42,11 +42,16 @@ function encryptedStorage(file: string): SupportedStorage {
   };
 }
 
-/** The name the user gave, or their provider's: GitHub and Google send `full_name`. */
-function nameOf(meta: Record<string, unknown>): string {
+/**
+ * The first and last name the user gave, at sign-up or in Settings > Account, or else their
+ * provider's, split at its first space: GitHub and Google send `full_name`.
+ */
+export function namesOf(meta: Record<string, unknown>): Pick<Profile, "firstName" | "lastName"> {
   const text = (key: string) => (typeof meta[key] === "string" ? meta[key].trim() : "");
-  const given = [text("first_name"), text("last_name")].filter(Boolean).join(" ");
-  return given || text("full_name") || text("name");
+  if (text("first_name") || text("last_name"))
+    return { firstName: text("first_name"), lastName: text("last_name") };
+  const [firstName = "", ...rest] = (text("full_name") || text("name")).split(/\s+/);
+  return { firstName, lastName: rest.join(" ") };
 }
 
 /** The provider's picture's https URL, if it sent one. */
@@ -111,7 +116,9 @@ export function startAccount() {
     const change = ++changes;
     const user: User | undefined = session?.user;
     if (!user) return publish(null);
-    const shown = { name: nameOf(user.user_metadata), email: user.email ?? "" };
+    const names = namesOf(user.user_metadata);
+    const name = [names.firstName, names.lastName].filter(Boolean).join(" ");
+    const shown = { ...names, name, email: user.email ?? "" };
     const url = pictureUrl(user.user_metadata);
     if (!url || url === picture?.url) return publish({ ...shown, picture: url && picture?.data });
     // The name now, the picture once it's here. Not awaited: auth-js holds a lock while this runs.
@@ -173,6 +180,17 @@ export function startAccount() {
     if (page === current) page = undefined;
     if (!error) bringForward();
     return error;
+  });
+
+  // Settings > Account's name. Saved where sign-up keeps it, which a provider's sign-in leaves
+  // alone; the profile republishes when Supabase answers.
+  ipcMain.handle("parallax:saveName", async (_event, firstName: unknown, lastName: unknown) => {
+    if (!auth) return notSetUp;
+    if (typeof firstName !== "string" || typeof lastName !== "string") return "Enter a name.";
+    const { error } = await auth.updateUser({
+      data: { first_name: firstName.trim(), last_name: lastName.trim() },
+    });
+    return error?.message;
   });
 
   ipcMain.handle("parallax:signOut", async () => {

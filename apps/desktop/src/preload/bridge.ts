@@ -149,6 +149,11 @@ export interface ParallaxBridge {
    * to an error for people, or undefined.
    */
   signIn(create: boolean): Promise<string | undefined>;
+  /**
+   * Saves the account's first and last name, trimmed. Resolves to an error for people, or undefined
+   * once saved, after which `onProfile` hears the new name.
+   */
+  saveName(firstName: string, lastName: string): Promise<string | undefined>;
   /** Signs out on this computer. */
   signOut(): Promise<void>;
 
@@ -164,8 +169,17 @@ export type StorageItemId = "history" | "worktrees" | "logs" | "app" | "cache";
 /** Something Parallax keeps on this computer: its folder, and its size in bytes. */
 export type StorageItem = { id: StorageItemId; name: string; folder: string; bytes: number };
 
-/** The signed-in Parallax account, as the app shows it. `picture` is a data: URL. */
-export type Profile = { name: string; email: string; picture?: string };
+/**
+ * The signed-in Parallax account, as the app shows it. `name` is the first and last name joined,
+ * or empty. `picture` is a data: URL.
+ */
+export type Profile = {
+  name: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  picture?: string;
+};
 
 /** What the sidebar's Update button shows. */
 export type UpdateState = {
