@@ -37,21 +37,19 @@ import {
 } from "./threads";
 import { isRunning } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
-import { ProfilePage } from "./ProfilePage";
 import { UsagePage } from "./UsagePage";
 
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
  * thread (its id is its run's; `started` when New Thread just started it, until anything else is
  * selected), a new thread in a sidebar group (`threads.ts`; with no group, it's the first
- * repository's), Usage, or Profile.
+ * repository's), or Usage.
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
   | { kind: "thread"; threadId: string; started?: boolean }
   | { kind: "new"; groupId?: string }
-  | { kind: "usage" }
-  | { kind: "profile" };
+  | { kind: "usage" };
 
 export type SettingsSection =
   | "account"
@@ -269,10 +267,7 @@ export function App() {
 
   // Where the open thread's or New thread's terminals open (folderOf).
   const folder =
-    settings ||
-    selection.kind === "usage" ||
-    selection.kind === "profile" ||
-    selection.kind === "project"
+    settings || selection.kind === "usage" || selection.kind === "project"
       ? undefined
       : folderOf(
           host.id,
@@ -333,8 +328,8 @@ export function App() {
       <PanelLeftOpen />
     </IconButton>
   );
-  // The side panel is a chat's, so Settings, Usage, and Profile have none.
-  const chat = !settings && selection.kind !== "usage" && selection.kind !== "profile";
+  // The side panel is a chat's, so Settings and Usage have none.
+  const chat = !settings && selection.kind !== "usage";
   const sidePanelOpen = panelOpen && chat;
   const expanded = sidePanelOpen && panelExpanded;
   // The main pane's top row meets the traffic lights without the sidebar, and
@@ -389,18 +384,10 @@ export function App() {
               {showSidebar}
               <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[settings] }]} />
             </TopBar>
-            <Settings section={settings} theme={theme} onThemeChange={setTheme} />
+            <Settings section={settings} listed={listed} theme={theme} onThemeChange={setTheme} />
           </>
         ) : selection.kind === "usage" ? (
           <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
-        ) : selection.kind === "profile" ? (
-          <ProfilePage
-            hosts={hosts}
-            listed={listed}
-            leading={showSidebar}
-            topBarClassName={topBarInset}
-            onOpenAccount={() => openSettings("account")}
-          />
         ) : (
           <>
             <TopBar className={`@container ${topBarInset}`}>
@@ -514,7 +501,7 @@ export function App() {
             )}
           </>
         )}
-        {/* Outside the views, so the terminals live on behind Settings, Usage, and Profile. */}
+        {/* Outside the views, so the terminals live on behind Settings and Usage. */}
         <TerminalDrawer
           open={drawerOpen}
           folder={folder}

@@ -181,7 +181,7 @@ ipcMain.handle("parallax:pickFolder", async (event) => {
   return canceled ? null : (filePaths[0] ?? null);
 });
 
-// The Profile page's Share: a picture of part of the asking window, onto the clipboard.
+// Settings > Account's Share: a picture of part of the asking window, onto the clipboard.
 ipcMain.handle("parallax:copyPicture", async (event, rect: unknown) => {
   const { x, y, width, height } = (rect ?? {}) as Record<string, unknown>;
   const sides = [x, y, width, height];
