@@ -65,11 +65,14 @@ export function gitActions(
 export function GitMenu({
   hostId,
   run,
+  title,
   onPrOpened,
   onSetUpGithub,
 }: {
   hostId: string;
   run?: AgentRun;
+  /** The thread's title, for the commit message and pull request. Else, its run's. */
+  title?: string;
   onPrOpened?: (url: string) => void;
   onSetUpGithub?: () => void;
 }) {
@@ -122,7 +125,7 @@ export function GitMenu({
     if (action === "pr") {
       const answer = await window.parallax.request(hostId, "agent/openPr", {
         runId: run.id,
-        title: titleOf(run),
+        title: title ?? titleOf(run),
       });
       if ("error" in answer) failed = answer.error;
       else {
@@ -149,7 +152,7 @@ export function GitMenu({
     menu.current?.hidePopover();
     if (action !== "commit") return void perform(action);
     setError(undefined);
-    setMessage(titleOf(run));
+    setMessage(title ?? titleOf(run));
     dialog.current?.showModal();
   };
 
