@@ -30,9 +30,9 @@ plxd places each child with fixed rules, no model involved:
 
 ### Recovery mid-run
 
-- On a rate limit, plxd moves the child to another instance of the same kind with headroom. A CLI session can't move between accounts, so a move is 0014's handoff: a new run with the conversation so far.
+- On a rate limit, plxd moves the child to another instance of the same kind with headroom, with 0014's account move: the run keeps its id, transcript, worktree, and branch, and starts a new session with the conversation so far, since a CLI session can't move between accounts.
 - With none free, the child waits for its limit to reset and resumes (PLX-371).
-- **The coordinator may move a child** to another instance or vendor with `thread_move {runId, instance, model?}`, only when it judges the move worth a new run, such as a long wait on a task another vendor can do now. `capacity_read` shows it each instance's headroom and running children.
+- **The coordinator may move a child** to another instance or vendor with `thread_move {runId, instance, model?}`, only when it judges the move worth a new session, such as a long wait on a task another vendor can do now. `capacity_read` shows it each instance's headroom and running children.
 
 ### Hosts (after one host works)
 
@@ -48,7 +48,7 @@ plxd places each child with fixed rules, no model involved:
 
 ## Consequences
 
-- Placement is predictable and costs no tokens. A poor first placement costs a move, which is a new run.
+- Placement is predictable and costs no tokens. A poor first placement costs a move, which is a new session that rereads the conversation so far.
 - Several accounts of one vendor on one host now work for Projects. Threads keep 0012's routing.
 - A Project in Auto narrows placement to kinds with Auto ([0042](0042-project-children-are-threads.md)).
 - Until worker hosts exist, everything runs on the home host.

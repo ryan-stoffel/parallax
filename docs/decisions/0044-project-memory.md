@@ -1,6 +1,6 @@
 # 0044: Project memory: what a child starts with, and who writes it
 
-- Status: accepted; extends [0005](0005-shared-context-folder.md) (the context folder holds memory, and only a coordinator or the user writes it)
+- Status: accepted; supersedes in part [0005](0005-shared-context-folder.md) (every agent writes the folder, last writer wins, and agents get its path)
 - Date: 2026-10-03
 - Issue: PLX-383
 
@@ -35,13 +35,14 @@ A thread starts from zero. Each Project has a context folder (0005), where the c
 
 ### Format
 
-- One Markdown file per entry, `memory/<kind>/<slug>.md`, whose first lines are its kind, title, source (the run or message it came from), date, and writer. Knowledge is `knowledge/<slug>.md`, the brief `brief.md`, and history `history/<run id>.md`. Files keep 0005's mirroring and let the user edit them anywhere.
-- The index is built by plxd from the entries' titles: You, then Repo, then Project, capped at 8 KiB. Over the cap, it ends with a note to read the rest, and the coordinator gets an inbox item to merge entries.
+- One Markdown file per entry, `memory/<kind>/<slug>.md`, whose first lines are its kind, title, source (the run or message it came from), date, and writer. Knowledge is `knowledge/<slug>.md`, the brief `brief.md`, and history `history/<run id>.md`. Files keep 0005's mirroring and let the user edit them anywhere. The context folder accepts these folders, where today it takes only one flat file name.
+- The index is built by plxd from the entries' titles: You, then Repo, then Project, capped at 8 KiB. Over the cap, it ends with a note to read the rest, and the coordinator's next wake-up asks it to merge entries.
 
 ### Who writes
 
-- **Children propose, the coordinator curates.** A child has `memory_read` and `memory_propose`. A proposal waits until the coordinator's next wake-up, where it dedupes, checks it against existing entries, and writes with `memory_write` or drops it. This replaces last-writer-wins for memory. It holds in Bypass too.
-- **Plain threads** get `memory_read` and `memory_propose` for their repo's scope through 0041's host-wide MCP, but no index in their first message, which stays the user's own (0034). Repo proposals go to any Project coordinator on that repo, or to the user in the Memory tab when there is none.
+- **Children propose, the coordinator curates.** A child has `memory_read` and `memory_propose`. A proposal waits until the coordinator's next wake-up, where it dedupes, checks it against existing entries, and writes with `memory_write` or drops it. This replaces last-writer-wins for memory.
+- **Children reach memory only through the tools.** Unlike 0005, plxd gives a child neither the folder's path nor an allowed directory for it. A child in Bypass that finds the folder under plxd's data folder anyway isn't stopped, as 0043 says of pushes.
+- **Plain threads** get `memory_read` and `memory_propose` for their repo's scope through 0041's host-wide MCP, but no index in their first message, which stays the user's own (0034). A plain thread's proposals go to the user in the Memory tab. A coordinator curates only its own children's proposals, at any scope.
 - **The user** edits and deletes any entry directly.
 - **Corrections reach running children.** Changing or deleting an entry sends each running child of the affected Projects a queued message (PLX-370) naming the change.
 - **Stale entries.** After each landing ([0045](0045-integration-branch.md)), plxd checks the paths entries name in backticks against the integration branch, and marks an entry naming a missing one for review.

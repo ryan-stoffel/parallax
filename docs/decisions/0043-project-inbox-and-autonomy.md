@@ -19,7 +19,7 @@ With ten threads, the user reads every chat, answers every question, and remembe
 
 | Kind | Added when |
 | --- | --- |
-| `needsYou` | A question goes to the user, a child's permission request is waiting (0031), a landing needs approval or failed twice ([0045](0045-integration-branch.md)), or wake-ups paused |
+| `needsYou` | A question goes to the user, a child's permission request is waiting (0031), a landing needs approval, failed twice, or conflicts with the base branch ([0045](0045-integration-branch.md)), or wake-ups paused |
 | `done` | A child finishes, with its diff stats and whether it landed |
 | `failed` | A child fails, or a placement waits with a reason ([0046](0046-project-scheduler.md)) |
 | `decided` | The coordinator answered a question for the user |
@@ -29,7 +29,7 @@ With ten threads, the user reads every chat, answers every question, and remembe
 
 ### Questions never block
 
-- A child asks with `ask {question, assumption}`. It returns at once: the child goes on with its assumption. plxd records the question, and the coordinator sees it in its next wake-up.
+- A child asks with `ask {question, assumption}`. It returns at once: the child goes on with its assumption. plxd records the question, and the question wakes the coordinator, batched as 0025 batches, except in Ask me, where it goes straight to Needs you.
 - The coordinator answers with `answer {question, text}`, or passes it to the user with `escalate {question}`. An answer that differs from the assumption goes to the child as a queued message (PLX-370). The item shows as Decided for you: "went with X, change it?". Changing it sends the child a correction.
 - A question nobody has answered stays in Needs you. The child has already moved on, so the user comes back to work done on stated assumptions, not to idle children.
 
@@ -44,12 +44,13 @@ A Project has an autonomy level, Routine by default:
 | Full | Everything it can justify. |
 
 - Routine and Full differ only in the coordinator's instructions.
-- At every level the coordinator's own tools never push, merge, open a PR, or delete a branch without the user ([0045](0045-integration-branch.md)). Children are told the same. In Bypass nothing enforces that on a child, which the disclaimer says.
+- At every level the coordinator's tools never push to a remote, merge into the base branch, open a PR, or delete a branch without the user ([0045](0045-integration-branch.md)). The coordinator and children are told the same. Both have a shell in the Project's mode, so in Bypass nothing enforces that on either, which the disclaimer says.
 - Every answer is listed and reversible, and the user can always message a child directly.
 
 ### Wake-ups
 
-- 0025 applies to a Project's coordinator as to any parent (0041). The cap is 100 wake-up turns in a row instead of 10. Reaching it pauses wake-ups as 0025 does, adds a Needs you item, and the user's next message to the coordinator lets them through.
+- 0025 applies to a Project's coordinator as to any parent (0041). A child's end, a child's start ([0042](0042-project-children-are-threads.md#dispatch)), and an `ask` wake it, all batched into one turn as 0025 batches. Memory proposals and other news ride along with the next wake-up and don't wake it on their own.
+- The cap is 100 wake-up turns in a row instead of 10. Reaching it pauses wake-ups as 0025 does, adds a Needs you item, and the user's next message to the coordinator lets them through.
 
 ### Away
 
@@ -59,4 +60,4 @@ On an external home host, children, wake-ups, and landing go on with the laptop 
 
 - The inbox costs no tokens to build. Its lines come from events, the coordinator's answers, and memory writes.
 - A wrong assumption costs the work done on it before the correction arrives. Ask me makes that more likely, since nothing answers until the user does.
-- A looping coordinator runs up to 100 turns before it stops. The per-account caps ([0046](0046-project-scheduler.md)) bound what that spends.
+- A looping coordinator runs up to 100 turns before it stops. The cap is the only bound: reserves ([0046](0046-project-scheduler.md)) stop new children from being placed, not coordinator turns.
