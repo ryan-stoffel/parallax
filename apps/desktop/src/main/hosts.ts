@@ -98,6 +98,11 @@ const rendererMethods: Record<RendererMethod, true> = {
   "github/signInCancel": true,
   "inbox/list": true,
   "inbox/seen": true,
+  "queue/list": true,
+  "queue/edit": true,
+  "queue/reorder": true,
+  "queue/cancel": true,
+  "queue/steer": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */

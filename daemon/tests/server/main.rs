@@ -22,6 +22,7 @@ mod mcp;
 mod open_pr;
 mod projects;
 mod pull_requests;
+mod queue;
 mod requests;
 mod support;
 mod thread_tools;

@@ -373,7 +373,10 @@ async fn a_fork_at_a_turn_followed_up_mid_turn_copies_the_whole_turn() {
     client.subscribe(0, Some(scope(parent.thread.repo))).await;
     client.until(text(run_id, "Working.")).await;
     client
-        .call::<AgentSend>(message(run_id, "Now the tests"))
+        .call::<AgentSend>(AgentSendParams {
+            delivery: Some(parallax_protocol::AgentDelivery::Steer),
+            ..message(run_id, "Now the tests")
+        })
         .await
         .unwrap();
     client.until(text(run_id, "Now the tests")).await;
@@ -386,7 +389,10 @@ async fn a_fork_at_a_turn_followed_up_mid_turn_copies_the_whole_turn() {
     assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
 
     client
-        .call::<AgentSend>(message(run_id, "And the docs"))
+        .call::<AgentSend>(AgentSendParams {
+            delivery: Some(parallax_protocol::AgentDelivery::Steer),
+            ..message(run_id, "And the docs")
+        })
         .await
         .unwrap();
     client.until(finished(run_id)).await;
@@ -474,7 +480,10 @@ async fn a_fork_at_a_stopped_turn_copies_it_while_a_later_turn_runs() {
     client.subscribe(0, Some(scope(parent.thread.repo))).await;
     client.until(text(run_id, "Working.")).await;
     client
-        .call::<AgentSend>(message(run_id, "Now the tests"))
+        .call::<AgentSend>(AgentSendParams {
+            delivery: Some(parallax_protocol::AgentDelivery::Steer),
+            ..message(run_id, "Now the tests")
+        })
         .await
         .unwrap();
     client.until(text(run_id, "The first turn's end.")).await;

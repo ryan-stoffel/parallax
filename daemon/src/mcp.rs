@@ -493,6 +493,7 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                     images: Vec::new(),
                     threads: Vec::new(),
                     from: None,
+                    delivery: None,
                 })
                 .await?
                 .run;

@@ -425,6 +425,8 @@ struct FallbackRun {
     /// target at once, the same way [`crate::backend::CancelSwitch::arm`] cancels a process armed
     /// after the cancel already happened.
     cancelled: AtomicBool,
+    /// [`Run::hold`]'s last flag, which a swap passes on to the new target (PLX-370).
+    held: AtomicBool,
 }
 
 impl FallbackRun {
@@ -432,6 +434,7 @@ impl FallbackRun {
         Self {
             current: Mutex::new(initial),
             cancelled: AtomicBool::new(false),
+            held: AtomicBool::new(false),
         }
     }
 
@@ -444,6 +447,7 @@ impl FallbackRun {
         if self.cancelled.load(Ordering::Acquire) {
             next.cancel();
         }
+        next.hold(self.held.load(Ordering::Acquire));
     }
 }
 
@@ -463,6 +467,11 @@ impl Run for FallbackRun {
 
     fn answer(&self, answer: Answer) -> Result<(), AnswerError> {
         self.current().answer(answer)
+    }
+
+    fn hold(&self, held: bool) {
+        self.held.store(held, Ordering::Release);
+        self.current().hold(held);
     }
 }
 

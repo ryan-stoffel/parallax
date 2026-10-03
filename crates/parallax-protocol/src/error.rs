@@ -108,6 +108,9 @@ pub enum ErrorKind {
     /// `github/install` refused because a `gh` is already on the host, or `github/signIn` could
     /// not start `gh auth login` or read its one-time code (PLX-423). The message says why.
     GithubSetupFailed,
+    /// The run's queue has no waiting message with the given id: it was sent, cancelled, or never
+    /// queued (PLX-370).
+    QueuedMessageNotFound,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

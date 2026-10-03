@@ -373,6 +373,21 @@ const MIGRATIONS: &[Migration] = &[
         version: 26,
         sql: "ALTER TABLE projects ADD COLUMN permission TEXT NOT NULL DEFAULT 'auto';",
     },
+    // A run's waiting messages (PLX-370, decision 0048), so a restart keeps them: `position`
+    // orders them, first to be sent first, and `extra` is the daemon's JSON for what else goes
+    // with the message (its images, run options, and account). No foreign key, like `turns`.
+    Migration {
+        version: 27,
+        sql: "CREATE TABLE queued (
+            run_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            extra TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, turn_id)
+        );",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
