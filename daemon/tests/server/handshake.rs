@@ -30,6 +30,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("agentReview".to_owned(), serde_json::Map::new()),
             ("agents".to_owned(), serde_json::Map::new()),
             ("approvals".to_owned(), serde_json::Map::new()),
+            ("autoResume".to_owned(), serde_json::Map::new()),
             ("checkout".to_owned(), serde_json::Map::new()),
             ("composerMenus".to_owned(), serde_json::Map::new()),
             ("contextAndFast".to_owned(), serde_json::Map::new()),

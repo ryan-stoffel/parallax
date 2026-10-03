@@ -483,6 +483,7 @@ const statuses: Record<AgentStatus, string> = {
   failed: "Failed",
   cancelled: "Stopped",
   interrupted: "Interrupted",
+  waiting: "Waiting",
   accepted: "Accepted",
 };
 
