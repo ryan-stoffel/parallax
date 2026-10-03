@@ -45,6 +45,16 @@ test("runs it over ssh -t, quoting the path for the host's shell", () => {
   expect(remote("claude", "C:\\Users\\A B\\.local\\bin\\claude.exe").args.at(-1)).toBe(
     '"C:\\Users\\A B\\.local\\bin\\claude.exe" auth login',
   );
+  // A provider instance's login, with its home: here as a variable, there before the command.
+  const home = { CODEX_HOME: "/Users/me/.codex-work" };
+  expect(loginCommand("codex", "codex", undefined, "darwin", ["login"], home)).toEqual({
+    file: "codex",
+    args: ["login"],
+    env: home,
+  });
+  expect(loginCommand("codex", "codex", mini, "darwin", ["login"], home).args.at(-1)).toBe(
+    "CODEX_HOME=/Users/me/.codex-work codex login",
+  );
 });
 
 test("runs ssh.exe on Windows, where node-pty won't add the extension", () => {

@@ -1,23 +1,22 @@
 import { useState } from "react";
 
-import type { CliKind } from "../protocol/generated/protocol";
+import type { TerminalTarget } from "../preload/bridge";
 import { TerminalView } from "./Terminal";
 
 /**
- * A terminal running `cli`'s own sign-in on a host (0004), in the main process's pty, as the
- * window's terminal `sign-in`. `onExit` runs when the sign-in ends; closing the pane (`onClose`,
- * or unmounting) ends it if it's still running.
+ * A terminal running a sign-in on a host, in the main process's pty, as the window's terminal
+ * `sign-in`: a CLI's own (0004), or a provider instance's `login`. `onExit` runs when the sign-in
+ * ends; closing the pane (`onClose`, or unmounting) ends it if it's still running.
  */
 export function SignInTerminal({
-  hostId,
-  cli,
+  target,
   name,
   onExit,
   onClose,
 }: {
-  hostId: string;
-  cli: CliKind;
-  /** The CLI as people know it, such as "Claude Code". */
+  /** A CLI's or a provider instance's sign-in. */
+  target: Exclude<TerminalTarget, { path: string }>;
+  /** What signs in, as people know it, such as "Claude Code". */
   name: string;
   onExit: () => void;
   onClose: () => void;
@@ -48,9 +47,9 @@ export function SignInTerminal({
       {/* The fit addon sizes the terminal to the inner box, so the padding goes outside it. */}
       <div className="h-64 rounded-md border border-border bg-surface p-2">
         <TerminalView
-          key={`${hostId}/${cli}`}
+          key={JSON.stringify(target)}
           id="sign-in"
-          target={{ hostId, cli }}
+          target={target}
           label={`${name} sign-in terminal`}
           onEnd={(why) => {
             if (why) return setError(why);

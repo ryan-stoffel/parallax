@@ -817,3 +817,18 @@ async fn cancel_after_a_fallback_reaches_the_second_attempt() {
         "cancel must reach the attempt that is actually running"
     );
 }
+
+#[test]
+fn key_accounts_keep_the_startup_backend_when_its_instance_is_turned_off() {
+    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
+    let registry = registry(Arc::clone(&backend));
+    registry.remove("claude");
+    assert!(
+        registry.by_backend_name("claude").is_none(),
+        "no subscription route"
+    );
+    let kept = registry
+        .by_provider(Provider::Anthropic)
+        .expect("the key account's backend");
+    assert!(Arc::ptr_eq(&kept, &backend));
+}

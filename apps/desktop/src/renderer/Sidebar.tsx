@@ -74,6 +74,7 @@ import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
+import { dragThread } from "./threadDrag";
 import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import {
@@ -87,6 +88,7 @@ import {
   TopBar,
   useModHeld,
 } from "./ui";
+import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 
 const row =
@@ -442,6 +444,7 @@ export function ThreadList({
       <ThreadRow
         key={item.key}
         thread={t}
+        hostId={item.host.id}
         title={titleOf(item)}
         run={view.state.runs[t.id]}
         repo={item.repo}
@@ -1152,6 +1155,7 @@ function RowHead({ repo, status }: { repo?: Repo; status: ReactNode }) {
  */
 function ThreadRow({
   thread,
+  hostId,
   title,
   run,
   repo,
@@ -1167,6 +1171,8 @@ function ThreadRow({
   onLeave,
 }: {
   thread: Thread;
+  /** Its host, which a drag onto the composer names (PLX-378). */
+  hostId: string;
   title: string;
   run?: AgentRun;
   repo?: Repo;
@@ -1195,7 +1201,7 @@ function ThreadRow({
     onLeave();
     action();
   };
-  const Logo = run?.backend ? backendLogos[run.backend] : undefined;
+  const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
   const hasDetails = !!(run?.branch || run?.diff || Logo);
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
@@ -1225,6 +1231,12 @@ function ThreadRow({
         onContextMenu={(e) => {
           onLeave();
           openOnContextMenu(e, actions.current);
+        }}
+        // Dropped on the composer, it attaches the thread to the message (PLX-378).
+        draggable
+        onDragStart={(e) => {
+          onLeave();
+          dragThread(e.dataTransfer, hostId, thread.id);
         }}
         className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left hover:bg-hover ${selected ? current : ""}`}
       >
@@ -1412,7 +1424,7 @@ function ThreadCard({
   top: number;
   left: number;
 }) {
-  const Logo = run?.backend ? backendLogos[run.backend] : undefined;
+  const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
   const look = run && (statusLooks[run.status] ?? statusLooks.completed!);
   return (
     <div
@@ -1439,7 +1451,9 @@ function ThreadCard({
         {run?.accountId && (
           <li>
             {Logo ? <Logo /> : <Bot />}
-            <span className="truncate">{accountLabel(run.accountId)}</span>
+            <span className="truncate">
+              {instanceName(run.accountId) ?? accountLabel(run.accountId)}
+            </span>
           </li>
         )}
         {run?.diff && (

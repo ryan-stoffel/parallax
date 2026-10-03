@@ -17,7 +17,14 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model"
 import { EditorContent, markInputRule, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment as ReactFragment,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import type {
   AgentCommand,
@@ -26,18 +33,13 @@ import type {
   AgentRun,
   PromptImage,
 } from "../protocol/generated/protocol";
+import { lastPrompt } from "./attention";
 import { EffortMenu } from "./EffortMenu";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { ModelMenu } from "./ModelMenu";
-import {
-  backendOf,
-  backends,
-  models,
-  useDisabledClis,
-  type Model,
-  type Provider,
-  type RunOptions,
-} from "./models";
+import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
+import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
+import { draggedThread, threadDragType } from "./threadDrag";
 import { menuItem, Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
@@ -208,6 +210,9 @@ function byName<T>(items: T[], query: string, name: (item: T) => string): T[] {
 /** The most files the `@` menu shows. */
 const maxFiles = 50;
 
+/** The most threads the `@` menu shows. */
+const maxThreadRows = 5;
+
 /**
  * `paths` matching `query`: those whose file name starts with it, then those that contain it,
  * then those that have its letters in order, at most `maxFiles`.
@@ -257,12 +262,16 @@ function listCommands(
   return list;
 }
 
-/** A row of the `/` or `@` menu. */
+/** A row of the `/` or `@` menu. `group` heads the `@` menu's threads and files apart. */
 interface MenuEntry {
   key: string;
   label: string;
   description?: string;
   hint?: string;
+  icon?: ReactNode;
+  /** Muted text at the row's end, such as how long ago a thread was prompted. */
+  meta?: string;
+  group?: "Threads" | "Files";
   pick: () => void;
 }
 
@@ -270,24 +279,26 @@ interface MenuEntry {
 export const tabItem =
   "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
 
-/** A prompt for Stop to put back: its text, then its images once they load. */
+/** A prompt for Stop to put back: its text and attached threads, then its images once they load. */
 export interface Unanswered {
   text: string;
   images: () => Promise<PromptImage[]>;
+  threads?: readonly string[];
 }
 
 export interface ComposerProps {
   /** Whether it starts a new thread, which only changes its hint. */
   newThread?: boolean;
   /**
-   * Sends the text and images, with the chosen run options (empty without `backend`). Resolves to
-   * an error message, which puts them back; `""` puts them back with no message. Absent: Send
-   * stays off.
+   * Sends the text, images, and attached threads' run ids, with the chosen run options (empty
+   * without `backend`). Resolves to an error message, which puts them back; `""` puts them back
+   * with no message. Absent: Send stays off.
    */
   onSend?: (
     text: string,
     options: RunOptions,
     images: PromptImage[],
+    threads: string[],
   ) => Promise<string | undefined>;
   /** Sends as `onSend` does, for Cmd/Ctrl+Enter anywhere in the box: a new thread's background start. */
   onSendInBackground?: ComposerProps["onSend"];
@@ -321,7 +332,12 @@ export interface ComposerProps {
   started?: Pick<AgentRun, "model" | "effort" | "permission" | "contextWindow" | "fast">;
   /** Whether the host's plxd takes a context window and fast mode (`contextAndFast`). */
   contextAndFast?: boolean;
-  /** Providers the thread can't run on, by why, whose models it doesn't offer: those an open run
+  /**
+   * The host the thread runs on, whose provider instances and models it offers (`useCatalog`).
+   * Absent: the built-in ones.
+   */
+  hostId?: string;
+  /** Instances the thread can't run on, by why, whose models it doesn't offer: those an open run
    * can't move to, or a new thread can't start on. */
   unavailable?: Partial<Record<Provider, string>>;
   /** Why the model, effort, and access can't change right now, which turns them off. */
@@ -347,6 +363,11 @@ export interface ComposerProps {
    * or repo, and are fetched again on each new `@`. Absent: no menus.
    */
   menus?: { hostId: string; repo?: string; runId?: string };
+  /**
+   * The host's threads, on a plxd with `threadContext` (0047): `@` lists them above the files, and
+   * a sidebar row dropped on the box attaches one, as a chip beside the images. Absent: neither.
+   */
+  attach?: AttachThreads;
 }
 
 /**
@@ -360,6 +381,9 @@ export interface ComposerProps {
  * With `menus`, `/` at the start of a word opens a menu of the composer's own commands and the
  * CLI's commands and skills, and `@` one of the thread's files, filtered as you type. Up and Down
  * move through it, Enter or Tab picks, and Esc closes it.
+ * With `attach`, `@` also lists the host's threads above the files: its newest, or those
+ * `thread/search` finds for what's typed. Picking one, or dropping a sidebar row on the box,
+ * attaches it as a chip beside the images (PLX-378).
  */
 export function Composer({
   newThread,
@@ -373,6 +397,7 @@ export function Composer({
   backend,
   started,
   contextAndFast,
+  hostId: host,
   unavailable,
   optionsDisabled,
   imageCaps,
@@ -380,6 +405,7 @@ export function Composer({
   insert,
   history = [],
   menus,
+  attach,
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
@@ -388,8 +414,12 @@ export function Composer({
   // Files that aren't images, shown as chips; plxd doesn't take them yet.
   const [files, setFiles] = useState<File[]>([]);
   const [images, setImages] = useState<PromptImage[]>([]);
-  // Why an image wasn't added, shown by the thumbnails.
-  const [imageError, setImageError] = useState<string>();
+  // Attached threads' run ids, shown as chips beside the images.
+  const [threads, setThreads] = useState<string[]>([]);
+  // Why an image or thread wasn't added, shown by the thumbnails.
+  const [attachError, setAttachError] = useState<string>();
+  // Whether a sidebar row is dragged over the box, which outlines it.
+  const [threadOver, setThreadOver] = useState(false);
   const filePicker = useRef<HTMLInputElement>(null);
   // Which of `history` the box holds, unedited.
   const recalled = useRef<number>(undefined);
@@ -399,18 +429,17 @@ export function Composer({
   const [pickedContext, setContext] = useState<number>();
   const [pickedFast, setFast] = useState<boolean>();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
-  const run = backend === undefined ? undefined : backends[backend];
-  const runModels = models.filter((m) => m.provider === run?.provider);
-  // Providers turned off in Settings, but an open run's own, which it keeps.
-  const off = useDisabledClis();
-  const blocked = { ...unavailable };
-  for (const cli of off) {
-    const p = backends[cli]?.provider;
-    if (p && !(started && p === run?.provider))
-      blocked[p] ??= `${p} is turned off in Settings > Providers.`;
-  }
-  // Any provider whose models aren't unavailable: an open run moves to it, a new thread starts there.
-  const choices = models.filter((m) => !blocked[m.provider]);
+  const catalog = useCatalog(host);
+  const instanceOf = (id: string | undefined) => catalog.instances.find((i) => i.id === id);
+  const run = instanceOf(backend);
+  const runModels = catalog.models.filter((m) => m.provider === run?.id);
+  // Instances turned off in Settings, but an open run's own, which it keeps.
+  const blocked: Partial<Record<Provider, string>> = { ...unavailable };
+  for (const i of catalog.instances)
+    if (!i.enabled && !(started && i === run))
+      blocked[i.id] ??= `${i.name} is turned off in Settings > Providers.`;
+  // Any instance whose models aren't unavailable: an open run moves to it, a new thread starts there.
+  const choices = catalog.models.filter((m) => !blocked[m.provider]);
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
     started &&
@@ -418,18 +447,18 @@ export function Composer({
     (runModels.find((m) => m.id === started.model) ?? {
       id: started.model ?? "",
       name: started.model ?? "Default model",
-      provider: run.provider,
+      provider: run.id,
       contexts: [],
     });
+  // A pick is kept by its instance and id, since the catalog's models are made again as it changes.
   const model =
-    choices.find((m) => m === pickedModel) ??
+    choices.find((m) => m.provider === pickedModel?.provider && m.id === pickedModel.id) ??
     startedModel ??
     runModels.find((m) => choices.includes(m)) ??
     choices[0];
-  // Where the message goes: the run's backend, or the one that runs the picked model.
-  const target =
-    run && model && model.provider !== run.provider ? backendOf(model.provider) : backend;
-  const targetBackend = target === undefined ? undefined : backends[target];
+  // Where the message goes: the run's backend, or the instance that runs the picked model.
+  const target = run && model && model.provider !== run.id ? model.provider : backend;
+  const targetBackend = instanceOf(target);
   const permissions = targetBackend?.permissions ?? [];
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
@@ -455,10 +484,16 @@ export function Composer({
   const account = { kind: "subscription", backend: target! } as const;
   let options: RunOptions = {};
   if (run && started && model && target !== backend)
-    options = { model: model.id, ...(efforts && { effort }), permission, ...speed, account };
+    options = {
+      ...(model.id && { model: model.id }),
+      ...(efforts && { effort }),
+      permission,
+      ...speed,
+      account,
+    };
   else if (run && started)
     options = {
-      ...(model && model !== startedModel && { model: model.id }),
+      ...(model?.id && model !== startedModel && { model: model.id }),
       ...(efforts && effort !== startedEffort && { effort }),
       ...(permission !== startedPermission && { permission }),
       ...(context !== undefined && context !== startedContext && { contextWindow: context }),
@@ -466,7 +501,7 @@ export function Composer({
     };
   else if (run)
     options = {
-      ...(model && { model: model.id }),
+      ...(model?.id && { model: model.id }),
       ...(efforts && { effort }),
       permission,
       ...speed,
@@ -514,6 +549,29 @@ export function Composer({
   }, [pathsAt, pathsKey, hostId, repo, runId]);
   const loadedCommands = commands && commands.key === commandsKey ? commands.list : undefined;
   const loadedPaths = paths && paths.key === pathsKey ? paths.list : undefined;
+  // The threads `thread/search` found for what's typed after `@`; the last list shows meanwhile.
+  const [found, setFound] = useState<string[]>([]);
+  const threadHost = attach?.hostId;
+  const search = trigger?.kind === "@" ? trigger.query.trim() : undefined;
+  useEffect(() => {
+    if (threadHost === undefined || !search) return;
+    let live = true;
+    void window.parallax
+      .request(threadHost, "thread/search", { query: search })
+      .then((r) => live && setFound("result" in r ? r.result.threads.map((t) => t.id) : []));
+    return () => {
+      live = false;
+    };
+  }, [threadHost, search]);
+  // Adds threads as chips, once each, at most the host's cap, but never the open thread itself.
+  const addThreads = (ids: readonly string[]) => {
+    const all = [...new Set([...threads, ...ids])].filter((id) => id !== attach?.self);
+    const max = attach?.max ?? 0;
+    setAttachError(
+      all.length > max ? `A message takes at most ${max} attached threads.` : undefined,
+    );
+    setThreads(all.slice(0, max));
+  };
 
   // Puts `text` where the trigger is, as typed text, which Markdown leaves alone.
   const replaceTrigger = (at: Trigger, text: string) =>
@@ -576,12 +634,42 @@ export function Composer({
         pick: () => replaceTrigger(trigger, `${c.text} `),
       })),
     ];
-  else if (trigger?.kind === "@")
-    entries = matchPaths(loadedPaths ?? [], trigger.query).map((path) => ({
+  else if (trigger?.kind === "@") {
+    // With nothing typed, the host's newest threads, as the sidebar orders them.
+    const ids = !attach
+      ? []
+      : search
+        ? found
+        : attach.state.threads
+            .filter((t) => !t.archived)
+            .sort((a, b) => Date.parse(lastPrompt(b)) - Date.parse(lastPrompt(a)))
+            .map((t) => t.id);
+    const threadRows = ids
+      .filter((id) => id !== attach?.self && !threads.includes(id))
+      .slice(0, maxThreadRows)
+      .map((id): MenuEntry => {
+        const look = lookOf(attach?.state, id);
+        return {
+          key: `thread:${id}`,
+          label: look.title,
+          icon: <look.Logo aria-hidden />,
+          meta: look.age,
+          group: "Threads",
+          pick: () => {
+            replaceTrigger(trigger, "");
+            addThreads([id]);
+          },
+        };
+      });
+    const fileRows = matchPaths(loadedPaths ?? [], trigger.query).map((path): MenuEntry => ({
       key: path,
       label: path,
+      // Headed only beside threads.
+      group: threadRows.length > 0 ? "Files" : undefined,
       pick: () => replaceTrigger(trigger, `@${path} `),
     }));
+    entries = [...threadRows, ...fileRows];
+  }
   // What the menu still waits for, shown as a row of its own.
   const loading =
     (wantsCommands && !loadedCommands && "Loading commands…") ||
@@ -606,16 +694,16 @@ export function Composer({
     const isImage = (f: File) => f.type.startsWith("image/");
     setFiles((all) => [...all, ...added.filter((f) => !isImage(f))]);
     const picked = added.filter(isImage);
-    setImageError(undefined);
+    setAttachError(undefined);
     if (picked.length === 0) return;
-    if (!imageCaps) return setImageError("This host's plxd can't take images.");
+    if (!imageCaps) return setAttachError("This host's plxd can't take images.");
     const { maxImages, maxImageBytes, maxTotalBytes } = imageCaps;
     const room = Math.max(0, maxImages - images.length);
     const share = Math.min(maxImageBytes, Math.floor(maxTotalBytes / maxImages));
     const read = await Promise.all(picked.slice(0, room).map((f) => readImage(f, share)));
     const errors = read.filter((r) => typeof r === "string");
     if (picked.length > room) errors.push(`A message takes at most ${maxImages} images.`);
-    setImageError(errors[0]);
+    setAttachError(errors[0]);
     const ok = read.filter((r) => typeof r !== "string");
     setImages((all) => [...all, ...ok].slice(0, maxImages));
   };
@@ -624,20 +712,32 @@ export function Composer({
     if (!canSend) return;
     const sent = editor.getJSON();
     const sentImages = images;
+    const sentThreads = threads;
     editor.commands.clearContent();
     setImages([]);
+    setThreads([]);
     setError(undefined);
-    setImageError(undefined);
-    const failed = await (background ? onSendInBackground! : onSend)(text, options, sentImages);
+    setAttachError(undefined);
+    const failed = await (background ? onSendInBackground! : onSend)(
+      text,
+      options,
+      sentImages,
+      sentThreads,
+    );
     if (failed === undefined) setFiles([]);
     else if (!editor.isDestroyed) {
       // Put it back ahead of anything typed or added while it was in flight.
       const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);
       editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });
       setImages((added) => [...sentImages, ...added].slice(0, imageCaps?.maxImages));
+      putBackThreads(sentThreads);
       setError(failed);
     }
   };
+
+  // Threads back ahead of any attached meanwhile.
+  const putBackThreads = (back: readonly string[]) =>
+    setThreads((added) => [...new Set([...back, ...added])].slice(0, attach?.max));
 
   const stop = async () => {
     const back = unanswered;
@@ -652,6 +752,7 @@ export function Composer({
       // ponytail: its formatting shows as typed Markdown, until the box parses Markdown.
       editor.commands.focus("start");
       editor.view.pasteText(editor.isEmpty ? back.text : `${back.text}\n`);
+      if (attach && back.threads?.length) putBackThreads(back.threads);
       void back
         .images()
         .then((images) =>
@@ -828,47 +929,86 @@ export function Composer({
           e.preventDefault();
           void submit();
         }}
-        // Files dropped anywhere on the box are added, before the editor can take them as text.
-        onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
+        // Files and sidebar threads dropped anywhere on the box are added, before the editor can
+        // take them as text.
+        onDragOver={(e) => {
+          const { types } = e.dataTransfer;
+          const thread = !!attach && types.includes(threadDragType);
+          if (types.includes("Files") || thread) e.preventDefault();
+          if (thread) e.dataTransfer.dropEffect = "copy";
+          setThreadOver(thread);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setThreadOver(false);
+        }}
         onDropCapture={(e) => {
-          if (e.dataTransfer.files.length === 0) return;
+          setThreadOver(false);
+          const thread = attach ? draggedThread(e.dataTransfer) : undefined;
+          if (e.dataTransfer.files.length === 0 && !thread) return;
           e.preventDefault();
           e.stopPropagation();
-          void addFiles([...e.dataTransfer.files]);
+          if (!thread) return void addFiles([...e.dataTransfer.files]);
+          // Run ids are the host's own, so another computer's thread can't come along.
+          if (thread.hostId !== attach?.hostId)
+            setAttachError("A thread on another computer can't be attached here.");
+          else addThreads([thread.runId]);
         }}
-        className="relative z-10 rounded-3xl border border-border bg-surface shadow-composer focus-within:border-ring"
+        className={`relative z-10 rounded-3xl border bg-surface shadow-composer focus-within:border-ring ${threadOver ? "border-ring" : "border-border"}`}
       >
         {menuOpen && (
           <div
             id={menuId}
             role="listbox"
-            aria-label={trigger.kind === "/" ? "Commands" : "Files"}
+            aria-label={
+              trigger.kind === "/"
+                ? "Commands"
+                : entries[0]?.group === "Threads"
+                  ? "Threads and files"
+                  : "Files"
+            }
             className="absolute inset-x-0 bottom-full mb-2 max-h-72 overflow-y-auto rounded-lg border border-border bg-surface p-1 text-foreground shadow-composer"
           >
             {entries.map((entry, i) => (
-              <div
-                key={entry.key}
-                id={`${menuId}-${i}`}
-                role="option"
-                aria-selected={i === highlighted}
-                // The box keeps focus, so typing goes on filtering.
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  entry.pick();
-                }}
-                onMouseMove={() => setActive(i)}
-                className={`${menuItem} cursor-default ${i === highlighted ? "bg-hover" : ""}`}
-              >
-                <span className="shrink-0">{entry.label}</span>
-                {entry.hint && (
-                  <span className="shrink-0 text-[12px] text-faint-foreground">{entry.hint}</span>
+              <ReactFragment key={entry.key}>
+                {entry.group && entry.group !== entries[i - 1]?.group && (
+                  <div
+                    role="presentation"
+                    className="px-2 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-foreground"
+                  >
+                    {entry.group}
+                  </div>
                 )}
-                {entry.description && (
-                  <span className="min-w-0 truncate text-[12px] text-faint-foreground">
-                    {entry.description}
+                <div
+                  id={`${menuId}-${i}`}
+                  role="option"
+                  aria-selected={i === highlighted}
+                  // The box keeps focus, so typing goes on filtering.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    entry.pick();
+                  }}
+                  onMouseMove={() => setActive(i)}
+                  className={`${menuItem} cursor-default ${i === highlighted ? "bg-hover" : ""}`}
+                >
+                  {entry.icon}
+                  <span className={entry.meta ? "min-w-0 truncate" : "shrink-0"}>
+                    {entry.label}
                   </span>
-                )}
-              </div>
+                  {entry.hint && (
+                    <span className="shrink-0 text-[12px] text-faint-foreground">{entry.hint}</span>
+                  )}
+                  {entry.description && (
+                    <span className="min-w-0 truncate text-[12px] text-faint-foreground">
+                      {entry.description}
+                    </span>
+                  )}
+                  {entry.meta && (
+                    <span className="ml-auto shrink-0 pl-2 text-[12px] text-faint-foreground">
+                      {entry.meta}
+                    </span>
+                  )}
+                </div>
+              </ReactFragment>
             ))}
             {loading && (
               <p role="status" className="px-2 py-1.5 text-[12px] text-faint-foreground">
@@ -877,8 +1017,15 @@ export function Composer({
             )}
           </div>
         )}
-        {(images.length > 0 || imageError) && (
+        {(images.length > 0 || threads.length > 0 || attachError) && (
           <div className="flex flex-wrap items-center gap-2 px-4 pt-3.5">
+            {threads.map((id) => (
+              <ThreadChip
+                key={id}
+                look={lookOf(attach?.state, id)}
+                onRemove={() => setThreads((all) => all.filter((t) => t !== id))}
+              />
+            ))}
             {images.map((image, i) => (
               <span key={i} className="relative">
                 <img
@@ -896,9 +1043,9 @@ export function Composer({
                 </button>
               </span>
             ))}
-            {imageError && (
+            {attachError && (
               <p role="alert" className="text-[12.5px] text-danger">
-                {imageError}
+                {attachError}
               </p>
             )}
           </div>
@@ -951,7 +1098,7 @@ export function Composer({
                     {/* Every provider, and an open run can't pick those it can't move to. */}
                     <ModelMenu
                       key={backend}
-                      models={models}
+                      catalog={catalog}
                       unavailable={blocked}
                       value={model}
                       onChange={setModel}
@@ -967,7 +1114,7 @@ export function Composer({
                       contexts={contexts}
                       context={context}
                       onContext={setContext}
-                      fastMode={hasFast ? model!.provider : undefined}
+                      fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
                       fast={fast}
                       onFast={setFast}
                     />

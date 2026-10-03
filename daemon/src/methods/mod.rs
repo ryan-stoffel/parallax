@@ -33,7 +33,8 @@ use parallax_protocol::methods::{
     AgentResumeNow, AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
     EventsUnsubscribe, GithubStatusGet, HostHealth, HostSettingsGet, HostSettingsSet, HostVersion,
     Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete, ProjectList, ProjectStart,
-    ProjectUpdate, RequestMethod, UsageDaily, UsageGet, UsageHistory,
+    ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod, UsageDaily,
+    UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -82,17 +83,20 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         HostVersion::NAME => {
             handle::<HostVersion, _, _>(&request, |p| ready(Ok(host::version(&context, p)))).await
         }
-        name if name.starts_with("host/settings/") => host_settings_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
-        name if name.starts_with("project/") => project_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
+        name if name.starts_with("host/settings/") => {
+            found(name, host_settings_method(&context, &request).await)
+        }
+        name if name.starts_with("project/") => {
+            found(name, project_method(&context, &request).await)
+        }
         AccountsList::NAME => {
             handle::<AccountsList, _, _>(&request, |p| accounts::list(&context, p)).await
         }
         AccountsRefresh::NAME => {
             handle::<AccountsRefresh, _, _>(&request, |p| accounts::refresh(&context, p)).await
+        }
+        name if name.starts_with("providers/") => {
+            found(name, providers_method(&context, &request).await)
         }
         AccountsKeysAdd::NAME => {
             handle::<AccountsKeysAdd, _, _>(&request, |p| accounts::keys::add(&context, p)).await
@@ -104,9 +108,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             handle::<AccountsKeysRemove, _, _>(&request, |p| accounts::keys::remove(&context, p))
                 .await
         }
-        name if name.starts_with("usage/") => usage_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
+        name if name.starts_with("usage/") => found(name, usage_method(&context, &request).await),
         AccountsDefaultsGet::NAME => {
             handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
         }
@@ -122,9 +124,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         ContextWrite::NAME => {
             handle::<ContextWrite, _, _>(&request, |p| context::write(&context, p)).await
         }
-        name if name.starts_with("agent/") => agent_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
+        name if name.starts_with("agent/") => found(name, agent_method(&context, &request).await),
         PrView::NAME => handle::<PrView, _, _>(&request, |p| pr::view(&context, p)).await,
         PrAct::NAME => handle::<PrAct, _, _>(&request, |p| pr::act(&context, p)).await,
         PrDiff::NAME => handle::<PrDiff, _, _>(&request, |p| pr::diff(&context, p)).await,
@@ -169,6 +169,11 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         id: Some(id),
         result,
     })
+}
+
+/// A family method's answer, or `method_not_found` if the family has no method `name`.
+fn found(name: &str, answer: Option<Result<Value, ErrorObject>>) -> Result<Value, ErrorObject> {
+    answer.unwrap_or_else(|| Err(ErrorObject::method_not_found(name)))
 }
 
 /// Answers a `host/settings/*` method (PLX-371), or `None` if there is no such method.
@@ -219,6 +224,37 @@ async fn project_method(
         }
         ProjectDelete::NAME => {
             handle::<ProjectDelete, _, _>(request, |p| project::delete(context, p)).await
+        }
+        _ => return None,
+    })
+}
+
+/// Answers a `providers/*` method (0040), each with every instance after it, or `None` if
+/// there is no such method.
+async fn providers_method(
+    context: &Context,
+    request: &Request,
+) -> Option<Result<Value, ErrorObject>> {
+    let daemon = &context.daemon;
+    let list = |refresh| daemon.providers.list(&daemon.cli_detector, refresh);
+    Some(match request.method.as_str() {
+        ProvidersList::NAME => {
+            handle::<ProvidersList, _, _>(request, |p| async move { Ok(list(p.refresh).await) })
+                .await
+        }
+        ProvidersSave::NAME => {
+            handle::<ProvidersSave, _, _>(request, |p| async move {
+                daemon.providers.save(p.instance).await?;
+                Ok(list(false).await)
+            })
+            .await
+        }
+        ProvidersRemove::NAME => {
+            handle::<ProvidersRemove, _, _>(request, |p| async move {
+                daemon.providers.remove(&p.id).await?;
+                Ok(list(false).await)
+            })
+            .await
         }
         _ => return None,
     })

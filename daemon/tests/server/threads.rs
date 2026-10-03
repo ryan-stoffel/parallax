@@ -95,7 +95,7 @@ struct WithOptions {
 }
 
 impl Backend for WithOptions {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.fake.name()
     }
 

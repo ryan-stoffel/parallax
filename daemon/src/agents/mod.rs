@@ -69,7 +69,7 @@ pub(crate) use self::convert::agent_run as snapshot;
 use self::convert::{RUNNING, STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
 pub(crate) use self::resume::Timing as ResumeTiming;
 use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
-use crate::backend::{Backend, ToolPolicy, check_argument, codex, cursor};
+use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
 use crate::worktree::{CreatedWorktree, PrError, WorktreeError, WorktreeManager};
@@ -408,8 +408,7 @@ async fn prepare_run(
     // A Codex or Cursor thread is full Codex or Cursor Agent, with no worker sandbox to check
     // (0035, 0036). Any other run on them is refused, even one on a repo entry: Cursor runs
     // nothing else, and Codex workers wait on RYA-153.
-    let full = [codex::PROGRAM, cursor::NAME].contains(&resolved.backend().name());
-    if !(thread_run && full) {
+    if !(thread_run && resolved.backend().full_thread()) {
         worker::check_backend(resolved.backend())?;
     }
     if let Some(cli) = worker::cli_of(resolved.backend()) {
