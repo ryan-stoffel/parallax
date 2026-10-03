@@ -9,6 +9,7 @@ import { useConnection } from "./ConnectionStatus";
 import { ContextPanel } from "./ContextPanel";
 import { FilesPanel } from "./FilesPanel";
 import { GitMenu } from "./GitMenu";
+import { LineageTrail } from "./Lineage";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
@@ -31,7 +32,9 @@ import {
   groupOf,
   groupThreads,
   idleThreads,
+  lineageOf,
   noRepo,
+  rootOf,
   titleOf,
   useThreads,
   type ThreadsView,
@@ -226,6 +229,21 @@ export function App() {
   };
   useSnoozeAlarms(listed, (hostId, threadId) => openOnHost(hostId, { kind: "thread", threadId }));
 
+  // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
+  const lineage = threads.lineage && openThread ? lineageOf(threads.state, openThread) : undefined;
+  const openThreadId = (threadId: string) => openOnHost(host.id, { kind: "thread", threadId });
+  // Where Go to parent, Next, and Previous sibling go. From a parent, Next and Previous open its
+  // first and last child.
+  const lineageStep = (command: "parentThread" | "nextThread" | "previousThread") => {
+    if (!lineage || settings) return undefined;
+    if (command === "parentThread") return lineage.parent?.id;
+    const step = command === "nextThread" ? 1 : -1;
+    const i = lineage.chips.findIndex((t) => t.id === lineage.active);
+    const n = lineage.chips.length;
+    const next = i === -1 ? (step === 1 ? 0 : n - 1) : (i + step + n) % n;
+    return lineage.chips[next]?.id;
+  };
+
   // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
   // back to the coordinator. In a thread, the repository's opens New thread on that repository.
   let crumbs: Crumb[];
@@ -253,6 +271,18 @@ export function App() {
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
     crumbs = [{ label: host.name }, repo, { label: page }];
+    // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
+    // parent and children has the parent's crumb before its own.
+    const parent = lineage?.parent;
+    if (parent) {
+      const back = {
+        label: threads.state.titles[parent.id] ?? "Thread",
+        onClick: () => openThreadId(parent.id),
+      };
+      crumbs = lineage.active
+        ? [crumbs[0]!, repo, back]
+        : [crumbs[0]!, repo, back, { label: page }];
+    }
   }
 
   // A Project created on the open host is in its list already. Another host's list loads once
@@ -329,7 +359,14 @@ export function App() {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
       else if (command === "usage") openOnHost(host.id, { kind: "usage" });
-      else return;
+      else if (
+        !dialog &&
+        (command === "parentThread" || command === "nextThread" || command === "previousThread")
+      ) {
+        const next = lineageStep(command);
+        if (!next) return;
+        openThreadId(next);
+      } else return;
       e.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
@@ -418,7 +455,22 @@ export function App() {
           <>
             <TopBar className={`@container ${topBarInset}`}>
               {showSidebar}
-              <Breadcrumb items={crumbs} />
+              <Breadcrumb
+                items={crumbs}
+                trail={
+                  lineage &&
+                  openThread && (
+                    <LineageTrail
+                      state={threads.state}
+                      chips={lineage.chips}
+                      active={lineage.active}
+                      root={rootOf(threads.state, openThread)}
+                      openId={openThread.id}
+                      onOpen={openThreadId}
+                    />
+                  )
+                }
+              />
               <div className="ml-auto flex shrink-0 items-center gap-2">
                 {selection.kind !== "project" && group.id !== noRepo && (
                   <Actions hostId={host.id} repoId={group.id} canRun={!!folder} onRun={runAction} />
@@ -439,6 +491,7 @@ export function App() {
                     key={`${host.id}/${selection.threadId}`}
                     hostId={host.id}
                     run={threads.state.runs[selection.threadId]}
+                    title={threads.state.titles[selection.threadId]}
                     onPrOpened={linksPrs ? openPr : undefined}
                     onSetUpGithub={setUpGithub}
                   />
@@ -474,6 +527,7 @@ export function App() {
                 key={`${host.id}/${selection.threadId}`}
                 hostId={host.id}
                 runId={selection.threadId}
+                title={threads.state.titles[selection.threadId]}
                 notice={notice?.threadId === selection.threadId ? notice.text : undefined}
                 prompt={threads.state.runs[selection.threadId]?.prompt}
                 // The list's status goes stale once the run moves on, so only a start says so.
@@ -639,6 +693,7 @@ function HostLoader({
     editable: !!capabilities && "projectEdit" in capabilities,
     deletable: !!capabilities && "projectDelete" in capabilities,
     iconImageBytes: iconImageBytes(connection),
+    lineage: !!capabilities && "threadLineage" in capabilities,
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;
