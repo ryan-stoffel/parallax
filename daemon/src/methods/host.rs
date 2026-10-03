@@ -118,6 +118,8 @@ pub(crate) fn initialize(
 /// `composerMenus` (PLX-359): `agent/commands` and `repo/files`, for the composer's `/` and `@`
 /// menus.
 /// `githubStatus` (PLX-336): `github/status`.
+/// `providers` (0040): `providers/list`, `providers/save`, and `providers/remove`, and a
+/// subscription `AccountChoice` naming any enabled instance.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -145,6 +147,7 @@ fn capabilities_advertised() -> Capabilities {
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
+        ("providers".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("pullRequests".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),

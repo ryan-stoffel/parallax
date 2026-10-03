@@ -17,10 +17,10 @@
 //! failure, arrives on the stream; and `send` and `cancel` only enqueue. The price is a virtual
 //! call per start, send, or cancel, never per event.
 
+pub mod acp;
 pub mod claude;
 pub mod codex;
 pub mod commands;
-pub mod cursor;
 pub mod event;
 pub mod fake;
 pub mod key_account;
@@ -29,7 +29,7 @@ pub mod run_temp;
 pub mod sandbox;
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -58,7 +58,7 @@ pub const EVENT_BUFFER: usize = 256;
 /// A vendor CLI that runs agents.
 pub trait Backend: Send + Sync {
     /// A short, stable name for logs and records, such as `claude`, `codex`, or `cursor`.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// What this backend can do.
     fn capabilities(&self) -> Capabilities;
@@ -83,8 +83,14 @@ pub trait Backend: Send + Sync {
     /// The [`RunRequest::permission`] values this backend maps to its CLI, all inside the worker
     /// sandbox (0013). None by default, like [`Backend::efforts`]; an absent permission always
     /// means [`AgentPermission::Edit`].
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         &[]
+    }
+
+    /// Whether a thread on it runs as the full agent with no worker sandbox to check (0035,
+    /// 0036, 0038), and nothing else runs on it. Not by default.
+    fn full_thread(&self) -> bool {
+        false
     }
 
     /// The [`RunRequest::context_window`] sizes this backend maps to its CLI. None by default,
@@ -296,6 +302,46 @@ pub fn prepend_path_line(path: &OsStr) -> Vec<u8> {
     }
     line.extend_from_slice(b"'${PATH:+:$PATH}\n");
     line
+}
+
+/// What a provider instance (0040) changes about how a built-in backend starts its CLI.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Overrides {
+    /// The backend's name, the instance's id, instead of the backend's own.
+    pub name: Option<String>,
+    /// The program, a name on `PATH` or an absolute path, instead of the backend's own.
+    pub program: Option<OsString>,
+    /// The CLI's configuration folder for a subscription account that names none.
+    pub home: Option<PathBuf>,
+    /// Arguments after the backend's own.
+    pub args: Vec<OsString>,
+    /// Variables set last, after the backend's own.
+    pub env: Vec<(OsString, OsString)>,
+}
+
+impl Overrides {
+    /// `spec` with the instance's program, arguments, and variables, for a spec whose own
+    /// arguments are already set.
+    pub fn apply(&self, spec: &mut process::ProcessSpec) {
+        if let Some(program) = &self.program {
+            spec.program.clone_from(program);
+        }
+        spec.args.extend(self.args.iter().cloned());
+        for (name, value) in &self.env {
+            spec.inject.set(name, value);
+        }
+    }
+
+    /// The configuration folder for `credential`: its own, or else the instance's.
+    #[must_use]
+    pub fn config_home(&self, credential: &Credential) -> Option<PathBuf> {
+        match credential {
+            Credential::Subscription { config_home } => {
+                config_home.clone().or_else(|| self.home.clone())
+            }
+            Credential::ApiKey(_) => None,
+        }
+    }
 }
 
 /// A vendor session for a run to continue.

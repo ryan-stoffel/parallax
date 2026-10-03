@@ -46,6 +46,7 @@ mod id;
 pub mod jsonrpc;
 pub mod methods;
 mod project;
+mod provider;
 mod pull_request;
 mod review;
 mod thread;
@@ -104,6 +105,10 @@ pub use project::{
     Project, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
     ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectStartParams,
     ProjectUpdateParams, ProjectUpdateResult,
+};
+pub use provider::{
+    ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
+    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
 };
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,

@@ -1,0 +1,872 @@
+//! Provider instances (0040): the configured ways a host runs agents, behind `providers/*`.
+//!
+//! An instance is a [`ProviderInstance`]: a kind, a name, and the user's settings. The built-in
+//! ones, `claude`, `codex`, and `cursor`, always exist; the rest are added from the app's Add
+//! provider dialog. Instances live in `providers.json` in plxd's data folder, except secret
+//! variables, which live in the host's keychain under the instance's secret id, one JSON object
+//! per instance.
+//!
+//! Every enabled instance is a backend in the [`BackendRegistry`], under its id, so a thread
+//! starts on one as `AccountChoice::Subscription { backend: <id> }`. A built-in instance with no
+//! settings keeps the backend plxd registered at startup.
+
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use jiff::Timestamp;
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    AccountId, AgentPermission, CliKind, ProviderInfo, ProviderInstance,
+    ProviderKind, ProviderModel, ProvidersListResult,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tokio::sync::Mutex;
+use tokio::time::Instant;
+
+use crate::backend::acp::{self, AcpAgent, AcpBackend};
+use crate::backend::claude::ClaudeBackend;
+use crate::backend::codex::CodexBackend;
+use crate::backend::process::{Launcher, Output, ProcessSpec, StdinMode};
+use crate::backend::{Backend, Overrides, check_argument};
+use crate::detect::{self, CliDetector};
+use crate::keystore::KeyStore;
+use crate::routing::BackendRegistry;
+
+/// How long a probe's answer is served before `providers/list` probes again.
+const CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// How long one probe step may take: a version, a status command, or an ACP session.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// What runs a kind, and how.
+#[derive(Clone, Debug)]
+enum Driver {
+    /// Claude Code, with the instance's variables: a model service sets its endpoint there.
+    Claude,
+    /// Codex's `app-server`.
+    Codex,
+    /// An ACP agent.
+    Acp(AcpAgent),
+}
+
+/// A kind's defaults.
+#[derive(Clone, Debug)]
+struct Preset {
+    program: &'static str,
+    driver: Driver,
+    /// Arguments after the program that sign it in, in a terminal on the host. Empty: none.
+    login: &'static [&'static str],
+    /// The variable the instance's home folder sets, for an ACP agent.
+    home_env: Option<&'static str>,
+    /// Where a model service lists its models, OpenAI style, and the variable that holds its key.
+    models_url: Option<(&'static str, &'static str)>,
+}
+
+/// The ACP agent `program args` with the usual Plan mode `plan`.
+fn acp_agent(label: &str, program: &str, args: &[&str]) -> AcpAgent {
+    AcpAgent::new("", label, program, args)
+}
+
+/// The defaults of `kind`. `None` for a kind this plxd doesn't know.
+#[expect(clippy::too_many_lines, reason = "one table of every kind's defaults")]
+fn preset(kind: ProviderKind) -> Option<Preset> {
+    let base = |program, driver| Preset {
+        program,
+        driver,
+        login: &[],
+        home_env: None,
+        models_url: None,
+    };
+    Some(match kind {
+        ProviderKind::Claude => Preset {
+            login: &["auth", "login"],
+            ..base("claude", Driver::Claude)
+        },
+        ProviderKind::Codex => Preset {
+            login: &["login"],
+            ..base("codex", Driver::Codex)
+        },
+        ProviderKind::Cursor => Preset {
+            login: &["login"],
+            ..base("agent",
+                Driver::Acp(AcpAgent {
+                    scrub: vec!["CURSOR_".into()],
+                    model_flag: Some("--model".into()),
+                    bypass_flag: Some("--force".into()),
+                    plan_mode: Some("plan".into()),
+                    edit_mode: Some("agent".into()),
+                    ..acp_agent("Cursor Agent", "agent", &["acp"])
+                }),
+            )
+        },
+        ProviderKind::Opencode => Preset {
+            login: &["auth", "login"],
+            home_env: Some("OPENCODE_CONFIG_DIR"),
+            ..base("opencode",
+                Driver::Acp(AcpAgent {
+                    plan_mode: Some("plan".into()),
+                    edit_mode: Some("build".into()),
+                    ..acp_agent("OpenCode", "opencode", &["acp"])
+                }),
+            )
+        },
+        ProviderKind::Pi => Preset {
+            ..base("pi-acp",
+                Driver::Acp(acp_agent("Pi", "pi-acp", &[])),
+            )
+        },
+        ProviderKind::Omp => Preset {
+            ..base("omp",
+                Driver::Acp(acp_agent("Oh My Pi", "omp", &["acp"])),
+            )
+        },
+        ProviderKind::GrokBuild => Preset {
+            login: &["login"],
+            ..base("grok",
+                Driver::Acp(AcpAgent {
+                    scrub: vec!["XAI_".into()],
+                    model_flag: Some("--model".into()),
+                    bypass_flag: Some("--always-approve".into()),
+                    ..acp_agent("Grok Build", "grok", &["agent", "stdio"])
+                }),
+            )
+        },
+        ProviderKind::Hermes => Preset {
+            login: &["setup", "--portal"],
+            home_env: Some("HERMES_HOME"),
+            ..base("hermes",
+                Driver::Acp(acp_agent("Hermes Agent", "hermes", &["acp"])),
+            )
+        },
+        ProviderKind::OllamaCloud => Preset {
+            models_url: Some(("https://ollama.com/v1/models", "ANTHROPIC_AUTH_TOKEN")),
+            ..base("claude", Driver::Claude)
+        },
+        ProviderKind::OpenRouter => Preset {
+            models_url: Some((
+                "https://openrouter.ai/api/v1/models?supported_parameters=tools",
+                "ANTHROPIC_AUTH_TOKEN",
+            )),
+            ..base("claude", Driver::Claude)
+        },
+        ProviderKind::LocalModel => Preset {
+            models_url: Some(("http://127.0.0.1:8080/v1/models", "ANTHROPIC_AUTH_TOKEN")),
+            ..base("claude", Driver::Claude)
+        },
+        ProviderKind::Acp => base("", Driver::Acp(acp_agent("", "", &[]))),
+        ProviderKind::Antigravity | ProviderKind::Unknown => return None,
+    })
+}
+
+/// The built-in instances, in order: always present, and never removed.
+const BUILT_IN: &[(&str, ProviderKind, &str)] = &[
+    ("claude", ProviderKind::Claude, "Claude Code"),
+    ("codex", ProviderKind::Codex, "Codex"),
+    ("cursor", ProviderKind::Cursor, "Cursor"),
+];
+
+/// The CLI plxd's detector already probes for a built-in instance.
+fn detected_cli(id: &str) -> Option<CliKind> {
+    match id {
+        "claude" => Some(CliKind::Claude),
+        "codex" => Some(CliKind::Codex),
+        "cursor" => Some(CliKind::Cursor),
+        _ => None,
+    }
+}
+
+/// One instance as `providers.json` keeps it: secret values left out.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Stored {
+    #[serde(flatten)]
+    instance: ProviderInstance,
+    /// Where its secret variables are in the keychain, once it has any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    secrets: Option<AccountId>,
+}
+
+/// What a probe found, kept for [`CACHE_TTL`].
+#[derive(Clone, Debug, Default)]
+struct Found {
+    installed: bool,
+    path: Option<String>,
+    version: Option<String>,
+    signed_in: Option<bool>,
+    account: Option<String>,
+    note: Option<String>,
+    models: Vec<ProviderModel>,
+}
+
+/// This host's provider instances.
+pub struct Providers {
+    file: PathBuf,
+    keys: Arc<dyn KeyStore>,
+    launcher: Launcher,
+    registry: BackendRegistry,
+    stored: Mutex<Vec<Stored>>,
+    cache: Mutex<HashMap<String, (Instant, Found)>>,
+}
+
+impl std::fmt::Debug for Providers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Providers")
+            .field("file", &self.file)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Providers {
+    /// Loads `data_dir`'s `providers.json`, adds the built-in instances it lacks, and registers
+    /// every enabled instance's backend in `registry`. A file that can't be read starts empty.
+    pub fn load(
+        data_dir: &Path,
+        keys: Arc<dyn KeyStore>,
+        launcher: Launcher,
+        registry: BackendRegistry,
+    ) -> Self {
+        let file = data_dir.join("providers.json");
+        let mut stored: Vec<Stored> = std::fs::read(&file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        for (i, (id, kind, name)) in BUILT_IN.iter().enumerate() {
+            if !stored.iter().any(|s| s.instance.id == *id) {
+                let instance = ProviderInstance {
+                    id: (*id).to_owned(),
+                    kind: *kind,
+                    name: (*name).to_owned(),
+                    enabled: true,
+                    program: None,
+                    home: None,
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    models: Vec::new(),
+                };
+                stored.insert(i.min(stored.len()), Stored {
+                    instance,
+                    secrets: None,
+                });
+            }
+        }
+        let providers = Self {
+            file,
+            keys,
+            launcher,
+            registry,
+            stored: Mutex::new(Vec::new()),
+            cache: Mutex::new(HashMap::new()),
+        };
+        for entry in &stored {
+            providers.register(entry);
+        }
+        providers.stored.try_lock().map(|mut s| *s = stored).ok();
+        providers
+    }
+
+    /// Every instance with its state, probing those whose cached state is older than
+    /// [`CACHE_TTL`], or all of them with `refresh`.
+    pub async fn list(&self, detector: &CliDetector, refresh: bool) -> ProvidersListResult {
+        let stored = self.stored.lock().await.clone();
+        let probes = stored.iter().map(|entry| self.found(detector, entry, refresh));
+        let found = futures_util::future::join_all(probes).await;
+        let providers = stored
+            .into_iter()
+            .zip(found)
+            .map(|(entry, found)| info(entry.instance, found))
+            .collect();
+        ProvidersListResult {
+            providers,
+            checked_at: Timestamp::now(),
+        }
+    }
+
+    /// Adds `instance`, or replaces the one with its id, keeping stored secrets it sends no value
+    /// for, and registers its backend.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for an id, kind, or setting plxd can't use, and an internal error if the
+    /// file or the keychain can't be written.
+    pub async fn save(&self, mut instance: ProviderInstance) -> Result<(), ErrorObject> {
+        check(&instance)?;
+        let mut stored = self.stored.lock().await;
+        let old = stored.iter().position(|s| s.instance.id == instance.id);
+        if let Some(i) = old
+            && stored[i].instance.kind != instance.kind
+        {
+            return Err(ErrorObject::invalid_params(
+                "an instance's kind can't change; add a new instance instead",
+            ));
+        }
+        let mut secrets = old
+            .and_then(|i| stored[i].secrets)
+            .map(|id| self.secrets(id))
+            .transpose()?
+            .unwrap_or_default();
+        secrets.retain(|name, _| {
+            instance
+                .env
+                .iter()
+                .any(|var| var.secret && var.name == *name)
+        });
+        for var in &mut instance.env {
+            if var.secret
+                && let Some(value) = var.value.take()
+            {
+                secrets.insert(var.name.clone(), value);
+            }
+        }
+        let mut secret_id = old.and_then(|i| stored[i].secrets);
+        if !secrets.is_empty() || secret_id.is_some() {
+            let id = *secret_id.get_or_insert_with(AccountId::generate);
+            let text = serde_json::to_string(&secrets).unwrap_or_default();
+            self.keys.set(id, &text).map_err(|error| {
+                ErrorObject::internal_error(format!("couldn't keep the secrets: {error}"))
+            })?;
+        }
+        let entry = Stored {
+            instance,
+            secrets: secret_id,
+        };
+        match old {
+            Some(i) => stored[i] = entry.clone(),
+            None => stored.push(entry.clone()),
+        }
+        self.write(&stored)?;
+        self.cache.lock().await.remove(&entry.instance.id);
+        self.register(&entry);
+        Ok(())
+    }
+
+    /// Removes the instance `id` and its secrets.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for a built-in instance or an id that doesn't exist.
+    pub async fn remove(&self, id: &str) -> Result<(), ErrorObject> {
+        if BUILT_IN.iter().any(|(built_in, ..)| *built_in == id) {
+            return Err(ErrorObject::invalid_params(
+                "a built-in provider can't be removed; turn it off instead",
+            ));
+        }
+        let mut stored = self.stored.lock().await;
+        let Some(i) = stored.iter().position(|s| s.instance.id == id) else {
+            return Err(ErrorObject::invalid_params(format!("no provider {id}")));
+        };
+        let entry = stored.remove(i);
+        if let Some(secrets) = entry.secrets {
+            let _ = self.keys.delete(secrets);
+        }
+        self.write(&stored)?;
+        self.registry.remove(id);
+        Ok(())
+    }
+
+    fn write(&self, stored: &[Stored]) -> Result<(), ErrorObject> {
+        let text = serde_json::to_vec_pretty(stored).unwrap_or_default();
+        std::fs::write(&self.file, text).map_err(|error| {
+            ErrorObject::internal_error(format!("couldn't save {}: {error}", self.file.display()))
+        })
+    }
+
+    fn secrets(&self, id: AccountId) -> Result<HashMap<String, String>, ErrorObject> {
+        let text = self.keys.get(id).map_err(|error| {
+            ErrorObject::internal_error(format!("couldn't read the secrets: {error}"))
+        })?;
+        Ok(text
+            .and_then(|text| serde_json::from_str(text.as_str()).ok())
+            .unwrap_or_default())
+    }
+
+    /// Every variable `entry` sets, secrets included.
+    fn env(&self, entry: &Stored) -> Vec<(OsString, OsString)> {
+        let secrets = entry
+            .secrets
+            .and_then(|id| self.secrets(id).ok())
+            .unwrap_or_default();
+        entry
+            .instance
+            .env
+            .iter()
+            .filter_map(|var| {
+                let value = if var.secret {
+                    secrets.get(&var.name).cloned()
+                } else {
+                    var.value.clone()
+                }?;
+                Some((var.name.clone().into(), value.into()))
+            })
+            .collect()
+    }
+
+    /// Puts `entry`'s backend in the registry, or takes it out while it's off. A built-in
+    /// instance with nothing set keeps the backend registered at startup.
+    fn register(&self, entry: &Stored) {
+        let instance = &entry.instance;
+        if !instance.enabled {
+            self.registry.remove(&instance.id);
+            return;
+        }
+        let plain = detected_cli(&instance.id).is_some()
+            && instance.program.is_none()
+            && instance.home.is_none()
+            && instance.args.is_empty()
+            && instance.env.is_empty();
+        if plain && self.registry.by_backend_name(&instance.id).is_some() {
+            return;
+        }
+        if let Some(backend) = self.backend(entry) {
+            self.registry.set(backend);
+        }
+    }
+
+    /// What `entry` changes about its kind's backend.
+    fn overrides(&self, entry: &Stored) -> Overrides {
+        let instance = &entry.instance;
+        Overrides {
+            name: Some(instance.id.clone()),
+            program: instance.program.as_ref().map(Into::into),
+            home: instance.home.as_ref().map(PathBuf::from),
+            args: instance.args.iter().map(Into::into).collect(),
+            env: self.env(entry),
+        }
+    }
+
+    /// The backend that runs `entry`.
+    fn backend(&self, entry: &Stored) -> Option<Arc<dyn Backend>> {
+        let instance = &entry.instance;
+        let preset = preset(instance.kind)?;
+        let launcher = self.launcher.clone();
+        let overrides = self.overrides(entry);
+        Some(match &preset.driver {
+            Driver::Claude => {
+                let mut overrides = overrides;
+                if overrides.program.is_none() && preset.program != "claude" {
+                    overrides.program = Some(preset.program.into());
+                }
+                Arc::new(ClaudeBackend::new(launcher).with_overrides(overrides))
+            }
+            Driver::Codex => Arc::new(CodexBackend::new(launcher).with_overrides(overrides)),
+            Driver::Acp(agent) => Arc::new(AcpBackend::new(
+                launcher,
+                acp_for(instance, &preset, agent.clone(), overrides),
+            )),
+        })
+    }
+
+    /// `entry`'s state: from the cache while it's fresh, else probed.
+    async fn found(&self, detector: &CliDetector, entry: &Stored, refresh: bool) -> Found {
+        let id = &entry.instance.id;
+        if !refresh
+            && let Some((at, found)) = self.cache.lock().await.get(id)
+            && at.elapsed() < CACHE_TTL
+        {
+            return found.clone();
+        }
+        let found = self.probe(detector, entry, refresh).await;
+        self.cache
+            .lock()
+            .await
+            .insert(id.clone(), (Instant::now(), found.clone()));
+        found
+    }
+
+    async fn probe(&self, detector: &CliDetector, entry: &Stored, refresh: bool) -> Found {
+        let instance = &entry.instance;
+        let Some(preset) = preset(instance.kind) else {
+            return Found {
+                note: Some("this plxd doesn't know this kind of provider; update plxd".into()),
+                ..Found::default()
+            };
+        };
+        let default_program = detected_cli(&instance.id).filter(|_| instance.program.is_none());
+        let mut found = match default_program {
+            Some(cli) => {
+                let detected = if refresh {
+                    detector.refresh_one(cli).await
+                } else {
+                    detector.get(cli).await
+                };
+                Found {
+                    installed: detected.installed,
+                    path: detected.path,
+                    version: detected.version,
+                    signed_in: detected.signed_in,
+                    account: detected.plan,
+                    note: detected.note,
+                    models: Vec::new(),
+                }
+            }
+            None => {
+                let program = program_of(instance, &preset);
+                let Some(path) = detect::resolve(&self.launcher, &program) else {
+                    return Found {
+                        note: Some(format!("{program} isn't installed on this host")),
+                        ..Found::default()
+                    };
+                };
+                let version = detect::run(&self.launcher, &program, &["--version"], PROBE_TIMEOUT)
+                    .await
+                    .ok()
+                    .filter(|ran| ran.exit_code == Some(0))
+                    .and_then(|ran| version_of(&ran.stdout));
+                Found {
+                    installed: true,
+                    path: Some(path.display().to_string()),
+                    version,
+                    ..Found::default()
+                }
+            }
+        };
+        if !found.installed {
+            return found;
+        }
+        let env = self.env(entry);
+        match (&preset.driver, preset.models_url) {
+            (Driver::Claude, Some((url, key))) => {
+                let url = instance
+                    .env
+                    .iter()
+                    .find(|var| var.name == "ANTHROPIC_BASE_URL")
+                    .and_then(|var| var.value.as_deref())
+                    .filter(|base| !url.starts_with(base.trim_end_matches('/')))
+                    .map_or_else(
+                        || url.to_owned(),
+                        |base| format!("{}/v1/models", base.trim_end_matches('/')),
+                    );
+                let key = env
+                    .iter()
+                    .find(|(name, _)| name == key)
+                    .map(|(_, value)| value.to_string_lossy().into_owned());
+                match key.as_deref().filter(|key| !key.is_empty()) {
+                    None => {
+                        found.signed_in = Some(false);
+                        found.note = Some("Add the service's API key".into());
+                    }
+                    Some(key) => match models_from(&self.launcher, &url, key).await {
+                        Ok(models) => {
+                            found.signed_in = Some(true);
+                            found.models = models;
+                        }
+                        Err(error) => found.note = Some(error),
+                    },
+                }
+            }
+            (Driver::Acp(agent), _) if instance.kind != ProviderKind::Cursor => {
+                let agent = acp_for(instance, &preset, agent.clone(), self.overrides(entry));
+                match acp_probe(&self.launcher, &agent).await {
+                    Ok((signed_in, models)) => {
+                        found.signed_in = Some(signed_in);
+                        found.models = models;
+                    }
+                    Err(error) => found.note = Some(error),
+                }
+            }
+            _ => {}
+        }
+        found
+    }
+}
+
+/// The program `instance` runs: its own, or its kind's.
+fn program_of(instance: &ProviderInstance, preset: &Preset) -> String {
+    instance
+        .program
+        .clone()
+        .unwrap_or_else(|| preset.program.to_owned())
+}
+
+/// `preset`'s ACP agent as `instance` runs it.
+fn acp_for(
+    instance: &ProviderInstance,
+    preset: &Preset,
+    mut agent: AcpAgent,
+    overrides: Overrides,
+) -> AcpAgent {
+    agent.name.clone_from(&instance.id);
+    if agent.label.is_empty() {
+        agent.label.clone_from(&instance.name);
+    }
+    agent.program = program_of(instance, preset).into();
+    if instance.kind == ProviderKind::Acp {
+        agent.args = overrides.args;
+    } else {
+        agent.args.extend(overrides.args);
+    }
+    agent.env = overrides.env;
+    if let (Some(name), Some(home)) = (preset.home_env, &instance.home) {
+        agent.env.push((name.into(), home.into()));
+    }
+    agent
+}
+
+/// The first version-looking word of `text`, such as `1.0.39` from `grok 1.0.39`.
+fn version_of(text: &str) -> Option<String> {
+    let line = text.lines().find(|line| !line.trim().is_empty())?;
+    line.split_whitespace()
+        .find(|word| word.trim_start_matches('v').starts_with(|c: char| c.is_ascii_digit()))
+        .or_else(|| line.split_whitespace().last())
+        .map(|word| word.trim_start_matches('v').to_owned())
+}
+
+/// The models an OpenAI-style `/v1/models` at `url` lists, read with `curl` so plxd needs no
+/// HTTP client of its own.
+async fn models_from(
+    launcher: &Launcher,
+    url: &str,
+    key: &str,
+) -> Result<Vec<ProviderModel>, String> {
+    let mut spec = ProcessSpec::new("curl", std::env::temp_dir());
+    // The key goes on stdin as a curl config line, so `ps` never shows it.
+    spec.args = ["-sS", "--max-time", "15", "-K", "-", url]
+        .iter()
+        .map(Into::into)
+        .collect();
+    spec.stdin = StdinMode::Piped;
+    let config = format!("header = \"Authorization: Bearer {key}\"\n");
+    let ran = detect::run_spec(launcher, &spec, config.as_bytes(), PROBE_TIMEOUT).await?;
+    if ran.exit_code != Some(0) {
+        return Err(format!("couldn't reach {url}: {}", ran.stderr_tail.trim()));
+    }
+    let body: Value = serde_json::from_str(&ran.stdout)
+        .map_err(|_| format!("{url} didn't answer with a model list"))?;
+    if let Some(error) = body.get("error") {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .map_or_else(|| error.to_string(), str::to_owned);
+        return Err(message);
+    }
+    let models = body
+        .get("data")
+        .or_else(|| body.get("models"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{url} didn't answer with a model list"))?;
+    Ok(models
+        .iter()
+        .filter_map(|model| {
+            let id = model.get("id").or_else(|| model.get("model"))?.as_str()?;
+            let name = model
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(id)
+                .to_owned();
+            Some(ProviderModel {
+                id: id.to_owned(),
+                name,
+            })
+        })
+        .collect())
+}
+
+/// Starts `agent`, opens a session in the user's home, and reads whether it is signed in and
+/// the models its `session/new` answer lists. The agent is killed once it answers.
+async fn acp_probe(
+    launcher: &Launcher,
+    agent: &AcpAgent,
+) -> Result<(bool, Vec<ProviderModel>), String> {
+    let home = std::env::home_dir().unwrap_or_else(std::env::temp_dir);
+    let mut spec = ProcessSpec::new(&agent.program, &home);
+    spec.args.clone_from(&agent.args);
+    spec.scrub = acp::scrubbed(launcher.base(), &agent.scrub);
+    spec.inject = agent.env.iter().cloned().collect();
+    spec.stdin = StdinMode::Piped;
+    let mut process = launcher
+        .spawn(&spec)
+        .map_err(|error| format!("couldn't start it: {error}"))?;
+    let mut stdin = process.take_stdin();
+    let input = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": acp::initialize_params()}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": home, "mcpServers": []}}),
+    ]
+    .iter()
+    .map(|message| format!("{message}\n"))
+    .collect::<String>();
+    let read = async {
+        if let Some(pipe) = &mut stdin {
+            use tokio::io::AsyncWriteExt;
+            let _ = pipe.write_all(input.as_bytes()).await;
+        }
+        loop {
+            match process.next().await {
+                Some(Output::Line(line)) => {
+                    let Ok(message) = serde_json::from_slice::<Value>(&line) else {
+                        continue;
+                    };
+                    if message["id"] != 2 {
+                        continue;
+                    }
+                    if let Some(error) = message.get("error") {
+                        let text = error["message"].as_str().unwrap_or_default();
+                        let lower = text.to_ascii_lowercase();
+                        if error["code"] == -32000 || lower.contains("auth") || lower.contains("login")
+                        {
+                            return Ok((false, Vec::new()));
+                        }
+                        return Err(text.to_owned());
+                    }
+                    return Ok((true, session_models(&message["result"])));
+                }
+                Some(Output::Oversized { .. }) => {}
+                Some(Output::Exited(exit)) => {
+                    return Err(format!("it exited: {}", exit.stderr_tail.trim()));
+                }
+                None => return Err("it exited".to_owned()),
+            }
+        }
+    };
+    tokio::time::timeout(PROBE_TIMEOUT, read)
+        .await
+        .unwrap_or_else(|_| Err(format!("it didn't open a session within {PROBE_TIMEOUT:?}")))
+}
+
+/// The models a `session/new` answer lists: ACP's `models`, or its model config option.
+fn session_models(result: &Value) -> Vec<ProviderModel> {
+    let from = |list: &Value, id: &str, name: &str| -> Vec<ProviderModel> {
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|model| {
+                let id = model.get(id)?.as_str()?.to_owned();
+                let name = model
+                    .get(name)
+                    .and_then(Value::as_str)
+                    .unwrap_or(&id)
+                    .to_owned();
+                Some(ProviderModel { id, name })
+            })
+            .collect()
+    };
+    let models = from(&result["models"]["availableModels"], "modelId", "name");
+    if !models.is_empty() {
+        return models;
+    }
+    result["configOptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|option| option["category"] == "model")
+        .map(|option| from(&option["options"], "value", "name"))
+        .unwrap_or_default()
+}
+
+/// The checks `providers/save` makes before keeping `instance`.
+fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
+    let id = &instance.id;
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return Err(ErrorObject::invalid_params(
+            "an id is 1 to 64 lowercase letters, digits, and dashes",
+        ));
+    }
+    if preset(instance.kind).is_none() {
+        return Err(ErrorObject::invalid_params(
+            "this plxd doesn't know that kind of provider",
+        ));
+    }
+    if let Some((built_in, kind, _)) = BUILT_IN.iter().find(|(built_in, ..)| built_in == id)
+        && instance.kind != *kind
+    {
+        return Err(ErrorObject::invalid_params(format!(
+            "{built_in} is a built-in provider of another kind"
+        )));
+    }
+    if instance.kind == ProviderKind::Acp && instance.program.is_none() {
+        return Err(ErrorObject::invalid_params(
+            "an ACP agent needs the program that starts it",
+        ));
+    }
+    for model in &instance.models {
+        check_argument("model", &model.id).map_err(|e| ErrorObject::invalid_params(e.to_string()))?;
+    }
+    for var in &instance.env {
+        if var.name.is_empty() || var.name.contains(['=', '\0']) {
+            return Err(ErrorObject::invalid_params(format!(
+                "{:?} isn't a variable name",
+                var.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// What `providers/list` says about one instance.
+fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
+    let preset = preset(instance.kind);
+    let (permissions, efforts, coordinator) = match preset.as_ref().map(|p| &p.driver) {
+        Some(Driver::Claude) => (
+            vec![
+                AgentPermission::Auto,
+                AgentPermission::Manual,
+                AgentPermission::Edit,
+                AgentPermission::Plan,
+                AgentPermission::Bypass,
+            ],
+            true,
+            instance.id == "claude",
+        ),
+        Some(Driver::Codex) => (
+            vec![
+                AgentPermission::Auto,
+                AgentPermission::Manual,
+                AgentPermission::Edit,
+                AgentPermission::Bypass,
+            ],
+            true,
+            false,
+        ),
+        Some(Driver::Acp(agent)) => (agent.permissions(), false, false),
+        None => (vec![AgentPermission::Edit], false, false),
+    };
+    let login = preset.filter(|p| !p.login.is_empty()).map(|p| {
+        std::iter::once(program_of(&instance, &p))
+            .chain(p.login.iter().map(|arg| (*arg).to_owned()))
+            .collect()
+    });
+    let mut instance = instance;
+    for var in &mut instance.env {
+        if var.secret {
+            var.value = None;
+        }
+    }
+    ProviderInfo {
+        instance,
+        installed: found.installed,
+        path: found.path,
+        version: found.version,
+        signed_in: found.signed_in,
+        account: found.account,
+        note: found.note,
+        models: found.models,
+        permissions,
+        efforts,
+        coordinator,
+        login,
+    }
+}
+
+/// The built-in `cursor` instance's backend before any setting changes it: Cursor Agent's
+/// `agent acp` (0036).
+#[must_use]
+pub fn cursor_backend(launcher: Launcher) -> AcpBackend {
+    let agent = match preset(ProviderKind::Cursor).map(|preset| preset.driver) {
+        Some(Driver::Acp(agent)) => agent,
+        _ => unreachable!("Cursor's preset is an ACP agent"),
+    };
+    AcpBackend::new(
+        launcher,
+        AcpAgent {
+            name: "cursor".into(),
+            ..agent
+        },
+    )
+}

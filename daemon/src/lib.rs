@@ -55,6 +55,7 @@ pub mod launch_agent;
 pub mod logging;
 pub mod mcp;
 mod methods;
+pub mod providers;
 pub mod paths;
 mod repo;
 pub mod routing;

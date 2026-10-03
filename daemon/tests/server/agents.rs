@@ -1154,7 +1154,7 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     );
     backends.register(
         Provider::Cursor,
-        Arc::new(plxd::backend::cursor::CursorBackend::new(launcher)),
+        Arc::new(plxd::providers::cursor_backend(launcher)),
     );
     config.backends = Some(backends);
     let server = InProcess::start(config);

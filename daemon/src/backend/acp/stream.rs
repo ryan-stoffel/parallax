@@ -1,7 +1,7 @@
-//! Turning `agent acp`'s stdout into [`Event`]s, one JSON-RPC message at a time.
+//! Turning an ACP agent's stdout into [`Event`]s, one JSON-RPC message at a time.
 //!
-//! The shapes are Agent Client Protocol 1 as Cursor Agent 2026.10.01-14929f9 writes it, read from
-//! real runs (0036), with Cursor's own requests (`cursor/update_todos`, `cursor/create_plan`,
+//! The shapes are Agent Client Protocol 1 as Cursor Agent 2026.10.01-14929f9 and the other agents
+//! of 0040 write it, read from real runs (0036), with Cursor's own requests (`cursor/update_todos`, `cursor/create_plan`,
 //! `cursor/ask_question`). Fields Parallax doesn't use are ignored, as 0004 asks.
 
 use std::collections::{HashMap, HashSet};
@@ -73,6 +73,8 @@ pub(super) struct Translator {
     /// `session/load` replays the session's history as updates before it answers. Those are
     /// already in the run's log, so they are dropped while this is set.
     pub replaying: bool,
+    /// What messages call the agent, such as `Cursor Agent`.
+    pub label: String,
     /// The client answers permission requests (`RunRequest::approvals`). Without it, plxd rejects
     /// each one at once, as headless Claude Code denies what would prompt (0031).
     pub asks: bool,
@@ -133,8 +135,10 @@ impl Translator {
                         Some(error) => Err(error
                             .get("message")
                             .and_then(Value::as_str)
-                            .unwrap_or("Cursor Agent returned an error")
-                            .to_owned()),
+                            .map_or_else(
+                                || format!("{} returned an error", self.label),
+                                str::to_owned,
+                            )),
                         None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
                     };
                     steps.push(Step::Response { id, result });

@@ -101,7 +101,8 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
-    EventSink, ImageMediaType, PromptImage, RunHandle, RunRequest, StartError, Started, ToolPolicy,
+    EventSink, ImageMediaType, Overrides, PromptImage, RunHandle, RunRequest, StartError, Started,
+    ToolPolicy,
     TurnId, WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::images;
@@ -151,13 +152,25 @@ pub const CONFIG_DIR_ENV: &str = "CODEX_HOME";
 #[derive(Clone, Debug)]
 pub struct CodexBackend {
     launcher: Launcher,
+    overrides: Overrides,
 }
 
 impl CodexBackend {
     /// A backend that starts `codex` through `launcher`.
     #[must_use]
     pub fn new(launcher: Launcher) -> Self {
-        Self { launcher }
+        Self {
+            launcher,
+            overrides: Overrides::default(),
+        }
+    }
+
+    /// Runs as a provider instance (0040): its name, program, `CODEX_HOME`, arguments after
+    /// `app-server`, and variables.
+    #[must_use]
+    pub fn with_overrides(mut self, overrides: Overrides) -> Self {
+        self.overrides = overrides;
+        self
     }
 }
 
@@ -426,8 +439,8 @@ pub fn scrubbed(base: &Environment) -> Vec<OsString> {
 }
 
 impl Backend for CodexBackend {
-    fn name(&self) -> &'static str {
-        PROGRAM
+    fn name(&self) -> &str {
+        self.overrides.name.as_deref().unwrap_or(PROGRAM)
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -450,7 +463,11 @@ impl Backend for CodexBackend {
 
     /// A thread's modes ([`app_server::mode`]). A worker on `codex exec` takes only `edit`, and
     /// is refused anyway until RYA-145 (RYA-153).
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn full_thread(&self) -> bool {
+        true
+    }
+
+    fn permissions(&self) -> &[AgentPermission] {
         app_server::PERMISSIONS
     }
 
@@ -464,7 +481,8 @@ impl Backend for CodexBackend {
 
     /// `codex app-server` on the default login, asked for `skills/list` ([`commands::codex`]).
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
-        let spec = app_server::spec(&self.launcher, cwd, None);
+        let home = self.overrides.home.as_deref();
+        let spec = app_server::spec(&self.launcher, &self.overrides, cwd, home);
         Ok(Some(CommandsProbe {
             process: self.launcher.spawn(&spec)?,
             input: vec![
@@ -478,7 +496,7 @@ impl Backend for CodexBackend {
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         if request.thread {
-            return app_server::start(&self.launcher, request);
+            return app_server::start(&self.launcher, &self.overrides, request);
         }
         if request.prompt.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
@@ -507,8 +525,8 @@ impl Backend for CodexBackend {
         )?;
         spec.scrub = scrubbed(self.launcher.base());
         match &request.account.credential {
-            Credential::Subscription { config_home } => {
-                if let Some(home) = config_home {
+            Credential::Subscription { .. } => {
+                if let Some(home) = self.overrides.config_home(&request.account.credential) {
                     spec.inject.set(CONFIG_DIR_ENV, home);
                 }
             }
@@ -517,6 +535,12 @@ impl Backend for CodexBackend {
             }
         }
         spec.stdin = StdinMode::Piped;
+        if let Some(program) = &self.overrides.program {
+            spec.program.clone_from(program);
+        }
+        for (name, value) in &self.overrides.env {
+            spec.inject.set(name, value);
+        }
 
         let mut process = self.launcher.spawn(&spec)?;
         if let Some(mut stdin) = process.take_stdin() {

@@ -175,8 +175,8 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Answer, AnswerError, ApprovalId, Backend, CancelSwitch,
-    Capabilities, Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, PromptImage, Run,
-    RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
+    Capabilities, Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, Overrides, PromptImage,
+    Run, RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
     WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::mcp;
@@ -518,6 +518,7 @@ pub struct ClaudeBackend {
     program: OsString,
     cancel: CancelPolicy,
     limits: OutputLimits,
+    overrides: Overrides,
 }
 
 impl ClaudeBackend {
@@ -529,7 +530,20 @@ impl ClaudeBackend {
             program: PROGRAM.into(),
             cancel: CancelPolicy::default(),
             limits: OutputLimits::default(),
+            overrides: Overrides::default(),
         }
+    }
+
+    /// Runs as a provider instance (0040): its name, program, folder, arguments, and variables,
+    /// such as a model service's `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, which Claude
+    /// Code reports as `apiKeySource` `none`, as it does a login.
+    #[must_use]
+    pub fn with_overrides(mut self, overrides: Overrides) -> Self {
+        if let Some(program) = &overrides.program {
+            self.program.clone_from(program);
+        }
+        self.overrides = overrides;
+        self
     }
 
     /// Runs `program`, a name on `PATH` or an absolute path, instead of `claude`.
@@ -563,8 +577,17 @@ impl ClaudeBackend {
     ) -> Result<(ProcessSpec, &'static str), StartError> {
         let mut spec = ProcessSpec::new(self.program.clone(), cwd);
         spec.scrub = scrubbed(self.launcher.base());
-        let key_source = apply_credential(credential, &mut spec)?;
+        let credential = match credential {
+            Credential::Subscription { .. } => Credential::Subscription {
+                config_home: self.overrides.config_home(credential),
+            },
+            Credential::ApiKey(_) => credential.clone(),
+        };
+        let key_source = apply_credential(&credential, &mut spec)?;
         for (name, value) in ALWAYS_SET {
+            spec.inject.set(name, value);
+        }
+        for (name, value) in &self.overrides.env {
             spec.inject.set(name, value);
         }
         spec.stdin = StdinMode::Piped;
@@ -874,8 +897,8 @@ pub fn apply_credential(
 }
 
 impl Backend for ClaudeBackend {
-    fn name(&self) -> &'static str {
-        "claude"
+    fn name(&self) -> &str {
+        self.overrides.name.as_deref().unwrap_or(PROGRAM)
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -893,7 +916,7 @@ impl Backend for ClaudeBackend {
         EFFORTS
     }
 
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         PERMISSIONS
     }
 
@@ -910,6 +933,7 @@ impl Backend for ClaudeBackend {
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
         let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
         spec.args = BASE_ARGS.iter().map(OsString::from).collect();
+        spec.args.extend(self.overrides.args.iter().cloned());
         Ok(Some(CommandsProbe {
             process: self.launcher.spawn(&spec)?,
             input: vec![json!({
@@ -935,6 +959,7 @@ impl Backend for ClaudeBackend {
         let (mut spec, expected_key_source) =
             self.spec(&request.cwd, &request.account.credential)?;
         spec.args = arguments(&request)?;
+        spec.args.extend(self.overrides.args.iter().cloned());
         let asks = prompts(&request);
         let plan_exit = hands_over_plans(&request);
         let full = full_thread(&request);

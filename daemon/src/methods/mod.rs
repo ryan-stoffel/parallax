@@ -27,7 +27,8 @@ use std::sync::Arc;
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
-    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
+    AccountsKeysRemove, AccountsList, AccountsRefresh, ProvidersList, ProvidersRemove,
+    ProvidersSave, AgentAccept, AgentApprove, AgentCancel,
     AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus,
     AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart,
     ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, GithubStatusGet,
@@ -89,6 +90,29 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         }
         AccountsRefresh::NAME => {
             handle::<AccountsRefresh, _, _>(&request, |p| accounts::refresh(&context, p)).await
+        }
+        ProvidersList::NAME => {
+            handle::<ProvidersList, _, _>(&request, |p| async move {
+                let daemon = &context.daemon;
+                Ok(daemon.providers.list(&daemon.cli_detector, p.refresh).await)
+            })
+            .await
+        }
+        ProvidersSave::NAME => {
+            handle::<ProvidersSave, _, _>(&request, |p| async move {
+                let daemon = &context.daemon;
+                daemon.providers.save(p.instance).await?;
+                Ok(daemon.providers.list(&daemon.cli_detector, false).await)
+            })
+            .await
+        }
+        ProvidersRemove::NAME => {
+            handle::<ProvidersRemove, _, _>(&request, |p| async move {
+                let daemon = &context.daemon;
+                daemon.providers.remove(&p.id).await?;
+                Ok(daemon.providers.list(&daemon.cli_detector, false).await)
+            })
+            .await
         }
         AccountsKeysAdd::NAME => {
             handle::<AccountsKeysAdd, _, _>(&request, |p| accounts::keys::add(&context, p)).await

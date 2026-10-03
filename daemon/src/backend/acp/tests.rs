@@ -1,4 +1,4 @@
-//! The Cursor backend against a fake `agent` on `PATH` that replays ACP transcripts recorded
+//! The ACP backend, configured as Cursor Agent, against a fake `agent` on `PATH` that replays ACP transcripts recorded
 //! from Cursor Agent 2026.10.01-14929f9, so every test spawns a real process and speaks the
 //! protocol both ways. No test runs the real CLI.
 
@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::{BUILD_PLAN, CursorBackend, arguments};
+use super::{AcpAgent, AcpBackend, BUILD_PLAN, arguments};
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::{
     AccountRef, AgentPermission, Answer, ApiKey, Backend, Credential, Decision, Event, EventStream,
@@ -40,7 +40,19 @@ fn fixture(name: &str) -> &'static str {
 /// A fake `agent` on the launcher's `PATH`, in a folder that also holds what it records.
 struct Fake {
     dir: TempDir,
-    backend: CursorBackend,
+    backend: AcpBackend,
+}
+
+/// Cursor Agent as plxd's built-in `cursor` provider describes it (0036).
+fn cursor() -> AcpAgent {
+    AcpAgent {
+        scrub: vec!["CURSOR_".into()],
+        model_flag: Some("--model".into()),
+        bypass_flag: Some("--force".into()),
+        plan_mode: Some("plan".into()),
+        edit_mode: Some("agent".into()),
+        ..AcpAgent::new("cursor", "Cursor Agent", "agent", &["acp"])
+    }
 }
 
 impl Fake {
@@ -66,7 +78,7 @@ impl Fake {
         let launcher = Launcher::new(DataDir::new(root.join("data")).unwrap(), base);
         Self {
             dir,
-            backend: CursorBackend::new(launcher),
+            backend: AcpBackend::new(launcher, cursor()),
         }
     }
 
@@ -583,17 +595,17 @@ fn only_a_threads_subscription_runs_on_cursor() {
     let mut worker = fake.request();
     worker.thread = false;
     assert!(matches!(
-        arguments(&worker),
+        arguments(&cursor(), &worker),
         Err(StartError::Unsupported(_))
     ));
     let mut key = fake.request();
     key.account.credential = Credential::ApiKey(ApiKey::new("k".into()));
-    assert!(matches!(arguments(&key), Err(StartError::Unsupported(_))));
+    assert!(matches!(arguments(&cursor(), &key), Err(StartError::Unsupported(_))));
     let mut auto = fake.request();
     auto.permission = Some(AgentPermission::Auto);
-    assert!(matches!(arguments(&auto), Err(StartError::Unsupported(_))));
+    assert!(matches!(arguments(&cursor(), &auto), Err(StartError::Unsupported(_))));
     let mut bypass = fake.request();
     bypass.permission = Some(AgentPermission::Bypass);
     bypass.model = None;
-    assert_eq!(arguments(&bypass).unwrap(), ["--force", "acp"]);
+    assert_eq!(arguments(&cursor(), &bypass).unwrap(), ["--force", "acp"]);
 }

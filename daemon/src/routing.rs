@@ -33,22 +33,21 @@ use crate::backend::{
 };
 use crate::keystore::KeyStore;
 
-/// Every backend plxd can route to, by the provider whose credentials it takes (0004: a backend
-/// takes both a subscription login and a key account for the same provider).
+/// Every backend plxd can route to: by name, which a subscription `AccountChoice` names, and by
+/// the provider whose key accounts it takes (0004: a backend takes both a subscription login and
+/// a key account for the same provider). Provider instances (0040) add and replace named
+/// backends while plxd runs, so clones share one table.
 #[derive(Clone, Default)]
 pub struct BackendRegistry {
-    by_provider: HashMap<Provider, Arc<dyn Backend>>,
+    /// The name of the backend that takes each provider's key accounts.
+    by_provider: HashMap<Provider, String>,
+    by_name: Arc<std::sync::RwLock<HashMap<String, Arc<dyn Backend>>>>,
 }
 
 impl std::fmt::Debug for BackendRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_map()
-            .entries(
-                self.by_provider
-                    .iter()
-                    .map(|(provider, backend)| (provider, backend.name())),
-            )
-            .finish()
+        let names = self.by_name.read().unwrap_or_else(PoisonError::into_inner);
+        f.debug_list().entries(names.keys()).finish()
     }
 }
 
@@ -59,25 +58,56 @@ impl BackendRegistry {
         Self::default()
     }
 
-    /// Registers `backend` as the one that takes `provider`'s credentials.
+    /// Registers `backend` as the one that takes `provider`'s credentials, under its name.
     pub fn register(&mut self, provider: Provider, backend: Arc<dyn Backend>) -> &mut Self {
-        self.by_provider.insert(provider, backend);
+        self.by_provider.insert(provider, backend.name().to_owned());
+        self.set(backend);
         self
+    }
+
+    /// Adds `backend` under its name, or replaces the one with that name, for key accounts too.
+    pub fn set(&self, backend: Arc<dyn Backend>) {
+        self.by_name
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(backend.name().to_owned(), backend);
+    }
+
+    /// Removes the backend named `name`, so no new run routes to it.
+    pub fn remove(&self, name: &str) {
+        self.by_name
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
     }
 
     /// The backend registered for `provider`.
     #[must_use]
     pub fn by_provider(&self, provider: Provider) -> Option<Arc<dyn Backend>> {
-        self.by_provider.get(&provider).cloned()
+        let name = self.by_provider.get(&provider)?;
+        self.by_name
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
-    /// The provider and backend whose [`Backend::name`] is `name`, such as `claude`.
+    /// The backend whose [`Backend::name`] is `name`, such as `claude`, and the provider whose
+    /// key accounts it takes, or [`Provider::Unknown`] for one that takes none.
     #[must_use]
     pub fn by_backend_name(&self, name: &str) -> Option<(Provider, Arc<dyn Backend>)> {
-        self.by_provider
+        let backend = self
+            .by_name
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()?;
+        let provider = self
+            .by_provider
             .iter()
-            .find(|(_, backend)| backend.name() == name)
-            .map(|(provider, backend)| (*provider, Arc::clone(backend)))
+            .find(|(_, registered)| *registered == name)
+            .map_or(Provider::Unknown, |(provider, _)| *provider);
+        Some((provider, backend))
     }
 }
 
