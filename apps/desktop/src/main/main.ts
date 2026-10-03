@@ -8,6 +8,7 @@ import {
   nativeTheme,
   session,
   shell,
+  type NativeImage,
 } from "electron";
 import path from "node:path";
 
@@ -27,6 +28,7 @@ import { savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
+import { startStorage } from "./storage";
 import { isNightly, startUpdater } from "./updater";
 
 // The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
@@ -62,6 +64,7 @@ function createWindow() {
       additionalArguments: updatable ? ["--parallax-updatable"] : [],
     },
   });
+  if (appIcon && process.platform !== "darwin") win.setIcon(appIcon);
   win.once("ready-to-show", () => win.show());
 
   if (devServerUrl) void win.loadURL(devServerUrl);
@@ -237,6 +240,14 @@ ipcMain.on("parallax:theme", (_event, preference: unknown) => {
   const source = THEME_PREFERENCES.find((p) => p === preference);
   if (source) nativeTheme.themeSource = source;
 });
+// The icon in the Appearance preset's colors (appearance.ts), kept for windows opened later.
+let appIcon: NativeImage | undefined;
+ipcMain.on("parallax:appIcon", (_event, png: unknown) => {
+  if (typeof png !== "string" || !png.startsWith("data:image/png;base64,")) return;
+  appIcon = nativeImage.createFromDataURL(png);
+  if (process.platform === "darwin") app.dock?.setIcon(appIcon);
+  else for (const win of BrowserWindow.getAllWindows()) win.setIcon(appIcon);
+});
 // Fires for the setting above, and for an OS theme change while it's "system".
 nativeTheme.on("updated", () => {
   const dark = nativeTheme.shouldUseDarkColors;
@@ -253,6 +264,7 @@ void app.whenReady().then(() => {
   browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));
   browserSession.setPermissionCheckHandler(() => false);
   startHosts();
+  startStorage();
   // Under `pnpm dev`, Update follows develop, the nightly channel's branch (scripts/channels.mjs).
   if (!updater) process.send?.({ channel: "nightly" });
   startAccount();

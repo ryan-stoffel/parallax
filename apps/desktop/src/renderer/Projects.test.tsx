@@ -122,6 +122,12 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => sshHosts,
     onHosts: () => () => {},
+    onLocalName: (listener: (name: string) => void) => {
+      listener("This Mac");
+      return () => {};
+    },
+    setZoom: () => {},
+    setAppIcon: () => {},
     openTargets: async () => [],
     openTargetIcons: async () => ({}),
   } as Partial<ParallaxBridge> as ParallaxBridge;
@@ -716,8 +722,13 @@ test("with iconImages, Change icon uploads an image, and a Project's and its rep
     vi.unstubAllGlobals();
   });
   vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 64, close() {} }));
+  // The image upload draws the picture; the app icon (appearance.ts) draws its circles.
+  const noop = () => {};
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-    drawImage() {},
+    drawImage: noop,
+    ...Object.fromEntries(
+      ["beginPath", "roundRect", "arc", "fill", "save", "restore", "clip"].map((m) => [m, noop]),
+    ),
   } as never);
   vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
     `data:image/webp;base64,${logo.data}`,

@@ -4,11 +4,14 @@
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
 //! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
-//! `project.rs`; PLX-318 `pullRequests` and PLX-328 `prDiff`: `pr.rs`), and `host.rs`
+//! `project.rs`; PLX-318 `pullRequests` and PLX-328 `prDiff`: `pr.rs`; PLX-359 `composerMenus`:
+//! `composer.rs`; PLX-336 `githubStatus`:
+//! `github/status` in `accounts.rs`), and `host.rs`
 //! advertises the capability in `initialize`.
 
 mod accounts;
 mod agent;
+mod composer;
 mod context;
 mod defaults;
 mod events;
@@ -25,11 +28,11 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestI
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
-    AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus, AgentImage,
-    AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart, ContextList,
-    ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, HostHealth, HostVersion,
-    Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete, ProjectList, ProjectStart,
-    ProjectUpdate, RequestMethod, UsageDaily, UsageGet, UsageHistory,
+    AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus,
+    AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart,
+    ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, GithubStatusGet,
+    HostHealth, HostVersion, Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete,
+    ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -97,13 +100,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             handle::<AccountsKeysRemove, _, _>(&request, |p| accounts::keys::remove(&context, p))
                 .await
         }
-        UsageGet::NAME => handle::<UsageGet, _, _>(&request, |p| usage::get(&context, p)).await,
-        UsageHistory::NAME => {
-            handle::<UsageHistory, _, _>(&request, |p| usage::history(&context, p)).await
-        }
-        UsageDaily::NAME => {
-            handle::<UsageDaily, _, _>(&request, |p| usage::daily(&context, p)).await
-        }
+        name if name.starts_with("usage/") => usage_method(&context, &request)
+            .await
+            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         AccountsDefaultsGet::NAME => {
             handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
         }
@@ -125,6 +124,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         PrView::NAME => handle::<PrView, _, _>(&request, |p| pr::view(&context, p)).await,
         PrAct::NAME => handle::<PrAct, _, _>(&request, |p| pr::act(&context, p)).await,
         PrDiff::NAME => handle::<PrDiff, _, _>(&request, |p| pr::diff(&context, p)).await,
+        GithubStatusGet::NAME => {
+            handle::<GithubStatusGet, _, _>(&request, |p| accounts::github(&context, p)).await
+        }
         name if thread::handles(name) => thread::dispatch(&context, &request).await,
         EventsSubscribe::NAME => {
             let subscribed = match request.params() {
@@ -162,6 +164,18 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     Reply::Response(Response {
         id: Some(id),
         result,
+    })
+}
+
+/// Answers a `usage/*` method, or `None` if there is no such method.
+async fn usage_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        UsageGet::NAME => handle::<UsageGet, _, _>(request, |p| usage::get(context, p)).await,
+        UsageHistory::NAME => {
+            handle::<UsageHistory, _, _>(request, |p| usage::history(context, p)).await
+        }
+        UsageDaily::NAME => handle::<UsageDaily, _, _>(request, |p| usage::daily(context, p)).await,
+        _ => return None,
     })
 }
 
@@ -227,6 +241,9 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
             handle::<AgentCommit, _, _>(request, |p| agent::commit(context, p)).await
         }
         AgentPush::NAME => handle::<AgentPush, _, _>(request, |p| agent::push(context, p)).await,
+        AgentCommands::NAME => {
+            handle::<AgentCommands, _, _>(request, |p| composer::list_commands(context, p)).await
+        }
         _ => return None,
     })
 }

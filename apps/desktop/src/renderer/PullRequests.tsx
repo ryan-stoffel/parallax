@@ -37,6 +37,7 @@ import type {
   PullRequest,
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
+import { diffBand, diffLook } from "./Approval";
 import { tabItem } from "./Composer";
 import { describeError } from "./errors";
 import { age } from "./Sidebar";
@@ -439,13 +440,6 @@ export function parseDiff(diff: string): DiffFile[] {
   return files;
 }
 
-const lineLook = {
-  "+": "bg-added/10",
-  "-": "bg-danger/10",
-  " ": "",
-  "@": "text-faint-foreground",
-};
-
 /**
  * One file of the Code tab: a header that folds it, with its path, size, and Viewed, over its
  * lines numbered on both sides. ponytail: every line renders; window them if huge diffs lag.
@@ -464,7 +458,9 @@ function DiffFileView({
   const Chevron = shut ? ChevronRight : ChevronDown;
   return (
     <li className="border-b border-border">
-      <div className="flex items-center gap-2 px-3 py-2 text-[13px]">
+      <div
+        className={`flex items-center gap-2 bg-code px-3 py-2 text-[13px] ${shut ? "" : "border-b border-border"}`}
+      >
         <button
           type="button"
           aria-expanded={!shut}
@@ -490,42 +486,39 @@ function DiffFileView({
         </label>
       </div>
       {!shut && (
-        <div className="pb-2 font-mono text-[12px] leading-5">
+        <div className="code-scroll pb-1 font-mono text-[12px] leading-5">
           {file.binary && <p className="px-3 text-faint-foreground">Binary file not shown</p>}
-          {file.lines.map((line, i) => (
-            <div key={i} className={`flex ${lineLook[line.op]}`}>
-              {line.op === "@" ? (
-                <span className="min-w-0 px-3 break-all whitespace-pre-wrap">{line.text}</span>
-              ) : (
-                <>
-                  <span
-                    aria-hidden
-                    className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none"
-                  >
-                    {line.old}
-                  </span>
-                  <span
-                    aria-hidden
-                    className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none"
-                  >
-                    {line.new}
-                  </span>
-                  <span
-                    aria-hidden
-                    className={`w-4 shrink-0 select-none ${line.op === "+" ? "text-added" : line.op === "-" ? "text-danger" : ""}`}
-                  >
-                    {line.op === "-" ? "−" : line.op}
-                  </span>
-                  {line.op !== " " && (
-                    <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
-                  )}
-                  <span className="min-w-0 pr-3 break-all whitespace-pre-wrap">
-                    {line.text || " "}
-                  </span>
-                </>
-              )}
-            </div>
-          ))}
+          {file.lines.map((line, i) =>
+            line.op === "@" ? (
+              <div key={i} className={`${diffBand} code-lines break-all whitespace-pre-wrap`}>
+                {line.text}
+              </div>
+            ) : (
+              <div key={i} className={`flex ${diffLook[line.op].row}`}>
+                <span
+                  aria-hidden
+                  className="w-10 shrink-0 pr-2 text-right text-faint-foreground/70 select-none"
+                >
+                  {line.old}
+                </span>
+                <span
+                  aria-hidden
+                  className="w-10 shrink-0 pr-2 text-right text-faint-foreground/70 select-none"
+                >
+                  {line.new}
+                </span>
+                <span aria-hidden className={`w-5 shrink-0 select-none ${diffLook[line.op].sign}`}>
+                  {line.op === "-" ? "−" : line.op}
+                </span>
+                {line.op !== " " && (
+                  <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
+                )}
+                <span className="code-lines min-w-0 pr-3 break-all whitespace-pre-wrap">
+                  {line.text || " "}
+                </span>
+              </div>
+            ),
+          )}
         </div>
       )}
     </li>

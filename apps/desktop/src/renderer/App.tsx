@@ -23,6 +23,7 @@ import { attentionOf } from "./attention";
 import { useSnoozeAlarms } from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
+import { useAppearanceEffects } from "./appearance";
 import { folderOf, runInDrawer, TerminalDrawer, TerminalPool, useDeleted } from "./ThreadTerminal";
 import {
   asksOf,
@@ -50,7 +51,15 @@ export type Selection =
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
 
-export type SettingsSection = "account" | "general" | "hosts" | "providers";
+export type SettingsSection =
+  | "account"
+  | "general"
+  | "appearance"
+  | "keybinds"
+  | "providers"
+  | "sourceControl"
+  | "storage"
+  | "connections";
 
 /**
  * The app frame: sidebar, then the chat or Settings, then the side panel.
@@ -58,6 +67,7 @@ export type SettingsSection = "account" | "general" | "hosts" | "providers";
  */
 export function App() {
   const [theme, setTheme] = useThemePreference();
+  useAppearanceEffects();
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   // The open host, or this computer once the open one is removed.
@@ -306,7 +316,7 @@ export function App() {
   const showSidebar = !sidebarOpen && (
     <IconButton
       label="Show sidebar"
-      keys="S"
+      command="sidebar"
       aria-expanded={false}
       aria-controls="sidebar"
       onClick={() => setSidebarOpen(true)}
@@ -404,7 +414,7 @@ export function App() {
                 {folder && (
                   <IconButton
                     label={drawerOpen ? "Hide terminal" : "Show terminal"}
-                    keys="J"
+                    command="terminal"
                     aria-pressed={drawerOpen}
                     aria-controls="terminal-drawer"
                     onClick={toggleDrawer}
@@ -416,7 +426,7 @@ export function App() {
                 {!panelOpen && (
                   <IconButton
                     label="Show side panel"
-                    keys="Alt+B"
+                    command="panel"
                     aria-expanded={false}
                     aria-controls="side-panel"
                     onClick={() => setPanelOpen(true)}
@@ -487,7 +497,12 @@ export function App() {
           </>
         )}
         {/* Outside the views, so the terminals live on behind Settings and Usage. */}
-        <TerminalDrawer open={drawerOpen} folder={folder} deleted={deleted} />
+        <TerminalDrawer
+          open={drawerOpen}
+          folder={folder}
+          deleted={deleted}
+          onClose={toggleDrawer}
+        />
       </main>
 
       <SidePanel

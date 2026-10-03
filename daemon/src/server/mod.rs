@@ -212,7 +212,8 @@ pub(crate) struct Daemon {
     /// The operating system and version, for `host/version`.
     pub os: String,
     pub limits: Limits,
-    /// Detects the vendor CLIs for `accounts/list` and `accounts/refresh` (#114).
+    /// Detects the vendor CLIs for `accounts/list` and `accounts/refresh` (#114), and `gh` for
+    /// `github/status` (PLX-336).
     pub cli_detector: CliDetector,
     /// Where key accounts' API keys live (#117): the OS's real store, except in tests.
     pub keys: Arc<dyn KeyStore>,

@@ -30,23 +30,24 @@ use crate::{
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
-    AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentCommitParams, AgentDiffParams,
-    AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult,
-    AgentFilesParams, AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams,
-    AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPushParams,
-    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams,
-    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
-    ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, HostHealthParams,
-    HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams, InitializeResult,
-    PrActParams, PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult,
-    ProjectDeleteParams, ProjectDeleteResult, ProjectListParams, ProjectListResult,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, PullRequest,
-    RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentCommandsParams,
+    AgentCommandsResult, AgentCommitParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
+    AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams, AgentFilesResult,
+    AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams,
+    AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
+    AgentStartParams, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
+    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
+    GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult, HostVersionParams,
+    HostVersionResult, InitializeParams, InitializeResult, PrActParams, PrDiffResult, PrViewParams,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
+    ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams, RepoAddResult, RepoFilesParams,
+    RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -274,6 +275,16 @@ method_table! {
         /// (PLX-338). Fails with `projectNotFound` for an unknown project or a repo entry's id.
         /// Gated on the `projectDelete` capability.
         ProjectDelete = "project/delete": ProjectDeleteParams => ProjectDeleteResult;
+        /// `agent/commands`: a CLI's own slash commands and skills, for the composer's `/` menu
+        /// (PLX-359). Gated on the `composerMenus` capability, like `repo/files`.
+        AgentCommands = "agent/commands": AgentCommandsParams => AgentCommandsResult;
+        /// `repo/files`: a thread's files that git tracks or doesn't ignore, capped, for the
+        /// composer's `@` menu.
+        RepoFiles = "repo/files": RepoFilesParams => RepoFilesResult;
+        /// `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
+        /// github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
+        /// `githubStatus` capability.
+        GithubStatusGet = "github/status": GithubStatusParams => GithubStatus;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -362,6 +373,9 @@ mod tests {
                 "pr/act",
                 "pr/diff",
                 "project/delete",
+                "agent/commands",
+                "repo/files",
+                "github/status",
                 "$/cancelRequest",
                 "events/event",
             ]

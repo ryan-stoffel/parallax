@@ -1,5 +1,6 @@
 //! `accounts/list` and `accounts/refresh` (#114): the vendor CLIs plxd detects, gated on the
-//! `agentClis` capability.
+//! `agentClis` capability. `github/status` (PLX-336), the GitHub CLI from the same detector, is
+//! gated on `githubStatus`.
 //!
 //! `keys` holds `accounts/keys/add`, `accounts/keys/list`, and `accounts/keys/remove` (#117),
 //! which manage stored API keys under the separate `accounts` capability. The two features share
@@ -11,6 +12,7 @@ pub(crate) mod keys;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult,
+    GithubStatus, GithubStatusParams,
 };
 
 use super::Context;
@@ -37,4 +39,12 @@ pub(crate) async fn refresh(
         clis: probe.clis,
         checked_at: probe.checked_at,
     })
+}
+
+/// The GitHub CLI on the host, always freshly probed.
+pub(crate) async fn github(
+    context: &Context,
+    _: GithubStatusParams,
+) -> Result<GithubStatus, ErrorObject> {
+    Ok(context.daemon.cli_detector.github().await)
 }

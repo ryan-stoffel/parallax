@@ -318,8 +318,11 @@ function cut(text: string, all: boolean) {
   return { shown, lines: lines.length, cut: shown !== text };
 }
 
+// A box of monospace text, as code, and a diff's, whose rows reach its edges.
 const codeBox =
-  "overflow-x-auto rounded-lg border border-border bg-sidebar px-2.5 py-2 font-mono text-[12px] leading-relaxed";
+  "overflow-x-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-[12px] leading-relaxed";
+const diffBox =
+  "code-scroll overflow-x-auto rounded-xl border border-border bg-code py-1.5 font-mono text-[12px] leading-relaxed";
 
 /** Show all, or Show less, for a preview cut short. */
 function ShowAll({ all, onToggle, lines }: { all: boolean; onToggle: () => void; lines?: number }) {
@@ -370,6 +373,32 @@ function Prose({ text }: { text: string }) {
   );
 }
 
+/**
+ * How a diff line looks, by its op: a changed line tinted, with a bar on its left edge, and its
+ * sign in its color. The PR Code tab and Markdown's diff blocks share it.
+ */
+export const diffLook = {
+  "+": { row: "bg-added/10 shadow-[inset_2px_0_0_var(--added)]", sign: "text-added" },
+  "-": { row: "bg-danger/10 shadow-[inset_2px_0_0_var(--danger)]", sign: "text-danger" },
+  " ": { row: "", sign: "text-faint-foreground" },
+};
+
+/** A band across a diff: a run of unchanged lines left out, or a hunk's `@@` header. */
+export const diffBand = "bg-hover px-3 py-0.5 text-[11.5px] text-faint-foreground";
+
+/** One line of a diff, its sign before it. */
+export function DiffRow({ op, text }: { op: " " | "+" | "-"; text: string }) {
+  return (
+    <div className={`flex px-3 ${diffLook[op].row}`}>
+      <span aria-hidden className={`w-5 shrink-0 select-none ${diffLook[op].sign}`}>
+        {op === "-" ? "−" : op}
+      </span>
+      {op !== " " && <span className="sr-only">{op === "+" ? "Added: " : "Removed: "}</span>}
+      <span className="code-lines min-w-0 break-words whitespace-pre-wrap">{text || " "}</span>
+    </div>
+  );
+}
+
 /** A diff from `before` to `after`, a line each, cut short with Show all. */
 function Diff({ before, after }: { before: string; after: string }) {
   const [all, setAll] = useState(false);
@@ -382,29 +411,15 @@ function Diff({ before, after }: { before: string; after: string }) {
       <div
         role="group"
         aria-label={`Diff: ${added} ${added === 1 ? "line" : "lines"} added, ${removed} removed`}
-        className={`${codeBox} px-0 py-1.5`}
+        className={diffBox}
       >
         {shown.map((line, i) =>
           line.op === "gap" ? (
-            <div key={i} className="px-2.5 text-faint-foreground">
+            <div key={i} className={diffBand}>
               ⋯ {line.count} unchanged {line.count === 1 ? "line" : "lines"}
             </div>
           ) : (
-            <div
-              key={i}
-              className={`flex px-2.5 ${line.op === "+" ? "bg-added/10" : line.op === "-" ? "bg-danger/10" : ""}`}
-            >
-              <span
-                aria-hidden
-                className={`w-4 shrink-0 select-none ${line.op === "+" ? "text-added" : line.op === "-" ? "text-danger" : "text-faint-foreground"}`}
-              >
-                {line.op === "-" ? "−" : line.op}
-              </span>
-              {line.op !== " " && (
-                <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
-              )}
-              <span className="min-w-0 break-words whitespace-pre-wrap">{line.text || " "}</span>
-            </div>
+            <DiffRow key={i} op={line.op} text={line.text} />
           ),
         )}
       </div>
@@ -476,7 +491,11 @@ const valueText = (value: JsonValue, whole = true) =>
  * What a request will do, by the names common tools use: the command, the edit as a diff, the
  * URL, a subagent's task, or the arguments. Nothing for a tool whose header says it all.
  */
-export function RequestPreview({ request }: { request: ApprovalRequest }) {
+export function RequestPreview({
+  request,
+}: {
+  request: Pick<ApprovalRequest, "toolName" | "input" | "interactive">;
+}) {
   const { toolName, input } = request;
   if (isObject(input) && input["truncated"] === true) {
     const bytes = typeof input["bytes"] === "number" ? input["bytes"] : 0;

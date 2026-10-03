@@ -11,6 +11,8 @@ export type Settings = {
    * write it, so it can't choose which program the app runs.
    */
   ssh?: string;
+  /** This computer's name in Parallax, when the user renamed it. */
+  localName?: string;
 };
 
 /**
@@ -30,9 +32,11 @@ export function readSettings(file: string): Settings {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error("it isn't a JSON object");
   }
-  const { hosts = [], ssh } = raw as Record<string, unknown>;
+  const { hosts = [], ssh, localName } = raw as Record<string, unknown>;
   if (!Array.isArray(hosts)) throw new Error("`hosts` isn't a list");
   if (ssh !== undefined && typeof ssh !== "string") throw new Error("`ssh` isn't a string");
+  if (localName !== undefined && typeof localName !== "string")
+    throw new Error("`localName` isn't a string");
   const ids = new Set(["local"]);
   for (const entry of hosts as unknown[]) {
     const { id, name, destination } = (entry ?? {}) as Record<string, unknown>;
