@@ -189,8 +189,13 @@ const press = (key: string) =>
     document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   });
 
-const openNewProject = () =>
-  click(document.querySelector('#sidebar button[aria-label="New project"]'));
+/** The toolbar's New project or repository menu's items, by label. */
+const addMenuItems = () => [
+  ...document.querySelectorAll<HTMLButtonElement>(
+    '#sidebar [role="menu"][aria-label="New project or repository"] [role="menuitem"]',
+  ),
+];
+const openNewProject = () => click(addMenuItems().find((b) => b.textContent === "New project…"));
 const workspaceButton = () =>
   dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");
 const workspaceMenu = () =>
@@ -1595,12 +1600,16 @@ test("Projects sit in a collapsible section above Threads, with New project besi
   expect(projectsSection().hidden).toBe(false);
 });
 
-test("with no Projects, there's no section and New project stays in the toolbar until one is created", async () => {
+test("with no Projects, there's no section, and the toolbar's one menu creates a Project or adds a repository", async () => {
   answers["project/list"] = () => ({ result: { projects: [], seq: 7 } });
   await renderApp();
   expect(sectionHeadings()).toEqual([]);
-  expect(newProjectButtons()).toHaveLength(1);
-  expect(besideProjectsHeading(newProjectButtons()[0]!)).toBe(false);
+  expect(newProjectButtons()).toHaveLength(0);
+  expect(addMenuItems().map((b) => b.textContent)).toEqual(["New project…", "Add repository…"]);
+  await click(addMenuItems()[1]);
+  expect(
+    document.querySelector<HTMLDialogElement>('dialog[aria-label="Add repository"]')!.open,
+  ).toBe(true);
 
   await act(async () =>
     deliver({
