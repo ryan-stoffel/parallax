@@ -142,6 +142,7 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
         images: Vec::new(),
         threads: Vec::new(),
         from: None,
+        delivery: None,
     }
 }
 
@@ -288,7 +289,7 @@ pub(crate) fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) 
     move |event| matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.status == status)
 }
 
-fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) -> bool {
+pub(crate) fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) -> bool {
     move |event| matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.contains(&item))
 }
 
@@ -1573,6 +1574,7 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
         dir,
         fake(vec![
             init("review-1"),
+            Step::EndTurn { result: None },
             Step::AwaitFollowUp,
             end_turn("Noted."),
             Step::Hang,

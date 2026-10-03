@@ -144,6 +144,9 @@ pub(crate) fn initialize(
 /// `from` and the `interrupted` item, and `pr/link` and `pr/unlink`, which a thread's Parallax
 /// tools use.
 /// `inbox` (PLX-401, 0043): `inbox/list`, `inbox/seen`, and `inbox.added`.
+/// `queue` (PLX-370, 0048): `queue/list`, `queue/edit`, `queue/reorder`, `queue/cancel`,
+/// `queue/steer`, and `queue.updated`, and `agent/send` takes `delivery`, which an older plxd
+/// would silently ignore, queueing a steer.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -178,6 +181,7 @@ fn capabilities_advertised() -> Capabilities {
         ("providers".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("pullRequests".to_owned(), serde_json::Map::new()),
+        ("queue".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("sendAccount".to_owned(), serde_json::Map::new()),

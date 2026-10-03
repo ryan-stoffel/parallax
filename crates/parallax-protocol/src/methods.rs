@@ -46,7 +46,7 @@ use crate::{
     PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
     ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
     ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
-    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest, RepoAddParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest, QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams,
     RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
     RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
     ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult,
@@ -340,6 +340,17 @@ method_table! {
         GithubSignInStart = "github/signIn": GithubSignInParams => GithubSignIn;
         /// `github/signInCancel`: stops a pending sign-in, if there is one.
         GithubSignInCancel = "github/signInCancel": GithubSignInCancelParams => GithubSignInCancelResult;
+        /// `queue/list`: a run's waiting messages, first to be sent first (PLX-370). Gated on
+        /// the `queue` capability, like every `queue/*` method.
+        QueueList = "queue/list": QueueListParams => QueueResult;
+        /// `queue/edit`: replaces a waiting message's text.
+        QueueEdit = "queue/edit": QueueEditParams => QueueResult;
+        /// `queue/reorder`: puts a run's waiting messages in a new order.
+        QueueReorder = "queue/reorder": QueueReorderParams => QueueResult;
+        /// `queue/cancel`: drops a waiting message, which is never sent.
+        QueueCancel = "queue/cancel": QueueCancelParams => QueueResult;
+        /// `queue/steer`: sends a waiting message into the turn running now.
+        QueueSteer = "queue/steer": QueueSteerParams => QueueResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -447,6 +458,11 @@ mod tests {
                 "github/install",
                 "github/signIn",
                 "github/signInCancel",
+                "queue/list",
+                "queue/edit",
+                "queue/reorder",
+                "queue/cancel",
+                "queue/steer",
                 "$/cancelRequest",
                 "events/event",
             ]
