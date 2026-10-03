@@ -339,7 +339,7 @@ impl Actor {
                     self.expire_approvals().await;
                 }
                 () = sleep_until(resume_at.unwrap_or_else(Instant::now)), if resume_at.is_some() => {
-                    self.resume_when_due().await;
+                    self.check_resume().await;
                 }
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
@@ -1613,6 +1613,8 @@ impl Actor {
                 })
                 .await;
                 self.row.state.account_id.clone_from(to_account);
+                // The first account's limits don't bind the account the run moved to.
+                self.resumes.take_reset();
                 self.save().await;
             }
             Event::Usage(_) | Event::RateLimit(_) => {

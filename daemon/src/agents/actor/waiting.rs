@@ -2,9 +2,11 @@
 //! its CLI ends `rateLimited`, when the stored timer fires, and when a client resumes, cancels,
 //! or turns auto-resume off for a waiting run. The policy is [`crate::agents::resume`]'s.
 
+use std::time::Duration;
+
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{AgentFailureKind, AgentOutcome, AgentRun, ErrorKind};
+use parallax_protocol::{AgentFailureKind, AgentOutcome, AgentRun, ErrorKind, TurnId};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
@@ -13,15 +15,35 @@ use crate::agents::RunOptions;
 use crate::agents::convert::{self, WAITING};
 use crate::agents::resume::{self, MESSAGE};
 
+/// The longest the actor sleeps before checking the wall clock again while a run waits. Tokio's
+/// clock stops while a Mac sleeps, so one long sleep could end hours after `resumeAt`.
+const CHECK_EVERY: Duration = Duration::from_secs(60);
+
 impl Actor {
-    /// When the stored timer fires: the run's `resumeAt`, while it waits and no CLI runs.
+    /// When the actor next checks the stored timer: `resumeAt`, or [`CHECK_EVERY`] from now if
+    /// that is sooner, while the run waits and no CLI runs.
     pub(super) fn resume_due(&self) -> Option<Instant> {
         if self.row.state.status != WAITING || self.live.is_some() {
             return None;
         }
         let at = self.row.state.resume_at?;
-        let left = at.duration_since(Timestamp::now());
-        Some(Instant::now() + left.try_into().unwrap_or_default())
+        let left: Duration = at
+            .duration_since(Timestamp::now())
+            .try_into()
+            .unwrap_or_default();
+        Some(Instant::now() + left.min(CHECK_EVERY))
+    }
+
+    /// [`Self::resume_due`] came: resumes the run if the wall clock has reached `resumeAt`.
+    pub(super) async fn check_resume(&mut self) {
+        if self
+            .row
+            .state
+            .resume_at
+            .is_some_and(|at| at <= Timestamp::now())
+        {
+            self.resume_when_due().await;
+        }
     }
 
     /// After a CLI ended with `outcome`, before the run is saved: a run a usage limit stopped,
@@ -56,16 +78,17 @@ impl Actor {
 
     /// The stored timer fired: resumes the session with [`MESSAGE`], unless auto-resume was
     /// turned off meanwhile.
-    pub(super) async fn resume_when_due(&mut self) {
+    async fn resume_when_due(&mut self) {
         if !resume::enabled(&self.daemon, self.row.state.auto_resume).await {
             info!(run = %self.id, "auto-resume is off, so a waiting run stays stopped");
             self.stop_waiting(convert::FAILED).await;
             return;
         }
-        self.resume_waiting().await;
+        let turn = self.resumes.next();
+        self.resume_waiting(turn).await;
     }
 
-    /// `agent/resumeNow`: resumes a waiting run now.
+    /// `agent/resumeNow`: resumes a waiting run now, as the user's own turn.
     pub(super) async fn resume_now(&mut self) -> Result<AgentRun, ErrorObject> {
         if self.row.state.status != WAITING {
             return Err(ErrorObject::parallax(
@@ -73,7 +96,7 @@ impl Actor {
                 format!("run {} isn't waiting for a usage limit to reset", self.id),
             ));
         }
-        self.resume_waiting().await;
+        self.resume_waiting(TurnId::generate()).await;
         self.snapshot()
     }
 
@@ -111,11 +134,10 @@ impl Actor {
         self.save().await;
     }
 
-    /// Resumes the waiting run's session with [`MESSAGE`], as plxd's own turn. A launch clears the
-    /// timer; a run that can't be resumed stops waiting, `failed`.
-    async fn resume_waiting(&mut self) {
+    /// Resumes the waiting run's session with [`MESSAGE`] as `turn`. A launch clears the timer;
+    /// a run that can't be resumed stops waiting, `failed`.
+    async fn resume_waiting(&mut self, turn: TurnId) {
         info!(run = %self.id, "resuming a run whose usage limit reset");
-        let turn = self.resumes.next();
         let resumed = self
             .resume(
                 turn,

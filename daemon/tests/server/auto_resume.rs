@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::methods::{
-    AgentCancel, AgentList, AgentResumeNow, AgentStart, HostSettingsGet, HostSettingsSet,
+    AgentCancel, AgentList, AgentResumeNow, AgentSend, AgentStart, HostSettingsGet, HostSettingsSet,
 };
 use parallax_protocol::{
     AgentCancelParams, AgentListParams, AgentOutputItem, AgentResumeNowParams, AgentRunState,
     AgentStatus, ErrorKind, EventsEventParams, HostSettingsGetParams, HostSettingsSetParams,
-    ParallaxEvent, Provider, RunId,
+    ParallaxEvent, Provider, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{
@@ -21,8 +21,8 @@ use plxd::backend::{
 use plxd::routing::BackendRegistry;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake_backend, init, items, project_params, start_params,
-    subscribe, until, updated_to,
+    Conn, Host, create, end_turn, fake_backend, init, items, project_params, send_params,
+    start_params, subscribe, until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -127,6 +127,51 @@ async fn status(client: &mut Conn, run: RunId) -> AgentStatus {
 
 fn in_seconds(seconds: i64) -> Timestamp {
     Timestamp::now() + SignedDuration::from_secs(seconds)
+}
+
+/// Sleeps until a moment after `at`.
+async fn sleep_past(at: Timestamp) {
+    let wait: Duration = at
+        .duration_since(Timestamp::now())
+        .try_into()
+        .unwrap_or_default();
+    tokio::time::sleep(wait + Duration::from_millis(300)).await;
+}
+
+/// The text of each turn the transcript started, and whether plxd sent it.
+fn turns(events: &[EventsEventParams]) -> Vec<(String, bool)> {
+    items(events)
+        .into_iter()
+        .filter_map(|item| match item {
+            AgentOutputItem::TurnStarted {
+                text: Some(text),
+                wake,
+                ..
+            } => Some((text, wake)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Starts a run on a fresh plxd whose first CLI the limit stops until `reset`, and the scripts
+/// after it, and waits until it is waiting. Returns the host, a subscribed client, and the run.
+async fn waiting_run(
+    reset: Timestamp,
+    seen: &Arc<Mutex<Vec<RunRequest>>>,
+) -> (Host, Conn, RunId, u64) {
+    let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], seen);
+    let host = host(temp_dir(), backends, Duration::from_secs(600));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let run = client
+        .call::<AgentStart>(start_params(project.id, "Build it."))
+        .await
+        .unwrap()
+        .run;
+    let events = until(&mut client, |event| waiting(event).is_some()).await;
+    let seq = events.last().unwrap().seq;
+    (host, client, run.id, seq)
 }
 
 /// The stored timer outlives plxd: a run waiting when plxd stops resumes its session at the reset
@@ -300,5 +345,81 @@ async fn the_host_setting_turns_it_off() {
         .await
         .unwrap_err();
     assert_eq!(kind(&refused), ErrorKind::RunNotResumable);
+    host.server.stop().await;
+}
+
+/// A reset that passed while plxd was stopped resumes the run as soon as plxd is back.
+#[tokio::test]
+async fn a_reset_that_passed_while_plxd_was_stopped_resumes_at_once() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let reset = in_seconds(1);
+    let (host, client, run, seq) = waiting_run(reset, &seen).await;
+    drop(client);
+    let Host { dir, server } = host;
+    server.stop().await;
+    sleep_past(reset).await;
+
+    let host = self::host(
+        dir,
+        sequence(vec![resumed()], &seen),
+        Duration::from_secs(600),
+    );
+    let mut client = host.client().await;
+    let listed = client
+        .call::<AgentList>(AgentListParams::default())
+        .await
+        .unwrap()
+        .runs;
+    let project_id = listed.iter().find(|r| r.id == run).unwrap().project;
+    subscribe(&mut client, project_id, seq).await;
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(turns(&events), [(CONTINUE.to_owned(), true)]);
+    assert_eq!(seen.lock().unwrap().len(), 2, "resumed once");
+    host.server.stop().await;
+}
+
+/// The user's own message to a waiting run resumes it now and clears the timer, so the reset
+/// starts nothing more.
+#[tokio::test]
+async fn a_message_to_a_waiting_run_clears_its_timer() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let reset = in_seconds(2);
+    let (host, mut client, run, _) = waiting_run(reset, &seen).await;
+    let sent = client
+        .call::<AgentSend>(send_params(run, TurnId::generate(), "Try again."))
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(sent.resume_at, None);
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(turns(&events), [("Try again.".to_owned(), false)]);
+    sleep_past(reset).await;
+    assert_eq!(seen.lock().unwrap().len(), 2, "the reset started nothing");
+    assert_eq!(status(&mut client, run).await, AgentStatus::Completed);
+    host.server.stop().await;
+}
+
+/// `agent/resumeNow` resumes a waiting run before its reset, as the user's own turn.
+#[tokio::test]
+async fn resume_now_resumes_a_waiting_run_as_the_users_turn() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, mut client, run, _) = waiting_run(in_seconds(600), &seen).await;
+    let resumed = client
+        .call::<AgentResumeNow>(AgentResumeNowParams { run_id: run })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(resumed.resume_at, None);
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(turns(&events), [(CONTINUE.to_owned(), false)]);
+    let launches = seen.lock().unwrap().clone();
+    assert_eq!(launches.len(), 2);
+    assert_eq!(
+        launches[1]
+            .resume
+            .as_ref()
+            .map(|resume| resume.session_id.as_str()),
+        Some("s-1")
+    );
     host.server.stop().await;
 }
