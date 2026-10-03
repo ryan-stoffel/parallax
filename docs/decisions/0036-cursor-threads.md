@@ -1,6 +1,6 @@
 # 0036: A thread can run on Cursor as full Cursor Agent
 
-- Status: accepted; supersedes in part [0004](0004-subscription-providers.md) (Cursor waits for Cursor's written OK, and its headless `-p` integration)
+- Status: accepted; supersedes in part [0004](0004-subscription-providers.md) (Cursor waits for Cursor's written OK, and its headless `-p` integration); Cursor runs a Project's coordinator and children, in Bypass, since [0042](0042-project-children-are-threads.md)
 - Date: 2026-10-01
 - Issue: RYA-283 (replaces RYA-40)
 
