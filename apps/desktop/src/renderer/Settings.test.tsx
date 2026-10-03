@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge";
+import type { ConnectionState, Profile, SshHost, ParallaxBridge } from "../preload/bridge";
 import type { SettingsSection } from "./App";
 import { models } from "./models";
 import { Settings } from "./Settings";
@@ -89,7 +89,9 @@ afterEach(() => {
 
 async function renderSettings(name: SettingsSection = "providers") {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<Settings section={name} theme="system" onThemeChange={() => {}} />));
+  act(() =>
+    root.render(<Settings section={name} listed={[]} theme="system" onThemeChange={() => {}} />),
+  );
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
@@ -123,6 +125,16 @@ const click = async (element: HTMLElement) => {
   await act(async () => element.click());
   await settle();
 };
+const change = (element: HTMLSelectElement | HTMLInputElement, value: string) =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")!.set!.call(
+      element,
+      value,
+    );
+    element.dispatchEvent(
+      new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }),
+    );
+  });
 
 test("lists the host's CLIs, and shows the chosen one's account, API keys, and models", async () => {
   await renderSettings();
@@ -459,16 +471,6 @@ test("Typography's sizes and Word wrap are kept, and Advanced takes any font's n
   await renderSettings("appearance");
   const select = (label: string) =>
     document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-  const change = (element: HTMLSelectElement | HTMLInputElement, value: string) =>
-    act(() => {
-      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")!.set!.call(
-        element,
-        value,
-      );
-      element.dispatchEvent(
-        new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }),
-      );
-    });
   change(select("Interface font size"), "16");
   change(select("Monospace font size"), "14");
   await click(
@@ -493,7 +495,9 @@ test("the last provider on can't be turned off", async () => {
   vi.resetModules();
   const { Settings: Fresh } = await import("./Settings");
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<Fresh section="providers" theme="system" onThemeChange={() => {}} />));
+  act(() =>
+    root.render(<Fresh section="providers" listed={[]} theme="system" onThemeChange={() => {}} />),
+  );
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
@@ -504,4 +508,39 @@ test("the last provider on can't be turned off", async () => {
   expect(toggle("Claude Code").disabled).toBe(true);
   expect(toggle("Codex").disabled).toBe(false);
   localStorage.removeItem("parallax.disabledProviders");
+});
+
+test("Account saves a changed name, and shows main's answer when it fails", async () => {
+  let publish = (_profile: Profile | null) => {};
+  const ryan = { name: "Ryan Stoffel", firstName: "Ryan", lastName: "Stoffel", email: "r@x.dev" };
+  const saveName = vi.fn(async () => "Network error" as string | undefined);
+  Object.assign(window.parallax, {
+    onProfile: (listener: (profile: Profile | null) => void) => {
+      publish = listener;
+      listener(ryan);
+      return () => {};
+    },
+    saveName,
+  });
+  await renderSettings("account");
+  const first = document.querySelector<HTMLInputElement>('input[aria-label="First name"]')!;
+  const save = button(section("Account settings"), "Save");
+  expect(first.value).toBe("Ryan");
+  expect(save.disabled).toBe(true);
+
+  change(first, " Ry ");
+  expect(save.disabled).toBe(false);
+  await click(save);
+  expect(saveName).toHaveBeenCalledWith(" Ry ", "Stoffel");
+  expect(section("Account settings").textContent).toContain("Network error");
+
+  // Once main publishes the saved name, the fields start over from it.
+  saveName.mockResolvedValue(undefined);
+  await click(save);
+  act(() => publish({ ...ryan, name: "Ry Stoffel", firstName: "Ry" }));
+  expect(document.querySelector<HTMLInputElement>('input[aria-label="First name"]')!.value).toBe(
+    "Ry",
+  );
+  expect(button(section("Account settings"), "Save").disabled).toBe(true);
+  expect(section("Profile").querySelector("h2")!.textContent).toBe("Ry Stoffel");
 });

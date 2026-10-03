@@ -5,7 +5,6 @@ import {
   useCallback,
   useEffect,
   useId,
-  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -25,8 +24,8 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { backends, models, setCliEnabled, useDisabledClis } from "./models";
-import { Avatar, useProfile } from "./profile";
 import { age, backendLogos } from "./Sidebar";
+import { AccountSettings } from "./settings/AccountSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { ConnectionSettings } from "./settings/ConnectionSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
@@ -45,6 +44,7 @@ import {
 } from "./settings/parts";
 import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
+import type { ThreadsView } from "./threads";
 import { IconButton, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
 import { uuidv7 } from "./uuidv7";
@@ -56,19 +56,21 @@ const SignInTerminal = lazy(() =>
 
 interface SettingsProps {
   section: SettingsSection;
+  /** Every host's threads and Projects, as App loads them for the sidebar: Account's activity. */
+  listed: { host: Host; view: ThreadsView }[];
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
 }
 
 /** The Settings page body. The sidebar's SettingsNav picks the section. */
-export function Settings({ section, theme, onThemeChange }: SettingsProps) {
+export function Settings({ section, listed, theme, onThemeChange }: SettingsProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div
         className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" ? "max-w-5xl" : "max-w-3xl"}`}
       >
         {section === "account" ? (
-          <AccountSettings />
+          <AccountSettings listed={listed} />
         ) : section === "general" ? (
           <GeneralSettings />
         ) : section === "appearance" ? (
@@ -86,76 +88,6 @@ export function Settings({ section, theme, onThemeChange }: SettingsProps) {
         )}
       </div>
     </div>
-  );
-}
-
-/**
- * Settings > Account: the Parallax account (0037) and Sign out, or while signed out, Sign in and
- * Create an account, which open the sign-in page in the browser.
- */
-function AccountSettings() {
-  const profile = useProfile();
-  const [note, setNote] = useState<string>();
-  // Only the latest sign-in's answer shows: a replaced one answers "cancelled" late.
-  const latest = useRef(0);
-  const signIn = async (create: boolean) => {
-    const n = ++latest.current;
-    setNote("Finish signing in in your browser.");
-    const answer = await window.parallax.signIn(create);
-    if (n === latest.current) setNote(answer);
-  };
-
-  if (profile === undefined) return null;
-  return (
-    <>
-      <h1 className="mb-6 text-xl font-semibold">Account</h1>
-      {profile ? (
-        <Section title="Signed in">
-          <div className={settingRow}>
-            <div className="flex min-w-0 items-center gap-3">
-              <Avatar profile={profile} size={36} />
-              <div className="min-w-0">
-                <span className="block truncate text-[13px] font-medium">
-                  {profile.name || profile.email}
-                </span>
-                {profile.name && (
-                  <span className="block truncate text-[12.5px] text-muted-foreground">
-                    {profile.email}
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => void window.parallax.signOut()}
-              className={quietButton}
-            >
-              Sign out
-            </button>
-          </div>
-        </Section>
-      ) : (
-        <Section title="Sign in to Parallax">
-          <div className={settingRow}>
-            <p role="status" className="text-[12.5px] text-muted-foreground">
-              {note ?? "Sign in with GitHub, Google, Apple, or email in your browser."}
-            </p>
-            <div className="flex shrink-0 items-center gap-2">
-              <button type="button" onClick={() => void signIn(true)} className={quietButton}>
-                Create an account
-              </button>
-              <button
-                type="button"
-                onClick={() => void signIn(false)}
-                className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90"
-              >
-                Sign in
-              </button>
-            </div>
-          </div>
-        </Section>
-      )}
-    </>
   );
 }
 
