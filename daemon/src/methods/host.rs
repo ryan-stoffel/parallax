@@ -1,4 +1,4 @@
-//! `initialize`, `host/health`, and `host/version`.
+//! `initialize`, `host/health`, `host/version`, and `host/settings/*`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -6,14 +6,16 @@ use std::fs;
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::{
-    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostVersionParams,
-    HostVersionResult, IncompatibleProtocolDetail, InitializeParams, InitializeProtocol,
-    InitializeResult, ProtocolRange,
+    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostSettings,
+    HostSettingsGetParams, HostSettingsSetParams, HostVersionParams, HostVersionResult,
+    IncompatibleProtocolDetail, InitializeParams, InitializeProtocol, InitializeResult,
+    ProtocolRange,
 };
 use tracing::info;
 
 use super::Context;
 use crate::agents::attached;
+use crate::agents::store_error;
 use crate::images;
 use crate::logging::untrusted;
 use crate::server::Daemon;
@@ -126,6 +128,9 @@ pub(crate) fn initialize(
 /// `agent/send` take `threads`, which an older plxd would silently drop, and `turnStarted` lists
 /// them. Its options are the caps: `maxThreads` per message, and `maxSummaryBytes` of each
 /// thread's summary.
+/// `autoResume` (PLX-371, 0049): `agent/resumeNow`, `agent/autoResume`, `host/settings/get` and
+/// `host/settings/set`, the `waiting` status, and `resumeAt` and `autoResume` on `AgentRun` and
+/// `agent.updated`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -138,6 +143,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agentReview".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
         ("approvals".to_owned(), serde_json::Map::new()),
+        ("autoResume".to_owned(), serde_json::Map::new()),
         ("checkout".to_owned(), serde_json::Map::new()),
         ("composerMenus".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
@@ -189,6 +195,43 @@ pub(crate) fn version(context: &Context, _: HostVersionParams) -> HostVersionRes
         os: context.daemon.os.clone(),
         arch: std::env::consts::ARCH.to_owned(),
     }
+}
+
+/// `host/settings/get`.
+pub(crate) async fn settings(
+    context: &Context,
+    _: HostSettingsGetParams,
+) -> Result<HostSettings, ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, |db| read_settings(db))
+        .await
+}
+
+/// `host/settings/set`: stores the settings it names, then answers with them all.
+pub(crate) async fn set_settings(
+    context: &Context,
+    params: HostSettingsSetParams,
+) -> Result<HostSettings, ErrorObject> {
+    let HostSettingsSetParams { auto_resume } = params;
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |db| {
+            if let Some(on) = auto_resume {
+                db.set_auto_resume(on).map_err(|e| store_error(&e))?;
+                info!(auto_resume = on, "changed the host's auto-resume setting");
+            }
+            read_settings(db)
+        })
+        .await
+}
+
+fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject> {
+    Ok(HostSettings {
+        auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
+    })
 }
 
 /// The operating system and its version, such as `macOS 27.0`, read once at startup.

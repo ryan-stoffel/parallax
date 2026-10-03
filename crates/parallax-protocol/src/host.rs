@@ -56,6 +56,31 @@ pub struct HostVersionResult {
     pub arch: String,
 }
 
+/// Params of `host/settings/get`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSettingsGetParams {}
+
+/// Params of `host/settings/set`: changes the settings it names and leaves the rest.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSettingsSetParams {
+    /// The new `autoResume`. Absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
+}
+
+/// This host's settings, the result of `host/settings/get` and `host/settings/set`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSettings {
+    /// Whether a run a usage limit stopped waits for the limit to reset and then resumes
+    /// (PLX-371, decision 0049). On by default. A run's own `autoResume` overrides it. Turning it
+    /// off stops a waiting run from resuming when its timer fires.
+    pub auto_resume: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

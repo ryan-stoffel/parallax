@@ -27,12 +27,13 @@ use std::sync::Arc;
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
-    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
-    AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles, AgentGitStatus,
-    AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart,
-    ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, GithubStatusGet,
-    HostHealth, HostVersion, Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete,
-    ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageDaily, UsageGet, UsageHistory,
+    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentAutoResume,
+    AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles,
+    AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
+    AgentResumeNow, AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
+    EventsUnsubscribe, GithubStatusGet, HostHealth, HostSettingsGet, HostSettingsSet, HostVersion,
+    Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete, ProjectList, ProjectStart,
+    ProjectUpdate, RequestMethod, UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -81,6 +82,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         HostVersion::NAME => {
             handle::<HostVersion, _, _>(&request, |p| ready(Ok(host::version(&context, p)))).await
         }
+        name if name.starts_with("host/settings/") => host_settings_method(&context, &request)
+            .await
+            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         name if name.starts_with("project/") => project_method(&context, &request)
             .await
             .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
@@ -167,6 +171,22 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     })
 }
 
+/// Answers a `host/settings/*` method (PLX-371), or `None` if there is no such method.
+async fn host_settings_method(
+    context: &Context,
+    request: &Request,
+) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        HostSettingsGet::NAME => {
+            handle::<HostSettingsGet, _, _>(request, |p| host::settings(context, p)).await
+        }
+        HostSettingsSet::NAME => {
+            handle::<HostSettingsSet, _, _>(request, |p| host::set_settings(context, p)).await
+        }
+        _ => return None,
+    })
+}
+
 /// Answers a `usage/*` method, or `None` if there is no such method.
 async fn usage_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
     Some(match request.method.as_str() {
@@ -243,6 +263,12 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentPush::NAME => handle::<AgentPush, _, _>(request, |p| agent::push(context, p)).await,
         AgentCommands::NAME => {
             handle::<AgentCommands, _, _>(request, |p| composer::list_commands(context, p)).await
+        }
+        AgentResumeNow::NAME => {
+            handle::<AgentResumeNow, _, _>(request, |p| agent::resume_now(context, p)).await
+        }
+        AgentAutoResume::NAME => {
+            handle::<AgentAutoResume, _, _>(request, |p| agent::auto_resume(context, p)).await
         }
         _ => return None,
     })

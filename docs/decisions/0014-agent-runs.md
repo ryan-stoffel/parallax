@@ -1,6 +1,6 @@
 # 0014: Agent runs in plxd
 
-- Status: accepted; review and accept added by #157; `PATH` fill-in and cancelling on Linux and Windows are in [0023](0023-cross-platform.md); model, effort, and permission added by RYA-97; Open PR added by RYA-168; the Git menu's status, commit, and push added by RYA-298; moving a run to another account and waiting messages added by `sendAccount`; browsing a run's files added by RYA-296
+- Status: accepted; review and accept added by #157; `PATH` fill-in and cancelling on Linux and Windows are in [0023](0023-cross-platform.md); model, effort, and permission added by RYA-97; Open PR added by RYA-168; the Git menu's status, commit, and push added by RYA-298; moving a run to another account and waiting messages added by `sendAccount`; browsing a run's files added by RYA-296; the `waiting` status added by PLX-371 ([0049](0049-auto-resume-usage-limits.md))
 - Date: 2026-09-25
 - Issue: #156, #157 (review and accept), #68 (what Accept does), #191 (no hooks in the user's checkout)
 

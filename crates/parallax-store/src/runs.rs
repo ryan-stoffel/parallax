@@ -62,6 +62,12 @@ pub struct RunState {
     /// The web URLs of the pull requests linked to the run, oldest first (PLX-318). None holds a
     /// newline, since the column stores them one per line.
     pub pull_requests: Vec<String>,
+    /// The run's auto-resume override (PLX-371, decision 0049), `None` for the host's setting.
+    pub auto_resume: Option<bool>,
+    /// When plxd resumes the run after a usage limit, while it waits.
+    pub resume_at: Option<Timestamp>,
+    /// How many resumes in a row had no reset time to wait for, for the backoff.
+    pub resume_tries: u32,
 }
 
 /// What `agent/accept` did for a run (#157).
@@ -91,7 +97,8 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
-                       approvals, checkout, context_window, fast, pull_requests, parent";
+                       approvals, checkout, context_window, fast, pull_requests, parent, \
+                       auto_resume, resume_at, resume_tries";
 
 struct RawRun {
     id: String,
@@ -124,6 +131,9 @@ struct RawRun {
     fast: Option<bool>,
     pull_requests: String,
     parent: Option<String>,
+    auto_resume: Option<bool>,
+    resume_at: Option<String>,
+    resume_tries: u32,
 }
 
 impl RawRun {
@@ -159,6 +169,9 @@ impl RawRun {
             fast: row.get(27)?,
             pull_requests: row.get(28)?,
             parent: row.get(29)?,
+            auto_resume: row.get(30)?,
+            resume_at: row.get(31)?,
+            resume_tries: row.get(32)?,
         })
     }
 
@@ -210,6 +223,13 @@ impl RawRun {
                 deletions: self.deletions,
                 accept,
                 pull_requests: self.pull_requests.lines().map(str::to_owned).collect(),
+                auto_resume: self.auto_resume,
+                resume_at: self
+                    .resume_at
+                    .as_deref()
+                    .map(timestamp::parse)
+                    .transpose()?,
+                resume_tries: self.resume_tries,
             },
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
@@ -379,7 +399,8 @@ fn update(conn: &Connection, id: Uuid, state: &RunState) -> Result<Run, StoreErr
                          commit_sha = ?6, files_changed = ?7, insertions = ?8,
                          deletions = ?9, updated_at = ?10, accept_id = ?11,
                          merge_commit = ?12, merge_into = ?13, merge_how = ?14,
-                         pull_requests = ?15
+                         pull_requests = ?15, auto_resume = ?16, resume_at = ?17,
+                         resume_tries = ?18
          WHERE id = ?1",
         params![
             id.to_string(),
@@ -397,6 +418,9 @@ fn update(conn: &Connection, id: Uuid, state: &RunState) -> Result<Run, StoreErr
             accept.map(|accept| accept.into.as_str()),
             accept.map(|accept| accept.how.as_str()),
             state.pull_requests.join("\n"),
+            state.auto_resume,
+            state.resume_at.map(timestamp::format),
+            state.resume_tries,
         ],
     )?;
     if changed == 0 {

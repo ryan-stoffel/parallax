@@ -9,9 +9,11 @@ use std::collections::HashMap;
 use serde_json::{Map, Value, json};
 
 use super::super::stream::classify;
+use jiff::Timestamp;
+
 use crate::backend::event::{
-    ApprovalRequest, Event, Failure, FailureKind, MAX_ALWAYS_ALLOW_RULE_BYTES, TodoItem,
-    TodoStatus, ToolStatus, Usage, WarningKind,
+    ApprovalRequest, Event, Failure, FailureKind, LimitStatus, LimitWindow,
+    MAX_ALWAYS_ALLOW_RULE_BYTES, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
 };
 use crate::backend::{ApprovalId, Decision};
 
@@ -213,6 +215,7 @@ impl Translator {
                 .map(|detail| notice(detail.to_owned()))
                 .into_iter()
                 .collect(),
+            "account/rateLimits/updated" => rate_limits(params),
             "serverRequest/resolved" => params
                 .get("requestId")
                 .map(|id| Step::Resolved(id.clone()))
@@ -476,6 +479,38 @@ fn usage_total(total: &Value) -> Usage {
     }
 }
 
+/// `account/rateLimits/updated`'s `primary` and `secondary` windows, each refused once it is
+/// fully used, with when it resets (PLX-371): what auto-resume waits for (decision 0049).
+fn rate_limits(params: &Map<String, Value>) -> Vec<Step> {
+    let Some(limits) = params.get("rateLimits") else {
+        return Vec::new();
+    };
+    ["primary", "secondary"]
+        .into_iter()
+        .filter_map(|window| {
+            let limit = limits.get(window).filter(|limit| limit.is_object())?;
+            let used_percent = limit.get("usedPercent").and_then(Value::as_f64);
+            Some(Step::Emit(Event::RateLimit(LimitWindow {
+                window: window.to_owned(),
+                duration_minutes: limit
+                    .get("windowDurationMins")
+                    .and_then(Value::as_u64)
+                    .and_then(|minutes| u32::try_from(minutes).ok()),
+                used_percent,
+                status: match used_percent {
+                    Some(used) if used >= 100.0 => LimitStatus::Rejected,
+                    Some(_) => LimitStatus::Allowed,
+                    None => LimitStatus::Unknown,
+                },
+                resets_at: limit
+                    .get("resetsAt")
+                    .and_then(Value::as_i64)
+                    .and_then(|seconds| Timestamp::from_second(seconds).ok()),
+            })))
+        })
+        .collect()
+}
+
 /// A failed turn's [`Failure`]: `codexErrorInfo` says when routing should fall back (0012), and
 /// the message says the rest, as for exec.
 fn turn_failure(error: Option<&Value>) -> Failure {
@@ -508,7 +543,9 @@ mod tests {
 
     use super::{Ask, AskKind, Step, Translator, answer_response};
     use crate::backend::Decision;
-    use crate::backend::event::{Event, FailureKind, TodoItem, TodoStatus, ToolStatus, Usage};
+    use crate::backend::event::{
+        Event, FailureKind, LimitStatus, LimitWindow, TodoItem, TodoStatus, ToolStatus, Usage,
+    };
 
     fn translate(fixture: &str) -> Vec<Step> {
         let mut translator = Translator::default();
@@ -592,6 +629,52 @@ mod tests {
                 failure: None
             })
         );
+    }
+
+    /// PLX-371: the windows' reset times are what auto-resume waits for, and a fully used one is
+    /// refused.
+    #[test]
+    fn rate_limit_updates_are_limit_windows() {
+        let steps = translate(include_str!("../fixtures/app-server-turn.jsonl"));
+        let windows: Vec<&LimitWindow> = events(&steps)
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::RateLimit(window) => Some(window),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            windows,
+            [
+                &LimitWindow {
+                    window: "primary".into(),
+                    duration_minutes: Some(300),
+                    used_percent: Some(78.0),
+                    status: LimitStatus::Allowed,
+                    resets_at: Some(jiff::Timestamp::from_second(1_790_923_590).unwrap()),
+                },
+                &LimitWindow {
+                    window: "secondary".into(),
+                    duration_minutes: Some(10080),
+                    used_percent: Some(65.0),
+                    status: LimitStatus::Allowed,
+                    resets_at: Some(jiff::Timestamp::from_second(1_791_077_219).unwrap()),
+                },
+            ]
+        );
+
+        let full = json!({"method": "account/rateLimits/updated", "params": {"rateLimits": {
+            "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1_790_923_590},
+            "secondary": null,
+        }}});
+        let steps = translate(&full.to_string());
+        assert!(matches!(
+            events(&steps)[..],
+            [Event::RateLimit(LimitWindow {
+                status: LimitStatus::Rejected,
+                ..
+            })]
+        ));
     }
 
     #[test]

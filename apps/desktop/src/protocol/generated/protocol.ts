@@ -299,6 +299,24 @@ export type ParallaxRequests = {
 	 * newest message first (PLX-372). Gated on the `threadContext` capability.
 	 */
 	"thread/search": { params: ThreadSearchParams, result: ThreadSearchResult },
+	/**
+	 * `agent/resumeNow`: resumes a run waiting for its usage limit to reset now (PLX-371,
+	 * decision 0049). Gated on the `autoResume` capability, like `agent/autoResume` and
+	 * `host/settings/*`.
+	 */
+	"agent/resumeNow": { params: AgentResumeNowParams, result: AgentRunResult },
+	/**
+	 * `agent/autoResume`: sets or clears a run's auto-resume override.
+	 */
+	"agent/autoResume": { params: AgentAutoResumeParams, result: AgentRunResult },
+	/**
+	 * `host/settings/get`: this host's settings.
+	 */
+	"host/settings/get": { params: HostSettingsGetParams, result: HostSettings },
+	/**
+	 * `host/settings/set`: changes this host's settings and returns them.
+	 */
+	"host/settings/set": { params: HostSettingsSetParams, result: HostSettings },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1454,7 +1472,8 @@ export type AgentPolicy = "workspaceWrite" | "noWrite";
 export type CoordinatorThreadId = string;
 
 /**
- * Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
+ * Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and
+ * `agent/autoResume`: the run as it stands.
  */
 export type AgentRunResult = {
 	/**
@@ -1567,6 +1586,15 @@ export type AgentRun = {
 	 */
 	pullRequests?: Array<string>,
 	/**
+	 * When plxd resumes it, while it is `waiting` (decision 0049). Absent otherwise.
+	 */
+	resumeAt?: string,
+	/**
+	 * Whether a usage limit makes it wait and resume, overriding the host's
+	 * `host/settings` `autoResume` (decision 0049). Absent means the host's setting.
+	 */
+	autoResume?: boolean,
+	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -1582,7 +1610,7 @@ export type AgentRun = {
  * A newer plxd may send a status this version does not know; treat it as unknown, and don't
  * end a `switch` over this type in an exhaustiveness assertion.
  */
-export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "accepted";
+export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "waiting" | "accepted";
 
 /**
  * The commit plxd made for a run, compared with the commit its worktree was created from.
@@ -1967,7 +1995,9 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	text?: string,
 	/**
 	 * True for a wake-up (RYA-42, decision 0025): a turn plxd sent a project's coordinator
-	 * on its own, not the user, because runs it started finished. `text` lists them.
+	 * on its own, not the user, because runs it started finished. `text` lists them. Also
+	 * true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
+	 * 0049).
 	 */
 	wake?: boolean,
 	/**
@@ -2254,6 +2284,14 @@ export type AgentRunState = {
 	 * Its linked pull requests, as `AgentRun.pullRequests` (PLX-318). Absent means none.
 	 */
 	pullRequests?: Array<string>,
+	/**
+	 * When plxd resumes it, as `AgentRun.resumeAt`. Absent once it doesn't wait.
+	 */
+	resumeAt?: string,
+	/**
+	 * Its auto-resume override, as `AgentRun.autoResume`. Absent means the host's setting.
+	 */
+	autoResume?: boolean,
 	/**
 	 * When it changed, in RFC 3339 UTC.
 	 */
@@ -3699,6 +3737,61 @@ export type ThreadSearchResult = {
 	 * The matching threads, the one with the newest message first.
 	 */
 	threads: Array<Thread>,
+};
+
+/**
+ * Params of `agent/resumeNow`: resumes a `waiting` run now instead of at its `resumeAt`, with
+ * the same message the timer sends (decision 0049). Fails with `runNotResumable` for a run that
+ * isn't waiting.
+ */
+export type AgentResumeNowParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Params of `agent/autoResume`: sets or clears a run's auto-resume override (decision 0049).
+ * Turning it off for a `waiting` run clears its timer, and the run becomes `failed` with its
+ * usage limit's error.
+ */
+export type AgentAutoResumeParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * On or off for this run. Absent clears the override, so the host's setting applies.
+	 */
+	autoResume?: boolean,
+};
+
+/**
+ * Params of `host/settings/get`.
+ */
+export type HostSettingsGetParams = Record<symbol, never>;
+
+/**
+ * This host's settings, the result of `host/settings/get` and `host/settings/set`.
+ */
+export type HostSettings = {
+	/**
+	 * Whether a run a usage limit stopped waits for the limit to reset and then resumes
+	 * (PLX-371, decision 0049). On by default. A run's own `autoResume` overrides it. Turning it
+	 * off stops a waiting run from resuming when its timer fires.
+	 */
+	autoResume: boolean,
+};
+
+/**
+ * Params of `host/settings/set`: changes the settings it names and leaves the rest.
+ */
+export type HostSettingsSetParams = {
+	/**
+	 * The new `autoResume`. Absent leaves it.
+	 */
+	autoResume?: boolean,
 };
 
 /**
