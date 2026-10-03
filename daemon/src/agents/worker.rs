@@ -296,7 +296,7 @@ pub(super) async fn check_linux_sandbox(
             "plxd could not tell where Claude Code is installed",
         ));
     };
-    claude::linux_sandbox::check_host(detector.launcher(), Path::new(path))
+    crate::backend::claude::linux_sandbox::check_host(detector.launcher(), Path::new(path))
         .await
         .map_err(worker_unavailable)
 }
