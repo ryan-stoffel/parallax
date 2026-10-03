@@ -1,25 +1,44 @@
 name: Release
 
-# The two release channels (0028): a nightly prerelease per push to develop and a standard release
-# per push to main, each with the packaged app for the five targets and the update metadata the
-# app's updater reads attached (0029, 0030). Each build attaches its own files as soon as it's
-# done, so the signed macOS app is out about two minutes after a push; its dmg is notarized
-# after. Only this workflow can write to the repository's releases. It builds and publishes; it
-# runs no tests or lint, because the PR that landed the commit already passed CI.
+# Nightly and stable releases (0051, 0028, 0030). A push publishes nothing. GitHub runs the
+# schedule only from the default branch: every half hour, plan publishes a nightly of that
+# branch when it has commits since the last nightly and that nightly is at least six hours
+# old. A manual stable run publishes that nightly's commit without -nightly and marks it
+# Latest. dry-run, the default manual choice, builds and signs any branch and never publishes.
+# Each build attaches its own files as soon as it's done; the dmg is notarized after. Only
+# this workflow can write releases. It runs no tests or lint; the pull request already passed CI.
 on:
-  push:
-    branches: [develop, main]
-  # Runs everything on any branch, signing and notarizing included, and never publishes: the
-  # publish steps print what they would do. Proves the pipeline before merge.
+  schedule:
+    # Away from minute zero, when scheduled jobs pile up.
+    - cron: "8,38 * * * *"
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "dry-run never publishes. nightly and stable do."
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - nightly
+          - stable
+      commit:
+        description: "Stable only. Commit to publish instead of the latest nightly."
+        required: false
+        type: string
+      version:
+        description: "Stable only. Override YYMM.1DDHH.1MMSS, without -nightly."
+        required: false
+        type: string
 
 permissions:
   contents: read
 
-# One run at a time per branch, so each release's notes start at the one before it. If pushes
-# queue up, the newest waits and the ones between are skipped; their PRs still land in its notes.
+# Nightlies share a queue so two runs cannot publish the same commit. A stable run has its
+# own, so a check does not block a promotion. A dry run stays on its branch. A run that has
+# started publishing is not cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.event_name == 'schedule' && 'release-nightly' || github.event.inputs.channel == 'nightly' && 'release-nightly' || github.event.inputs.channel == 'stable' && 'release-stable' || format('release-dry-{0}', github.ref) }}
   cancel-in-progress: false
 
 defaults:
@@ -27,8 +46,8 @@ defaults:
     shell: bash
 
 jobs:
-  # The version, tag, and channel for this commit, and whether a build is needed at all. On push
-  # it creates the release as a draft, with its notes, for the builds to attach to.
+  # The version, tag, channel, and commit, and whether a build is needed at all (0051). When
+  # it is, creates the release as a draft, with its notes, for the builds to attach to.
   plan:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -41,42 +60,38 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       version: ${{ steps.plan.outputs.version }}
       channel: ${{ steps.plan.outputs.channel }}
-      build: ${{ steps.draft.outputs.build }}
+      sha: ${{ steps.plan.outputs.sha }}
+      dry_run: ${{ steps.plan.outputs.dry_run }}
+      # A skipped draft means plan already decided not to build. A draft that ran says whether
+      # the release is already complete.
+      build: ${{ steps.draft.conclusion == 'skipped' && steps.plan.outputs.build || steps.draft.outputs.build }}
     steps:
-      - name: Plan the release
-        id: plan
-        run: |
-          # The version is the commit's committer time in UTC as YYMM.1DDHH.1MMSS (0030): the same
-          # on a re-run, rising with every commit, and each part at most 65535 for Windows. The
-          # leading 1s keep every tag the same length, because GitHub orders releases from the
-          # same day by tag name as text, and the updater takes the first one it finds.
-          t=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" --jq .commit.committer.date)
-          [[ $t =~ ^20([0-9]{2})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$ ]]
-          m=("${BASH_REMATCH[@]}")
-          version="${m[1]}${m[2]}.1${m[3]}${m[4]}.1${m[5]}${m[6]}"
-          # Only main is the standard channel: electron-updater's `latest`. Any other branch, from
-          # workflow_dispatch, builds as a nightly, a prerelease of the same time, so the standard
-          # release of a commit is newer than its nightly.
-          channel=nightly
-          if [ "$GITHUB_REF" = refs/heads/main ]; then channel=latest; else version+=-nightly; fi
-          {
-            echo "tag=v$version"
-            echo "version=$version"
-            echo "channel=$channel"
-          } >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: scripts/ci
 
-      # A dry run on workflow_dispatch, which never publishes.
+      - name: Plan the release
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          CHANNEL_INPUT: ${{ inputs.channel }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          COMMIT_INPUT: ${{ inputs.commit }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: scripts/ci/plan-release
+
+      # A dry run prints the create. A skipped plan (nothing new, or too soon) creates nothing.
       - name: Create the draft release
         id: draft
+        if: steps.plan.outputs.build == 'true'
         env:
           TAG: ${{ steps.plan.outputs.tag }}
           CHANNEL: ${{ steps.plan.outputs.channel }}
-          DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
+          GITHUB_SHA: ${{ steps.plan.outputs.sha }}
+          DRY_RUN: ${{ steps.plan.outputs.dry_run }}
         run: scripts/ci/draft-release >> "$GITHUB_OUTPUT"
 
   # The installer on each target's own runner (0023, 0029), the same five as ci.yml's rust job,
@@ -105,6 +120,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.plan.outputs.sha }}
 
       # plxd reads its version from a file the package step writes beside it (0030), so a commit
       # that changes no Rust reuses the last release plxd and skips the Rust build. The key covers
@@ -211,20 +227,20 @@ jobs:
         run: codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/*.app
 
       # Straight from the runner to plan's draft, then publishes it: the first build done makes the
-      # release visible. A dry run on workflow_dispatch.
+      # release visible. A dry run prints the writes.
       - name: Publish this build
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
-          DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
+          DRY_RUN: ${{ needs.plan.outputs.dry_run }}
         run: scripts/ci/publish-build
 
-      # On workflow_dispatch the installers stay in the run's artifacts, which notarize reads. They
+      # On a dry run the installers stay in the run's artifacts, which notarize reads. They
       # are compressed already.
       - name: Upload the installer
-        if: github.event_name != 'push'
+        if: needs.plan.outputs.dry_run == '1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-${{ matrix.os }}
@@ -237,9 +253,9 @@ jobs:
           compression-level: 0
           overwrite: true
 
-      # On workflow_dispatch, what finish's dry run joins. On push it reads the release instead.
+      # On a dry run, what finish's dry run joins. A published release is read from GitHub instead.
       - name: Upload the Windows update metadata
-        if: github.event_name != 'push' && runner.os == 'Windows'
+        if: needs.plan.outputs.dry_run == '1' && runner.os == 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-update-${{ matrix.os }}
@@ -249,8 +265,8 @@ jobs:
           overwrite: true
 
   # After every build, off the path to the update: joins the Windows builds' update metadata, as
-  # attached to the release, and when all five succeeded writes SHA256SUMS. A dry run on
-  # workflow_dispatch, from the builds' artifacts.
+  # attached to the release, and when all five succeeded writes SHA256SUMS. A dry run reads
+  # the builds' artifacts.
   finish:
     needs: [plan, build]
     if: ${{ !cancelled() && needs.plan.outputs.build == 'true' }}
@@ -264,7 +280,7 @@ jobs:
           persist-credentials: false
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: github.event_name != 'push'
+        if: needs.plan.outputs.dry_run == '1'
         with:
           pattern: windows-update-*
           path: windows
@@ -277,7 +293,7 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
           ALL_BUILT: ${{ needs.build.result == 'success' }}
-          DRY_RUN: ${{ github.event_name != 'push' && '1' || '' }}
+          DRY_RUN: ${{ needs.plan.outputs.dry_run }}
         run: scripts/ci/finish-release windows
 
   # Notarizes the published dmg, which also notarizes the app inside it, off the path to the
@@ -292,7 +308,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Download the published dmg
-        if: github.event_name == 'push'
+        if: needs.plan.outputs.dry_run != '1'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -305,7 +321,7 @@ jobs:
           fi
 
       - name: Download the built dmg
-        if: github.event_name != 'push'
+        if: needs.plan.outputs.dry_run == '1'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: installer-macos-26

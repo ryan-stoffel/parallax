@@ -291,6 +291,9 @@ jobs:
       - name: Lint workflows
         run: actionlint -color
 
+      - name: Test the release plan
+        run: scripts/ci/plan-release.test
+
       - name: Require ci to need every other job
         run: |
           workflow_jobs=$(yq -o=json '.jobs' .github/workflows/ci.yml)

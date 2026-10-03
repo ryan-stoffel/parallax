@@ -4,7 +4,7 @@
 
 ## Roles
 
-The session driving this repo acts as senior project manager: it plans, writes issues, assigns work, merges reviewed PRs into `develop`, and delegates implementation and PR review to subagents. Every subagent is a senior specialist and its instructions open with its role:
+The session driving this repo acts as senior project manager: it plans, writes issues, assigns work, merges reviewed PRs into `main`, and delegates implementation and PR review to subagents. Every subagent is a senior specialist and its instructions open with its role:
 
 - Senior software engineer (Rust daemon, desktop app, build tooling)
 - Senior QA engineer (test plans, test code, regression checks)
@@ -18,19 +18,18 @@ The naming convention has no exceptions, including for small fixes.
 
 | Branch | Purpose | Branches from | Merges into |
 | --- | --- | --- | --- |
-| `main` | Released code only | | |
-| `develop` | Integration branch | `main` | `main`, as a release |
-| `feature/<ID>-<slug>` | New functionality | `develop` | `develop` |
-| `bug/<ID>-<slug>` | Bug fixes | `develop` | `develop` |
-| `chore/<ID>-<slug>` | Tooling, deps, CI | `develop` | `develop` |
-| `docs/<ID>-<slug>` | Documentation | `develop` | `develop` |
-| `hotfix/<ID>-<slug>` | Urgent fix to a release | `main` | `main` and `develop` |
+| `main` | Integration branch. A nightly is a snapshot of it; a stable release is one nightly, promoted ([0051](docs/decisions/0051-promote-a-nightly.md)) | | |
+| `feature/<ID>-<slug>` | New functionality | `main` | `main` |
+| `bug/<ID>-<slug>` | Bug fixes | `main` | `main` |
+| `chore/<ID>-<slug>` | Tooling, deps, CI | `main` | `main` |
+| `docs/<ID>-<slug>` | Documentation | `main` | `main` |
+| `hotfix/<ID>-<slug>` | A stable fix that cannot wait for the next nightly to be promoted | `main` | `main` |
 
 - Every branch starts from an existing Linear issue and uses its ID. The prefix follows the issue's type label (Feature, Bug, Chore, Docs; Improvement uses `feature/`), whatever its title says. Examples: `feature/PLX-12-connect-app-to-plxd`, `docs/PLX-5-linear-work-record`. Never use Linear's suggested branch name.
 - Slugs are lowercase, hyphenated, five words or fewer.
 - Commits use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`) and end with the Linear ID, e.g. `feat: show follow-up messages in a rebuilt transcript (PLX-92)`.
 - Commits and PRs are authored as Ryan only: no co-author or attribution trailers.
-- `main` and `develop` are protected. Changes land only through pull requests.
+- `main` is protected. Changes land only through pull requests.
 
 ## Issues are the record
 
@@ -50,15 +49,15 @@ When something comes up mid-work (a bug, a follow-up, a question, out-of-scope w
 
 ## Pull requests
 
-- Target `develop`. Exceptions: release PRs (`develop` into `main`) and hotfixes.
+- Target `main`.
 - The body follows `.github/pull_request_template.md`: the problem, the fix, a `Linear: <issue URL>` line, and the acceptance criteria as a checklist. Linear's GitHub integration links the PR and marks the issue Done when it merges.
 - A separate senior engineer subagent reviews every PR against the acceptance criteria and posts it as a comment review (`gh pr review --comment`; the shared account cannot approve its own PRs). The review opens with `Verdict: ready to merge` or `Verdict: changes needed`.
-- The project manager merges a PR into `develop` once the review says ready and CI is green. Feature, bug, chore, and docs PRs are squash-merged.
-- Ryan approves and merges every PR into `main`: releases (`develop` into `main`, merge commit) and hotfixes. The project manager opens them and leaves the merge to Ryan.
+- The project manager merges a PR into `main` once the review says ready and CI is green. Feature, bug, chore, and docs PRs are squash-merged.
+- Ryan promotes a nightly to stable by running the Release workflow with `channel=stable` ([0051](docs/decisions/0051-promote-a-nightly.md)). A hotfix merges to `main` like any other pull request; to publish it before the next snapshot is promoted, Ryan runs that workflow with `commit` set to the hotfix commit.
 
 ## CI/CD
 
-The GitHub Actions workflow `ci.yml` runs on every PR, and only on PRs, since `develop` and `main` take changes only through PRs that passed it: lint, type-check, build, and test `plxd` on macOS, Linux, and Windows and check `plxd attach` over ssh; lint, type-check, test, build, and launch the app on the same three OSes; run the app's end-to-end tests on macOS, Linux, and Windows against the `plxd` the Rust job built for each; lint the workflow. The `ci` job needs every other job, and a red `ci` check blocks merge. A second workflow, `release.yml`, on every push to `develop` and `main` builds the installer and its update metadata for macOS arm64, Windows x64 and arm64, and Linux x64 and arm64 on their own runners (no tests or lint; the PR already passed them), signing and verifying the macOS app (Windows and Linux stay unsigned) and reusing a cached release `plxd` when no Rust changed. `plan` creates a draft nightly prerelease (`develop`, tag `v<YYMM.1DDHH.1MMSS>-nightly`) or standard release (`main`, `v<YYMM.1DDHH.1MMSS>`, marked Latest), and each build attaches its installer and the updater's `.yml`, zip, and blockmap files to it as soon as it's done and publishes it, so the first one done makes it visible; then a `finish` job joins the Windows metadata and adds `SHA256SUMS`, and a `notarize` job notarizes the published dmg ([0028](docs/decisions/0028-release-channels.md), [0029](docs/decisions/0029-app-packaging.md), [0030](docs/decisions/0030-release-versions.md)). A failed build leaves only its own OS out. Run it on a branch with `workflow_dispatch`, which builds, signs, and notarizes but never creates or publishes a release. It is the only workflow with `contents: write`.
+The GitHub Actions workflow `ci.yml` runs on every PR, and only on PRs, since `main` takes changes only through PRs that passed it: lint, type-check, build, and test `plxd` on macOS, Linux, and Windows and check `plxd attach` over ssh; lint, type-check, test, build, and launch the app on the same three OSes; run the app's end-to-end tests on macOS, Linux, and Windows against the `plxd` the Rust job built for each; lint the workflow. The `ci` job needs every other job, and a red `ci` check blocks merge. A second workflow, `release.yml`, builds the installer and its update metadata for macOS arm64, Windows x64 and arm64, and Linux x64 and arm64 on their own runners (no tests or lint; the PR already passed them), signing and verifying the macOS app (Windows and Linux stay unsigned) and reusing a cached release `plxd` when no Rust changed. It does not run on push. A schedule checks the default branch every half hour and publishes a nightly prerelease, `v<YYMM.1DDHH.1MMSS>-nightly`, only when that branch has commits since the last nightly and the last nightly is at least six hours old. A manual run promotes the latest nightly's commit to a standard release of the same timestamp, marked Latest, or publishes a nightly immediately. `plan` creates the draft, each build attaches its installer and the updater's `.yml`, zip, and blockmap files as soon as it's done and publishes it, so the first one done makes it visible; then a `finish` job joins the Windows metadata and adds `SHA256SUMS`, and a `notarize` job notarizes the published dmg ([0051](docs/decisions/0051-promote-a-nightly.md), [0028](docs/decisions/0028-release-channels.md), [0029](docs/decisions/0029-app-packaging.md), [0030](docs/decisions/0030-release-versions.md)). A failed build leaves only its own OS out. `workflow_dispatch` with `dry-run` builds, signs, and notarizes on any branch and never publishes. It is the only workflow with `contents: write`.
 
 ## Order of work
 

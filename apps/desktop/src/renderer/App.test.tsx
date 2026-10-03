@@ -151,7 +151,7 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   // A background check's note, such as an error, is the button's label.
   act(() => publish({ note: "Can't reach GitHub to check for updates." }));
   expect(button("Can't reach GitHub to check for updates.")).not.toBeNull();
-  // Under `pnpm dev`, a click takes develop's commits, with the answer in the popover.
+  // Under `pnpm dev`, a click takes main's commits, with the answer in the popover.
   act(() => publish({ ready: "3 commits to apply" }));
   act(() => button("Update ready: 3 commits to apply")!.click());
   const status = () =>

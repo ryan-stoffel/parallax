@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Exercises scripts/ci/plan-release against a fake gh. No network.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/../.." && pwd)
+plan=$root/scripts/ci/plan-release
+bindir=$(mktemp -d)
+fixture=$(mktemp -d)
+trap 'rm -rf "$bindir" "$fixture"' EXIT
+
+cat > "$bindir/gh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+url="" jqfilter="" prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--jq" ]; then jqfilter=$arg; fi
+  case "$arg" in
+    repos/*) url=$arg ;;
+  esac
+  prev=$arg
+done
+dir=${PLAN_FIXTURE:?}
+if [[ $url == *"/releases?"* ]]; then
+  [ -f "$dir/latest" ] && cat "$dir/latest"
+  exit 0
+fi
+if [[ $url == *"/compare/"* ]]; then
+  cat "$dir/compare"
+  exit 0
+fi
+if [[ $url == *"/commits/"* ]]; then
+  if [ "$jqfilter" = ".sha" ]; then cat "$dir/sha"; exit 0; fi
+  cat "$dir/date"
+  exit 0
+fi
+echo "fake gh: unhandled: $*" >&2
+exit 1
+EOF
+chmod +x "$bindir/gh"
+
+export PATH="$bindir:$PATH" PLAN_FIXTURE=$fixture GH_REPO=ryan-stoffel/parallax
+# 2026-10-04 02:00:00 UTC is version 2610.10402.10000.
+printf '%s\n' "2026-10-04T02:00:00Z" > "$fixture/date"
+printf '%s\n' "abc123" > "$fixture/sha"
+published=$(python3 -c 'import datetime; print(int(datetime.datetime(2026, 10, 4, 2, 0, tzinfo=datetime.timezone.utc).timestamp()))')
+
+run() {
+  local out err status
+  out=$(mktemp)
+  err=$(mktemp)
+  set +e
+  GITHUB_OUTPUT=$out "$@" > /dev/null 2> "$err"
+  status=$?
+  set -e
+  RUN_STATUS=$status
+  RUN_OUT=$(cat "$out")
+  RUN_ERR=$(cat "$err")
+  rm -f "$out" "$err"
+}
+
+expect_status() {
+  [ "$RUN_STATUS" = "$1" ] || { echo "expected exit $1, got $RUN_STATUS"; echo "$RUN_ERR"; echo "$RUN_OUT"; exit 1; }
+}
+
+expect_out() {
+  grep -qxF "$1" <<< "$RUN_OUT" || { echo "missing $1"; echo "$RUN_OUT"; exit 1; }
+}
+
+# No previous nightly: the schedule publishes one.
+rm -f "$fixture/latest" "$fixture/compare"
+run env EVENT=schedule REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 0
+expect_out "build=true"
+expect_out "dry_run="
+expect_out "channel=nightly"
+expect_out "version=2610.10402.10000-nightly"
+expect_out "sha=tip"
+expect_out "tag=v2610.10402.10000-nightly"
+grep -q "no published nightly" <<< "$RUN_ERR"
+
+# Published an hour ago: skip, and do not compare.
+printf '%s\n' $'2026-10-04T02:00:00Z\tv2610.10402.10000-nightly' > "$fixture/latest"
+rm -f "$fixture/compare"
+run env EVENT=schedule REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main NOW_EPOCH=$((published + 3600)) "$plan"
+expect_status 0
+expect_out "build=false"
+grep -q "six hours" <<< "$RUN_ERR"
+
+# Old enough, but the branch has not moved.
+printf '%s\n' identical > "$fixture/compare"
+run env EVENT=schedule REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main NOW_EPOCH=$((published + 25200)) "$plan"
+expect_status 0
+expect_out "build=false"
+grep -q "identical" <<< "$RUN_ERR"
+
+# Old enough, and the branch is ahead: publish.
+printf '%s\n' ahead > "$fixture/compare"
+run env EVENT=schedule REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main NOW_EPOCH=$((published + 25200)) "$plan"
+expect_status 0
+expect_out "build=true"
+expect_out "tag=v2610.10402.10000-nightly"
+expect_out "sha=tip"
+
+# A manual nightly does not wait, and only from the default branch.
+run env EVENT=workflow_dispatch CHANNEL_INPUT=nightly REF=refs/heads/feature/x SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 1
+grep -q "default branch\|publishes from main" <<< "$RUN_ERR"
+
+run env EVENT=workflow_dispatch CHANNEL_INPUT=nightly REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main NOW_EPOCH=$((published + 60)) "$plan"
+expect_status 0
+expect_out "build=true"
+expect_out "dry_run="
+expect_out "channel=nightly"
+
+# A dry run versions the selected branch and never publishes. main is the standard channel.
+run env EVENT=workflow_dispatch CHANNEL_INPUT=dry-run REF=refs/heads/feature/x SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 0
+expect_out "build=true"
+expect_out "dry_run=1"
+expect_out "channel=nightly"
+expect_out "version=2610.10402.10000-nightly"
+
+run env EVENT=workflow_dispatch CHANNEL_INPUT=dry-run REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 0
+expect_out "dry_run=1"
+expect_out "channel=latest"
+expect_out "version=2610.10402.10000"
+expect_out "tag=v2610.10402.10000"
+
+# Stable promotes the nightly's commit. ahead means the default branch contains it.
+printf '%s\n' ahead > "$fixture/compare"
+run env EVENT=workflow_dispatch CHANNEL_INPUT=stable REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 0
+expect_out "build=true"
+expect_out "dry_run="
+expect_out "channel=latest"
+expect_out "version=2610.10402.10000"
+expect_out "sha=abc123"
+expect_out "tag=v2610.10402.10000"
+
+# A chosen commit skips the containment check. A bad version is refused.
+rm -f "$fixture/compare"
+run env EVENT=workflow_dispatch CHANNEL_INPUT=stable REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main \
+  COMMIT_INPUT=def456 "$plan"
+expect_status 0
+expect_out "sha=def456"
+expect_out "channel=latest"
+
+run env EVENT=workflow_dispatch CHANNEL_INPUT=stable REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main \
+  COMMIT_INPUT=def456 VERSION_INPUT=1.2.3 "$plan"
+expect_status 1
+grep -q "2610.10402.10000" <<< "$RUN_ERR"
+
+# Nothing to promote, a nightly the default branch does not contain, and a legacy tag.
+rm -f "$fixture/latest"
+run env EVENT=workflow_dispatch CHANNEL_INPUT=stable REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 1
+grep -q "no published nightly" <<< "$RUN_ERR"
+
+printf '%s\n' $'2026-10-04T02:00:00Z\tv2610.10402.10000-nightly' > "$fixture/latest"
+printf '%s\n' behind > "$fixture/compare"
+run env EVENT=workflow_dispatch CHANNEL_INPUT=stable REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 1
+grep -q "not contained" <<< "$RUN_ERR"
+
+printf '%s\n' $'2026-09-30T00:00:00Z\tnightly-20260930-49ef244' > "$fixture/latest"
+run env EVENT=workflow_dispatch CHANNEL_INPUT=stable REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 1
+grep -q "not a timestamp nightly" <<< "$RUN_ERR"
+
+echo "plan-release.test: ok"
