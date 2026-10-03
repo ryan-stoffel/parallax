@@ -33,6 +33,84 @@ export function CursorLogo(props: LogoProps) {
   );
 }
 
+// Simple line marks for the other agent kinds, drawn here in each one's likeness, as lucide draws.
+const line = {
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 2,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+} as const;
+
+/** Google Antigravity's arch. */
+export function AntigravityLogo(props: LogoProps) {
+  return (
+    <svg {...line} aria-hidden {...props}>
+      <path d="M3 20C5 14 8 4 12 4s7 10 9 16" />
+      <path d="M8.5 20c.8-3 2-5 3.5-5s2.7 2 3.5 5" />
+    </svg>
+  );
+}
+
+/** OpenCode's block in a frame. */
+export function OpenCodeLogo(props: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" aria-hidden {...props}>
+      <path d="M4 2h16v20H4zm3 3v14h10V5z" />
+      <path d="M7 12h10v7H7z" />
+    </svg>
+  );
+}
+
+/** Pi's π. */
+export function PiLogo(props: LogoProps) {
+  return (
+    <svg {...line} aria-hidden {...props}>
+      <path d="M4 7h16M9 7v12m6-12v9.5a2.5 2.5 0 0 0 2.5 2.5" />
+    </svg>
+  );
+}
+
+/** Oh My Pi: π in a ring. */
+export function OhMyPiLogo(props: LogoProps) {
+  return (
+    <svg {...line} aria-hidden {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M7 9h10m-7 0v7m4-7v5.5a1.5 1.5 0 0 0 1.5 1.5" />
+    </svg>
+  );
+}
+
+/** Grok's ring, cut by a slash. */
+export function GrokLogo(props: LogoProps) {
+  return (
+    <svg {...line} aria-hidden {...props}>
+      <path d="M17 6.3A7.5 7.5 0 0 0 6.3 17M18.6 9.5a7.5 7.5 0 0 1-9 9M4 20 20 4" />
+    </svg>
+  );
+}
+
+/** Ollama's llama. */
+export function OllamaLogo(props: LogoProps) {
+  return (
+    <svg {...line} aria-hidden {...props}>
+      <path d="M7.5 9.5V5a1.5 1.5 0 0 1 3 0v3.3m3 0V5a1.5 1.5 0 0 1 3 0v4.5" />
+      <path d="M6 21v-6.5a6 6 0 0 1 12 0V21M10.5 17.5h3" />
+      <path d="M9.5 14h.01M14.5 14h.01" />
+    </svg>
+  );
+}
+
+/** OpenRouter's routes, splitting from one. */
+export function OpenRouterLogo(props: LogoProps) {
+  return (
+    <svg {...line} aria-hidden {...props}>
+      <path d="M3 12h4c2.5 0 3.5-6 7-6h7m-4-3 3 3-3 3M7 12c2.5 0 3.5 6 7 6h7m-4-3 3 3-3 3" />
+    </svg>
+  );
+}
+
 // VS Code's mark, from Simple Icons (CC0), since LobeHub's set has none.
 export function VSCodeLogo(props: LogoProps) {
   return (

@@ -86,6 +86,8 @@ const bridge: ParallaxBridge = {
   saveHost: (host, id) => ipcRenderer.invoke("parallax:saveHost", host, id),
   removeHost: (id) => ipcRenderer.invoke("parallax:removeHost", id),
 
+  acpRegistry: () => ipcRenderer.invoke("parallax:acpRegistry"),
+
   openTerminal: (id, target, cols, rows) =>
     ipcRenderer.invoke("parallax:openTerminal", id, target, cols, rows),
   terminalInput: (id, data) => ipcRenderer.send("parallax:terminalInput", id, data),
