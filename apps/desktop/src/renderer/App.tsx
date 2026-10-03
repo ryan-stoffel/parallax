@@ -209,7 +209,7 @@ export function App() {
   useSnoozeAlarms(listed, (hostId, threadId) => openOnHost(hostId, { kind: "thread", threadId }));
 
   // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
-  // back to the coordinator. In a thread, the repository's starts a new thread there.
+  // back to the coordinator. In a thread, the repository's opens New thread on that repository.
   let crumbs: Crumb[];
   if (project) {
     crumbs = [
