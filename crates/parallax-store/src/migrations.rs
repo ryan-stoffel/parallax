@@ -367,6 +367,12 @@ const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX inbox_project ON inbox (project_id, created_at);",
     },
+    // A project's permission mode (PLX-394, decision 0042), `auto` or `bypass`, which its
+    // coordinator and every run in it start in. Existing projects get `auto`.
+    Migration {
+        version: 26,
+        sql: "ALTER TABLE projects ADD COLUMN permission TEXT NOT NULL DEFAULT 'auto';",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

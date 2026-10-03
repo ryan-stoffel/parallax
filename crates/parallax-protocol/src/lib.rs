@@ -110,8 +110,8 @@ pub use inbox::{
 };
 pub use project::{
     Project, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult,
+    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectPermission,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use provider::{
     ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
@@ -171,6 +171,7 @@ mod tests {
             repo_path: "/Users/me/src/parallax".to_owned(),
             branch: Some("main".to_owned()),
             coordinator: None,
+            permission: None,
             created_at: "2026-09-24T12:00:00Z".parse().unwrap(),
             updated_at: "2026-09-24T12:05:00.125Z".parse().unwrap(),
         }
@@ -322,6 +323,7 @@ mod tests {
                 name: "parallax".to_owned(),
                 repo_path: "/".to_owned(),
                 icon: icon.clone(),
+                permission: None,
             });
             round_trip(&ProjectUpdateResult {
                 project: with_icon.clone(),
@@ -338,6 +340,7 @@ mod tests {
                     project: ProjectId::generate(),
                     name,
                     icon: icon.clone(),
+                    permission: None,
                 });
             }
         }
@@ -355,6 +358,7 @@ mod tests {
                 project: id,
                 name: None,
                 icon: None,
+                permission: None,
             })
             .unwrap(),
             json!({"project": id}),
@@ -374,6 +378,39 @@ mod tests {
             serde_json::from_value::<ProjectUpdateParams>(json!({"project": id, "icon": "rocket"}))
                 .is_err(),
             "an icon is an object"
+        );
+    }
+
+    /// PLX-394 (0042): a project's mode round trips on each type that carries it, and a mode from
+    /// a newer peer reads as unknown.
+    #[test]
+    fn project_permission_round_trips_and_an_unknown_mode_reads_as_unknown() {
+        for permission in [ProjectPermission::Auto, ProjectPermission::Bypass] {
+            round_trip(&Project {
+                permission: Some(permission),
+                ..project()
+            });
+            round_trip(&ProjectCreateParams {
+                id: ProjectId::generate(),
+                name: "parallax".to_owned(),
+                repo_path: "/".to_owned(),
+                icon: None,
+                permission: Some(permission),
+            });
+            round_trip(&ProjectUpdateParams {
+                project: ProjectId::generate(),
+                name: None,
+                icon: None,
+                permission: Some(permission),
+            });
+        }
+        assert_eq!(
+            serde_json::to_value(ProjectPermission::Bypass).unwrap(),
+            json!("bypass")
+        );
+        assert_eq!(
+            serde_json::from_value::<ProjectPermission>(json!("manual")).unwrap(),
+            ProjectPermission::Unknown
         );
     }
 
