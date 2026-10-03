@@ -361,32 +361,9 @@ impl Providers {
                 "an instance's kind can't change; add a new instance instead",
             ));
         }
-        let mut secrets = old
-            .and_then(|i| stored[i].secrets)
-            .map(|id| self.secrets(id))
-            .transpose()?
-            .unwrap_or_default();
-        secrets.retain(|name, _| {
-            instance
-                .env
-                .iter()
-                .any(|var| var.secret && var.name == *name)
-        });
-        for var in &mut instance.env {
-            if var.secret
-                && let Some(value) = var.value.take()
-            {
-                secrets.insert(var.name.clone(), value);
-            }
-        }
-        let mut secret_id = old.and_then(|i| stored[i].secrets);
-        if !secrets.is_empty() || secret_id.is_some() {
-            let id = *secret_id.get_or_insert_with(AccountId::generate);
-            let text = serde_json::to_string(&secrets).unwrap_or_default();
-            self.keys.set(id, &text).map_err(|error| {
-                ErrorObject::internal_error(format!("couldn't keep the secrets: {error}"))
-            })?;
-        }
+        let secret_id = self
+            .save_secrets(old.map(|i| &stored[i]), &mut instance)
+            .await?;
         let entry = Stored {
             instance,
             secrets: secret_id,
@@ -399,6 +376,61 @@ impl Providers {
         self.cache.lock().await.remove(&entry.instance.id);
         self.register(&entry);
         Ok(())
+    }
+
+    /// Keeps `instance`'s secret values in the keychain, takes them out of it, and returns where
+    /// they are. The keychain is only touched when a secret's value or the set of secrets
+    /// changed, off the runtime's threads, since it may wait for the user to allow plxd.
+    async fn save_secrets(
+        &self,
+        old: Option<&Stored>,
+        instance: &mut ProviderInstance,
+    ) -> Result<Option<AccountId>, ErrorObject> {
+        let names = |env: &[parallax_protocol::ProviderEnvVar]| -> Vec<String> {
+            env.iter()
+                .filter(|var| var.secret)
+                .map(|var| var.name.clone())
+                .collect()
+        };
+        let old_id = old.and_then(|old| old.secrets);
+        let sent = instance
+            .env
+            .iter()
+            .any(|var| var.secret && var.value.is_some());
+        if !sent && old.map(|old| names(&old.instance.env)) == Some(names(&instance.env)) {
+            return Ok(old_id);
+        }
+        let keys = Arc::clone(&self.keys);
+        let new: HashMap<String, String> = instance
+            .env
+            .iter_mut()
+            .filter(|var| var.secret)
+            .filter_map(|var| Some((var.name.clone(), var.value.take()?)))
+            .collect();
+        let wanted = names(&instance.env);
+        let blocking = tokio::task::spawn_blocking(move || {
+            let mut secrets: HashMap<String, String> = old_id
+                .and_then(|id| keys.get(id).ok().flatten())
+                .and_then(|text| serde_json::from_str(text.as_str()).ok())
+                .unwrap_or_default();
+            secrets.retain(|name, _| wanted.contains(name));
+            secrets.extend(new);
+            if secrets.is_empty() {
+                if let Some(id) = old_id {
+                    keys.delete(id)?;
+                }
+                return Ok(None);
+            }
+            let id = old_id.unwrap_or_else(AccountId::generate);
+            keys.set(id, &serde_json::to_string(&secrets).unwrap_or_default())?;
+            Ok(Some(id))
+        });
+        blocking
+            .await
+            .map_err(|error| ErrorObject::internal_error(error.to_string()))?
+            .map_err(|error: crate::keystore::KeyStoreError| {
+                ErrorObject::internal_error(format!("couldn't keep the secrets: {error}"))
+            })
     }
 
     /// Removes the instance `id` and its secrets.
@@ -430,15 +462,6 @@ impl Providers {
         std::fs::write(&self.file, text).map_err(|error| {
             ErrorObject::internal_error(format!("couldn't save {}: {error}", self.file.display()))
         })
-    }
-
-    fn secrets(&self, id: AccountId) -> Result<HashMap<String, String>, ErrorObject> {
-        let text = self.keys.get(id).map_err(|error| {
-            ErrorObject::internal_error(format!("couldn't read the secrets: {error}"))
-        })?;
-        Ok(text
-            .and_then(|text| serde_json::from_str(text.as_str()).ok())
-            .unwrap_or_default())
     }
 
     /// Every variable `entry` sets, secrets included, read from the keychain.
@@ -699,8 +722,18 @@ struct WithSecrets {
 }
 
 impl WithSecrets {
+    /// The backend with its secrets. Reading them may wait for the user to allow plxd into the
+    /// keychain, so other tasks move off this thread meanwhile where the runtime allows it.
     fn full(&self) -> Arc<dyn Backend> {
-        let env = full_env(self.keys.as_ref(), &self.entry);
+        let read = || full_env(self.keys.as_ref(), &self.entry);
+        let multi_thread = tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+            handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        });
+        let env = if multi_thread {
+            tokio::task::block_in_place(read)
+        } else {
+            read()
+        };
         build(&self.launcher, &self.entry, env).unwrap_or_else(|| Arc::clone(&self.plain))
     }
 }
