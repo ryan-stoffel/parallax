@@ -290,13 +290,15 @@ body {
 }
 
 /* The top row doubles as the title bar on macOS and Windows (frame.ts hides
-   theirs). Linux keeps a native frame, so nothing there drags. */
+   theirs). Linux keeps a native frame, so nothing there drags. A menu opened
+   from it inherits the drag, and the window then treats every click outside
+   the menu's buttons as a drag, so none reaches the page to close it. */
 :is([data-platform="darwin"], [data-platform="win32"]) .titlebar {
   -webkit-app-region: drag;
 }
 :is([data-platform="darwin"], [data-platform="win32"])
   .titlebar
-  :is(button, a, input, select, textarea, fieldset, [role="tab"]) {
+  :is(button, a, input, select, textarea, fieldset, [role="tab"], [popover]) {
   -webkit-app-region: no-drag;
 }
 /* Room for the traffic lights, where a row starts at the window's left edge. */

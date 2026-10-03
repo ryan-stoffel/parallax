@@ -93,6 +93,20 @@ test("stops the thread", async () => {
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
 });
 
+test("a top bar menu closes on a click outside it (PLX-363)", async () => {
+  await page.getByRole("button", { name: "Open in…" }).click();
+  const menu = page.getByRole("menu", { name: "Open in" });
+  await expect(menu).toBeVisible();
+  // A menu that inherits the top bar's drag turns the window's clicks outside it into drags,
+  // which never reach the page. Playwright's clicks skip the window, so check the style itself.
+  const region = await menu.evaluate(
+    `(m) => getComputedStyle(m).getPropertyValue("-webkit-app-region")`,
+  );
+  expect(region).not.toBe("drag");
+  await page.getByRole("log", { name: "Transcript" }).click();
+  await expect(menu).toBeHidden();
+});
+
 test("opens a terminal in the thread's folder, kept while hidden (RYA-295)", async () => {
   const listed = (await page.evaluate(`window.parallax.request("local", "agent/list", {})`)) as {
     result: { runs: { prompt: string; branch?: string }[] };
