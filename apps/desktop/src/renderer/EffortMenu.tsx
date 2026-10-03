@@ -2,7 +2,6 @@ import { ChevronDown, Zap } from "lucide-react";
 import { useId, type CSSProperties } from "react";
 
 import type { AgentEffort } from "../protocol/generated/protocol";
-import type { Provider } from "./models";
 import { menuButton, menuPanel, Picker } from "./ui";
 
 // Each level plxd takes, a line about it, and how long (in seconds) a stripe takes to cross the
@@ -25,18 +24,18 @@ const spring = "duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]";
 /** A context window's size, such as `200K` or `1M`. */
 const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
 
-// What each provider with fast mode calls it, and its two settings. Cursor has none (0036).
-const fastNames: Partial<Record<Provider, { label: string; on: string; off: string }>> = {
-  Claude: { label: "Fast mode", on: "On", off: "Off" },
-  Codex: { label: "Speed", on: "Fast", off: "Standard" },
+// What each kind of instance with fast mode calls it, and its two settings. Cursor has none (0036).
+const fastNames: Partial<Record<string, { label: string; on: string; off: string }>> = {
+  claude: { label: "Fast mode", on: "On", off: "Off" },
+  codex: { label: "Speed", on: "Fast", off: "Standard" },
 };
 
 /**
  * The reasoning picker: a button showing the effort, the context window, and a bolt in fast mode,
  * that opens a slider with a stop for each level. Stripes in the fill speed up with the level,
  * and Max shimmers and glows (index.css). Below it, the context window is a choice when the model
- * offers more than one, and fast mode when the model has it (`fastMode`, by its provider's name
- * for it).
+ * offers more than one, and fast mode when the model has it (`fastMode`, by its instance kind's
+ * name for it).
  */
 export function EffortMenu({
   value,
@@ -55,8 +54,8 @@ export function EffortMenu({
   /** The chosen context window. Absent: none is shown. */
   context?: number;
   onContext?: (tokens: number) => void;
-  /** The model's provider, when it has fast mode. */
-  fastMode?: Provider;
+  /** The kind of the model's instance, when it has fast mode. */
+  fastMode?: string;
   fast?: boolean;
   onFast?: (fast: boolean) => void;
 }) {

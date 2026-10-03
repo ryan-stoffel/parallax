@@ -1,7 +1,7 @@
-//! Turning `agent acp`'s stdout into [`Event`]s, one JSON-RPC message at a time.
+//! Turning an ACP agent's stdout into [`Event`]s, one JSON-RPC message at a time.
 //!
-//! The shapes are Agent Client Protocol 1 as Cursor Agent 2026.10.01-14929f9 writes it, read from
-//! real runs (0036), with Cursor's own requests (`cursor/update_todos`, `cursor/create_plan`,
+//! The shapes are Agent Client Protocol 1 as Cursor Agent 2026.10.01-14929f9 and the other agents
+//! of 0040 write it, read from real runs (0036), with Cursor's own requests (`cursor/update_todos`, `cursor/create_plan`,
 //! `cursor/ask_question`). Fields Parallax doesn't use are ignored, as 0004 asks.
 
 use std::collections::{HashMap, HashSet};
@@ -65,6 +65,8 @@ struct Call {
     input: Map<String, Value>,
     /// Its `ToolCall` event was sent.
     reported: bool,
+    /// Its `ToolResult` event was sent.
+    finished: bool,
 }
 
 /// The state that reading one run's output needs.
@@ -73,6 +75,8 @@ pub(super) struct Translator {
     /// `session/load` replays the session's history as updates before it answers. Those are
     /// already in the run's log, so they are dropped while this is set.
     pub replaying: bool,
+    /// What messages call the agent, such as `Cursor Agent`.
+    pub label: String,
     /// The client answers permission requests (`RunRequest::approvals`). Without it, plxd rejects
     /// each one at once, as headless Claude Code denies what would prompt (0031).
     pub asks: bool,
@@ -130,11 +134,8 @@ impl Translator {
             (None, Some(id)) => match id.as_u64() {
                 Some(id) => {
                     let result = match message.get("error") {
-                        Some(error) => Err(error
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("Cursor Agent returned an error")
-                            .to_owned()),
+                        Some(error) => Err(error_text(error)
+                            .unwrap_or_else(|| format!("{} returned an error", self.label))),
                         None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
                     };
                     steps.push(Step::Response { id, result });
@@ -160,6 +161,28 @@ impl Translator {
                 text: std::mem::take(&mut self.thinking),
             })
         })
+    }
+
+    /// A failed result for every call reported but never finished, at the end of a turn: some
+    /// agents leave a call pending (Hermes Agent's denied edit), and the app would wait on it.
+    pub fn unfinished(&mut self) -> Vec<Event> {
+        let mut events = Vec::new();
+        for (id, call) in &mut self.calls {
+            if call.reported && !call.finished {
+                call.finished = true;
+                let status = if self.denied.contains(id) {
+                    ToolStatus::Denied
+                } else {
+                    ToolStatus::Error
+                };
+                events.push(Event::ToolResult {
+                    call_id: id.clone(),
+                    status,
+                    output: None,
+                });
+            }
+        }
+        events
     }
 
     /// The turn's result, its text since the last tool call, and starts the next turn's.
@@ -192,11 +215,14 @@ impl Translator {
                     .collect();
                 vec![Step::Emit(Event::TodoList { items })]
             }
-            // Cursor's own bookkeeping, and the user's own message echoed in a replay.
+            // Agents' own bookkeeping (a turn's tokens come on its answer instead), and the user's
+            // own message echoed in a replay.
             Some(
                 "available_commands_update"
                 | "session_info_update"
                 | "current_mode_update"
+                | "config_option_update"
+                | "usage_update"
                 | "user_message_chunk"
                 | "subagent_spawned"
                 | "subagent_state_update",
@@ -234,8 +260,10 @@ impl Translator {
             steps.extend(self.report(id));
         }
         if let Some(status @ ("completed" | "failed")) = status
-            && self.calls.get(id).is_some_and(|call| call.reported)
+            && let Some(call) = self.calls.get_mut(id)
+            && call.reported
         {
+            call.finished = true;
             let output = update.get("rawOutput");
             let failed = status == "failed"
                 || output
@@ -448,6 +476,16 @@ pub(super) fn permission_answer(id: &Value, option: Option<&str>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": {"outcome": outcome}})
 }
 
+/// What a JSON-RPC error says: its `data.details`, which Hermes Agent puts under a generic
+/// "Internal error", or else its `message`.
+pub fn error_text(error: &Value) -> Option<String> {
+    error
+        .pointer("/data/details")
+        .or_else(|| error.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
 fn error(id: &Value, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": METHOD_NOT_FOUND, "message": message}})
 }
@@ -477,8 +515,8 @@ fn todo(entry: &Value) -> Option<TodoItem> {
     Some(TodoItem { text, status })
 }
 
-/// What a tool returned: a command's stdout and stderr, a read's `content`, or the whole
-/// `rawOutput` as JSON.
+/// What a tool returned: a command's stdout and stderr, a read's `content` as text or text blocks,
+/// or the whole `rawOutput` as JSON.
 fn output_text(output: &Value) -> Option<String> {
     let Value::Object(fields) = output else {
         return None;
@@ -493,6 +531,16 @@ fn output_text(output: &Value) -> Option<String> {
     }
     if let Some(content) = fields.get("content").and_then(Value::as_str) {
         return Some(content.to_owned());
+    }
+    // Text blocks, as some agents report a command's output.
+    if let Some(blocks) = fields.get("content").and_then(Value::as_array) {
+        let text: Vec<&str> = blocks
+            .iter()
+            .filter_map(|block| block.get("text")?.as_str())
+            .collect();
+        if !text.is_empty() {
+            return Some(text.join("\n"));
+        }
     }
     (!fields.is_empty()).then(|| output.to_string())
 }

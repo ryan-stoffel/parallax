@@ -13,8 +13,9 @@
 //! - **Codex**: `codex app-server`, `initialize`, `initialized`, and `skills/list` for the folder:
 //!   the enabled skills, which a `$name` in a message loads. Codex's own slash commands belong
 //!   to its TUI, which app-server doesn't take.
-//! - **Cursor Agent**: `agent acp`, `initialize`, and `session/new`, after which it sends an
-//!   `available_commands_update` with its commands and skills.
+//! - **ACP agents** (Cursor Agent's `agent acp`, `OpenCode`, and the rest of 0040): `initialize`
+//!   and `session/new`, after which the agent sends an `available_commands_update` with its
+//!   commands and skills.
 
 use std::time::Duration;
 
@@ -128,9 +129,9 @@ pub fn codex(message: &Value) -> Parsed {
         .collect()))
 }
 
-/// Cursor Agent's `available_commands_update`, or its refusal of `session/new`.
+/// An ACP agent's `available_commands_update`, or its refusal of `session/new`.
 #[must_use]
-pub fn cursor(message: &Value) -> Parsed {
+pub fn acp(message: &Value) -> Parsed {
     if message["id"] == LIST_ID && !message["error"].is_null() {
         return Some(Err(text(&message["error"]["message"])));
     }
@@ -170,7 +171,7 @@ mod tests {
     use parallax_protocol::AgentCommand;
     use serde_json::Value;
 
-    use super::{Parsed, claude, codex, cursor};
+    use super::{Parsed, acp, claude, codex};
 
     /// The first answer `parse` finds in a recorded output.
     fn first(fixture: &str, parse: fn(&Value) -> Parsed) -> Result<Vec<AgentCommand>, String> {
@@ -222,7 +223,7 @@ mod tests {
 
     #[test]
     fn cursor_lists_its_available_commands() {
-        let commands = first(include_str!("commands/fixtures/cursor.jsonl"), cursor).unwrap();
+        let commands = first(include_str!("commands/fixtures/cursor.jsonl"), acp).unwrap();
         assert_eq!(texts(&commands), ["/simplify", "/create-rule", "/review"]);
         assert_eq!(
             commands[0].description,
@@ -265,7 +266,7 @@ mod tests {
     fn a_refusal_is_an_error() {
         let refused = r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"no session"}}"#;
         let refused: Value = serde_json::from_str(refused).unwrap();
-        assert_eq!(cursor(&refused), Some(Err("no session".to_owned())));
+        assert_eq!(acp(&refused), Some(Err("no session".to_owned())));
         assert_eq!(codex(&refused), Some(Err("no session".to_owned())));
     }
 }

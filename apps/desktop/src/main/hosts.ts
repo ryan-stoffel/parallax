@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
 import {
+  HOME_VARS,
   type ConnectionState,
   type RendererMethod,
   type RpcResponse,
@@ -43,6 +44,9 @@ const rendererMethods: Record<RendererMethod, true> = {
   "accounts/keys/remove": true,
   "accounts/list": true,
   "accounts/refresh": true,
+  "providers/list": true,
+  "providers/save": true,
+  "providers/remove": true,
   "usage/get": true,
   "usage/history": true,
   "usage/daily": true,
@@ -183,18 +187,23 @@ export function startHosts(): void {
   ipcMain.handle("parallax:connectionState", (_event, hostId: unknown) => connection(hostId).state);
   ipcMain.handle("parallax:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
-  // A window's terminals (terminal.ts), by an id it picks: a CLI's sign-in, or a shell in a
-  // thread's folder. The renderer names the host and the CLI or folder; only main decides what runs.
+  // A window's terminals (terminal.ts), by an id it picks: a CLI's or a provider instance's
+  // sign-in, or a shell in a thread's folder. The renderer names the host and the CLI, instance,
+  // or folder; only main decides what runs.
   ipcMain.handle(
     "parallax:openTerminal",
     (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {
       if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      const { hostId, cli, path } = target;
+      const { hostId, cli, provider, path } = target;
       if (typeof hostId !== "string") return "invalid terminal";
       if (isCliKind(cli)) {
         return openTerminal(event.sender, id, () => signInCommand(hostId, cli), cols, rows);
+      }
+      if (typeof provider === "string") {
+        const command = () => providerSignInCommand(hostId, provider);
+        return openTerminal(event.sender, id, command, cols, rows);
       }
       if (typeof path !== "string") return "invalid terminal";
       return openTerminal(event.sender, id, () => folderCommand(hostId, path), cols, rows);
@@ -236,6 +245,34 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
   const path = answer.result.clis.find((each) => each.cli === cli)?.path;
   if (!path) return "That CLI isn't installed on this host anymore.";
   return loginCommand(cli, path, ssh);
+}
+
+/**
+ * What signs in to provider instance `id` on a host: its `login` argv from the host's plxd, run as
+ * it is, with its `loginEnv` and its home's variable set, so a second Codex signs in to its own `CODEX_HOME`. A
+ * program that's the one plxd found runs from where it found it, as a CLI's sign-in does.
+ * Resolves to an error for people.
+ */
+async function providerSignInCommand(hostId: string, id: string): Promise<Command | string> {
+  const host = connections.get(hostId);
+  if (!host) return "That host isn't in Parallax anymore.";
+  const saved = settings.hosts.find((h) => h.id === hostId);
+  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  const answer = await host.request("providers/list", { refresh: false });
+  if ("error" in answer)
+    return `Parallax couldn't ask the host how to sign in: ${answer.error.message}`;
+  const found = answer.result.providers.find((p) => p.instance.id === id);
+  if (!found) return "That provider isn't on this host anymore.";
+  const [program, ...args] = found.login ?? [];
+  if (!program) return "That provider has no sign-in on this host.";
+  const { kind, home } = found.instance;
+  const homeVar = HOME_VARS[kind];
+  const env = {
+    ...Object.fromEntries((found.loginEnv ?? []).map((v) => [v.name, v.value ?? ""])),
+    ...(homeVar && home ? { [homeVar]: home } : {}),
+  };
+  const own = found.path && /[^/\\]+$/.exec(found.path)?.[0].replace(/\.\w+$/, "") === program;
+  return loginCommand(kind, own ? found.path! : program, ssh, undefined, args, env);
 }
 
 /**

@@ -37,7 +37,7 @@ struct Recording {
 }
 
 impl Backend for Recording {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.fake.name()
     }
 
@@ -248,7 +248,7 @@ struct Roles {
 }
 
 impl Backend for Roles {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.worker.name()
     }
 

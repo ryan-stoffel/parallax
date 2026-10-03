@@ -38,6 +38,21 @@ enum Command {
     /// Serve a coordinator's Parallax tools over MCP on stdin and stdout. plxd starts it.
     #[command(hide = true)]
     Mcp(McpArgs),
+    /// Sign in to an ACP agent with one of its own sign-in methods. The app's sign-in terminal
+    /// runs it.
+    #[command(hide = true)]
+    AcpLogin(AcpLoginArgs),
+}
+
+#[derive(Debug, Args)]
+struct AcpLoginArgs {
+    /// The agent's sign-in method, from its `initialize` answer
+    #[arg(long, value_name = "ID")]
+    method: String,
+
+    /// The agent's command and its arguments
+    #[arg(last = true, required = true, value_name = "COMMAND")]
+    command: Vec<std::ffi::OsString>,
 }
 
 #[derive(Debug, Args)]
@@ -135,6 +150,19 @@ fn main() -> ExitCode {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Service(args) => service_command(args.command),
         Command::Mcp(args) => mcp(&args),
+        Command::AcpLogin(args) => {
+            let (program, rest) = args.command.split_first().expect("clap requires a command");
+            match plxd::backend::acp::authenticate(program, rest, &args.method) {
+                Ok(()) => {
+                    println!("Signed in.");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("plxd acp-login: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
 }
 

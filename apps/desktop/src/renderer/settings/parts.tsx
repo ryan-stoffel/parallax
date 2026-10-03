@@ -106,26 +106,41 @@ export function Switch({
   );
 }
 
-/** A dot for a state: on, off, or needing the user. */
-export function StatusDot({ tone }: { tone: "on" | "off" | "warn" }) {
-  const color = { on: "bg-added", off: "bg-faint-foreground", warn: "bg-warning" }[tone];
+/** A dot for a state: on, off, needing the user, or failing. */
+export function StatusDot({ tone }: { tone: "on" | "off" | "warn" | "error" }) {
+  const color = {
+    on: "bg-added",
+    off: "bg-faint-foreground",
+    warn: "bg-warning",
+    error: "bg-danger",
+  }[tone];
   return <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${color}`} />;
 }
 
-/** "on <host>", a select of `hosts`, shown only when there's more than one. */
+/**
+ * "on <host>", a select of `hosts`, shown only when there's more than one, or with `always`, as
+ * the host's name alone.
+ */
 export function HostPicker({
   hosts,
   value,
   onChange,
+  always,
 }: {
   hosts: Host[];
   value: string;
   onChange: (id: string) => void;
+  always?: boolean;
 }) {
-  if (hosts.length < 2) return null;
+  if (hosts.length < 2)
+    return always ? (
+      <p className="text-[15px] text-muted-foreground">
+        Applying settings on <span className="font-medium text-foreground">{hosts[0]?.name}</span>
+      </p>
+    ) : null;
   return (
-    <label className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-      on
+    <label className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
+      Applying settings on
       <select
         aria-label="Host"
         value={value}
