@@ -293,6 +293,7 @@ impl Server {
     ///
     /// [`StartError::AlreadyRunning`] when another server holds the lock, and the other
     /// variants when a startup check fails.
+    #[expect(clippy::too_many_lines, reason = "builds every part of the daemon")]
     pub fn start(config: Config) -> Result<Self, StartError> {
         let data_dir = &config.data_dir;
         prepare_data_dir(data_dir.root())?;
