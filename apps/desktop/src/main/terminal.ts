@@ -16,40 +16,62 @@ export const isCliKind = (value: unknown): value is CliKind =>
   typeof value === "string" && Object.hasOwn(loginArgs, value);
 
 /**
- * A program and its arguments, or on Windows its command line, already quoted, and the folder it
- * starts in (the home folder if absent).
+ * A program and its arguments, or on Windows its command line, already quoted, the folder it
+ * starts in (the home folder if absent), and variables it gets besides the app's.
  */
-export type Command = { file: string; args: string[] | string; cwd?: string };
+export type Command = {
+  file: string;
+  args: string[] | string;
+  cwd?: string;
+  env?: Record<string, string>;
+};
 
 /** An SSH host's destination, checked when it was saved (`checkHost`), and the ssh program. */
 export type SshTarget = { destination: string; ssh: string };
 
 /**
- * The command that signs in to `cli` at `path`, where the host's plxd found it: run here, or
- * with `ssh -t` on an SSH host.
+ * The command that signs in to an agent of `kind` at `path`, where the host's plxd found it, with
+ * `args` (a CLI's own by default) and `env`: run here, or with `ssh -t` on an SSH host.
  * - Windows can't run an npm `.cmd` shim by itself, so one goes through `cmd.exe`.
  * - Over ssh, Codex's browser callback to localhost:1455 is forwarded back here, where the
  *   browser is, and fails at once if that port is taken. Cursor is told not to open a browser on
  *   the host. Claude Code needs neither: with no browser, it asks for a code to paste.
+ * ponytail: over ssh, `env` goes as `NAME=value` before the command, for a POSIX shell, unless
+ * `path` is a Windows one; a bare program name on a Windows host gets it too, and fails.
  */
 export function loginCommand(
-  cli: CliKind,
+  kind: string,
   path: string,
   ssh?: SshTarget,
   platform = process.platform,
+  args: string[] = loginArgs[kind as CliKind] ?? [],
+  env: Record<string, string> = {},
 ): Command {
-  const args = loginArgs[cli];
+  const line = args.map(quote).join(" ");
   if (!ssh) {
+    const vars = Object.keys(env).length ? { env } : {};
     if (platform === "win32" && /\.(cmd|bat)$/i.test(path)) {
-      const line = `/d /s /c ""${path}" ${args.join(" ")}"`;
-      return { file: process.env["ComSpec"] ?? "cmd.exe", args: line };
+      return {
+        file: process.env["ComSpec"] ?? "cmd.exe",
+        args: `/d /s /c ""${path}" ${line}"`,
+        ...vars,
+      };
     }
-    return { file: path, args };
+    return { file: path, args, ...vars };
   }
   const forward =
-    cli === "codex" ? ["-o", "ExitOnForwardFailure=yes", "-L", "1455:localhost:1455"] : [];
-  const env = cli === "cursor" && path.startsWith("/") ? "NO_OPEN_BROWSER=1 " : "";
-  return overSsh(ssh, `${env}${quote(path)} ${args.join(" ")}`, forward, platform);
+    kind === "codex" ? ["-o", "ExitOnForwardFailure=yes", "-L", "1455:localhost:1455"] : [];
+  const posix = !/^[a-z]:\\/i.test(path);
+  const vars = {
+    ...(kind === "cursor" && { NO_OPEN_BROWSER: "1" }),
+    ...env,
+  };
+  const prefix = posix
+    ? Object.entries(vars)
+        .map(([name, value]) => `${name}=${quote(value)} `)
+        .join("")
+    : "";
+  return overSsh(ssh, `${prefix}${quote(path)} ${line}`, forward, platform);
 }
 
 /**
@@ -143,7 +165,7 @@ export async function openTerminal(
       name: "xterm-256color",
       ...session.size,
       cwd: found.cwd ?? os.homedir(),
-      env: terminalEnv(),
+      env: { ...terminalEnv(), ...found.env },
     });
     session.pty = pty;
     pty.onData((data) => send({ type: "data", data }));

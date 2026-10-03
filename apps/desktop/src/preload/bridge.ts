@@ -8,6 +8,7 @@ import type {
   EventsSubscribeParams,
   LogId,
   ParallaxRequests,
+  ProviderKind,
 } from "../protocol/generated/protocol";
 
 /** The Appearance setting: follow the OS, or force a theme. */
@@ -17,6 +18,18 @@ export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 /** Where the top bar's Open button opens a folder: an editor, or the OS's file manager. */
 export const OPEN_TARGETS = ["cursor", "vscode", "files"] as const;
 export type OpenTarget = (typeof OPEN_TARGETS)[number];
+
+/**
+ * The variable a provider instance's `home` sets, for the kinds that have one: Settings labels the
+ * field with it, and a sign-in runs with it, so it signs in to that home.
+ */
+export const HOME_VARS: Partial<Record<ProviderKind, string>> = {
+  claude: "CLAUDE_CONFIG_DIR",
+  codex: "CODEX_HOME",
+  antigravity: "GEMINI_HOME",
+  opencode: "OPENCODE_CONFIG_DIR",
+  hermes: "HERMES_HOME",
+};
 
 export interface ParallaxBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
@@ -108,8 +121,15 @@ export interface ParallaxBridge {
   removeHost(id: string): Promise<string | undefined>;
 
   /**
+   * The agents in the ACP Registry, fetched once while the app runs. Resolves to an error for
+   * people when it can't be read.
+   */
+  acpRegistry(): Promise<RegistryAgent[] | string>;
+
+  /**
    * Opens this window's terminal `id`, in place of any terminal it had with that id: `cli`'s own
-   * sign-in on a host (0004), or the user's login shell in a host's folder. Resolves to an error
+   * sign-in on a host (0004), a provider instance's (its `ProviderInfo.login`, on a plxd with
+   * `providers`), or the user's login shell in a host's folder. Resolves to an error
    * for people, or undefined once it runs. The app only passes on what's typed and printed; it
    * never reads or keeps it. A window's terminals end when it reloads or closes.
    */
@@ -196,8 +216,37 @@ export type UpdateState = {
   note?: string;
 };
 
-/** What a terminal runs: a CLI's sign-in on a host, or a shell in a folder on a host. */
-export type TerminalTarget = { hostId: string; cli: CliKind } | { hostId: string; path: string };
+/**
+ * What a terminal runs: a CLI's sign-in on a host, a provider instance's sign-in by its id, or a
+ * shell in a folder on a host.
+ */
+export type TerminalTarget =
+  | { hostId: string; cli: CliKind }
+  | { hostId: string; provider: string }
+  | { hostId: string; path: string };
+
+/** How an ACP Registry agent is run with `npx` or `uvx`: a package, pinned to its version. */
+export type RegistryPackage = { package: string; args?: string[]; env?: Record<string, string> };
+
+/**
+ * An agent in the ACP Registry (cdn.agentclientprotocol.com/registry/v1), as main passes it on.
+ * `binary` is by platform, such as `darwin-aarch64`, each with the command in its archive.
+ */
+export type RegistryAgent = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  /** An SVG drawn in `currentColor`. */
+  icon?: string;
+  repository?: string;
+  website?: string;
+  distribution: {
+    npx?: RegistryPackage;
+    uvx?: RegistryPackage;
+    binary?: Record<string, { cmd: string; args?: string[]; env?: Record<string, string> }>;
+  };
+};
 
 export type TerminalMessage = { type: "data"; data: string } | { type: "exit"; exitCode: number };
 

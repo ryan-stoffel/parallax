@@ -636,7 +636,7 @@ function fakeBridge(
   } = {},
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
-  let connection: (hostId: string, state: ConnectionState) => void = () => {};
+  const connections = new Set<(hostId: string, state: ConnectionState) => void>();
   const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
@@ -664,9 +664,9 @@ function fakeBridge(
       protocol: 1,
       capabilities,
     }),
-    onConnectionState: (l: typeof connection) => {
-      connection = l;
-      return () => {};
+    onConnectionState: (l: (hostId: string, state: ConnectionState) => void) => {
+      connections.add(l);
+      return () => connections.delete(l);
     },
     request,
     subscribe,
@@ -676,7 +676,8 @@ function fakeBridge(
     subscribe,
     unsubscribe,
     emit: (m: SubscriptionMessage) => act(() => listener(m)),
-    connect: (state: ConnectionState) => act(() => connection("local", state)),
+    connect: (state: ConnectionState) =>
+      act(() => connections.forEach((connection) => connection("local", state))),
   };
 }
 
@@ -1063,7 +1064,7 @@ test("an open thread's composer picks within its provider and sends only what ch
         backend="claude"
         started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
         unavailable={{
-          Codex: "Codex is unavailable in this thread. Start a new thread to switch providers.",
+          codex: "Codex is unavailable in this thread. Start a new thread to switch providers.",
         }}
         onSend={onSend}
         optionsDisabled={optionsDisabled}

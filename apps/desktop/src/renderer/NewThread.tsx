@@ -447,6 +447,7 @@ export function NewThread({
           attach={attachThreads(connection, threadLinks)}
           // Hidden while starting, as the opened thread's composer has none.
           backend={runOptions && starting === undefined ? backend : undefined}
+          hostId={hostId}
           contextAndFast={
             connection?.status === "connected" && "contextAndFast" in connection.capabilities
           }

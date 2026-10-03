@@ -88,6 +88,7 @@ import {
   TopBar,
   useModHeld,
 } from "./ui";
+import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 
 const row =
@@ -1200,7 +1201,7 @@ function ThreadRow({
     onLeave();
     action();
   };
-  const Logo = run?.backend ? backendLogos[run.backend] : undefined;
+  const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
   const hasDetails = !!(run?.branch || run?.diff || Logo);
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
@@ -1423,7 +1424,7 @@ function ThreadCard({
   top: number;
   left: number;
 }) {
-  const Logo = run?.backend ? backendLogos[run.backend] : undefined;
+  const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
   const look = run && (statusLooks[run.status] ?? statusLooks.completed!);
   return (
     <div
@@ -1450,7 +1451,9 @@ function ThreadCard({
         {run?.accountId && (
           <li>
             {Logo ? <Logo /> : <Bot />}
-            <span className="truncate">{accountLabel(run.accountId)}</span>
+            <span className="truncate">
+              {instanceName(run.accountId) ?? accountLabel(run.accountId)}
+            </span>
           </li>
         )}
         {run?.diff && (

@@ -63,7 +63,8 @@ use crate::backend::process::{
 };
 use crate::backend::{
     AgentPermission, Answer, ApprovalId, CancelSwitch, Credential, Decision, EVENT_BUFFER,
-    EventSink, FollowUp, RunHandle, RunRequest, StartError, Started, TurnId, check_argument,
+    EventSink, FollowUp, Overrides, RunHandle, RunRequest, StartError, Started, TurnId,
+    check_argument,
 };
 
 /// The permissions a thread maps, in Claude Code's picker order (0027): Codex's own presets
@@ -108,11 +109,15 @@ pub fn mode(
 /// [`StartError::Unsupported`] for an API key account, a permission [`mode`] doesn't map, or an
 /// effort or context window Codex doesn't know; [`StartError::Invalid`] for an empty message or a
 /// model or resume id that can't be an argument; and the spawn's error.
-pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started, StartError> {
+pub(super) fn start(
+    launcher: &Launcher,
+    overrides: &Overrides,
+    request: RunRequest,
+) -> Result<Started, StartError> {
     if request.prompt.is_empty() && request.images.is_empty() {
         return Err(StartError::Invalid("the prompt is empty".into()));
     }
-    let Credential::Subscription { config_home } = &request.account.credential else {
+    let Credential::Subscription { .. } = &request.account.credential else {
         return Err(StartError::Unsupported(
             "a Codex thread runs on a Codex login; app-server can't take an API key (decision \
              0035)"
@@ -126,7 +131,8 @@ pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started,
         .map_err(SpawnError::Io)?
         .unzip();
 
-    let mut process = launcher.spawn(&spec(launcher, &request.cwd, config_home.as_deref()))?;
+    let home = overrides.config_home(&request.account.credential);
+    let mut process = launcher.spawn(&spec(launcher, overrides, &request.cwd, home.as_deref()))?;
 
     let switch = CancelSwitch::new();
     let policy = CancelPolicy {
@@ -178,8 +184,13 @@ pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started,
 
 /// `codex app-server` in `cwd`, as a thread on the subscription whose configuration folder is
 /// `config_home` (the default one when absent) runs it: the inherited [`SCRUBBED_PREFIXES`]
-/// variables dropped, and stdin piped.
-pub(super) fn spec(launcher: &Launcher, cwd: &Path, config_home: Option<&Path>) -> ProcessSpec {
+/// variables dropped, the instance's `overrides` applied, and stdin piped.
+pub(super) fn spec(
+    launcher: &Launcher,
+    overrides: &Overrides,
+    cwd: &Path,
+    config_home: Option<&Path>,
+) -> ProcessSpec {
     let mut spec = ProcessSpec::new(PROGRAM, cwd);
     spec.args = vec!["app-server".into()];
     spec.scrub = scrubbed(launcher.base());
@@ -187,6 +198,7 @@ pub(super) fn spec(launcher: &Launcher, cwd: &Path, config_home: Option<&Path>) 
         spec.inject.set(CONFIG_DIR_ENV, home);
     }
     spec.stdin = StdinMode::Piped;
+    overrides.apply(&mut spec);
     spec
 }
 

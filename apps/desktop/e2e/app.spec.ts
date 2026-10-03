@@ -25,8 +25,9 @@ test.beforeAll(async () => {
 });
 
 /**
- * A fake Codex, for the sign-in test: signed out until `codex login` has read a line. Returns its
- * folder, which goes first on PATH, so plxd finds it before any real Codex.
+ * A fake Codex, for the sign-in test: signed out until `codex login` has read a line. And a fake
+ * Claude Code, signed out, so a host with neither installed still lists both (0040). Returns their
+ * folder, which goes first on PATH, so plxd finds them before any real ones.
  */
 function fakeCodex(): string {
   const bin = mkdtempSync(path.join(tmpdir(), "parallax-e2e-bin-"));
@@ -39,6 +40,7 @@ function fakeCodex(): string {
       "exit 2",
     ];
     writeFileSync(path.join(bin, "codex.cmd"), script.join("\r\n"));
+    writeFileSync(path.join(bin, "claude.cmd"), "@echo off\r\nexit 1\r\n");
   } else {
     const script = [
       "#!/bin/sh",
@@ -49,6 +51,7 @@ function fakeCodex(): string {
       "esac",
     ];
     writeFileSync(path.join(bin, "codex"), script.join("\n"), { mode: 0o755 });
+    writeFileSync(path.join(bin, "claude"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   }
   return bin;
 }
@@ -248,7 +251,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await page.getByRole("button", { name: "Providers" }).click();
   const codex = page.getByRole("tab", { name: /^Codex/ });
   await codex.click();
-  await expect(codex).toHaveText("CodexNot signed in");
+  await expect(codex).toHaveText("CodexNot authenticated");
   await page.getByRole("button", { name: "Sign in to Codex" }).click();
 
   const terminal = page.getByRole("group", { name: "Codex sign-in terminal" });
@@ -257,7 +260,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await page.keyboard.press("Enter");
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
   // The sign-in's end ran accounts/refresh, which found the fake signed in.
-  await expect(codex).toHaveText("CodexSigned in");
+  await expect(codex).toHaveText("CodexAuthenticated");
 });
 
 test("creates a project on a repository it adds, and opens it (RYA-166)", async () => {

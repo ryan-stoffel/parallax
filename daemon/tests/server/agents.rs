@@ -1143,6 +1143,12 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     )
     .unwrap();
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Codex and Cursor installed too, so the host lists them (0040).
+    for program in ["codex", "agent"] {
+        std::fs::write(bin.join(program), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(bin.join(program), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
     let mut environment = Environment::empty();
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
 
@@ -1160,7 +1166,7 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     );
     backends.register(
         Provider::Cursor,
-        Arc::new(plxd::backend::cursor::CursorBackend::new(launcher)),
+        Arc::new(plxd::providers::cursor_backend(launcher)),
     );
     config.backends = Some(backends);
     let server = InProcess::start(config);
