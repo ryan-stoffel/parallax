@@ -1,6 +1,6 @@
 # 0034: A thread is full Claude Code in every mode
 
-- Status: accepted; supersedes in part [0013](0013-worker-sandbox.md) and [0017](0017-normal-threads.md) (a thread's sandbox and first prompt), and [0031](0031-permission-requests.md) (a thread asks in Accept Edits too)
+- Status: accepted; supersedes in part [0013](0013-worker-sandbox.md) and [0017](0017-normal-threads.md) (a thread's sandbox and first prompt), and [0031](0031-permission-requests.md) (a thread asks in Accept Edits too); a coordinator's children are threads too since [0042](0042-project-children-are-threads.md)
 - Date: 2026-10-01
 - Issue: RYA-276
 
