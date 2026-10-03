@@ -32,7 +32,7 @@ use parallax_protocol::methods::{
     AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges, AgentSend, AgentStart,
     ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe, GithubStatusGet,
     HostHealth, HostVersion, Initialize, PrAct, PrDiff, PrView, ProjectCreate, ProjectDelete,
-    ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
+    ProjectList, ProjectStart, ProjectUpdate, RequestMethod, UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -100,10 +100,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             handle::<AccountsKeysRemove, _, _>(&request, |p| accounts::keys::remove(&context, p))
                 .await
         }
-        UsageGet::NAME => handle::<UsageGet, _, _>(&request, |p| usage::get(&context, p)).await,
-        UsageHistory::NAME => {
-            handle::<UsageHistory, _, _>(&request, |p| usage::history(&context, p)).await
-        }
+        name if name.starts_with("usage/") => usage_method(&context, &request)
+            .await
+            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         AccountsDefaultsGet::NAME => {
             handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
         }
@@ -165,6 +164,18 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     Reply::Response(Response {
         id: Some(id),
         result,
+    })
+}
+
+/// Answers a `usage/*` method, or `None` if there is no such method.
+async fn usage_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        UsageGet::NAME => handle::<UsageGet, _, _>(request, |p| usage::get(context, p)).await,
+        UsageHistory::NAME => {
+            handle::<UsageHistory, _, _>(request, |p| usage::history(context, p)).await
+        }
+        UsageDaily::NAME => handle::<UsageDaily, _, _>(request, |p| usage::daily(context, p)).await,
+        _ => return None,
     })
 }
 
