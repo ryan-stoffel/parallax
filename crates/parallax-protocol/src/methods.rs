@@ -45,9 +45,9 @@ use crate::{
     ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams, RepoAddResult, RepoFilesParams,
     RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
     ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult,
+    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -286,6 +286,9 @@ method_table! {
         /// github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
         /// `githubStatus` capability.
         GithubStatusGet = "github/status": GithubStatusParams => GithubStatus;
+        /// `thread/search`: the host's threads whose messages contain a query, the one with the
+        /// newest message first (PLX-372). Gated on the `threadContext` capability.
+        ThreadSearch = "thread/search": ThreadSearchParams => ThreadSearchResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -377,6 +380,7 @@ mod tests {
                 "agent/commands",
                 "repo/files",
                 "github/status",
+                "thread/search",
                 "$/cancelRequest",
                 "events/event",
             ]

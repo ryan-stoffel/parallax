@@ -124,6 +124,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         fast: None,
         images: Vec::new(),
         approvals: false,
+        threads: Vec::new(),
     }
 }
 
@@ -139,6 +140,7 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
         fast: None,
         account: None,
         images: Vec::new(),
+        threads: Vec::new(),
     }
 }
 
@@ -586,6 +588,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         text: Some("and the tests".to_owned()),
         wake: false,
         images: Vec::new(),
+        threads: Vec::new(),
     }));
     assert!(transcript.contains(&AgentOutputItem::Text {
         message_id: None,
@@ -628,6 +631,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         text: Some("one more thing".to_owned()),
         wake: false,
         images: Vec::new(),
+        threads: Vec::new(),
     }));
     let third = TurnId::generate();
     client
@@ -932,6 +936,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
             text: Some("carry on".to_owned()),
             wake: false,
             images: Vec::new(),
+            threads: Vec::new(),
         },
         AgentOutputItem::SessionStarted {
             session_id: "hang-1".to_owned(),
@@ -1005,6 +1010,7 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
             text: Some("carry on".to_owned()),
             wake: false,
             images: Vec::new(),
+            threads: Vec::new(),
         }),
     )
     .await;

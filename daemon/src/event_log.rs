@@ -635,6 +635,33 @@ impl EventLog {
         Ok((entries, false))
     }
 
+    /// `run`'s events before `before`, newest first, at most `limit` of them, from the database,
+    /// or from memory for a log that has none, as [`EventLog::run_events`] reads them (PLX-372).
+    pub fn run_events_before(
+        &self,
+        run: RunId,
+        before: u64,
+        limit: usize,
+    ) -> Result<Vec<Arc<Entry>>, StoreError> {
+        if let Some(reader) = &self.reader {
+            let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
+            let stored = db.run_events_before(run.into(), before, limit)?;
+            return Ok(stored
+                .iter()
+                .map(|stored| Arc::new(entry(stored)))
+                .collect());
+        }
+        let inner = self.inner();
+        Ok(inner
+            .events
+            .iter()
+            .rev()
+            .filter(|entry| entry.seq < before && run_of(&entry.event) == Some(run))
+            .take(limit)
+            .map(Arc::clone)
+            .collect())
+    }
+
     /// Removes `run`'s events from the in-memory replay window, for a deleted thread (#110), so
     /// `events/subscribe` stops replaying them. The stored ones go with the run's rows.
     pub fn purge_run(&self, run: RunId) {

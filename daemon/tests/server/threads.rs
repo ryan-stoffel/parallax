@@ -32,6 +32,7 @@ use tokio::time::Instant;
 
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
+mod context;
 mod files;
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -180,6 +181,7 @@ fn message(run_id: RunId, text: &str) -> AgentSendParams {
         fast: None,
         account: None,
         images: Vec::new(),
+        threads: Vec::new(),
     }
 }
 
@@ -219,6 +221,7 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
         checkout: false,
         base: None,
         checkout_ref: None,
+        threads: Vec::new(),
     }
 }
 

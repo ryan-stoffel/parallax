@@ -195,6 +195,35 @@ impl Store {
         Ok((events, false))
     }
 
+    /// Run `run_id`'s events before `before`, newest first: at most `limit` of them (PLX-372).
+    /// Rows are read one at a time, so a reader that only wants the latest few never loads the
+    /// rest.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn run_events_before(
+        &self,
+        run_id: Uuid,
+        before: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredEvent>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM events WHERE run_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3"
+        ))?;
+        let before = i64::try_from(before).unwrap_or(i64::MAX);
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt.query_map(
+            params![run_id.to_string(), before, limit],
+            RawEvent::from_row,
+        )?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?.into_event()?);
+        }
+        Ok(events)
+    }
+
     /// Forgets the log's id, so the next [`Store::event_log_id`] stores a new one. The event log
     /// calls it after an event failed to be stored: the log then has a hole, and possibly a
     /// `seq` a later plxd would give out again, so clients must resync rather than trust it.

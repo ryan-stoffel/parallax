@@ -66,7 +66,7 @@ pub(super) fn check_message(
 
 pub(crate) async fn start(
     context: &Context,
-    params: AgentStartParams,
+    mut params: AgentStartParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     if params.policy != AgentPolicy::WorkspaceWrite {
         return Err(ErrorObject::invalid_params(
@@ -74,6 +74,7 @@ pub(crate) async fn start(
         ));
     }
     check_message("prompt", &params.prompt, &params.images)?;
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -85,9 +86,10 @@ pub(crate) async fn start(
 
 pub(crate) async fn send(
     context: &Context,
-    params: AgentSendParams,
+    mut params: AgentSendParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     check_message("text", &params.text, &params.images)?;
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -331,6 +333,7 @@ pub(crate) async fn request_changes(
             fast: None,
             account: None,
             images: Vec::new(),
+            threads: Vec::new(),
         },
     )
     .await
