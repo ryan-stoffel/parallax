@@ -277,7 +277,19 @@ async function fetchRegistry(): Promise<RegistryAgent[] | string> {
     const text = (value: unknown) => (typeof value === "string" ? value : "");
     const https = (url: unknown) =>
       typeof url === "string" && url.startsWith("https://") ? url : undefined;
-    return agents.flatMap((a: Record<string, unknown>) =>
+    // The renderer masks with each icon, and a CSS mask needs CORS the CDN doesn't send, so the
+    // icons go over as data URLs. One that fails to load is left out.
+    const icon = async (url: unknown) => {
+      const from = https(url);
+      if (!from) return undefined;
+      const svg = await net.fetch(from).then(
+        (r) => (r.ok ? r.text() : ""),
+        () => "",
+      );
+      return svg ? `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}` : undefined;
+    };
+    const icons = await Promise.all(agents.map((a: Record<string, unknown>) => icon(a?.["icon"])));
+    return agents.flatMap((a: Record<string, unknown>, i) =>
       typeof a?.["id"] === "string" && typeof a["name"] === "string"
         ? [
             {
@@ -285,7 +297,7 @@ async function fetchRegistry(): Promise<RegistryAgent[] | string> {
               name: a["name"],
               version: text(a["version"]),
               description: text(a["description"]),
-              icon: https(a["icon"]),
+              icon: icons[i],
               repository: https(a["repository"]),
               website: https(a["website"]),
               distribution: (a["distribution"] ?? {}) as RegistryAgent["distribution"],
