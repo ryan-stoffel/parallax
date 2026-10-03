@@ -141,6 +141,18 @@ export function instanceLogo(backend: string): Logo | undefined {
   return undefined;
 }
 
+/**
+ * The name of the instance `id` on any host whose instances are listed: a subscription account
+ * is named by its instance, an added one by the name the user gave it.
+ */
+export function instanceName(id: string): string | undefined {
+  for (const list of lists.values()) {
+    const info = list.providers.find((p) => p.instance.id === id);
+    if (info) return info.instance.name;
+  }
+  return undefined;
+}
+
 /** The instances every plxd has, which can be turned off but not removed. */
 export const builtInIds = ["claude", "codex", "cursor"];
 

@@ -87,7 +87,7 @@ import {
   TopBar,
   useModHeld,
 } from "./ui";
-import { instanceLogo } from "./providers";
+import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 
 const row =
@@ -1445,7 +1445,9 @@ function ThreadCard({
         {run?.accountId && (
           <li>
             {Logo ? <Logo /> : <Bot />}
-            <span className="truncate">{accountLabel(run.accountId)}</span>
+            <span className="truncate">
+              {instanceName(run.accountId) ?? accountLabel(run.accountId)}
+            </span>
           </li>
         )}
         {run?.diff && (

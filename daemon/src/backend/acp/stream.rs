@@ -515,8 +515,8 @@ fn todo(entry: &Value) -> Option<TodoItem> {
     Some(TodoItem { text, status })
 }
 
-/// What a tool returned: a command's stdout and stderr, a read's `content`, or the whole
-/// `rawOutput` as JSON.
+/// What a tool returned: a command's stdout and stderr, a read's `content` as text or text blocks,
+/// or the whole `rawOutput` as JSON.
 fn output_text(output: &Value) -> Option<String> {
     let Value::Object(fields) = output else {
         return None;
@@ -531,6 +531,16 @@ fn output_text(output: &Value) -> Option<String> {
     }
     if let Some(content) = fields.get("content").and_then(Value::as_str) {
         return Some(content.to_owned());
+    }
+    // Text blocks, as Oh My Pi reports a command's output.
+    if let Some(blocks) = fields.get("content").and_then(Value::as_array) {
+        let text: Vec<&str> = blocks
+            .iter()
+            .filter_map(|block| block.get("text")?.as_str())
+            .collect();
+        if !text.is_empty() {
+            return Some(text.join("\n"));
+        }
     }
     (!fields.is_empty()).then(|| output.to_string())
 }
