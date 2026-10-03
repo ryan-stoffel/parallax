@@ -165,6 +165,10 @@ pub enum AgentStatus {
     Cancelled,
     /// plxd stopped while it ran. `agent/send` resumes it when it has a `sessionId`.
     Interrupted,
+    /// A usage limit stopped it, and plxd resumes it at `resumeAt` (PLX-371, decision 0049).
+    /// `agent/send` and `agent/resumeNow` resume it sooner, and `agent/cancel` makes it
+    /// `cancelled`.
+    Waiting,
     /// `agent/accept` merged its changes into the project's branch and removed its worktree and
     /// branch. It takes no more messages.
     Accepted,
@@ -273,6 +277,15 @@ pub struct AgentRun {
     /// `pullRequests` capability. Absent means none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pull_requests: Vec<String>,
+    /// When plxd resumes it, while it is `waiting` (decision 0049). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resume_at: Option<Timestamp>,
+    /// Whether a usage limit makes it wait and resume, overriding the host's
+    /// `host/settings` `autoResume` (decision 0049). Absent means the host's setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -330,6 +343,14 @@ pub struct AgentRunState {
     /// Its linked pull requests, as `AgentRun.pullRequests` (PLX-318). Absent means none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pull_requests: Vec<String>,
+    /// When plxd resumes it, as `AgentRun.resumeAt`. Absent once it doesn't wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resume_at: Option<Timestamp>,
+    /// Its auto-resume override, as `AgentRun.autoResume`. Absent means the host's setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
     /// When it changed, in RFC 3339 UTC.
     pub updated_at: Timestamp,
 }
@@ -477,7 +498,9 @@ pub enum AgentOutputItem {
         #[ts(optional)]
         text: Option<String>,
         /// True for a wake-up (RYA-42, decision 0025): a turn plxd sent a project's coordinator
-        /// on its own, not the user, because runs it started finished. `text` lists them.
+        /// on its own, not the user, because runs it started finished. `text` lists them. Also
+        /// true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
+        /// 0049).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         wake: bool,
         /// The images sent with the turn's message, the prompt's or a follow-up's, in order, for
@@ -726,7 +749,8 @@ pub struct AgentStartParams {
     pub threads: Vec<RunId>,
 }
 
-/// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
+/// Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and
+/// `agent/autoResume`: the run as it stands.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunResult {
@@ -802,6 +826,30 @@ pub struct AgentSendParams {
 pub struct AgentCancelParams {
     /// The run.
     pub run_id: RunId,
+}
+
+/// Params of `agent/resumeNow`: resumes a `waiting` run now instead of at its `resumeAt`, with
+/// the same message the timer sends (decision 0049). Fails with `runNotResumable` for a run that
+/// isn't waiting.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentResumeNowParams {
+    /// The run.
+    pub run_id: RunId,
+}
+
+/// Params of `agent/autoResume`: sets or clears a run's auto-resume override (decision 0049).
+/// Turning it off for a `waiting` run clears its timer, and the run becomes `failed` with its
+/// usage limit's error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAutoResumeParams {
+    /// The run.
+    pub run_id: RunId,
+    /// On or off for this run. Absent clears the override, so the host's setting applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
 }
 
 /// Params of `agent/list`.

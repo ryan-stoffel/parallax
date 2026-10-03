@@ -82,6 +82,10 @@ const rendererMethods: Record<RendererMethod, true> = {
   "agent/commands": true,
   "repo/files": true,
   "github/status": true,
+  "agent/resumeNow": true,
+  "agent/autoResume": true,
+  "host/settings/get": true,
+  "host/settings/set": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */

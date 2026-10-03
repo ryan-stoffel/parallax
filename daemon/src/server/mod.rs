@@ -104,6 +104,12 @@ pub struct Config {
     /// How long a run's permission request waits for an answer before plxd denies it (RYA-222,
     /// decision 0031). 30 minutes by default.
     pub approval_timeout: Duration,
+    /// The most a run a usage limit stopped resumes past its reset, at random (PLX-371, decision
+    /// 0049). 60 seconds by default.
+    pub resume_jitter: Duration,
+    /// How long such a run first waits when no reset time is known, doubling with each resume
+    /// in a row that finds the limit still on, up to 16 times this. 15 minutes by default.
+    pub resume_backoff: Duration,
 }
 
 impl Config {
@@ -123,6 +129,8 @@ impl Config {
             backends: None,
             agent_environment: None,
             approval_timeout: agents::APPROVAL_TIMEOUT,
+            resume_jitter: agents::ResumeTiming::default().jitter,
+            resume_backoff: agents::ResumeTiming::default().backoff,
         }
     }
 }
@@ -343,7 +351,12 @@ impl Server {
             keys: keystore::system_store(),
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
-            agents: Agents::new(backends, worktrees).with_approval_timeout(config.approval_timeout),
+            agents: Agents::new(backends, worktrees)
+                .with_approval_timeout(config.approval_timeout)
+                .with_resume_timing(agents::ResumeTiming {
+                    jitter: config.resume_jitter,
+                    backoff: config.resume_backoff,
+                }),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for

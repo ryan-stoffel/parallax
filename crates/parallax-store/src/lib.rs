@@ -16,6 +16,7 @@ mod images;
 mod migrations;
 mod project;
 mod runs;
+mod settings;
 mod threads;
 mod timestamp;
 mod turns;

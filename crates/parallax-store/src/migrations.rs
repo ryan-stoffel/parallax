@@ -336,6 +336,20 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE threads ADD COLUMN title TEXT;
         ALTER TABLE threads ADD COLUMN settled INTEGER NOT NULL DEFAULT 0;",
     },
+    // Auto-resume after a usage limit (PLX-371, decision 0049): a run's override (NULL for the
+    // host's setting), when its stored timer fires (NULL when it doesn't wait), and how many
+    // resumes in a row found no reset time, for the backoff. `host_settings` holds the host's
+    // settings by key; no row means the default.
+    Migration {
+        version: 24,
+        sql: "ALTER TABLE runs ADD COLUMN auto_resume INTEGER;
+        ALTER TABLE runs ADD COLUMN resume_at TEXT;
+        ALTER TABLE runs ADD COLUMN resume_tries INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE host_settings (
+            key TEXT NOT NULL PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

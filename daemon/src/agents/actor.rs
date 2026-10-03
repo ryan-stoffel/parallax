@@ -22,6 +22,9 @@
 //!
 //! A thread in its repository's own checkout has no worktree: every launch, a resume included,
 //! starts in the checkout, and it is never committed either.
+//!
+//! A run a usage limit stopped waits for the limit to reset and resumes itself (PLX-371,
+//! [`waiting`]).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -49,6 +52,7 @@ use super::attached;
 use super::convert::{
     self, WORKSPACE_WRITE, agent_run, item_bytes, option_name, option_value, output_item,
 };
+use super::resume::Resumes;
 use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_prompt, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
@@ -63,6 +67,7 @@ use crate::server::Daemon;
 use crate::worktree::github_pr_urls;
 
 mod git;
+mod waiting;
 pub(crate) use git::GitAction;
 
 /// How long transcript items wait to be sent together as one `agent.output` (0007).
@@ -120,13 +125,25 @@ pub(super) enum Command {
     },
     /// A run this coordinator started finished, as [`wake::summary`] tells it (RYA-42).
     Wake(String),
+    /// `agent/resumeNow` (PLX-371).
+    ResumeNow {
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
+    /// `agent/autoResume` (PLX-371).
+    AutoResume {
+        auto_resume: Option<bool>,
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
 }
 
 impl Command {
     /// Answers the command with `error` without running it.
     fn refuse(self, error: ErrorObject) {
         match self {
-            Self::Send { reply, .. } | Self::Cancel { reply } => {
+            Self::Send { reply, .. }
+            | Self::Cancel { reply }
+            | Self::ResumeNow { reply }
+            | Self::AutoResume { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Accept { reply, .. } => {
@@ -212,6 +229,8 @@ pub(super) struct Actor {
     deleted: bool,
     /// A coordinator's wake-ups (RYA-42).
     wakes: Wakes,
+    /// What a usage limit's resume needs (PLX-371).
+    resumes: Resumes,
     /// The permission requests its CLIs asked (RYA-222).
     approvals: Approvals,
     /// The tool calls running `gh pr create`, by call id, until their results link the pull
@@ -251,6 +270,7 @@ impl Actor {
             stopping: false,
             deleted: false,
             wakes: Wakes::default(),
+            resumes: Resumes::default(),
             approvals: Approvals::default(),
             pr_calls: HashSet::new(),
         }
@@ -285,6 +305,7 @@ impl Actor {
             // A coordinator's turn in progress gets its wake-ups next, once its CLI has exited.
             let wake_at = self.wakes.due().filter(|_| self.live.is_none());
             let expire_at = self.approvals.due();
+            let resume_at = self.resume_due();
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
                 // event (#190 N6): while a CLI keeps its stream busy, that event branch is
@@ -316,6 +337,9 @@ impl Actor {
                 }
                 () = sleep_until(expire_at.unwrap_or_else(Instant::now)), if expire_at.is_some() => {
                     self.expire_approvals().await;
+                }
+                () = sleep_until(resume_at.unwrap_or_else(Instant::now)), if resume_at.is_some() => {
+                    self.check_resume().await;
                 }
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
@@ -356,8 +380,10 @@ impl Actor {
                     info!(run = %self.id, "cancelling an agent run");
                     self.stop_approvals(AgentApprovalBy::Cancel).await;
                 }
-                // Stop means stop: what waited for this turn to end doesn't start another.
+                // Stop means stop: what waited for this turn to end doesn't start another, and a
+                // run waiting for its usage limit doesn't resume.
                 self.drop_queued().await;
+                self.cancel_waiting().await;
                 if let Some(live) = &self.live {
                     live.run.cancel();
                 }
@@ -403,6 +429,12 @@ impl Actor {
                 if self.is_coordinator() {
                     self.wakes.push(summary, Instant::now());
                 }
+            }
+            Command::ResumeNow { reply } => {
+                let _ = reply.send(self.resume_now().await);
+            }
+            Command::AutoResume { auto_resume, reply } => {
+                let _ = reply.send(self.set_auto_resume(auto_resume).await);
             }
         }
     }
@@ -587,6 +619,7 @@ impl Actor {
         };
         convert::ACCEPTED.clone_into(&mut self.row.state.status);
         self.row.state.error = None;
+        self.row.state.resume_at = None;
         self.row.state.accept = Some(accept.clone());
         let (row_id, state) = (self.row.id, self.row.state.clone());
         let saved = store(&self.daemon, move |db| {
@@ -1433,6 +1466,7 @@ impl Actor {
                 convert::RUNNING.clone_into(&mut self.row.state.status);
                 self.row.state.account_id = account_id;
                 self.row.state.error = None;
+                self.row.state.resume_at = None;
                 self.save().await;
                 self.keep_images(turn_id, images).await;
                 true
@@ -1547,6 +1581,7 @@ impl Actor {
         .await;
         convert::FAILED.clone_into(&mut self.row.state.status);
         self.row.state.error = Some(message);
+        self.row.state.resume_at = None;
         self.save().await;
     }
 
@@ -1578,9 +1613,14 @@ impl Actor {
                 })
                 .await;
                 self.row.state.account_id.clone_from(to_account);
+                // The first account's limits don't bind the account the run moved to.
+                self.resumes.take_reset();
                 self.save().await;
             }
             Event::Usage(_) | Event::RateLimit(_) => {
+                if let Event::RateLimit(window) = &event {
+                    self.resumes.saw(window);
+                }
                 self.record_usage(event.clone()).await;
                 if let Some(item) = output_item(&event) {
                     self.push(item).await;
@@ -1632,7 +1672,9 @@ impl Actor {
                         *images = self.images.remove(turn_id).unwrap_or_default();
                         *threads = self.attached.remove(turn_id).unwrap_or_default();
                         if let Some(turn_id) = turn_id {
-                            *wake = self.wakes.was_sent(*turn_id);
+                            // A coordinator's wake-up or a usage limit's resume: plxd's own turn.
+                            *wake =
+                                self.wakes.was_sent(*turn_id) || self.resumes.was_sent(*turn_id);
                             *text = self
                                 .turns
                                 .get(turn_id)
@@ -1721,7 +1763,8 @@ impl Actor {
         }
         status.clone_into(&mut self.row.state.status);
         self.row.state.error = error;
-        info!(run = %self.id, status, "an agent run's CLI finished");
+        self.after_limit(&outcome).await;
+        info!(run = %self.id, status = %self.row.state.status, "an agent run's CLI finished");
         self.save().await;
         if let Some(thread) = self.row.fields.coordinator_thread
             && !self.is_coordinator()

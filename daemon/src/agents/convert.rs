@@ -60,6 +60,7 @@ pub(super) const COMPLETED: &str = "completed";
 pub(super) const FAILED: &str = "failed";
 pub(super) const CANCELLED: &str = "cancelled";
 pub(super) const INTERRUPTED: &str = "interrupted";
+pub(super) const WAITING: &str = "waiting";
 pub(super) const ACCEPTED: &str = "accepted";
 
 /// The store's text for the only policy `agent/start` takes.
@@ -76,6 +77,7 @@ fn status(text: &str) -> AgentStatus {
         FAILED => AgentStatus::Failed,
         CANCELLED => AgentStatus::Cancelled,
         INTERRUPTED => AgentStatus::Interrupted,
+        WAITING => AgentStatus::Waiting,
         ACCEPTED => AgentStatus::Accepted,
         _ => AgentStatus::Unknown,
     }
@@ -128,6 +130,8 @@ pub(crate) fn agent_run(
         approvals: row.fields.approvals,
         checkout: row.fields.checkout,
         pull_requests: state.pull_requests.clone(),
+        resume_at: state.resume_at,
+        auto_resume: state.auto_resume,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -163,6 +167,8 @@ pub(super) fn run_state(row: &parallax_store::Run) -> AgentRunState {
         context_window: row.fields.context_window,
         fast: row.fields.fast,
         pull_requests: state.pull_requests.clone(),
+        resume_at: state.resume_at,
+        auto_resume: state.auto_resume,
         updated_at: row.updated_at,
     }
 }
