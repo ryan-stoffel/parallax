@@ -15,6 +15,11 @@
 //! flag (decision 0041). Deleting a run leaves its children with no parent and its forks with no
 //! origin.
 //!
+//! `thread/fork` (decision 0050) makes a thread that continues another's conversation from one of
+//! its turns, in a workspace of the same kind. It starts no CLI: its log begins with the parent's
+//! transcript up to that turn, and its first message either forks the parent's vendor session
+//! (the actor's `fork_source`) or hands that transcript to a new session, as 0014's move does.
+//!
 //! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,
 //! on the branch the user has out or the one `checkoutRef` switches it to, and plxd leaves its
 //! changes there uncommitted. A thread with no repo has no checkout, so it can't ask for one.
@@ -25,18 +30,19 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, ForkedFrom, MAX_THREAD_TITLE_BYTES, ParallaxEvent, ProjectId, Repo, RepoAddParams,
-    RepoAddResult, RepoId, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
-    RunId, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, TurnId,
+    AgentOutputItem, AgentStatus, ErrorKind, ForkedFrom, MAX_THREAD_TITLE_BYTES, ParallaxEvent,
+    ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId, RepoRefsParams, RepoRefsResult,
+    RepoUpdateParams, RepoUpdateResult, RunId, Thread, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteResult, ThreadForkParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnId,
 };
 use parallax_store::{RepoFields, ThreadFields, ThreadUpdate};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::agents::{self, NewRun, NewThread, RunOptions};
+use crate::agents::convert::{agent_run, option_value};
+use crate::agents::{self, NewFork, NewRun, NewThread, RunOptions};
 use crate::backend::check_argument;
 use crate::repo;
 use crate::server::Daemon;
@@ -495,6 +501,7 @@ pub(crate) async fn start(
                 forked_from: None,
                 title,
             },
+            fork: None,
         }),
     };
     let created = match agents::create(Arc::clone(&daemon), new).await {
@@ -530,6 +537,339 @@ async fn check_parent(daemon: &Daemon, parent: Option<RunId>) -> Result<(), Erro
             .ok_or_else(|| agents::run_not_found(parent))
     })
     .await
+}
+
+/// The thread `thread/fork` forks, as the store has it (0050).
+struct Parent {
+    run: parallax_store::Run,
+    status: AgentStatus,
+    entry: parallax_store::Repo,
+    /// Its latest commit: its last one, or else its worktree's base.
+    commit: Option<String>,
+    /// Its recorded turns' ids.
+    turns: Vec<Uuid>,
+    /// Its newest recorded turn's id.
+    latest: Option<Uuid>,
+    /// Whether it is itself a fork, whose prompt's turn is the history it copied.
+    forked: bool,
+}
+
+/// `thread/fork`: see [`ThreadForkParams`] and decision 0050. Idempotent on the new run id.
+pub(crate) async fn fork(
+    daemon: Arc<Daemon>,
+    params: ThreadForkParams,
+) -> Result<ThreadStartResult, ErrorObject> {
+    let ThreadForkParams {
+        run_id,
+        new_run_id,
+        turn_id,
+        account,
+        model,
+    } = params;
+    if let Some(done) = existing_fork(&daemon, new_run_id, run_id, turn_id).await? {
+        return Ok(done);
+    }
+    let parent = load_parent(&daemon, run_id).await?;
+    let turn = fork_turn(&parent, run_id, turn_id)?;
+    let events = agents::logged_events(&daemon, run_id).await?;
+    let first = first_turn(run_id)?;
+    let (transcript, ended) = transcript_until(&events, turn, first, &parent);
+    if !ended && matches!(parent.status, AgentStatus::Starting | AgentStatus::Running) {
+        return Err(still_running(run_id, turn));
+    }
+    let (checkout, git_ref, scratch) = fork_workspace(&daemon, &parent, run_id, new_run_id).await?;
+    let fields = &parent.run.fields;
+    let scope =
+        ProjectId::try_from(parent.entry.id).map_err(|_| corrupt("repo entry", parent.entry.id))?;
+    let new = NewRun {
+        run_id: new_run_id,
+        scope,
+        prompt: fields.prompt.clone(),
+        images: Vec::new(),
+        threads: Vec::new(),
+        account: Some(
+            account.unwrap_or_else(|| agents::session_account(&parent.run.state.account_id)),
+        ),
+        coordinator_thread: None,
+        options: RunOptions {
+            model: model.clone().or_else(|| fields.model.clone()),
+            effort: fields.effort.as_deref().and_then(option_value),
+            permission: fields.permission.as_deref().and_then(option_value),
+            context_window: fields.context_window,
+            fast: fields.fast,
+        },
+        approvals: fields.approvals,
+        thread: Some(NewThread {
+            scratch: scratch.clone(),
+            branch_slug: None,
+            checkout,
+            git_ref,
+            parent: None,
+            fields: ThreadFields {
+                forked_from: Some(parallax_store::ForkedFrom {
+                    run: run_id.into(),
+                    turn: turn.into(),
+                }),
+                title: None,
+            },
+            fork: Some(NewFork {
+                parent_backend: fields.backend.clone(),
+                model_given: model.is_some(),
+                transcript,
+            }),
+        }),
+    };
+    let created = match agents::create(Arc::clone(&daemon), new).await {
+        Ok(created) => created,
+        Err(error) => {
+            if let Some(dir) = scratch {
+                remove_unused_scratch(&daemon, new_run_id, &dir).await;
+            }
+            return Err(error);
+        }
+    };
+    let thread = created
+        .thread
+        .as_ref()
+        .ok_or_else(|| ErrorObject::internal_error("a new fork has no thread row"))?;
+    Ok(ThreadStartResult {
+        thread: thread_entry(thread)?,
+        run: created.run,
+    })
+}
+
+/// The fork a retried `thread/fork` already made: `None` if `new_run_id` is free, and
+/// `idConflict` if it is anything but a fork of `run_id`, at `turn_id` if that is given.
+async fn existing_fork(
+    daemon: &Daemon,
+    new_run_id: RunId,
+    run_id: RunId,
+    turn_id: Option<TurnId>,
+) -> Result<Option<ThreadStartResult>, ErrorObject> {
+    store(daemon, move |db| {
+        let Some(run) = db.get_run(new_run_id.into()).map_err(|e| store_error(&e))? else {
+            return Ok(None);
+        };
+        let same = |from: parallax_store::ForkedFrom| {
+            from.run == Uuid::from(run_id)
+                && turn_id.is_none_or(|turn| from.turn == Uuid::from(turn))
+        };
+        let thread = db
+            .get_thread(new_run_id.into())
+            .map_err(|e| store_error(&e))?
+            .filter(|thread| thread.fields.forked_from.is_some_and(same))
+            .ok_or_else(|| {
+                ErrorObject::parallax(
+                    ErrorKind::IdConflict,
+                    format!("run {new_run_id} exists and is not that fork of thread {run_id}"),
+                )
+            })?;
+        let worktree = db
+            .get_worktree(new_run_id.into())
+            .map_err(|e| store_error(&e))?;
+        Ok(Some(ThreadStartResult {
+            thread: thread_entry(&thread)?,
+            run: agent_run(&run, worktree.as_ref())?,
+        }))
+    })
+    .await
+}
+
+/// Thread `run_id`, for `thread/fork`, or `threadNotFound`.
+async fn load_parent(daemon: &Daemon, run_id: RunId) -> Result<Parent, ErrorObject> {
+    store(daemon, move |db| {
+        let id = Uuid::from(run_id);
+        let error = |error| store_error(&error);
+        let thread = db
+            .get_thread(id)
+            .map_err(error)?
+            .ok_or_else(|| thread_not_found(run_id))?;
+        let run = db
+            .get_run(id)
+            .map_err(error)?
+            .ok_or_else(|| thread_not_found(run_id))?;
+        let entry = db
+            .get_repo(thread.repo_id)
+            .map_err(error)?
+            .ok_or_else(|| corrupt("thread", id))?;
+        let worktree = db.get_worktree(id).map_err(error)?;
+        let status = agent_run(&run, worktree.as_ref())?.status;
+        let commit = run
+            .state
+            .commit_sha
+            .clone()
+            .or_else(|| worktree.map(|worktree| worktree.base));
+        let turns = db
+            .run_turns(id)
+            .map_err(error)?
+            .into_iter()
+            .map(|(turn, _)| turn)
+            .collect();
+        let latest = db.latest_turn(id).map_err(error)?;
+        let forked = thread.fields.forked_from.is_some();
+        Ok(Parent {
+            run,
+            status,
+            entry,
+            commit,
+            turns,
+            latest,
+            forked,
+        })
+    })
+    .await
+}
+
+/// The prompt's turn of run `run_id`, which has no turn id of its own: `thread/fork` names it by
+/// the run's id (0050).
+fn first_turn(run_id: RunId) -> Result<TurnId, ErrorObject> {
+    TurnId::try_from(Uuid::from(run_id)).map_err(|_| corrupt("run", run_id.into()))
+}
+
+/// The turn a fork continues after: `turn_id`, or the parent's latest. `invalidParams` for a
+/// turn the parent didn't record, including one a fork copied from its own parent, and for the
+/// one it is still running.
+fn fork_turn(
+    parent: &Parent,
+    run_id: RunId,
+    turn_id: Option<TurnId>,
+) -> Result<TurnId, ErrorObject> {
+    let first = first_turn(run_id)?;
+    let latest = match parent.latest {
+        Some(id) => TurnId::try_from(id).map_err(|_| corrupt("turn", id))?,
+        None => first,
+    };
+    let turn = turn_id.unwrap_or(latest);
+    if turn != first && !parent.turns.contains(&Uuid::from(turn)) {
+        return Err(ErrorObject::invalid_params(format!(
+            "thread {run_id} has no turn {turn} of its own: a turn a fork copied is forked from \
+             the thread it came from"
+        )));
+    }
+    if turn == latest && matches!(parent.status, AgentStatus::Starting | AgentStatus::Running) {
+        return Err(still_running(run_id, turn));
+    }
+    Ok(turn)
+}
+
+fn still_running(run_id: RunId, turn: TurnId) -> ErrorObject {
+    ErrorObject::invalid_params(format!(
+        "thread {run_id} is still running turn {turn}: fork it once the turn ends"
+    ))
+}
+
+/// `events`' `agent.output` items up to the end of the parent's turn `turn`, one list per
+/// event, for a fork's log (0050), and whether that end was found. Approval items are left out,
+/// since their requests were the parent CLI's.
+///
+/// Only the parent's own recorded turns mark turns: a `turnStarted` a fork copied from its own
+/// parent is part of its prompt's turn, `first`. The copy ends at `turn`'s `turnFinished`, which
+/// for the prompt's turn has no turn id, or else at the `agent.finished` of the CLI that ran it,
+/// as a stopped, interrupted, or usage-limited turn logs no `turnFinished`. A follow-up's
+/// `turnStarted` can come before the end of the turn it followed, as Claude Code's driver
+/// reports it once written, so a later turn's `turnStarted` is skipped. A turn with neither end,
+/// as when plxd itself died, ends where the next turn started. A fork's prompt's turn has no end
+/// of its own, so it counts as found.
+fn transcript_until(
+    events: &[ParallaxEvent],
+    turn: TurnId,
+    first: TurnId,
+    parent: &Parent,
+) -> (Vec<Vec<AgentOutputItem>>, bool) {
+    // The `turnFinished` turn id that ends the copy, if one does.
+    let end = if turn == first {
+        (!parent.forked).then_some(None)
+    } else {
+        Some(Some(turn))
+    };
+    let mut reached = turn == first;
+    // Each copied item, with the index of the event it came from.
+    let mut copied: Vec<(usize, &AgentOutputItem)> = Vec::new();
+    // Where the first turn after `turn` started.
+    let mut next = None;
+    let mut found = false;
+    'events: for (index, event) in events.iter().enumerate() {
+        let items = match event {
+            ParallaxEvent::AgentOutput { items, .. } => items,
+            ParallaxEvent::AgentFinished { .. } if reached && end.is_some() => {
+                found = true;
+                break;
+            }
+            _ => continue,
+        };
+        for item in items {
+            match item {
+                AgentOutputItem::TurnStarted {
+                    turn_id: Some(id), ..
+                } if parent.turns.contains(&Uuid::from(*id)) => {
+                    if *id == turn {
+                        reached = true;
+                    } else if reached {
+                        next.get_or_insert(copied.len());
+                        continue;
+                    }
+                }
+                AgentOutputItem::TurnFinished { turn_id, .. }
+                    if reached && end == Some(*turn_id) =>
+                {
+                    copied.push((index, item));
+                    found = true;
+                    break 'events;
+                }
+                AgentOutputItem::ApprovalRequested { .. }
+                | AgentOutputItem::ApprovalResolved { .. } => continue,
+                _ => {}
+            }
+            copied.push((index, item));
+        }
+    }
+    if !found && let Some(next) = next {
+        copied.truncate(next);
+    }
+    let mut kept: Vec<Vec<AgentOutputItem>> = Vec::new();
+    let mut last = None;
+    for (index, item) in copied {
+        match kept.last_mut() {
+            Some(items) if last == Some(index) => items.push(item.clone()),
+            _ => kept.push(vec![item.clone()]),
+        }
+        last = Some(index);
+    }
+    (kept, found || end.is_none())
+}
+
+/// Where a fork works (0050): `checkout` for a Current checkout thread's fork, which works in the
+/// same checkout; otherwise the base of its worktree, the parent's latest commit, and for a
+/// thread with no repo the fork's own scratch repository, which that commit is fetched into.
+async fn fork_workspace(
+    daemon: &Arc<Daemon>,
+    parent: &Parent,
+    run_id: RunId,
+    new_run_id: RunId,
+) -> Result<(bool, Option<String>, Option<PathBuf>), ErrorObject> {
+    if parent.run.fields.checkout {
+        return Ok((true, None, None));
+    }
+    let Some(dir) = scratch_dir(daemon, &parent.entry, new_run_id, false).await? else {
+        return Ok((false, parent.commit.clone(), None));
+    };
+    let from = PathBuf::from(&parent.entry.fields.path).join(run_id.to_string());
+    let Some(commit) = parent.commit.clone().filter(|_| from.is_dir()) else {
+        return Ok((false, None, Some(dir)));
+    };
+    if let Err(error) = daemon
+        .agents
+        .worktrees()
+        .fetch_commit(&dir, &from, &commit)
+        .await
+    {
+        remove_unused_scratch(daemon, new_run_id, &dir).await;
+        return Err(ErrorObject::parallax(
+            ErrorKind::WorktreeFailed,
+            format!("could not copy thread {run_id}'s latest commit: {error}"),
+        ));
+    }
+    Ok((false, Some(commit), Some(dir)))
 }
 
 /// The ref a thread starts from: `base` for a worktree, `checkoutRef` with `checkout`, checked as
