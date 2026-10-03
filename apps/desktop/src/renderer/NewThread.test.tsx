@@ -321,6 +321,19 @@ test("a finished thread opens on its prompt with no loader while its transcript 
   expect(musing()).toBeUndefined();
 });
 
+test("a thread's repo crumb starts a new thread in that repo", async () => {
+  await renderApp();
+  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
+  await settle();
+  const repo = document.querySelector<HTMLButtonElement>('[aria-label="Breadcrumb"] li button')!;
+  expect(repo.textContent).toBe("parallax");
+  await act(async () => repo.click());
+  expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
+  expect(heading()).toBe("What should we build in parallax?");
+  // On New thread the crumb is plain text.
+  expect(document.querySelector('[aria-label="Breadcrumb"] button')).toBeNull();
+});
+
 test("the link under the heading switches New Thread to No Repo, showing its shortcut", async () => {
   await renderApp();
   const link = button("or start without a repo⇧⌘N")!;
