@@ -22,7 +22,7 @@ Desk research and local runs on 2026-10-03 found:
 ### Instances
 
 - A host keeps its provider instances in `providers.json` in plxd's data folder: an id, a kind, a name, whether it's enabled, a program, a home folder, arguments, environment variables, and models the user added. A variable marked secret, such as an API key, is kept in the host's keychain as one JSON object per instance, never in the file, and never sent back.
-- `claude`, `codex`, and `cursor` always exist and can only be turned off. Any number of other instances may be added, including a second instance of a built-in kind, such as a Codex with its own `CODEX_HOME`.
+- A host lists only the instances its user added, so the list holds what they use. Its first run adds the built-in agents, `claude`, `codex`, and `cursor`, whose CLI is installed; any instance, built-in or not, can be removed, and stays removed. Any number may be added, including a second instance of a kind, such as a Codex with its own `CODEX_HOME`.
 - `providers/list`, `providers/save`, and `providers/remove`, behind the `providers` capability, manage them. `providers/list` reports each instance's install, version, sign-in, models, the permissions and efforts it maps, and the command that signs it in, from a 30 s cache.
 - Every enabled instance is a backend in the routing registry under its id, so `AccountChoice::Subscription { backend: <id> }` starts a thread on it. A built-in instance with no settings runs the backend plxd registers at startup. Key accounts always run those startup backends, so turning off or customizing the Claude Code or Codex instance changes only its subscription.
 - Secrets are read from the keychain only when a run starts, never at startup, in a list, for the `/` menu, or while the instances are locked, since macOS may wait on the user to allow plxd in. A worker is checked by the CLI an instance runs, whatever its name (0013).
@@ -34,8 +34,8 @@ Desk research and local runs on 2026-10-03 found:
 | Claude Code, Ollama Cloud, OpenRouter, local model | Claude Code (0034), with the instance's variables | `--model` | Claude Code's | Claude Code's | `claude auth login`, or the service's API key |
 | Codex | `codex app-server` (0035), with the instance's `CODEX_HOME`, arguments after `app-server`, and variables | Codex's | none | Codex's | `codex login` |
 | Cursor | `agent [--model] [--force] acp` (0036) | `--model` | `plan` mode | `--force` | `agent login` |
-| OpenCode (1.x as `opencode`, 2.x as `opencode2`) | `opencode acp` | `model` config option | `plan` mode option, back to `build` | none | `opencode auth login` |
-| Pi, Pi 0.x | `npx -y pi-acp@0.0.34`, or `@0.0.27` for Pi 0.73 | `model` config option or `session/set_model` | none | none | `pi`, then `/login` |
+| OpenCode, whose Version picks 1.x (`opencode`) or 2.x (`opencode2`) | `opencode acp` | `model` config option | `plan` mode option, back to `build` | none | `opencode auth login` |
+| Pi, whose Version picks 1.0 or 0.x | `npx -y pi-acp@0.0.34`, or `@0.0.27` with `PI_ACP_PI_COMMAND` naming Pi 0.73 | `model` config option or `session/set_model` | none | none | `pi`, then `/login` |
 | Oh My Pi | `omp acp` | `model` config option | `plan` mode, back to `default` | none | `omp login` |
 | Grok Build | `grok [--model] [--always-approve] agent stdio` | `--model` | none | `--always-approve` | `grok login` |
 | Hermes Agent | `hermes acp`; Manual is its `default` mode, Edit `accept_edits`, Bypass `dont_ask` | `session/set_model` | none | `dont_ask` | `hermes setup --portal` |
@@ -54,7 +54,7 @@ Desk research and local runs on 2026-10-03 found:
 
 ### The app
 
-Settings > Providers lists a host's instances with an enable switch, and its + opens an Add provider dialog: a provider (a built-in kind, or an agent from the ACP registry, fetched by the app's main process, or one entered by hand), then a name and id, then the program, home, arguments, and environment. An instance's page edits the same settings and lists its models: favorites, visibility, and order are kept on the device, and models the user adds are kept on the host. An instance that lists no models offers "Default model", which sends none. The model picker offers every enabled instance's visible models, and a thread starts on the instance its model belongs to. A plxd without `providers` keeps the three fixed providers.
+Settings > Providers lists a host's instances with an enable switch, laid out like T3 Code's, and its + opens an Add provider dialog: a provider, then a name and id, then the program, home, arguments, and environment. The dialog's cards are the providers that aren't ACP registry agents (Claude Code, Codex, Hermes Agent, Oh My Pi, and the model services); every ACP agent comes from the ACP registry, which the app's main process fetches, or is entered by hand. A registry agent plxd tunes (OpenCode, Pi, Grok Build, Antigravity, Cursor) is added as its kind, the rest as `acp` with the registry's command. An instance's page edits the same settings and lists its models: favorites, visibility, and order are kept on the device, and models the user adds are kept on the host. An instance that lists no models offers "Default model", which sends none. The model picker offers every enabled instance's visible models, and a thread starts on the instance its model belongs to. A plxd without `providers` keeps the three fixed providers.
 
 ## Consequences
 

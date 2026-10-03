@@ -1,14 +1,15 @@
 //! Provider instances (0040): the configured ways a host runs agents, behind `providers/*`.
 //!
-//! An instance is a [`ProviderInstance`]: a kind, a name, and the user's settings. The built-in
-//! ones, `claude`, `codex`, and `cursor`, always exist; the rest are added from the app's Add
-//! provider dialog. Instances live in `providers.json` in plxd's data folder, except secret
+//! An instance is a [`ProviderInstance`]: a kind, a name, and the user's settings. A host lists
+//! only the instances its user added from the app's Add provider dialog, and on its first run, the
+//! built-in agents (`claude`, `codex`, `cursor`) whose CLI is installed. Instances live in `providers.json` in plxd's data folder, except secret
 //! variables, which live in the host's keychain under the instance's secret id, one JSON object
 //! per instance.
 //!
 //! Every enabled instance is a backend in the [`BackendRegistry`], under its id, so a thread
 //! starts on one as `AccountChoice::Subscription { backend: <id> }`. A built-in instance with no
-//! settings keeps the backend plxd registered at startup.
+//! settings runs the backend plxd registered at startup; one the host doesn't list isn't routed
+//! to, though key accounts keep their startup backends.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -213,7 +214,8 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
     })
 }
 
-/// The built-in instances, in order: always present, and never removed.
+/// The built-in instances: what a first run lists when their CLI is installed, and the ids whose
+/// startup backends an instance with no settings runs.
 const BUILT_IN: &[(&str, ProviderKind, &str)] = &[
     ("claude", ProviderKind::Claude, "Claude Code"),
     ("codex", ProviderKind::Codex, "Codex"),
@@ -288,12 +290,16 @@ impl Providers {
         registry: BackendRegistry,
     ) -> Self {
         let file = data_dir.join("providers.json");
-        let mut stored: Vec<Stored> = std::fs::read(&file)
+        let saved: Option<Vec<Stored>> = std::fs::read(&file)
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        for (i, (id, kind, name)) in BUILT_IN.iter().enumerate() {
-            if !stored.iter().any(|s| s.instance.id == *id) {
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        // The first time, the built-in agents whose CLI is installed; after that, only what the
+        // user added or kept.
+        let first = saved.is_none();
+        let mut stored = saved.unwrap_or_default();
+        for (id, kind, name) in BUILT_IN {
+            let program = preset(*kind).map_or("", |preset| preset.program);
+            if first && detect::resolve(&launcher, program).is_some() {
                 let instance = ProviderInstance {
                     id: (*id).to_owned(),
                     kind: *kind,
@@ -305,13 +311,10 @@ impl Providers {
                     env: Vec::new(),
                     models: Vec::new(),
                 };
-                stored.insert(
-                    i.min(stored.len()),
-                    Stored {
-                        instance,
-                        secrets: None,
-                    },
-                );
+                stored.push(Stored {
+                    instance,
+                    secrets: None,
+                });
             }
         }
         let defaults = BUILT_IN
@@ -327,6 +330,11 @@ impl Providers {
             stored: Mutex::new(Vec::new()),
             cache: Mutex::new(HashMap::new()),
         };
+        for (id, ..) in BUILT_IN {
+            if !stored.iter().any(|s| s.instance.id == *id) {
+                providers.registry.remove(id);
+            }
+        }
         for entry in &stored {
             providers.register(entry);
         }
@@ -456,13 +464,8 @@ impl Providers {
     ///
     /// # Errors
     ///
-    /// `invalidParams` for a built-in instance or an id that doesn't exist.
+    /// `invalidParams` for an id that doesn't exist.
     pub async fn remove(&self, id: &str) -> Result<(), ErrorObject> {
-        if BUILT_IN.iter().any(|(built_in, ..)| *built_in == id) {
-            return Err(ErrorObject::invalid_params(
-                "a built-in provider can't be removed; turn it off instead",
-            ));
-        }
         let mut stored = self.stored.lock().await;
         let Some(i) = stored.iter().position(|s| s.instance.id == id) else {
             return Err(ErrorObject::invalid_params(format!("no provider {id}")));
@@ -1385,10 +1388,29 @@ mod tests {
         assert_eq!(keys.reads.load(std::sync::atomic::Ordering::SeqCst), before);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
-    async fn built_in_instances_exist_and_can_only_be_turned_off() {
+    async fn a_first_run_lists_the_installed_built_ins_and_a_removed_one_stays_removed() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let (providers, registry) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(bin.join("codex"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(bin.join("codex"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        let launcher = || {
+            let env: Environment = [("PATH", bin.display().to_string())].into_iter().collect();
+            Launcher::new(DataDir::new(dir.path().join("data")).unwrap(), env)
+        };
+        let startup = |registry: &mut BackendRegistry| {
+            let codex = crate::backend::codex::CodexBackend::new(launcher());
+            registry.register(parallax_protocol::Provider::Openai, Arc::new(codex));
+        };
+        let keys = || -> Arc<MemoryKeyStore> { Arc::new(MemoryKeyStore::new()) };
+
+        let mut registry = BackendRegistry::new();
+        startup(&mut registry);
+        let providers = Providers::load(dir.path(), keys(), launcher(), registry.clone());
         let ids: Vec<String> = providers
             .stored
             .lock()
@@ -1396,9 +1418,29 @@ mod tests {
             .iter()
             .map(|s| s.instance.id.clone())
             .collect();
-        assert_eq!(ids, ["claude", "codex", "cursor"]);
-        assert!(providers.remove("codex").await.is_err());
+        assert_eq!(ids, ["codex"], "only the installed built-in");
+        assert!(registry.by_backend_name("codex").is_some());
 
+        providers.remove("codex").await.unwrap();
+        assert!(registry.by_backend_name("codex").is_none());
+        assert!(
+            registry
+                .by_provider(parallax_protocol::Provider::Openai)
+                .is_some(),
+            "key accounts keep their backend"
+        );
+
+        let mut registry = BackendRegistry::new();
+        startup(&mut registry);
+        let reloaded = Providers::load(dir.path(), keys(), launcher(), registry.clone());
+        assert!(reloaded.stored.lock().await.is_empty(), "not seeded again");
+        assert!(registry.by_backend_name("codex").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_disabled_instance_doesnt_route_and_a_removed_one_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (providers, registry) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
         providers.save(ollama()).await.unwrap();
         let mut off = ollama();
         off.enabled = false;
