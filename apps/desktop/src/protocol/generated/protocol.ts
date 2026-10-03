@@ -3379,7 +3379,9 @@ export type ThreadStartResult = {
  *
  * Idempotent on `newRunId`: a retry returns the fork, and a run id that is taken by anything
  * else fails with `idConflict`. Fails with `threadNotFound` for an unknown parent, and with
- * `invalidParams` for a turn the parent doesn't have or one it is still running.
+ * `invalidParams` for a turn the parent didn't record or one it is still running. A fork's
+ * copied turns aren't its own: they are part of its prompt's turn, and forking at one of their
+ * ids fails.
  */
 export type ThreadForkParams = {
 	/**

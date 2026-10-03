@@ -550,6 +550,8 @@ struct Parent {
     turns: Vec<Uuid>,
     /// Its newest recorded turn's id.
     latest: Option<Uuid>,
+    /// Whether it is itself a fork, whose prompt's turn is the history it copied.
+    forked: bool,
 }
 
 /// `thread/fork`: see [`ThreadForkParams`] and decision 0050. Idempotent on the new run id.
@@ -570,7 +572,11 @@ pub(crate) async fn fork(
     let parent = load_parent(&daemon, run_id).await?;
     let turn = fork_turn(&parent, run_id, turn_id)?;
     let events = agents::logged_events(&daemon, run_id).await?;
-    let transcript = transcript_until(&events, turn, first_turn(run_id)?);
+    let first = first_turn(run_id)?;
+    let (transcript, ended) = transcript_until(&events, turn, first, &parent);
+    if !ended && matches!(parent.status, AgentStatus::Starting | AgentStatus::Running) {
+        return Err(still_running(run_id, turn));
+    }
     let (checkout, git_ref, scratch) = fork_workspace(&daemon, &parent, run_id, new_run_id).await?;
     let fields = &parent.run.fields;
     let scope =
@@ -700,6 +706,7 @@ async fn load_parent(daemon: &Daemon, run_id: RunId) -> Result<Parent, ErrorObje
             .map(|(turn, _)| turn)
             .collect();
         let latest = db.latest_turn(id).map_err(error)?;
+        let forked = thread.fields.forked_from.is_some();
         Ok(Parent {
             run,
             status,
@@ -707,6 +714,7 @@ async fn load_parent(daemon: &Daemon, run_id: RunId) -> Result<Parent, ErrorObje
             commit,
             turns,
             latest,
+            forked,
         })
     })
     .await
@@ -719,7 +727,8 @@ fn first_turn(run_id: RunId) -> Result<TurnId, ErrorObject> {
 }
 
 /// The turn a fork continues after: `turn_id`, or the parent's latest. `invalidParams` for a
-/// turn the parent doesn't have, or for the one it is still running.
+/// turn the parent didn't record, including one a fork copied from its own parent, and for the
+/// one it is still running.
 fn fork_turn(
     parent: &Parent,
     run_id: RunId,
@@ -733,60 +742,94 @@ fn fork_turn(
     let turn = turn_id.unwrap_or(latest);
     if turn != first && !parent.turns.contains(&Uuid::from(turn)) {
         return Err(ErrorObject::invalid_params(format!(
-            "thread {run_id} has no turn {turn}"
+            "thread {run_id} has no turn {turn} of its own: a turn a fork copied is forked from \
+             the thread it came from"
         )));
     }
     if turn == latest && matches!(parent.status, AgentStatus::Starting | AgentStatus::Running) {
-        return Err(ErrorObject::invalid_params(format!(
-            "thread {run_id} is still running turn {turn}: fork it once the turn ends"
-        )));
+        return Err(still_running(run_id, turn));
     }
     Ok(turn)
 }
 
-/// `events`' `agent.output` items up to the end of turn `turn`, one list per event, for a fork's
-/// log (0050). The prompt's turn, `first`, starts the log, and each follow-up's starts at its
-/// `turnStarted`, so the copy stops at the first turn that starts after `turn`. Approval items
-/// are left out, since their requests were the parent CLI's.
+fn still_running(run_id: RunId, turn: TurnId) -> ErrorObject {
+    ErrorObject::invalid_params(format!(
+        "thread {run_id} is still running turn {turn}: fork it once the turn ends"
+    ))
+}
+
+/// `events`' `agent.output` items up to the end of the parent's turn `turn`, one list per
+/// event, for a fork's log (0050), and whether that end was found. Approval items are left out,
+/// since their requests were the parent CLI's.
+///
+/// Only the parent's own recorded turns mark turns: a `turnStarted` a fork copied from its own
+/// parent is part of its prompt's turn, `first`. The copy ends at `turn`'s `turnFinished`, which
+/// for the prompt's turn has no turn id. A follow-up's `turnStarted` can come before the end of
+/// the turn it followed, as Claude Code's driver reports it once written, so a later turn's
+/// `turnStarted` is skipped. A turn that never logged its end, such as one that was stopped, ends
+/// where the next turn started. A fork's prompt's turn has no end of its own, so it counts as
+/// found.
 fn transcript_until(
     events: &[ParallaxEvent],
     turn: TurnId,
     first: TurnId,
-) -> Vec<Vec<AgentOutputItem>> {
+    parent: &Parent,
+) -> (Vec<Vec<AgentOutputItem>>, bool) {
+    // The `turnFinished` turn id that ends the copy, if one does.
+    let end = if turn == first {
+        (!parent.forked).then_some(None)
+    } else {
+        Some(Some(turn))
+    };
     let mut reached = turn == first;
-    let mut kept = Vec::new();
-    for event in events {
+    // Each copied item, with the index of the event it came from.
+    let mut copied: Vec<(usize, &AgentOutputItem)> = Vec::new();
+    // Where the first turn after `turn` started.
+    let mut next = None;
+    let mut found = false;
+    'events: for (index, event) in events.iter().enumerate() {
         let ParallaxEvent::AgentOutput { items, .. } = event else {
             continue;
         };
-        let mut copied = Vec::new();
         for item in items {
-            if let AgentOutputItem::TurnStarted {
-                turn_id: Some(id), ..
-            } = item
-            {
-                if reached && *id != turn {
-                    if !copied.is_empty() {
-                        kept.push(copied);
+            match item {
+                AgentOutputItem::TurnStarted {
+                    turn_id: Some(id), ..
+                } if parent.turns.contains(&Uuid::from(*id)) => {
+                    if *id == turn {
+                        reached = true;
+                    } else if reached {
+                        next.get_or_insert(copied.len());
+                        continue;
                     }
-                    return kept;
                 }
-                reached |= *id == turn;
-            }
-            let approval = matches!(
-                item,
+                AgentOutputItem::TurnFinished { turn_id, .. }
+                    if reached && end == Some(*turn_id) =>
+                {
+                    copied.push((index, item));
+                    found = true;
+                    break 'events;
+                }
                 AgentOutputItem::ApprovalRequested { .. }
-                    | AgentOutputItem::ApprovalResolved { .. }
-            );
-            if !approval {
-                copied.push(item.clone());
+                | AgentOutputItem::ApprovalResolved { .. } => continue,
+                _ => {}
             }
-        }
-        if !copied.is_empty() {
-            kept.push(copied);
+            copied.push((index, item));
         }
     }
-    kept
+    if !found && let Some(next) = next {
+        copied.truncate(next);
+    }
+    let mut kept: Vec<Vec<AgentOutputItem>> = Vec::new();
+    let mut last = None;
+    for (index, item) in copied {
+        match kept.last_mut() {
+            Some(items) if last == Some(index) => items.push(item.clone()),
+            _ => kept.push(vec![item.clone()]),
+        }
+        last = Some(index);
+    }
+    (kept, found || end.is_none())
 }
 
 /// Where a fork works (0050): `checkout` for a Current checkout thread's fork, which works in the

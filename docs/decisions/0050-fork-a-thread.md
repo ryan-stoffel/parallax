@@ -18,7 +18,8 @@ Ryan wants to branch a conversation without losing the original (PLX-368). 0041 
 
 `thread/fork {runId, newRunId, turnId?, account?, model?}` returns `{thread, run}`, as `thread/start` does.
 
-- **The turn.** `turnId` is a follow-up's turn id. The prompt's turn has none of its own, so the parent's run id names it. Absent means the parent's latest recorded turn. A turn the parent doesn't have, or the latest one while the parent is starting or running, is `invalidParams`.
+- **The turn.** `turnId` is a follow-up's turn id. The prompt's turn has none of its own, so the parent's run id names it. Absent means the parent's latest recorded turn. A turn the parent didn't record is `invalidParams`, and so is a turn that hasn't ended while the parent is starting or running.
+- **A fork's copied turns** aren't its own: a fork's history up to its first message is its prompt's turn, named by its run id. Forking it at a copied turn id is `invalidParams`, since the thread the turn came from can be forked at it instead.
 - **The fork** is a new thread in the parent's repo entry, with `forkedFrom` set, no `parent`, and no title. Its run has the parent's prompt, approvals, and options. It runs on `account` if given, or else on the account the parent's session is on. A fork onto another backend keeps only the options that backend maps, and the parent's model only if `model` is absent and the backend is the same.
 - **No CLI starts.** The run is recorded `completed`, where the parent's turn ended. The fork's first `agent/send` starts its CLI.
 - **Idempotent** on `newRunId`. A retry returns the fork. A run id that is anything but a fork of `runId` (at `turnId`, when given) is `idConflict`.
@@ -35,12 +36,12 @@ The parent's uncommitted work isn't included, since plxd commits it only when th
 
 ### Transcript
 
-The fork's log starts with its own `agent.started`, then the parent's `agent.output` events up to the end of the fork turn, copied with the fork's run id. The copy stops at the first `turnStarted` of a later turn, and approval items are left out because their requests belonged to the parent's CLI. `agent/events` and the live stream show the fork's history like any run's. The fork keeps that history after the parent is deleted.
+The fork's log starts with its own `agent.started`, then the parent's `agent.output` events up to the end of the fork turn, copied with the fork's run id. The copy ends at the fork turn's `turnFinished`, which carries its turn id (none for the prompt's turn). Claude Code's driver logs a follow-up's `turnStarted` when the message is written, which can be before the turn it followed ends, so later turns' `turnStarted` items are left out of the copy. A turn that never logged its end, such as a stopped one, ends where the next turn started. Only the parent's recorded turns mark turns: a `turnStarted` the parent copied as a fork is part of its prompt's turn. Approval items are left out because their requests belonged to the parent's CLI. `agent/events` and the live stream show the fork's history like any run's. The fork keeps that history after the parent is deleted.
 
 ### The first message
 
 - **Native** when the fork has sent nothing yet and its backend can fork (`Capabilities::fork`), and the parent still exists, on the same backend and account, isn't starting or running, and has had no turn since the fork turn. The backend gets `Resume {fork: true}` with the parent's session and its usage totals, since a forked session's totals carry over. Claude Code runs `--resume <session> --fork-session`. A Codex thread sends `thread/fork` in place of `thread/resume`. The CLI reports the new session, which becomes the fork's.
-- **Handoff** otherwise: Cursor, another provider, an earlier turn, or a parent that moved on. This is 0014's handoff from the fork's own log, which holds the parent's transcript cut at the fork turn. It is told the conversation without tool calls, cut from the front to about 64 KiB.
+- **Handoff** otherwise: Cursor, another provider, an earlier turn, or a parent that moved on. This is 0014's handoff from the fork's own log, which holds the parent's transcript cut at the fork turn. It is told the conversation without tool calls, cut from the front to about 64 KiB, and that it began on the parent's backend.
 
 A native fork at an earlier turn needs plxd to record each turn's vendor id (a Claude message uuid, a Codex turn id). That is left to a follow-up.
 
@@ -72,4 +73,4 @@ The same day, `plxd serve` from this change, with a fresh data folder, ran a two
 | Codex | Latest turn | Native: a new thread, no handoff notice | "APPLE, BANANA" |
 | Codex | The prompt's turn | Handoff, with its notice | "APPLE" |
 
-`daemon/tests/server/threads/fork.rs` covers a native fork, a handoff onto another provider from a Current checkout thread, and a fork at an earlier turn of a thread with no repo.
+`daemon/tests/server/threads/fork.rs` covers a native fork, a handoff onto another provider from a Current checkout thread, a fork at an earlier turn of a thread with no repo, a fork at a turn followed up mid-turn, and a fork of a fork.

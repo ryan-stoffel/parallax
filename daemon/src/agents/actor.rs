@@ -1271,9 +1271,9 @@ impl Actor {
             .await?;
         let message = text;
         let opening = self
-            .opening(session_id, &from, sent, &prepared, paths.as_ref())
+            .opening(session_id, from, sent, &prepared, paths.as_ref())
             .await;
-        let (prompt, resume) = match opening {
+        let (prompt, resume, from) = match opening {
             Ok(opening) => opening,
             Err(error) => {
                 self.move_back(moved_from).await;
@@ -1398,53 +1398,58 @@ impl Actor {
         })
     }
 
-    /// The first message and the session of the run's next CLI, on `prepared`'s backend: `text`
-    /// with the run's session `session_id` to resume, or with a fork's parent session to fork
-    /// ([`Actor::fork_source`]), or else a new session told the conversation so far, which ran
-    /// on `from`.
+    /// The first message and the session of the run's next CLI, on `prepared`'s backend, and the
+    /// backend the conversation so far ran on: `text` with the run's session `session_id` to
+    /// resume, or with a fork's parent session to fork ([`Actor::fork_source`]), or else a new
+    /// session told the conversation so far, which ran on `from`, or for a fork's first message
+    /// on its parent's backend.
     async fn opening(
         &mut self,
         session_id: Option<String>,
-        from: &str,
+        mut from: String,
         text: String,
         prepared: &Prepared,
         paths: Option<&(PathBuf, PathBuf)>,
-    ) -> Result<(String, Option<Resume>), ErrorObject> {
+    ) -> Result<(String, Option<Resume>, String), ErrorObject> {
         if let Some(session_id) = session_id {
             info!(run = %self.id, "resuming an agent run's session");
-            return Ok((text, Some(self.resume_of(session_id).await?)));
+            return Ok((text, Some(self.resume_of(session_id).await?), from));
         }
-        if let Some(session_id) = self.fork_source(&prepared.resolved).await? {
-            info!(run = %self.id, "forking the parent thread's session");
-            let resume = Resume {
-                fork: true,
-                ..self.resume_of(session_id).await?
-            };
-            return Ok((text, Some(resume)));
+        if let Some(source) = self.fork_source(&prepared.resolved).await? {
+            from = source.backend;
+            if let Some(session_id) = source.session_id {
+                info!(run = %self.id, "forking the parent thread's session");
+                let resume = Resume {
+                    fork: true,
+                    ..self.resume_of(session_id).await?
+                };
+                return Ok((text, Some(resume), from));
+            }
         }
         let to = prepared.resolved.backend().name();
         info!(run = %self.id, from, to, "starting a new session for an agent run");
         let prompt = self
-            .handoff_prompt(from, &text, &prepared.place, paths)
+            .handoff_prompt(&from, &text, &prepared.place, paths)
             .await?;
-        Ok((prompt, None))
+        Ok((prompt, None, from))
     }
 
-    /// The parent's session that a fork's first CLI, on `resolved`'s backend and account,
-    /// continues a copy of (0050): when the run is a fork that has sent nothing yet, the backend
-    /// can fork, and the parent still runs on that backend and account, isn't running, and has
-    /// had no turn since the one the fork was made at. `None` means the fork takes a handoff
+    /// The parent of a fork that has sent nothing yet (0050), for its first CLI on `resolved`'s
+    /// backend and account: its backend, and its session to continue a copy of when the backend
+    /// can fork and the parent still runs on that backend and account, isn't running, and has
+    /// had no turn since the one the fork was made at. With no session the fork takes a handoff
     /// (0014) from its own log, which starts with the parent's transcript up to that turn.
     async fn fork_source(
         &self,
         resolved: &routing::Resolved,
-    ) -> Result<Option<String>, ErrorObject> {
-        let backend = resolved.backend();
-        if !self.turns.is_empty() || !backend.capabilities().fork {
+    ) -> Result<Option<ForkSource>, ErrorObject> {
+        if !self.turns.is_empty() {
             return Ok(None);
         }
-        let (id, backend, account_id) = (
+        let backend = resolved.backend();
+        let (id, can_fork, backend, account_id) = (
             self.row.id,
+            backend.capabilities().fork,
             backend.name().to_owned(),
             resolved.account_id(),
         );
@@ -1465,7 +1470,13 @@ impl Actor {
                 ![convert::RUNNING, convert::STARTING].contains(&parent.state.status.as_str());
             let same = parent.fields.backend == backend && parent.state.account_id == account_id;
             let unmoved = latest.unwrap_or(from.run) == from.turn;
-            Ok(parent.state.session_id.filter(|_| idle && same && unmoved))
+            Ok(Some(ForkSource {
+                session_id: parent
+                    .state
+                    .session_id
+                    .filter(|_| can_fork && idle && same && unmoved),
+                backend: parent.fields.backend,
+            }))
         })
         .await
     }
@@ -2098,6 +2109,12 @@ impl Actor {
         })
         .await;
     }
+}
+
+/// A fork's parent, as its first message continues it: see [`Actor::fork_source`].
+struct ForkSource {
+    backend: String,
+    session_id: Option<String>,
 }
 
 /// The account a run's session belongs to, as routing takes it: a key account's id, or else a

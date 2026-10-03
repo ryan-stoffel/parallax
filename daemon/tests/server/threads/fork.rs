@@ -46,6 +46,11 @@ impl Backend for Seen {
 
 /// A host whose `fake` backend, and `other` backend for another provider, record their starts.
 fn host() -> (Host, Starts, Starts) {
+    host_running(&editing())
+}
+
+/// [`host`], with both backends running `steps`.
+fn host_running(steps: &[Step]) -> (Host, Starts, Starts) {
     let (fake, other) = (Arc::default(), Arc::default());
     let mut backends = BackendRegistry::new();
     for (provider, name, starts) in [
@@ -54,7 +59,7 @@ fn host() -> (Host, Starts, Starts) {
     ] {
         let seen = Seen {
             name,
-            fake: fake_backend(editing()),
+            fake: fake_backend(steps.to_vec()),
             starts: Arc::clone(starts),
         };
         backends.register(provider, Arc::new(seen));
@@ -221,6 +226,11 @@ async fn a_fork_onto_another_provider_takes_a_handoff_in_the_same_checkout() {
     };
     assert_eq!(start.resume, None, "a new session");
     assert!(
+        start.prompt.contains("began with another agent, on fake,"),
+        "names the parent's backend: {}",
+        start.prompt
+    );
+    assert!(
         start.prompt.contains(
             "User:\nWrite the notes\n\nAgent:\nDone.\n\nUser:\nNow the tests\n\nAgent:\nDone.\n</conversation>"
         ),
@@ -231,6 +241,14 @@ async fn a_fork_onto_another_provider_takes_a_handoff_in_the_same_checkout() {
         start.prompt.ends_with("yours to answer:\nCarry on"),
         "{}",
         start.prompt
+    );
+    let (_, items) = transcript(&mut client, params.new_run_id).await;
+    assert!(
+        items
+            .iter()
+            .any(|item| matches!(item, AgentOutputItem::Notice { detail }
+            if detail.starts_with("Moved from fake to other:"))),
+        "{items:?}"
     );
     host.server.stop().await;
 }
@@ -298,4 +316,129 @@ async fn a_fork_at_an_earlier_turn_hands_over_the_conversation_up_to_it() {
 /// The prompt's turn of run `run_id`, which `thread/fork` names by the run's id.
 fn first_turn(run_id: RunId) -> TurnId {
     TurnId::try_from(uuid::Uuid::from(run_id)).unwrap()
+}
+
+fn texts(items: &[AgentOutputItem]) -> Vec<&str> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            AgentOutputItem::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn text(run_id: RunId, wanted: &'static str) -> impl FnMut(&EventsEventParams) -> bool {
+    move |event| {
+        matches!(&event.event, ParallaxEvent::AgentOutput { run_id: id, items }
+            if *id == run_id && texts(items).contains(&wanted))
+    }
+}
+
+/// A fork at a turn the user followed up mid-turn, as Claude Code's driver logs one: the
+/// follow-up's `turnStarted` comes before the end of the turn it followed. The fork is refused
+/// until that turn ends, and then copies all of it and none of the follow-up.
+#[tokio::test]
+async fn a_fork_at_a_turn_followed_up_mid_turn_copies_the_whole_turn() {
+    let steps = [
+        Step::Init {
+            session_id: "thread-1".to_owned(),
+            model: None,
+        },
+        Step::Emit(Event::Text {
+            message_id: None,
+            text: "Working.".to_owned(),
+        }),
+        Step::AwaitFollowUp,
+        Step::AwaitFollowUp,
+        Step::Emit(Event::Text {
+            message_id: None,
+            text: "The first turn's end.".to_owned(),
+        }),
+        Step::EndTurn { result: None },
+        Step::Emit(Event::Text {
+            message_id: None,
+            text: "The follow-ups' answer.".to_owned(),
+        }),
+        Step::EndTurn { result: None },
+        Step::EndTurn { result: None },
+    ];
+    let (host, _, _) = host_running(&steps);
+    let mut client = host.client().await;
+    let parent = client
+        .call::<ThreadStart>(start_params(None, "Write the notes"))
+        .await
+        .unwrap();
+    let run_id = parent.thread.id;
+    client.subscribe(0, Some(scope(parent.thread.repo))).await;
+    client.until(text(run_id, "Working.")).await;
+    client
+        .call::<AgentSend>(message(run_id, "Now the tests"))
+        .await
+        .unwrap();
+    client.until(text(run_id, "Now the tests")).await;
+
+    let params = ThreadForkParams {
+        turn_id: Some(first_turn(run_id)),
+        ..fork_params(run_id)
+    };
+    let refused = client.call::<ThreadFork>(params.clone()).await.unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
+
+    client
+        .call::<AgentSend>(message(run_id, "And the docs"))
+        .await
+        .unwrap();
+    client.until(finished(run_id)).await;
+    client.call::<ThreadFork>(params.clone()).await.unwrap();
+    let (_, items) = transcript(&mut client, params.new_run_id).await;
+    assert!(follow_ups(&items).is_empty(), "{items:?}");
+    assert_eq!(
+        texts(&items),
+        [
+            "Working.",
+            "Now the tests",
+            "And the docs",
+            "The first turn's end."
+        ]
+    );
+    assert!(
+        matches!(
+            items.last(),
+            Some(AgentOutputItem::TurnFinished { turn_id: None, .. })
+        ),
+        "{items:?}"
+    );
+    host.server.stop().await;
+}
+
+/// A fork of a fork that has sent nothing copies all the history that fork copied, whose turns
+/// are its prompt's turn: they can be forked only from the thread they came from.
+#[tokio::test]
+async fn a_fresh_fork_forks_with_all_it_copied() {
+    let (host, _, _) = host();
+    let mut client = host.client().await;
+    let (parent, follow_up) = two_turns(&mut client, start_params(None, "Write the notes")).await;
+    let first = fork_params(parent.thread.id);
+    client.call::<ThreadFork>(first.clone()).await.unwrap();
+
+    let copied = ThreadForkParams {
+        turn_id: Some(follow_up),
+        ..fork_params(first.new_run_id)
+    };
+    let refused = client.call::<ThreadFork>(copied).await.unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
+    assert!(refused.message.contains("of its own"), "{refused:?}");
+
+    let second = fork_params(first.new_run_id);
+    let forked = client.call::<ThreadFork>(second.clone()).await.unwrap();
+    let from = forked.thread.forked_from.expect("forkedFrom");
+    assert_eq!(
+        (from.run, from.turn),
+        (first.new_run_id, first_turn(first.new_run_id))
+    );
+    let (_, items) = transcript(&mut client, second.new_run_id).await;
+    assert_eq!(follow_ups(&items), ["Now the tests"]);
+    assert_eq!(texts(&items), ["Done.", "Done."]);
+    host.server.stop().await;
 }
