@@ -16,7 +16,6 @@ import {
   Ellipsis,
   FileDiff,
   Folder,
-  FolderKanban,
   FolderPlus,
   GitBranch,
   GitMerge,
@@ -265,8 +264,8 @@ type Item = (
 };
 
 /**
- * Search and the Repos filter, then every host's Projects in a collapsible section, then their
- * threads, each the most recently active first (0033). A thread row shows its repo, how long ago
+ * Search, the Repos filter, and a menu to create a Project or add a repository, then every host's
+ * Projects in a collapsible section, then their threads, each the most recently active first (0033). A thread row shows its repo, how long ago
  * it was prompted or what it asks of the user, its title, branch, and provider. Snoozed and
  * Archived threads sit under the list. Resting on a thread shows a card with where and how it runs.
  */
@@ -280,6 +279,8 @@ export function ThreadList({
   onDelete,
 }: ThreadListProps) {
   const newProject = useRef<HTMLDialogElement>(null);
+  const addMenuId = useId();
+  const addMenu = useRef<HTMLDivElement>(null);
   const addRepositoryDialog = useRef<HTMLDialogElement>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const projectsId = useId();
@@ -362,7 +363,7 @@ export function ThreadList({
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
   // The Projects section shows once any host has a Project, even while search or the filter hides
-  // them all. Until then, New project stays in the toolbar.
+  // them all.
   const hasProjects = items.some((i) => i.kind === "project");
 
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
@@ -502,14 +503,42 @@ export function ThreadList({
           />
         </label>
         <RepoFilterMenu hosts={hosts} filter={filter} onFilter={setFilter} many={many} />
-        <IconButton label="Add repository" onClick={() => addRepositoryDialog.current?.showModal()}>
+        <IconButton label="New project or repository" popoverTarget={addMenuId}>
           <FolderPlus />
         </IconButton>
-        {!hasProjects && (
-          <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
-            <FolderKanban />
-          </IconButton>
-        )}
+        <div
+          ref={addMenu}
+          id={addMenuId}
+          popover="auto"
+          role="menu"
+          aria-label="New project or repository"
+          onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+            if (e.newState === "open")
+              e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+          }}
+          onKeyDown={moveFocus}
+          className={`${menuPanel("end")} min-w-40 p-1`}
+        >
+          {(
+            [
+              ["New project…", newProject],
+              ["Add repository…", addRepositoryDialog],
+            ] as const
+          ).map(([label, dialog]) => (
+            <button
+              key={label}
+              type="button"
+              role="menuitem"
+              className={menuItem}
+              onClick={() => {
+                addMenu.current?.hidePopover();
+                dialog.current?.showModal();
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       <div onScroll={hideCard} className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {errors.map((e) => (
