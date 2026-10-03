@@ -552,6 +552,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         text: Some(wake.prompt.clone()),
         wake: true,
         images: Vec::new(),
+        threads: Vec::new(),
     }));
     host.server.stop().await;
 }

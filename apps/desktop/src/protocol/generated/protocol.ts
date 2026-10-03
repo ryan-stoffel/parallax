@@ -294,6 +294,11 @@ export type ParallaxRequests = {
 	 * `githubStatus` capability.
 	 */
 	"github/status": { params: GithubStatusParams, result: GithubStatus },
+	/**
+	 * `thread/search`: the host's threads whose messages contain a query, the one with the
+	 * newest message first (PLX-372). Gated on the `threadContext` capability.
+	 */
+	"thread/search": { params: ThreadSearchParams, result: ThreadSearchResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1405,6 +1410,15 @@ export type AgentStartParams = {
 	 * resumes, and a retry must repeat it.
 	 */
 	approvals?: boolean,
+	/**
+	 * Threads attached to the prompt as context, by their run ids, sent only to a plxd that
+	 * advertises `threadContext` (PLX-372, decision 0047). The agent gets a summary of each ahead
+	 * of the prompt: its id and what was said in it, without tool calls, cut from the front to
+	 * the capability's `maxSummaryBytes`. At most the capability's `maxThreads`. An id that is
+	 * no thread's fails with `threadNotFound`. A retry must repeat them; plxd doesn't compare
+	 * them.
+	 */
+	threads?: Array<RunId>,
 };
 
 /**
@@ -1654,6 +1668,11 @@ export type AgentSendParams = {
 	 * Images for the message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Threads attached to the message as context, as `agent/start`'s. A message that waits for
+	 * the run's CLI gets their summaries when it's sent.
+	 */
+	threads?: Array<RunId>,
 };
 
 /**
@@ -1955,7 +1974,13 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 * The images sent with the turn's message, the prompt's or a follow-up's, in order, for
 	 * `agent/image` (RYA-191). Absent when it had none.
 	 */
-	images?: Array<ImageId>, } | { "kind": "textDelta",
+	images?: Array<ImageId>,
+	/**
+	 * The threads attached to the turn's message as context, in order (PLX-372). The agent
+	 * got a summary of each ahead of the message, which `text` and the run's `prompt` leave
+	 * out. Absent when it had none.
+	 */
+	threads?: Array<RunId>, } | { "kind": "textDelta",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
@@ -2951,6 +2976,10 @@ export type ThreadStartParams = {
 	 * what makes a retry with the same run id conflict, and a retry switches nothing.
 	 */
 	checkoutRef?: string,
+	/**
+	 * Threads attached to the first message as context, as `agent/start` takes them.
+	 */
+	threads?: Array<RunId>,
 };
 
 /**
@@ -3641,6 +3670,35 @@ export type GithubStatus = {
 	 * When plxd read this.
 	 */
 	checkedAt: string,
+};
+
+/**
+ * Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
+ * behind the `threadContext` capability.
+ *
+ * Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the
+ * agent's replies, but not its tool calls. Case-insensitive for ASCII letters. An empty query
+ * fails with `invalidParams`.
+ */
+export type ThreadSearchParams = {
+	/**
+	 * The text to find.
+	 */
+	query: string,
+	/**
+	 * The most threads to return: 20 by default, and at most 100.
+	 */
+	limit?: number,
+};
+
+/**
+ * Result of `thread/search`.
+ */
+export type ThreadSearchResult = {
+	/**
+	 * The matching threads, the one with the newest message first.
+	 */
+	threads: Array<Thread>,
 };
 
 /**

@@ -1,7 +1,8 @@
 //! `thread/list`, `repo/add`, `thread/start`, `thread/archive`, and `thread/delete` (#110),
 //! behind the `threads` capability, `thread/update` and `repo/update` (0033), behind
-//! `threadAttention` (and `threadLineage` for its title and settled flag, 0041), and `repo/refs`,
-//! behind `repoRefs`. The logic is [`crate::threads`].
+//! `threadAttention` (and `threadLineage` for its title and settled flag, 0041), `repo/refs`,
+//! behind `repoRefs`, and `thread/search` (PLX-372), behind `threadContext`. The logic is
+//! [`crate::threads`].
 //! `repo/files` is `composer.rs`'s, behind `composerMenus`.
 
 use std::sync::Arc;
@@ -9,18 +10,18 @@ use std::sync::Arc;
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::methods::{
     RepoAdd, RepoFiles, RepoRefs, RepoUpdate, RequestMethod, ThreadArchive, ThreadDelete,
-    ThreadList, ThreadStart, ThreadUpdate,
+    ThreadList, ThreadSearch, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
     RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult,
+    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 use serde_json::Value;
 
 use super::{Context, handle};
-use crate::threads;
+use crate::{agents, threads};
 
 /// Whether `method` is one of this module's: a `thread/*` or `repo/*` method.
 pub(crate) fn handles(method: &str) -> bool {
@@ -40,6 +41,7 @@ pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Val
         RepoUpdate::NAME => handle::<RepoUpdate, _, _>(request, |p| update_repo(context, p)).await,
         ThreadDelete::NAME => handle::<ThreadDelete, _, _>(request, |p| delete(context, p)).await,
         RepoRefs::NAME => handle::<RepoRefs, _, _>(request, |p| refs(context, p)).await,
+        ThreadSearch::NAME => handle::<ThreadSearch, _, _>(request, |p| search(context, p)).await,
         RepoFiles::NAME => {
             handle::<RepoFiles, _, _>(request, |p| super::composer::files(context, p)).await
         }
@@ -60,9 +62,10 @@ async fn add_repo(context: &Context, params: RepoAddParams) -> Result<RepoAddRes
 
 async fn start(
     context: &Context,
-    params: ThreadStartParams,
+    mut params: ThreadStartParams,
 ) -> Result<ThreadStartResult, ErrorObject> {
     super::agent::check_message("prompt", &params.prompt, &params.images)?;
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let daemon = Arc::clone(&context.daemon);
     context
         .daemon
@@ -83,6 +86,13 @@ async fn update(
     params: ThreadUpdateParams,
 ) -> Result<ThreadUpdateResult, ErrorObject> {
     threads::update(&context.daemon, params).await
+}
+
+async fn search(
+    context: &Context,
+    params: ThreadSearchParams,
+) -> Result<ThreadSearchResult, ErrorObject> {
+    threads::search(&context.daemon, params).await
 }
 
 async fn refs(context: &Context, params: RepoRefsParams) -> Result<RepoRefsResult, ErrorObject> {
