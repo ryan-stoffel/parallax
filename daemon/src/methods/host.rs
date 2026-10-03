@@ -133,6 +133,9 @@ pub(crate) fn initialize(
 /// `agent.updated`.
 /// `providers` (0040): `providers/list`, `providers/save`, and `providers/remove`, and a
 /// subscription `AccountChoice` naming any enabled instance.
+/// `githubSetup` (PLX-423, 0050): `github/install`, `github/signIn`, and `github/signInCancel`,
+/// and `managed`, `installing`, `signingIn`, and `setupNote` on `github/status`, which an older
+/// plxd never fills.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -156,6 +159,7 @@ fn capabilities_advertised() -> Capabilities {
             "iconImages".to_owned(),
             serde_json::Map::from_iter([("maxBytes".to_owned(), images::MAX_ICON_BYTES.into())]),
         ),
+        ("githubSetup".to_owned(), serde_json::Map::new()),
         ("githubStatus".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
