@@ -1,4 +1,4 @@
-//! `thread/search` and threads attached to a message as context (PLX-372, decision 0041).
+//! `thread/search` and threads attached to a message as context (PLX-372, decision 0042).
 
 use parallax_protocol::methods::ThreadSearch;
 use parallax_protocol::{AgentOutputItem, Thread, ThreadSearchParams};

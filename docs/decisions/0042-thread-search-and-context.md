@@ -1,4 +1,4 @@
-# 0041: Threads are searched by their messages and attached to a prompt as a capped summary
+# 0042: Threads are searched by their messages and attached to a prompt as a capped summary
 
 - Status: accepted
 - Date: 2026-10-03

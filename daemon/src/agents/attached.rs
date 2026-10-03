@@ -1,4 +1,4 @@
-//! Threads attached to a message as context (PLX-372, decision 0041).
+//! Threads attached to a message as context (PLX-372, decision 0042).
 //!
 //! `agent/start`, `thread/start`, and `agent/send` take `threads`, which [`check`] checks when
 //! the request arrives. Once the message reaches a CLI, [`prompt`] puts a summary of each thread

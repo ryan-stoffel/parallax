@@ -122,7 +122,7 @@ pub(crate) fn initialize(
 /// `composerMenus` (PLX-359): `agent/commands` and `repo/files`, for the composer's `/` and `@`
 /// menus.
 /// `githubStatus` (PLX-336): `github/status`.
-/// `threadContext` (PLX-372, 0041): `thread/search`, and `agent/start`, `thread/start`, and
+/// `threadContext` (PLX-372, 0042): `thread/search`, and `agent/start`, `thread/start`, and
 /// `agent/send` take `threads`, which an older plxd would silently drop, and `turnStarted` lists
 /// them. Its options are the caps: `maxThreads` per message, and `maxSummaryBytes` of each
 /// thread's summary.
