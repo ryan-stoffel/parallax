@@ -139,6 +139,7 @@ pub(crate) fn initialize(
 /// `threadTools` (PLX-373, 0041): `agent/send`'s and `agent/cancel`'s `from`, `turnStarted`'s
 /// `from` and the `interrupted` item, and `pr/link` and `pr/unlink`, which a thread's Parallax
 /// tools use.
+/// `inbox` (PLX-401, 0043): `inbox/list`, `inbox/seen`, and `inbox.added`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -164,6 +165,7 @@ fn capabilities_advertised() -> Capabilities {
         ),
         ("githubSetup".to_owned(), serde_json::Map::new()),
         ("githubStatus".to_owned(), serde_json::Map::new()),
+        ("inbox".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),

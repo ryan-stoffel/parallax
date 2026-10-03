@@ -7,7 +7,8 @@
 //! `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
-//! `github/signInCancel` there too), and `host.rs` advertises the capability in `initialize`.
+//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`), and `host.rs` advertises the
+//! capability in `initialize`.
 
 mod accounts;
 mod agent;
@@ -16,6 +17,7 @@ mod context;
 mod defaults;
 mod events;
 mod host;
+pub(crate) mod inbox;
 mod pr;
 pub(crate) mod project;
 mod thread;
@@ -32,10 +34,10 @@ use parallax_protocol::methods::{
     AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
     AgentResumeNow, AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
     EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet,
-    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, Initialize, PrAct, PrDiff, PrLink,
-    PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectList, ProjectStart, ProjectUpdate,
-    ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod, UsageDaily, UsageGet,
-    UsageHistory,
+    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize,
+    PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectList,
+    ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod,
+    UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -87,9 +89,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         name if name.starts_with("host/settings/") => {
             found(name, host_settings_method(&context, &request).await)
         }
-        name if name.starts_with("project/") => {
-            found(name, project_method(&context, &request).await)
-        }
+        name if project_scoped(name) => found(name, project_method(&context, &request).await),
         AccountsList::NAME => {
             handle::<AccountsList, _, _>(&request, |p| accounts::list(&context, p)).await
         }
@@ -238,7 +238,13 @@ async fn github_method(context: &Context, request: &Request) -> Option<Result<Va
     })
 }
 
-/// Answers a `project/*` method (RYA-227), or `None` if there is no such method.
+/// Whether `name` is a `project/*` method or a Project's `inbox/*` one (PLX-401).
+fn project_scoped(name: &str) -> bool {
+    name.starts_with("project/") || name.starts_with("inbox/")
+}
+
+/// Answers a `project/*` method (RYA-227) or a Project's `inbox/*` one (PLX-401), or `None` if
+/// there is no such method.
 async fn project_method(
     context: &Context,
     request: &Request,
@@ -259,6 +265,8 @@ async fn project_method(
         ProjectDelete::NAME => {
             handle::<ProjectDelete, _, _>(request, |p| project::delete(context, p)).await
         }
+        InboxList::NAME => handle::<InboxList, _, _>(request, |p| inbox::list(context, p)).await,
+        InboxSeen::NAME => handle::<InboxSeen, _, _>(request, |p| inbox::seen(context, p)).await,
         _ => return None,
     })
 }
