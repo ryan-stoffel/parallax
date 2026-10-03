@@ -30,24 +30,26 @@ use crate::{
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
-    AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentCommandsParams,
-    AgentCommandsResult, AgentCommitParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
-    AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams, AgentFilesResult,
-    AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams,
-    AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentRunResult, AgentSendParams,
-    AgentStartParams, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
-    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
-    GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult, HostVersionParams,
-    HostVersionResult, InitializeParams, InitializeResult, PrActParams, PrDiffResult, PrViewParams,
-    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams, RepoAddResult, RepoFilesParams,
-    RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    AgentApproveParams, AgentApproveResult, AgentAutoResumeParams, AgentCancelParams,
+    AgentCommandsParams, AgentCommandsResult, AgentCommitParams, AgentDiffParams, AgentDiffResult,
+    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams,
+    AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
+    AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
+    AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams,
+    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, GithubStatus, GithubStatusParams,
+    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
+    HostVersionParams, HostVersionResult, InitializeParams, InitializeResult, PrActParams,
+    PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams,
+    RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
+    RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -289,6 +291,16 @@ method_table! {
         /// `thread/search`: the host's threads whose messages contain a query, the one with the
         /// newest message first (PLX-372). Gated on the `threadContext` capability.
         ThreadSearch = "thread/search": ThreadSearchParams => ThreadSearchResult;
+        /// `agent/resumeNow`: resumes a run waiting for its usage limit to reset now (PLX-371,
+        /// decision 0049). Gated on the `autoResume` capability, like `agent/autoResume` and
+        /// `host/settings/*`.
+        AgentResumeNow = "agent/resumeNow": AgentResumeNowParams => AgentRunResult;
+        /// `agent/autoResume`: sets or clears a run's auto-resume override.
+        AgentAutoResume = "agent/autoResume": AgentAutoResumeParams => AgentRunResult;
+        /// `host/settings/get`: this host's settings.
+        HostSettingsGet = "host/settings/get": HostSettingsGetParams => HostSettings;
+        /// `host/settings/set`: changes this host's settings and returns them.
+        HostSettingsSet = "host/settings/set": HostSettingsSetParams => HostSettings;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -381,6 +393,10 @@ mod tests {
                 "repo/files",
                 "github/status",
                 "thread/search",
+                "agent/resumeNow",
+                "agent/autoResume",
+                "host/settings/get",
+                "host/settings/set",
                 "$/cancelRequest",
                 "events/event",
             ]

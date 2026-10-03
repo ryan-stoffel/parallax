@@ -152,6 +152,9 @@ fn a_run_is_created_once_read_back_and_updated() {
             "https://github.com/me/app/pull/7".to_owned(),
             "https://github.com/me/app/pull/9".to_owned(),
         ],
+        auto_resume: Some(false),
+        resume_at: Some("2026-10-03T18:00:00Z".parse().unwrap()),
+        resume_tries: 2,
     };
     let updated = store.update_run(id, &finished).unwrap();
     assert_eq!(updated.state, finished);
@@ -460,12 +463,14 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // base_dirty columns, turns table (#190's migration 10; dropping `runs` already undoes #157's
     // migration 8 columns on it, since they're columns of the table this drops wholesale), the
     // normal threads tables (#110's migration 9), the wakes table (RYA-178's migration 14), the
-    // images table (RYA-191's migration 15), or the project icon columns (RYA-227's migration 16).
+    // images table (RYA-191's migration 15), the project icon columns (RYA-227's migration 16),
+    // or the host settings table (PLX-371's migration 24).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
              DROP TABLE threads; DROP TABLE repos; DROP TABLE wakes; DROP TABLE images;
+             DROP TABLE host_settings;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;

@@ -36,6 +36,7 @@ mod approvals;
 pub(crate) mod attached;
 pub(crate) mod convert;
 pub(crate) mod coordinator;
+mod resume;
 pub(crate) mod review;
 mod wake;
 pub(crate) mod worker;
@@ -66,6 +67,7 @@ use self::actor::{Actor, Command};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
 use self::convert::{RUNNING, STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
+pub(crate) use self::resume::Timing as ResumeTiming;
 use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument, codex, cursor};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
@@ -90,6 +92,8 @@ pub(crate) struct Agents {
     shutdown: CancellationToken,
     /// How long a run's permission request waits for an answer (RYA-222).
     approval_timeout: Duration,
+    /// When a run a usage limit stopped resumes (PLX-371).
+    resume_timing: ResumeTiming,
 }
 
 /// Per-run-id locks for [`Agents::starting`] (#190).
@@ -196,6 +200,7 @@ impl Agents {
             tracker: TaskTracker::new(),
             shutdown: CancellationToken::new(),
             approval_timeout: APPROVAL_TIMEOUT,
+            resume_timing: ResumeTiming::default(),
         }
     }
 
@@ -210,6 +215,18 @@ impl Agents {
     /// How long a permission request waits for an answer.
     pub(super) fn approval_timeout(&self) -> Duration {
         self.approval_timeout
+    }
+
+    /// Resumes runs a usage limit stopped with `timing` instead of the default.
+    #[must_use]
+    pub fn with_resume_timing(mut self, timing: ResumeTiming) -> Self {
+        self.resume_timing = timing;
+        self
+    }
+
+    /// When a run a usage limit stopped resumes.
+    pub(super) fn resume_timing(&self) -> ResumeTiming {
+        self.resume_timing
     }
 
     /// Locks `run_id`'s per-run start lock, waiting only on another call for the same run id
@@ -1150,6 +1167,24 @@ pub(crate) async fn cancel(daemon: Arc<Daemon>, id: RunId) -> Result<AgentRun, E
     ask(&daemon, id, |reply| Command::Cancel { reply }).await
 }
 
+/// `agent/resumeNow` (PLX-371): resumes a run waiting for its usage limit to reset now.
+pub(crate) async fn resume_now(daemon: Arc<Daemon>, id: RunId) -> Result<AgentRun, ErrorObject> {
+    ask(&daemon, id, |reply| Command::ResumeNow { reply }).await
+}
+
+/// `agent/autoResume` (PLX-371): sets or clears a run's auto-resume override.
+pub(crate) async fn set_auto_resume(
+    daemon: Arc<Daemon>,
+    id: RunId,
+    auto_resume: Option<bool>,
+) -> Result<AgentRun, ErrorObject> {
+    ask(&daemon, id, |reply| Command::AutoResume {
+        auto_resume,
+        reply,
+    })
+    .await
+}
+
 /// `agent/approve` (RYA-222): through the run's actor, which keeps its permission requests. The
 /// caller has checked `params`.
 pub(crate) async fn approve(
@@ -1299,8 +1334,9 @@ pub(crate) async fn git(
 
 /// Marks every run the store still has as `starting` or `running` as `interrupted`: plxd
 /// stopped without recording how they ended, as after a crash. Then wakes each project's
-/// coordinator for what it missed while plxd was stopped ([`wake::catch_up`], RYA-178). Called
-/// once at startup, before any connection is accepted.
+/// coordinator for what it missed while plxd was stopped ([`wake::catch_up`], RYA-178), and
+/// starts the timers of runs waiting for a usage limit to reset ([`resume::restore`], PLX-371).
+/// Called once at startup, before any connection is accepted.
 pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     let recovered = store(daemon, |db| {
         let mut recovered = Vec::new();
@@ -1354,6 +1390,8 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                                 context_window: run.context_window,
                                 fast: run.fast,
                                 pull_requests: run.pull_requests,
+                                resume_at: run.resume_at,
+                                auto_resume: run.auto_resume,
                                 updated_at: run.updated_at,
                             },
                         },
@@ -1364,6 +1402,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
         Err(error) => warn!(error = %error.message, "could not recover interrupted agent runs"),
     }
     wake::catch_up(daemon).await;
+    resume::restore(daemon).await;
 }
 
 #[cfg(test)]
