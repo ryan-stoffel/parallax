@@ -1524,7 +1524,6 @@ mod tests {
 
         use crate::backend::claude::ClaudeBackend;
         use crate::backend::codex::CodexBackend;
-        use crate::backend::cursor::CursorBackend;
         use crate::backend::process::{Environment, Launcher};
         use crate::paths::DataDir;
 
@@ -1535,7 +1534,7 @@ mod tests {
         );
         let claude = ClaudeBackend::new(launcher.clone());
         let codex = CodexBackend::new(launcher.clone());
-        let cursor = CursorBackend::new(launcher);
+        let cursor = crate::providers::cursor_backend(launcher);
         let (auto, bypass) = (ProjectPermission::Auto, ProjectPermission::Bypass);
         for backend in [&claude as &dyn crate::backend::Backend, &codex] {
             assert_eq!(in_mode(backend, auto).unwrap(), AgentPermission::Auto);

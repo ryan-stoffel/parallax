@@ -46,7 +46,7 @@ impl Backend for Recording {
         self.fake.capabilities()
     }
 
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         self.fake.permissions()
     }
 

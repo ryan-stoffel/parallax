@@ -45,8 +45,9 @@ impl Backend for Sequence {
         self.scripts.lock().unwrap()[0].capabilities()
     }
 
-    fn permissions(&self) -> &'static [AgentPermission] {
-        self.scripts.lock().unwrap()[0].permissions()
+    // The fake's (0042), so its runs start in a Project's mode.
+    fn permissions(&self) -> &[AgentPermission] {
+        &[AgentPermission::Auto, AgentPermission::Bypass]
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {

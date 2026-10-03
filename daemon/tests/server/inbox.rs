@@ -8,9 +8,9 @@ use parallax_protocol::methods::{
     AgentCancel, AgentSend, AgentStart, InboxList, InboxSeen, ProjectStart,
 };
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentStartParams, AgentStatus, CoordinatorThreadId,
-    ErrorKind, InboxItem, InboxKind, InboxListParams, InboxSeenParams, ParallaxEvent, ProjectId,
-    ProjectStartParams, Provider, RunId, TurnId,
+    AccountChoice, AgentCancelParams, AgentPermission, AgentStartParams, AgentStatus,
+    CoordinatorThreadId, ErrorKind, InboxItem, InboxKind, InboxListParams, InboxSeenParams,
+    ParallaxEvent, ProjectId, ProjectStartParams, Provider, RunId, TurnId,
 };
 use plxd::backend::fake::{AskedApproval, FakeBackend, Step};
 use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started};
@@ -201,6 +201,10 @@ impl Backend for FailingAfter {
 
     fn capabilities(&self) -> Capabilities {
         self.fake.capabilities()
+    }
+
+    fn permissions(&self) -> &[AgentPermission] {
+        self.fake.permissions()
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {

@@ -287,7 +287,7 @@ impl Backend for FakeBackend {
 
     /// A Project's two modes (0042), so the app's end-to-end tests can run one. The fake CLI
     /// ignores them.
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         &[AgentPermission::Auto, AgentPermission::Bypass]
     }
 
