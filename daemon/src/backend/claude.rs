@@ -158,13 +158,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 
+pub(crate) use self::stream::micros as usd_micros;
 pub(crate) use self::stream::version as parse_version;
 use self::stream::{Ask, Step, Translator, TurnDone};
+use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
@@ -550,6 +552,25 @@ impl ClaudeBackend {
         self.limits = limits;
         self
     }
+
+    /// What every run and the command list start from: the program in `cwd`, inherited
+    /// credentials [`scrubbed`] and `credential`'s injected ([`apply_credential`], whose
+    /// `apiKeySource` it returns), [`ALWAYS_SET`], stdin piped, and the backend's output limits.
+    fn spec(
+        &self,
+        cwd: &Path,
+        credential: &Credential,
+    ) -> Result<(ProcessSpec, &'static str), StartError> {
+        let mut spec = ProcessSpec::new(self.program.clone(), cwd);
+        spec.scrub = scrubbed(self.launcher.base());
+        let key_source = apply_credential(credential, &mut spec)?;
+        for (name, value) in ALWAYS_SET {
+            spec.inject.set(name, value);
+        }
+        spec.stdin = StdinMode::Piped;
+        spec.limits = self.limits;
+        Ok((spec, key_source))
+    }
 }
 
 /// The CLI's arguments for `request`.
@@ -884,6 +905,22 @@ impl Backend for ClaudeBackend {
         true
     }
 
+    /// `claude -p` in stream-json on the user's login, asked to `initialize`
+    /// ([`commands::claude`]).
+    fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
+        spec.args = BASE_ARGS.iter().map(OsString::from).collect();
+        Ok(Some(CommandsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![json!({
+                "type": "control_request",
+                "request_id": "commands",
+                "request": {"subtype": "initialize"},
+            })],
+            parse: commands::claude,
+        }))
+    }
+
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         // Images alone are a message too (RYA-202), as a resumed run's may be.
         if request.prompt.is_empty() && request.images.is_empty() {
@@ -895,18 +932,14 @@ impl Backend for ClaudeBackend {
                     .into(),
             ));
         }
-        let mut spec = ProcessSpec::new(self.program.clone(), &request.cwd);
+        let (mut spec, expected_key_source) =
+            self.spec(&request.cwd, &request.account.credential)?;
         spec.args = arguments(&request)?;
         let asks = prompts(&request);
         let plan_exit = hands_over_plans(&request);
         let full = full_thread(&request);
         if let Some(sandbox) = worker_sandbox(&request)? {
             spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
-        }
-        spec.scrub = scrubbed(self.launcher.base());
-        let expected_key_source = apply_credential(&request.account.credential, &mut spec)?;
-        for (name, value) in ALWAYS_SET {
-            spec.inject.set(name, value);
         }
         if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
             spec.inject.set(SCRUB_ENV, "1");
@@ -931,8 +964,6 @@ impl Backend for ClaudeBackend {
             }
             _ => None,
         };
-        spec.stdin = StdinMode::Piped;
-        spec.limits = self.limits;
 
         let process = self.launcher.spawn(&spec)?;
         let switch = CancelSwitch::new();

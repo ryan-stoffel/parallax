@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
+import { Globe } from "lucide-react";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
@@ -13,8 +14,9 @@ import type {
   AgentToolStatus,
   LoggedEvent,
 } from "../protocol/generated/protocol";
-import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
+import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
+import { GitHubLogo, LinearLogo } from "./logos";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -168,6 +170,57 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
   // Its file: source is unsafe, so it has no href at all rather than an empty one.
   expect(links[1]!.hasAttribute("href")).toBe(false);
+});
+
+test("a code block names its language, highlights it, and copies its text", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  row({ kind: "assistant", key: "a", text: "```ts\nconst x = 1;\n```\n\n```\nplain\n```" });
+  const [ts, plain] = [...document.querySelectorAll(".markdown > div")];
+  expect(ts!.firstElementChild!.textContent).toBe("tsCopy");
+  expect(ts!.querySelector(".hljs-keyword")?.textContent).toBe("const");
+  expect(plain!.firstElementChild!.textContent).toBe("textCopy");
+  expect(plain!.querySelector("[class^='hljs-']")).toBeNull();
+  await act(async () => ts!.querySelector<HTMLButtonElement>("button")!.click());
+  expect(writeText).toHaveBeenCalledWith("const x = 1;\n");
+});
+
+test("a diff code block shows added and removed lines, and copies the diff", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const diff = "--- a/q.sql\n+++ b/q.sql\n@@ -1,3 +1,2 @@\n-old\n--- a note\n+new\n same\n";
+  row({ kind: "assistant", key: "a", text: `\`\`\`diff\n${diff}\`\`\`` });
+  // The block's header, then its lines.
+  const lines = [...document.querySelector(".markdown > div")!.lastElementChild!.children];
+  expect(lines.map((l) => l.textContent)).toEqual([
+    "--- a/q.sql",
+    "+++ b/q.sql",
+    "@@ -1,3 +1,2 @@",
+    "−Removed: old",
+    "−Removed: -- a note",
+    "+Added: new",
+    " same",
+  ]);
+  expect(lines[5]!.className).toContain("bg-added/10");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Copy code"]')!.click(),
+  );
+  expect(writeText).toHaveBeenCalledWith(diff);
+});
+
+test("an edit's tool call shows its change as a diff, not JSON", () => {
+  row({
+    kind: "tool",
+    key: "t",
+    callId: "toolu_3",
+    name: "Edit",
+    input: { file_path: "/a.ts", old_string: "let a = 1;", new_string: "let a = 2;" },
+    status: "ok",
+  });
+  const diff = document.querySelector('[role="group"]')!;
+  expect(diff.getAttribute("aria-label")).toBe("Diff: 1 line added, 1 removed");
+  expect(diff.textContent).toBe("−Removed: let a = 1;+Added: let a = 2;");
+  expect(document.querySelector("details")!.textContent).not.toContain("old_string");
 });
 
 test("a tool call collapses its input and output under its name", () => {
@@ -1232,11 +1285,13 @@ test("the musing changes its word on the wall clock, while screen readers keep h
 
 test("under reduced motion, the musing keeps its word", () => {
   vi.useFakeTimers({ now: 2400 * 8000 });
-  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduced-motion") }));
+  // appearance.ts sets it under the OS's Reduce motion or the app's own.
+  document.documentElement.classList.add("reduce-motion");
   render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
   expect(vi.getTimerCount()).toBe(0);
   act(() => void vi.advanceTimersByTime(4800));
   expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
+  document.documentElement.classList.remove("reduce-motion");
 });
 
 test("a running chat that loses plxd shows no loader", async () => {
@@ -1297,7 +1352,7 @@ const todoWrite = (n: number, done: number): Item[] => [
   { kind: "todo", key: `t${n}`, items: checklist(done) },
 ];
 
-test("a turn's plan is one card where it began, its updates lines in the work, its proposal a card", () => {
+test("a turn's plan is one line where it began, its updates lines in the work, its proposal a card", () => {
   const rows: Item[] = [
     { kind: "user", key: "u", text: "go" },
     { kind: "reasoning", key: "r", text: "A plan first." },
@@ -1322,7 +1377,7 @@ test("a turn's plan is one card where it began, its updates lines in the work, i
     "go",
     "Workedbriefly",
     "ProposedplanShipitReadBuild",
-    "Plan2of2doneDone:ReadDone:Build",
+    "Madeaplan2of2done",
     "Workedbriefly",
     "Done.",
   ]);
@@ -1337,7 +1392,7 @@ test("a turn's plan is one card where it began, its updates lines in the work, i
   expect(transcriptText()).not.toContain("TodoWrite");
 });
 
-test("Claude Code's task tools make the same card and lines as TodoWrite, and their rows go", () => {
+test("Claude Code's task tools make the same lines as TodoWrite, and their rows go", () => {
   // As plxd logs them from Claude Code 2.1.283: each call, with its result's text.
   const task = (
     key: string,
@@ -1381,7 +1436,7 @@ test("Claude Code's task tools make the same card and lines as TodoWrite, and th
   expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
     "go",
     "Workedbriefly",
-    "Plan2of2doneDone:ReadDone:Build",
+    "Madeaplan2of2done",
     "Workedbriefly",
     "Done.",
   ]);
@@ -1398,7 +1453,7 @@ test("Claude Code's task tools make the same card and lines as TodoWrite, and th
   expect(transcriptText()).not.toMatch(/Task(Create|Update|List)/);
 });
 
-test("while a run goes, only its latest plan moves, and the work after a plan muses until it starts", () => {
+test("while a run goes, the work after a plan muses until it starts", () => {
   const rows: Item[] = [
     { kind: "user", key: "u1", text: "go" },
     { kind: "todo", key: "t1", items: checklist(0) },
@@ -1407,8 +1462,6 @@ test("while a run goes, only its latest plan moves, and the work after a plan mu
     ...todoWrite(2, 1),
   ];
   render(<TranscriptView rows={rows} sent={new Map()} live />);
-  const cards = [...document.querySelectorAll('[role="group"]')];
-  expect(cards.map((c) => c.querySelectorAll(".loader").length)).toEqual([0, 1]);
   // After the plan, a work row for what comes next.
   const last = [...document.querySelectorAll("[data-index]")].at(-1)!;
   expect(last.querySelector("button[aria-expanded] .sr-only")!.textContent).toBe("Working");
@@ -1437,14 +1490,12 @@ test("while the run works on a plan, a strip over the composer shows it, until a
   expect(strip()).toBeNull();
   act(() => unmount());
 
-  // Losing plxd stalls it: no strip, and nothing moves in the card.
-  const card = () => document.querySelector('[role="log"] [role="group"]')!;
+  // Losing plxd stalls it: no strip.
   const third = fakeBridge(4);
   await renderChat();
-  expect(card().querySelector(".loader")).not.toBeNull();
+  expect(strip()).not.toBeNull();
   third.connect({ status: "connecting" });
   expect(strip()).toBeNull();
-  expect(card().querySelector(".loader")).toBeNull();
 });
 
 test("a bar beside the transcript for each prompt shows it and its reply, and scrolls back to it", () => {
@@ -1467,6 +1518,8 @@ test("a bar beside the transcript for each prompt shows it and its reply, and sc
   ]);
   // Scrolled to the end, the latest prompt is the one being read.
   expect(bars.map((b) => b.getAttribute("aria-current"))).toEqual([null, "true"]);
+  // Only a hovered or focused bar stands out, not the one being read.
+  expect(bars[1]!.firstElementChild!.className).toBe(bars[0]!.firstElementChild!.className);
 
   act(() => bars[0]!.focus());
   const card = document.querySelector('nav[aria-label="Prompts"] + [aria-hidden]')!;
@@ -1521,4 +1574,15 @@ test("scrolled up from the end, Scroll to end shows over the transcript, and goe
   });
   expect(end()).toBeUndefined();
   scrollTo.mockRestore();
+});
+
+test("a web link gets its site's logo, or a globe, and other links none (PLX-330)", () => {
+  expect(linkIcon("https://github.com/ryan-stoffel/parallax/pull/470")).toBe(GitHubLogo);
+  expect(linkIcon("https://gist.github.com/x")).toBe(GitHubLogo);
+  expect(linkIcon("https://linear.app/ryanstoffel/issue/PLX-330")).toBe(LinearLogo);
+  expect(linkIcon("https://notgithub.com/x")).toBe(Globe);
+  expect(linkIcon("http://localhost:5173")).toBe(Globe);
+  expect(linkIcon("mailto:a@b.c")).toBeUndefined();
+  expect(linkIcon("archived.md")).toBeUndefined();
+  expect(linkIcon(undefined)).toBeUndefined();
 });

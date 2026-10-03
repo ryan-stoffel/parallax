@@ -311,6 +311,45 @@ const MIGRATIONS: &[Migration] = &[
         version: 21,
         sql: "ALTER TABLE runs ADD COLUMN pull_requests TEXT NOT NULL DEFAULT '';",
     },
+    // An uploaded image as a project's or repo entry's icon (PLX-339, decision 0038): its media
+    // type and base64 data, as the client sent them. A NULL type means no image, so existing
+    // icons keep their glyph.
+    Migration {
+        version: 22,
+        sql: "ALTER TABLE projects ADD COLUMN icon_image_type TEXT;
+        ALTER TABLE projects ADD COLUMN icon_image_data TEXT;
+        ALTER TABLE repos ADD COLUMN icon_image_type TEXT;
+        ALTER TABLE repos ADD COLUMN icon_image_data TEXT;",
+    },
+    // Thread lineage (PLX-369, decision 0041). `runs.parent` is the run that launched a run, on
+    // `runs` because a coordinator's subagents have no thread row: existing runs a coordinator
+    // started get its thread as their parent, except the coordinator itself, which carries its
+    // own id (0024). A thread's fork origin (a run and a turn), title, and settled flag go on
+    // `threads`. No foreign keys, like the rest: deleting a run clears these on its children.
+    Migration {
+        version: 23,
+        sql: "ALTER TABLE runs ADD COLUMN parent TEXT;
+        UPDATE runs SET parent = coordinator_thread
+            WHERE coordinator_thread IS NOT NULL AND coordinator_thread != id;
+        ALTER TABLE threads ADD COLUMN forked_from_run TEXT;
+        ALTER TABLE threads ADD COLUMN forked_from_turn TEXT;
+        ALTER TABLE threads ADD COLUMN title TEXT;
+        ALTER TABLE threads ADD COLUMN settled INTEGER NOT NULL DEFAULT 0;",
+    },
+    // Auto-resume after a usage limit (PLX-371, decision 0049): a run's override (NULL for the
+    // host's setting), when its stored timer fires (NULL when it doesn't wait), and how many
+    // resumes in a row found no reset time, for the backoff. `host_settings` holds the host's
+    // settings by key; no row means the default.
+    Migration {
+        version: 24,
+        sql: "ALTER TABLE runs ADD COLUMN auto_resume INTEGER;
+        ALTER TABLE runs ADD COLUMN resume_at TEXT;
+        ALTER TABLE runs ADD COLUMN resume_tries INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE host_settings (
+            key TEXT NOT NULL PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

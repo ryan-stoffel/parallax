@@ -1,9 +1,23 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  ClipboardItem,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  nativeTheme,
+  session,
+  shell,
+  type NativeImage,
+} from "electron";
 import path from "node:path";
 
 import { THEME_PREFERENCES, type OpenTarget, type UpdateState } from "../preload/bridge";
 import { startAccount } from "./account";
 import {
+  appBundle,
   detectEditors,
   editorCommand,
   isDirectory,
@@ -16,6 +30,7 @@ import { savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
+import { startStorage } from "./storage";
 import { isNightly, startUpdater } from "./updater";
 
 // The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
@@ -51,6 +66,7 @@ function createWindow() {
       additionalArguments: updatable ? ["--parallax-updatable"] : [],
     },
   });
+  if (appIcon && process.platform !== "darwin") win.setIcon(appIcon);
   win.once("ready-to-show", () => win.show());
 
   if (devServerUrl) void win.loadURL(devServerUrl);
@@ -165,6 +181,27 @@ ipcMain.handle("parallax:pickFolder", async (event) => {
   return canceled ? null : (filePaths[0] ?? null);
 });
 
+// Settings > Account's Share: a picture of part of the asking window, onto the clipboard.
+ipcMain.handle("parallax:copyPicture", async (event, rect: unknown) => {
+  const { x, y, width, height } = (rect ?? {}) as Record<string, unknown>;
+  const sides = [x, y, width, height];
+  if (!sides.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0))
+    throw new Error("copyPicture needs a rect");
+  // The renderer measures in CSS pixels, which the window's zoom scales.
+  const zoom = event.sender.getZoomFactor();
+  const [left, top, w, h] = (sides as number[]).map((n) => Math.round(n * zoom)) as [
+    number,
+    number,
+    number,
+    number,
+  ];
+  // An empty rect would capture the whole window.
+  if (!w || !h) throw new Error("copyPicture needs a rect");
+  const picture = await event.sender.capturePage({ x: left, y: top, width: w, height: h });
+  const png = new Blob([picture.toPNG()], { type: "image/png" });
+  await clipboard.write([new ClipboardItem({ "image/png": png })]);
+});
+
 // The top bar's Open button (editors.ts). The renderer names the host, target, and folder; main
 // checks each and runs only a program it found, never through a shell. Editors are found once.
 let editors: Partial<Record<Editor, string>> | undefined;
@@ -177,6 +214,27 @@ function openTargets(hostId: unknown): OpenTarget[] {
   return local ? [...found, "files"] : found;
 }
 ipcMain.handle("parallax:openTargets", (_event, hostId: unknown) => openTargets(hostId));
+// The Open targets' own app icons on macOS, as data URLs, found once. Quick Look, since
+// `app.getFileIcon` gives a `.app` bundle a placeholder icon. A target without one keeps its mark.
+let targetIcons: Promise<Partial<Record<OpenTarget, string>>> | undefined;
+async function openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>> {
+  if (process.platform !== "darwin") return {};
+  const apps = { ...installedEditors(), files: "/System/Library/CoreServices/Finder.app" };
+  const icons = await Promise.all(
+    Object.entries(apps).map(async ([target, program]) => {
+      try {
+        const bundle = appBundle(program);
+        if (!bundle) return [];
+        const icon = await nativeImage.createThumbnailFromPath(bundle, { width: 64, height: 64 });
+        return [[target, icon.toDataURL()]];
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return Object.fromEntries(icons.flat());
+}
+ipcMain.handle("parallax:openTargetIcons", () => (targetIcons ??= openTargetIcons()));
 ipcMain.handle(
   "parallax:openFolder",
   async (event, hostId: unknown, target: unknown, folder: unknown) => {
@@ -205,6 +263,14 @@ ipcMain.on("parallax:theme", (_event, preference: unknown) => {
   const source = THEME_PREFERENCES.find((p) => p === preference);
   if (source) nativeTheme.themeSource = source;
 });
+// The icon in the Appearance preset's colors (appearance.ts), kept for windows opened later.
+let appIcon: NativeImage | undefined;
+ipcMain.on("parallax:appIcon", (_event, png: unknown) => {
+  if (typeof png !== "string" || !png.startsWith("data:image/png;base64,")) return;
+  appIcon = nativeImage.createFromDataURL(png);
+  if (process.platform === "darwin") app.dock?.setIcon(appIcon);
+  else for (const win of BrowserWindow.getAllWindows()) win.setIcon(appIcon);
+});
 // Fires for the setting above, and for an OS theme change while it's "system".
 nativeTheme.on("updated", () => {
   const dark = nativeTheme.shouldUseDarkColors;
@@ -221,6 +287,7 @@ void app.whenReady().then(() => {
   browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));
   browserSession.setPermissionCheckHandler(() => false);
   startHosts();
+  startStorage();
   // Under `pnpm dev`, Update follows develop, the nightly channel's branch (scripts/channels.mjs).
   if (!updater) process.send?.({ channel: "nightly" });
   startAccount();

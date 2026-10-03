@@ -1,4 +1,4 @@
-import type { SVGProps } from "react";
+import { useId, type SVGProps } from "react";
 
 // Provider and source logos, mostly from LobeHub's icon set (@lobehub/icons-static-svg). Each
 // sizes like a lucide icon; Claude and Google keep their brand colors, the others take
@@ -46,6 +46,33 @@ export function GitHubLogo(props: LogoProps) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" aria-hidden {...props}>
       <path d="M12 0c6.63 0 12 5.276 12 11.79-.001 5.067-3.29 9.567-8.175 11.187-.6.118-.825-.25-.825-.56 0-.398.015-1.665.015-3.242 0-1.105-.375-1.813-.81-2.181 2.67-.295 5.475-1.297 5.475-5.822 0-1.297-.465-2.344-1.23-3.169.12-.295.54-1.503-.12-3.125 0 0-1.005-.324-3.3 1.209a11.32 11.32 0 00-3-.398c-1.02 0-2.04.133-3 .398-2.295-1.518-3.3-1.209-3.3-1.209-.66 1.622-.24 2.83-.12 3.125-.765.825-1.23 1.887-1.23 3.169 0 4.51 2.79 5.527 5.46 5.822-.345.294-.66.81-.765 1.577-.69.31-2.415.81-3.495-.973-.225-.354-.9-1.223-1.845-1.209-1.005.015-.405.56.015.781.51.28 1.095 1.327 1.23 1.666.24.663 1.02 1.93 4.035 1.385 0 .988.015 1.916.015 2.196 0 .31-.225.664-.825.56C3.303 21.374-.003 16.867 0 11.791 0 5.276 5.37 0 12 0z" />
+    </svg>
+  );
+}
+
+// Linear's mark, from Simple Icons (CC0).
+export function LinearLogo(props: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden {...props}>
+      <path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z" />
+    </svg>
+  );
+}
+
+/**
+ * Parallax's mark: the blue and coral circles, their overlap filled with --mark-overlap
+ * (index.css), which is indigo-black in light mode and greyish white in dark mode.
+ */
+export function ParallaxMark(props: LogoProps) {
+  const clip = useId();
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden {...props}>
+      <clipPath id={clip}>
+        <circle cx="9.5" cy="9.5" r="7" />
+      </clipPath>
+      <circle cx="9.5" cy="9.5" r="7" className="fill-mark-blue" />
+      <circle cx="14.5" cy="14.5" r="7" className="fill-mark-coral" />
+      <circle cx="14.5" cy="14.5" r="7" clipPath={`url(#${clip})`} className="fill-mark-overlap" />
     </svg>
   );
 }

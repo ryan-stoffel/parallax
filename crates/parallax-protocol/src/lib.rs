@@ -33,6 +33,7 @@ mod account;
 mod agent;
 mod approval;
 mod cli_account;
+mod composer;
 mod context;
 mod defaults;
 mod error;
@@ -60,12 +61,12 @@ pub use account::{
     Provider, RawKey,
 };
 pub use agent::{
-    AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult, AgentFailureKind,
-    AgentImageParams, AgentListParams, AgentListResult, AgentOutcome, AgentOutputItem,
-    AgentPermission, AgentPolicy, AgentRun, AgentRunResult, AgentRunState, AgentSendParams,
-    AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus, AgentToolStatus,
-    CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId,
-    TurnId,
+    AgentAutoResumeParams, AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult,
+    AgentFailureKind, AgentImageParams, AgentListParams, AgentListResult, AgentOutcome,
+    AgentOutputItem, AgentPermission, AgentPolicy, AgentResumeNowParams, AgentRun, AgentRunResult,
+    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus,
+    AgentToolStatus, CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent,
+    PromptImage, RunId, TurnId,
 };
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
@@ -73,7 +74,10 @@ pub use approval::{
 };
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,
-    CliKind, DetectedCli,
+    CliKind, DetectedCli, GithubStatus, GithubStatusParams,
+};
+pub use composer::{
+    AgentCommand, AgentCommandsParams, AgentCommandsResult, RepoFilesParams, RepoFilesResult,
 };
 pub use context::{
     ContextFile, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
@@ -93,16 +97,18 @@ pub use handshake::{
     Capabilities, ClientInfo, InitializeParams, InitializeProtocol, InitializeResult, ProtocolRange,
 };
 pub use host::{
-    HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, StoreState,
+    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
+    HostVersionParams, HostVersionResult, StoreState,
 };
 pub use id::InvalidId;
 pub use project::{
-    Project, ProjectCreateParams, ProjectCreateResult, ProjectIcon, ProjectId, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
+    Project, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use pull_request::{
-    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrMergeMethod, PrMergeState, PrState,
-    PrViewParams, PullRequest,
+    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
+    PrMergeState, PrReview, PrReviewState, PrState, PrViewParams, PullRequest,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,
@@ -111,14 +117,16 @@ pub use review::{
     AgentOpenPrParams, AgentOpenPrResult, AgentRequestChangesParams,
 };
 pub use thread::{
-    Repo, RepoAddParams, RepoAddResult, RepoId, RepoRef, RepoRefsParams, RepoRefsResult,
-    RepoUpdateParams, RepoUpdateResult, Thread, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ForkedFrom, MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult, RepoId, RepoRef,
+    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, Thread,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
     ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
-    AccountRuns, AccountUsage, UsageGetParams, UsageGetResult, UsageHistoryParams,
-    UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod,
+    AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay, UsageGetParams,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow,
+    UsagePeriod, UsageProblem, UsageSource,
 };
 
 /// The newest protocol version this crate speaks. Versions start at 1.
@@ -271,13 +279,28 @@ mod tests {
             ProjectIcon {
                 name: "rocket".to_owned(),
                 color: Some("green".to_owned()),
+                image: None,
             },
             ProjectIcon {
                 name: "folder-kanban".to_owned(),
                 color: None,
+                image: None,
+            },
+            ProjectIcon {
+                name: "rocket".to_owned(),
+                color: None,
+                image: Some(PromptImage {
+                    media_type: ImageMediaType::Webp,
+                    data: "UklGRg==".to_owned(),
+                }),
             },
         ];
-        for icon in [None, Some(icons[0].clone()), Some(icons[1].clone())] {
+        for icon in [
+            None,
+            Some(icons[0].clone()),
+            Some(icons[1].clone()),
+            Some(icons[2].clone()),
+        ] {
             let with_icon = Project {
                 icon: icon.clone(),
                 ..project()
@@ -310,6 +333,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&icons[1]).unwrap(),
             json!({"name": "folder-kanban"})
+        );
+        assert_eq!(
+            serde_json::to_value(&icons[2]).unwrap(),
+            json!({"name": "rocket", "image": {"mediaType": "image/webp", "data": "UklGRg=="}})
         );
         let id = ProjectId::generate();
         assert_eq!(

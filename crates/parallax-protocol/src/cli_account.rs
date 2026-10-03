@@ -1,4 +1,5 @@
-//! Detected vendor CLIs (#114): `accounts/list` and `accounts/refresh`.
+//! Detected vendor CLIs (#114): `accounts/list` and `accounts/refresh`. Also the GitHub CLI
+//! (PLX-336): `github/status`.
 //!
 //! Distinct from #117's `accounts/keys/*`, which manages stored API keys. This is read-only:
 //! plxd never signs a CLI in, never touches its credential files, and only runs the status
@@ -112,6 +113,41 @@ pub struct AccountsRefreshResult {
     /// Every CLI plxd knows how to detect, freshly probed.
     pub clis: Vec<DetectedCli>,
     /// When this probe ran.
+    pub checked_at: Timestamp,
+}
+
+/// Params of `github/status`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubStatusParams {}
+
+/// The GitHub CLI (`gh`) on the host: the result of `github/status`.
+///
+/// Every field but `installed` and `checkedAt` is best-effort: a field plxd could not read is
+/// absent rather than a guess.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubStatus {
+    /// Whether `gh` resolves on the `PATH` plxd itself uses (#96).
+    pub installed: bool,
+    /// Its version, such as `2.100.0`, from `gh --version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub version: Option<String>,
+    /// Whether `gh` is signed in to github.com. Absent when installed but plxd could not tell (a
+    /// timeout, or an exit code `gh auth status` doesn't use).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub signed_in: Option<bool>,
+    /// The signed-in github.com login, when `gh auth status` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<String>,
+    /// Why a field above is missing, such as `"timed out after 5s"`. Never set on a clean read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+    /// When plxd read this.
     pub checked_at: Timestamp,
 }
 

@@ -6,15 +6,16 @@
 //! default branch. `gh` is found on the same `PATH` as every other tool plxd runs.
 //!
 //! [`WorktreeManager::view_pr`] and [`WorktreeManager::act_pr`] read and change a run's linked pull
-//! request by its URL (PLX-318), in plxd's temp folder rather than any checkout, and
-//! [`github_pr_urls`] finds the pull requests an agent's `gh pr create` printed.
+//! request by its URL (PLX-318), and [`WorktreeManager::diff_pr`] reads its diff (PLX-328), in
+//! plxd's temp folder rather than any checkout, and [`github_pr_urls`] finds the pull requests an agent's `gh pr create` printed.
 
 use std::ffi::OsString;
 use std::path::Path;
 
 use jiff::Timestamp;
 use parallax_protocol::{
-    PrAction, PrCheck, PrCheckState, PrComment, PrMergeMethod, PrMergeState, PrState, PullRequest,
+    PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
+    PrMergeState, PrReview, PrReviewState, PrState, PullRequest,
 };
 use serde::Deserialize;
 use tokio::time::timeout;
@@ -30,7 +31,10 @@ const GH_AUTH_REQUIRED: i32 = 4;
 const VIEW_FIELDS: &str = "--json=number,title,url,state,isDraft,author,updatedAt,baseRefName,\
                            headRefName,changedFiles,additions,deletions,body,comments,reviews,\
                            reviewRequests,labels,statusCheckRollup,mergeStateStatus,\
-                           autoMergeRequest";
+                           autoMergeRequest,createdAt,closedAt,mergedAt,mergedBy,commits";
+
+/// The most of a pull request's diff `pr/diff` returns, so its answer fits one frame.
+const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 
 /// Why [`WorktreeManager::open_pr`] failed. Each message says what to do, with the command's
 /// stderr.
@@ -111,6 +115,18 @@ impl WorktreeManager {
             .gh(&std::env::temp_dir(), &["pr", "view", url, VIEW_FIELDS])
             .await?;
         parse_view(&viewed)
+    }
+
+    /// Pull request `url`'s unified diff, cut at a line's end at [`MAX_DIFF_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed.
+    pub async fn diff_pr(&self, url: &str) -> Result<PrDiffResult, PrError> {
+        let diff = self
+            .gh(&std::env::temp_dir(), &["pr", "diff", url, "--color=never"])
+            .await?;
+        Ok(cap_diff(diff, MAX_DIFF_BYTES))
     }
 
     /// Does `action` to pull request `url` and returns it as it is after.
@@ -235,7 +251,7 @@ struct Viewed {
     #[serde(default)]
     comments: Vec<Comment>,
     #[serde(default)]
-    reviews: Vec<Comment>,
+    reviews: Vec<Review>,
     #[serde(default)]
     review_requests: Vec<Requested>,
     #[serde(default)]
@@ -244,6 +260,12 @@ struct Viewed {
     status_check_rollup: Option<Vec<Check>>,
     merge_state_status: String,
     auto_merge_request: Option<AutoMerge>,
+    created_at: Option<Timestamp>,
+    closed_at: Option<Timestamp>,
+    merged_at: Option<Timestamp>,
+    merged_by: Option<Login>,
+    #[serde(default)]
+    commits: Vec<Commit>,
 }
 
 #[derive(Deserialize)]
@@ -251,14 +273,42 @@ struct Login {
     login: String,
 }
 
-/// A comment, or a review, whose time is `submittedAt` and is absent while it is pending.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Comment {
     author: Option<Login>,
     body: String,
-    #[serde(alias = "submittedAt")]
     created_at: Option<Timestamp>,
+}
+
+/// A review: its text, verdict, and `submittedAt`, absent while it is pending.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Review {
+    author: Option<Login>,
+    body: String,
+    state: String,
+    submitted_at: Option<Timestamp>,
+}
+
+/// A commit's hash, first line, authors, and time.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Commit {
+    oid: String,
+    message_headline: String,
+    #[serde(default)]
+    authors: Vec<CommitAuthor>,
+    committed_date: Timestamp,
+}
+
+/// A commit's author: a GitHub `login` when git's email matches an account, else just a `name`.
+#[derive(Deserialize)]
+struct CommitAuthor {
+    #[serde(default)]
+    login: String,
+    #[serde(default)]
+    name: String,
 }
 
 /// A user, by `login`, or a team, by `name`.
@@ -293,17 +343,16 @@ struct AutoMerge {
     merge_method: String,
 }
 
-/// `gh pr view --json`'s answer as a [`PullRequest`].
-fn parse_view(json: &str) -> Result<PullRequest, PrError> {
-    let viewed: Viewed = serde_json::from_str(json)
-        .map_err(|error| PrError::Gh(format!("could not read gh pr view's answer: {error}")))?;
-    // A deleted account is GitHub's `ghost`.
-    let login = |author: Option<Login>| author.map_or_else(|| "ghost".to_owned(), |a| a.login);
-    let mut comments: Vec<PrComment> = viewed
-        .comments
+/// A deleted account is GitHub's `ghost`.
+fn login(author: Option<Login>) -> String {
+    author.map_or_else(|| "ghost".to_owned(), |a| a.login)
+}
+
+/// The comments and review texts that say something, and the reviews' verdicts, each oldest
+/// first. A pending review has no `submittedAt`, so it is left out of both.
+fn discussion(comments: Vec<Comment>, reviews: Vec<Review>) -> (Vec<PrComment>, Vec<PrReview>) {
+    let mut said: Vec<PrComment> = comments
         .into_iter()
-        .chain(viewed.reviews)
-        .filter(|comment| !comment.body.trim().is_empty())
         .filter_map(|comment| {
             Some(PrComment {
                 created_at: comment.created_at?,
@@ -312,7 +361,40 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
             })
         })
         .collect();
-    comments.sort_by_key(|comment| comment.created_at);
+    let mut verdicts = Vec::new();
+    for review in reviews {
+        let Some(submitted_at) = review.submitted_at else {
+            continue;
+        };
+        let author = login(review.author);
+        said.push(PrComment {
+            author: author.clone(),
+            body: review.body,
+            created_at: submitted_at,
+        });
+        verdicts.push(PrReview {
+            author,
+            state: match review.state.as_str() {
+                "APPROVED" => PrReviewState::Approved,
+                "CHANGES_REQUESTED" => PrReviewState::ChangesRequested,
+                "COMMENTED" => PrReviewState::Commented,
+                "DISMISSED" => PrReviewState::Dismissed,
+                _ => PrReviewState::Unknown,
+            },
+            submitted_at,
+        });
+    }
+    said.retain(|comment| !comment.body.trim().is_empty());
+    said.sort_by_key(|comment| comment.created_at);
+    verdicts.sort_by_key(|review| review.submitted_at);
+    (said, verdicts)
+}
+
+/// `gh pr view --json`'s answer as a [`PullRequest`].
+fn parse_view(json: &str) -> Result<PullRequest, PrError> {
+    let viewed: Viewed = serde_json::from_str(json)
+        .map_err(|error| PrError::Gh(format!("could not read gh pr view's answer: {error}")))?;
+    let (comments, reviews) = discussion(viewed.comments, viewed.reviews);
     let checks: Vec<PrCheck> = viewed
         .status_check_rollup
         .unwrap_or_default()
@@ -365,6 +447,12 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
         labels: viewed.labels.into_iter().map(|label| label.name).collect(),
         checks,
         checks_state,
+        created_at: viewed.created_at,
+        closed_at: viewed.closed_at,
+        merged_at: viewed.merged_at,
+        merged_by: viewed.merged_by.map(|by| by.login),
+        commits: viewed.commits.into_iter().map(commit).collect(),
+        reviews,
         merge_state: match viewed.merge_state_status.as_str() {
             "CLEAN" => Some(PrMergeState::Clean),
             "UNSTABLE" => Some(PrMergeState::Unstable),
@@ -384,6 +472,21 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
                 _ => PrMergeMethod::Unknown,
             }),
     })
+}
+
+/// One of `commits`, by its first author.
+fn commit(commit: Commit) -> PrCommit {
+    PrCommit {
+        author: commit
+            .authors
+            .into_iter()
+            .next()
+            .map(|a| if a.login.is_empty() { a.name } else { a.login })
+            .unwrap_or_default(),
+        oid: commit.oid,
+        headline: commit.message_headline,
+        committed_at: commit.committed_date,
+    }
 }
 
 /// One of `statusCheckRollup`'s checks. A job is done once its `status` is `COMPLETED`, and a
@@ -414,6 +517,25 @@ fn check(check: Check) -> PrCheck {
     }
 }
 
+/// `diff` cut to at most `max` bytes, at the end of a line.
+fn cap_diff(mut diff: String, max: usize) -> PrDiffResult {
+    if diff.len() <= max {
+        return PrDiffResult {
+            diff,
+            truncated: false,
+        };
+    }
+    let cut = diff.as_bytes()[..max]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |at| at + 1);
+    diff.truncate(cut);
+    PrDiffResult {
+        diff,
+        truncated: true,
+    }
+}
+
 /// `url` without its userinfo (`https://user:token@host/path` becomes `https://host/path`), so a
 /// credential kept in the remote's URL never reaches `gh`'s argv. An scp-like `git@host:path`
 /// stays as it is: it can't hold a password.
@@ -430,10 +552,10 @@ fn without_userinfo(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::{PrCheckState, PrMergeMethod, PrMergeState, PrState};
+    use parallax_protocol::{PrCheckState, PrMergeMethod, PrMergeState, PrReviewState, PrState};
     use serde_json::json;
 
-    use super::{github_pr_urls, parse_view, without_userinfo};
+    use super::{cap_diff, github_pr_urls, parse_view, without_userinfo};
 
     #[test]
     fn pull_request_urls_are_found_in_what_gh_printed() {
@@ -506,7 +628,21 @@ mod tests {
                  "targetUrl": "https://deploy.example/1"}
             ],
             "mergeStateStatus": "BLOCKED",
-            "autoMergeRequest": {"mergeMethod": "SQUASH", "enabledBy": {"login": "me"}}
+            "autoMergeRequest": {"mergeMethod": "SQUASH", "enabledBy": {"login": "me"}},
+            "createdAt": "2026-10-02T12:00:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "mergedBy": null,
+            "commits": [
+                {"oid": "abc123", "messageHeadline": "docs: add a README",
+                 "messageBody": "", "committedDate": "2026-10-02T11:58:00Z",
+                 "authoredDate": "2026-10-02T11:58:00Z",
+                 "authors": [{"email": "me@example.com", "id": "U_1", "login": "me", "name": "Me"}]},
+                {"oid": "def456", "messageHeadline": "docs: mention Node",
+                 "messageBody": "", "committedDate": "2026-10-02T12:07:00Z",
+                 "authoredDate": "2026-10-02T12:07:00Z",
+                 "authors": [{"email": "a@example.com", "id": "", "login": "", "name": "Ann"}]}
+            ]
         })
     }
 
@@ -572,6 +708,33 @@ mod tests {
         assert_eq!(pr.checks_state, Some(PrCheckState::Failed));
         assert_eq!(pr.merge_state, Some(PrMergeState::Blocked));
         assert_eq!(pr.auto_merge, Some(PrMergeMethod::Squash));
+        assert_eq!(pr.created_at, Some("2026-10-02T12:00:00Z".parse().unwrap()));
+        let reviews: Vec<_> = pr
+            .reviews
+            .iter()
+            .map(|r| (r.author.as_str(), r.state))
+            .collect();
+        assert_eq!(
+            reviews,
+            [
+                ("rev", PrReviewState::Commented),
+                ("rev", PrReviewState::Approved)
+            ],
+            "every submitted verdict, even with no text, and no pending one"
+        );
+        let commits: Vec<_> = pr
+            .commits
+            .iter()
+            .map(|c| (c.oid.as_str(), c.headline.as_str(), c.author.as_str()))
+            .collect();
+        assert_eq!(
+            commits,
+            [
+                ("abc123", "docs: add a README", "me"),
+                ("def456", "docs: mention Node", "Ann")
+            ],
+            "by login, or by name without a GitHub account"
+        );
     }
 
     #[test]
@@ -581,12 +744,25 @@ mod tests {
         merged["statusCheckRollup"] = json!(null);
         merged["mergeStateStatus"] = json!("UNKNOWN");
         merged["autoMergeRequest"] = json!(null);
+        merged["mergedAt"] = json!("2026-10-02T13:00:00Z");
+        merged["closedAt"] = json!("2026-10-02T13:00:00Z");
+        merged["mergedBy"] = json!({"login": "rev"});
         let pr = parse_view(&merged.to_string()).unwrap();
         assert_eq!(pr.state, PrState::Merged);
+        assert_eq!(pr.merged_by.as_deref(), Some("rev"));
+        assert_eq!(pr.merged_at, Some("2026-10-02T13:00:00Z".parse().unwrap()));
         assert_eq!(
             (pr.checks_state, pr.merge_state, pr.auto_merge),
             (None, None, None)
         );
+    }
+
+    #[test]
+    fn a_long_diff_is_cut_at_a_line_s_end() {
+        let short = cap_diff("+a\n+b\n".to_owned(), 6);
+        assert_eq!((short.diff.as_str(), short.truncated), ("+a\n+b\n", false));
+        let cut = cap_diff("+a\n+bcd\n".to_owned(), 5);
+        assert_eq!((cut.diff.as_str(), cut.truncated), ("+a\n", true));
     }
 
     #[test]

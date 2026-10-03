@@ -46,7 +46,7 @@ mod tests;
 mod translate;
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -126,14 +126,7 @@ pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started,
         .map_err(SpawnError::Io)?
         .unzip();
 
-    let mut spec = ProcessSpec::new(PROGRAM, &request.cwd);
-    spec.args = vec!["app-server".into()];
-    spec.scrub = scrubbed(launcher.base());
-    if let Some(home) = config_home {
-        spec.inject.set(CONFIG_DIR_ENV, home);
-    }
-    spec.stdin = StdinMode::Piped;
-    let mut process = launcher.spawn(&spec)?;
+    let mut process = launcher.spawn(&spec(launcher, &request.cwd, config_home.as_deref()))?;
 
     let switch = CancelSwitch::new();
     let policy = CancelPolicy {
@@ -181,6 +174,26 @@ pub(super) fn start(launcher: &Launcher, request: RunRequest) -> Result<Started,
         run: Arc::new(handle),
         events,
     })
+}
+
+/// `codex app-server` in `cwd`, as a thread on the subscription whose configuration folder is
+/// `config_home` (the default one when absent) runs it: the inherited [`SCRUBBED_PREFIXES`]
+/// variables dropped, and stdin piped.
+pub(super) fn spec(launcher: &Launcher, cwd: &Path, config_home: Option<&Path>) -> ProcessSpec {
+    let mut spec = ProcessSpec::new(PROGRAM, cwd);
+    spec.args = vec!["app-server".into()];
+    spec.scrub = scrubbed(launcher.base());
+    if let Some(home) = config_home {
+        spec.inject.set(CONFIG_DIR_ENV, home);
+    }
+    spec.stdin = StdinMode::Piped;
+    spec
+}
+
+/// The JSON-RPC `initialize` params plxd sends app-server.
+pub(super) fn initialize_params() -> Value {
+    let client = json!({"name": "plxd", "title": "Parallax", "version": env!("CARGO_PKG_VERSION")});
+    json!({"clientInfo": client, "capabilities": null})
 }
 
 /// `thread/start`, or `thread/resume` for a run that resumes a thread, and its params: the cwd,
@@ -335,13 +348,7 @@ impl Driver {
         if let Some(turn_id) = first {
             self.emit(Event::TurnStarted { turn_id }).await;
         }
-        let client =
-            json!({"name": "plxd", "title": "Parallax", "version": env!("CARGO_PKG_VERSION")});
-        self.request(
-            Request::Initialize,
-            "initialize",
-            &json!({"clientInfo": client, "capabilities": null}),
-        );
+        self.request(Request::Initialize, "initialize", &initialize_params());
         let mut control_open = true;
         let mut answers_open = true;
         let exit = loop {

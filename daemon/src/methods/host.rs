@@ -1,4 +1,4 @@
-//! `initialize`, `host/health`, and `host/version`.
+//! `initialize`, `host/health`, `host/version`, and `host/settings/*`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -6,13 +6,16 @@ use std::fs;
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::{
-    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostVersionParams,
-    HostVersionResult, IncompatibleProtocolDetail, InitializeParams, InitializeProtocol,
-    InitializeResult, ProtocolRange,
+    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostSettings,
+    HostSettingsGetParams, HostSettingsSetParams, HostVersionParams, HostVersionResult,
+    IncompatibleProtocolDetail, InitializeParams, InitializeProtocol, InitializeResult,
+    ProtocolRange,
 };
 use tracing::info;
 
 use super::Context;
+use crate::agents::attached;
+use crate::agents::store_error;
 use crate::images;
 use crate::logging::untrusted;
 use crate::server::Daemon;
@@ -95,8 +98,14 @@ pub(crate) fn initialize(
 /// items, which `agent/approve` answers, instead of denying what would prompt.
 /// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
 /// and `project/create`, which an older plxd would silently drop.
+/// `iconImages` (PLX-339, 0038): `image` on a project's or repo entry's `icon`, which an older
+/// plxd would silently drop. Its option `maxBytes` is the cap on the image's base64 `data`.
+/// `projectDelete` (PLX-338): `project/delete` and `project.deleted`.
 /// `threadAttention` (RYA-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
 /// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
+/// `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on `Thread`,
+/// `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`, which an
+/// older plxd would silently drop.
 /// `checkout`: `thread/start` takes `checkout`, to work in the repo's own checkout instead of a
 /// new worktree, and `AgentRun` reports it; an older plxd would silently make a worktree.
 /// `repoRefs`: `repo/refs`, and `thread/start` takes `base` and `checkoutRef`, which an older plxd
@@ -110,6 +119,18 @@ pub(crate) fn initialize(
 /// would refuse, to browse a run's folder.
 /// `pullRequests` (PLX-318): `pr/view` and `pr/act`, and `pullRequests` on `AgentRun` and
 /// `agent.updated`, which an older plxd never fills.
+/// `prDiff` (PLX-328): `pr/diff`, and `createdAt`, `closedAt`, `mergedAt`, `mergedBy`, `commits`,
+/// and `reviews` on `PullRequest`, which an older plxd never fills.
+/// `composerMenus` (PLX-359): `agent/commands` and `repo/files`, for the composer's `/` and `@`
+/// menus.
+/// `githubStatus` (PLX-336): `github/status`.
+/// `threadContext` (PLX-372, 0047): `thread/search`, and `agent/start`, `thread/start`, and
+/// `agent/send` take `threads`, which an older plxd would silently drop, and `turnStarted` lists
+/// them. Its options are the caps: `maxThreads` per message, and `maxSummaryBytes` of each
+/// thread's summary.
+/// `autoResume` (PLX-371, 0049): `agent/resumeNow`, `agent/autoResume`, `host/settings/get` and
+/// `host/settings/set`, the `waiting` status, and `resumeAt` and `autoResume` on `AgentRun` and
+/// `agent.updated`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -122,12 +143,21 @@ fn capabilities_advertised() -> Capabilities {
         ("agentReview".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
         ("approvals".to_owned(), serde_json::Map::new()),
+        ("autoResume".to_owned(), serde_json::Map::new()),
         ("checkout".to_owned(), serde_json::Map::new()),
+        ("composerMenus".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
+        (
+            "iconImages".to_owned(),
+            serde_json::Map::from_iter([("maxBytes".to_owned(), images::MAX_ICON_BYTES.into())]),
+        ),
+        ("githubStatus".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
+        ("prDiff".to_owned(), serde_json::Map::new()),
+        ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("pullRequests".to_owned(), serde_json::Map::new()),
@@ -137,6 +167,14 @@ fn capabilities_advertised() -> Capabilities {
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),
         ("threadAttention".to_owned(), serde_json::Map::new()),
+        (
+            "threadContext".to_owned(),
+            serde_json::Map::from_iter([
+                ("maxThreads".to_owned(), attached::MAX_THREADS.into()),
+                ("maxSummaryBytes".to_owned(), attached::SUMMARY_BYTES.into()),
+            ]),
+        ),
+        ("threadLineage".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
     ]))
 }
@@ -157,6 +195,43 @@ pub(crate) fn version(context: &Context, _: HostVersionParams) -> HostVersionRes
         os: context.daemon.os.clone(),
         arch: std::env::consts::ARCH.to_owned(),
     }
+}
+
+/// `host/settings/get`.
+pub(crate) async fn settings(
+    context: &Context,
+    _: HostSettingsGetParams,
+) -> Result<HostSettings, ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, |db| read_settings(db))
+        .await
+}
+
+/// `host/settings/set`: stores the settings it names, then answers with them all.
+pub(crate) async fn set_settings(
+    context: &Context,
+    params: HostSettingsSetParams,
+) -> Result<HostSettings, ErrorObject> {
+    let HostSettingsSetParams { auto_resume } = params;
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |db| {
+            if let Some(on) = auto_resume {
+                db.set_auto_resume(on).map_err(|e| store_error(&e))?;
+                info!(auto_resume = on, "changed the host's auto-resume setting");
+            }
+            read_settings(db)
+        })
+        .await
+}
+
+fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject> {
+    Ok(HostSettings {
+        auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
+    })
 }
 
 /// The operating system and its version, such as `macOS 27.0`, read once at startup.

@@ -80,7 +80,14 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => [],
     onHosts: () => () => {},
+    onLocalName: (listener: (name: string) => void) => {
+      listener("This Mac");
+      return () => {};
+    },
+    setZoom: () => {},
+    setAppIcon: () => {},
     openTargets: async () => [],
+    openTargetIcons: async () => ({}),
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
@@ -312,6 +319,28 @@ test("a finished thread opens on its prompt with no loader while its transcript 
   expect(bubble()).toBe("Fix the flaky test");
   expect(document.querySelector(".loader")).toBeNull();
   expect(musing()).toBeUndefined();
+});
+
+test("a thread's repo crumb starts a new thread in that repo", async () => {
+  await renderApp();
+  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
+  await settle();
+  const repo = document.querySelector<HTMLButtonElement>('[aria-label="Breadcrumb"] li button')!;
+  expect(repo.textContent).toBe("parallax");
+  await act(async () => repo.click());
+  expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
+  expect(heading()).toBe("What should we build in parallax?");
+  // On New thread the crumb is plain text.
+  expect(document.querySelector('[aria-label="Breadcrumb"] button')).toBeNull();
+});
+
+test("the link under the heading switches New Thread to No Repo, showing its shortcut", async () => {
+  await renderApp();
+  const link = button("or start without a repo⇧⌘N")!;
+  expect(link.getAttribute("aria-keyshortcuts")).toBe("Shift+Meta+N");
+  act(() => link.click());
+  expect(heading()).toBe("What should we work on without a repo?");
+  expect(button("or start without a repo⇧⌘N")).toBeUndefined();
 });
 
 test("No Repo starts a thread with no repo", async () => {
@@ -692,9 +721,7 @@ test("Delete asks first, and only deletes once confirmed", async () => {
   await renderApp();
   await act(async () => button("Thread actions")!.click());
   await act(async () => button("Delete…")!.click());
-  const dialog = document.querySelector<HTMLDialogElement>(
-    '[aria-labelledby="delete-thread-title"]',
-  )!;
+  const dialog = document.querySelector<HTMLDialogElement>('[aria-labelledby="delete-title"]')!;
   expect(dialog.open).toBe(true);
   expect(dialog.textContent).toContain("Fix the flaky test");
 

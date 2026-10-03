@@ -240,7 +240,7 @@ export function SidePanel({
           </IconButton>
           <IconButton
             label="Hide side panel"
-            keys="Alt+B"
+            command="panel"
             aria-expanded
             aria-controls="side-panel"
             onClick={onClose}

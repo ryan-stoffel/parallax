@@ -25,8 +25,17 @@ export interface ParallaxBridge {
   version(): Promise<string>;
   /** Sets Electron's `nativeTheme.themeSource`, so native UI matches the app's theme. */
   setThemeSource(preference: ThemePreference): void;
+  /**
+   * Sets the Dock icon on macOS, or the windows' icon elsewhere, to a PNG data: URL drawn in the
+   * Appearance preset's colors.
+   */
+  setAppIcon(png: string): void;
+  /** Zooms this window's page, 1 being 100%: Settings > Appearance's text size. */
+  setZoom(factor: number): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
+  /** Copies a picture of this window's `rect`, in CSS pixels, to the clipboard. Rejects for an empty or invalid one. */
+  copyPicture(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /**
    * Whether `update` can run: in a packaged app, which installs releases (RYA-68), or under
    * `pnpm dev`, from a checkout (RYA-204).
@@ -83,6 +92,13 @@ export interface ParallaxBridge {
   hosts(): Promise<SshHost[]>;
   /** Every later change to the saved hosts. Returns the unsubscribe function. */
   onHosts(listener: (hosts: SshHost[]) => void): () => void;
+  /**
+   * This computer's name in Parallax: the one the user gave it, else the computer's own, such as
+   * "macbook". Calls `listener` now and on every change. Returns the unsubscribe function.
+   */
+  onLocalName(listener: (name: string) => void): () => void;
+  /** Renames this computer in Parallax; an empty name puts the computer's own back. */
+  renameLocal(name: string): Promise<string | undefined>;
   /** Adds a host, or edits the one with `id`. Resolves to an error for people, or undefined. */
   saveHost(host: HostInput, id?: string): Promise<string | undefined>;
   /**
@@ -117,6 +133,8 @@ export interface ParallaxBridge {
    * manager for this computer's own folders. Empty for an unknown host.
    */
   openTargets(hostId: string): Promise<OpenTarget[]>;
+  /** The Open targets' own app icons as data URLs: macOS only, and only those it could read. */
+  openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>>;
   /** Opens a host's folder with `target`. Main shows a dialog when it can't. */
   openFolder(hostId: string, target: OpenTarget, folder: string): Promise<void>;
 
@@ -131,12 +149,37 @@ export interface ParallaxBridge {
    * to an error for people, or undefined.
    */
   signIn(create: boolean): Promise<string | undefined>;
+  /**
+   * Saves the account's first and last name, trimmed. Resolves to an error for people, or undefined
+   * once saved, after which `onProfile` hears the new name.
+   */
+  saveName(firstName: string, lastName: string): Promise<string | undefined>;
   /** Signs out on this computer. */
   signOut(): Promise<void>;
+
+  /** What Parallax keeps on this computer, with sizes. Takes a moment: it walks the folders. */
+  storage(): Promise<StorageItem[]>;
+  /** Opens a storage item's folder in the file manager. */
+  showFolder(id: StorageItemId): Promise<void>;
+  /** Clears the app's web cache. Nothing the user made is in it. */
+  clearCache(): Promise<void>;
 }
 
-/** The signed-in Parallax account, as the app shows it. `picture` is a data: URL. */
-export type Profile = { name: string; email: string; picture?: string };
+export type StorageItemId = "history" | "worktrees" | "logs" | "app" | "cache";
+/** Something Parallax keeps on this computer: its folder, and its size in bytes. */
+export type StorageItem = { id: StorageItemId; name: string; folder: string; bytes: number };
+
+/**
+ * The signed-in Parallax account, as the app shows it. `name` is the first and last name joined,
+ * or empty. `picture` is a data: URL.
+ */
+export type Profile = {
+  name: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  picture?: string;
+};
 
 /** What the sidebar's Update button shows. */
 export type UpdateState = {

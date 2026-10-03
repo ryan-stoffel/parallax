@@ -44,7 +44,8 @@ pub struct Project {
 }
 
 /// A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
-/// name. plxd stores them as the client sent them and never reads them.
+/// name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
+/// them and never reads them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectIcon {
@@ -56,6 +57,12 @@ pub struct ProjectIcon {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub color: Option<String>,
+    /// An uploaded image the app draws instead of the glyph, behind the `iconImages` capability
+    /// (0038). Its `data` is at most the capability's `maxBytes` of base64, or the request fails
+    /// with `imageTooLarge`. Absent means no image, so an icon sent without one clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub image: Option<PromptImage>,
 }
 
 /// Params of `project/list`.
@@ -178,3 +185,22 @@ pub struct ProjectStartParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
 }
+
+/// Params of `project/delete`: deletes a project with its coordinator and every run in it, their
+/// stored events, sent turns, images, worktrees, and branches, and its shared context folder,
+/// behind the `projectDelete` capability (PLX-338).
+///
+/// Running CLIs are cancelled first, and the delete answers once they have exited and the
+/// project is gone, after appending `project.deleted`. Deleting a project that doesn't exist, or
+/// a repo entry's id, fails with `projectNotFound`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDeleteParams {
+    /// The project.
+    pub project: ProjectId,
+}
+
+/// Result of `project/delete`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDeleteResult {}

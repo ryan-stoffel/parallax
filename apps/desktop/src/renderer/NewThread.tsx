@@ -13,6 +13,7 @@ import type { RunOptions } from "./models";
 import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { noRepo, type ThreadGroup } from "./threads";
+import { ariaKeyshortcut, bindingsOf, useShortcutLabel } from "./keybindings";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
@@ -140,6 +141,9 @@ export function NewThread({
   onStarted,
   disabledReason,
 }: NewThreadProps) {
+  // The no-repo start's shortcut, as Settings > Keybinds has it.
+  const noRepoKeys = useShortcutLabel("noRepoThread");
+  const noRepoBinding = bindingsOf("noRepoThread")[0];
   // ponytail: read as the screen opens, since plxd has no event for a changed default. One
   // changed elsewhere shows once New Thread opens again. Until then plxd refuses an effort or
   // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
@@ -343,7 +347,9 @@ export function NewThread({
       >
         {starting === undefined && (
           <>
-            <h1 className="mb-7 text-center text-[24px] font-medium tracking-tight">
+            <h1
+              className={`${group.id === noRepo ? "mb-7" : "mb-2"} text-center text-[24px] font-medium tracking-tight`}
+            >
               {group.id === noRepo ? "What should we work on " : "What should we build in "}
               <button
                 type="button"
@@ -355,6 +361,31 @@ export function NewThread({
               </button>
               ?
             </h1>
+            {group.id !== noRepo && (
+              <div className="relative z-20 mb-9 text-center">
+                {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRepoError(undefined);
+                    setChoices(undefined);
+                    onGroupChange(noRepo);
+                  }}
+                  aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
+                  className="group relative rounded-md text-[15px] text-muted-foreground underline underline-offset-4 hover:text-foreground focus-visible:text-foreground"
+                >
+                  or start without a repo
+                  {noRepoKeys && (
+                    <kbd
+                      aria-hidden
+                      className="pointer-events-none invisible absolute top-full left-1/2 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-[12px] text-muted-foreground group-hover:visible group-focus-visible:visible"
+                    >
+                      {noRepoKeys}
+                    </kbd>
+                  )}
+                </button>
+              </div>
+            )}
             {/* Menu only: the repository name in the heading opens it. */}
             <Picker
               id={repoMenu}
@@ -398,6 +429,11 @@ export function NewThread({
           }
           disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
           imageCaps={imageCaps(connection)}
+          menus={
+            connection?.status === "connected" && "composerMenus" in connection.capabilities
+              ? { hostId, repo: group.id === noRepo ? undefined : group.id }
+              : undefined
+          }
           // A new thread asks only through a plxd that sends its requests (RYA-196).
           manualDenied={
             connection?.status === "connected" && !("approvals" in connection.capabilities)

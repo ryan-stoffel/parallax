@@ -9,12 +9,12 @@ use std::sync::Arc;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
-    AgentApproveResult, AgentCancelParams, AgentCommitParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams,
-    AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
-    AgentOpenPrParams, AgentOpenPrResult, AgentPolicy, AgentPushParams, AgentRequestChangesParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind, GitStatus, LoggedEvent,
-    PromptImage, RunId,
+    AgentApproveResult, AgentAutoResumeParams, AgentCancelParams, AgentCommitParams,
+    AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileParams,
+    AgentFileResult, AgentFilesParams, AgentFilesResult, AgentGitStatusParams, AgentImageParams,
+    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy,
+    AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams, AgentRunResult,
+    AgentSendParams, AgentStartParams, ErrorKind, GitStatus, LoggedEvent, PromptImage, RunId,
 };
 
 use super::Context;
@@ -66,7 +66,7 @@ pub(super) fn check_message(
 
 pub(crate) async fn start(
     context: &Context,
-    params: AgentStartParams,
+    mut params: AgentStartParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     if params.policy != AgentPolicy::WorkspaceWrite {
         return Err(ErrorObject::invalid_params(
@@ -74,6 +74,7 @@ pub(crate) async fn start(
         ));
     }
     check_message("prompt", &params.prompt, &params.images)?;
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -85,9 +86,10 @@ pub(crate) async fn start(
 
 pub(crate) async fn send(
     context: &Context,
-    params: AgentSendParams,
+    mut params: AgentSendParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     check_message("text", &params.text, &params.images)?;
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -106,6 +108,38 @@ pub(crate) async fn cancel(
         .daemon
         .agents
         .detached(agents::cancel(daemon, params.run_id))
+        .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `agent/resumeNow` (PLX-371): through the run's actor, detached as `agent/cancel` is.
+pub(crate) async fn resume_now(
+    context: &Context,
+    params: AgentResumeNowParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    let run = context
+        .daemon
+        .agents
+        .detached(agents::resume_now(daemon, params.run_id))
+        .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `agent/autoResume` (PLX-371): through the run's actor.
+pub(crate) async fn auto_resume(
+    context: &Context,
+    params: AgentAutoResumeParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    let AgentAutoResumeParams {
+        run_id,
+        auto_resume,
+    } = params;
+    let run = context
+        .daemon
+        .agents
+        .detached(agents::set_auto_resume(daemon, run_id, auto_resume))
         .await?;
     Ok(AgentRunResult { run })
 }
@@ -331,6 +365,7 @@ pub(crate) async fn request_changes(
             fast: None,
             account: None,
             images: Vec::new(),
+            threads: Vec::new(),
         },
     )
     .await
@@ -422,6 +457,7 @@ mod tests {
                     policy: "workspaceWrite".to_owned(),
                     backend: "fake".to_owned(),
                     coordinator_thread: None,
+                    parent: None,
                     model: None,
                     effort: None,
                     permission: None,

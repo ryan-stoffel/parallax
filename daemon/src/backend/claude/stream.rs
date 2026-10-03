@@ -875,7 +875,7 @@ fn is_zero(usage: &Usage) -> bool {
     clippy::cast_sign_loss,
     reason = "a finite, non-negative cost in dollars fits in u64 micros"
 )]
-fn micros(usd: f64) -> Option<u64> {
+pub(crate) fn micros(usd: f64) -> Option<u64> {
     (usd.is_finite() && usd >= 0.0).then(|| (usd * 1_000_000.0).round() as u64)
 }
 

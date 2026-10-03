@@ -370,14 +370,45 @@ export interface Work {
 }
 
 /**
- * Folds each run of thinking, tool calls, and checklists into one `Work` row. The agent's messages
- * are never folded: they split runs and pass through, so they stay in order and stream in place.
- * So do a dropped follow-up's notice and other rows (user, end, and whatever the caller adds).
- * Other notices fold, except those after a run's last activity.
+ * The rows of each turn an `end` row closes that fold into its work, as T3 Code shows a finished
+ * turn (PLX-326): its messages before the last, and its answered permission requests. One CLI
+ * process can run several turns, as follow-ups arrive, so its `end` closes them all. A turn still
+ * going has no `end`, so its messages stream in place and its requests stay in view.
+ */
+function finishedTurnRows(rows: readonly { kind: string }[]): Set<number> {
+  const folds = new Set<number>();
+  // The current turn's messages and answered requests, and the earlier turns' that would fold.
+  let turn: number[] = [];
+  let closed: number[] = [];
+  const close = () => {
+    const answer = turn.findLast((j) => rows[j]!.kind === "assistant");
+    closed.push(...turn.filter((j) => j !== answer));
+    turn = [];
+  };
+  rows.forEach((row, i) => {
+    if (row.kind === "user" || row.kind === "pending") close();
+    else if (row.kind === "assistant" || (row.kind === "approval" && (row as Approval).resolved))
+      turn.push(i);
+    else if (row.kind === "end") {
+      close();
+      for (const j of closed) folds.add(j);
+      closed = [];
+    }
+  });
+  return folds;
+}
+
+/**
+ * Folds each run of thinking, tool calls, and checklists into one `Work` row. While a turn goes,
+ * the agent's messages split runs and pass through, so they stay in order and stream in place;
+ * once it ends, all but its last fold too (`finishedTurnRows`). A dropped follow-up's notice and
+ * other rows (user, end, and whatever the caller adds) pass through. Other notices fold, except
+ * those after a run's last activity.
  */
 export function groupWork<R extends { kind: string; at?: string }>(
   rows: readonly (Item | R)[],
 ): (Item | R | Work)[] {
+  const folds = finishedTurnRows(rows);
   const out: (Item | R | Work)[] = [];
   let run: Item[] = [];
   const flush = (next?: { kind: string; at?: string }) => {
@@ -398,8 +429,9 @@ export function groupWork<R extends { kind: string; at?: string }>(
     out.push(...run.slice(last + 1));
     run = [];
   };
-  for (const row of rows) {
+  for (const [i, row] of rows.entries()) {
     if (
+      folds.has(i) ||
       ["reasoning", "tool", "todo"].includes(row.kind) ||
       (row.kind === "notice" && !(row as Item & { turnId?: string }).turnId)
     )
@@ -451,6 +483,7 @@ const statuses: Record<AgentStatus, string> = {
   failed: "Failed",
   cancelled: "Stopped",
   interrupted: "Interrupted",
+  waiting: "Waiting",
   accepted: "Accepted",
 };
 

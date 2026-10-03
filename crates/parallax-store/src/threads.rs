@@ -3,7 +3,8 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
-use crate::runs::insert_run;
+use crate::project::{icon_columns, icon_from_row};
+use crate::runs::{delete_run_rows, insert_run};
 use crate::worktree::insert_worktree;
 use crate::{ProjectIcon, Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
 
@@ -40,28 +41,60 @@ pub struct Thread {
     pub snoozed_until: Option<Timestamp>,
     /// When its newest message was sent: its newest recorded turn, or its creation.
     pub last_prompt_at: Timestamp,
+    /// The run that launched it: its run's [`RunFields::parent`] (decision record 0041).
+    pub parent: Option<Uuid>,
+    /// Its fork origin and title.
+    pub fields: ThreadFields,
+    /// Whether the user or an agent marked it settled: nothing left to do.
+    pub settled: bool,
 }
 
-const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, icon_name, icon_color";
+/// The run and turn a thread was forked from (decision record 0041).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForkedFrom {
+    pub run: Uuid,
+    pub turn: Uuid,
+}
+
+/// A thread's fork origin and title (decision record 0041), as a new thread records them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadFields {
+    /// Where it was forked from. Cleared when that run is deleted.
+    pub forked_from: Option<ForkedFrom>,
+    /// Its title. `None` leaves it to the client, which shows its prompt's first line.
+    pub title: Option<String>,
+}
+
+/// What [`Store::update_thread`] changes. Each `None` leaves its field alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadUpdate {
+    /// Marks it seen now (decision record 0033).
+    pub seen: bool,
+    /// Replaces its snooze.
+    pub snoozed_until: Option<Timestamp>,
+    /// Replaces its title, where `Some(None)` clears it.
+    pub title: Option<Option<String>>,
+    pub settled: Option<bool>,
+}
+
+const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
+    icon_name, icon_color, icon_image_type, icon_image_data";
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
-    COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at)";
+    COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
+    AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
+    forked_from_turn, title, settled";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (String, String, String, bool, String, Option<ProjectIcon>);
 
 fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
-    let icon_name: Option<String> = row.get(5)?;
-    let icon_color: Option<String> = row.get(6)?;
     Ok((
         row.get(0)?,
         row.get(1)?,
         row.get(2)?,
         row.get(3)?,
         row.get(4)?,
-        icon_name.map(|name| ProjectIcon {
-            name,
-            color: icon_color,
-        }),
+        icon_from_row(row, 5)?,
     ))
 }
 
@@ -80,39 +113,77 @@ fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
 }
 
 /// A thread's columns as TEXT, before the fallible conversion to [`Thread`].
-type RawThread = (
-    String,
-    String,
-    bool,
-    String,
-    Option<String>,
-    Option<String>,
-    String,
-);
+struct RawThread {
+    id: String,
+    repo_id: String,
+    archived: bool,
+    created_at: String,
+    seen_at: Option<String>,
+    snoozed_until: Option<String>,
+    last_prompt_at: String,
+    parent: Option<String>,
+    forked_from_run: Option<String>,
+    forked_from_turn: Option<String>,
+    title: Option<String>,
+    settled: bool,
+}
 
 fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-    ))
+    Ok(RawThread {
+        id: row.get(0)?,
+        repo_id: row.get(1)?,
+        archived: row.get(2)?,
+        created_at: row.get(3)?,
+        seen_at: row.get(4)?,
+        snoozed_until: row.get(5)?,
+        last_prompt_at: row.get(6)?,
+        parent: row.get(7)?,
+        forked_from_run: row.get(8)?,
+        forked_from_turn: row.get(9)?,
+        title: row.get(10)?,
+        settled: row.get(11)?,
+    })
 }
 
 fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
-    let (id, repo_id, archived, created_at, seen_at, snoozed_until, last_prompt_at) = raw;
+    let uuid = |text: Option<String>| text.as_deref().map(Uuid::parse_str).transpose();
+    let forked_from = match (uuid(raw.forked_from_run)?, uuid(raw.forked_from_turn)?) {
+        (Some(run), Some(turn)) => Some(ForkedFrom { run, turn }),
+        _ => None,
+    };
     Ok(Thread {
-        id: Uuid::parse_str(&id)?,
-        repo_id: Uuid::parse_str(&repo_id)?,
-        archived,
-        created_at: timestamp::parse(&created_at)?,
-        seen_at: seen_at.as_deref().map(timestamp::parse).transpose()?,
-        snoozed_until: snoozed_until.as_deref().map(timestamp::parse).transpose()?,
-        last_prompt_at: timestamp::parse(&last_prompt_at)?,
+        id: Uuid::parse_str(&raw.id)?,
+        repo_id: Uuid::parse_str(&raw.repo_id)?,
+        archived: raw.archived,
+        created_at: timestamp::parse(&raw.created_at)?,
+        seen_at: raw.seen_at.as_deref().map(timestamp::parse).transpose()?,
+        snoozed_until: raw
+            .snoozed_until
+            .as_deref()
+            .map(timestamp::parse)
+            .transpose()?,
+        last_prompt_at: timestamp::parse(&raw.last_prompt_at)?,
+        parent: uuid(raw.parent)?,
+        fields: ThreadFields {
+            forked_from,
+            title: raw.title,
+        },
+        settled: raw.settled,
     })
+}
+
+/// A `LIKE` pattern, escaped with `\`, that matches `text` anywhere.
+fn like_pattern(text: &str) -> String {
+    let mut pattern = String::with_capacity(text.len() + 2);
+    pattern.push('%');
+    for c in text.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
 }
 
 fn fetch_repo(conn: &Connection, sql_where: &str, key: &str) -> Result<Option<Repo>, StoreError> {
@@ -220,7 +291,7 @@ impl Store {
     /// Records a normal thread in repo entry `repo_id`, with its run and the run's worktree, in
     /// one transaction, so none exists without the others. The run's `project_id` must be
     /// `repo_id`. A run in the repository's own checkout ([`RunFields::checkout`]) has no
-    /// worktree, so `worktree` is `None` for it.
+    /// worktree, so `worktree` is `None` for it. `thread` is its fork origin and title.
     ///
     /// # Errors
     ///
@@ -233,6 +304,7 @@ impl Store {
         fields: &RunFields,
         state: &RunState,
         worktree: Option<&WorktreeFields>,
+        thread: &ThreadFields,
     ) -> Result<(Thread, Run, Option<Worktree>), StoreError> {
         let tx = self
             .conn
@@ -242,9 +314,18 @@ impl Store {
             .transpose()?;
         let run = insert_run(&tx, id, fields, state)?;
         let inserted = tx.execute(
-            "INSERT INTO threads (id, repo_id, archived, created_at) VALUES (?1, ?2, 0, ?3)
+            "INSERT INTO threads (id, repo_id, archived, created_at, forked_from_run,
+                                  forked_from_turn, title)
+             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6)
              ON CONFLICT (id) DO NOTHING",
-            params![id.to_string(), repo_id.to_string(), timestamp::now()],
+            params![
+                id.to_string(),
+                repo_id.to_string(),
+                timestamp::now(),
+                thread.forked_from.map(|from| from.run.to_string()),
+                thread.forked_from.map(|from| from.turn.to_string()),
+                thread.title,
+            ],
         )?;
         if inserted == 0 {
             return Err(StoreError::IdConflict { id });
@@ -280,6 +361,43 @@ impl Store {
         Ok(threads)
     }
 
+    /// The threads whose title or messages contain `query`, the one with the newest message
+    /// first, at most `limit` (PLX-372). A message is the run's prompt, a sent turn's text, or the agent's
+    /// reply: a `text` item of the run's `agent.output` events. Tool calls and their output don't
+    /// count. Matching is SQLite's `LIKE`: case-insensitive for ASCII letters only.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn search_threads(&self, query: &str, limit: usize) -> Result<Vec<Thread>, StoreError> {
+        let pattern = like_pattern(query);
+        // The event's JSON holds a reply's text JSON-escaped, so this cheap test on the raw
+        // payload finds every event that could match, and only those are parsed.
+        let escaped = serde_json::to_string(query).unwrap_or_default();
+        let payload_pattern = like_pattern(&escaped[1..escaped.len() - 1]);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {THREAD_COLUMNS} FROM threads WHERE
+                title LIKE ?1 ESCAPE '\\'
+                OR EXISTS (SELECT 1 FROM runs WHERE runs.id = threads.id
+                    AND runs.prompt LIKE ?1 ESCAPE '\\')
+                OR EXISTS (SELECT 1 FROM turns WHERE turns.run_id = threads.id
+                    AND turns.text LIKE ?1 ESCAPE '\\')
+                OR EXISTS (SELECT 1 FROM events, json_each(events.payload, '$.items') AS item
+                    WHERE events.run_id = threads.id AND events.kind = 'agent.output'
+                    AND events.payload LIKE ?2 ESCAPE '\\'
+                    AND json_extract(item.value, '$.kind') = 'text'
+                    AND json_extract(item.value, '$.text') LIKE ?1 ESCAPE '\\')
+             ORDER BY last_prompt_at DESC, id DESC LIMIT ?3"
+        ))?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt.query_map(params![pattern, payload_pattern, limit], thread_from_row)?;
+        let mut threads = Vec::new();
+        for row in rows {
+            threads.push(into_thread(row?)?);
+        }
+        Ok(threads)
+    }
+
     /// Archives thread `id` or brings it back, and returns it.
     ///
     /// # Errors
@@ -296,8 +414,9 @@ impl Store {
         fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })
     }
 
-    /// Marks thread `id` seen now when `seen`, and snoozes it until `snoozed_until` when that is
-    /// set (decision record 0033). Returns the thread and whether anything changed.
+    /// Applies `update` to thread `id`: marks it seen now, snoozes it (decision record 0033), or
+    /// sets its title or settled flag (decision record 0041). Returns the thread and whether
+    /// anything changed.
     ///
     /// # Errors
     ///
@@ -305,12 +424,17 @@ impl Store {
     pub fn update_thread(
         &self,
         id: Uuid,
-        seen: bool,
-        snoozed_until: Option<Timestamp>,
+        update: &ThreadUpdate,
     ) -> Result<(Thread, bool), StoreError> {
+        let ThreadUpdate {
+            seen,
+            snoozed_until,
+            title,
+            settled,
+        } = update;
         let key = id.to_string();
         let mut changed = 0;
-        if seen {
+        if *seen {
             changed += self.conn.execute(
                 "UPDATE threads SET seen_at = ?2 WHERE id = ?1",
                 params![key, timestamp::now()],
@@ -320,7 +444,19 @@ impl Store {
             changed += self.conn.execute(
                 "UPDATE threads SET snoozed_until = ?2 WHERE id = ?1 \
                  AND snoozed_until IS NOT ?2",
-                params![key, timestamp::format(until)],
+                params![key, timestamp::format(*until)],
+            )?;
+        }
+        if let Some(title) = title {
+            changed += self.conn.execute(
+                "UPDATE threads SET title = ?2 WHERE id = ?1 AND title IS NOT ?2",
+                params![key, title],
+            )?;
+        }
+        if let Some(settled) = settled {
+            changed += self.conn.execute(
+                "UPDATE threads SET settled = ?2 WHERE id = ?1 AND settled IS NOT ?2",
+                params![key, settled],
             )?;
         }
         let thread = fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })?;
@@ -339,32 +475,28 @@ impl Store {
         if before.icon.as_ref() == Some(icon) {
             return Ok((before, false));
         }
+        let (name, color, image_type, image_data) = icon_columns(Some(icon));
         self.conn.execute(
-            "UPDATE repos SET icon_name = ?2, icon_color = ?3 WHERE id = ?1",
-            params![key, icon.name, icon.color],
+            "UPDATE repos SET icon_name = ?2, icon_color = ?3, icon_image_type = ?4, \
+             icon_image_data = ?5 WHERE id = ?1",
+            params![key, name, color, image_type, image_data],
         )?;
         let repo = fetch_repo(&self.conn, "id = ?1", &key)?.ok_or(StoreError::NotFound { id })?;
         Ok((repo, true))
     }
 
-    /// Deletes thread `id` with its run, its worktree row, its stored events, its sent turns, and
-    /// its images (#190, RYA-191: `turns` and `images` have no foreign key to `runs`, so nothing
-    /// else removes them), in one transaction. Returns whether the thread existed.
+    /// Deletes thread `id` with its run and every row [`Store::delete_run`] deletes (#190,
+    /// RYA-191), in one transaction. Returns whether the thread existed.
     ///
     /// # Errors
     ///
     /// A database error.
     pub fn delete_thread(&mut self, id: Uuid) -> Result<bool, StoreError> {
-        let key = id.to_string();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existed = tx.execute("DELETE FROM threads WHERE id = ?1", params![key])? > 0;
-        tx.execute("DELETE FROM runs WHERE id = ?1", params![key])?;
-        tx.execute("DELETE FROM worktrees WHERE id = ?1", params![key])?;
-        tx.execute("DELETE FROM events WHERE run_id = ?1", params![key])?;
-        tx.execute("DELETE FROM turns WHERE run_id = ?1", params![key])?;
-        tx.execute("DELETE FROM images WHERE run_id = ?1", params![key])?;
+        let existed = tx.execute("DELETE FROM threads WHERE id = ?1", params![id.to_string()])? > 0;
+        delete_run_rows(&tx, id)?;
         tx.commit()?;
         Ok(existed)
     }

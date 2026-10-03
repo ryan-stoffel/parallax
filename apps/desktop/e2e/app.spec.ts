@@ -93,6 +93,20 @@ test("stops the thread", async () => {
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
 });
 
+test("a top bar menu closes on a click outside it (PLX-363)", async () => {
+  await page.getByRole("button", { name: "Open in…" }).click();
+  const menu = page.getByRole("menu", { name: "Open in" });
+  await expect(menu).toBeVisible();
+  // A menu that inherits the top bar's drag turns the window's clicks outside it into drags,
+  // which never reach the page. Playwright's clicks skip the window, so check the style itself.
+  const region = await menu.evaluate(
+    `(m) => getComputedStyle(m).getPropertyValue("-webkit-app-region")`,
+  );
+  expect(region).not.toBe("drag");
+  await page.getByRole("log", { name: "Transcript" }).click();
+  await expect(menu).toBeHidden();
+});
+
 test("opens a terminal in the thread's folder, kept while hidden (RYA-295)", async () => {
   const listed = (await page.evaluate(`window.parallax.request("local", "agent/list", {})`)) as {
     result: { runs: { prompt: string; branch?: string }[] };
@@ -260,7 +274,8 @@ test("creates a project on a repository it adds, and opens it (RYA-166)", async 
 
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Back to app" }).click();
-  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("button", { name: "New project or repository" }).click();
+  await page.getByRole("menuitem", { name: "New project…" }).click();
   const dialog = page.getByRole("dialog", { name: "Create Project" });
   await dialog.getByRole("button", { name: /^Workspace/ }).click();
   await page.getByRole("menuitem", { name: "Choose folder…" }).click();
@@ -468,7 +483,7 @@ test("saves a repository action and runs it in the drawer, opening its preview (
   const dialog = page.getByRole("dialog", { name: "Add action" });
   await dialog.getByRole("textbox", { name: "Name" }).fill("Git version");
   const keys = dialog.getByRole("textbox", { name: "Keybinding" });
-  await keys.press("ControlOrMeta+b");
+  await keys.press("ControlOrMeta+s");
   await expect(dialog.getByRole("alert")).toContainText("one of Parallax's shortcuts");
   await keys.press("ControlOrMeta+Shift+k");
   await dialog.getByRole("textbox", { name: "Command" }).fill("git --version");

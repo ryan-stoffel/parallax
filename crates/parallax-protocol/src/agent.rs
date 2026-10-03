@@ -64,7 +64,8 @@ pub enum ImageMediaType {
 }
 
 /// An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
-/// decision 0026). The CLI gets it beside the text, never as a file name or path in it.
+/// decision 0026). The CLI gets it beside the text, never as a file name or path in it. A
+/// project's or repo's icon image has the same shape (0038).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptImage {
@@ -164,6 +165,10 @@ pub enum AgentStatus {
     Cancelled,
     /// plxd stopped while it ran. `agent/send` resumes it when it has a `sessionId`.
     Interrupted,
+    /// A usage limit stopped it, and plxd resumes it at `resumeAt` (PLX-371, decision 0049).
+    /// `agent/send` and `agent/resumeNow` resume it sooner, and `agent/cancel` makes it
+    /// `cancelled`.
+    Waiting,
     /// `agent/accept` merged its changes into the project's branch and removed its worktree and
     /// branch. It takes no more messages.
     Accepted,
@@ -272,6 +277,15 @@ pub struct AgentRun {
     /// `pullRequests` capability. Absent means none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pull_requests: Vec<String>,
+    /// When plxd resumes it, while it is `waiting` (decision 0049). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resume_at: Option<Timestamp>,
+    /// Whether a usage limit makes it wait and resume, overriding the host's
+    /// `host/settings` `autoResume` (decision 0049). Absent means the host's setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -329,6 +343,14 @@ pub struct AgentRunState {
     /// Its linked pull requests, as `AgentRun.pullRequests` (PLX-318). Absent means none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pull_requests: Vec<String>,
+    /// When plxd resumes it, as `AgentRun.resumeAt`. Absent once it doesn't wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resume_at: Option<Timestamp>,
+    /// Its auto-resume override, as `AgentRun.autoResume`. Absent means the host's setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
     /// When it changed, in RFC 3339 UTC.
     pub updated_at: Timestamp,
 }
@@ -476,13 +498,20 @@ pub enum AgentOutputItem {
         #[ts(optional)]
         text: Option<String>,
         /// True for a wake-up (RYA-42, decision 0025): a turn plxd sent a project's coordinator
-        /// on its own, not the user, because runs it started finished. `text` lists them.
+        /// on its own, not the user, because runs it started finished. `text` lists them. Also
+        /// true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
+        /// 0049).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         wake: bool,
         /// The images sent with the turn's message, the prompt's or a follow-up's, in order, for
         /// `agent/image` (RYA-191). Absent when it had none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<ImageId>,
+        /// The threads attached to the turn's message as context, in order (PLX-372). The agent
+        /// got a summary of each ahead of the message, which `text` and the run's `prompt` leave
+        /// out. Absent when it had none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        threads: Vec<RunId>,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {
@@ -710,9 +739,18 @@ pub struct AgentStartParams {
     /// resumes, and a retry must repeat it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
+    /// Threads attached to the prompt as context, by their run ids, sent only to a plxd that
+    /// advertises `threadContext` (PLX-372, decision 0047). The agent gets a summary of each ahead
+    /// of the prompt: its id and what was said in it, without tool calls, cut from the front to
+    /// the capability's `maxSummaryBytes`. At most the capability's `maxThreads`. An id that is
+    /// no thread's fails with `threadNotFound`. A retry must repeat them; plxd doesn't compare
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RunId>,
 }
 
-/// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
+/// Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and
+/// `agent/autoResume`: the run as it stands.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunResult {
@@ -775,6 +813,10 @@ pub struct AgentSendParams {
     /// Images for the message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
+    /// Threads attached to the message as context, as `agent/start`'s. A message that waits for
+    /// the run's CLI gets their summaries when it's sent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RunId>,
 }
 
 /// Params of `agent/cancel`: stops a running agent, which ends as `cancelled`. Cancelling a run
@@ -784,6 +826,30 @@ pub struct AgentSendParams {
 pub struct AgentCancelParams {
     /// The run.
     pub run_id: RunId,
+}
+
+/// Params of `agent/resumeNow`: resumes a `waiting` run now instead of at its `resumeAt`, with
+/// the same message the timer sends (decision 0049). Fails with `runNotResumable` for a run that
+/// isn't waiting.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentResumeNowParams {
+    /// The run.
+    pub run_id: RunId,
+}
+
+/// Params of `agent/autoResume`: sets or clears a run's auto-resume override (decision 0049).
+/// Turning it off for a `waiting` run clears its timer, and the run becomes `failed` with its
+/// usage limit's error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAutoResumeParams {
+    /// The run.
+    pub run_id: RunId,
+    /// On or off for this run. Absent clears the override, so the host's setting applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
 }
 
 /// Params of `agent/list`.

@@ -30,12 +30,20 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("agentReview".to_owned(), serde_json::Map::new()),
             ("agents".to_owned(), serde_json::Map::new()),
             ("approvals".to_owned(), serde_json::Map::new()),
+            ("autoResume".to_owned(), serde_json::Map::new()),
             ("checkout".to_owned(), serde_json::Map::new()),
+            ("composerMenus".to_owned(), serde_json::Map::new()),
             ("contextAndFast".to_owned(), serde_json::Map::new()),
             ("coordinator".to_owned(), serde_json::Map::new()),
             ("files".to_owned(), serde_json::Map::new()),
             ("git".to_owned(), serde_json::Map::new()),
+            (
+                "iconImages".to_owned(),
+                serde_json::from_value(json!({"maxBytes": 64 * 1024})).unwrap()
+            ),
+            ("githubStatus".to_owned(), serde_json::Map::new()),
             ("openPr".to_owned(), serde_json::Map::new()),
+            ("projectDelete".to_owned(), serde_json::Map::new()),
             ("projectEdit".to_owned(), serde_json::Map::new()),
             (
                 "promptImages".to_owned(),
@@ -46,6 +54,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
                 }))
                 .unwrap()
             ),
+            ("prDiff".to_owned(), serde_json::Map::new()),
             ("pullRequests".to_owned(), serde_json::Map::new()),
             ("repoRefs".to_owned(), serde_json::Map::new()),
             ("runOptions".to_owned(), serde_json::Map::new()),
@@ -53,6 +62,12 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("sendModel".to_owned(), serde_json::Map::new()),
             ("sendOptions".to_owned(), serde_json::Map::new()),
             ("threadAttention".to_owned(), serde_json::Map::new()),
+            (
+                "threadContext".to_owned(),
+                serde_json::from_value(json!({"maxThreads": 8, "maxSummaryBytes": 32 * 1024}))
+                    .unwrap()
+            ),
+            ("threadLineage".to_owned(), serde_json::Map::new()),
             ("threads".to_owned(), serde_json::Map::new()),
         ]))
     );

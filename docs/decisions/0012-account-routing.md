@@ -1,6 +1,6 @@
 # 0012: Routing a task to a backend and account
 
-- Status: accepted; the coordinator's turns call `snapshot` and `check` as of [0024](0024-coordinator-chat.md), and no longer since [0027](0027-claude-permission-modes.md)
+- Status: accepted; the coordinator's turns call `snapshot` and `check` as of [0024](0024-coordinator-chat.md), and no longer since [0027](0027-claude-permission-modes.md); a Project's children may use several accounts of one backend and use an API key only when the Project allows it since [0046](0046-project-scheduler.md)
 - Date: 2026-09-25
 - Issue: #119
 

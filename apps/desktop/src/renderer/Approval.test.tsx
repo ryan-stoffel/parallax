@@ -351,6 +351,9 @@ test("a request that times out, is withdrawn, is stopped, or outlives its run le
   expect(card()!.textContent).toContain("Needs approval");
   await emitEvent({ kind: "agent.finished", runId, outcome: { status: "interrupted" } });
   expect(pinned()).toBeNull();
+  // The run is over, so its answered requests fold into its work (PLX-326).
+  expect(lines()).toEqual([]);
+  await click(transcript().querySelector("button[aria-expanded]"));
   expect(lines()).toEqual([
     expect.stringMatching(/^Timed outBash/),
     expect.stringMatching(/^WithdrawnBash/),

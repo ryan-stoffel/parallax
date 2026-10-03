@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "electron";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import path from "node:path";
 
 import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
@@ -36,6 +37,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "project/create": true,
   "project/start": true,
   "project/update": true,
+  "project/delete": true,
   "accounts/keys/add": true,
   "accounts/keys/list": true,
   "accounts/keys/remove": true,
@@ -43,6 +45,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "accounts/refresh": true,
   "usage/get": true,
   "usage/history": true,
+  "usage/daily": true,
   "accounts/defaults/get": true,
   "accounts/defaults/set": true,
   "context/list": true,
@@ -70,10 +73,19 @@ const rendererMethods: Record<RendererMethod, true> = {
   "thread/archive": true,
   "thread/delete": true,
   "thread/update": true,
+  "thread/search": true,
   "repo/update": true,
   "repo/refs": true,
   "pr/view": true,
   "pr/act": true,
+  "pr/diff": true,
+  "agent/commands": true,
+  "repo/files": true,
+  "github/status": true,
+  "agent/resumeNow": true,
+  "agent/autoResume": true,
+  "host/settings/get": true,
+  "host/settings/set": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */
@@ -106,6 +118,18 @@ export function startHosts(): void {
   ipcMain.handle("parallax:hosts", () => settings.hosts);
   ipcMain.handle("parallax:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
   ipcMain.handle("parallax:removeHost", (_event, id: unknown) => removeHost(id));
+  ipcMain.handle("parallax:localName", () => localName());
+  ipcMain.handle("parallax:renameLocal", (_event, name: unknown) => {
+    if (typeof name !== "string") return "invalid name";
+    const label = name
+      .replace(/\p{Cc}/gu, "")
+      .trim()
+      .slice(0, 64);
+    const { localName: _old, ...rest } = settings;
+    const error = saveSettings(label ? { ...rest, localName: label } : rest);
+    if (!error) broadcast("parallax:localName", localName());
+    return error;
+  });
 
   // Answers `{error}` rather than throwing, so a bad call reads like any failed request.
   ipcMain.handle(
@@ -212,6 +236,26 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
   const path = answer.result.clis.find((each) => each.cli === cli)?.path;
   if (!path) return "That CLI isn't installed on this host anymore.";
   return loginCommand(cli, path, ssh);
+}
+
+/**
+ * This computer's name in Parallax: the user's, else the computer's own. macOS's is the Computer
+ * Name in System Settings, such as "macbook"; elsewhere, the host name.
+ */
+function localName(): string {
+  return settings.localName || (computerName ??= readComputerName());
+}
+let computerName: string | undefined;
+function readComputerName(): string {
+  if (process.platform === "darwin") {
+    try {
+      const name = execFileSync("scutil", ["--get", "ComputerName"], { encoding: "utf8" }).trim();
+      if (name) return name;
+    } catch {
+      // Falls back to the host name.
+    }
+  }
+  return hostname().replace(/\.local$/, "");
 }
 
 /** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */

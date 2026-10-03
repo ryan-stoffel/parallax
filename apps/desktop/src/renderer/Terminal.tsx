@@ -5,7 +5,9 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import type { TerminalTarget } from "../preload/bridge";
-import { rowShortcut } from "./ui";
+import { terminalAppShortcut } from "./ui";
+
+const mac = () => window.parallax.platform === "darwin";
 
 /**
  * An xterm.js terminal showing main's terminal `id`, which it opens on `target` when it mounts and
@@ -47,9 +49,18 @@ export function TerminalView({
         cursor: color("--foreground"),
       };
     };
+    // The monospace font and size from Settings > Appearance (appearance.ts), on <html>.
+    const font = () => {
+      const style = getComputedStyle(document.documentElement);
+      const family = style.getPropertyValue("--code-font").trim();
+      return {
+        // Last, the bundled Nerd Font icons (index.css), for the glyphs no system font has.
+        fontFamily: `${family && `${family}, `}ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"`,
+        fontSize: Number(style.getPropertyValue("--code-size")) || 12,
+      };
+    };
     const term = new Terminal({
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
+      ...font(),
       cursorBlink: true,
       theme: theme(),
     });
@@ -57,20 +68,16 @@ export function TerminalView({
     term.loadAddon(fit);
     // Links go to main, which opens https ones in the browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri)));
-    // Outside macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac, and
-    // Ctrl+J and Ctrl+1 to Ctrl+9 reach the app, which toggles the terminal drawer and opens a
-    // sidebar row with them.
+    // The app's shortcuts reach only the app, but plain Ctrl+letter ones outside macOS, which stay
+    // the shell's (`terminalAppShortcut`). Outside macOS, Ctrl+V pastes and Ctrl+C copies a
+    // selection, as Cmd does on a Mac.
     term.attachCustomKeyEventHandler(
       (e) =>
-        window.parallax.platform === "darwin" ||
-        e.type !== "keydown" ||
-        !e.ctrlKey ||
-        !(
-          e.key === "v" ||
-          (e.key === "c" && term.hasSelection()) ||
-          e.code === "KeyJ" ||
-          rowShortcut(e) !== undefined
-        ),
+        !terminalAppShortcut(e) &&
+        (mac() ||
+          e.type !== "keydown" ||
+          !e.ctrlKey ||
+          !(e.key === "v" || (e.key === "c" && term.hasSelection()))),
     );
     term.open(element);
     // Hidden, it has no size to fit; it fits once shown.
@@ -85,12 +92,26 @@ export function TerminalView({
     term.onResize(({ cols, rows }) => window.parallax.resizeTerminal(id, cols, rows));
     const observer = new ResizeObserver(fitShown);
     observer.observe(element);
-    // The `dark` class on <html> switches the theme's tokens (theme.ts).
-    const themes = new MutationObserver(() => (term.options.theme = theme()));
-    themes.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    // The `dark` class on <html> switches the theme's tokens (theme.ts), and its style holds the
+    // monospace font and size.
+    const themes = new MutationObserver(() => {
+      term.options.theme = theme();
+      Object.assign(term.options, font());
+      fitShown();
+    });
+    themes.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
     let live = true;
-    void window.parallax
-      .openTerminal(id, opened.current, term.cols, term.rows)
+    // The shell starts once the Nerd Font icons have loaded: xterm.js measures a glyph's width
+    // once, so an icon drawn before its font arrives would stay a cell off.
+    void document.fonts
+      .load('12px "Symbols Nerd Font Mono"', "\ue0a0")
+      .catch(() => {})
+      .then(() =>
+        live ? window.parallax.openTerminal(id, opened.current, term.cols, term.rows) : undefined,
+      )
       .then((error) => live && (error ? ended(error) : began()));
     term.focus();
 

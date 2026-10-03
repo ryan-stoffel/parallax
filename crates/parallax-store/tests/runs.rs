@@ -1,5 +1,6 @@
 use parallax_store::{
-    RunAccept, RunFields, RunState, Store, StoreError, StoredEvent, WorktreeFields,
+    RunAccept, RunFields, RunState, Store, StoreError, StoredEvent, StoredImage, WakeState,
+    WorktreeFields,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -18,6 +19,7 @@ fn fields(project_id: Uuid) -> RunFields {
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
         coordinator_thread: None,
+        parent: None,
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         permission: None,
@@ -150,6 +152,9 @@ fn a_run_is_created_once_read_back_and_updated() {
             "https://github.com/me/app/pull/7".to_owned(),
             "https://github.com/me/app/pull/9".to_owned(),
         ],
+        auto_resume: Some(false),
+        resume_at: Some("2026-10-03T18:00:00Z".parse().unwrap()),
+        resume_tries: 2,
     };
     let updated = store.update_run(id, &finished).unwrap();
     assert_eq!(updated.state, finished);
@@ -378,6 +383,51 @@ fn a_run_and_its_worktree_are_created_together_or_not_at_all() {
     assert_eq!(store.get_worktree(run_only).unwrap(), None);
 }
 
+/// PLX-338: `project/delete` removes each of a Project's runs with every row kept for it.
+#[test]
+fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
+    let (_dir, mut store) = open();
+    let project = Uuid::now_v7();
+    let [kept, gone] = [Uuid::now_v7(), Uuid::now_v7()];
+    let image = Uuid::now_v7();
+    for (seq, id) in [(1, kept), (2, gone)] {
+        store
+            .create_run_with_worktree(id, &fields(project), &starting(), &worktree_fields())
+            .unwrap();
+        store.append_event(&event(seq, Some(id))).unwrap();
+        store.record_turn(id, Uuid::now_v7(), "carry on").unwrap();
+        let stored = StoredImage {
+            media_type: "image/png".to_owned(),
+            data: "iVBORw0KGgo=".to_owned(),
+        };
+        store.add_images(id, &[(image, stored)]).unwrap();
+        let wakes = WakeState {
+            in_a_row: 2,
+            paused: true,
+        };
+        store.set_wake_state(id, wakes).unwrap();
+    }
+
+    assert!(store.delete_run(gone).unwrap());
+    assert!(
+        !store.delete_run(gone).unwrap(),
+        "deleting again does nothing"
+    );
+    assert_eq!(store.get_run(gone).unwrap(), None);
+    assert_eq!(store.get_worktree(gone).unwrap(), None);
+    assert!(store.run_events(gone, 0, 10, 1 << 20).unwrap().0.is_empty());
+    assert_eq!(store.run_turns(gone).unwrap(), []);
+    assert_eq!(store.image(gone, image).unwrap(), None);
+    assert_eq!(store.wake_state(gone).unwrap(), WakeState::default());
+
+    assert!(store.get_run(kept).unwrap().is_some());
+    assert!(store.get_worktree(kept).unwrap().is_some());
+    assert_eq!(store.run_events(kept, 0, 10, 1 << 20).unwrap().0.len(), 1);
+    assert_eq!(store.run_turns(kept).unwrap().len(), 1);
+    assert!(store.image(kept, image).unwrap().is_some());
+    assert!(store.wake_state(kept).unwrap().paused);
+}
+
 #[test]
 fn resetting_the_log_id_makes_the_next_one_new() {
     let (_dir, store) = open();
@@ -413,16 +463,20 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // base_dirty columns, turns table (#190's migration 10; dropping `runs` already undoes #157's
     // migration 8 columns on it, since they're columns of the table this drops wholesale), the
     // normal threads tables (#110's migration 9), the wakes table (RYA-178's migration 14), the
-    // images table (RYA-191's migration 15), or the project icon columns (RYA-227's migration 16).
+    // images table (RYA-191's migration 15), the project icon columns (RYA-227's migration 16),
+    // or the host settings table (PLX-371's migration 24).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
              DROP TABLE threads; DROP TABLE repos; DROP TABLE wakes; DROP TABLE images;
+             DROP TABLE host_settings;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;
              ALTER TABLE projects DROP COLUMN icon_color;
+             ALTER TABLE projects DROP COLUMN icon_image_type;
+             ALTER TABLE projects DROP COLUMN icon_image_data;
              DELETE FROM schema_version WHERE version >= 7;",
         )
         .unwrap();

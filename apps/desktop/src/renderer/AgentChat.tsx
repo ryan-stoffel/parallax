@@ -41,6 +41,7 @@ import {
   type ReactNode,
 } from "react";
 import Markdown, { type Components } from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
 import type {
@@ -54,7 +55,10 @@ import {
   ApprovalDetails,
   ApprovalQueue,
   ApprovalSummary,
+  DiffRow,
+  diffBand,
   queueOf,
+  RequestPreview,
   useAnswers,
   withAnswers,
   type Asked,
@@ -65,12 +69,12 @@ import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
+import { GitHubLogo, LinearLogo } from "./logos";
 import { backendOf, backends, models, type Provider, type RunOptions } from "./models";
 import {
   latestPlan,
-  PlanCard,
   PlanStrip,
-  PlanUpdateLine,
+  PlanLine,
   ProposedPlan,
   withPlans,
   type PlanRow,
@@ -460,6 +464,9 @@ export function AgentChat({
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
           insert={compose && !compose.send ? compose.text : undefined}
+          menus={
+            connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
+          }
         />
       </div>
     </>
@@ -794,11 +801,10 @@ export const RowView = memo(function RowView({
       );
     case "tool":
       return <ToolCall item={row} live={live} open={open} onToggle={onToggle} />;
-    case "todo":
-      // A later update to the turn's plan, whose card shows the whole list.
-      return <PlanUpdateLine item={row} />;
     case "plan":
-      return <PlanCard items={row.items} live={live && !!row.latest} loader={loaders.planning} />;
+    case "todo":
+      // The turn's plan and its later updates, as lines: the strip shows the whole list.
+      return <PlanLine item={row} />;
     case "proposedPlan":
       return (
         <ProposedPlan id={row.key} status={row.status} open={open} onToggle={onToggle}>
@@ -862,7 +868,7 @@ export const RowView = memo(function RowView({
             <p className="font-medium text-danger">Failed: {failureText(outcome.failure)}</p>
             <p className="mt-0.5 text-muted-foreground">{first}</p>
             {changed.length > 0 && (
-              <pre className="mt-2 max-h-60 overflow-auto rounded-lg border border-border bg-sidebar p-2.5 font-mono text-[12px]">
+              <pre className="mt-2 max-h-60 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-[12px]">
                 {changed.join("\n")}
               </pre>
             )}
@@ -1022,7 +1028,7 @@ function Musing() {
   const [tick, setTick] = useState(() => Math.floor(Date.now() / musingMs));
   const [first] = useState(tick);
   useEffect(() => {
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (document.documentElement.classList.contains("reduce-motion")) return;
     const timer = setTimeout(
       () => setTick(Math.max(tick + 1, Math.floor(Date.now() / musingMs))),
       musingMs - (Date.now() % musingMs),
@@ -1235,7 +1241,14 @@ function ToolCall({
       }
     >
       <div className="space-y-2 text-[12px]">
-        {item.input !== undefined && <Block label="Input">{inputText(item.input)}</Block>}
+        {item.name && previewed.has(item.name) && isWhole(item.input) ? (
+          <div>
+            <p className="mb-1 text-[11.5px] text-faint-foreground">Input</p>
+            <RequestPreview request={{ toolName: item.name, input: item.input }} />
+          </div>
+        ) : (
+          item.input !== undefined && <Block label="Input">{inputText(item.input)}</Block>
+        )}
         {item.output !== undefined && <Block label="Output">{item.output}</Block>}
       </div>
     </Disclosure>
@@ -1297,7 +1310,7 @@ function Block({ label, children }: { label: string; children: string }) {
   return (
     <div>
       <p className="mb-1 text-[11.5px] text-faint-foreground">{label}</p>
-      <pre className="max-h-80 overflow-auto rounded-lg border border-border bg-sidebar p-2.5 font-mono whitespace-pre-wrap">
+      <pre className="max-h-80 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono leading-relaxed whitespace-pre-wrap">
         {children}
       </pre>
     </div>
@@ -1381,6 +1394,14 @@ function namedTool(item: Extract<Item, { kind: "tool" }>) {
   return undefined;
 }
 
+// Tools whose input reads better as a permission request shows it: an edit's diff.
+const previewed = new Set(["Edit", "MultiEdit", "Write"]);
+
+/** Whether a tool's input arrived whole, not cut for size. */
+const isWhole = (input?: JsonValue): input is JsonValue =>
+  input !== undefined &&
+  !(input && typeof input === "object" && !Array.isArray(input) && input["truncated"] === true);
+
 function inputText(input: JsonValue): string {
   if (input && typeof input === "object" && !Array.isArray(input) && input["truncated"] === true) {
     const bytes = typeof input["bytes"] === "number" ? input["bytes"] : 0;
@@ -1389,16 +1410,50 @@ function inputText(input: JsonValue): string {
   return typeof input === "string" ? input : JSON.stringify(input, null, 2);
 }
 
+/** The icon before a web link, as T3 Code shows one: its site's logo, or a globe (PLX-330). */
+export function linkIcon(href?: string) {
+  let host;
+  try {
+    const url = new URL(href ?? "");
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    host = url.hostname;
+  } catch {
+    return undefined;
+  }
+  const on = (site: string) => host === site || host.endsWith(`.${site}`);
+  return on("github.com") ? GitHubLogo : on("linear.app") ? LinearLogo : Globe;
+}
+
 // Agent output is untrusted: no raw HTML (no rehype-raw), and react-markdown's
 // default urlTransform drops javascript: and other unsafe links. Links open in
 // a new window, which main hands to the system browser, https only.
 const markdownComponents: Components = {
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  ),
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  a: ({ href, children }) => {
+    const Icon = linkIcon(href);
+    return (
+      <a href={href} target="_blank" rel="noreferrer">
+        {Icon && (
+          <Icon aria-hidden className="mr-1 inline size-3.5 align-[-0.15em] text-foreground" />
+        )}
+        {children}
+      </a>
+    );
+  },
+  pre: ({ node, children }) => {
+    const code = node?.children[0];
+    const classes = code?.type === "element" ? code.properties["className"] : undefined;
+    const language = Array.isArray(classes)
+      ? classes
+          .map(String)
+          .find((c) => c.startsWith("language-"))
+          ?.slice("language-".length)
+      : undefined;
+    return (
+      <CodeBlock language={language} text={code ? textOf(code) : ""}>
+        {children}
+      </CodeBlock>
+    );
+  },
   // Never load images: a link with the alt text, which opens externally like any link.
   img: ({ src, alt }) => (
     // An unsafe source arrives as "" from urlTransform: no href at all, then.
@@ -1408,6 +1463,16 @@ const markdownComponents: Components = {
   ),
 };
 
+// Highlights a code block whose fence names its language, never a guess; a diff's lines are
+// drawn by DiffLines instead.
+const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [
+  [rehypeHighlight, { detect: false, plainText: ["diff", "patch"] }],
+];
+
+/** A Markdown tree node's text, as a code block's, for Copy. */
+type TextNode = { value?: string; children?: TextNode[] };
+const textOf = (node: TextNode): string => node.value ?? node.children?.map(textOf).join("") ?? "";
+
 /**
  * An agent message, rendered from Markdown with GitHub's extensions. `components` replace some
  * elements' renderers, such as the Context view's links; they get the same safe, HTML-free tree.
@@ -1415,7 +1480,11 @@ const markdownComponents: Components = {
 export function MarkdownText({ text, components }: { text: string; components?: Components }) {
   return (
     <div className="markdown">
-      <Markdown remarkPlugins={[remarkGfm]} components={{ ...markdownComponents, ...components }}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={highlight}
+        components={{ ...markdownComponents, ...components }}
+      >
         {text}
       </Markdown>
     </div>
@@ -1462,26 +1531,72 @@ function sentAt(at: string) {
     : date.toLocaleString([], { month: "short", day: "numeric", ...time });
 }
 
-function CodeBlock({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLPreElement>(null);
-  const [copied, copyText] = useCopy();
-  const copy = () => copyText(ref.current?.textContent ?? "");
+/**
+ * A Markdown code block: a header with its fence's language and Copy, over its code, highlighted,
+ * or a diff's lines.
+ */
+function CodeBlock({
+  language,
+  text,
+  children,
+}: {
+  language?: string;
+  text: string;
+  children: ReactNode;
+}) {
+  const [copied, copy] = useCopy();
   return (
-    <div className="group/code relative">
-      <pre
-        ref={ref}
-        className="overflow-x-auto rounded-lg border border-border bg-sidebar p-3 font-mono text-[12.5px] leading-relaxed"
-      >
-        {children}
-      </pre>
-      <button
-        type="button"
-        aria-label={copied ? "Copied" : "Copy code"}
-        onClick={copy}
-        className="absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-md bg-sidebar text-muted-foreground opacity-0 group-hover/code:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5"
-      >
-        {copied ? <Check /> : <Copy />}
-      </button>
+    <div className="overflow-hidden rounded-xl border border-border bg-code">
+      <div className="flex h-8 items-center justify-between border-b border-border pr-1 pl-3 text-[11.5px] text-faint-foreground">
+        <span className="font-mono">{language ?? "text"}</span>
+        <button
+          type="button"
+          aria-label={copied ? "Copied" : "Copy code"}
+          onClick={() => copy(text)}
+          className="flex h-6 items-center gap-1 rounded-md px-1.5 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+        >
+          {copied ? <Check /> : <Copy />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {language === "diff" || language === "patch" ? (
+        <DiffLines text={text} />
+      ) : (
+        <pre className="code-lines overflow-x-auto px-3.5 py-3 font-mono text-[12.5px] leading-relaxed">
+          {children}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A unified diff's lines, as a permission request draws an edit. Hunk headers, and the file headers
+ * before a file's first hunk, are bands, so a removed `-- comment` inside a hunk stays removed.
+ */
+function DiffLines({ text }: { text: string }) {
+  let inHunk = false;
+  return (
+    <div className="code-scroll overflow-x-auto py-1.5 font-mono text-[12px] leading-relaxed">
+      {text
+        .replace(/\n$/, "")
+        .split("\n")
+        .map((line, i) => {
+          if (line.startsWith("diff ")) inHunk = false;
+          if (line.startsWith("@@")) inHunk = true;
+          const op = line[0];
+          if (line.startsWith("@@") || (!inHunk && /^(\+\+\+|---|diff |index )/.test(line)))
+            return (
+              <div key={i} className={`${diffBand} whitespace-pre-wrap`}>
+                {line}
+              </div>
+            );
+          return op === "+" || op === "-" || op === " " ? (
+            <DiffRow key={i} op={op} text={line.slice(1)} />
+          ) : (
+            <DiffRow key={i} op=" " text={line} />
+          );
+        })}
     </div>
   );
 }

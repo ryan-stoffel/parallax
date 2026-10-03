@@ -1,4 +1,4 @@
-import { PanelBottom, PanelLeft, PanelRight, Workflow } from "lucide-react";
+import { PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
@@ -12,6 +12,7 @@ import { GitMenu } from "./GitMenu";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
+import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
@@ -22,6 +23,7 @@ import { attentionOf } from "./attention";
 import { useSnoozeAlarms } from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
+import { useAppearanceEffects } from "./appearance";
 import { folderOf, runInDrawer, TerminalDrawer, TerminalPool, useDeleted } from "./ThreadTerminal";
 import {
   asksOf,
@@ -49,7 +51,15 @@ export type Selection =
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
 
-export type SettingsSection = "account" | "general" | "hosts" | "providers";
+export type SettingsSection =
+  | "account"
+  | "general"
+  | "appearance"
+  | "keybinds"
+  | "providers"
+  | "sourceControl"
+  | "storage"
+  | "connections";
 
 /**
  * The app frame: sidebar, then the chat or Settings, then the side panel.
@@ -57,6 +67,7 @@ export type SettingsSection = "account" | "general" | "hosts" | "providers";
  */
 export function App() {
   const [theme, setTheme] = useThemePreference();
+  useAppearanceEffects();
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   // The open host, or this computer once the open one is removed.
@@ -139,7 +150,12 @@ export function App() {
   const threadRun =
     selection.kind === "thread" ? threads.state.runs[selection.threadId] : undefined;
   const linksPrs = connected && "pullRequests" in connection.capabilities;
-  const prs = usePullRequests(host.id, threadRun?.id, (linksPrs && threadRun?.pullRequests) || []);
+  const prs = usePullRequests(
+    host.id,
+    threadRun?.id,
+    (linksPrs && threadRun?.pullRequests) || [],
+    connected && "prDiff" in connection.capabilities,
+  );
   const openPr = (url?: string) => {
     setPanelOpen(true);
     setShowPr({ url });
@@ -191,7 +207,7 @@ export function App() {
   useSnoozeAlarms(listed, (hostId, threadId) => openOnHost(hostId, { kind: "thread", threadId }));
 
   // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
-  // back to the coordinator.
+  // back to the coordinator. In a thread, the repository's opens New thread on that repository.
   let crumbs: Crumb[];
   if (project) {
     crumbs = [
@@ -207,6 +223,10 @@ export function App() {
     const repo = {
       label: group.name,
       icon: <RepoIcon repo={threads.state.repos.find((r) => r.id === group.id)} />,
+      onClick:
+        selection.kind === "thread"
+          ? () => setSelection({ kind: "new", groupId: group.id })
+          : undefined,
     };
     const page =
       selection.kind === "thread"
@@ -245,7 +265,7 @@ export function App() {
         ? undefined
         : "Connecting to plxd…";
 
-  // The open thread's folder, or the new thread's repository's, where its terminals open.
+  // Where the open thread's or New thread's terminals open (folderOf).
   const folder =
     settings || selection.kind === "usage" || selection.kind === "project"
       ? undefined
@@ -273,7 +293,7 @@ export function App() {
     }
   };
 
-  // The app's shortcuts (ui.tsx), but Mod+O, which OpenMenu takes, and Mod+1 to Mod+9, which
+  // The app's shortcuts (ui.tsx), but Open, which OpenMenu takes, and Mod+1 to Mod+9, which
   // ThreadList takes.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -288,6 +308,7 @@ export function App() {
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
+      else if (command === "usage") openOnHost(host.id, { kind: "usage" });
       else return;
       e.preventDefault();
     };
@@ -299,12 +320,12 @@ export function App() {
   const showSidebar = !sidebarOpen && (
     <IconButton
       label="Show sidebar"
-      keys="B"
+      command="sidebar"
       aria-expanded={false}
       aria-controls="sidebar"
       onClick={() => setSidebarOpen(true)}
     >
-      <PanelLeft />
+      <PanelLeftOpen />
     </IconButton>
   );
   // The side panel is a chat's, so Settings and Usage have none.
@@ -350,6 +371,7 @@ export function App() {
             onOpenProject={openProject}
             onOpenSettings={openSettings}
             onDelete={deleteThread}
+            onNewThread={() => newThread()}
           />
         )}
       </Sidebar>
@@ -362,7 +384,7 @@ export function App() {
               {showSidebar}
               <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[settings] }]} />
             </TopBar>
-            <Settings section={settings} theme={theme} onThemeChange={setTheme} />
+            <Settings section={settings} listed={listed} theme={theme} onThemeChange={setTheme} />
           </>
         ) : selection.kind === "usage" ? (
           <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
@@ -397,7 +419,7 @@ export function App() {
                 {folder && (
                   <IconButton
                     label={drawerOpen ? "Hide terminal" : "Show terminal"}
-                    keys="J"
+                    command="terminal"
                     aria-pressed={drawerOpen}
                     aria-controls="terminal-drawer"
                     onClick={toggleDrawer}
@@ -409,7 +431,7 @@ export function App() {
                 {!panelOpen && (
                   <IconButton
                     label="Show side panel"
-                    keys="Alt+B"
+                    command="panel"
                     aria-expanded={false}
                     aria-controls="side-panel"
                     onClick={() => setPanelOpen(true)}
@@ -480,7 +502,12 @@ export function App() {
           </>
         )}
         {/* Outside the views, so the terminals live on behind Settings and Usage. */}
-        <TerminalDrawer open={drawerOpen} folder={folder} deleted={deleted} />
+        <TerminalDrawer
+          open={drawerOpen}
+          folder={folder}
+          deleted={deleted}
+          onClose={toggleDrawer}
+        />
       </main>
 
       <SidePanel
@@ -579,6 +606,8 @@ function HostLoader({
     approvals: !!capabilities && "approvals" in capabilities,
     attention: !!capabilities && "threadAttention" in capabilities,
     editable: !!capabilities && "projectEdit" in capabilities,
+    deletable: !!capabilities && "projectDelete" in capabilities,
+    iconImageBytes: iconImageBytes(connection),
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;

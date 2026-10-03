@@ -3,17 +3,20 @@ import { useEffect, useId, useRef, useState, type ReactNode, type ToggleEvent } 
 
 import type { OpenTarget } from "../preload/bridge";
 import { CursorLogo, VSCodeLogo } from "./logos";
-import { appShortcut, menuButton, menuItem, menuPanel, moveFocus, shortcut } from "./ui";
+import { useShortcutLabel } from "./keybindings";
+import { appShortcut, menuButton, menuItem, menuPanel, moveFocus } from "./ui";
 
-const STORAGE_KEY = "parallax.openTarget";
+/** Where the last target chosen is kept; Settings > General sets it too. */
+export const OPEN_TARGET_KEY = "parallax.openTarget";
 
-const icons: Record<OpenTarget, ReactNode> = {
+// Each target's mark, shown where main has no app icon for it (anywhere but macOS).
+const marks: Record<OpenTarget, ReactNode> = {
   cursor: <CursorLogo />,
   vscode: <VSCodeLogo />,
   files: <FolderOpen />,
 };
 
-const nameOf = (target: OpenTarget) => {
+export const nameOf = (target: OpenTarget) => {
   if (target === "cursor") return "Cursor";
   if (target === "vscode") return "VS Code";
   const platform = window.parallax.platform;
@@ -22,14 +25,22 @@ const nameOf = (target: OpenTarget) => {
 
 /**
  * The top bar's Open split button. The main part opens `folder` on the host with the last target
- * chosen, also on Mod+O; the chevron lists the targets main found, and choosing one opens with it
+ * chosen, also on its shortcut (keybindings.ts); the chevron lists the targets main found, and choosing one opens with it
  * and keeps it. Disabled while there's no folder, and absent while nothing can open one.
  */
 export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
   const [targets, setTargets] = useState<OpenTarget[]>([]);
-  const [chosen, setChosen] = useState(() => localStorage.getItem(STORAGE_KEY));
+  const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
+  const [appIcons, setAppIcons] = useState<Partial<Record<OpenTarget, string>>>({});
+  useEffect(() => {
+    void window.parallax.openTargetIcons().then(setAppIcons);
+  }, []);
+  const icon = (target: OpenTarget) => {
+    const src = appIcons[target];
+    return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks[target];
+  };
   useEffect(() => {
     let live = true;
     void window.parallax.openTargets(hostId).then((found) => live && setTargets(found));
@@ -38,6 +49,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
     };
   }, [hostId]);
   const current = targets.find((t) => t === chosen) ?? targets[0];
+  const keys = useShortcutLabel("open");
 
   const open = (target: OpenTarget) => {
     if (folder) void window.parallax.openFolder(hostId, target, folder);
@@ -55,7 +67,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
   if (!current) return null;
   const choose = (target: OpenTarget) => {
     menu.current?.hidePopover();
-    localStorage.setItem(STORAGE_KEY, target);
+    localStorage.setItem(OPEN_TARGET_KEY, target);
     setChosen(target);
     open(target);
   };
@@ -71,10 +83,10 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
           onClick={() => open(current)}
           aria-label={`Open in ${nameOf(current)}`}
           // Unset without a folder, so the wrapper's tooltip says why it's disabled.
-          title={folder ? `Open in ${nameOf(current)} (${shortcut("O")})` : undefined}
+          title={folder ? `Open in ${nameOf(current)}${keys ? ` (${keys})` : ""}` : undefined}
           className={`${menuButton} rounded-r-none pr-2.5`}
         >
-          {icons[current]}
+          {icon(current)}
           Open
         </button>
         <button
@@ -108,10 +120,10 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
             onClick={() => choose(t)}
             className={`${menuItem} [&_svg]:size-4`}
           >
-            {icons[t]}
+            {icon(t)}
             <span className="flex-1">{nameOf(t)}</span>
-            {t === current && (
-              <span className="text-[11.5px] text-faint-foreground">{shortcut("O")}</span>
+            {t === current && keys && (
+              <span className="text-[11.5px] text-faint-foreground">{keys}</span>
             )}
           </button>
         ))}

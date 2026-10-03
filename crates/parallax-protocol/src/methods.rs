@@ -30,22 +30,26 @@ use crate::{
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
-    AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentCommitParams, AgentDiffParams,
-    AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult,
-    AgentFilesParams, AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams,
-    AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPushParams,
-    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams,
-    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    AgentApproveParams, AgentApproveResult, AgentAutoResumeParams, AgentCancelParams,
+    AgentCommandsParams, AgentCommandsResult, AgentCommitParams, AgentDiffParams, AgentDiffResult,
+    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams,
+    AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
+    AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
+    AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams,
+    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
     ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, HostHealthParams,
-    HostHealthResult, HostVersionParams, HostVersionResult, InitializeParams, InitializeResult,
-    PrActParams, PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
-    PullRequest, RepoAddParams, RepoAddResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
-    UsageHistoryResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, GithubStatus, GithubStatusParams,
+    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
+    HostVersionParams, HostVersionResult, InitializeParams, InitializeResult, PrActParams,
+    PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult, PromptImage, PullRequest, RepoAddParams,
+    RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
+    RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -157,6 +161,10 @@ method_table! {
         /// `usage/history`: tokens and cost since a time, summed per UTC hour, account, and
         /// model, and each account's run count over the same range.
         UsageHistory = "usage/history": UsageHistoryParams => UsageHistoryResult;
+        /// `usage/daily`: every Claude Code, Codex, and Cursor session's tokens and cost on this
+        /// host since a local day, per local day, agent, and model (0039), and each source that
+        /// failed.
+        UsageDaily = "usage/daily": UsageDailyParams => UsageDailyResult;
         /// `accounts/defaults/get`: this host's default account for the coordinator role and for
         /// a worker role, absent where none is set (#119).
         AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
@@ -235,8 +243,9 @@ method_table! {
         ThreadStart = "thread/start": ThreadStartParams => ThreadStartResult;
         /// `thread/archive`: archives a normal thread or brings it back.
         ThreadArchive = "thread/archive": ThreadArchiveParams => ThreadArchiveResult;
-        /// `thread/update`: marks a normal thread seen or snoozes it (0033). Gated on the
-        /// `threadAttention` capability.
+        /// `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the
+        /// `threadAttention` capability, or sets its title or settled flag (0041), gated on
+        /// `threadLineage`.
         ThreadUpdate = "thread/update": ThreadUpdateParams => ThreadUpdateResult;
         /// `repo/update`: sets a repo entry's icon (0033). Gated on the `threadAttention`
         /// capability.
@@ -262,6 +271,36 @@ method_table! {
         /// `pr/act`: merges, squashes, sets auto-merge on or off, drafts, readies, or closes one
         /// of a run's linked pull requests with `gh`, and returns it as it is after.
         PrAct = "pr/act": PrActParams => PullRequest;
+        /// `pr/diff`: one of a run's linked pull requests' unified diff, read with `gh pr diff`
+        /// and cut at a size cap (PLX-328). Gated on the `prDiff` capability.
+        PrDiff = "pr/diff": PrViewParams => PrDiffResult;
+        /// `project/delete`: deletes a project with every run in it, stopping their CLIs first
+        /// (PLX-338). Fails with `projectNotFound` for an unknown project or a repo entry's id.
+        /// Gated on the `projectDelete` capability.
+        ProjectDelete = "project/delete": ProjectDeleteParams => ProjectDeleteResult;
+        /// `agent/commands`: a CLI's own slash commands and skills, for the composer's `/` menu
+        /// (PLX-359). Gated on the `composerMenus` capability, like `repo/files`.
+        AgentCommands = "agent/commands": AgentCommandsParams => AgentCommandsResult;
+        /// `repo/files`: a thread's files that git tracks or doesn't ignore, capped, for the
+        /// composer's `@` menu.
+        RepoFiles = "repo/files": RepoFilesParams => RepoFilesResult;
+        /// `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
+        /// github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
+        /// `githubStatus` capability.
+        GithubStatusGet = "github/status": GithubStatusParams => GithubStatus;
+        /// `thread/search`: the host's threads whose messages contain a query, the one with the
+        /// newest message first (PLX-372). Gated on the `threadContext` capability.
+        ThreadSearch = "thread/search": ThreadSearchParams => ThreadSearchResult;
+        /// `agent/resumeNow`: resumes a run waiting for its usage limit to reset now (PLX-371,
+        /// decision 0049). Gated on the `autoResume` capability, like `agent/autoResume` and
+        /// `host/settings/*`.
+        AgentResumeNow = "agent/resumeNow": AgentResumeNowParams => AgentRunResult;
+        /// `agent/autoResume`: sets or clears a run's auto-resume override.
+        AgentAutoResume = "agent/autoResume": AgentAutoResumeParams => AgentRunResult;
+        /// `host/settings/get`: this host's settings.
+        HostSettingsGet = "host/settings/get": HostSettingsGetParams => HostSettings;
+        /// `host/settings/set`: changes this host's settings and returns them.
+        HostSettingsSet = "host/settings/set": HostSettingsSetParams => HostSettings;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -314,6 +353,7 @@ mod tests {
                 "accounts/refresh",
                 "usage/get",
                 "usage/history",
+                "usage/daily",
                 "accounts/defaults/get",
                 "accounts/defaults/set",
                 "context/list",
@@ -347,6 +387,16 @@ mod tests {
                 "repo/refs",
                 "pr/view",
                 "pr/act",
+                "pr/diff",
+                "project/delete",
+                "agent/commands",
+                "repo/files",
+                "github/status",
+                "thread/search",
+                "agent/resumeNow",
+                "agent/autoResume",
+                "host/settings/get",
+                "host/settings/set",
                 "$/cancelRequest",
                 "events/event",
             ]
