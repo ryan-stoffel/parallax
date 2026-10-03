@@ -274,7 +274,8 @@ test("creates a project on a repository it adds, and opens it (RYA-166)", async 
 
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Back to app" }).click();
-  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("button", { name: "New project or repository" }).click();
+  await page.getByRole("menuitem", { name: "New project…" }).click();
   const dialog = page.getByRole("dialog", { name: "Create Project" });
   await dialog.getByRole("button", { name: /^Workspace/ }).click();
   await page.getByRole("menuitem", { name: "Choose folder…" }).click();
