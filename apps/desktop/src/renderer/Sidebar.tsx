@@ -134,9 +134,6 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
           <ParallaxMark className="size-5" />
           Parallax
         </button>
-        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
-          <SquarePen />
-        </IconButton>
       </TopBar>
       {children}
     </nav>
@@ -162,6 +159,7 @@ interface ThreadListProps {
   onOpenSettings: (section: SettingsSection) => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
+  onNewThread: () => void;
 }
 
 /**
@@ -264,8 +262,8 @@ type Item = (
 };
 
 /**
- * Search, the Repos filter, and a menu to create a Project or add a repository, then every host's
- * Projects in a collapsible section, then their threads, each the most recently active first (0033). A thread row shows its repo, how long ago
+ * Search, the Repos filter, a menu to create a Project or add a repository, and New thread, then
+ * every host's Projects in a collapsible section, then their threads, each the most recently active first (0033). A thread row shows its repo, how long ago
  * it was prompted or what it asks of the user, its title, branch, and provider. Snoozed and
  * Archived threads sit under the list. Resting on a thread shows a card with where and how it runs.
  */
@@ -277,6 +275,7 @@ export function ThreadList({
   onOpenProject,
   onOpenSettings,
   onDelete,
+  onNewThread,
 }: ThreadListProps) {
   const newProject = useRef<HTMLDialogElement>(null);
   const addMenuId = useId();
@@ -539,6 +538,9 @@ export function ThreadList({
             </button>
           ))}
         </div>
+        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
+          <SquarePen />
+        </IconButton>
       </div>
       <div onScroll={hideCard} className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {errors.map((e) => (
