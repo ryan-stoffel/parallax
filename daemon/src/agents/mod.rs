@@ -548,7 +548,7 @@ fn worktree_failed(error: &WorktreeError) -> ErrorObject {
 
 /// The run `run_id` already is, for a retry of `agent/start` that asks for the same `fields`, or
 /// `idConflict` if they differ. The backend isn't compared: routing resolves it, not the
-/// request. `None` for a new run.
+/// request, and neither is a parent the store no longer has. `None` for a new run.
 async fn existing(
     daemon: &Arc<Daemon>,
     run_id: RunId,
@@ -567,8 +567,11 @@ async fn existing(
     let Some((row, worktree)) = found else {
         return Ok(None);
     };
+    // An empty stored parent isn't compared: deleting the parent cleared it (0041), and a retry
+    // still names it.
     let stored = RunFields {
         backend: fields.backend.clone(),
+        parent: row.fields.parent.or(fields.parent),
         ..row.fields.clone()
     };
     if stored != *fields {

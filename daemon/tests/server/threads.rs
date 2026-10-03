@@ -1998,3 +1998,25 @@ async fn a_child_thread_keeps_its_parent_and_title_until_the_parent_is_deleted()
     assert_eq!(cleared.title, None);
     assert!(!cleared.settled);
 }
+
+/// A `thread/start` retried after its parent was deleted returns the thread, now with no parent,
+/// rather than `idConflict` (0041).
+#[tokio::test]
+async fn a_retried_start_whose_parent_was_deleted_returns_the_thread() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let parent = start_params(Some(repo.id), "Plan the work");
+    client.call::<ThreadStart>(parent.clone()).await.unwrap();
+    let child = ThreadStartParams {
+        parent: Some(parent.run_id),
+        ..start_params(Some(repo.id), "Write the tests")
+    };
+    client.call::<ThreadStart>(child.clone()).await.unwrap();
+
+    client.delete(parent.run_id).await.unwrap();
+    let retried = client.call::<ThreadStart>(child.clone()).await.unwrap();
+    assert_eq!(retried.thread.id, child.run_id);
+    assert_eq!(retried.thread.parent, None);
+}
