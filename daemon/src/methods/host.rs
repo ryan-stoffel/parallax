@@ -136,6 +136,9 @@ pub(crate) fn initialize(
 /// `githubSetup` (PLX-423, 0050): `github/install`, `github/signIn`, and `github/signInCancel`,
 /// and `managed`, `installing`, `signingIn`, and `setupNote` on `github/status`, which an older
 /// plxd never fills.
+/// `threadTools` (PLX-373, 0041): `agent/send`'s and `agent/cancel`'s `from`, `turnStarted`'s
+/// `from` and the `interrupted` item, and `pr/link` and `pr/unlink`, which a thread's Parallax
+/// tools use.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -182,6 +185,7 @@ fn capabilities_advertised() -> Capabilities {
             ]),
         ),
         ("threadLineage".to_owned(), serde_json::Map::new()),
+        ("threadTools".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
     ]))
 }
