@@ -45,6 +45,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::approvals::{self, Approvals, Lookup, ended};
+use super::attached;
 use super::convert::{
     self, WORKSPACE_WRITE, agent_run, item_bytes, option_name, option_value, output_item,
 };
@@ -78,6 +79,8 @@ pub(super) enum Command {
         text: String,
         /// The message's images, already checked (RYA-191).
         images: Vec<PromptImage>,
+        /// The threads attached to it, already checked (PLX-372).
+        threads: Vec<RunId>,
         /// New options for the run (RYA-161, RYA-163).
         options: RunOptions,
         /// A new account for the run, perhaps on another backend.
@@ -152,6 +155,7 @@ struct Queued {
     turn_id: TurnId,
     text: String,
     images: Vec<PromptImage>,
+    threads: Vec<RunId>,
     options: RunOptions,
     account: Option<AccountChoice>,
 }
@@ -195,6 +199,9 @@ pub(super) struct Actor {
     /// The stored images of messages a CLI took, by turn id (`None` for the prompt's), until
     /// their `TurnStarted` lists them (RYA-191, decision 0026).
     images: HashMap<Option<TurnId>, Vec<ImageId>>,
+    /// The threads attached to messages a CLI took, by turn id as `images`, until their
+    /// `TurnStarted` lists them (PLX-372).
+    attached: HashMap<Option<TurnId>, Vec<RunId>>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
     /// Messages waiting for the running CLI to exit, oldest first.
@@ -238,6 +245,7 @@ impl Actor {
             batch: Batch::default(),
             turns,
             images: HashMap::new(),
+            attached: HashMap::new(),
             last_message,
             queued: VecDeque::new(),
             stopping: false,
@@ -330,11 +338,14 @@ impl Actor {
                 turn_id,
                 text,
                 images,
+                threads,
                 options,
                 account,
                 reply,
             } => {
-                let answer = self.send(turn_id, text, images, options, account).await;
+                let answer = self
+                    .send(turn_id, text, images, threads, options, account)
+                    .await;
                 if answer.is_ok() && self.wakes.attended() {
                     self.save_wakes().await;
                 }
@@ -424,7 +435,14 @@ impl Actor {
         };
         info!(run = %self.id, "waking a coordinator: runs it started finished");
         match self
-            .resume(turn_id, text, Vec::new(), RunOptions::default(), None)
+            .resume(
+                turn_id,
+                text,
+                Vec::new(),
+                Vec::new(),
+                RunOptions::default(),
+                None,
+            )
             .await
         {
             Ok(_) if self.live.is_some() => {
@@ -853,6 +871,7 @@ impl Actor {
         turn_id: TurnId,
         text: String,
         images: Vec<PromptImage>,
+        threads: Vec<RunId>,
         options: RunOptions,
         account: Option<AccountChoice>,
     ) -> Result<AgentRun, ErrorObject> {
@@ -882,18 +901,19 @@ impl Actor {
         let changing =
             self.changes(options.clone()) != RunOptions::default() || self.moves(account.as_ref());
         if self.live.is_some() && (changing || !self.queued.is_empty()) {
-            return self.queue(turn_id, text, images, options, account);
+            return self.queue(turn_id, text, images, threads, options, account);
         }
         if let Some(live) = &self.live {
             let follow_up = FollowUp {
                 turn_id,
-                text: text.clone(),
+                text: attached::prompt(&self.daemon, &threads, &text).await?,
                 images: images.clone(),
             };
             match live.run.send(follow_up) {
                 Ok(()) => {
                     self.record_turn(turn_id, text.clone()).await;
                     self.keep_images(Some(turn_id), images).await;
+                    self.attach(Some(turn_id), threads);
                     self.last_message = text;
                     return self.snapshot();
                 }
@@ -905,7 +925,7 @@ impl Actor {
                 }
                 // A backend that takes no messages while it runs gets this one once it's done.
                 Err(SendError::Unsupported) => {
-                    return self.queue(turn_id, text, images, options, account);
+                    return self.queue(turn_id, text, images, threads, options, account);
                 }
                 // The CLI is exiting: let the run finish, then resume it with the message.
                 Err(SendError::Finished) => {
@@ -917,7 +937,8 @@ impl Actor {
             }
         }
         let changes = self.changes(options);
-        self.resume(turn_id, text, images, changes, account).await
+        self.resume(turn_id, text, images, threads, changes, account)
+            .await
     }
 
     /// Of `options`, those that differ from the run's.
@@ -947,6 +968,7 @@ impl Actor {
         turn_id: TurnId,
         text: String,
         images: Vec<PromptImage>,
+        threads: Vec<RunId>,
         options: RunOptions,
         account: Option<AccountChoice>,
     ) -> Result<AgentRun, ErrorObject> {
@@ -955,6 +977,7 @@ impl Actor {
             turn_id,
             text,
             images,
+            threads,
             options,
             account,
         });
@@ -973,11 +996,15 @@ impl Actor {
                 turn_id,
                 text,
                 images,
+                threads,
                 options,
                 account,
             } = next;
             let changes = self.changes(options);
-            let why = match self.resume(turn_id, text, images, changes, account).await {
+            let resumed = self
+                .resume(turn_id, text, images, threads, changes, account)
+                .await;
+            let why = match resumed {
                 Ok(_) if self.live.is_some() => return,
                 Ok(_) => self
                     .row
@@ -1008,15 +1035,17 @@ impl Actor {
         }
     }
 
-    /// Starts a new CLI process for the run with `text` and `images`, after storing `changes` to
-    /// its options, which the new process runs with. It resumes the run's
-    /// vendor session, on `account` if that's another of the same backend's. On another backend's
-    /// account, or with no session to resume, a new session starts, told the conversation so far.
+    /// Starts a new CLI process for the run with `text`, after the summaries of `threads`, and
+    /// `images`, after storing `changes` to its options, which the new process runs with. It
+    /// resumes the run's vendor session, on `account` if that's another of the same backend's. On
+    /// another backend's account, or with no session to resume, a new session starts, told the
+    /// conversation so far.
     async fn resume(
         &mut self,
         turn_id: TurnId,
         text: String,
         images: Vec<PromptImage>,
+        threads: Vec<RunId>,
         changes: RunOptions,
         account: Option<AccountChoice>,
     ) -> Result<AgentRun, ErrorObject> {
@@ -1075,18 +1104,19 @@ impl Actor {
         }
         let session_id = session_id.filter(|_| backend == from);
         let paths = self.checkout_paths(&repo_path).await?;
+        let sent = attached::prompt(&self.daemon, &threads, &text).await?;
         // The run's fields before it moves, to move it back if its new CLI doesn't start.
         let moved_from = self
             .store_options(prepared.resolved.backend(), changes)
             .await?;
-        let message = text.clone();
+        let message = text;
         let (prompt, resume) = if let Some(session_id) = session_id {
             info!(run = %self.id, "resuming an agent run's session");
-            (text, Some(self.resume_of(session_id).await?))
+            (sent, Some(self.resume_of(session_id).await?))
         } else {
             info!(run = %self.id, from, to = backend, "starting a new session for an agent run");
             match self
-                .handoff_prompt(&from, &text, &prepared.place, paths.as_ref())
+                .handoff_prompt(&from, &sent, &prepared.place, paths.as_ref())
                 .await
             {
                 Ok(prompt) => (prompt, None),
@@ -1117,6 +1147,7 @@ impl Actor {
             // Only a turn that reached a CLI counts as sent: a retry after a failed start
             // tries again.
             self.record_turn(turn_id, message.clone()).await;
+            self.attach(Some(turn_id), threads);
             self.last_message = message;
         } else {
             self.row.state.session_id = old_session;
@@ -1240,23 +1271,8 @@ impl Actor {
     ) -> Result<String, ErrorObject> {
         // What the agent said last is logged before the conversation is read.
         self.flush().await;
-        let (log, run) = (Arc::clone(&self.daemon.log), self.id);
-        let events = tokio::task::spawn_blocking(move || {
-            let mut events = Vec::new();
-            let mut after = 0;
-            loop {
-                let (page, more) = log.run_events(run, after, 1000, 4 * 1024 * 1024)?;
-                after = page.last().map_or(after, |entry| entry.seq);
-                events.extend(page.iter().map(|entry| entry.event.clone()));
-                if !more || page.is_empty() {
-                    return Ok(events);
-                }
-            }
-        })
-        .await
-        .map_err(ErrorObject::internal_error)?
-        .map_err(|error| store_error(&error))?;
-        let message = handoff_message(from, &conversation(&events), text);
+        let events = logged_events(&self.daemon, self.id).await?;
+        let message = handoff_message(from, &conversation(&events, HISTORY_BYTES), text);
         match place {
             Place::Coordinator { repo } => Ok(super::coordinator::first_message(
                 &message,
@@ -1330,6 +1346,14 @@ impl Actor {
             Err(error) => {
                 warn!(run = %self.id, error = %error.message, "could not store a message's images");
             }
+        }
+    }
+
+    /// Keeps the threads attached to `turn_id`'s message, which its CLI has now taken, for its
+    /// `TurnStarted` to list (PLX-372).
+    pub(super) fn attach(&mut self, turn_id: Option<TurnId>, threads: Vec<RunId>) {
+        if !threads.is_empty() {
+            self.attached.insert(turn_id, threads);
         }
     }
 
@@ -1595,15 +1619,18 @@ impl Actor {
                 if let Some(mut item) = output_item(&event) {
                     // A follow-up's text, which `send` recorded before its CLI could report the
                     // turn, so a transcript rebuilt from the log shows it (RYA-92), capped like
-                    // every other text item, and the ids of any message's images (RYA-191).
+                    // every other text item, the ids of any message's images (RYA-191), and the
+                    // threads attached to it (PLX-372).
                     if let AgentOutputItem::TurnStarted {
                         turn_id,
                         text,
                         wake,
                         images,
+                        threads,
                     } = &mut item
                     {
                         *images = self.images.remove(turn_id).unwrap_or_default();
+                        *threads = self.attached.remove(turn_id).unwrap_or_default();
                         if let Some(turn_id) = turn_id {
                             *wake = self.wakes.was_sent(*turn_id);
                             *text = self
@@ -1820,11 +1847,34 @@ fn session_account(account_id: &str) -> AccountChoice {
 /// About the most of the conversation a new session is told, in bytes: its latest messages.
 const HISTORY_BYTES: usize = 64 * 1024;
 
-/// A run's conversation as `events` logged it, for a new session to take over: the user's
-/// messages, Parallax's wake-ups, and the agent's replies, oldest first, without its tool calls,
-/// whose work is in the run's folder. Only the latest that fit in about [`HISTORY_BYTES`] are
-/// kept.
-fn conversation(events: &[ParallaxEvent]) -> String {
+/// Every event run `run` logged, oldest first.
+pub(super) async fn logged_events(
+    daemon: &Daemon,
+    run: RunId,
+) -> Result<Vec<ParallaxEvent>, ErrorObject> {
+    let log = Arc::clone(&daemon.log);
+    tokio::task::spawn_blocking(move || {
+        let mut events = Vec::new();
+        let mut after = 0;
+        loop {
+            let (page, more) = log.run_events(run, after, 1000, 4 * 1024 * 1024)?;
+            after = page.last().map_or(after, |entry| entry.seq);
+            events.extend(page.iter().map(|entry| entry.event.clone()));
+            if !more || page.is_empty() {
+                return Ok(events);
+            }
+        }
+    })
+    .await
+    .map_err(ErrorObject::internal_error)?
+    .map_err(|error| store_error(&error))
+}
+
+/// A run's conversation as `events` logged it, for a new session to take over (0014) or a
+/// message it's attached to (PLX-372): the user's messages, Parallax's wake-ups, and the agent's
+/// replies, oldest first, without its tool calls, whose work is in the run's folder. Only the
+/// latest that fit in about `cap` bytes are kept.
+pub(super) fn conversation(events: &[ParallaxEvent], cap: usize) -> String {
     let mut said: Vec<String> = Vec::new();
     // The last thing the agent said, which a turn's result often repeats.
     let mut last_reply = String::new();
@@ -1865,10 +1915,10 @@ fn conversation(events: &[ParallaxEvent]) -> String {
     let mut kept = Vec::new();
     let mut bytes = 0;
     for message in said.iter().rev() {
-        if bytes + message.len() > HISTORY_BYTES {
+        if bytes + message.len() > cap {
             // One message longer than the whole is cut, rather than leaving nothing.
             if kept.is_empty() {
-                kept.push(convert::truncate(message, HISTORY_BYTES));
+                kept.push(convert::truncate(message, cap));
             }
             break;
         }
@@ -1997,8 +2047,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        Actor, Command, HISTORY_BYTES, Live, commit_message, conversation, handoff_message,
-        handoff_notice, session_account,
+        Actor, Command, HISTORY_BYTES, Live, attached, commit_message, conversation,
+        handoff_message, handoff_notice, session_account,
     };
     use crate::agents::RunOptions;
     use crate::agents::convert::agent_run;
@@ -2241,6 +2291,7 @@ mod tests {
             text: Some(text.to_owned()),
             wake,
             images: Vec::new(),
+            threads: Vec::new(),
         };
         let finished = |result: &str| AgentOutputItem::TurnFinished {
             turn_id: None,
@@ -2257,6 +2308,7 @@ mod tests {
                     text: None,
                     wake: false,
                     images: Vec::new(),
+                    threads: Vec::new(),
                 },
                 AgentOutputItem::ToolCall {
                     call_id: "call-1".to_owned(),
@@ -2273,7 +2325,7 @@ mod tests {
             output(vec![turn("Subagents finished", true)]),
         ];
         assert_eq!(
-            conversation(&events),
+            conversation(&events, HISTORY_BYTES),
             "User:\nflood\n\nAgent:\nRead it.\n\nUser:\nAnd now?\n\nAgent:\nAll done.\n\n\
              Parallax:\nSubagents finished"
         );
@@ -2282,10 +2334,20 @@ mod tests {
         let long: Vec<_> = (0..20)
             .map(|i| output(vec![turn(&format!("{i}{}", "x".repeat(8 * 1024)), false)]))
             .collect();
-        let kept = conversation(&long);
+        let kept = conversation(&long, HISTORY_BYTES);
         assert!(kept.starts_with("(Earlier messages are left out.)\n\nUser:\n"));
         assert!(kept.ends_with(&format!("19{}", "x".repeat(8 * 1024))));
         assert!(kept.len() <= HISTORY_BYTES + 64, "{}", kept.len());
+        // An attached thread's summary is cut the same way, to its own cap (PLX-372).
+        let summary = conversation(&long, attached::SUMMARY_BYTES);
+        assert!(summary.starts_with("(Earlier messages are left out.)\n\nUser:\n"));
+        assert!(summary.ends_with(&format!("19{}", "x".repeat(8 * 1024))));
+        assert!(
+            summary.len() <= attached::SUMMARY_BYTES + 64,
+            "{}",
+            summary.len()
+        );
+        assert!(summary.len() < kept.len());
     }
 
     #[test]
@@ -2329,6 +2391,7 @@ mod tests {
                 first,
                 "Hurry up".to_owned(),
                 Vec::new(),
+                Vec::new(),
                 sonnet.clone(),
                 None,
             )
@@ -2340,6 +2403,7 @@ mod tests {
                 second,
                 "And then".to_owned(),
                 Vec::new(),
+                Vec::new(),
                 RunOptions::default(),
                 None,
             )
@@ -2350,13 +2414,21 @@ mod tests {
                 first,
                 "Hurry up".to_owned(),
                 Vec::new(),
+                Vec::new(),
                 sonnet.clone(),
                 None,
             )
             .await
             .unwrap();
         let conflict = actor
-            .send(first, "Other".to_owned(), Vec::new(), sonnet, None)
+            .send(
+                first,
+                "Other".to_owned(),
+                Vec::new(),
+                Vec::new(),
+                sonnet,
+                None,
+            )
             .await
             .unwrap_err();
         assert_eq!(
@@ -2406,6 +2478,7 @@ mod tests {
             .send(
                 turn,
                 "Also this".to_owned(),
+                Vec::new(),
                 Vec::new(),
                 RunOptions::default(),
                 None,

@@ -172,6 +172,20 @@ fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
     })
 }
 
+/// A `LIKE` pattern, escaped with `\`, that matches `text` anywhere.
+fn like_pattern(text: &str) -> String {
+    let mut pattern = String::with_capacity(text.len() + 2);
+    pattern.push('%');
+    for c in text.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
+}
+
 fn fetch_repo(conn: &Connection, sql_where: &str, key: &str) -> Result<Option<Repo>, StoreError> {
     conn.query_row(
         &format!("SELECT {REPO_COLUMNS} FROM repos WHERE {sql_where}"),
@@ -340,6 +354,42 @@ impl Store {
             "SELECT {THREAD_COLUMNS} FROM threads ORDER BY created_at ASC, id ASC"
         ))?;
         let rows = stmt.query_map([], thread_from_row)?;
+        let mut threads = Vec::new();
+        for row in rows {
+            threads.push(into_thread(row?)?);
+        }
+        Ok(threads)
+    }
+
+    /// The threads whose messages contain `query`, the one with the newest message first, at
+    /// most `limit` (PLX-372). A message is the run's prompt, a sent turn's text, or the agent's
+    /// reply: a `text` item of the run's `agent.output` events. Tool calls and their output don't
+    /// count. Matching is SQLite's `LIKE`: case-insensitive for ASCII letters only.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn search_threads(&self, query: &str, limit: usize) -> Result<Vec<Thread>, StoreError> {
+        let pattern = like_pattern(query);
+        // The event's JSON holds a reply's text JSON-escaped, so this cheap test on the raw
+        // payload finds every event that could match, and only those are parsed.
+        let escaped = serde_json::to_string(query).unwrap_or_default();
+        let payload_pattern = like_pattern(&escaped[1..escaped.len() - 1]);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {THREAD_COLUMNS} FROM threads WHERE
+                EXISTS (SELECT 1 FROM runs WHERE runs.id = threads.id
+                    AND runs.prompt LIKE ?1 ESCAPE '\\')
+                OR EXISTS (SELECT 1 FROM turns WHERE turns.run_id = threads.id
+                    AND turns.text LIKE ?1 ESCAPE '\\')
+                OR EXISTS (SELECT 1 FROM events, json_each(events.payload, '$.items') AS item
+                    WHERE events.run_id = threads.id AND events.kind = 'agent.output'
+                    AND events.payload LIKE ?2 ESCAPE '\\'
+                    AND json_extract(item.value, '$.kind') = 'text'
+                    AND json_extract(item.value, '$.text') LIKE ?1 ESCAPE '\\')
+             ORDER BY 7 DESC, id DESC LIMIT ?3"
+        ))?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt.query_map(params![pattern, payload_pattern, limit], thread_from_row)?;
         let mut threads = Vec::new();
         for row in rows {
             threads.push(into_thread(row?)?);

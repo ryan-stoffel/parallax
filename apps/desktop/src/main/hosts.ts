@@ -73,6 +73,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "thread/archive": true,
   "thread/delete": true,
   "thread/update": true,
+  "thread/search": true,
   "repo/update": true,
   "repo/refs": true,
   "pr/view": true,

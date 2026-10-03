@@ -293,6 +293,34 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub checkout_ref: Option<String>,
+    /// Threads attached to the first message as context, as `agent/start` takes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RunId>,
+}
+
+/// Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0041),
+/// behind the `threadContext` capability.
+///
+/// Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the
+/// agent's replies, but not its tool calls. Case-insensitive for ASCII letters. An empty query
+/// fails with `invalidParams`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearchParams {
+    /// The text to find.
+    pub query: String,
+    /// The most threads to return: 20 by default, and at most 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub limit: Option<u32>,
+}
+
+/// Result of `thread/search`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearchResult {
+    /// The matching threads, the one with the newest message first.
+    pub threads: Vec<Thread>,
 }
 
 /// Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an

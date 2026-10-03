@@ -33,6 +33,7 @@
 
 mod actor;
 mod approvals;
+pub(crate) mod attached;
 pub(crate) mod convert;
 pub(crate) mod coordinator;
 pub(crate) mod review;
@@ -783,6 +784,7 @@ pub(crate) async fn start(
         fast,
         images,
         approvals,
+        threads,
         ..
     } = params;
     let new = NewRun {
@@ -790,6 +792,7 @@ pub(crate) async fn start(
         scope: project,
         prompt,
         images,
+        threads,
         account,
         coordinator_thread,
         options: RunOptions {
@@ -814,6 +817,8 @@ pub(crate) struct NewRun {
     pub prompt: String,
     /// The prompt's images (RYA-191), already checked.
     pub images: Vec<PromptImage>,
+    /// The threads attached to the prompt (PLX-372), already checked.
+    pub threads: Vec<RunId>,
     pub account: Option<AccountChoice>,
     /// The coordinator thread starting the run through `plxd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
@@ -857,6 +862,10 @@ fn parent(thread: Option<&NewThread>, coordinator: Option<CoordinatorThreadId>) 
 }
 
 /// Creates and starts a run: see the module documentation. Idempotent on the run id.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sequence of steps, each of which must happen before the next"
+)]
 pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRun, ErrorObject> {
     let agents = &daemon.agents;
     let NewRun {
@@ -864,6 +873,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         scope: project,
         prompt,
         images,
+        threads,
         account,
         coordinator_thread,
         mut options,
@@ -898,6 +908,8 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         };
         return Ok(CreatedRun { run, thread: row });
     }
+    // The attached threads are read before anything is created, so a failure leaves nothing.
+    let sent = attached::prompt(&daemon, &threads, &prompt).await?;
     let (prepared, scope_path) = prepare_run(
         &daemon,
         project,
@@ -950,8 +962,9 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
 
     // A run just created here has no sent turns yet.
     let mut actor = Actor::new(Arc::clone(&daemon), row, worktree, HashMap::new());
-    let task = first_prompt(&prompt, &prepared.place, &cwd)?;
+    let task = first_prompt(&sent, &prepared.place, &cwd)?;
     let paths = Some((cwd, git_common_dir));
+    actor.attach(None, threads);
     actor
         .launch(prepared, task, images, None, None, paths)
         .await;
@@ -1081,6 +1094,7 @@ pub(crate) async fn send(
         fast,
         account,
         images,
+        threads,
     } = params;
     let options = RunOptions {
         model,
@@ -1093,6 +1107,7 @@ pub(crate) async fn send(
         turn_id,
         text,
         images,
+        threads,
         options,
         account,
         reply,

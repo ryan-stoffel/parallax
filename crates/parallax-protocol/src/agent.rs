@@ -484,6 +484,11 @@ pub enum AgentOutputItem {
         /// `agent/image` (RYA-191). Absent when it had none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<ImageId>,
+        /// The threads attached to the turn's message as context, in order (PLX-372). The agent
+        /// got a summary of each ahead of the message, which `text` and the run's `prompt` leave
+        /// out. Absent when it had none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        threads: Vec<RunId>,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {
@@ -711,6 +716,14 @@ pub struct AgentStartParams {
     /// resumes, and a retry must repeat it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
+    /// Threads attached to the prompt as context, by their run ids, sent only to a plxd that
+    /// advertises `threadContext` (PLX-372, decision 0041). The agent gets a summary of each ahead
+    /// of the prompt: its id and what was said in it, without tool calls, cut from the front to
+    /// the capability's `maxSummaryBytes`. At most the capability's `maxThreads`. An id that is
+    /// no thread's fails with `threadNotFound`. A retry must repeat them; plxd doesn't compare
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RunId>,
 }
 
 /// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
@@ -776,6 +789,10 @@ pub struct AgentSendParams {
     /// Images for the message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
+    /// Threads attached to the message as context, as `agent/start`'s. A message that waits for
+    /// the run's CLI gets their summaries when it's sent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RunId>,
 }
 
 /// Params of `agent/cancel`: stops a running agent, which ends as `cancelled`. Cancelling a run
