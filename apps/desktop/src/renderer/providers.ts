@@ -1,4 +1,4 @@
-import { Bot, Cpu } from "lucide-react";
+import { Bot, Cpu, SquareTerminal } from "lucide-react";
 import { useEffect, useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
@@ -9,6 +9,7 @@ import type {
   ProvidersListResult,
 } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
+import { merged, stored } from "./stored";
 import {
   AmpLogo,
   AntigravityLogo,
@@ -17,7 +18,7 @@ import {
   CursorLogo,
   GrokLogo,
   HermesLogo,
-  OhMyPiLogo,
+  maskLogo,
   OllamaLogo,
   OpenAILogo,
   OpenCodeLogo,
@@ -70,7 +71,7 @@ export async function saveProvider(
   return undefined;
 }
 
-/** Removes an instance the user added. Resolves to an error for people. */
+/** Removes an instance, and its secrets. Resolves to an error for people. */
 export async function removeProvider(hostId: string, id: string): Promise<string | undefined> {
   const answer = await window.parallax.request(hostId, "providers/remove", { id });
   if ("error" in answer) return describeError(answer.error);
@@ -123,7 +124,7 @@ export const kinds: Record<string, Kind> = {
   antigravity: { name: "Antigravity", Logo: AntigravityLogo, program: "agy_acp_server.par" },
   opencode: { name: "OpenCode", Logo: OpenCodeLogo, program: "opencode" },
   pi: { name: "Pi", Logo: PiLogo, program: "npx", wholeArgs: true },
-  omp: { name: "Oh My Pi", Logo: OhMyPiLogo, program: "omp" },
+  omp: { name: "Oh My Pi", Logo: SquareTerminal, program: "omp" },
   grokBuild: { name: "Grok Build", Logo: GrokLogo, program: "grok" },
   hermes: { name: "Hermes Agent", Logo: HermesLogo, program: "hermes" },
   ollamaCloud: { name: "Ollama Cloud", Logo: OllamaLogo, program: "claude" },
@@ -141,11 +142,22 @@ const acpLogos: [RegExp, Logo][] = [
   [/\bcline\b/i, ClineLogo],
 ];
 
-/** An instance's logo: its kind's, or for an ACP agent with a mark of its own, that one. */
+const registryIcons = stored<Record<string, string>>("parallax.registryIcons", {}, merged);
+
+/** Keeps an ACP Registry agent's icon on this device, for the instances named `name`. */
+export const keepRegistryIcon = (name: string, url: string) =>
+  registryIcons.set({ ...registryIcons.get(), [name]: url });
+
+/**
+ * An instance's logo: its kind's, or for an ACP agent, its own mark, else the icon of the
+ * registry agent it was added as (by its name), else the generic one.
+ */
 export function logoOf(instance: { kind: string; name: string; program?: string }): Logo {
+  if (instance.kind !== "acp") return kindOf(instance.kind).Logo;
   const own = `${instance.name} ${instance.program ?? ""}`;
-  const known = instance.kind === "acp" && acpLogos.find(([name]) => name.test(own));
-  return known ? known[1] : kindOf(instance.kind).Logo;
+  const known = acpLogos.find(([name]) => name.test(own))?.[1];
+  const icon = registryIcons.get()[instance.name];
+  return known ?? (icon ? (maskLogo(icon) as Logo) : kindOf("acp").Logo);
 }
 
 /**
@@ -172,9 +184,6 @@ export function instanceName(id: string): string | undefined {
   return undefined;
 }
 
-/** The instances every plxd has, which can be turned off but not removed. */
-export const builtInIds = ["claude", "codex", "cursor"];
-
 /** An Add provider card: what a new instance starts as. */
 export interface Preset {
   kind: ProviderKind;
@@ -195,44 +204,15 @@ const anthropicApi = (url: string, token: Omit<ProviderEnvVar, "name">): Provide
   { name: "ANTHROPIC_AUTH_TOKEN", ...token },
 ];
 
-const piCommand = (value: string): ProviderEnvVar[] => [
-  { name: "PI_ACP_PI_COMMAND", value, secret: false },
-];
-
 /**
- * The Add provider dialog's cards, in order. The model services run Claude Code against an
- * Anthropic-compatible endpoint, set in their variables.
+ * The Add provider dialog's cards, in order: what isn't an ACP Registry agent. The model services
+ * run Claude Code against an Anthropic-compatible endpoint, set in their variables.
  */
 export const presets: Preset[] = [
   { kind: "claude", name: "Claude Code", blurb: "Anthropic's agent" },
   { kind: "codex", name: "Codex", blurb: "OpenAI's agent" },
-  { kind: "cursor", name: "Cursor", blurb: "Cursor Agent" },
-  {
-    kind: "antigravity",
-    name: "Antigravity",
-    blurb: "Google's agent",
-    programHint:
-      "The full path to agy_acp_server.par, from the ACP Registry's Google Antigravity archive.",
-  },
-  { kind: "opencode", name: "OpenCode", blurb: "Any model" },
-  { kind: "opencode", name: "OpenCode 2", blurb: "OpenCode 2.x", program: "opencode2" },
-  {
-    kind: "pi",
-    name: "Pi",
-    blurb: "A minimal agent",
-    args: ["-y", "pi-acp@0.0.34"],
-    env: piCommand("pi"),
-  },
-  {
-    kind: "pi",
-    name: "Pi (0.x)",
-    blurb: "For Pi before 1.0",
-    args: ["-y", "pi-acp@0.0.27"],
-    env: piCommand("pi-0.73"),
-  },
-  { kind: "omp", name: "Oh My Pi", blurb: "Pi, extended" },
-  { kind: "grokBuild", name: "Grok Build", blurb: "xAI's agent" },
   { kind: "hermes", name: "Hermes Agent", blurb: "Nous Portal" },
+  { kind: "omp", name: "Oh My Pi", blurb: "Pi, extended" },
   {
     kind: "ollamaCloud",
     name: "Ollama Cloud",
@@ -252,3 +232,48 @@ export const presets: Preset[] = [
     env: anthropicApi("http://127.0.0.1:8080", { value: "local", secret: false }),
   },
 ];
+
+/** What a version choice sets: its program (absent: the kind's), arguments, and variables. */
+export interface Version {
+  label: string;
+  program?: string;
+  args?: string[];
+  env?: ProviderEnvVar[];
+}
+
+const piVersion = (label: string, pkg: string, command: string): Version => ({
+  label,
+  args: ["-y", pkg],
+  env: [{ name: "PI_ACP_PI_COMMAND", value: command, secret: false }],
+});
+
+/** The kinds that run in more than one version, the default first. */
+export const versions: Partial<Record<string, Version[]>> = {
+  opencode: [{ label: "1.x" }, { label: "2.x", program: "opencode2" }],
+  pi: [piVersion("1.0", "pi-acp@0.0.34", "pi"), piVersion("0.x", "pi-acp@0.0.27", "pi-0.73")],
+};
+
+type Fields = Pick<ProviderInstance, "kind" | "program" | "args" | "env">;
+
+/**
+ * The version `fields` run, read back from them: the first besides the default whose program or
+ * arguments they have, else the default. Undefined for a kind with one version.
+ */
+export function versionOf(fields: Fields): Version | undefined {
+  const all = versions[fields.kind];
+  const has = (v: Version) =>
+    (v.program !== undefined && fields.program === v.program) ||
+    (v.args !== undefined && v.args.join(" ") === fields.args.join(" "));
+  return all && (all.slice(1).find(has) ?? all[0]);
+}
+
+/** `fields` running `version`: its program, its arguments if it sets them, and its variables. */
+export function withVersion<T extends Fields>(fields: T, version: Version): T {
+  const names = new Set(version.env?.map((v) => v.name));
+  return {
+    ...fields,
+    program: version.program,
+    args: version.args ?? fields.args,
+    env: [...fields.env.filter((v) => !names.has(v.name)), ...(version.env ?? [])],
+  };
+}

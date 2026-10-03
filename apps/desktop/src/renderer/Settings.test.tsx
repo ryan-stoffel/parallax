@@ -558,6 +558,13 @@ describe("on a plxd with providers", () => {
     };
     window.parallax.acpRegistry = async () => [
       {
+        id: "pi-acp",
+        name: "pi ACP",
+        version: "0.0.34",
+        description: "Pi over ACP",
+        distribution: { npx: { package: "pi-acp@0.0.34" } },
+      },
+      {
         id: "gemini",
         name: "Gemini CLI",
         version: "0.62.0",
@@ -574,8 +581,8 @@ describe("on a plxd with providers", () => {
   test("lists the host's instances, and a switch turns one off on the host", async () => {
     await renderSettings();
     expect(tabs()).toEqual([
-      "Claude Code2.1.281Signed in · ryan@example.com",
-      "CodexNot signed in",
+      "Claude Code2.1.281Authenticated · ryan@example.com",
+      "CodexNot authenticated",
     ]);
     expect(rows("Account")[0]).toBe("Display nameAuthenticated as ryan@example.com");
     expect(calls("accounts/list")).toEqual([]);
@@ -650,5 +657,60 @@ describe("on a plxd with providers", () => {
       env: [],
       models: [],
     });
+  });
+
+  test("an empty host offers Add provider", async () => {
+    listed = [];
+    await renderSettings();
+    expect(tabs()).toEqual([]);
+    expect(document.body.textContent).toContain("No providers on This Mac yet.");
+    await click(button(document.body, "Add provider"));
+    expect(dialog()).not.toBeNull();
+  });
+
+  test("a registry agent plxd tunes is added as its kind, with its defaults", async () => {
+    await renderSettings();
+    await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+    await click(dialog().querySelector<HTMLElement>('[aria-label="Add pi ACP"]')!);
+    await next();
+    await next();
+    expect(saved()).toEqual({
+      id: "pi",
+      kind: "pi",
+      name: "Pi",
+      enabled: true,
+      args: ["-y", "pi-acp@0.0.34"],
+      env: [{ name: "PI_ACP_PI_COMMAND", value: "pi", secret: false }],
+      models: [],
+    });
+  });
+
+  test("a version choice writes its fields, and is read back from them", async () => {
+    listed = [
+      {
+        ...listed[1]!,
+        instance: {
+          ...instance("pi", "pi", "Pi"),
+          args: ["-y", "pi-acp@0.0.34"],
+          env: [
+            { name: "PI_ACP_PI_COMMAND", value: "pi", secret: false },
+            { name: "TOKEN", secret: true },
+          ],
+        },
+      },
+    ];
+    await renderSettings();
+    const version = (label: string) =>
+      section("Version").querySelector<HTMLInputElement>(`[value="${label}"]`)!;
+    expect(version("1.0").checked).toBe(true);
+    await click(version("0.x"));
+    expect(saved()).toMatchObject({
+      args: ["-y", "pi-acp@0.0.27"],
+      env: [
+        { name: "TOKEN", secret: true },
+        { name: "PI_ACP_PI_COMMAND", value: "pi-0.73", secret: false },
+      ],
+    });
+    expect(version("0.x").checked).toBe(true);
   });
 });

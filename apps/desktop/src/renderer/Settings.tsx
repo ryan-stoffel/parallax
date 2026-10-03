@@ -32,13 +32,15 @@ import { localId, useHosts, type Host } from "./hosts";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { Avatar, useProfile } from "./profile";
 import {
-  builtInIds,
   kindOf,
   logoOf,
   loadProviders,
   removeProvider,
   saveProvider,
   useProviders,
+  versionOf,
+  versions,
+  withVersion,
 } from "./providers";
 import { age, backendLogos } from "./Sidebar";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
@@ -238,16 +240,8 @@ function ProvidersSettings() {
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
-  const picker = <HostPicker hosts={hosts} value={host.id} onChange={setHostId} />;
-  return (
-    <>
-      <PageTitle title="Providers">
-        The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
-        API key as a fallback. Turn one off to hide its models.
-      </PageTitle>
-      <HostProviders key={host.id} host={host} picker={picker} />
-    </>
-  );
+  const picker = <HostPicker hosts={hosts} value={host.id} onChange={setHostId} always />;
+  return <HostProviders key={host.id} host={host} picker={picker} />;
 }
 
 /**
@@ -327,6 +321,10 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
 
   return (
     <>
+      <PageTitle title="Providers">
+        The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
+        API key as a fallback. Turn one off to hide its models.
+      </PageTitle>
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
         {picker}
         <div className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
@@ -489,7 +487,7 @@ function ProviderPane({
   const off = useDisabledClis();
   const enabled = !off.includes(cli.cli);
   // One provider stays on, so a new thread always has one to start on.
-  const last = enabled && builtInIds.every((c) => c === cli.cli || off.includes(c));
+  const last = enabled && Object.keys(cliInfo).every((c) => c === cli.cli || off.includes(c));
 
   let action: ReactNode;
   if (!cli.installed)
@@ -666,20 +664,31 @@ function ProviderPane({
   );
 }
 
-/** An instance's state in a few words: "Signed in · Max", "Not signed in", "Not installed". */
-function instanceStatus(info: ProviderInfo): string {
-  if (!info.installed) return "Not installed";
-  if (info.signedIn === false) return "Not signed in";
-  if (info.signedIn !== true) return info.login ? "Sign-in unknown" : "Ready";
-  return info.account ? `Signed in · ${info.account}` : "Signed in";
-}
-
-const instanceTone = (info: ProviderInfo) =>
-  !info.installed ? "off" : info.signedIn === false ? "warn" : "on";
+/** A plan a CLI reports in lowercase ("max") capitalized; an email as it is. */
+const capitalized = (text: string) =>
+  text.includes("@") ? text : text.charAt(0).toUpperCase() + text.slice(1);
 
 /**
- * One host's provider instances (`providers/list`) as tabs, each with a switch that turns it on or
- * off on the host, and the chosen one's pane. Refresh probes them again, and + adds one.
+ * An instance's state, as its list row says it: "Authenticated · Max", or what it needs, from
+ * plxd's note, such as "Not authenticated · Add your API key".
+ */
+function instanceStatus(info: ProviderInfo): string {
+  const why = info.note ? ` · ${info.note}` : "";
+  if (!info.installed) return `Not installed${why}`;
+  if (info.signedIn === false) return `Not authenticated${why}`;
+  if (info.signedIn !== true) return info.note ?? "Ready";
+  return info.account ? `Authenticated · ${capitalized(info.account)}` : "Authenticated";
+}
+
+/** The dot before a row's state: only when it needs the user. */
+const instanceTone = (info: ProviderInfo) =>
+  !info.installed || info.signedIn === false ? "error" : undefined;
+
+/**
+ * One host's provider instances (`providers/list`), as T3 Code lays them out: under the host and a
+ * Providers line with Refresh and +, one card with the instances on the left, each with a switch
+ * that turns it on or off on the host, and the chosen one's pane on the right. Without instances,
+ * it offers Add provider.
  */
 function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const providers = useProviders(host.id);
@@ -732,20 +741,27 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
 
   return (
     <>
-      <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
-        {picker}
-        <div className="ml-auto flex items-center gap-1 text-[12.5px] text-muted-foreground">
-          {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
-          <IconButton label="Refresh" disabled={checking} onClick={() => void refresh()}>
+      <div className="mb-8 text-[15px]">{picker}</div>
+      <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
+        <h1 className="text-[13px] font-medium text-muted-foreground">Providers</h1>
+        <div className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
+          <button
+            type="button"
+            aria-label="Refresh"
+            disabled={checking}
+            onClick={() => void refresh()}
+            className="flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          >
             <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
-          </IconButton>
+            {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
+          </button>
           <IconButton label="Add provider" onClick={() => setAdding(true)}>
             <Plus aria-hidden />
           </IconButton>
         </div>
       </div>
       {error && (
-        <p role="alert" className="mb-3 text-[12.5px] text-danger">
+        <p role="alert" className="mb-3 px-1 text-[12.5px] text-danger">
           {error}
         </p>
       )}
@@ -759,30 +775,47 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         />
       )}
       {!list || !current ? (
-        <p className="mb-8 rounded-xl border border-border bg-surface px-4 py-3 text-[13px] text-muted-foreground">
-          {error ? "Couldn't list this host's providers." : "Checking…"}
-        </p>
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-border px-4 py-10 text-center text-[13px] text-muted-foreground">
+          {!list ? (
+            error ? (
+              "Couldn't list this host's providers."
+            ) : (
+              "Checking…"
+            )
+          ) : (
+            <>
+              <p>
+                No providers on {host.name} yet. Add an agent or a model service for threads to run
+                on.
+              </p>
+              <button type="button" onClick={() => setAdding(true)} className={primaryButton}>
+                Add provider
+              </button>
+            </>
+          )}
+        </div>
       ) : (
         // Stacked until there's room for the list beside the pane.
-        <div className="@container">
-          <div className="grid gap-6 @2xl:grid-cols-[17rem_minmax(0,1fr)] @2xl:items-start">
+        <div className="@container rounded-xl border border-border">
+          <div className="grid @3xl:grid-cols-[17rem_minmax(0,1fr)]">
             <div
               role="tablist"
               aria-label="Providers"
               aria-orientation="vertical"
               onKeyDown={moveTab}
-              className="flex flex-col gap-0.5 rounded-xl border border-border bg-surface p-1"
+              className="flex flex-col border-b border-border @3xl:border-r @3xl:border-b-0"
             >
               {list.map((info) => {
                 const { instance } = info;
                 const Logo = logoOf(instance);
                 const chosen = info === current;
+                const tone = instanceTone(info);
                 // One instance stays on, so a new thread always has one to start on.
                 const last = instance.enabled && on.length === 1;
                 return (
                   <div
                     key={instance.id}
-                    className={`flex items-center gap-2 rounded-lg pr-3 hover:bg-hover has-[[aria-selected=true]]:bg-selected ${instance.enabled ? "" : "opacity-60"}`}
+                    className="flex items-center gap-2 border-b border-border pr-4 first:rounded-tl-xl hover:bg-hover has-[[aria-selected=true]]:bg-selected"
                   >
                     <button
                       id={`${tabs}-${instance.id}`}
@@ -792,23 +825,27 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                       aria-controls={`${tabs}-${instance.id}-pane`}
                       tabIndex={chosen ? 0 : -1}
                       onClick={() => setSelected(instance.id)}
-                      className="flex min-w-0 flex-1 items-start gap-3 rounded-lg py-2.5 pl-3 text-left"
+                      className={`flex min-w-0 flex-1 items-start gap-3 py-3.5 pl-4 text-left ${instance.enabled ? "" : "opacity-60"}`}
                     >
                       <Logo className="mt-0.5 size-4 shrink-0" />
                       <span className="min-w-0">
                         <span className="flex items-baseline gap-2">
-                          <span className="truncate text-[13px] font-medium">{instance.name}</span>
+                          <span className="truncate text-[13.5px] font-medium">
+                            {instance.name}
+                          </span>
                           {info.version && (
                             <span className="truncate font-mono text-[11.5px] text-faint-foreground">
                               {info.version}
                             </span>
                           )}
                         </span>
-                        <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
-                          <StatusDot tone={instance.enabled ? instanceTone(info) : "off"} />
-                          <span className="truncate">
-                            {instance.enabled ? instanceStatus(info) : "Off"}
-                          </span>
+                        <span className="mt-0.5 line-clamp-2 text-[12.5px] text-muted-foreground">
+                          {instance.enabled && tone && (
+                            <span className="mr-1.5 inline-flex align-middle">
+                              <StatusDot tone={tone} />
+                            </span>
+                          )}
+                          {instance.enabled ? instanceStatus(info) : "Off"}
                         </span>
                       </span>
                     </button>
@@ -884,11 +921,21 @@ function SavedField({
 /** A field's words as arguments, split on spaces. ponytail: no quoting, so no argument has a space. */
 const argsOf = (text: string) => text.split(/\s+/).filter(Boolean);
 
+/** A card of rows with no title over it, named `label`. */
+function Card({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section aria-label={label} className="mb-8">
+      <div className="rounded-xl border border-border bg-surface">{children}</div>
+    </section>
+  );
+}
+
 /**
- * A provider instance's pane, `hidden` unless its tab is chosen: its display name and account,
- * with Sign in (in a terminal under it, after which the instances are probed again with
- * `onSignedIn`); how it runs; its variables; Claude's and Codex's usage and API keys; its models;
- * and Remove, for one the user added. Each change saves the instance on the host.
+ * A provider instance's pane, `hidden` unless its tab is chosen: its display name with its
+ * account, and Sign in (in a terminal under it, after which the instances are probed again with
+ * `onSignedIn`); how it runs, with its version for a kind that has more than one; its variables;
+ * its models; Claude's and Codex's usage and API keys; and Remove. Each change saves the instance
+ * on the host.
  */
 function InstancePane({
   id,
@@ -925,22 +972,25 @@ function InstancePane({
   const kind = kindOf(instance.kind);
   const KindLogo = logoOf(instance);
   const homeVar = HOME_VARS[instance.kind];
-  const builtIn = builtInIds.includes(instance.id);
-  // The host's keys are for the built-in Claude Code and Codex.
-  const keyProvider = builtIn ? cliInfo[instance.id]?.keyProvider : undefined;
+  const choices = versions[instance.kind];
+  const version = versionOf(instance);
+  // The host's keys are for its Claude Code and Codex, the instances named for their kind.
+  const keyProvider = instance.id === instance.kind ? cliInfo[instance.id]?.keyProvider : undefined;
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string>();
   const save = async (change: Partial<ProviderInstance>) =>
     setError(await saveProvider(hostId, { ...instance, ...change }));
+  const program = instance.program ?? kind.program ?? "the program";
 
   let account = instanceStatus(info);
-  if (info.signedIn === true && info.account) account = `Authenticated as ${info.account}`;
+  if (info.signedIn === true && info.account)
+    account = `Authenticated as ${capitalized(info.account)}`;
 
   return (
-    <div id={id} role="tabpanel" aria-labelledby={tabId} hidden={hidden} className="min-w-0">
-      <div className="mb-5 flex items-center gap-2.5">
-        <KindLogo className="size-5 shrink-0" />
-        <h2 className="truncate text-[15px] font-semibold">{instance.name}</h2>
+    <div id={id} role="tabpanel" aria-labelledby={tabId} hidden={hidden} className="min-w-0 p-5">
+      <div className="mb-4 flex items-center gap-2.5 px-1">
+        <KindLogo className="size-4 shrink-0" />
+        <h2 className="truncate text-[14px] font-medium">{instance.name}</h2>
         {info.version && (
           <span className="ml-auto truncate font-mono text-[12px] text-muted-foreground">
             {info.version}
@@ -957,26 +1007,9 @@ function InstancePane({
           {error}
         </p>
       )}
-      <Section title="Account">
-        <Row
-          title="Display name"
-          description={
-            <>
-              {account}
-              {info.note && <span className="block">{info.note}</span>}
-            </>
-          }
-        >
-          <SavedField
-            aria-label="Display name"
-            required
-            maxLength={64}
-            value={instance.name}
-            onSave={(name) => void save({ name: name.trim() })}
-          />
-        </Row>
-        {info.login && info.installed && info.signedIn !== true && !signingIn && (
-          <Row title="Sign in" description={`Runs ${info.login.join(" ")} on this host.`}>
+      <Card label="Account">
+        <Row title="Display name" description={account}>
+          {info.login && info.installed && info.signedIn !== true && !signingIn && (
             <button
               type="button"
               aria-label={`Sign in to ${instance.name}`}
@@ -985,8 +1018,15 @@ function InstancePane({
             >
               Sign in
             </button>
-          </Row>
-        )}
+          )}
+          <SavedField
+            aria-label="Display name"
+            required
+            maxLength={64}
+            value={instance.name}
+            onSave={(name) => void save({ name: name.trim() })}
+          />
+        </Row>
         {signingIn && (
           <Suspense>
             <SignInTerminal
@@ -997,22 +1037,46 @@ function InstancePane({
             />
           </Suspense>
         )}
-      </Section>
+      </Card>
       <Section title="Runtime">
+        {choices && version && (
+          <Row title="Version" description={`Which ${kind.name} this instance runs.`}>
+            <Segmented
+              label="Version"
+              options={choices.map((v) => ({ value: v.label, name: v.label }))}
+              value={version.label}
+              onChange={(label) =>
+                void save(
+                  withVersion(
+                    instance,
+                    choices.find((v) => v.label === label)!,
+                  ),
+                )
+              }
+            />
+          </Row>
+        )}
         <Row
           title="Binary path"
-          description={info.path ? `Runs ${info.path}.` : `Not found on this host's PATH.`}
+          description={
+            info.path
+              ? `Path to the ${kind.name} binary this instance runs. Found at ${info.path}.`
+              : `Path to the ${kind.name} binary this instance runs. Not found on the host.`
+          }
         >
           <SavedField
             aria-label="Binary path"
             placeholder={kind.program}
             required={instance.kind === "acp"}
             value={instance.program ?? ""}
-            onSave={(program) => void save({ program: program.trim() || undefined })}
+            onSave={(next) => void save({ program: next.trim() || undefined })}
           />
         </Row>
         {homeVar && (
-          <Row title={`${homeVar} path`} description="Its own home, for a second account.">
+          <Row
+            title={`${homeVar} path`}
+            description={`Custom ${kind.name} home and config directory, for a second account.`}
+          >
             <SavedField
               aria-label={`${homeVar} path`}
               placeholder="Default"
@@ -1025,8 +1089,8 @@ function InstancePane({
           title={kind.wholeArgs ? "Arguments" : "Launch arguments"}
           description={
             kind.wholeArgs
-              ? "Everything after the program, separated by spaces."
-              : "Added after its own, separated by spaces."
+              ? `Every argument passed to ${program}, separated by spaces.`
+              : `Additional arguments passed to ${program} on session start, separated by spaces.`
           }
         >
           <SavedField
@@ -1037,6 +1101,7 @@ function InstancePane({
         </Row>
       </Section>
       <EnvSection env={instance.env} onSave={(env) => save({ env })} />
+      <ProviderModels hostId={hostId} info={info} onSave={(models) => save({ models })} />
       {usage && (instance.kind === "claude" || instance.kind === "codex") && (
         <Section
           title="Usage"
@@ -1055,22 +1120,22 @@ function InstancePane({
         <Section title={`${providerNames[keyProvider]} API keys`}>
           {keys
             .filter((k) => k.provider === keyProvider)
-            .map((account) => (
+            .map((key) => (
               <KeyRow
-                key={account.id}
+                key={key.id}
                 hostId={hostId}
-                account={account}
-                usage={usage && <UsageLines usage={usage.get(account.id)} period={period} />}
-                onRemoved={() => onKeys((all) => all?.filter((k) => k.id !== account.id))}
+                account={key}
+                usage={usage && <UsageLines usage={usage.get(key.id)} period={period} />}
+                onRemoved={() => onKeys((all) => all?.filter((k) => k.id !== key.id))}
               />
             ))}
           {adding ? (
             <KeyForm
               hostId={hostId}
               provider={keyProvider}
-              onDone={(account) => {
+              onDone={(added) => {
                 setAdding(false);
-                if (account) onKeys((all) => [...(all ?? []), account]);
+                if (added) onKeys((all) => [...(all ?? []), added]);
               }}
             />
           ) : (
@@ -1085,16 +1150,15 @@ function InstancePane({
           )}
         </Section>
       )}
-      <ProviderModels hostId={hostId} info={info} onSave={(models) => save({ models })} />
-      {!builtIn && <RemoveProvider hostId={hostId} instance={instance} />}
+      <RemoveProvider hostId={hostId} instance={instance} />
     </div>
   );
 }
 
 /**
- * An instance's variables: each by name, with its value to edit (a secret's never shows, and a
- * new one replaces it), and Remove; and Add variable, a secret by default for a name with KEY,
- * TOKEN, or SECRET in it.
+ * An instance's variables: a Variables row with Add variable, then each by name, with its value to
+ * edit (a secret's never shows, and a new one replaces it), and Remove. A new one is a secret by
+ * default when its name has KEY, TOKEN, or SECRET in it.
  */
 function EnvSection({
   env,
@@ -1116,6 +1180,19 @@ function EnvSection({
 
   return (
     <Section title="Environment">
+      <Row
+        title="Variables"
+        description="API keys, base URLs, and other settings this instance's runs get."
+      >
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className={`${quietButton} flex items-center gap-1 border border-border [&_svg]:size-3.5`}
+        >
+          <Plus aria-hidden />
+          Add variable
+        </button>
+      </Row>
       {env.map((v, i) => (
         <div key={v.name} className={settingRow}>
           <div className="min-w-0">
@@ -1147,7 +1224,7 @@ function EnvSection({
           </div>
         </div>
       ))}
-      {adding ? (
+      {adding && (
         <form
           aria-label="Add variable"
           onSubmit={(e) => {
@@ -1197,21 +1274,12 @@ function EnvSection({
             </button>
           </div>
         </form>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-        >
-          <Plus aria-hidden />
-          Add variable
-        </button>
       )}
     </Section>
   );
 }
 
-/** Remove provider, for an instance the user added. It asks first, in place, as KeyRow does. */
+/** Remove provider. It asks first, in place, as KeyRow does. */
 function RemoveProvider({ hostId, instance }: { hostId: string; instance: ProviderInstance }) {
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -1225,7 +1293,7 @@ function RemoveProvider({ hostId, instance }: { hostId: string; instance: Provid
   };
 
   return (
-    <Section title="Remove">
+    <Card label="Remove">
       <div className={settingRow}>
         <div className="min-w-0">
           <span className="block text-[13px] font-medium">Remove provider</span>
@@ -1268,7 +1336,7 @@ function RemoveProvider({ hostId, instance }: { hostId: string; instance: Provid
           )}
         </div>
       </div>
-    </Section>
+    </Card>
   );
 }
 

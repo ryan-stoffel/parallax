@@ -1,4 +1,4 @@
-import { useId, type SVGProps } from "react";
+import { useId, type ReactElement, type SVGProps } from "react";
 
 // Provider and source logos, from LobeHub's icon set (@lobehub/icons-static-svg) and the
 // vendors' brand kits. Each sizes like a lucide icon; Claude, Antigravity, Oh My Pi, and Google
@@ -286,19 +286,8 @@ export function OpenCodeLogo(props: LogoProps) {
   );
 }
 
-/** Pi's mark. */
+/** Pi's mark, in its colors. */
 export function PiLogo(props: LogoProps) {
-  return (
-    <svg viewBox="0 0 560 560" fill="none" aria-hidden {...props}>
-      <path fill="currentColor" d="M420 280H280V140H0V0H420V280Z" />{" "}
-      <path fill="currentColor" d="M560 560H420V280H560V560Z" />{" "}
-      <path fill="currentColor" d="M140 560H0V140H140V280H280V420H140V560Z" />
-    </svg>
-  );
-}
-
-/** Oh My Pi's mark, in its colors. */
-export function OhMyPiLogo(props: LogoProps) {
   return (
     <svg viewBox="165 165 470 470" fill="none" aria-hidden {...props}>
       <path fill="#F09082" d="M165.29 165.29H517.36V400H400V282.65H165.29Z" />{" "}
@@ -410,6 +399,24 @@ export function HermesLogo(props: LogoProps) {
       ></path>
     </svg>
   );
+}
+
+const masks = new Map<string, (props: LogoProps) => ReactElement>();
+
+/**
+ * A logo drawn from an SVG's URL, such as an ACP Registry agent's icon, in the text's color: the
+ * SVG is a mask over it, so none of its markup reaches the page. One component per URL.
+ */
+export function maskLogo(url: string): (props: LogoProps) => ReactElement {
+  let logo = masks.get(url);
+  if (!logo) {
+    const mask = `url("${url.replaceAll('"', "%22")}") center / contain no-repeat`;
+    logo = ({ className }: LogoProps) => (
+      <span aria-hidden style={{ mask }} className={`inline-block bg-current ${className ?? ""}`} />
+    );
+    masks.set(url, logo);
+  }
+  return logo;
 }
 
 // VS Code's mark, from Simple Icons (CC0), since LobeHub's set has none.

@@ -3,19 +3,51 @@ import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 
 import { HOME_VARS, type RegistryAgent } from "../preload/bridge";
 import type { ProviderEnvVar, ProviderInstance } from "../protocol/generated/protocol";
-import { kindOf, presets, saveProvider, type Preset } from "./providers";
+import {
+  keepRegistryIcon,
+  kindOf,
+  presets,
+  saveProvider,
+  versionOf,
+  versions,
+  withVersion,
+  type Preset,
+} from "./providers";
 import { field, primaryButton, quietButton } from "./settings/parts";
-import { IconButton } from "./ui";
+import { IconButton, Segmented } from "./ui";
 
-/** What a new instance starts as: a card's preset, or a registry agent's. */
-export type Draft = Omit<Preset, "blurb">;
+/** What a new instance starts as: a card's preset, or a registry agent's, with its icon. */
+export type Draft = Omit<Preset, "blurb"> & { icon?: string };
 
-/** `agent`'s Draft: run with npx, or uvx, or else its binary for `platform`, if it has one. */
+/**
+ * Registry agents plxd runs as a kind of its own, tuned to it, by registry id: they start from the
+ * kind's defaults, not the registry's command.
+ */
+const tuned: Record<string, Draft> = {
+  opencode: { kind: "opencode", name: "OpenCode" },
+  "pi-acp": withVersion({ kind: "pi", name: "Pi", args: [], env: [] }, versions["pi"]![0]!),
+  "grok-build": { kind: "grokBuild", name: "Grok Build" },
+  "antigravity-acp": {
+    kind: "antigravity",
+    name: "Antigravity",
+    program: "",
+    programHint:
+      "The full path to agy_acp_server.par, from the ACP Registry's Google Antigravity archive.",
+  },
+  cursor: { kind: "cursor", name: "Cursor" },
+};
+
+/**
+ * `agent`'s Draft: a kind plxd tunes, or an ACP agent run with npx, or uvx, or else its binary
+ * for `platform`, if it has one.
+ */
 export function registryDraft(agent: RegistryAgent, platform: string): Draft | undefined {
+  const own = tuned[agent.id];
+  if (own) return own;
   const { npx, uvx, binary } = agent.distribution;
   const env = (vars: Record<string, string> = {}): ProviderEnvVar[] =>
     Object.entries(vars).map(([name, value]) => ({ name, value, secret: false }));
-  const base = { kind: "acp" as const, name: agent.name };
+  const base = { kind: "acp" as const, name: agent.name, icon: agent.icon };
   if (npx) {
     const args = ["-y", npx.package, ...(npx.args ?? [])];
     return { ...base, program: "npx", args, env: env(npx.env) };
@@ -93,6 +125,17 @@ export function AddProviderDialog({
       ? "Another provider on this host has it."
       : undefined;
   const homeVar = draft && HOME_VARS[draft.kind];
+  // A kind with versions: the one the fields run, which a choice rewrites.
+  const choices = draft && versions[draft.kind];
+  const command = program.trim();
+  const fields = {
+    kind: draft?.kind ?? "acp",
+    // The kind's own program is left to plxd.
+    program: command && command !== kindOf(draft?.kind ?? "acp").program ? command : undefined,
+    args: args.split(/\s+/).filter(Boolean),
+    env,
+  };
+  const version = versionOf(fields);
 
   const choose = (next: Draft, to = 1) => {
     setDraft(next);
@@ -114,21 +157,20 @@ export function AddProviderDialog({
   const add = async () => {
     if (!draft) return;
     setSaving(true);
-    const command = program.trim();
     const failed = await saveProvider(hostId, {
       id,
       kind: draft.kind,
       name: name.trim(),
       enabled: true,
-      // The kind's own program is left to plxd.
-      ...(command && command !== kindOf(draft.kind).program && { program: command }),
+      ...(fields.program && { program: fields.program }),
       ...(home.trim() && { home: home.trim() }),
-      args: args.split(/\s+/).filter(Boolean),
+      args: fields.args,
       env: env.filter((v) => v.name),
       models: [],
     });
     setSaving(false);
     if (failed) return setError(failed);
+    if (draft.kind === "acp" && draft.icon) keepRegistryIcon(name.trim(), draft.icon);
     onAdded(id);
     dialog.current?.close();
   };
@@ -224,6 +266,25 @@ export function AddProviderDialog({
           )}
           {step === 2 && draft && (
             <div className="flex flex-col gap-4">
+              {choices && (
+                <div className="flex items-center justify-between gap-4 text-[12.5px] text-muted-foreground">
+                  Version
+                  <Segmented
+                    label="Version"
+                    options={choices.map((v) => ({ value: v.label, name: v.label }))}
+                    value={version!.label}
+                    onChange={(label) => {
+                      const next = withVersion(
+                        fields,
+                        choices.find((v) => v.label === label)!,
+                      );
+                      setProgram(next.program ?? kindOf(draft.kind).program ?? "");
+                      setArgs(next.args.join(" "));
+                      setEnv(next.env);
+                    }}
+                  />
+                </div>
+              )}
               <label className="text-[12.5px] text-muted-foreground">
                 Binary path
                 <input
