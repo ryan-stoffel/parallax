@@ -11,6 +11,20 @@ import { App } from "./App";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The row menu's buttons are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
+// The composer's image reads, so a test can wait for them: happy-dom reads a file on two chained
+// timers, which a fixed wait races when the event loop stalls (PLX-277).
+const reads = vi.hoisted(() => [] as Promise<unknown>[]);
+vi.mock(import("./images"), async (importOriginal) => {
+  const images = await importOriginal();
+  return {
+    ...images,
+    readImage: (...args) => {
+      const read = images.readImage(...args);
+      reads.push(read);
+      return read;
+    },
+  };
+});
 // happy-dom lays nothing out. A tall transcript with small rows renders every row.
 Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
   get(this: HTMLElement) {
@@ -50,6 +64,7 @@ beforeEach(() => {
     "project/list": () => ({ result: { projects: [], seq: 7 } }),
   };
   window.parallax = {
+    onProfile: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async () => ({
@@ -65,11 +80,22 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => [],
     onHosts: () => () => {},
+    onLocalName: (listener: (name: string) => void) => {
+      listener("This Mac");
+      return () => {};
+    },
+    setZoom: () => {},
+    setAppIcon: () => {},
+    openTargets: async () => [],
+    openTargetIcons: async () => ({}),
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  act(() => unmount());
+  vi.useRealTimers();
+});
 
 async function renderApp() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -191,7 +217,7 @@ test("Send shows the prompt at once while plxd starts the thread, and a failure 
   await send("Tidy the README");
   expect(heading()).toBeUndefined();
   expect(bubble()).toBe("Tidy the README");
-  expect(document.querySelector('[role="log"] [class*="opacity"]')).toBeNull();
+  expect(document.querySelector('[role="log"] .bg-selected')!.className).not.toContain("opacity");
   expect(musing()).toBe("Working");
   expect(composer().getAttribute("aria-placeholder")).toBe("Starting thread…");
 
@@ -217,6 +243,9 @@ test("the loader under the prompt carries on as the thread opens and loads", asy
     }) as unknown as RpcResponse<unknown>;
   // The opened thread's transcript is still on its way.
   answers["agent/events"] = () => new Promise(() => {}) as unknown as RpcResponse<unknown>;
+  // The musing's word changes on a 2.4 s wall-clock timer, which would fade a word in whenever
+  // the test straddles a change (PLX-277). Held, only the remount can.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   await renderApp();
   await send("Tidy the README");
   expect(musing()).toBe("Working");
@@ -290,6 +319,28 @@ test("a finished thread opens on its prompt with no loader while its transcript 
   expect(bubble()).toBe("Fix the flaky test");
   expect(document.querySelector(".loader")).toBeNull();
   expect(musing()).toBeUndefined();
+});
+
+test("a thread's repo crumb starts a new thread in that repo", async () => {
+  await renderApp();
+  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
+  await settle();
+  const repo = document.querySelector<HTMLButtonElement>('[aria-label="Breadcrumb"] li button')!;
+  expect(repo.textContent).toBe("parallax");
+  await act(async () => repo.click());
+  expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
+  expect(heading()).toBe("What should we build in parallax?");
+  // On New thread the crumb is plain text.
+  expect(document.querySelector('[aria-label="Breadcrumb"] button')).toBeNull();
+});
+
+test("the link under the heading switches New Thread to No Repo, showing its shortcut", async () => {
+  await renderApp();
+  const link = button("or start without a repo⇧⌘N")!;
+  expect(link.getAttribute("aria-keyshortcuts")).toBe("Shift+Meta+N");
+  act(() => link.click());
+  expect(heading()).toBe("What should we work on without a repo?");
+  expect(button("or start without a repo⇧⌘N")).toBeUndefined();
 });
 
 test("No Repo starts a thread with no repo", async () => {
@@ -405,14 +456,48 @@ describe("with plxd's run options", () => {
     expect(retry!["runId"]).not.toBe(refused!["runId"]);
   });
 
+  test("on a plxd that takes them, New Thread sends the context window and fast mode", async () => {
+    capabilities = { runOptions: {}, contextAndFast: {} };
+    await renderApp();
+    expect(control("Reasoning effort: High · 1M")).not.toBeNull();
+    await pick("200K");
+    await send("Tidy the README");
+    expect(calls("thread/start")).toEqual([
+      {
+        runId: expect.any(String),
+        repo: parallax.id,
+        prompt: "Tidy the README",
+        model: "claude-opus-5-5",
+        effort: "high",
+        permission: "edit",
+        contextWindow: 200_000,
+        fast: false,
+      },
+    ]);
+  });
+
+  test("New Thread offers Codex's and Cursor's models", async () => {
+    await renderApp();
+    const menu = document.getElementById(
+      control("Model: Claude Opus 5.5")!.getAttribute("popovertarget")!,
+    )!;
+    const rail = (name: string) =>
+      menu.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+    expect(rail("Codex").disabled).toBe(false);
+    expect(rail("Cursor").disabled).toBe(false);
+  });
+
   test("an OpenAI key default offers Codex's models and no plan", async () => {
     answers["accounts/defaults/get"] = () => ({ result: { worker: { kind: "key", id: "k-1" } } });
     answers["accounts/keys/list"] = () => ({
       result: { accounts: [{ id: "k-1", provider: "openai", label: "Work" }] },
     });
     await renderApp();
-    expect(control("Model: GPT-6 Astra")).not.toBeNull();
-    expect(document.querySelector('main [aria-label^="Access"]')).toBeNull();
+    expect(control("Model: GPT-6.1 Sol")).not.toBeNull();
+    const access = control("Access: Accept Edits")!;
+    const menu = document.getElementById(access.getAttribute("popovertarget")!)!;
+    expect(menu.textContent).toContain("Bypass Permissions");
+    expect(menu.textContent).not.toContain("Plan");
 
     await send("Tidy the README");
     expect(calls("thread/start")).toEqual([
@@ -420,7 +505,7 @@ describe("with plxd's run options", () => {
         runId: expect.any(String),
         repo: parallax.id,
         prompt: "Tidy the README",
-        model: "gpt-6-astra",
+        model: "gpt-6.1-sol",
         effort: "high",
         permission: "edit",
       },
@@ -476,6 +561,75 @@ test("Current checkout starts a thread in the repository itself, with no branch 
   ]);
 });
 
+describe("the ref picker", () => {
+  beforeEach(() => {
+    answers["repo/refs"] = () => ({
+      result: {
+        refs: [
+          { name: "develop", default: true, current: true },
+          { name: "feature", worktree: true },
+          { name: "origin/develop", remote: true },
+        ],
+      },
+    });
+    answers["thread/start"] = (p) => ({
+      result: {
+        thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
+        run: run(p["runId"] as string, "Fix it"),
+      },
+    });
+  });
+
+  test("a new worktree starts from the checkout's branch, or from the ref picked", async () => {
+    capabilities = { repoRefs: {} };
+    await renderApp();
+    expect(button("From develop")).toBeDefined();
+    await choose("Ref", "origin/develop");
+    expect(button("From origin/develop")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([
+      { runId: expect.any(String), prompt: "Fix it", repo: parallax.id, base: "origin/develop" },
+    ]);
+  });
+
+  test("the current checkout switches to the ref picked first", async () => {
+    capabilities = { checkout: {}, repoRefs: {} };
+    await renderApp();
+    await choose("Runs on", "Current checkoutRight in the repository, on the branch you have out.");
+    expect(button("Select ref")).toBeDefined();
+    await choose("Ref", "featureworktree");
+    expect(button("feature")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([
+      {
+        runId: expect.any(String),
+        prompt: "Fix it",
+        repo: parallax.id,
+        checkout: true,
+        checkoutRef: "feature",
+      },
+    ]);
+  });
+
+  test("a new worktree's ref never becomes the checkout's switch", async () => {
+    capabilities = { checkout: {}, repoRefs: {} };
+    await renderApp();
+    await choose("Ref", "origin/develop");
+    await choose("Runs on", "Current checkoutRight in the repository, on the branch you have out.");
+    expect(button("Select ref")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([
+      { runId: expect.any(String), prompt: "Fix it", repo: parallax.id, checkout: true },
+    ]);
+  });
+
+  test("a plxd without repoRefs shows no ref picker", async () => {
+    await renderApp();
+    expect(document.querySelector('main [role="menu"][aria-label="Ref"]')).toBeNull();
+    expect(calls("repo/refs")).toEqual([]);
+  });
+});
+
 test("Current checkout can't be picked without a repo, or from a plxd that would make a worktree anyway", async () => {
   const checkoutOption = () =>
     [
@@ -515,7 +669,7 @@ test("a thread can start with an image alone, titled Image, and nothing to name 
   act(() => {
     composer().dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
   });
-  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  await act(() => Promise.all(reads.splice(0)));
   await send("");
   expect(calls("thread/start")).toEqual([
     {
@@ -567,9 +721,7 @@ test("Delete asks first, and only deletes once confirmed", async () => {
   await renderApp();
   await act(async () => button("Thread actions")!.click());
   await act(async () => button("Delete…")!.click());
-  const dialog = document.querySelector<HTMLDialogElement>(
-    '[aria-labelledby="delete-thread-title"]',
-  )!;
+  const dialog = document.querySelector<HTMLDialogElement>('[aria-labelledby="delete-title"]')!;
   expect(dialog.open).toBe(true);
   expect(dialog.textContent).toContain("Fix the flaky test");
 
@@ -641,6 +793,21 @@ describe("a host with no usable default account for threads", () => {
     ]);
     const [first, retry] = calls("thread/start");
     expect(retry).toEqual(first);
+    expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
+  });
+
+  test("Continue after Cmd+Enter opens the thread, so the prompt can't start it twice", async () => {
+    accounts([cli("claude", true)], [key("Work", "anthropic")]);
+    await renderApp();
+    act(() => void composer().editor!.commands.setContent("Tidy the README"));
+    await act(async () => {
+      composer().dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+      );
+    });
+    await settle();
+    await act(async () => button("Continue")!.click());
+    await settle();
     expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   });
 
@@ -731,4 +898,68 @@ test("an open thread deleted by another client goes back to New Thread", async (
   );
   await settle();
   expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
+});
+
+describe("keyboard shortcuts (PLX-316)", () => {
+  // A key press at `target`, or the window's focused element.
+  const key = (init: KeyboardEventInit, target: EventTarget = document.activeElement ?? window) =>
+    act(async () => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+    });
+  const picker = () =>
+    document.querySelector<HTMLDialogElement>('dialog[aria-label="New thread in"]')!;
+
+  test("Cmd+Enter starts a thread in the background and leaves New Thread open for the next", async () => {
+    answers["thread/start"] = (p) => ({
+      result: {
+        thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+        run: run(p["runId"] as string, "Tidy the README"),
+      },
+    });
+    await renderApp();
+    act(() => void composer().editor!.commands.setContent("Tidy the README"));
+    await key({ key: "Enter", metaKey: true }, composer());
+    await settle();
+
+    expect(calls("thread/start")).toEqual([
+      { runId: expect.any(String), repo: parallax.id, prompt: "Tidy the README" },
+    ]);
+    expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
+    expect(heading()).toBe("What should we build in parallax?");
+    expect(composer().textContent).toBe("");
+    expect(threadRow("Tidy the README")).toBeDefined();
+  });
+
+  test("Cmd+N picks the new thread's repository, and Cmd+Shift+N opens one with no repo", async () => {
+    await renderApp();
+    await key({ key: "n", code: "KeyN", metaKey: true, shiftKey: true });
+    expect(heading()).toBe("What should we work on without a repo?");
+
+    await key({ key: "n", code: "KeyN", metaKey: true });
+    expect(picker().open).toBe(true);
+    const options = [...picker().querySelectorAll('[role="option"]')];
+    expect(options.map((o) => o.textContent)).toEqual([
+      "parallax" + "This Mac · /src/parallax" + "⌘1",
+      "No repo" + "⌘2",
+    ]);
+    await key({ key: "1", code: "Digit1", metaKey: true }, picker().querySelector("input")!);
+    await settle();
+    expect(picker().open).toBe(false);
+    expect(heading()).toBe("What should we build in parallax?");
+  });
+
+  test("holding Cmd numbers the sidebar's rows, and Cmd+1 opens the first", async () => {
+    await renderApp();
+    const status = () =>
+      threadRow("Fix the flaky test")!.querySelector("[data-status]")!.textContent;
+    expect(status()).not.toBe("⌘1");
+    await key({ key: "Meta", metaKey: true }, window);
+    expect(status()).toBe("⌘1");
+    await key({ key: "1", code: "Digit1", metaKey: true }, window);
+    expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta" }));
+    });
+    expect(status()).not.toBe("⌘1");
+  });
 });

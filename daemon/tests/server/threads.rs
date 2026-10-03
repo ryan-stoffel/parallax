@@ -10,15 +10,16 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification, RequestId};
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentEvents, AgentList, AgentSend, EventsEvent, EventsSubscribe,
-    HostHealth, NotificationMethod, RepoAdd, RepoUpdate, RequestMethod, ThreadArchive,
+    HostHealth, NotificationMethod, RepoAdd, RepoRefs, RepoUpdate, RequestMethod, ThreadArchive,
     ThreadDelete, ThreadList, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentCancelParams, AgentEffort, AgentEventsParams,
     AgentListParams, AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
-    EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectIcon, ProjectId, Provider, Repo,
-    RepoAddParams, RepoId, RepoUpdateParams, RunId, ThreadArchiveParams, ThreadDeleteParams,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadUpdateParams, TurnId,
+    EventsSubscribeParams, HostHealthParams, ImageMediaType, ParallaxEvent, ProjectIcon, ProjectId,
+    PromptImage, Provider, Repo, RepoAddParams, RepoId, RepoRefsParams, RepoUpdateParams, RunId,
+    ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ThreadUpdateParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -30,6 +31,10 @@ use tempfile::TempDir;
 use tokio::time::Instant;
 
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
+
+mod context;
+mod files;
+mod fork;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -73,11 +78,13 @@ fn fake(steps: Vec<Step>) -> BackendRegistry {
     backends
 }
 
-/// A run's model, effort, permission, and approvals, as its backend got them.
+/// A run's model, effort, permission, approvals, and whether it ran as a thread (0034), as its
+/// backend got them.
 type Options = (
     Option<String>,
     Option<AgentEffort>,
     Option<AgentPermission>,
+    bool,
     bool,
 );
 
@@ -89,7 +96,7 @@ struct WithOptions {
 }
 
 impl Backend for WithOptions {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.fake.name()
     }
 
@@ -103,6 +110,7 @@ impl Backend for WithOptions {
             request.effort,
             request.permission,
             request.approvals,
+            request.thread,
         );
         self.seen.lock().unwrap().push(options);
         self.fake.start(request)
@@ -170,8 +178,27 @@ fn message(run_id: RunId, text: &str) -> AgentSendParams {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         account: None,
         images: Vec::new(),
+        threads: Vec::new(),
+        from: None,
+    }
+}
+
+/// `thread/update` params that mark `run_id` seen or snooze it (0033), and change nothing else.
+fn attention(
+    run_id: RunId,
+    seen: bool,
+    snoozed_until: Option<jiff::Timestamp>,
+) -> ThreadUpdateParams {
+    ThreadUpdateParams {
+        run_id,
+        seen,
+        snoozed_until,
+        title: None,
+        settled: None,
     }
 }
 
@@ -179,6 +206,8 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
     ThreadStartParams {
         run_id: RunId::generate(),
         repo,
+        parent: None,
+        title: None,
         prompt: prompt.to_owned(),
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
@@ -186,10 +215,15 @@ fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartParams {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         branch_slug: None,
         images: Vec::new(),
         approvals: false,
         checkout: false,
+        base: None,
+        checkout_ref: None,
+        threads: Vec::new(),
     }
 }
 
@@ -902,6 +936,247 @@ async fn a_thread_can_name_its_branch() {
     assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
 }
 
+/// Commits a change to `file` in `repo`, committed at `date`.
+fn commit_at(repo: &Path, file: &str, date: &str) {
+    std::fs::write(repo.join(file), date).unwrap();
+    git(repo, &["add", "-A"]);
+    let output = Command::new("git")
+        .args(["commit", "-q", "-m", file])
+        .current_dir(repo)
+        .env("GIT_COMMITTER_DATE", date)
+        .output()
+        .expect("git runs");
+    assert!(output.status.success(), "{output:?}");
+}
+
+/// `repo/refs` lists the default branch first, then the rest newest first, with what each is.
+#[tokio::test]
+async fn repo_refs_lists_the_default_branch_first_then_the_newest() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    git(&path, &["checkout", "-q", "-b", "develop"]);
+    commit_at(&path, "DEV.md", "2021-01-01T00:00:00Z");
+    git(&path, &["checkout", "-q", "-b", "older", "main"]);
+    commit_at(&path, "OLD.md", "2020-01-01T00:00:00Z");
+    git(&path, &["checkout", "-q", "main"]);
+    git(
+        &path,
+        &["update-ref", "refs/remotes/origin/develop", "develop"],
+    );
+    git(
+        &path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/develop",
+        ],
+    );
+    let elsewhere = host.work.path().join("elsewhere");
+    git(
+        &path,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            elsewhere.to_str().unwrap(),
+            "older",
+        ],
+    );
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+
+    let refs = client
+        .call::<RepoRefs>(RepoRefsParams { repo: repo.id })
+        .await
+        .unwrap()
+        .refs;
+    let shown: Vec<_> = refs
+        .iter()
+        .map(|r| (r.name.as_str(), r.remote, r.default, r.current, r.worktree))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("develop", false, true, false, false),
+            ("main", false, false, true, false),
+            ("origin/develop", true, false, false, false),
+            ("older", false, false, false, true),
+        ]
+    );
+
+    let unknown = client
+        .call::<RepoRefs>(RepoRefsParams {
+            repo: RepoId::generate(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&unknown), ErrorKind::RepoNotFound);
+}
+
+/// `thread/start`'s `base` starts the worktree from that ref, and a bad one is refused.
+#[tokio::test]
+async fn a_thread_starts_its_worktree_from_the_ref_it_picks() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    git(&path, &["checkout", "-q", "-b", "develop"]);
+    commit_at(&path, "DEV.md", "2021-01-01T00:00:00Z");
+    git(&path, &["checkout", "-q", "main"]);
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+
+    let started = client
+        .call::<ThreadStart>(ThreadStartParams {
+            base: Some("develop".to_owned()),
+            ..start_params(Some(repo.id), "Write some notes")
+        })
+        .await
+        .unwrap();
+    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
+    assert!(worktree.join("DEV.md").is_file(), "it starts from develop");
+    assert_eq!(git(&path, &["branch", "--show-current"]), "main");
+
+    for params in [
+        ThreadStartParams {
+            base: Some("--orphan".to_owned()),
+            ..start_params(Some(repo.id), "Write more notes")
+        },
+        ThreadStartParams {
+            base: Some("develop".to_owned()),
+            checkout: true,
+            ..start_params(Some(repo.id), "Write more notes")
+        },
+        ThreadStartParams {
+            checkout_ref: Some("develop".to_owned()),
+            ..start_params(Some(repo.id), "Write more notes")
+        },
+    ] {
+        let refused = client.call::<ThreadStart>(params).await.unwrap_err();
+        assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
+    }
+}
+
+/// `thread/start`'s `checkoutRef` switches the checkout first, a remote-tracking ref to a local
+/// branch that tracks it, and never over the user's changes.
+#[tokio::test]
+async fn a_checkout_thread_switches_to_the_ref_it_picks_but_never_over_changes() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    git(&path, &["checkout", "-q", "-b", "feature"]);
+    commit_at(&path, "README.md", "2021-01-01T00:00:00Z");
+    git(&path, &["checkout", "-q", "main"]);
+    // Never fetched: git only needs the remote's refspec to set up tracking.
+    git(
+        &path,
+        &["remote", "add", "origin", "https://example.invalid/app.git"],
+    );
+    git(
+        &path,
+        &["update-ref", "refs/remotes/origin/topic", "feature"],
+    );
+    git(&path, &["branch", "-q", "-D", "feature"]);
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+
+    let params = ThreadStartParams {
+        checkout: true,
+        checkout_ref: Some("origin/topic".to_owned()),
+        ..start_params(Some(repo.id), "Write some notes")
+    };
+    client.call::<ThreadStart>(params.clone()).await.unwrap();
+    assert_eq!(git(&path, &["branch", "--show-current"]), "topic");
+    assert_eq!(
+        git(&path, &["rev-parse", "--abbrev-ref", "topic@{upstream}"]),
+        "origin/topic"
+    );
+    runs.until(updated_to(AgentStatus::Completed)).await;
+
+    // The user's edit to a file `main` has otherwise: git refuses, and nothing starts.
+    std::fs::write(path.join("README.md"), "the user's edit\n").unwrap();
+    let refused = client
+        .call::<ThreadStart>(ThreadStartParams {
+            checkout: true,
+            checkout_ref: Some("main".to_owned()),
+            ..start_params(Some(repo.id), "Write more notes")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::WorktreeFailed);
+    assert!(refused.message.contains("overwritten"), "{refused:?}");
+    assert_eq!(git(&path, &["branch", "--show-current"]), "topic");
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "the user's edit\n"
+    );
+    assert_eq!(client.list().await.threads.len(), 1);
+}
+
+/// A `checkoutRef` never switches a checkout another thread is running in, which would move that
+/// thread's work to a branch it never chose.
+#[tokio::test]
+async fn a_checkout_thread_never_switches_under_a_running_one() {
+    let host = Host::start(fake(hang()));
+    let path = real_repo(host.work.path(), "app");
+    git(&path, &["branch", "-q", "other"]);
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+    client
+        .call::<ThreadStart>(ThreadStartParams {
+            checkout: true,
+            ..start_params(Some(repo.id), "Keep working")
+        })
+        .await
+        .unwrap();
+    runs.until(updated_to(AgentStatus::Running)).await;
+
+    let refused = client
+        .call::<ThreadStart>(ThreadStartParams {
+            checkout: true,
+            checkout_ref: Some("other".to_owned()),
+            ..start_params(Some(repo.id), "Switch away")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::WorktreeFailed);
+    assert_eq!(git(&path, &["branch", "--show-current"]), "main");
+    assert_eq!(client.list().await.threads.len(), 1);
+}
+
+/// RYA-276, 0034: a thread's CLI gets the user's message as is, with no Parallax limits before it,
+/// as in Claude Code.
+#[tokio::test]
+async fn a_threads_first_message_is_the_users_own() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(Other::new(fake_backend(editing()), &prompts)),
+    );
+    let host = Host::start(backends);
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    client
+        .call::<ThreadStart>(ThreadStartParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..start_params(Some(repo.id), "Write the notes")
+        })
+        .await
+        .unwrap();
+    client.until(updated_to(AgentStatus::Completed)).await;
+    assert_eq!(
+        *prompts.lock().unwrap(),
+        [("Write the notes".to_owned(), false)]
+    );
+    host.server.stop().await;
+}
+
 /// RYA-97, RYA-222: a thread's model, effort, permission, and approvals reach its backend when it
 /// starts and when it resumes, come back on its run, and count for `thread/start`'s idempotency.
 /// What the backend can't honor is refused before anything is made.
@@ -939,6 +1214,7 @@ async fn a_thread_keeps_its_model_effort_permission_and_approvals() {
         Some(AgentEffort::High),
         Some(AgentPermission::Plan),
         true,
+        true,
     );
     assert_eq!(*seen.lock().unwrap(), [options.clone(), options]);
 
@@ -969,6 +1245,14 @@ async fn a_thread_keeps_its_model_effort_permission_and_approvals() {
         },
         ThreadStartParams {
             model: Some("--dangerously-skip-permissions".to_owned()),
+            ..start_params(None, "Anything")
+        },
+        ThreadStartParams {
+            context_window: Some(200_000),
+            ..start_params(None, "Anything")
+        },
+        ThreadStartParams {
+            fast: Some(true),
             ..start_params(None, "Anything")
         },
     ] {
@@ -1054,13 +1338,15 @@ async fn a_message_changes_a_finished_threads_model_and_effort() {
                 opus,
                 Some(AgentEffort::High),
                 Some(AgentPermission::Plan),
-                false
+                false,
+                true
             ),
             (
                 sonnet,
                 Some(AgentEffort::Low),
                 Some(AgentPermission::Plan),
-                false
+                false,
+                true
             ),
         ]
     );
@@ -1152,9 +1438,9 @@ async fn a_message_with_a_new_model_waits_for_a_running_thread_to_finish() {
     assert_eq!(
         *seen.lock().unwrap(),
         [
-            (None, high, None, false),
-            (sonnet.clone(), high, None, false),
-            (sonnet, high, None, false),
+            (None, high, None, false, true),
+            (sonnet.clone(), high, None, false, true),
+            (sonnet, high, None, false, true),
         ]
     );
     host.server.stop().await;
@@ -1258,7 +1544,7 @@ async fn a_message_on_another_backends_account_moves_the_thread_there() {
 }
 
 /// A message on another backend's account moves a Current checkout thread there, still in the
-/// user's checkout.
+/// user's checkout, with the conversation as its first message.
 #[tokio::test]
 async fn a_checkout_thread_moves_to_another_backend_in_the_same_checkout() {
     let prompts = Arc::new(Mutex::new(Vec::new()));
@@ -1301,11 +1587,9 @@ async fn a_checkout_thread_moves_to_another_backend_in_the_same_checkout() {
     let [(prompt, false)] = prompts.as_slice() else {
         panic!("one new session on the other backend: {prompts:?}");
     };
+    // A thread's handoff, like its first message, adds no Parallax limits (0034).
     assert!(
-        prompt.contains(&format!(
-            "own checkout of their repository at {}",
-            path.display()
-        )),
+        prompt.starts_with("This conversation began with another agent"),
         "{prompt}"
     );
     host.server.stop().await;
@@ -1425,6 +1709,7 @@ async fn stopping_a_running_thread_drops_the_messages_waiting_for_it() {
     client
         .call::<AgentCancel>(AgentCancelParams {
             run_id: params.run_id,
+            from: None,
         })
         .await
         .unwrap();
@@ -1453,6 +1738,90 @@ async fn stopping_a_running_thread_drops_the_messages_waiting_for_it() {
     host.server.stop().await;
 }
 
+/// A repo entry's icon takes an uploaded image (0038), with `repo.updated`, refuses one over the
+/// cap, and loses it to an icon sent without one.
+#[tokio::test]
+async fn a_repo_icon_takes_an_image_and_a_glyph_clears_it() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let seq = client.list().await.seq;
+    client.subscribe(seq, None).await;
+
+    let glyph = ProjectIcon {
+        name: "flame".to_owned(),
+        color: Some("orange".to_owned()),
+        image: None,
+    };
+    let with_image = ProjectIcon {
+        image: Some(PromptImage {
+            media_type: ImageMediaType::Png,
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+        }),
+        ..glyph.clone()
+    };
+    let updated = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: repo.id,
+            icon: with_image.clone(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    assert_eq!(updated.icon, Some(with_image.clone()));
+    let events = client
+        .until(|event| matches!(&event.event, ParallaxEvent::RepoUpdated { .. }))
+        .await;
+    assert_eq!(
+        events.last().unwrap().event,
+        ParallaxEvent::RepoUpdated {
+            repo: updated.clone()
+        }
+    );
+    assert_eq!(client.list().await.repos, std::slice::from_ref(&updated));
+
+    let too_large = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: repo.id,
+            icon: ProjectIcon {
+                image: Some(PromptImage {
+                    media_type: ImageMediaType::Png,
+                    data: "A".repeat(64 * 1024 + 4),
+                }),
+                ..glyph.clone()
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&too_large), ErrorKind::ImageTooLarge);
+
+    let cleared = client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: repo.id,
+            icon: glyph.clone(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    assert_eq!(
+        cleared.icon,
+        Some(glyph),
+        "an icon without an image clears it"
+    );
+    let events = client
+        .until(|event| matches!(&event.event, ParallaxEvent::RepoUpdated { .. }))
+        .await;
+    assert_eq!(
+        events.last().unwrap().event,
+        ParallaxEvent::RepoUpdated {
+            repo: cleared.clone()
+        }
+    );
+    assert_eq!(client.list().await.repos, [cleared]);
+    host.server.stop().await;
+}
+
 /// The sidebar's attention state (0033): a thread is marked seen and snoozed, a message moves its
 /// `lastPromptAt`, and a repo entry takes an icon, each with a host-level event.
 #[tokio::test]
@@ -1476,11 +1845,7 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
 
     let until: jiff::Timestamp = "2030-01-01T09:00:00Z".parse().unwrap();
     let updated = client
-        .call::<ThreadUpdate>(ThreadUpdateParams {
-            run_id: params.run_id,
-            seen: true,
-            snoozed_until: Some(until),
-        })
+        .call::<ThreadUpdate>(attention(params.run_id, true, Some(until)))
         .await
         .unwrap()
         .thread;
@@ -1491,11 +1856,7 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
         .await;
     // The same snooze again changes nothing.
     let again = client
-        .call::<ThreadUpdate>(ThreadUpdateParams {
-            run_id: params.run_id,
-            seen: false,
-            snoozed_until: Some(until),
-        })
+        .call::<ThreadUpdate>(attention(params.run_id, false, Some(until)))
         .await
         .unwrap()
         .thread;
@@ -1516,6 +1877,7 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
     let icon = ProjectIcon {
         name: "flame".to_owned(),
         color: Some("orange".to_owned()),
+        image: None,
     };
     let with_icon = client
         .call::<RepoUpdate>(RepoUpdateParams {
@@ -1537,6 +1899,7 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
             icon: ProjectIcon {
                 name: "Not An Icon".to_owned(),
                 color: None,
+                image: None,
             },
         })
         .await
@@ -1551,12 +1914,115 @@ async fn threads_are_seen_snoozed_and_reordered_and_repos_take_icons() {
         .unwrap_err();
     assert_eq!(kind(&missing), ErrorKind::RepoNotFound);
     let missing = client
-        .call::<ThreadUpdate>(ThreadUpdateParams {
-            run_id: RunId::generate(),
-            seen: true,
-            snoozed_until: None,
-        })
+        .call::<ThreadUpdate>(attention(RunId::generate(), true, None))
         .await
         .unwrap_err();
     assert_eq!(kind(&missing), ErrorKind::ThreadNotFound);
+}
+
+/// Lineage (0041): a thread started with a parent and a title lists them, `thread/update` renames
+/// and settles it with `thread.updated`, and deleting its parent leaves it with none.
+#[tokio::test]
+async fn a_child_thread_keeps_its_parent_and_title_until_the_parent_is_deleted() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let parent = start_params(Some(repo.id), "Plan the work");
+    client.call::<ThreadStart>(parent.clone()).await.unwrap();
+
+    let orphan = client
+        .call::<ThreadStart>(ThreadStartParams {
+            parent: Some(RunId::generate()),
+            ..start_params(Some(repo.id), "Nobody launched this")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&orphan), ErrorKind::RunNotFound);
+    let child = ThreadStartParams {
+        parent: Some(parent.run_id),
+        title: Some("  Write the tests ".to_owned()),
+        ..start_params(Some(repo.id), "Write the tests")
+    };
+    let started = client
+        .call::<ThreadStart>(child.clone())
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(started.parent, Some(parent.run_id));
+    assert_eq!(started.title.as_deref(), Some("Write the tests"));
+    assert!(!started.settled);
+    let reparented = client
+        .call::<ThreadStart>(ThreadStartParams {
+            parent: None,
+            ..child.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&reparented), ErrorKind::IdConflict);
+
+    let seq = client.list().await.seq;
+    client.subscribe(seq, None).await;
+    let update = |title: &str, settled| ThreadUpdateParams {
+        run_id: child.run_id,
+        seen: false,
+        snoozed_until: None,
+        title: Some(title.to_owned()),
+        settled,
+    };
+    let updated = client
+        .call::<ThreadUpdate>(update("Test attach", Some(true)))
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(updated.title.as_deref(), Some("Test attach"));
+    assert!(updated.settled);
+    client
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadUpdated { thread } if *thread == updated))
+        .await;
+    let long = "t".repeat(parallax_protocol::MAX_THREAD_TITLE_BYTES + 1);
+    let too_long = client
+        .call::<ThreadUpdate>(update(&long, None))
+        .await
+        .unwrap_err();
+    assert_eq!(too_long.code, INVALID_PARAMS, "{too_long:?}");
+
+    client.delete(parent.run_id).await.unwrap();
+    client
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadUpdated { thread } if thread.id == child.run_id && thread.parent.is_none()))
+        .await;
+    let threads = client.list().await.threads;
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].parent, None);
+    assert_eq!(threads[0].title.as_deref(), Some("Test attach"));
+
+    let cleared = client
+        .call::<ThreadUpdate>(update("", Some(false)))
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(cleared.title, None);
+    assert!(!cleared.settled);
+}
+
+/// A `thread/start` retried after its parent was deleted returns the thread, now with no parent,
+/// rather than `idConflict` (0041).
+#[tokio::test]
+async fn a_retried_start_whose_parent_was_deleted_returns_the_thread() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let parent = start_params(Some(repo.id), "Plan the work");
+    client.call::<ThreadStart>(parent.clone()).await.unwrap();
+    let child = ThreadStartParams {
+        parent: Some(parent.run_id),
+        ..start_params(Some(repo.id), "Write the tests")
+    };
+    client.call::<ThreadStart>(child.clone()).await.unwrap();
+
+    client.delete(parent.run_id).await.unwrap();
+    let retried = client.call::<ThreadStart>(child.clone()).await.unwrap();
+    assert_eq!(retried.thread.id, child.run_id);
+    assert_eq!(retried.thread.parent, None);
 }

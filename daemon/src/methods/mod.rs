@@ -3,15 +3,22 @@
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
-//! `projectEdit`: `project/update` in `project.rs`), and `host.rs` advertises the capability in
-//! `initialize`.
+//! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
+//! `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
+//! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
+//! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
+//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`), and `host.rs` advertises the
+//! capability in `initialize`.
 
 mod accounts;
 mod agent;
+mod composer;
 mod context;
 mod defaults;
 mod events;
 mod host;
+pub(crate) mod inbox;
+mod pr;
 pub(crate) mod project;
 mod thread;
 mod usage;
@@ -22,11 +29,15 @@ use std::sync::Arc;
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
-    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentCancel,
-    AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges,
-    AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
-    EventsUnsubscribe, HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList,
-    ProjectStart, ProjectUpdate, RequestMethod, UsageGet, UsageHistory,
+    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentAutoResume,
+    AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles,
+    AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
+    AgentResumeNow, AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
+    EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet,
+    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize,
+    PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectList,
+    ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod,
+    UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -75,14 +86,18 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         HostVersion::NAME => {
             handle::<HostVersion, _, _>(&request, |p| ready(Ok(host::version(&context, p)))).await
         }
-        name if name.starts_with("project/") => project_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
+        name if name.starts_with("host/settings/") => {
+            found(name, host_settings_method(&context, &request).await)
+        }
+        name if project_scoped(name) => found(name, project_method(&context, &request).await),
         AccountsList::NAME => {
             handle::<AccountsList, _, _>(&request, |p| accounts::list(&context, p)).await
         }
         AccountsRefresh::NAME => {
             handle::<AccountsRefresh, _, _>(&request, |p| accounts::refresh(&context, p)).await
+        }
+        name if name.starts_with("providers/") => {
+            found(name, providers_method(&context, &request).await)
         }
         AccountsKeysAdd::NAME => {
             handle::<AccountsKeysAdd, _, _>(&request, |p| accounts::keys::add(&context, p)).await
@@ -94,10 +109,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             handle::<AccountsKeysRemove, _, _>(&request, |p| accounts::keys::remove(&context, p))
                 .await
         }
-        UsageGet::NAME => handle::<UsageGet, _, _>(&request, |p| usage::get(&context, p)).await,
-        UsageHistory::NAME => {
-            handle::<UsageHistory, _, _>(&request, |p| usage::history(&context, p)).await
-        }
+        name if name.starts_with("usage/") => found(name, usage_method(&context, &request).await),
         AccountsDefaultsGet::NAME => {
             handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
         }
@@ -113,7 +125,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
         ContextWrite::NAME => {
             handle::<ContextWrite, _, _>(&request, |p| context::write(&context, p)).await
         }
-        name if name.starts_with("agent/") => agent_method(&context, &request)
+        name if name.starts_with("agent/") => found(name, agent_method(&context, &request).await),
+        name if name.starts_with("pr/") => found(name, pr_method(&context, &request).await),
+        name if name.starts_with("github/") => github_method(&context, &request)
             .await
             .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         name if thread::handles(name) => thread::dispatch(&context, &request).await,
@@ -156,7 +170,81 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     })
 }
 
-/// Answers a `project/*` method (RYA-227), or `None` if there is no such method.
+/// A family method's answer, or `method_not_found` if the family has no method `name`.
+fn found(name: &str, answer: Option<Result<Value, ErrorObject>>) -> Result<Value, ErrorObject> {
+    answer.unwrap_or_else(|| Err(ErrorObject::method_not_found(name)))
+}
+
+/// Answers a `host/settings/*` method (PLX-371), or `None` if there is no such method.
+async fn host_settings_method(
+    context: &Context,
+    request: &Request,
+) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        HostSettingsGet::NAME => {
+            handle::<HostSettingsGet, _, _>(request, |p| host::settings(context, p)).await
+        }
+        HostSettingsSet::NAME => {
+            handle::<HostSettingsSet, _, _>(request, |p| host::set_settings(context, p)).await
+        }
+        _ => return None,
+    })
+}
+
+/// Answers a `pr/*` method, or `None` if there is no such method.
+async fn pr_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        PrView::NAME => handle::<PrView, _, _>(request, |p| pr::view(context, p)).await,
+        PrAct::NAME => handle::<PrAct, _, _>(request, |p| pr::act(context, p)).await,
+        PrDiff::NAME => handle::<PrDiff, _, _>(request, |p| pr::diff(context, p)).await,
+        PrLink::NAME => handle::<PrLink, _, _>(request, |p| pr::link(context, p, true)).await,
+        PrUnlink::NAME => handle::<PrUnlink, _, _>(request, |p| pr::link(context, p, false)).await,
+        _ => return None,
+    })
+}
+
+/// Answers a `usage/*` method, or `None` if there is no such method.
+async fn usage_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        UsageGet::NAME => handle::<UsageGet, _, _>(request, |p| usage::get(context, p)).await,
+        UsageHistory::NAME => {
+            handle::<UsageHistory, _, _>(request, |p| usage::history(context, p)).await
+        }
+        UsageDaily::NAME => handle::<UsageDaily, _, _>(request, |p| usage::daily(context, p)).await,
+        _ => return None,
+    })
+}
+
+/// Answers a `github/*` method (PLX-336, PLX-423), or `None` if there is no such method.
+async fn github_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        GithubStatusGet::NAME => {
+            handle::<GithubStatusGet, _, _>(request, |p| accounts::github(context, p)).await
+        }
+        GithubInstall::NAME => {
+            handle::<GithubInstall, _, _>(request, |p| accounts::github_install(context, p)).await
+        }
+        GithubSignInStart::NAME => {
+            handle::<GithubSignInStart, _, _>(request, |p| accounts::github_sign_in(context, p))
+                .await
+        }
+        GithubSignInCancel::NAME => {
+            handle::<GithubSignInCancel, _, _>(request, |p| {
+                ready(Ok(accounts::github_sign_in_cancel(context, p)))
+            })
+            .await
+        }
+        _ => return None,
+    })
+}
+
+/// Whether `name` is a `project/*` method or a Project's `inbox/*` one (PLX-401).
+fn project_scoped(name: &str) -> bool {
+    name.starts_with("project/") || name.starts_with("inbox/")
+}
+
+/// Answers a `project/*` method (RYA-227) or a Project's `inbox/*` one (PLX-401), or `None` if
+/// there is no such method.
 async fn project_method(
     context: &Context,
     request: &Request,
@@ -173,6 +261,42 @@ async fn project_method(
         }
         ProjectUpdate::NAME => {
             handle::<ProjectUpdate, _, _>(request, |p| project::update(context, p)).await
+        }
+        ProjectDelete::NAME => {
+            handle::<ProjectDelete, _, _>(request, |p| project::delete(context, p)).await
+        }
+        InboxList::NAME => handle::<InboxList, _, _>(request, |p| inbox::list(context, p)).await,
+        InboxSeen::NAME => handle::<InboxSeen, _, _>(request, |p| inbox::seen(context, p)).await,
+        _ => return None,
+    })
+}
+
+/// Answers a `providers/*` method (0040), each with every instance after it, or `None` if
+/// there is no such method.
+async fn providers_method(
+    context: &Context,
+    request: &Request,
+) -> Option<Result<Value, ErrorObject>> {
+    let daemon = &context.daemon;
+    let list = |refresh| daemon.providers.list(&daemon.cli_detector, refresh);
+    Some(match request.method.as_str() {
+        ProvidersList::NAME => {
+            handle::<ProvidersList, _, _>(request, |p| async move { Ok(list(p.refresh).await) })
+                .await
+        }
+        ProvidersSave::NAME => {
+            handle::<ProvidersSave, _, _>(request, |p| async move {
+                daemon.providers.save(p.instance).await?;
+                Ok(list(false).await)
+            })
+            .await
+        }
+        ProvidersRemove::NAME => {
+            handle::<ProvidersRemove, _, _>(request, |p| async move {
+                daemon.providers.remove(&p.id).await?;
+                Ok(list(false).await)
+            })
+            .await
         }
         _ => return None,
     })
@@ -194,6 +318,7 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentImage::NAME => handle::<AgentImage, _, _>(request, |p| agent::image(context, p)).await,
         AgentDiff::NAME => handle::<AgentDiff, _, _>(request, |p| agent::diff(context, p)).await,
         AgentFile::NAME => handle::<AgentFile, _, _>(request, |p| agent::file(context, p)).await,
+        AgentFiles::NAME => handle::<AgentFiles, _, _>(request, |p| agent::files(context, p)).await,
         AgentAccept::NAME => {
             handle::<AgentAccept, _, _>(request, |p| agent::accept(context, p)).await
         }
@@ -206,6 +331,22 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         }
         AgentApprove::NAME => {
             handle::<AgentApprove, _, _>(request, |p| agent::approve(context, p)).await
+        }
+        AgentGitStatus::NAME => {
+            handle::<AgentGitStatus, _, _>(request, |p| agent::git_status(context, p)).await
+        }
+        AgentCommit::NAME => {
+            handle::<AgentCommit, _, _>(request, |p| agent::commit(context, p)).await
+        }
+        AgentPush::NAME => handle::<AgentPush, _, _>(request, |p| agent::push(context, p)).await,
+        AgentCommands::NAME => {
+            handle::<AgentCommands, _, _>(request, |p| composer::list_commands(context, p)).await
+        }
+        AgentResumeNow::NAME => {
+            handle::<AgentResumeNow, _, _>(request, |p| agent::resume_now(context, p)).await
+        }
+        AgentAutoResume::NAME => {
+            handle::<AgentAutoResume, _, _>(request, |p| agent::auto_resume(context, p)).await
         }
         _ => return None,
     })

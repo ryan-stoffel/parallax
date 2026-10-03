@@ -6,8 +6,9 @@ use std::path::Path;
 use parallax_protocol::jsonrpc::{INTERNAL_ERROR, INVALID_PARAMS, Request};
 use parallax_protocol::methods::{HostHealth, ProjectCreate, ProjectList, ProjectUpdate};
 use parallax_protocol::{
-    ErrorKind, HostHealthParams, Project, ProjectCreateParams, ProjectIcon, ProjectId,
-    ProjectListParams, ProjectUpdateParams, ProjectUpdateResult, StoreState,
+    ErrorKind, HostHealthParams, ImageMediaType, Project, ProjectCreateParams, ProjectIcon,
+    ProjectId, ProjectListParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
+    StoreState,
 };
 use rustix::process::Signal;
 use serde_json::json;
@@ -18,6 +19,17 @@ fn icon(name: &str, color: Option<&str>) -> ProjectIcon {
     ProjectIcon {
         name: name.to_owned(),
         color: color.map(str::to_owned),
+        image: None,
+    }
+}
+
+/// A 1x1 PNG in base64.
+const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+fn image(media_type: ImageMediaType, data: &str) -> PromptImage {
+    PromptImage {
+        media_type,
+        data: data.to_owned(),
     }
 }
 
@@ -30,6 +42,7 @@ fn update(
         project,
         name: name.map(str::to_owned),
         icon,
+        permission: None,
     }
 }
 
@@ -259,6 +272,84 @@ async fn projects_are_renamed_and_given_icons_without_moving_their_activity() {
     );
 }
 
+/// An icon's image (PLX-339, 0038) is stored and listed, capped with `imageTooLarge`, checked
+/// with `invalidParams`, and cleared by an icon sent without one.
+#[tokio::test]
+async fn an_icon_image_is_stored_capped_checked_and_cleared() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    let with_image = ProjectIcon {
+        image: Some(image(ImageMediaType::Png, PNG)),
+        ..icon("rocket", Some("green"))
+    };
+    let created = client
+        .call::<ProjectCreate>(ProjectCreateParams {
+            icon: Some(with_image.clone()),
+            ..create_params(dir.path(), "parallax")
+        })
+        .await
+        .unwrap()
+        .project;
+    assert_eq!(created.icon, Some(with_image.clone()));
+
+    let too_large = format!("{PNG}{}", "A".repeat(64 * 1024));
+    let error = client
+        .call::<ProjectUpdate>(update(
+            created.id,
+            None,
+            Some(ProjectIcon {
+                image: Some(image(ImageMediaType::Png, &too_large)),
+                ..icon("rocket", None)
+            }),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::ImageTooLarge);
+    for bad in [
+        image(ImageMediaType::Png, "not base64"),
+        image(ImageMediaType::Webp, PNG),
+    ] {
+        let error = client
+            .call::<ProjectUpdate>(update(
+                created.id,
+                None,
+                Some(ProjectIcon {
+                    image: Some(bad),
+                    ..icon("rocket", None)
+                }),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{error:?}");
+    }
+    let listed = client
+        .call::<ProjectList>(ProjectListParams {})
+        .await
+        .unwrap();
+    assert_eq!(
+        listed.projects,
+        std::slice::from_ref(&created),
+        "a refused image changes nothing"
+    );
+
+    let cleared = client
+        .call::<ProjectUpdate>(update(
+            created.id,
+            None,
+            Some(icon("rocket", Some("green"))),
+        ))
+        .await
+        .unwrap()
+        .project;
+    assert_eq!(cleared.icon, Some(icon("rocket", Some("green"))));
+    let listed = client
+        .call::<ProjectList>(ProjectListParams {})
+        .await
+        .unwrap();
+    assert_eq!(listed.projects, [cleared]);
+}
+
 #[tokio::test]
 async fn an_update_of_an_unknown_project_is_project_not_found() {
     let dir = temp_dir();
@@ -336,6 +427,16 @@ async fn invalid_update_params_are_refused_before_the_store() {
         let error = client.response().await.result.unwrap_err();
         assert_eq!(error.code, INVALID_PARAMS, "{icon}");
     }
+    // A Project runs only in Auto or Bypass (0042).
+    client
+        .send_message(&Request {
+            id: 5.into(),
+            method: "project/update".to_owned(),
+            params: Some(json!({"project": created.id, "permission": "manual"})),
+        })
+        .await;
+    let error = client.response().await.result.unwrap_err();
+    assert_eq!(error.code, INVALID_PARAMS);
 
     let listed = client
         .call::<ProjectList>(ProjectListParams {})

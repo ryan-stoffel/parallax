@@ -1,33 +1,46 @@
-import { PanelLeft, PanelRight, Workflow } from "lucide-react";
+import { PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Thread } from "../protocol/generated/protocol";
+import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
 import { ContextPanel } from "./ContextPanel";
+import { FilesPanel } from "./FilesPanel";
+import { GitMenu } from "./GitMenu";
+import { LineageTrail } from "./Lineage";
 import { NewThread } from "./NewThread";
+import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
+import { iconImageBytes } from "./images";
+import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
+import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { attentionOf } from "./attention";
 import { useSnoozeAlarms } from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
+import type { ThreadLinks } from "./threadContext";
+import { useAppearanceEffects } from "./appearance";
+import { folderOf, runInDrawer, TerminalDrawer, TerminalPool, useDeleted } from "./ThreadTerminal";
 import {
   asksOf,
   groupOf,
   groupThreads,
   idleThreads,
+  lineageOf,
   noRepo,
+  rootOf,
   titleOf,
   useThreads,
   type ThreadsView,
 } from "./threads";
 import { isRunning } from "./transcript";
-import { Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
+import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { UsagePage } from "./UsagePage";
 
 /**
@@ -42,7 +55,15 @@ export type Selection =
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
 
-export type SettingsSection = "general" | "hosts" | "providers";
+export type SettingsSection =
+  | "account"
+  | "general"
+  | "appearance"
+  | "keybinds"
+  | "providers"
+  | "sourceControl"
+  | "storage"
+  | "connections";
 
 /**
  * The app frame: sidebar, then the chat or Settings, then the side panel.
@@ -50,6 +71,7 @@ export type SettingsSection = "general" | "hosts" | "providers";
  */
 export function App() {
   const [theme, setTheme] = useThemePreference();
+  useAppearanceEffects();
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   // The open host, or this computer once the open one is removed.
@@ -59,12 +81,26 @@ export function App() {
   // check below drops a Project selection the open host's list doesn't have.
   const [opening, setOpening] = useState<{ hostId: string; projectId: string }>();
   const [settings, setSettings] = useState<SettingsSection | null>(null);
-  const openSettings = (section: SettingsSection) => setSettings(section);
+  // The host Set up GitHub opened Source control on (PLX-423).
+  const [settingsHost, setSettingsHost] = useState<string>();
+  const openSettings = (section: SettingsSection, hostId?: string) => {
+    setSettings(section);
+    setSettingsHost(hostId);
+  };
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelExpanded, setPanelExpanded] = useState(false);
+  // The folders whose terminal drawer is open, by key (ThreadTerminal.tsx).
+  const [drawers, setDrawers] = useState<ReadonlySet<string>>(new Set());
+  // The page a repository action last opened in the side panel's Browser view.
+  const [browse, setBrowse] = useState<{ url: string }>();
   // A quiet note for the thread New Thread just started, such as the account it picked.
   const [notice, setNotice] = useState<{ threadId: string; text: string }>();
+  // The pull request the side panel last opened, or with no URL its Pull requests view.
+  const [showPr, setShowPr] = useState<{ url?: string }>();
+  // A message the PR view handed the open thread's chat, until the chat takes it.
+  const [compose, setCompose] = useState<{ text: string; send: boolean }>();
+  const composed = useCallback(() => setCompose(undefined), []);
 
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
@@ -78,6 +114,15 @@ export function App() {
     [],
   );
   const threads = views[host.id] ?? idleThreads;
+  // The open host's threads, which a message attaches and its chips open (PLX-378).
+  const threadLinks = useMemo<ThreadLinks>(
+    () => ({
+      hostId: host.id,
+      state: threads.state,
+      open: (threadId) => setSelection({ kind: "thread", threadId }),
+    }),
+    [host.id, threads.state],
+  );
   const listed = useMemo(
     () => hosts.map((h) => ({ host: h, view: views[h.id] ?? idleThreads })),
     [hosts, views],
@@ -117,6 +162,27 @@ export function App() {
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
   const agent = agents.runs.find((r) => r.id === agentId);
+  // The run whose folder the side panel's Files view browses: the open thread or subagent.
+  const filesRunId = selection.kind === "thread" ? selection.threadId : agentId;
+  // The open thread's linked pull requests, on a plxd that links them (PLX-318).
+  const threadRun =
+    selection.kind === "thread" ? threads.state.runs[selection.threadId] : undefined;
+  const linksPrs = connected && "pullRequests" in connection.capabilities;
+  const prs = usePullRequests(
+    host.id,
+    threadRun?.id,
+    (linksPrs && threadRun?.pullRequests) || [],
+    connected && "prDiff" in connection.capabilities,
+  );
+  // A PR action that fails for a missing or signed-out gh offers this, on a plxd that sets it up.
+  const setUpGithub =
+    connected && "githubSetup" in connection.capabilities
+      ? () => openSettings("sourceControl", host.id)
+      : undefined;
+  const openPr = (url?: string) => {
+    setPanelOpen(true);
+    setShowPr({ url });
+  };
   // Shrinks an expanded side panel, which hides the main pane the chat opens in.
   const openAgent = (id?: string) => {
     if (!project) return;
@@ -163,8 +229,23 @@ export function App() {
   };
   useSnoozeAlarms(listed, (hostId, threadId) => openOnHost(hostId, { kind: "thread", threadId }));
 
+  // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
+  const lineage = threads.lineage && openThread ? lineageOf(threads.state, openThread) : undefined;
+  const openThreadId = (threadId: string) => openOnHost(host.id, { kind: "thread", threadId });
+  // Where Go to parent, Next, and Previous sibling go. From a parent, Next and Previous open its
+  // first and last child.
+  const lineageStep = (command: "parentThread" | "nextThread" | "previousThread") => {
+    if (!lineage || settings) return undefined;
+    if (command === "parentThread") return lineage.parent?.id;
+    const step = command === "nextThread" ? 1 : -1;
+    const i = lineage.chips.findIndex((t) => t.id === lineage.active);
+    const n = lineage.chips.length;
+    const next = i === -1 ? (step === 1 ? 0 : n - 1) : (i + step + n) % n;
+    return lineage.chips[next]?.id;
+  };
+
   // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
-  // back to the coordinator.
+  // back to the coordinator. In a thread, the repository's opens New thread on that repository.
   let crumbs: Crumb[];
   if (project) {
     crumbs = [
@@ -180,12 +261,28 @@ export function App() {
     const repo = {
       label: group.name,
       icon: <RepoIcon repo={threads.state.repos.find((r) => r.id === group.id)} />,
+      onClick:
+        selection.kind === "thread"
+          ? () => setSelection({ kind: "new", groupId: group.id })
+          : undefined,
     };
     const page =
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
     crumbs = [{ label: host.name }, repo, { label: page }];
+    // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
+    // parent and children has the parent's crumb before its own.
+    const parent = lineage?.parent;
+    if (parent) {
+      const back = {
+        label: threads.state.titles[parent.id] ?? "Thread",
+        onClick: () => openThreadId(parent.id),
+      };
+      crumbs = lineage.active
+        ? [crumbs[0]!, repo, back]
+        : [crumbs[0]!, repo, back, { label: page }];
+    }
   }
 
   // A Project created on the open host is in its list already. Another host's list loads once
@@ -197,10 +294,12 @@ export function App() {
     setOpening({ hostId, projectId });
   };
 
-  const newThread = () => {
+  const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
     setSettings(null);
-    setSelection({ kind: "new", groupId: selection.kind === "project" ? undefined : group.id });
+    setSelection({ kind: "new", groupId });
   };
+  // Mod+N's picker of the repository a new thread goes in.
+  const picker = useRef<HTMLDialogElement>(null);
   const deleteThread = async (hostId: string, thread: Thread) => {
     const view = views[hostId] ?? idleThreads;
     const error = await view.remove(thread);
@@ -216,19 +315,58 @@ export function App() {
         ? undefined
         : "Connecting to plxd…";
 
-  // Mod+B: sidebar. Mod+Alt+B: side panel. Mod+N: new thread. Mod+,: Settings.
+  // Where the open thread's or New thread's terminals open (folderOf).
+  const folder =
+    settings || selection.kind === "usage" || selection.kind === "project"
+      ? undefined
+      : folderOf(
+          host.id,
+          threads.state,
+          selection.kind === "thread" ? { threadId: selection.threadId } : { repoId: group.id },
+        );
+  const deleted = useDeleted(views);
+  const drawerOpen = !!folder && drawers.has(folder.key);
+  const toggleDrawer = () => {
+    if (!folder) return;
+    const next = new Set(drawers);
+    if (!next.delete(folder.key)) next.add(folder.key);
+    setDrawers(next);
+  };
+  // Runs a repository action in the folder's drawer, opened for it, and opens its preview.
+  const runAction = (action: RepoAction) => {
+    if (!folder) return;
+    if (!drawers.has(folder.key)) setDrawers(new Set(drawers).add(folder.key));
+    runInDrawer(folder, action.command);
+    if (action.openPreview && action.previewUrl) {
+      setPanelOpen(true);
+      setBrowse({ url: action.previewUrl });
+    }
+  };
+
+  // The app's shortcuts (ui.tsx), but Open, which OpenMenu takes, and Mod+1 to Mod+9, which
+  // ThreadList takes.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const mac = window.parallax.platform === "darwin";
-      if (!(mac ? e.metaKey : e.ctrlKey)) return;
-      // Off macOS, AltGr arrives as Ctrl+Alt and types characters we must not
-      // eat. (macOS may report Option as AltGraph, and uses Cmd anyway.)
-      if (!mac && e.getModifierState("AltGraph")) return;
-      if (e.code === "KeyB" && e.altKey) setPanelOpen((open) => !open);
-      else if (e.code === "KeyB") setSidebarOpen((open) => !open);
-      else if (e.code === "KeyN" && !e.altKey) newThread();
-      else if (e.key === "," && !e.altKey) openSettings("general");
-      else return;
+      const command = appShortcut(e);
+      // A new thread waits for an open dialog, the picker included, to close.
+      const dialog = !!document.querySelector("dialog[open]");
+      if (command === "panel") setPanelOpen((open) => !open);
+      else if (command === "sidebar") setSidebarOpen((open) => !open);
+      else if (command === "terminal" && folder) toggleDrawer();
+      else if (command === "newThread") {
+        if (!dialog) picker.current?.showModal();
+      } else if (command === "noRepoThread") {
+        if (!dialog) newThread(noRepo);
+      } else if (command === "settings") openSettings("general");
+      else if (command === "usage") openOnHost(host.id, { kind: "usage" });
+      else if (
+        !dialog &&
+        (command === "parentThread" || command === "nextThread" || command === "previousThread")
+      ) {
+        const next = lineageStep(command);
+        if (!next) return;
+        openThreadId(next);
+      } else return;
       e.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
@@ -239,12 +377,12 @@ export function App() {
   const showSidebar = !sidebarOpen && (
     <IconButton
       label="Show sidebar"
-      keys="B"
+      command="sidebar"
       aria-expanded={false}
       aria-controls="sidebar"
       onClick={() => setSidebarOpen(true)}
     >
-      <PanelLeft />
+      <PanelLeftOpen />
     </IconButton>
   );
   // The side panel is a chat's, so Settings and Usage have none.
@@ -263,7 +401,18 @@ export function App() {
       {hosts.map((h) => (
         <HostLoader key={h.id} hostId={h.id} onView={report} />
       ))}
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} onNewThread={newThread}>
+      <NewThreadPicker
+        ref={picker}
+        groups={groups}
+        repos={threads.state.repos}
+        hostName={host.name}
+        onPick={newThread}
+      />
+      <Sidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onNewThread={() => newThread()}
+      >
         {settings ? (
           <SettingsNav
             section={settings}
@@ -279,6 +428,7 @@ export function App() {
             onOpenProject={openProject}
             onOpenSettings={openSettings}
             onDelete={deleteThread}
+            onNewThread={() => newThread()}
           />
         )}
       </Sidebar>
@@ -291,29 +441,85 @@ export function App() {
               {showSidebar}
               <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[settings] }]} />
             </TopBar>
-            <Settings section={settings} theme={theme} onThemeChange={setTheme} />
+            <Settings
+              section={settings}
+              listed={listed}
+              theme={theme}
+              onThemeChange={setTheme}
+              sourceControlHost={settingsHost}
+            />
           </>
         ) : selection.kind === "usage" ? (
           <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
         ) : (
           <>
-            <TopBar className={topBarInset}>
+            <TopBar className={`@container ${topBarInset}`}>
               {showSidebar}
-              <Breadcrumb items={crumbs} />
-              {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
-              {!panelOpen && (
-                <div className="ml-auto">
+              <Breadcrumb
+                items={crumbs}
+                trail={
+                  lineage &&
+                  openThread && (
+                    <LineageTrail
+                      state={threads.state}
+                      chips={lineage.chips}
+                      active={lineage.active}
+                      root={rootOf(threads.state, openThread)}
+                      openId={openThread.id}
+                      onOpen={openThreadId}
+                    />
+                  )
+                }
+              />
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                {selection.kind !== "project" && group.id !== noRepo && (
+                  <Actions hostId={host.id} repoId={group.id} canRun={!!folder} onRun={runAction} />
+                )}
+                <OpenMenu
+                  hostId={host.id}
+                  // The thread's worktree, or New thread's repository.
+                  folder={
+                    selection.kind === "thread"
+                      ? threads.state.runs[selection.threadId]?.worktreePath
+                      : selection.kind === "new"
+                        ? threads.state.repos.find((r) => r.id === group.id)?.path
+                        : undefined
+                  }
+                />
+                {selection.kind === "thread" && (
+                  <GitMenu
+                    key={`${host.id}/${selection.threadId}`}
+                    hostId={host.id}
+                    run={threads.state.runs[selection.threadId]}
+                    title={threads.state.titles[selection.threadId]}
+                    onPrOpened={linksPrs ? openPr : undefined}
+                    onSetUpGithub={setUpGithub}
+                  />
+                )}
+                {folder && (
+                  <IconButton
+                    label={drawerOpen ? "Hide terminal" : "Show terminal"}
+                    command="terminal"
+                    aria-pressed={drawerOpen}
+                    aria-controls="terminal-drawer"
+                    onClick={toggleDrawer}
+                  >
+                    <PanelBottom />
+                  </IconButton>
+                )}
+                {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
+                {!panelOpen && (
                   <IconButton
                     label="Show side panel"
-                    keys="Alt+B"
+                    command="panel"
                     aria-expanded={false}
                     aria-controls="side-panel"
                     onClick={() => setPanelOpen(true)}
                   >
                     <PanelRight />
                   </IconButton>
-                </div>
-              )}
+                )}
+              </div>
             </TopBar>
             {selection.kind === "thread" ? (
               // Keyed, so another run starts from an empty transcript.
@@ -321,11 +527,18 @@ export function App() {
                 key={`${host.id}/${selection.threadId}`}
                 hostId={host.id}
                 runId={selection.threadId}
+                title={threads.state.titles[selection.threadId]}
                 notice={notice?.threadId === selection.threadId ? notice.text : undefined}
                 prompt={threads.state.runs[selection.threadId]?.prompt}
                 // The list's status goes stale once the run moves on, so only a start says so.
                 going={selection.started}
                 noRepo={group.id === noRepo}
+                pullRequests={prs.urls.length > 0 && <PullRequestChip prs={prs} onOpen={openPr} />}
+                onPrOpened={linksPrs ? openPr : undefined}
+                onSetUpGithub={setUpGithub}
+                compose={compose}
+                onComposed={composed}
+                threadLinks={threadLinks}
               />
             ) : selection.kind === "new" ? (
               <NewThread
@@ -341,11 +554,12 @@ export function App() {
                 runOptions={
                   connection?.status === "connected" && "runOptions" in connection.capabilities
                 }
-                onStarted={(threadId, text) => {
+                onStarted={(threadId, text, background) => {
                   setNotice(text ? { threadId, text } : undefined);
-                  setSelection({ kind: "thread", threadId, started: true });
+                  if (!background) setSelection({ kind: "thread", threadId, started: true });
                 }}
                 disabledReason={offline}
+                threadLinks={threadLinks}
               />
             ) : agentId ? (
               <AgentChat
@@ -371,6 +585,13 @@ export function App() {
             )}
           </>
         )}
+        {/* Outside the views, so the terminals live on behind Settings and Usage. */}
+        <TerminalDrawer
+          open={drawerOpen}
+          folder={folder}
+          deleted={deleted}
+          onClose={toggleDrawer}
+        />
       </main>
 
       <SidePanel
@@ -380,6 +601,30 @@ export function App() {
         onExpandedChange={setPanelExpanded}
         leading={expanded && showSidebar}
         topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
+        remoteHost={host.id === localId ? undefined : host.name}
+        browse={browse}
+        pullRequest={showPr}
+        pullRequests={
+          linksPrs && threadRun
+            ? {
+                urls: prs.urls,
+                list: <PullRequestList prs={prs} onOpen={openPr} />,
+                view: (url) => (
+                  <PullRequestView
+                    key={`${host.id}/${threadRun.id}`}
+                    url={url}
+                    prs={prs}
+                    onSetUpGithub={setUpGithub}
+                    onCompose={(text, send) => {
+                      // The chat is under an expanded panel.
+                      setPanelExpanded(false);
+                      setCompose({ text, send });
+                    }}
+                  />
+                ),
+              }
+            : undefined
+        }
         agents={
           project && (
             <AgentsPanel
@@ -389,6 +634,21 @@ export function App() {
               openId={agentId}
               onOpen={openAgent}
               disabledReason={offline}
+            />
+          )
+        }
+        files={
+          filesRunId && (
+            <FilesPanel
+              key={`${host.id}/${filesRunId}`}
+              hostId={host.id}
+              runId={filesRunId}
+              unavailable={
+                offline ??
+                (connected && "files" in connection.capabilities
+                  ? undefined
+                  : "Update Parallax on this host to browse a thread's files.")
+              }
             />
           )
         }
@@ -403,6 +663,15 @@ export function App() {
             />
           )
         }
+        terminal={(shown, empty) => (
+          <TerminalPool
+            prefix="panel"
+            label="Side panel terminal"
+            active={shown ? folder : undefined}
+            deleted={deleted}
+            empty={empty}
+          />
+        )}
       />
     </div>
   );
@@ -422,6 +691,9 @@ function HostLoader({
     approvals: !!capabilities && "approvals" in capabilities,
     attention: !!capabilities && "threadAttention" in capabilities,
     editable: !!capabilities && "projectEdit" in capabilities,
+    deletable: !!capabilities && "projectDelete" in capabilities,
+    iconImageBytes: iconImageBytes(connection),
+    lineage: !!capabilities && "threadLineage" in capabilities,
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;

@@ -1,4 +1,4 @@
-import { Folder, GitBranch, House, LoaderCircle, Plus } from "lucide-react";
+import { Folder, House, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError, ThreadName } from "../preload/bridge";
@@ -10,8 +10,11 @@ import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { imageCaps } from "./images";
 import type { RunOptions } from "./models";
+import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
+import { attachThreads, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { noRepo, type ThreadGroup } from "./threads";
+import { ariaKeyshortcut, bindingsOf, useShortcutLabel } from "./keybindings";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
@@ -36,13 +39,20 @@ interface NewThreadProps {
     images: PromptImage[],
     options: RunOptions,
     checkout: boolean,
+    gitRef: string | undefined,
     name?: ThreadName,
+    attached?: string[],
   ) => Promise<RpcError | undefined>;
   /** Whether the host's plxd takes a thread's model, effort, and permission (`runOptions`). */
   runOptions: boolean;
-  /** Called once plxd has the thread, with a note for it, such as which account it picked. */
-  onStarted: (runId: string, notice?: string) => void;
+  /**
+   * Called once plxd has the thread, with a note for it, such as which account it picked.
+   * `background` when Cmd/Ctrl+Enter started it, so New Thread stays open.
+   */
+  onStarted: (runId: string, notice: string | undefined, background: boolean) => void;
   disabledReason?: string;
+  /** The host's threads, which the composer attaches where plxd takes them (PLX-378). */
+  threadLinks?: ThreadLinks;
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -51,9 +61,15 @@ interface Attempt {
   groupId: string;
   prompt: string;
   images: PromptImage[];
+  /** The run ids of the threads attached to the prompt. */
+  threads: string[];
   options: RunOptions;
   checkout: boolean;
+  /** The picked ref: the worktree's base, or the branch the checkout switches to. */
+  gitRef?: string;
   name: ThreadName;
+  /** Started with Cmd/Ctrl+Enter, leaving New Thread open. */
+  background: boolean;
 }
 
 /** An account a worker or coordinator can run on, as the account chooser lists it. */
@@ -130,7 +146,11 @@ export function NewThread({
   runOptions,
   onStarted,
   disabledReason,
+  threadLinks,
 }: NewThreadProps) {
+  // The no-repo start's shortcut, as Settings > Keybinds has it.
+  const noRepoKeys = useShortcutLabel("noRepoThread");
+  const noRepoBinding = bindingsOf("noRepoThread")[0];
   // ponytail: read as the screen opens, since plxd has no event for a changed default. One
   // changed elsewhere shows once New Thread opens again. Until then plxd refuses an effort or
   // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
@@ -150,9 +170,13 @@ export function NewThread({
   const [picked, setPicked] = useState(0);
   const [choosing, setChoosing] = useState(false);
   const [chooseError, setChooseError] = useState<string>();
-  // The prompt and images of a start in flight. Starting takes plxd a moment (a worktree, a
-  // worker), so the screen shows them as the thread it opens meanwhile.
-  const [starting, setStarting] = useState<{ prompt: string; images: PromptImage[] }>();
+  // The prompt, images, and threads of a start in flight. Starting takes plxd a moment (a
+  // worktree, a worker), so the screen shows them as the thread it opens meanwhile.
+  const [starting, setStarting] = useState<{
+    prompt: string;
+    images: PromptImage[];
+    threads: string[];
+  }>();
   const failed = useRef<Attempt>(undefined);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
   const [workspace, setWorkspace] = useState<Workspace>("worktree");
@@ -165,6 +189,18 @@ export function NewThread({
         ? "needs a newer plxd"
         : undefined;
   const checkout = workspace === "checkout" && !checkoutUnavailable;
+  // Only a plxd with `repoRefs` lists refs or starts from one, and only a repository has them.
+  const refsAvailable =
+    group.id !== noRepo &&
+    connection?.status === "connected" &&
+    "repoRefs" in connection.capabilities;
+  // The picked ref, kept with its repository and workspace, so picking another drops it: a new
+  // worktree's base never becomes a checkout's switch.
+  const [pickedRef, setPickedRef] = useState<{ groupId: string; checkout: boolean; ref: string }>();
+  const gitRef =
+    refsAvailable && pickedRef?.groupId === group.id && pickedRef.checkout === checkout
+      ? pickedRef.ref
+      : undefined;
 
   // Focus the chosen account when the chooser opens, so a screen reader announces it.
   const chooser = useRef<HTMLFieldSetElement>(null);
@@ -188,11 +224,13 @@ export function NewThread({
       attempt.images,
       attempt.options,
       attempt.checkout,
+      attempt.gitRef,
       attempt.name,
+      attempt.threads,
     );
     failed.current = error ? attempt : undefined;
     if (!error) {
-      onStarted(attempt.runId, notice);
+      onStarted(attempt.runId, notice, attempt.background);
       return undefined;
     }
     // No default, or one naming a removed key account: both need an account picked. Asks once
@@ -229,22 +267,31 @@ export function NewThread({
     return attemptStart(attempt, false, notice);
   };
 
-  const send = async (prompt: string, options: RunOptions, images: PromptImage[]) => {
+  const send = async (
+    prompt: string,
+    options: RunOptions,
+    images: PromptImage[],
+    threads: string[],
+    background: boolean,
+  ) => {
     setChoices(undefined);
     const last = failed.current;
     // plxd refuses a run id reused with other options, so changing one starts afresh. It doesn't
-    // compare images, so this does: a failed send puts back the very same ones.
+    // compare images or threads, so this does: a failed send puts back the very same ones.
     const same =
       last &&
       last.groupId === group.id &&
       last.prompt === prompt &&
       last.images.length === images.length &&
       last.images.every((image, i) => image === images[i]) &&
+      last.threads.join() === threads.join() &&
       JSON.stringify(last.options) === JSON.stringify(options) &&
-      last.checkout === checkout
+      last.checkout === checkout &&
+      last.gitRef === gitRef
         ? last
         : undefined;
-    setStarting({ prompt, images });
+    // A background start leaves the box empty for the next thread.
+    if (!background) setStarting({ prompt, images, threads });
     // A retry keeps its name, so the same start is the same request. Images alone name nothing.
     const name = same?.name ?? (prompt.trim() ? await window.parallax.nameThread(prompt) : {});
     const error = await attemptStart({
@@ -252,9 +299,12 @@ export function NewThread({
       groupId: group.id,
       prompt,
       images,
+      threads,
       options,
       checkout,
+      gitRef,
       name,
+      background,
     });
     // On success the app opens the thread instead.
     if (error !== undefined) setStarting(undefined);
@@ -264,7 +314,8 @@ export function NewThread({
   const continueWith = async (option: AccountOption) => {
     setChoosing(true);
     setChooseError(undefined);
-    const error = await runOn(failed.current!, option);
+    // Continue is a click on New Thread, so the thread opens, even after a Cmd/Ctrl+Enter.
+    const error = await runOn({ ...failed.current!, background: false }, option);
     setChoosing(false);
     if (error) setChooseError(error);
   };
@@ -291,18 +342,21 @@ export function NewThread({
       }
     >
       {starting !== undefined && (
-        <TranscriptView
-          rows={[
-            {
-              kind: "pending",
-              key: "pending:prompt",
-              text: starting.prompt,
-              images: starting.images,
-            },
-          ]}
-          sent={new Map()}
-          live={false}
-        />
+        <ThreadLinksContext value={threadLinks}>
+          <TranscriptView
+            rows={[
+              {
+                kind: "pending",
+                key: "pending:prompt",
+                text: starting.prompt,
+                images: starting.images,
+                threads: starting.threads,
+              },
+            ]}
+            sent={new Map()}
+            live={false}
+          />
+        </ThreadLinksContext>
       )}
       <div
         className={
@@ -311,18 +365,45 @@ export function NewThread({
       >
         {starting === undefined && (
           <>
-            <h1 className="mb-7 text-center text-[24px] font-medium tracking-tight">
+            <h1
+              className={`${group.id === noRepo ? "mb-7" : "mb-2"} text-center text-[24px] font-medium tracking-tight`}
+            >
               {group.id === noRepo ? "What should we work on " : "What should we build in "}
               <button
                 type="button"
                 popoverTarget={repoMenu}
                 aria-haspopup="menu"
-                className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground"
+                className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
               >
                 {group.id === noRepo ? "without a repo" : group.name}
               </button>
               ?
             </h1>
+            {group.id !== noRepo && (
+              <div className="relative z-20 mb-9 text-center">
+                {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRepoError(undefined);
+                    setChoices(undefined);
+                    onGroupChange(noRepo);
+                  }}
+                  aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
+                  className="group relative rounded-md text-[15px] text-muted-foreground underline underline-offset-4 hover:text-foreground focus-visible:text-foreground"
+                >
+                  or start without a repo
+                  {noRepoKeys && (
+                    <kbd
+                      aria-hidden
+                      className="pointer-events-none invisible absolute top-full left-1/2 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-[12px] text-muted-foreground group-hover:visible group-focus-visible:visible"
+                    >
+                      {noRepoKeys}
+                    </kbd>
+                  )}
+                </button>
+              </div>
+            )}
             {/* Menu only: the repository name in the heading opens it. */}
             <Picker
               id={repoMenu}
@@ -357,11 +438,26 @@ export function NewThread({
         )}
         <Composer
           newThread
-          onSend={send}
+          onSend={(prompt, options, images, threads) =>
+            send(prompt, options, images, threads, false)
+          }
+          onSendInBackground={(prompt, options, images, threads) =>
+            send(prompt, options, images, threads, true)
+          }
+          attach={attachThreads(connection, threadLinks)}
           // Hidden while starting, as the opened thread's composer has none.
           backend={runOptions && starting === undefined ? backend : undefined}
+          hostId={hostId}
+          contextAndFast={
+            connection?.status === "connected" && "contextAndFast" in connection.capabilities
+          }
           disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
           imageCaps={imageCaps(connection)}
+          menus={
+            connection?.status === "connected" && "composerMenus" in connection.capabilities
+              ? { hostId, repo: group.id === noRepo ? undefined : group.id }
+              : undefined
+          }
           // A new thread asks only through a plxd that sends its requests (RYA-196).
           manualDenied={
             connection?.status === "connected" && !("approvals" in connection.capabilities)
@@ -383,18 +479,15 @@ export function NewThread({
                   onWorkspaceChange={setWorkspace}
                   checkoutUnavailable={checkoutUnavailable}
                 />
-                {/* Placeholder until plxd offers branches. */}
-                <Picker
-                  label="Branch"
-                  icon={<GitBranch />}
-                  align="end"
-                  search="Search branches…"
-                  panelClassName="w-72"
-                  options={[
-                    { value: "develop", label: "develop", hint: "current" },
-                    { value: "main", label: "main" },
-                  ]}
-                />
+                {refsAvailable && (
+                  <RefMenu
+                    hostId={hostId}
+                    repo={group.id}
+                    checkout={checkout}
+                    value={gitRef}
+                    onChange={(ref) => setPickedRef({ groupId: group.id, checkout, ref })}
+                  />
+                )}
               </>
             )
           }

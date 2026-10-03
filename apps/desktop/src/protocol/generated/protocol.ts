@@ -80,6 +80,22 @@ export type ParallaxRequests = {
 	 */
 	"accounts/refresh": { params: AccountsRefreshParams, result: AccountsRefreshResult },
 	/**
+	 * `providers/list`: this host's provider instances (0040), each with its detected state
+	 * and models. May answer from a short-lived cache unless `refresh` is set. Gated on the
+	 * `providers` capability.
+	 */
+	"providers/list": { params: ProvidersListParams, result: ProvidersListResult },
+	/**
+	 * `providers/save`: adds an instance, or replaces the one with its id, and returns every
+	 * instance. A secret variable sent without a value keeps its stored one.
+	 */
+	"providers/save": { params: ProvidersSaveParams, result: ProvidersListResult },
+	/**
+	 * `providers/remove`: removes an instance the user added, and its secrets, and returns
+	 * every instance. Fails with `invalidParams` for a built-in one.
+	 */
+	"providers/remove": { params: ProvidersRemoveParams, result: ProvidersListResult },
+	/**
 	 * `usage/get`: per-account tokens and cost for today and this week (local time on this
 	 * host), and the latest limit windows.
 	 */
@@ -89,6 +105,12 @@ export type ParallaxRequests = {
 	 * model, and each account's run count over the same range.
 	 */
 	"usage/history": { params: UsageHistoryParams, result: UsageHistoryResult },
+	/**
+	 * `usage/daily`: every Claude Code, Codex, and Cursor session's tokens and cost on this
+	 * host since a local day, per local day, agent, and model (0039), and each source that
+	 * failed.
+	 */
+	"usage/daily": { params: UsageDailyParams, result: UsageDailyResult },
 	/**
 	 * `accounts/defaults/get`: this host's default account for the coordinator role and for
 	 * a worker role, absent where none is set (#119).
@@ -151,9 +173,16 @@ export type ParallaxRequests = {
 	"agent/diff": { params: AgentDiffParams, result: AgentDiffResult },
 	/**
 	 * `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
-	 * size-capped, for a diff editor.
+	 * size-capped, for a diff editor. Its `working` side, behind the `files` capability,
+	 * reads the file on disk now.
 	 */
 	"agent/file": { params: AgentFileParams, result: AgentFileResult },
+	/**
+	 * `agent/files`: one folder of a run's worktree, or a Current checkout thread's
+	 * checkout, without `.git` or what git ignores, for browsing (RYA-296). Gated on the
+	 * `files` capability.
+	 */
+	"agent/files": { params: AgentFilesParams, result: AgentFilesResult },
 	/**
 	 * `agent/accept`: merges a run's commit into the project repository's current branch on
 	 * the host, fast-forward when possible, then removes its worktree and branch. Never
@@ -171,6 +200,19 @@ export type ParallaxRequests = {
 	 * `openPr` capability.
 	 */
 	"agent/openPr": { params: AgentOpenPrParams, result: AgentOpenPrResult },
+	/**
+	 * `agent/gitStatus`: the git state of a run's folder (RYA-298). Gated on the `git`
+	 * capability, like `agent/commit` and `agent/push`.
+	 */
+	"agent/gitStatus": { params: AgentGitStatusParams, result: GitStatus },
+	/**
+	 * `agent/commit`: stages everything in a finished run's folder and commits it.
+	 */
+	"agent/commit": { params: AgentCommitParams, result: GitStatus },
+	/**
+	 * `agent/push`: pushes a finished run's branch to `origin`, setting its upstream.
+	 */
+	"agent/push": { params: AgentPushParams, result: GitStatus },
 	/**
 	 * `agent/approve`: answers a run's permission request, from its `approvalRequested`
 	 * item, by allowing or denying the tool call (RYA-222, decision 0031). Idempotent on the
@@ -194,12 +236,19 @@ export type ParallaxRequests = {
 	 */
 	"thread/start": { params: ThreadStartParams, result: ThreadStartResult },
 	/**
+	 * `thread/fork`: a new thread that continues a thread's conversation from one of its
+	 * turns, in a workspace of the same kind (0050). Idempotent on its client-generated
+	 * run id. Gated on the `threadFork` capability.
+	 */
+	"thread/fork": { params: ThreadForkParams, result: ThreadStartResult },
+	/**
 	 * `thread/archive`: archives a normal thread or brings it back.
 	 */
 	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
 	/**
-	 * `thread/update`: marks a normal thread seen or snoozes it (0033). Gated on the
-	 * `threadAttention` capability.
+	 * `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the
+	 * `threadAttention` capability, or sets its title or settled flag (0041), gated on
+	 * `threadLineage`.
 	 */
 	"thread/update": { params: ThreadUpdateParams, result: ThreadUpdateResult },
 	/**
@@ -225,6 +274,107 @@ export type ParallaxRequests = {
 	 * `projectEdit` capability, like `Project.icon`.
 	 */
 	"project/update": { params: ProjectUpdateParams, result: ProjectUpdateResult },
+	/**
+	 * `repo/refs`: a repo entry's local and remote-tracking branches, for picking the ref a
+	 * thread starts from. Gated on the `repoRefs` capability.
+	 */
+	"repo/refs": { params: RepoRefsParams, result: RepoRefsResult },
+	/**
+	 * `pr/view`: one of a run's linked pull requests as GitHub has it now, read with `gh`
+	 * (PLX-318). Gated on the `pullRequests` capability, like `pr/act`.
+	 */
+	"pr/view": { params: PrViewParams, result: PullRequest },
+	/**
+	 * `pr/act`: merges, squashes, sets auto-merge on or off, drafts, readies, or closes one
+	 * of a run's linked pull requests with `gh`, and returns it as it is after.
+	 */
+	"pr/act": { params: PrActParams, result: PullRequest },
+	/**
+	 * `pr/diff`: one of a run's linked pull requests' unified diff, read with `gh pr diff`
+	 * and cut at a size cap (PLX-328). Gated on the `prDiff` capability.
+	 */
+	"pr/diff": { params: PrViewParams, result: PrDiffResult },
+	/**
+	 * `pr/link`: links a GitHub pull request URL to a run, unless it already is, and reports
+	 * the run as `agent.updated` (0041). Fails with `invalidParams` for another URL. Gated
+	 * on the `threadTools` capability, like `pr/unlink`.
+	 */
+	"pr/link": { params: PrViewParams, result: AgentRunResult },
+	/**
+	 * `pr/unlink`: removes a pull request URL from a run's links. Unlinking one that isn't
+	 * linked changes nothing.
+	 */
+	"pr/unlink": { params: PrViewParams, result: AgentRunResult },
+	/**
+	 * `project/delete`: deletes a project with every run in it, stopping their CLIs first
+	 * (PLX-338). Fails with `projectNotFound` for an unknown project or a repo entry's id.
+	 * Gated on the `projectDelete` capability.
+	 */
+	"project/delete": { params: ProjectDeleteParams, result: ProjectDeleteResult },
+	/**
+	 * `agent/commands`: a CLI's own slash commands and skills, for the composer's `/` menu
+	 * (PLX-359). Gated on the `composerMenus` capability, like `repo/files`.
+	 */
+	"agent/commands": { params: AgentCommandsParams, result: AgentCommandsResult },
+	/**
+	 * `repo/files`: a thread's files that git tracks or doesn't ignore, capped, for the
+	 * composer's `@` menu.
+	 */
+	"repo/files": { params: RepoFilesParams, result: RepoFilesResult },
+	/**
+	 * `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
+	 * github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
+	 * `githubStatus` capability.
+	 */
+	"github/status": { params: GithubStatusParams, result: GithubStatus },
+	/**
+	 * `thread/search`: the host's threads whose messages contain a query, the one with the
+	 * newest message first (PLX-372). Gated on the `threadContext` capability.
+	 */
+	"thread/search": { params: ThreadSearchParams, result: ThreadSearchResult },
+	/**
+	 * `agent/resumeNow`: resumes a run waiting for its usage limit to reset now (PLX-371,
+	 * decision 0049). Gated on the `autoResume` capability, like `agent/autoResume` and
+	 * `host/settings/*`.
+	 */
+	"agent/resumeNow": { params: AgentResumeNowParams, result: AgentRunResult },
+	/**
+	 * `agent/autoResume`: sets or clears a run's auto-resume override.
+	 */
+	"agent/autoResume": { params: AgentAutoResumeParams, result: AgentRunResult },
+	/**
+	 * `host/settings/get`: this host's settings.
+	 */
+	"host/settings/get": { params: HostSettingsGetParams, result: HostSettings },
+	/**
+	 * `host/settings/set`: changes this host's settings and returns them.
+	 */
+	"host/settings/set": { params: HostSettingsSetParams, result: HostSettings },
+	/**
+	 * `inbox/list`: a Project's inbox, oldest first, and the `seq` the list reflects (PLX-401,
+	 * 0043). Gated on the `inbox` capability, like `inbox/seen`.
+	 */
+	"inbox/list": { params: InboxListParams, result: InboxListResult },
+	/**
+	 * `inbox/seen`: marks items of a Project's inbox seen, and returns them as they stand.
+	 */
+	"inbox/seen": { params: InboxSeenParams, result: InboxSeenResult },
+	/**
+	 * `github/install`: starts installing `gh` into plxd's data folder, from the latest
+	 * GitHub release, and answers at once with `installing` set (PLX-423, 0050). Refused
+	 * with `githubSetupFailed` while a `gh` is found. Gated on the `githubSetup` capability,
+	 * like `github/signIn` and `github/signInCancel`.
+	 */
+	"github/install": { params: GithubInstallParams, result: GithubStatus },
+	/**
+	 * `github/signIn`: starts `gh auth login --web` and answers with its one-time code, or
+	 * the pending sign-in's. `github/status` reports it until it ends.
+	 */
+	"github/signIn": { params: GithubSignInParams, result: GithubSignIn },
+	/**
+	 * `github/signInCancel`: stops a pending sign-in, if there is one.
+	 */
+	"github/signInCancel": { params: GithubSignInCancelParams, result: GithubSignInCancelResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -444,6 +594,11 @@ export type Project = {
 	 */
 	coordinator?: RunId,
 	/**
+	 * The permission mode its coordinator and every run in it start in (0042), behind the
+	 * `projectPermission` capability. Absent only from an older plxd.
+	 */
+	permission?: ProjectPermission,
+	/**
 	 * When the project was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -456,7 +611,8 @@ export type Project = {
 
 /**
  * A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
- * name. plxd stores them as the client sent them and never reads them.
+ * name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
+ * them and never reads them.
  */
 export type ProjectIcon = {
 	/**
@@ -469,13 +625,51 @@ export type ProjectIcon = {
 	 * `-`. Absent means the app's accent.
 	 */
 	color?: string,
+	/**
+	 * An uploaded image the app draws instead of the glyph, behind the `iconImages` capability
+	 * (0038). Its `data` is at most the capability's `maxBytes` of base64, or the request fails
+	 * with `imageTooLarge`. Absent means no image, so an icon sent without one clears it.
+	 */
+	image?: PromptImage,
 };
+
+/**
+ * An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
+ * decision 0026). The CLI gets it beside the text, never as a file name or path in it. A
+ * project's or repo's icon image has the same shape (0038).
+ */
+export type PromptImage = {
+	/**
+	 * Its file type, which its bytes must match.
+	 */
+	mediaType: ImageMediaType,
+	/**
+	 * The image file's bytes, in standard base64 with padding.
+	 */
+	data: string,
+};
+
+/**
+ * An image's file type (RYA-191): the four that Claude and Codex both take.
+ *
+ * A newer peer may send a type this version does not know; treat it as unknown.
+ */
+export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
 /**
  * A project's id: a version 7 UUID that the client generates once and sends again on every
  * retry of `project/create`.
  */
 export type ProjectId = string;
+
+/**
+ * A project's permission mode (0042): the mode its coordinator and every run in it start in.
+ * Each maps to the [`AgentPermission`] of the same name. A run on a backend that doesn't map it
+ * is refused with `unsupportedOption`, never moved to another mode.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type ProjectPermission = "auto" | "bypass";
 
 /**
  * An agent run's id: a version 7 UUID that the client generates once and sends again on every
@@ -487,9 +681,9 @@ export type RunId = string;
  * Params of `project/create`.
  *
  * It is idempotent on `id`: if a project with that id exists, plxd returns it instead of
- * creating another, and fails with `idConflict` if `name`, `repoPath`, or `icon` differ. A new
- * project's `repoPath` must be the top folder of a git working tree on this host, or it fails
- * with `notARepository`.
+ * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, or `permission`
+ * differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
+ * or it fails with `notARepository`.
  */
 export type ProjectCreateParams = {
 	/**
@@ -509,6 +703,11 @@ export type ProjectCreateParams = {
 	 * app's default icon.
 	 */
 	icon?: ProjectIcon,
+	/**
+	 * The project's permission mode, sent only to a plxd that advertises `projectPermission`.
+	 * Absent means `auto`, the mode projects from before it have.
+	 */
+	permission?: ProjectPermission,
 };
 
 /**
@@ -792,6 +991,202 @@ export type AccountsRefreshResult = {
 };
 
 /**
+ * Params of `providers/list`.
+ */
+export type ProvidersListParams = {
+	/**
+	 * Probe every instance again instead of answering from plxd's cache.
+	 */
+	refresh: boolean,
+};
+
+/**
+ * Result of `providers/list`, and of `providers/save` and `providers/remove`.
+ */
+export type ProvidersListResult = {
+	/**
+	 * Every instance, the built-in ones first, then in the order they were added.
+	 */
+	providers: Array<ProviderInfo>,
+	/**
+	 * When the slowest of these was probed.
+	 */
+	checkedAt: string,
+};
+
+/**
+ * An instance's detected state, and what it offers.
+ */
+export type ProviderInfo = {
+	/**
+	 * Its settings.
+	 */
+	instance: ProviderInstance,
+	/**
+	 * Whether its program resolves on the host.
+	 */
+	installed: boolean,
+	/**
+	 * The program's resolved path, when installed.
+	 */
+	path?: string,
+	/**
+	 * The agent's version, when plxd could read it.
+	 */
+	version?: string,
+	/**
+	 * Whether it is signed in, or `null` when plxd can't tell.
+	 */
+	signedIn?: boolean,
+	/**
+	 * Who it is signed in as, or the plan, where the agent says.
+	 */
+	account?: string,
+	/**
+	 * Why something above is missing or uncertain.
+	 */
+	note?: string,
+	/**
+	 * The models plxd found for it, without the user's own.
+	 */
+	models: Array<ProviderModel>,
+	/**
+	 * The permissions a thread on it may ask for.
+	 */
+	permissions: Array<AgentPermission>,
+	/**
+	 * Whether it takes `thread/start`'s `effort`.
+	 */
+	efforts: boolean,
+	/**
+	 * Whether it can run a Project's coordinator.
+	 */
+	coordinator: boolean,
+	/**
+	 * The command that signs it in, run in a terminal on the host, if it has one.
+	 */
+	login?: Array<string>,
+	/**
+	 * Variables the sign-in command runs with, none of them secret: the agent's own and the
+	 * instance's, and for an ACP agent its home folder's.
+	 */
+	loginEnv?: Array<ProviderEnvVar>,
+};
+
+/**
+ * A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
+ * which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
+ * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
+
+/**
+ * One environment variable an instance's runs get.
+ */
+export type ProviderEnvVar = {
+	/**
+	 * The variable's name.
+	 */
+	name: string,
+	/**
+	 * Its value. plxd never sends a secret's value back: a listed secret has none, and an
+	 * update that leaves it out keeps the stored one.
+	 */
+	value?: string,
+	/**
+	 * Kept in the host's keychain instead of plxd's settings, such as an API key.
+	 */
+	secret: boolean,
+};
+
+/**
+ * An instance's settings, as the user sees and edits them.
+ */
+export type ProviderInstance = {
+	/**
+	 * A stable id: lowercase letters, digits, and `-`. The built-in instances are `claude`,
+	 * `codex`, and `cursor`.
+	 */
+	id: string,
+	/**
+	 * What runs it.
+	 */
+	kind: ProviderKind,
+	/**
+	 * What people see, such as `Codex` or `Work Codex`.
+	 */
+	name: string,
+	/**
+	 * Whether threads may start on it. A disabled instance keeps its settings.
+	 */
+	enabled: boolean,
+	/**
+	 * The program, a name on the host's `PATH` or an absolute path. Absent: the kind's own.
+	 */
+	program?: string,
+	/**
+	 * The agent's home or configuration folder, such as `CODEX_HOME`, for a kind that has one.
+	 */
+	home?: string,
+	/**
+	 * Arguments added after the kind's own. For an `acp` instance, every argument.
+	 */
+	args: Array<string>,
+	/**
+	 * Variables its runs get, set last.
+	 */
+	env: Array<ProviderEnvVar>,
+	/**
+	 * Models the user added, offered beside the ones plxd finds.
+	 */
+	models: Array<ProviderModel>,
+};
+
+/**
+ * What runs an instance, and the defaults it starts from.
+ *
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown, so a `switch`
+ * over this type must not end in an exhaustiveness assertion.
+ */
+export type ProviderKind = "claude" | "codex" | "cursor" | "antigravity" | "opencode" | "pi" | "grokBuild" | "hermes" | "ollamaCloud" | "openRouter" | "localModel" | "acp";
+
+/**
+ * A model an instance offers.
+ */
+export type ProviderModel = {
+	/**
+	 * What the agent takes, sent as `thread/start`'s `model`.
+	 */
+	id: string,
+	/**
+	 * What people see.
+	 */
+	name: string,
+};
+
+/**
+ * Params of `providers/save`: adds an instance, or replaces the one with its id.
+ */
+export type ProvidersSaveParams = {
+	/**
+	 * The instance as it should be.
+	 */
+	instance: ProviderInstance,
+};
+
+/**
+ * Params of `providers/remove`. A built-in instance can't be removed, only disabled.
+ */
+export type ProvidersRemoveParams = {
+	/**
+	 * The instance's id.
+	 */
+	id: string,
+};
+
+/**
  * Params of `usage/get`.
  *
  * Empty: plxd has no account registry yet (#114, #117, #118 are still open, and #113's
@@ -961,6 +1356,96 @@ export type UsageHour = {
 	 */
 	costUsdMicros?: number,
 };
+
+/**
+ * Params of `usage/daily`.
+ */
+export type UsageDailyParams = {
+	/**
+	 * The first local day of the range, such as `2026-09-30`. The range ends today.
+	 */
+	since: string,
+	/**
+	 * The IANA time zone whose local days the usage is grouped by, such as
+	 * `America/Los_Angeles`.
+	 */
+	timeZone: string,
+};
+
+/**
+ * Result of `usage/daily`.
+ */
+export type UsageDailyResult = {
+	/**
+	 * Usage per local day, agent, and model. Days with no usage are left out.
+	 */
+	days: Array<UsageDay>,
+	/**
+	 * Each source that failed, so the others still show.
+	 */
+	problems: Array<UsageProblem>,
+};
+
+/**
+ * One agent's usage of one model on one local day, from every session on the host, not only
+ * runs plxd started (0039).
+ */
+export type UsageDay = {
+	/**
+	 * The local day.
+	 */
+	date: string,
+	/**
+	 * The agent: Claude Code, Codex, or Cursor.
+	 */
+	agent: CliKind,
+	/**
+	 * The model, as the agent names it.
+	 */
+	model: string,
+	/**
+	 * Input tokens, not counting cache reads and writes.
+	 */
+	inputTokens: number,
+	/**
+	 * Output tokens, including reasoning.
+	 */
+	outputTokens: number,
+	/**
+	 * Input tokens read from the prompt cache.
+	 */
+	cacheReadTokens: number,
+	/**
+	 * Input tokens written to the prompt cache.
+	 */
+	cacheWriteTokens: number,
+	/**
+	 * The cost, when the source priced it.
+	 */
+	costUsdMicros?: number,
+};
+
+/**
+ * A source of `usage/daily` that failed, and why, for people.
+ */
+export type UsageProblem = {
+	/**
+	 * Which source.
+	 */
+	source: UsageSource,
+	/**
+	 * What went wrong, written for people, such as "Install Node.js or ccusage on this host to
+	 * see Claude Code and Codex usage."
+	 */
+	message: string,
+};
+
+/**
+ * Where `usage/daily` gets usage from.
+ *
+ * A newer plxd may send sources that are not listed here. Treat those as unknown.
+ */
+export type UsageSource = "ccusage" | "cursor";
 
 /**
  * Params of `accounts/defaults/get`.
@@ -1183,8 +1668,20 @@ export type AgentStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
-	 * `coordinatorThread`, the coordinator's mode when it spawns the run.
+	 * The context window in tokens, one the backend offers: Claude Code's `200000` or
+	 * `1000000`, Codex's `272000` or `872000`. Absent means the CLI's default. Send it and
+	 * `fast` only to a plxd that advertises `contextAndFast`. The run keeps both when it
+	 * resumes, and a retry must repeat them.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off: Claude Code's fast mode, or Codex's priority service tier. Absent
+	 * means the CLI's default.
+	 */
+	fast?: boolean,
+	/**
+	 * The permission mode (RYA-97, 0027). Absent means `edit`. Ignored in a project, whose
+	 * runs run in the project's mode (0042).
 	 */
 	permission?: AgentPermission,
 	/**
@@ -1197,12 +1694,22 @@ export type AgentStartParams = {
 	/**
 	 * Forward the run's permission requests to the client as `approvalRequested` items, which
 	 * `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
-	 * answers them, and only to a plxd that advertises `approvals`. Absent, a run in Manual,
-	 * Auto, or Plan denies what would prompt, as before. A run with a `coordinatorThread` also
-	 * gets it when its coordinator has it. The run keeps it when it resumes, and a retry must
-	 * repeat it.
+	 * answers them, and only to a plxd that advertises `approvals`. A thread with it is full
+	 * Claude Code and also asks in Accept Edits (0034). Absent, a run in Manual, Auto, or Plan
+	 * denies what would prompt, and a thread keeps the worker sandbox, as before. A run with a
+	 * `coordinatorThread` also gets it when its coordinator has it. The run keeps it when it
+	 * resumes, and a retry must repeat it.
 	 */
 	approvals?: boolean,
+	/**
+	 * Threads attached to the prompt as context, by their run ids, sent only to a plxd that
+	 * advertises `threadContext` (PLX-372, decision 0047). The agent gets a summary of each ahead
+	 * of the prompt: its id and what was said in it, without tool calls, cut from the front to
+	 * the capability's `maxSummaryBytes`. At most the capability's `maxThreads`. An id that is
+	 * no thread's fails with `threadNotFound`. A retry must repeat them; plxd doesn't compare
+	 * them.
+	 */
+	threads?: Array<RunId>,
 };
 
 /**
@@ -1213,15 +1720,6 @@ export type AgentStartParams = {
  * A newer peer may send a level this version does not know; treat it as unknown.
  */
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
-
-/**
- * A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
- * which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
- * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
- *
- * A newer peer may send a value this version does not know; treat it as unknown.
- */
-export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
 
 /**
  * What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
@@ -1238,29 +1736,8 @@ export type AgentPolicy = "workspaceWrite" | "noWrite";
 export type CoordinatorThreadId = string;
 
 /**
- * An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
- * decision 0026). The CLI gets it beside the text, never as a file name or path in it.
- */
-export type PromptImage = {
-	/**
-	 * Its file type, which its bytes must match.
-	 */
-	mediaType: ImageMediaType,
-	/**
-	 * The image file's bytes, in standard base64 with padding.
-	 */
-	data: string,
-};
-
-/**
- * An image's file type (RYA-191): the four that Claude and Codex both take.
- *
- * A newer peer may send a type this version does not know; treat it as unknown.
- */
-export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-
-/**
- * Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
+ * Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and
+ * `agent/autoResume`: the run as it stands.
  */
 export type AgentRunResult = {
 	/**
@@ -1343,6 +1820,14 @@ export type AgentRun = {
 	 */
 	effort?: AgentEffort,
 	/**
+	 * Its context window in tokens, as `model`. Absent means the CLI's default.
+	 */
+	contextWindow?: number,
+	/**
+	 * Whether it runs in fast mode, as `model`. Absent means the CLI's default.
+	 */
+	fast?: boolean,
+	/**
 	 * Its permission, as `model`. Absent means `edit`.
 	 */
 	permission?: AgentPermission,
@@ -1359,6 +1844,21 @@ export type AgentRun = {
 	 */
 	checkout?: boolean,
 	/**
+	 * The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
+	 * `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
+	 * `pullRequests` capability. Absent means none.
+	 */
+	pullRequests?: Array<string>,
+	/**
+	 * When plxd resumes it, while it is `waiting` (decision 0049). Absent otherwise.
+	 */
+	resumeAt?: string,
+	/**
+	 * Whether a usage limit makes it wait and resume, overriding the host's
+	 * `host/settings` `autoResume` (decision 0049). Absent means the host's setting.
+	 */
+	autoResume?: boolean,
+	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -1374,7 +1874,7 @@ export type AgentRun = {
  * A newer plxd may send a status this version does not know; treat it as unknown, and don't
  * end a `switch` over this type in an exhaustiveness assertion.
  */
-export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "accepted";
+export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "waiting" | "accepted";
 
 /**
  * The commit plxd made for a run, compared with the commit its worktree was created from.
@@ -1433,16 +1933,27 @@ export type AgentSendParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * A new permission (RYA-161), as `effort`.
+	 * A new permission (RYA-161), as `effort`. Ignored for a run in a project, which runs in the
+	 * project's mode (0042).
 	 */
 	permission?: AgentPermission,
+	/**
+	 * A new context window, as `effort`, but sent only to a plxd that advertises
+	 * `contextAndFast`.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `contextWindow`.
+	 */
+	fast?: boolean,
 	/**
 	 * A new account for the run and every later resume, sent only to a plxd that advertises
 	 * `sendAccount`, and waiting for a running CLI as `model` does. On the run's backend, the
 	 * session resumes on it. On another backend, the session can't move, so plxd starts a new
 	 * one there in the run's worktree, whose first message carries the conversation so far
 	 * before this one: the run keeps its id, transcript, and worktree, and takes the new
-	 * backend, with `model`, and the run's effort and permission where the backend maps them.
+	 * backend, with `model`, and the run's effort, permission, context window, and fast mode where
+	 * the backend maps them.
 	 * Absent, or the run's own, changes nothing.
 	 */
 	account?: AccountChoice,
@@ -1450,6 +1961,17 @@ export type AgentSendParams = {
 	 * Images for the message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Threads attached to the message as context, as `agent/start`'s. A message that waits for
+	 * the run's CLI gets their summaries when it's sent.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * The thread sending it through its Parallax tools (0041), which the turn's `turnStarted`
+	 * names. It must be a run on the host, or the send fails with `runNotFound`. Absent for the
+	 * user's own message. Behind `threadTools`.
+	 */
+	from?: RunId,
 };
 
 /**
@@ -1467,6 +1989,12 @@ export type AgentCancelParams = {
 	 * The run.
 	 */
 	runId: RunId,
+	/**
+	 * The thread stopping it through its Parallax tools (0041): a running run logs an
+	 * `interrupted` item naming it. It must be a run on the host, or the cancel fails with
+	 * `runNotFound`. Behind `threadTools`.
+	 */
+	from?: RunId,
 };
 
 /**
@@ -1562,7 +2090,11 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * The project as it stands.
 	 */
-	project: Project, } | { "kind": "context.changed",
+	project: Project, } | { "kind": "project.deleted",
+	/**
+	 * The deleted project's id.
+	 */
+	project: ProjectId, } | { "kind": "context.changed",
 	/**
 	 * The changed file.
 	 */
@@ -1634,7 +2166,11 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * The coordinator's run id.
 	 */
-	runId: RunId, } | { "kind": "repo.added",
+	runId: RunId, } | { "kind": "inbox.added",
+	/**
+	 * The new item.
+	 */
+	item: InboxItem, } | { "kind": "repo.added",
 	/**
 	 * The entry.
 	 */
@@ -1740,14 +2276,28 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	text?: string,
 	/**
 	 * True for a wake-up (RYA-42, decision 0025): a turn plxd sent a project's coordinator
-	 * on its own, not the user, because runs it started finished. `text` lists them.
+	 * on its own, not the user, because runs it started finished. `text` lists them. Also
+	 * true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
+	 * 0049).
 	 */
 	wake?: boolean,
+	/**
+	 * The thread that sent a follow-up through its Parallax tools (0041), as `agent/send`'s
+	 * `from` named it. Absent for the user's own message and for the prompt's turn, whose
+	 * sender is the thread's `parent`.
+	 */
+	from?: RunId,
 	/**
 	 * The images sent with the turn's message, the prompt's or a follow-up's, in order, for
 	 * `agent/image` (RYA-191). Absent when it had none.
 	 */
-	images?: Array<ImageId>, } | { "kind": "textDelta",
+	images?: Array<ImageId>,
+	/**
+	 * The threads attached to the turn's message as context, in order (PLX-372). The agent
+	 * got a summary of each ahead of the message, which `text` and the run's `prompt` leave
+	 * out. Absent when it had none.
+	 */
+	threads?: Array<RunId>, } | { "kind": "textDelta",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
@@ -1816,7 +2366,11 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The follow-up's turn id.
 	 */
-	turnId: TurnId, } | { "kind": "usage",
+	turnId: TurnId, } | { "kind": "interrupted",
+	/**
+	 * The thread that stopped it.
+	 */
+	from: RunId, } | { "kind": "usage",
 	/**
 	 * The model, when the vendor breaks usage down by model.
 	 */
@@ -2004,14 +2558,79 @@ export type AgentRunState = {
 	 */
 	effort?: AgentEffort,
 	/**
+	 * Its context window in tokens, which `agent/send` can change. Absent means the CLI's
+	 * default.
+	 */
+	contextWindow?: number,
+	/**
+	 * Whether it runs in fast mode, which `agent/send` can change. Absent means the CLI's
+	 * default.
+	 */
+	fast?: boolean,
+	/**
 	 * Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * Its linked pull requests, as `AgentRun.pullRequests` (PLX-318). Absent means none.
+	 */
+	pullRequests?: Array<string>,
+	/**
+	 * When plxd resumes it, as `AgentRun.resumeAt`. Absent once it doesn't wait.
+	 */
+	resumeAt?: string,
+	/**
+	 * Its auto-resume override, as `AgentRun.autoResume`. Absent means the host's setting.
+	 */
+	autoResume?: boolean,
 	/**
 	 * When it changed, in RFC 3339 UTC.
 	 */
 	updatedAt: string,
 };
+
+/**
+ * One item of a Project's inbox.
+ */
+export type InboxItem = {
+	/**
+	 * The item's id.
+	 */
+	id: InboxItemId,
+	/**
+	 * What it says.
+	 */
+	kind: InboxKind,
+	/**
+	 * The run it is about: a child, or the coordinator when its wake-ups paused.
+	 */
+	run: RunId,
+	/**
+	 * One line for people, such as the child's task and its diff stats.
+	 */
+	text: string,
+	/**
+	 * When plxd added it, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+	/**
+	 * When a client first marked it seen with `inbox/seen` (0033's read model). Absent if never.
+	 */
+	seenAt?: string,
+};
+
+/**
+ * Identifies one inbox item. plxd generates it.
+ */
+export type InboxItemId = string;
+
+/**
+ * What an inbox item says, by 0043's kinds.
+ *
+ * A newer plxd may send a kind this version does not know; treat it as unknown, and don't end
+ * a `switch` over this type in an exhaustiveness assertion.
+ */
+export type InboxKind = "needsYou" | "done" | "failed" | "decided" | "learned";
 
 /**
  * A repository on the host that normal threads run in.
@@ -2085,6 +2704,37 @@ export type Thread = {
 	 * plxd without `threadAttention`.
 	 */
 	lastPromptAt?: string,
+	/**
+	 * The run that launched it (0041), from `thread/start`'s `parent`. Absent for a thread the
+	 * user started, and once the parent is deleted.
+	 */
+	parent?: RunId,
+	/**
+	 * The run and turn it was forked from (0041). Absent once that run is deleted.
+	 */
+	forkedFrom?: ForkedFrom,
+	/**
+	 * Its title (0041). Absent leaves it to the client, which shows its prompt's first line.
+	 */
+	title?: string,
+	/**
+	 * Whether the user or an agent marked it settled: nothing left to do (0041).
+	 */
+	settled?: boolean,
+};
+
+/**
+ * Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
+ */
+export type ForkedFrom = {
+	/**
+	 * The run it was forked from.
+	 */
+	run: RunId,
+	/**
+	 * The turn of that run it was forked at.
+	 */
+	turn: TurnId,
 };
 
 /**
@@ -2234,7 +2884,7 @@ export type AgentFileParams = {
  *
  * A newer client may send a side this version does not know; plxd refuses it.
  */
-export type AgentFileSide = "base" | "head";
+export type AgentFileSide = "base" | "head" | "working";
 
 /**
  * Result of `agent/file`.
@@ -2249,9 +2899,9 @@ export type AgentFileResult = {
 	 */
 	side: AgentFileSide,
 	/**
-	 * The commit it was read from.
+	 * The commit it was read from. Absent for the `working` side.
 	 */
-	commit: string,
+	commit?: string,
 	/**
 	 * Whether the file exists on that side. An added file has no base side, and a deleted file
 	 * no head side.
@@ -2272,6 +2922,61 @@ export type AgentFileResult = {
 	 */
 	tooLarge: boolean,
 };
+
+/**
+ * Params of `agent/files` (RYA-296): one folder of a run's worktree, or for a Current checkout
+ * thread, its repository's checkout.
+ */
+export type AgentFilesParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The folder, relative to the run's folder, by `agent/file`'s path rules. Absent means the
+	 * run's folder itself.
+	 */
+	path?: string,
+};
+
+/**
+ * Result of `agent/files`.
+ */
+export type AgentFilesResult = {
+	/**
+	 * The folder's entries by name, without `.git` or anything git ignores.
+	 */
+	entries: Array<AgentEntry>,
+	/**
+	 * Whether `entries` was cut short because the folder holds more than one answer lists.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * One entry of a folder, from `agent/files`.
+ */
+export type AgentEntry = {
+	/**
+	 * Its name in the folder.
+	 */
+	name: string,
+	/**
+	 * What it is.
+	 */
+	kind: AgentEntryKind,
+	/**
+	 * Its size in bytes, for a file.
+	 */
+	size?: number,
+};
+
+/**
+ * What a folder entry is. Symlinks are never followed.
+ *
+ * A newer plxd may send a kind this version does not know; treat it as a file.
+ */
+export type AgentEntryKind = "file" | "dir" | "symlink";
 
 /**
  * Params of `agent/accept`.
@@ -2346,7 +3051,8 @@ export type AgentRequestChangesParams = {
 export type AgentOpenPrParams = {
 	/**
 	 * The run. It must have finished, have a commit, and work in a repository: a thread with no
-	 * repo has no `origin`.
+	 * repo has no `origin`. A Current checkout thread instead pushes the branch its checkout has
+	 * out (RYA-298), and needs one: not a detached HEAD.
 	 */
 	runId: RunId,
 	/**
@@ -2368,6 +3074,67 @@ export type AgentOpenPrResult = {
 	 * The pull request's web URL.
 	 */
 	url: string,
+};
+
+/**
+ * Params of `agent/gitStatus`.
+ */
+export type AgentGitStatusParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * The git state of a run's folder: the result of `agent/gitStatus`, and of `agent/commit` and
+ * `agent/push` after they ran.
+ */
+export type GitStatus = {
+	/**
+	 * The branch checked out, or null on a detached HEAD.
+	 */
+	branch: string | null,
+	/**
+	 * How many paths have uncommitted changes, untracked ones included.
+	 */
+	changes: number,
+	/**
+	 * The branch's upstream, such as `origin/main`, or null when it has none.
+	 */
+	upstream: string | null,
+	/**
+	 * Commits not on the upstream, or with no upstream, not on any of `origin`'s branches.
+	 */
+	ahead: number,
+	/**
+	 * Whether the repository has an `origin` remote to push to.
+	 */
+	origin: boolean,
+};
+
+/**
+ * Params of `agent/commit`.
+ */
+export type AgentCommitParams = {
+	/**
+	 * The run. It must not be running.
+	 */
+	runId: RunId,
+	/**
+	 * The commit message, at most 64 KiB, not blank.
+	 */
+	message: string,
+};
+
+/**
+ * Params of `agent/push`.
+ */
+export type AgentPushParams = {
+	/**
+	 * The run. It must not be running, and its folder must have a branch checked out.
+	 */
+	runId: RunId,
 };
 
 /**
@@ -2491,7 +3258,8 @@ export type RepoAddResult = {
 
 /**
  * Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
- * starts a worker, with the same sandbox (0013).
+ * starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
+ * worker sandbox (0034); without it, it keeps the worker's sandbox (0013).
  *
  * Idempotent on `runId`: the same id with the same params returns the run; with different
  * params it fails with `idConflict`.
@@ -2506,6 +3274,16 @@ export type ThreadStartParams = {
 	 * of its own.
 	 */
 	repo?: RepoId,
+	/**
+	 * The run that launches it, recorded as its parent (0041). It must exist, or the start fails
+	 * with `runNotFound`. Behind `threadLineage`.
+	 */
+	parent?: RunId,
+	/**
+	 * Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
+	 * conflict, since the title can change. Behind `threadLineage`.
+	 */
+	title?: string,
 	/**
 	 * The first message.
 	 */
@@ -2523,9 +3301,17 @@ export type ThreadStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * How the agent may act inside its sandbox, as `agent/start` takes it.
+	 * Claude Code's permission mode for the agent, as `agent/start` takes it.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * The context window in tokens, as `agent/start` takes it.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `agent/start` takes it.
+	 */
+	fast?: boolean,
 	/**
 	 * Names the worktree's branch `parallax/<branchSlug>`: lowercase letters, digits, and hyphens,
 	 * no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
@@ -2548,6 +3334,24 @@ export type ThreadStartParams = {
 	 * make a worktree.
 	 */
 	checkout?: boolean,
+	/**
+	 * The ref the new worktree starts from, such as `develop` or `origin/develop`. Absent means
+	 * the repo's `HEAD`. Not with `checkout`. Behind the `repoRefs` capability, like
+	 * `checkoutRef`. Not part of what makes a retry with the same run id conflict.
+	 */
+	base?: string,
+	/**
+	 * With `checkout`, the branch to switch the checkout to before the agent starts, as
+	 * `git switch` does: a remote-tracking ref such as `origin/foo` switches to the local `foo`,
+	 * made to track it if missing. Never forced: when git refuses, such as over local changes
+	 * it would overwrite, the start fails with git's reason. Absent switches nothing. Not part of
+	 * what makes a retry with the same run id conflict, and a retry switches nothing.
+	 */
+	checkoutRef?: string,
+	/**
+	 * Threads attached to the first message as context, as `agent/start` takes them.
+	 */
+	threads?: Array<RunId>,
 };
 
 /**
@@ -2562,6 +3366,45 @@ export type ThreadStartResult = {
 	 * Its run, as it stands.
 	 */
 	run: AgentRun,
+};
+
+/**
+ * Params of `thread/fork`: a new thread that continues thread `runId`'s conversation from one of
+ * its turns, behind the `threadFork` capability (0050). The fork has no CLI until its first
+ * `agent/send`. Its transcript starts with the parent's up to the end of that turn.
+ *
+ * It works where the parent does: a new worktree cut from the parent's latest commit, the same
+ * checkout for a Current checkout thread, or a scratch repository of its own, holding the
+ * parent's latest commit, for a thread with no repo.
+ *
+ * Idempotent on `newRunId`: a retry returns the fork, and a run id that is taken by anything
+ * else fails with `idConflict`. Fails with `threadNotFound` for an unknown parent, and with
+ * `invalidParams` for a turn the parent didn't record or one it is still running. A fork's
+ * copied turns aren't its own: they are part of its prompt's turn, and forking at one of their
+ * ids fails.
+ */
+export type ThreadForkParams = {
+	/**
+	 * The thread to fork.
+	 */
+	runId: RunId,
+	/**
+	 * The fork's run id, a version 7 UUID generated by the client.
+	 */
+	newRunId: RunId,
+	/**
+	 * The turn to fork at: a follow-up's turn id, or the parent's run id for its prompt's turn.
+	 * Absent means its latest turn.
+	 */
+	turnId?: TurnId,
+	/**
+	 * The account to run on. Absent means the one the parent's session is on.
+	 */
+	account?: AccountChoice,
+	/**
+	 * The model. Absent means the parent's, when the fork runs on the parent's backend.
+	 */
+	model?: string,
 };
 
 /**
@@ -2590,7 +3433,8 @@ export type ThreadArchiveResult = {
 
 /**
  * Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
- * `threadAttention` capability.
+ * `threadAttention` capability, or sets its title or settled flag (0041), behind
+ * `threadLineage`.
  *
  * `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
  * past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
@@ -2609,6 +3453,15 @@ export type ThreadUpdateParams = {
 	 * Snoozes it until this time, in RFC 3339 UTC.
 	 */
 	snoozedUntil?: string,
+	/**
+	 * Its new title, trimmed. Empty clears it. At most [`MAX_THREAD_TITLE_BYTES`] bytes, or it
+	 * fails with `invalidParams`.
+	 */
+	title?: string,
+	/**
+	 * True to mark it settled, false to clear that.
+	 */
+	settled?: boolean,
 };
 
 /**
@@ -2706,7 +3559,7 @@ export type ProjectStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * The permission mode, as `agent/start`'s (RYA-188). Absent means the backend's default.
+	 * Ignored: the coordinator runs in the project's permission mode (0042).
 	 */
 	permission?: AgentPermission,
 	/**
@@ -2722,11 +3575,11 @@ export type ProjectStartParams = {
 
 /**
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
- * capability (RYA-227, 0032).
+ * capability (RYA-227, 0032), or its permission mode, behind `projectPermission` (0042).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
- * `project/create`'s rules, and the repository can't change. A rename or a new icon is not
- * activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
+ * `project/create`'s rules, and the repository can't change. A rename, a new icon, or a new mode
+ * is not activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
  * A change appends `project.updated`; an update that changes nothing appends no event.
  */
 export type ProjectUpdateParams = {
@@ -2742,6 +3595,11 @@ export type ProjectUpdateParams = {
 	 * The new icon. Absent keeps the icon, and so does `null`: an icon can't be removed (0032).
 	 */
 	icon?: ProjectIcon,
+	/**
+	 * The new permission mode. Absent keeps the mode. Each run in the project starts its next
+	 * CLI process in it, and a running CLI keeps its mode until it exits.
+	 */
+	permission?: ProjectPermission,
 };
 
 /**
@@ -2753,6 +3611,675 @@ export type ProjectUpdateResult = {
 	 */
 	project: Project,
 };
+
+/**
+ * Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an
+ * unknown entry.
+ */
+export type RepoRefsParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Result of `repo/refs`.
+ */
+export type RepoRefsResult = {
+	/**
+	 * Its local and remote-tracking branches, `origin/HEAD` left out: the default branch first,
+	 * then the most recently committed first.
+	 */
+	refs: Array<RepoRef>,
+};
+
+/**
+ * A branch in a repository, as `repo/refs` lists it.
+ */
+export type RepoRef = {
+	/**
+	 * Its short name: `develop`, or `origin/develop` for a remote-tracking branch.
+	 */
+	name: string,
+	/**
+	 * True for a remote-tracking branch.
+	 */
+	remote?: boolean,
+	/**
+	 * True for the default branch `origin/HEAD` names: its local branch, or the remote-tracking
+	 * one when there is no local one.
+	 */
+	default?: boolean,
+	/**
+	 * True for the branch the repository's checkout has out.
+	 */
+	current?: boolean,
+	/**
+	 * True for a branch checked out in another worktree, a thread's included, which the checkout
+	 * can't switch to.
+	 */
+	worktree?: boolean,
+};
+
+/**
+ * Params of `pr/view`, of `pr/diff`, and of `pr/link` and `pr/unlink`.
+ */
+export type PrViewParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's web URL, as the run's `pullRequests` lists it.
+	 */
+	url: string,
+};
+
+/**
+ * A pull request as GitHub has it now: the result of `pr/view` and `pr/act`.
+ */
+export type PullRequest = {
+	/**
+	 * Its number in its repository.
+	 */
+	number: number,
+	/**
+	 * Its title.
+	 */
+	title: string,
+	/**
+	 * Its web URL.
+	 */
+	url: string,
+	/**
+	 * Its repository, as `owner/name`.
+	 */
+	repo: string,
+	/**
+	 * Where it is.
+	 */
+	state: PrState,
+	/**
+	 * Whether it is a draft.
+	 */
+	draft: boolean,
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * When it last changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+	/**
+	 * The branch it merges into.
+	 */
+	baseBranch: string,
+	/**
+	 * The branch it merges from.
+	 */
+	headBranch: string,
+	/**
+	 * Files changed.
+	 */
+	changedFiles: number,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
+	/**
+	 * Its description, in Markdown.
+	 */
+	body: string,
+	/**
+	 * Its comments and the text of its reviews, oldest first.
+	 */
+	comments: Array<PrComment>,
+	/**
+	 * Who is asked to review it: users' logins and teams' names.
+	 */
+	reviewRequests: Array<string>,
+	/**
+	 * Its labels' names.
+	 */
+	labels: Array<string>,
+	/**
+	 * The checks on its head commit.
+	 */
+	checks: Array<PrCheck>,
+	/**
+	 * All its checks together: failed if any failed, else pending if any is, else passed.
+	 * Absent when it has none.
+	 */
+	checksState?: PrCheckState,
+	/**
+	 * When it was opened, in RFC 3339 UTC. Absent from a plxd without `prDiff`.
+	 */
+	createdAt?: string,
+	/**
+	 * When it was closed or merged, in RFC 3339 UTC. Absent while it is open.
+	 */
+	closedAt?: string,
+	/**
+	 * When it was merged, in RFC 3339 UTC. Absent unless it is merged.
+	 */
+	mergedAt?: string,
+	/**
+	 * Who merged it. Absent unless it is merged.
+	 */
+	mergedBy?: string,
+	/**
+	 * Its commits, oldest first. Absent means none, or a plxd without `prDiff`.
+	 */
+	commits?: Array<PrCommit>,
+	/**
+	 * Its submitted reviews, oldest first. Absent means none, or a plxd without `prDiff`.
+	 */
+	reviews?: Array<PrReview>,
+	/**
+	 * Whether it can merge. Absent while GitHub is still working it out.
+	 */
+	mergeState?: PrMergeState,
+	/**
+	 * How it merges once its requirements pass, when auto-merge is on. Absent means off.
+	 */
+	autoMerge?: PrMergeMethod,
+};
+
+/**
+ * One check on a pull request's head commit: a GitHub Actions job or another CI's status.
+ */
+export type PrCheck = {
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Where it is.
+	 */
+	state: PrCheckState,
+	/**
+	 * How it ended, as GitHub says it in lowercase, such as `success`, `failure`, or
+	 * `timed_out`. Absent while it is pending.
+	 */
+	conclusion?: string,
+	/**
+	 * Its page, when it has one.
+	 */
+	url?: string,
+};
+
+/**
+ * Where a check is, or all of a pull request's checks together.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrCheckState = "pending" | "passed" | "failed" | "skipped";
+
+/**
+ * A comment on a pull request, or a review's text.
+ */
+export type PrComment = {
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * Its Markdown.
+	 */
+	body: string,
+	/**
+	 * When it was written, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * A commit on a pull request.
+ */
+export type PrCommit = {
+	/**
+	 * Its full hash.
+	 */
+	oid: string,
+	/**
+	 * Its message's first line.
+	 */
+	headline: string,
+	/**
+	 * Its first author's login, or name when they have no GitHub account.
+	 */
+	author: string,
+	/**
+	 * When it was committed, in RFC 3339 UTC.
+	 */
+	committedAt: string,
+};
+
+/**
+ * How a pull request merges.
+ *
+ * A newer plxd may send a method this version does not know; treat it as unknown.
+ */
+export type PrMergeMethod = "merge" | "squash" | "rebase";
+
+/**
+ * Whether a pull request can merge, as GitHub's `mergeStateStatus` says.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrMergeState = "clean" | "unstable" | "hasHooks" | "behind" | "blocked" | "dirty" | "draft";
+
+/**
+ * A submitted review: who, what verdict, and when. Its text, if any, is also in `comments`.
+ */
+export type PrReview = {
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * Its verdict.
+	 */
+	state: PrReviewState,
+	/**
+	 * When it was submitted, in RFC 3339 UTC.
+	 */
+	submittedAt: string,
+};
+
+/**
+ * A review's verdict.
+ *
+ * A newer plxd may send a verdict this version does not know; treat it as unknown.
+ */
+export type PrReviewState = "approved" | "changesRequested" | "commented" | "dismissed";
+
+/**
+ * Where a pull request is.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrState = "open" | "closed" | "merged";
+
+/**
+ * Params of `pr/act`.
+ */
+export type PrActParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's web URL, as the run's `pullRequests` lists it.
+	 */
+	url: string,
+	/**
+	 * What to do.
+	 */
+	action: PrAction,
+};
+
+/**
+ * What `pr/act` does to a pull request.
+ *
+ * A newer client may send an action this version does not know; plxd refuses it.
+ */
+export type PrAction = "merge" | "squash" | "autoMerge" | "disableAutoMerge" | "draft" | "ready" | "close";
+
+/**
+ * Result of `pr/diff`: a pull request's changes as one unified diff, as `gh pr diff` prints it.
+ */
+export type PrDiffResult = {
+	/**
+	 * Its unified diff, a `diff --git` section per file.
+	 */
+	diff: string,
+	/**
+	 * Whether `diff` was cut short, at a line's end, at plxd's size cap.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * Params of `project/delete`: deletes a project with its coordinator and every run in it, their
+ * stored events, sent turns, images, worktrees, and branches, and its shared context folder,
+ * behind the `projectDelete` capability (PLX-338).
+ *
+ * Running CLIs are cancelled first, and the delete answers once they have exited and the
+ * project is gone, after appending `project.deleted`. Deleting a project that doesn't exist, or
+ * a repo entry's id, fails with `projectNotFound`.
+ */
+export type ProjectDeleteParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Result of `project/delete`.
+ */
+export type ProjectDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `agent/commands`: lists what a thread on `backend` takes as a command, by asking the
+ * CLI itself, started as a thread on the user's own login would be. Fails with an internal error
+ * when the CLI can't start or doesn't answer in time.
+ */
+export type AgentCommandsParams = {
+	/**
+	 * The backend, such as `claude`, `codex`, or `cursor`.
+	 */
+	backend: string,
+	/**
+	 * The repo entry whose checkout the CLI runs in, without `runId`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The run whose folder the CLI runs in.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `agent/commands`.
+ */
+export type AgentCommandsResult = {
+	/**
+	 * In the CLI's own order. Empty for a backend that lists none.
+	 */
+	commands: Array<AgentCommand>,
+};
+
+/**
+ * One command or skill a CLI takes in a message.
+ */
+export type AgentCommand = {
+	/**
+	 * What goes in the message to run it: `/name` for Claude Code and Cursor, `$name` for Codex.
+	 */
+	text: string,
+	/**
+	 * Its name, without the `/` or `$`.
+	 */
+	name: string,
+	/**
+	 * What it does, possibly empty.
+	 */
+	description: string,
+	/**
+	 * What its arguments look like, such as `[lite|full|ultra]`.
+	 */
+	argumentHint?: string,
+};
+
+/**
+ * Params of `repo/files`: a thread's tracked and untracked files that git doesn't ignore, from
+ * the run's folder, else the repo entry's checkout. Fails with `worktreeFailed` when git fails
+ * there, such as outside a repository.
+ */
+export type RepoFilesParams = {
+	/**
+	 * The repo entry, without `runId`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The run.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `repo/files`.
+ */
+export type RepoFilesResult = {
+	/**
+	 * Paths relative to the folder, with `/` separators, in git's order, up to a cap.
+	 */
+	files: Array<string>,
+	/**
+	 * Whether there were more than the cap.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * Params of `github/status`.
+ */
+export type GithubStatusParams = Record<symbol, never>;
+
+/**
+ * The GitHub CLI (`gh`) on the host: the result of `github/status`.
+ *
+ * Every field but `installed` and `checkedAt` is best-effort: a field plxd could not read is
+ * absent rather than a guess.
+ */
+export type GithubStatus = {
+	/**
+	 * Whether `gh` resolves on the `PATH` plxd itself uses (#96).
+	 */
+	installed: boolean,
+	/**
+	 * Its version, such as `2.100.0`, from `gh --version`.
+	 */
+	version?: string,
+	/**
+	 * Whether `gh` is signed in to github.com. Absent when installed but plxd could not tell (a
+	 * timeout, or an exit code `gh auth status` doesn't use).
+	 */
+	signedIn?: boolean,
+	/**
+	 * The signed-in github.com login, when `gh auth status` names it.
+	 */
+	account?: string,
+	/**
+	 * Why a field above is missing, such as `"timed out after 5s"`. Never set on a clean read.
+	 */
+	note?: string,
+	/**
+	 * Whether the `gh` in use is the copy `github/install` put in plxd's data folder, rather than
+	 * one the user installed (PLX-423).
+	 */
+	managed?: boolean,
+	/**
+	 * Whether `github/install` is downloading and unpacking `gh` now.
+	 */
+	installing?: boolean,
+	/**
+	 * The sign-in `github/signIn` started, until `gh auth login` exits and `gh auth setup-git`
+	 * has run after it.
+	 */
+	signingIn?: GithubSignIn,
+	/**
+	 * What went wrong with the last install or sign-in plxd ran: why it failed, or why `gh auth
+	 * setup-git` failed after a sign-in that worked. Cleared when the next one starts.
+	 */
+	setupNote?: string,
+	/**
+	 * When plxd read this.
+	 */
+	checkedAt: string,
+};
+
+/**
+ * A pending `gh auth login`: the one-time code to enter on GitHub's device page. The result of
+ * `github/signIn`.
+ */
+export type GithubSignIn = {
+	/**
+	 * The one-time code, such as `AA17-58F5`.
+	 */
+	code: string,
+	/**
+	 * The page to enter it on, `https://github.com/login/device`.
+	 */
+	url: string,
+	/**
+	 * When plxd stops waiting: GitHub's device codes last 15 minutes.
+	 */
+	expiresAt: string,
+};
+
+/**
+ * Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
+ * behind the `threadContext` capability.
+ *
+ * Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the
+ * agent's replies, but not its tool calls. Case-insensitive for ASCII letters. An empty query
+ * fails with `invalidParams`.
+ */
+export type ThreadSearchParams = {
+	/**
+	 * The text to find.
+	 */
+	query: string,
+	/**
+	 * The most threads to return: 20 by default, and at most 100.
+	 */
+	limit?: number,
+};
+
+/**
+ * Result of `thread/search`.
+ */
+export type ThreadSearchResult = {
+	/**
+	 * The matching threads, the one with the newest message first.
+	 */
+	threads: Array<Thread>,
+};
+
+/**
+ * Params of `agent/resumeNow`: resumes a `waiting` run now instead of at its `resumeAt`, with
+ * the same message the timer sends (decision 0049). Fails with `runNotResumable` for a run that
+ * isn't waiting.
+ */
+export type AgentResumeNowParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Params of `agent/autoResume`: sets or clears a run's auto-resume override (decision 0049).
+ * Turning it off for a `waiting` run clears its timer, and the run becomes `failed` with its
+ * usage limit's error.
+ */
+export type AgentAutoResumeParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * On or off for this run. Absent clears the override, so the host's setting applies.
+	 */
+	autoResume?: boolean,
+};
+
+/**
+ * Params of `host/settings/get`.
+ */
+export type HostSettingsGetParams = Record<symbol, never>;
+
+/**
+ * This host's settings, the result of `host/settings/get` and `host/settings/set`.
+ */
+export type HostSettings = {
+	/**
+	 * Whether a run a usage limit stopped waits for the limit to reset and then resumes
+	 * (PLX-371, decision 0049). On by default. A run's own `autoResume` overrides it. Turning it
+	 * off stops a waiting run from resuming when its timer fires.
+	 */
+	autoResume: boolean,
+};
+
+/**
+ * Params of `host/settings/set`: changes the settings it names and leaves the rest.
+ */
+export type HostSettingsSetParams = {
+	/**
+	 * The new `autoResume`. Absent leaves it.
+	 */
+	autoResume?: boolean,
+};
+
+/**
+ * Params of `inbox/list`. Fails with `projectNotFound` for an unknown project.
+ */
+export type InboxListParams = {
+	/**
+	 * The Project.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Result of `inbox/list`.
+ */
+export type InboxListResult = {
+	/**
+	 * Every item, oldest first.
+	 */
+	items: Array<InboxItem>,
+	/**
+	 * The `seq` of the last event the list reflects. Subscribe to the Project's events with
+	 * `after` set to it for the items added since.
+	 */
+	seq: number,
+};
+
+/**
+ * Params of `inbox/seen`: marks items seen at plxd's clock now. An item already seen keeps its
+ * first `seenAt`, and ids not in the Project's inbox are skipped. Fails with `projectNotFound`
+ * for an unknown project.
+ */
+export type InboxSeenParams = {
+	/**
+	 * The Project.
+	 */
+	project: ProjectId,
+	/**
+	 * The items to mark.
+	 */
+	items: Array<InboxItemId>,
+};
+
+/**
+ * Result of `inbox/seen`.
+ */
+export type InboxSeenResult = {
+	/**
+	 * The marked items as they stand, oldest first.
+	 */
+	items: Array<InboxItem>,
+};
+
+/**
+ * Params of `github/install`.
+ */
+export type GithubInstallParams = Record<symbol, never>;
+
+/**
+ * Params of `github/signIn`.
+ */
+export type GithubSignInParams = Record<symbol, never>;
+
+/**
+ * Params of `github/signInCancel`.
+ */
+export type GithubSignInCancelParams = Record<symbol, never>;
+
+/**
+ * Result of `github/signInCancel`.
+ */
+export type GithubSignInCancelResult = Record<symbol, never>;
 
 /**
  * Params of `$/cancelRequest`.
@@ -2816,7 +4343,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

@@ -71,8 +71,12 @@ fn request(cwd: &Path) -> RunRequest {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         coordinator_tools: None,
+        thread_tools: None,
         approvals: false,
+        thread: false,
     }
 }
 
@@ -554,6 +558,7 @@ async fn a_resumed_session_reports_only_its_own_usage() {
     resumed.resume = Some(Resume {
         session_id: "fresh-usage".into(),
         usage_totals: vec![opus(1000)],
+        fork: false,
     });
     let mut events = launch(&backend, resumed).await.events;
     let all = rest(&mut events).await;

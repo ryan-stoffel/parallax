@@ -6,7 +6,7 @@
 
 <!-- What this PR does about it. -->
 
-Linear: https://linear.app/ryanstoffel/issue/RYA-
+Linear: https://linear.app/ryanstoffel/issue/PLX-
 
 ## Acceptance criteria
 

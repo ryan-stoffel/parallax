@@ -48,7 +48,8 @@ pub enum ErrorKind {
     /// versions. `project/start` fails with it too when the account's backend can't coordinate.
     WorkerUnavailable,
     /// plxd could not create the run's worktree, for example because the project's repository
-    /// has uncommitted changes. The message says what to do.
+    /// has uncommitted changes, or read the git state of the run's folder (RYA-298). The message
+    /// says what to do.
     WorktreeFailed,
     /// The run was accepted (#157): its worktree and branch are gone, so there is nothing left to
     /// review, and it takes no more messages.
@@ -69,9 +70,10 @@ pub enum ErrorKind {
     /// A run named no account, and its role has no default (0012). Set one with
     /// `accounts/defaults/set`, then retry with the same run id.
     NoDefaultAccount,
-    /// The run's backend can't honor a `model`, `effort`, or `permission` that `agent/start` or
-    /// `thread/start` asked for, or the model's name can't be passed to its CLI (RYA-97). Nothing
-    /// was created. The message names the option, the value, and the backend.
+    /// The run's backend can't honor a `model`, `effort`, `permission`, `contextWindow`, or
+    /// `fast` that `agent/start` or `thread/start` asked for, or the model's name can't be passed
+    /// to its CLI (RYA-97). Nothing was created. The message names the option, the value, and the
+    /// backend.
     UnsupportedOption,
     /// `agent/openPr` refused before pushing anything: the run is still running, it has no commit
     /// beyond its base, or it is a thread with no repo, which has no `origin` (RYA-168).
@@ -80,20 +82,32 @@ pub enum ErrorKind {
     /// failed. The message carries git's stderr.
     PushFailed,
     /// `gh` isn't installed on the host, or isn't signed in. The message says which, with gh's
-    /// stderr. The branch was pushed first.
+    /// stderr. For `agent/openPr`, the branch was pushed first.
     GhUnavailable,
     /// `gh` could not find or open the pull request, for example because `origin` isn't a GitHub
-    /// repository. The message carries gh's stderr. The branch was pushed first.
+    /// repository, or `pr/view` or `pr/act` failed, as for a merge GitHub refuses (PLX-318). The
+    /// message carries gh's stderr. For `agent/openPr`, the branch was pushed first.
     PrFailed,
     /// An image in `images` is over the per-image cap, or a message's images are over the
     /// per-message cap or count, which `promptImages`' options give (RYA-191). The message says
-    /// which. Nothing was sent.
+    /// which. Nothing was sent. `project/create`, `project/update`, and `repo/update` also return
+    /// it when `icon.image` is over `iconImages`' `maxBytes` (PLX-339, 0038); nothing changed.
     ImageTooLarge,
     /// No image of the run has the given id (RYA-191).
     ImageNotFound,
     /// The run has no permission request with the given id, as a run started without
     /// `approvals` never has, or none this plxd has seen since it started (RYA-222).
     ApprovalNotFound,
+    /// `agent/commit` or `agent/push` refused with nothing changed (RYA-298): the run is still
+    /// running, there is nothing to commit, or its folder has a detached HEAD, with no branch to
+    /// push. The message says which.
+    GitRefused,
+    /// `agent/commit`'s git failed, such as for a missing `user.name`. The message carries git's
+    /// stderr.
+    CommitFailed,
+    /// `github/install` refused because a `gh` is already on the host, or `github/signIn` could
+    /// not start `gh auth login` or read its one-time code (PLX-423). The message says why.
+    GithubSetupFailed,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -204,6 +218,9 @@ mod tests {
             (ErrorKind::PushFailed, "pushFailed"),
             (ErrorKind::GhUnavailable, "ghUnavailable"),
             (ErrorKind::PrFailed, "prFailed"),
+            (ErrorKind::GitRefused, "gitRefused"),
+            (ErrorKind::CommitFailed, "commitFailed"),
+            (ErrorKind::GithubSetupFailed, "githubSetupFailed"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

@@ -164,7 +164,7 @@ fn status_spec(launcher: &Launcher, claude: &str) -> ProcessSpec {
 
 /// Runs `spec`, a [`status_spec`], and reads its output as [`check_scrub_flag`] describes.
 async fn read_status(launcher: &Launcher, spec: &ProcessSpec) -> Result<(), String> {
-    let ran = run_spec(launcher, spec, PROBE_TIMEOUT)
+    let ran = run_spec(launcher, spec, b"", PROBE_TIMEOUT)
         .await
         .map_err(|error| format!("`claude sandbox status` failed ({error}), {CANT_TELL}"))?;
     if ran.exit_code != Some(0) {
@@ -499,8 +499,12 @@ fi"#;
             model: None,
             effort: None,
             permission: None,
+            context_window: None,
+            fast: None,
             coordinator_tools: None,
+            thread_tools: None,
             approvals: false,
+            thread: false,
         };
         let mut started = backend.start(request).unwrap();
         loop {

@@ -23,7 +23,10 @@ export interface ThreadsState {
   projects: Project[];
   repos: Repo[];
   threads: Thread[];
-  /** By run id: the first line of the run's prompt, since a thread has no title of its own. */
+  /**
+   * By run id: a thread's own title from plxd (0041), or else its run's (`titleOf`). Runs with no
+   * thread, such as a Project's, have their run's.
+   */
   titles: Readonly<Record<string, string>>;
   /** By run id: each run, kept current by its repo's or Project's own events. */
   runs: Readonly<Record<string, AgentRun>>;
@@ -63,14 +66,14 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         projects: action.projects,
         repos: action.repos,
         threads: action.threads,
-        titles: titlesOf(action.runs),
+        titles: withThreadTitles(titlesOf(action.runs), action.threads),
         runs: byId(action.runs),
         approvals: {},
       };
     case "runs":
       return {
         ...state,
-        titles: { ...state.titles, ...titlesOf(action.runs) },
+        titles: withThreadTitles({ ...state.titles, ...titlesOf(action.runs) }, state.threads),
         runs: { ...state.runs, ...byId(action.runs) },
       };
     case "coordinator":
@@ -99,7 +102,9 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
       return {
         ...state,
         runs,
-        titles: started.length ? { ...state.titles, ...titlesOf(started) } : state.titles,
+        titles: started.length
+          ? withThreadTitles({ ...state.titles, ...titlesOf(started) }, state.threads)
+          : state.titles,
         approvals,
       };
     }
@@ -111,12 +116,28 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         case "project.created":
         case "project.updated":
           return { ...state, projects: upsert(state.projects, e.project) };
+        case "project.deleted":
+          return {
+            ...state,
+            projects: state.projects.filter((p) => p.id !== e.project),
+            runs: Object.fromEntries(
+              Object.entries(state.runs).filter(([, r]) => r.project !== e.project),
+            ),
+          };
         case "repo.added":
         case "repo.updated":
           return { ...state, repos: upsert(state.repos, e.repo) };
         case "thread.started":
-        case "thread.updated":
-          return { ...state, threads: upsert(state.threads, e.thread) };
+        case "thread.updated": {
+          const run = state.runs[e.thread.id];
+          // A cleared title falls back to its run's.
+          const title = e.thread.title ?? (run && titleOf(run));
+          return {
+            ...state,
+            threads: upsert(state.threads, e.thread),
+            titles: title ? { ...state.titles, [e.thread.id]: title } : state.titles,
+          };
+        }
         case "thread.deleted":
           return { ...state, threads: state.threads.filter((t) => t.id !== e.runId) };
         default:
@@ -140,17 +161,24 @@ function titlesOf(runs: AgentRun[]): Record<string, string> {
   return Object.fromEntries(runs.map((r) => [r.id, titleOf(r)]));
 }
 
+/** `titles` with each of `threads`' own title (0041) over its run's. */
+function withThreadTitles(titles: Record<string, string>, threads: Thread[]) {
+  for (const t of threads) if (t.title) titles[t.id] = t.title;
+  return titles;
+}
+
 /**
- * A run's title: its thread's generated title, or else its prompt's first line, or "Image" for a
- * prompt of images alone.
+ * A run's title: the generated title this app kept for it, or else its prompt's first line, or
+ * "Image" for a prompt of images alone. A thread's own title from plxd comes first (`titles`).
  */
 export function titleOf(run: AgentRun): string {
   return readTitle(run.id) ?? (run.prompt.trim().split("\n")[0] || "Image");
 }
 
-// A thread's generated title, kept in this app: plxd has no title of its own. Run ids are unique
-// across hosts. ponytail: not shared with other computers running the app, or with a cleared
-// browser profile; both fall back to the prompt's first line.
+// A thread's generated title, kept in this app for a plxd without `threadLineage`, which keeps no
+// title. A lineage host gets it with `thread/start`, and `useThreads` moves any kept here to it.
+// Run ids are unique across hosts. ponytail: not shared with other computers running the app, or
+// with a cleared browser profile; both fall back to the prompt's first line.
 const titleKey = (runId: string) => `parallax:title:${runId}`;
 
 function readTitle(runId: string): string | undefined {
@@ -166,6 +194,14 @@ function saveTitle(runId: string, title: string) {
     localStorage.setItem(titleKey(runId), title);
   } catch {
     // Storage is off: the thread keeps its prompt as its title.
+  }
+}
+
+function forgetTitle(runId: string) {
+  try {
+    localStorage.removeItem(titleKey(runId));
+  } catch {
+    // Storage is off, so nothing was kept.
   }
 }
 
@@ -203,6 +239,44 @@ export function groupThreads({ repos, threads }: ThreadsState): {
 export const groupOf = (state: ThreadsState, thread: Thread) =>
   state.repos.some((r) => r.id === thread.repo && !r.scratch) ? thread.repo : noRepo;
 
+/** A thread's parent thread (0041), if it's listed. A Project coordinator's run is no thread. */
+export const parentOf = (state: ThreadsState, thread: Thread) =>
+  thread.parent === undefined ? undefined : state.threads.find((t) => t.id === thread.parent);
+
+/** The threads `id` launched, oldest first, so their order holds as they start. */
+export const childrenOf = (state: ThreadsState, id: string) =>
+  state.threads
+    .filter((t) => t.parent === id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+/**
+ * What the top bar shows of a thread's lineage: with children, the thread and them; else, as a
+ * child, its parent and its unarchived siblings, itself included. Undefined for neither.
+ * `parent` is the crumb before the chips.
+ */
+export function lineageOf(
+  state: ThreadsState,
+  thread: Thread,
+): { parent?: Thread; chips: Thread[]; active?: string } | undefined {
+  const parent = parentOf(state, thread);
+  const children = childrenOf(state, thread.id).filter((t) => !t.archived);
+  if (children.length > 0) return { parent, chips: children };
+  if (!parent) return undefined;
+  const chips = childrenOf(state, parent.id).filter((t) => !t.archived || t.id === thread.id);
+  return { parent, chips, active: thread.id };
+}
+
+/** A thread's topmost listed ancestor, for the whole tree. A loop of parents stops where it repeats. */
+export function rootOf(state: ThreadsState, thread: Thread): Thread {
+  const seen = new Set([thread.id]);
+  let root = thread;
+  for (let up = parentOf(state, root); up && !seen.has(up.id); up = parentOf(state, up)) {
+    seen.add(up.id);
+    root = up;
+  }
+  return root;
+}
+
 export interface ThreadsView {
   state: ThreadsState;
   /** Why the list couldn't load or stopped updating, for people. */
@@ -212,8 +286,10 @@ export interface ThreadsView {
   /**
    * Starts a thread in a group with `prompt` and its `images`, with `options` sent as they are, and
    * its branch and title from `name`. With `checkout`, it works in the repository's own checkout
-   * instead of a new worktree, so it gets no branch. Reuse `runId`, with the same options and
-   * `checkout`, to retry. Resolves to plxd's error, or undefined.
+   * instead of a new worktree, so it gets no branch. `gitRef` is the ref the worktree starts from,
+   * or with `checkout`, the branch the checkout switches to first. `attached` are the run ids of
+   * threads attached to the prompt as context (0047). Reuse `runId`, with the same options,
+   * `checkout`, and `gitRef`, to retry. Resolves to plxd's error, or undefined.
    */
   start: (
     runId: string,
@@ -222,7 +298,9 @@ export interface ThreadsView {
     images: PromptImage[],
     options: RunOptions,
     checkout: boolean,
+    gitRef: string | undefined,
     name?: ThreadName,
+    attached?: string[],
   ) => Promise<RpcError | undefined>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
@@ -242,6 +320,11 @@ export interface ThreadsView {
    */
   updateProject: (project: string, change: ProjectChange) => Promise<string | undefined>;
   /**
+   * Deletes a Project with every run in it, once plxd has stopped them. Resolves to an error
+   * message, or undefined.
+   */
+  removeProject: (project: string) => Promise<string | undefined>;
+  /**
    * Starts a Project's coordinator with `prompt` and its `images`, or starts it over with a new
    * `runId` (0024), then keeps it as the Project's. Reusing `runId` to retry is safe with any
    * prompt or options: a failed `project/start` creates nothing, and one whose answer was lost
@@ -258,6 +341,12 @@ export interface ThreadsView {
   attention: boolean;
   /** Whether the host's plxd renames Projects and sets their icons (`projectEdit`, 0032). */
   editable: boolean;
+  /** Whether the host's plxd deletes Projects (`projectDelete`, PLX-338). */
+  deletable: boolean;
+  /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
+  iconImageBytes?: number;
+  /** Whether the host's plxd keeps threads' parents and titles (`threadLineage`, 0041). */
+  lineage: boolean;
   /**
    * Marks a thread seen, or snoozes it until a time (a past one ends the snooze). Resolves to an
    * error message, or undefined.
@@ -285,12 +374,25 @@ export type CoordinatorOptions = Pick<
  * Project's own events for its runs and their permission requests (0033), starting over on
  * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
  * `approvals`, the threads and coordinators started here forward their permission requests
- * (RYA-196, 0031); `attention` and `editable` are passed through for the sidebar.
+ * (RYA-196, 0031); with `lineage`, a thread's generated title goes to plxd (0041), and titles kept
+ * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`, and
+ * `lineage` are passed through for the sidebar and top bar.
  */
 export function useThreads(
   hostId: string,
   connected: boolean,
-  { approvals = false, attention = false, editable = false } = {},
+  {
+    approvals = false,
+    attention = false,
+    editable = false,
+    deletable = false,
+    iconImageBytes,
+    lineage = false,
+  }: Partial<
+    Pick<ThreadsView, "attention" | "editable" | "deletable" | "iconImageBytes" | "lineage">
+  > & {
+    approvals?: boolean;
+  } = {},
 ): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
@@ -326,6 +428,25 @@ export function useThreads(
       );
     };
 
+    // Titles this app kept before plxd kept them go to plxd, once each, for threads it has none for.
+    async function moveTitles(threads: Thread[]) {
+      for (const t of threads) {
+        const title = t.title ? undefined : readTitle(t.id);
+        if (!title) continue;
+        const answer = await window.parallax.request(hostId, "thread/update", {
+          runId: t.id,
+          title,
+        });
+        if (stopped) return;
+        if ("error" in answer) continue;
+        forgetTitle(t.id);
+        dispatch({
+          type: "event",
+          event: { kind: "thread.updated", thread: answer.result.thread },
+        });
+      }
+    }
+
     async function load() {
       for (const stop of scopes.values()) stop();
       scopes = new Map();
@@ -348,6 +469,7 @@ export function useThreads(
         runs: runs.result.runs,
       });
       setError(undefined);
+      if (lineage) void moveTitles(list.result.threads);
       // Requests from before the list are in the logs of runs that still go. Read first, and
       // only for requests, so they never undo a newer change from the subscriptions below.
       const backlog = await waitingSince(hostId, runs.result.runs, () => stopped);
@@ -386,7 +508,7 @@ export function useThreads(
       unsubscribe();
       for (const stop of scopes.values()) stop();
     };
-  }, [hostId, connected]);
+  }, [hostId, connected, lineage]);
 
   // Each applies its own answer at once; the matching event repeats it harmlessly.
   const addRepo = useCallback(
@@ -408,25 +530,30 @@ export function useThreads(
       images: PromptImage[],
       options: RunOptions,
       checkout: boolean,
+      gitRef: string | undefined,
       name?: ThreadName,
+      attached: string[] = [],
     ) => {
       const answer = await window.parallax.request(hostId, "thread/start", {
         runId,
         prompt,
         ...(images.length > 0 && { images }),
+        ...(attached.length > 0 && { threads: attached }),
         ...(groupId !== noRepo && { repo: groupId }),
         ...options,
         // The checkout keeps its own branch, so a name gives it none.
         ...(checkout ? { checkout } : name?.slug && { branchSlug: name.slug }),
+        ...(gitRef && (checkout ? { checkoutRef: gitRef } : { base: gitRef })),
         ...(approvals && { approvals }),
+        ...(lineage && name?.title && { title: name.title }),
       });
       if ("error" in answer) return answer.error;
-      if (name?.title) saveTitle(runId, name.title);
+      if (!lineage && name?.title) saveTitle(runId, name.title);
       dispatch({ type: "runs", runs: [answer.result.run] });
       dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
       return undefined;
     },
-    [hostId, approvals],
+    [hostId, approvals, lineage],
   );
 
   const archive = useCallback(
@@ -489,6 +616,17 @@ export function useThreads(
     [hostId],
   );
 
+  const removeProject = useCallback(
+    async (project: string) => {
+      const answer = await window.parallax.request(hostId, "project/delete", { project });
+      if ("error" in answer) return describeError(answer.error);
+      if (shown.current === hostId)
+        dispatch({ type: "event", event: { kind: "project.deleted", project } });
+      return undefined;
+    },
+    [hostId],
+  );
+
   const startCoordinator = useCallback(
     async (
       project: string,
@@ -539,6 +677,9 @@ export function useThreads(
       error,
       attention,
       editable,
+      deletable,
+      iconImageBytes,
+      lineage,
       update,
       updateRepo,
       addRepo,
@@ -547,6 +688,7 @@ export function useThreads(
       remove,
       createProject,
       updateProject,
+      removeProject,
       startCoordinator,
     }),
     [
@@ -554,6 +696,9 @@ export function useThreads(
       error,
       attention,
       editable,
+      deletable,
+      iconImageBytes,
+      lineage,
       update,
       updateRepo,
       addRepo,
@@ -562,6 +707,7 @@ export function useThreads(
       remove,
       createProject,
       updateProject,
+      removeProject,
       startCoordinator,
     ],
   );
@@ -596,12 +742,15 @@ export const idleThreads: ThreadsView = {
   state: emptyThreads,
   attention: false,
   editable: false,
+  deletable: false,
+  lineage: false,
   addRepo: async () => notConnected,
   start: async () => ({ code: -32000, message: notConnected }),
   archive: async () => notConnected,
   remove: async () => notConnected,
   createProject: async () => notConnected,
   updateProject: async () => notConnected,
+  removeProject: async () => notConnected,
   startCoordinator: async () => ({ code: -32000, message: notConnected }),
   update: async () => notConnected,
   updateRepo: async () => notConnected,

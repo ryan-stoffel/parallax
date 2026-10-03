@@ -22,8 +22,8 @@ use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend,
     CoordinatorTools, Credential, Decision, Event, EventStream, FailureKind, FollowUp,
     ImageMediaType, LimitStatus, LimitWindow, ModelUsage, Outcome, PromptImage, Resume, RunId,
-    RunRequest, SendError, StartError, Started, TodoItem, TodoStatus, ToolPolicy, ToolStatus,
-    TurnId, Usage, WarningKind, WorkerSandbox,
+    RunRequest, SendError, StartError, Started, ThreadTools, TodoItem, TodoStatus, ToolPolicy,
+    ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
 };
 use crate::mcp;
 use crate::paths::DataDir;
@@ -195,8 +195,12 @@ fn request(cwd: &Path) -> RunRequest {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         coordinator_tools: None,
+        thread_tools: None,
         approvals: false,
+        thread: false,
     }
 }
 
@@ -773,6 +777,59 @@ fn every_run_s_one_settings_keep_its_task_list_its_own() {
     }
 }
 
+/// Fast mode goes in every run's one `--settings`, the only place headless Claude Code takes it.
+#[test]
+fn fast_mode_is_set_in_every_run_s_settings() {
+    let cwd = Path::new("/Users/u/wt");
+    let mut worker = request(cwd);
+    worker.policy = ToolPolicy::WorkspaceWrite;
+    worker.sandbox = Some(worker_sandbox(cwd));
+    let bypass = RunRequest {
+        permission: Some(AgentPermission::Bypass),
+        ..worker.clone()
+    };
+    for base in [request(cwd), worker, bypass, coordinator(cwd)] {
+        for fast in [None, Some(true), Some(false)] {
+            let args: Vec<String> = super::arguments(&RunRequest {
+                fast,
+                ..base.clone()
+            })
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+            let at = args.iter().position(|arg| arg == "--settings").unwrap();
+            let settings: Value = serde_json::from_str(&args[at + 1]).unwrap();
+            assert_eq!(settings.get("fastMode").and_then(Value::as_bool), fast);
+        }
+    }
+}
+
+/// A 200k context window caps a native 1M model with `CLAUDE_CODE_DISABLE_1M_CONTEXT`; 1M is
+/// those models' default, and any other size is refused.
+#[tokio::test]
+async fn a_200k_context_window_disables_1m_context() {
+    let fake = Fake::new("read-only");
+    let cwd = fake.root();
+    let other = RunRequest {
+        context_window: Some(500_000),
+        ..request(&cwd)
+    };
+    assert!(matches!(
+        fake.backend.start(other),
+        Err(StartError::Unsupported(_))
+    ));
+    let capped = RunRequest {
+        context_window: Some(200_000),
+        ..request(&cwd)
+    };
+    run(&fake, capped).await;
+    assert!(
+        fake.env()
+            .contains(&"CLAUDE_CODE_DISABLE_1M_CONTEXT=1".to_owned())
+    );
+}
+
 #[test]
 fn a_worker_without_a_usable_sandbox_is_refused_before_anything_runs() {
     let fake = Fake::new("tool-call");
@@ -1064,6 +1121,25 @@ async fn a_result_without_ids_or_a_queue_count_ends_every_turn() {
     assert!(matches!(outcome(&all), Outcome::Completed { .. }));
 }
 
+/// A fork's first run continues a copy of the parent's session (0050).
+#[test]
+fn a_forks_first_run_forks_the_session() {
+    let mut request = request(Path::new("/repo"));
+    request.resume = Some(Resume {
+        fork: true,
+        ..Resume::new(SESSION)
+    });
+    let args: Vec<String> = super::arguments(&request)
+        .unwrap()
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+    assert_eq!(
+        &args[args.len() - 3..],
+        ["--resume", SESSION, "--fork-session"]
+    );
+}
+
 #[tokio::test]
 async fn a_resumed_session_reports_only_what_it_adds() {
     let fake = Fake::new("resume");
@@ -1075,6 +1151,7 @@ async fn a_resumed_session_reports_only_what_it_adds() {
     request.resume = Some(Resume {
         session_id: SESSION.into(),
         usage_totals: baseline,
+        fork: false,
     });
     let all = run(&fake, request).await;
     assert_eq!(&fake.argv()[fake.argv().len() - 2..], ["--resume", SESSION]);
@@ -1549,6 +1626,7 @@ async fn a_resumed_session_starts_on_images_alone() {
         resume: Some(Resume {
             session_id: SESSION.into(),
             usage_totals: Vec::new(),
+            fork: false,
         }),
         ..request(&fake.root())
     };
@@ -2054,6 +2132,146 @@ fn a_no_write_run_allows_only_the_read_tools() {
         violation_kind(&translator.line(no_tools)),
         Some(FailureKind::PolicyViolation)
     );
+}
+
+/// RYA-276, 0034: a thread is full Claude Code in every mode, as a bypass worker is: no
+/// `--restricted`, `--tools`, `--strict-mcp-config`, or sandbox settings, so the user's settings,
+/// skills, and MCP servers load. It asks plxd in Accept Edits too, since nothing sandboxes its
+/// commands, and in Plan it has `ExitPlanMode` without a `--tools` list. Its init may list any
+/// tool. A worker keeps its sandbox, and so does a thread whose client can't answer requests.
+#[test]
+fn a_thread_is_full_claude_code_in_every_mode() {
+    let cwd = Path::new("/Users/u/wt");
+    let mut thread = request(cwd);
+    thread.policy = ToolPolicy::WorkspaceWrite;
+    thread.sandbox = Some(worker_sandbox(cwd));
+    thread.approvals = true;
+    thread.thread = true;
+    for permission in [
+        None,
+        Some(AgentPermission::Auto),
+        Some(AgentPermission::Manual),
+        Some(AgentPermission::Edit),
+        Some(AgentPermission::Plan),
+        Some(AgentPermission::Bypass),
+    ] {
+        let request = RunRequest {
+            permission,
+            ..thread.clone()
+        };
+        let args: Vec<String> = super::arguments(&request)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        for flag in ["--restricted", "--tools", "--strict-mcp-config"] {
+            assert!(
+                !args.contains(&flag.to_owned()),
+                "{permission:?} {flag}: {args:?}"
+            );
+        }
+        let settings = args.iter().position(|arg| arg == "--settings").unwrap();
+        assert_eq!(
+            args[settings + 1],
+            r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""}}"#
+        );
+        let asks = permission != Some(AgentPermission::Bypass);
+        assert_eq!(super::prompts(&request), asks, "{permission:?}");
+        assert!(!super::hands_over_plans(&request));
+    }
+    let unanswered = RunRequest {
+        approvals: false,
+        ..thread.clone()
+    };
+    assert!(
+        super::arguments(&unanswered)
+            .unwrap()
+            .contains(&"--restricted".into())
+    );
+    let worker = RunRequest {
+        thread: false,
+        ..thread
+    };
+    assert!(
+        super::arguments(&worker)
+            .unwrap()
+            .contains(&"--restricted".into())
+    );
+    assert!(
+        !super::prompts(&worker),
+        "a sandboxed worker in Accept Edits never asks"
+    );
+
+    let loaded = init_line(r#"["Read","Bash","Skill","Task","mcp__linear__list_issues"]"#);
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none").with_thread(true);
+    assert_eq!(violation_kind(&translator.line(&loaded)), None);
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+    assert_eq!(
+        violation_kind(&translator.line(&loaded)),
+        Some(FailureKind::PolicyViolation)
+    );
+}
+
+/// 0041: a full Claude Code thread gets `plxd mcp --thread <its run>` through `--mcp-config`,
+/// with no `--strict-mcp-config`, so the user's own MCP servers stay, and the tools lead its
+/// `--allowedTools`, so they run in every mode. A sandboxed thread gets none, since the server
+/// runs outside the sandbox.
+#[test]
+fn a_full_thread_gets_its_thread_tools_beside_the_users_mcp_servers() {
+    let cwd = Path::new("/Users/u/wt");
+    let tools = ThreadTools {
+        program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
+        data_dir: PathBuf::from("/Users/u/Library/Application Support/parallax"),
+        run: RunId::generate(),
+    };
+    let mut thread = request(cwd);
+    thread.policy = ToolPolicy::WorkspaceWrite;
+    thread.sandbox = Some(worker_sandbox(cwd));
+    thread.approvals = true;
+    thread.thread = true;
+    thread.thread_tools = Some(tools.clone());
+    let config = serde_json::json!({"mcpServers": {"plxd": {
+        "type": "stdio",
+        "command": "/Applications/Parallax.app/Contents/Resources/plxd",
+        "args": [
+            "mcp",
+            "--data-dir", "/Users/u/Library/Application Support/parallax",
+            "--thread", tools.run.to_string(),
+        ],
+    }}});
+    let allowed = format!(
+        "{},TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate",
+        mcp::thread::ALLOWED_TOOLS.join(",")
+    );
+    for permission in [
+        None,
+        Some(AgentPermission::Manual),
+        Some(AgentPermission::Plan),
+    ] {
+        let request = RunRequest {
+            permission,
+            ..thread.clone()
+        };
+        let args: Vec<String> = super::arguments(&request)
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        let at = args.iter().position(|arg| arg == "--mcp-config").unwrap();
+        assert_eq!(args[at + 1], config.to_string(), "{permission:?}");
+        assert_eq!(
+            args[at + 2..at + 4],
+            ["--allowedTools".to_owned(), allowed.clone()]
+        );
+        assert!(!args.contains(&"--strict-mcp-config".to_owned()));
+    }
+    let sandboxed = RunRequest {
+        approvals: false,
+        ..thread
+    };
+    let args = super::arguments(&sandboxed).unwrap();
+    assert!(args.contains(&"--strict-mcp-config".into()));
+    assert!(!args.contains(&"--mcp-config".into()));
 }
 
 /// 0027: a coordinator and a bypass worker are full Claude Code, so their init may list any

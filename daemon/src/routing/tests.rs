@@ -9,7 +9,7 @@ use super::{BackendRegistry, Defaults, KeyAccounts, RoutingError, resolve, start
 use crate::backend::{
     AccountRef, Backend, CancelSwitch, Capabilities, CoordinatorTools, Credential, EVENT_BUFFER,
     Event, EventSink, EventStream, Failure, FailureKind, ModelUsage, Outcome, RunHandle, RunId,
-    RunRequest, StartError, Started, ToolPolicy, Usage, WorkerSandbox, claude,
+    RunRequest, StartError, Started, ThreadTools, ToolPolicy, Usage, WorkerSandbox, claude,
 };
 use crate::keystore::{KeyStore, MemoryKeyStore};
 
@@ -41,8 +41,12 @@ fn request(cwd: &Path) -> RunRequest {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         coordinator_tools: None,
+        thread_tools: None,
         approvals: false,
+        thread: false,
     }
 }
 
@@ -518,6 +522,32 @@ async fn a_worker_never_gets_the_coordinator_tools() {
     assert_eq!(backend.calls()[0].coordinator_tools, None);
 }
 
+/// 0041: only a normal thread keeps its thread tools; a coordinator's subagent gets none.
+#[tokio::test]
+async fn only_a_thread_gets_the_thread_tools() {
+    for thread in [true, false] {
+        let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
+            Outcome::Completed { result: None },
+        )]]));
+        let resolved = resolved_for_role(backend.clone(), Role::Worker, ToolPolicy::WorkspaceWrite);
+        let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
+        let tools = ThreadTools {
+            program: PathBuf::from("/usr/local/bin/plxd"),
+            data_dir: PathBuf::from("/data"),
+            run: RunId::generate(),
+        };
+        let request = RunRequest {
+            thread,
+            thread_tools: Some(tools.clone()),
+            ..request(&root())
+        };
+        let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
+        rest(&mut started.events).await;
+        let kept = backend.calls()[0].thread_tools.clone();
+        assert_eq!(kept, thread.then_some(tools), "thread: {thread}");
+    }
+}
+
 #[test]
 fn claude_refuses_the_coordinator_tools_on_a_worker() {
     let request = RunRequest {
@@ -813,4 +843,19 @@ async fn cancel_after_a_fallback_reaches_the_second_attempt() {
         switches[1].is_cancelled(),
         "cancel must reach the attempt that is actually running"
     );
+}
+
+#[test]
+fn key_accounts_keep_the_startup_backend_when_its_instance_is_turned_off() {
+    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
+    let registry = registry(Arc::clone(&backend));
+    registry.remove("claude");
+    assert!(
+        registry.by_backend_name("claude").is_none(),
+        "no subscription route"
+    );
+    let kept = registry
+        .by_provider(Provider::Anthropic)
+        .expect("the key account's backend");
+    assert!(Arc::ptr_eq(&kept, &backend));
 }

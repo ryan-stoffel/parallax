@@ -64,7 +64,8 @@ pub enum ImageMediaType {
 }
 
 /// An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
-/// decision 0026). The CLI gets it beside the text, never as a file name or path in it.
+/// decision 0026). The CLI gets it beside the text, never as a file name or path in it. A
+/// project's or repo's icon image has the same shape (0038).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptImage {
@@ -164,6 +165,10 @@ pub enum AgentStatus {
     Cancelled,
     /// plxd stopped while it ran. `agent/send` resumes it when it has a `sessionId`.
     Interrupted,
+    /// A usage limit stopped it, and plxd resumes it at `resumeAt` (PLX-371, decision 0049).
+    /// `agent/send` and `agent/resumeNow` resume it sooner, and `agent/cancel` makes it
+    /// `cancelled`.
+    Waiting,
     /// `agent/accept` merged its changes into the project's branch and removed its worktree and
     /// branch. It takes no more messages.
     Accepted,
@@ -245,6 +250,14 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
+    /// Its context window in tokens, as `model`. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Whether it runs in fast mode, as `model`. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// Its permission, as `model`. Absent means `edit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -259,6 +272,20 @@ pub struct AgentRun {
     /// Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkout: bool,
+    /// The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
+    /// `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
+    /// `pullRequests` capability. Absent means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<String>,
+    /// When plxd resumes it, while it is `waiting` (decision 0049). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resume_at: Option<Timestamp>,
+    /// Whether a usage limit makes it wait and resume, overriding the host's
+    /// `host/settings` `autoResume` (decision 0049). Absent means the host's setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
     /// When it was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When it last changed, in RFC 3339 UTC.
@@ -299,10 +326,31 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
+    /// Its context window in tokens, which `agent/send` can change. Absent means the CLI's
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Whether it runs in fast mode, which `agent/send` can change. Absent means the CLI's
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// Its linked pull requests, as `AgentRun.pullRequests` (PLX-318). Absent means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<String>,
+    /// When plxd resumes it, as `AgentRun.resumeAt`. Absent once it doesn't wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resume_at: Option<Timestamp>,
+    /// Its auto-resume override, as `AgentRun.autoResume`. Absent means the host's setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
     /// When it changed, in RFC 3339 UTC.
     pub updated_at: Timestamp,
 }
@@ -450,13 +498,26 @@ pub enum AgentOutputItem {
         #[ts(optional)]
         text: Option<String>,
         /// True for a wake-up (RYA-42, decision 0025): a turn plxd sent a project's coordinator
-        /// on its own, not the user, because runs it started finished. `text` lists them.
+        /// on its own, not the user, because runs it started finished. `text` lists them. Also
+        /// true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
+        /// 0049).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         wake: bool,
+        /// The thread that sent a follow-up through its Parallax tools (0041), as `agent/send`'s
+        /// `from` named it. Absent for the user's own message and for the prompt's turn, whose
+        /// sender is the thread's `parent`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        from: Option<RunId>,
         /// The images sent with the turn's message, the prompt's or a follow-up's, in order, for
         /// `agent/image` (RYA-191). Absent when it had none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<ImageId>,
+        /// The threads attached to the turn's message as context, in order (PLX-372). The agent
+        /// got a summary of each ahead of the message, which `text` and the run's `prompt` leave
+        /// out. Absent when it had none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        threads: Vec<RunId>,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {
@@ -531,6 +592,12 @@ pub enum AgentOutputItem {
     FollowUpDropped {
         /// The follow-up's turn id.
         turn_id: TurnId,
+    },
+    /// Another thread stopped the run through its Parallax tools, with `agent/cancel`'s `from`
+    /// (0041). The run's `agent.finished` follows.
+    Interrupted {
+        /// The thread that stopped it.
+        from: RunId,
     },
     /// Tokens and cost used since the previous `usage` item.
     Usage {
@@ -652,8 +719,20 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
-    /// The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
-    /// `coordinatorThread`, the coordinator's mode when it spawns the run.
+    /// The context window in tokens, one the backend offers: Claude Code's `200000` or
+    /// `1000000`, Codex's `272000` or `872000`. Absent means the CLI's default. Send it and
+    /// `fast` only to a plxd that advertises `contextAndFast`. The run keeps both when it
+    /// resumes, and a retry must repeat them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Fast mode on or off: Claude Code's fast mode, or Codex's priority service tier. Absent
+    /// means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
+    /// The permission mode (RYA-97, 0027). Absent means `edit`. Ignored in a project, whose
+    /// runs run in the project's mode (0042).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
@@ -665,15 +744,25 @@ pub struct AgentStartParams {
     pub images: Vec<PromptImage>,
     /// Forward the run's permission requests to the client as `approvalRequested` items, which
     /// `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
-    /// answers them, and only to a plxd that advertises `approvals`. Absent, a run in Manual,
-    /// Auto, or Plan denies what would prompt, as before. A run with a `coordinatorThread` also
-    /// gets it when its coordinator has it. The run keeps it when it resumes, and a retry must
-    /// repeat it.
+    /// answers them, and only to a plxd that advertises `approvals`. A thread with it is full
+    /// Claude Code and also asks in Accept Edits (0034). Absent, a run in Manual, Auto, or Plan
+    /// denies what would prompt, and a thread keeps the worker sandbox, as before. A run with a
+    /// `coordinatorThread` also gets it when its coordinator has it. The run keeps it when it
+    /// resumes, and a retry must repeat it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
+    /// Threads attached to the prompt as context, by their run ids, sent only to a plxd that
+    /// advertises `threadContext` (PLX-372, decision 0047). The agent gets a summary of each ahead
+    /// of the prompt: its id and what was said in it, without tool calls, cut from the front to
+    /// the capability's `maxSummaryBytes`. At most the capability's `maxThreads`. An id that is
+    /// no thread's fails with `threadNotFound`. A retry must repeat them; plxd doesn't compare
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RunId>,
 }
 
-/// Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
+/// Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and
+/// `agent/autoResume`: the run as it stands.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunResult {
@@ -709,16 +798,27 @@ pub struct AgentSendParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
-    /// A new permission (RYA-161), as `effort`.
+    /// A new permission (RYA-161), as `effort`. Ignored for a run in a project, which runs in the
+    /// project's mode (0042).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// A new context window, as `effort`, but sent only to a plxd that advertises
+    /// `contextAndFast`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Fast mode on or off, as `contextWindow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// A new account for the run and every later resume, sent only to a plxd that advertises
     /// `sendAccount`, and waiting for a running CLI as `model` does. On the run's backend, the
     /// session resumes on it. On another backend, the session can't move, so plxd starts a new
     /// one there in the run's worktree, whose first message carries the conversation so far
     /// before this one: the run keeps its id, transcript, and worktree, and takes the new
-    /// backend, with `model`, and the run's effort and permission where the backend maps them.
+    /// backend, with `model`, and the run's effort, permission, context window, and fast mode where
+    /// the backend maps them.
     /// Absent, or the run's own, changes nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -726,6 +826,16 @@ pub struct AgentSendParams {
     /// Images for the message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
+    /// Threads attached to the message as context, as `agent/start`'s. A message that waits for
+    /// the run's CLI gets their summaries when it's sent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RunId>,
+    /// The thread sending it through its Parallax tools (0041), which the turn's `turnStarted`
+    /// names. It must be a run on the host, or the send fails with `runNotFound`. Absent for the
+    /// user's own message. Behind `threadTools`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub from: Option<RunId>,
 }
 
 /// Params of `agent/cancel`: stops a running agent, which ends as `cancelled`. Cancelling a run
@@ -735,6 +845,36 @@ pub struct AgentSendParams {
 pub struct AgentCancelParams {
     /// The run.
     pub run_id: RunId,
+    /// The thread stopping it through its Parallax tools (0041): a running run logs an
+    /// `interrupted` item naming it. It must be a run on the host, or the cancel fails with
+    /// `runNotFound`. Behind `threadTools`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub from: Option<RunId>,
+}
+
+/// Params of `agent/resumeNow`: resumes a `waiting` run now instead of at its `resumeAt`, with
+/// the same message the timer sends (decision 0049). Fails with `runNotResumable` for a run that
+/// isn't waiting.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentResumeNowParams {
+    /// The run.
+    pub run_id: RunId,
+}
+
+/// Params of `agent/autoResume`: sets or clears a run's auto-resume override (decision 0049).
+/// Turning it off for a `waiting` run clears its timer, and the run becomes `failed` with its
+/// usage limit's error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAutoResumeParams {
+    /// The run.
+    pub run_id: RunId,
+    /// On or off for this run. Absent clears the override, so the host's setting applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_resume: Option<bool>,
 }
 
 /// Params of `agent/list`.

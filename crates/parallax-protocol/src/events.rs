@@ -5,7 +5,7 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::{
     AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun, AgentRunState,
-    ContextFile, DiffSummary, Project, ProjectId, Repo, RepoId, RunId, Thread,
+    ContextFile, DiffSummary, InboxItem, Project, ProjectId, Repo, RepoId, RunId, Thread,
 };
 
 uuid_v7_id! {
@@ -96,6 +96,13 @@ pub enum ParallaxEvent {
         /// The project as it stands.
         project: Project,
     },
+    /// `project/delete` deleted a project with every run in it (PLX-338). Host-level, like
+    /// `project.created`.
+    #[serde(rename = "project.deleted")]
+    ProjectDeleted {
+        /// The deleted project's id.
+        project: ProjectId,
+    },
     /// A shared context file was created or changed (0005, #155): from `context/write`, or from
     /// an agent's own write, detected on disk. Project-scoped.
     #[serde(rename = "context.changed")]
@@ -178,6 +185,13 @@ pub enum ParallaxEvent {
     AgentWakeupsPaused {
         /// The coordinator's run id.
         run_id: RunId,
+    },
+    /// plxd added an item to a Project's inbox (PLX-401, decision 0043). Project-scoped, and
+    /// never in a run's `agent/events`.
+    #[serde(rename = "inbox.added")]
+    InboxAdded {
+        /// The new item.
+        item: InboxItem,
     },
     /// `repo/add` registered a repository for normal threads, or plxd made its scratch entry
     /// (#110). Host-level.

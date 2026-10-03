@@ -33,17 +33,22 @@ mod account;
 mod agent;
 mod approval;
 mod cli_account;
+mod composer;
 mod context;
 mod defaults;
 mod error;
 mod events;
 pub mod framing;
+mod git;
 mod handshake;
 mod host;
 mod id;
+mod inbox;
 pub mod jsonrpc;
 pub mod methods;
 mod project;
+mod provider;
+mod pull_request;
 mod review;
 mod thread;
 pub mod typescript;
@@ -58,12 +63,12 @@ pub use account::{
     Provider, RawKey,
 };
 pub use agent::{
-    AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult, AgentFailureKind,
-    AgentImageParams, AgentListParams, AgentListResult, AgentOutcome, AgentOutputItem,
-    AgentPermission, AgentPolicy, AgentRun, AgentRunResult, AgentRunState, AgentSendParams,
-    AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus, AgentToolStatus,
-    CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId,
-    TurnId,
+    AgentAutoResumeParams, AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult,
+    AgentFailureKind, AgentImageParams, AgentListParams, AgentListResult, AgentOutcome,
+    AgentOutputItem, AgentPermission, AgentPolicy, AgentResumeNowParams, AgentRun, AgentRunResult,
+    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus,
+    AgentToolStatus, CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent,
+    PromptImage, RunId, TurnId,
 };
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
@@ -71,7 +76,11 @@ pub use approval::{
 };
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,
-    CliKind, DetectedCli,
+    CliKind, DetectedCli, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
+};
+pub use composer::{
+    AgentCommand, AgentCommandsParams, AgentCommandsResult, RepoFilesParams, RepoFilesResult,
 };
 pub use context::{
     ContextFile, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
@@ -86,32 +95,49 @@ pub use events::{
     EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
     EventsUnsubscribeResult, LogId, ParallaxEvent, SubscriptionId,
 };
+pub use git::{AgentCommitParams, AgentGitStatusParams, AgentPushParams, GitStatus};
 pub use handshake::{
     Capabilities, ClientInfo, InitializeParams, InitializeProtocol, InitializeResult, ProtocolRange,
 };
 pub use host::{
-    HostHealthParams, HostHealthResult, HostVersionParams, HostVersionResult, StoreState,
+    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
+    HostVersionParams, HostVersionResult, StoreState,
 };
 pub use id::InvalidId;
+pub use inbox::{
+    InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult, InboxSeenParams,
+    InboxSeenResult,
+};
 pub use project::{
-    Project, ProjectCreateParams, ProjectCreateResult, ProjectIcon, ProjectId, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
+    Project, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectPermission,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
+};
+pub use provider::{
+    ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
+    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
+};
+pub use pull_request::{
+    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
+    PrMergeState, PrReview, PrReviewState, PrState, PrViewParams, PullRequest,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,
-    AgentDiffResult, AgentDiffStats, AgentFileParams, AgentFileResult, AgentFileSide,
-    AgentFileStatus, AgentMerge, AgentMergeKind, AgentOpenPrParams, AgentOpenPrResult,
-    AgentRequestChangesParams,
+    AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind, AgentFileParams, AgentFileResult,
+    AgentFileSide, AgentFileStatus, AgentFilesParams, AgentFilesResult, AgentMerge, AgentMergeKind,
+    AgentOpenPrParams, AgentOpenPrResult, AgentRequestChangesParams,
 };
 pub use thread::{
-    Repo, RepoAddParams, RepoAddResult, RepoId, RepoUpdateParams, RepoUpdateResult, Thread,
+    ForkedFrom, MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult, RepoId, RepoRef,
+    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, Thread,
     ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult,
+    ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
-    AccountRuns, AccountUsage, UsageGetParams, UsageGetResult, UsageHistoryParams,
-    UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod,
+    AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay, UsageGetParams,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow,
+    UsagePeriod, UsageProblem, UsageSource,
 };
 
 /// The newest protocol version this crate speaks. Versions start at 1.
@@ -145,6 +171,7 @@ mod tests {
             repo_path: "/Users/me/src/parallax".to_owned(),
             branch: Some("main".to_owned()),
             coordinator: None,
+            permission: None,
             created_at: "2026-09-24T12:00:00Z".parse().unwrap(),
             updated_at: "2026-09-24T12:05:00.125Z".parse().unwrap(),
         }
@@ -264,13 +291,28 @@ mod tests {
             ProjectIcon {
                 name: "rocket".to_owned(),
                 color: Some("green".to_owned()),
+                image: None,
             },
             ProjectIcon {
                 name: "folder-kanban".to_owned(),
                 color: None,
+                image: None,
+            },
+            ProjectIcon {
+                name: "rocket".to_owned(),
+                color: None,
+                image: Some(PromptImage {
+                    media_type: ImageMediaType::Webp,
+                    data: "UklGRg==".to_owned(),
+                }),
             },
         ];
-        for icon in [None, Some(icons[0].clone()), Some(icons[1].clone())] {
+        for icon in [
+            None,
+            Some(icons[0].clone()),
+            Some(icons[1].clone()),
+            Some(icons[2].clone()),
+        ] {
             let with_icon = Project {
                 icon: icon.clone(),
                 ..project()
@@ -281,6 +323,7 @@ mod tests {
                 name: "parallax".to_owned(),
                 repo_path: "/".to_owned(),
                 icon: icon.clone(),
+                permission: None,
             });
             round_trip(&ProjectUpdateResult {
                 project: with_icon.clone(),
@@ -297,6 +340,7 @@ mod tests {
                     project: ProjectId::generate(),
                     name,
                     icon: icon.clone(),
+                    permission: None,
                 });
             }
         }
@@ -304,12 +348,17 @@ mod tests {
             serde_json::to_value(&icons[1]).unwrap(),
             json!({"name": "folder-kanban"})
         );
+        assert_eq!(
+            serde_json::to_value(&icons[2]).unwrap(),
+            json!({"name": "rocket", "image": {"mediaType": "image/webp", "data": "UklGRg=="}})
+        );
         let id = ProjectId::generate();
         assert_eq!(
             serde_json::to_value(ProjectUpdateParams {
                 project: id,
                 name: None,
                 icon: None,
+                permission: None,
             })
             .unwrap(),
             json!({"project": id}),
@@ -329,6 +378,39 @@ mod tests {
             serde_json::from_value::<ProjectUpdateParams>(json!({"project": id, "icon": "rocket"}))
                 .is_err(),
             "an icon is an object"
+        );
+    }
+
+    /// PLX-394 (0042): a project's mode round trips on each type that carries it, and a mode from
+    /// a newer peer reads as unknown.
+    #[test]
+    fn project_permission_round_trips_and_an_unknown_mode_reads_as_unknown() {
+        for permission in [ProjectPermission::Auto, ProjectPermission::Bypass] {
+            round_trip(&Project {
+                permission: Some(permission),
+                ..project()
+            });
+            round_trip(&ProjectCreateParams {
+                id: ProjectId::generate(),
+                name: "parallax".to_owned(),
+                repo_path: "/".to_owned(),
+                icon: None,
+                permission: Some(permission),
+            });
+            round_trip(&ProjectUpdateParams {
+                project: ProjectId::generate(),
+                name: None,
+                icon: None,
+                permission: Some(permission),
+            });
+        }
+        assert_eq!(
+            serde_json::to_value(ProjectPermission::Bypass).unwrap(),
+            json!("bypass")
+        );
+        assert_eq!(
+            serde_json::from_value::<ProjectPermission>(json!("manual")).unwrap(),
+            ProjectPermission::Unknown
         );
     }
 

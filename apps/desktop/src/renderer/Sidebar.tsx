@@ -7,23 +7,26 @@ import {
   ChartNoAxesColumn,
   Check,
   ChevronDown,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   CirclePause,
   CircleSlash,
-  Download,
+  CircleUser,
   Ellipsis,
   FileDiff,
   Folder,
-  FolderKanban,
   FolderPlus,
   GitBranch,
   GitMerge,
+  HardDrive,
+  Keyboard,
   Laptop,
   ListFilter,
   LoaderCircle,
-  PanelLeft,
-  RefreshCw,
+  Palette,
+  PanelLeftClose,
+  Plus,
   Search,
   Server,
   Settings,
@@ -32,6 +35,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  Fragment,
   useEffect,
   useId,
   useRef,
@@ -42,7 +46,6 @@ import {
   type ToggleEvent,
 } from "react";
 
-import type { UpdateState } from "../preload/bridge";
 import type {
   AgentRun,
   AgentStatus,
@@ -58,6 +61,7 @@ import {
   attentionOf,
   initials,
   lastPrompt,
+  mostUrgent,
   projectAttention,
   snoozeChoices,
   snoozed,
@@ -65,18 +69,36 @@ import {
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { Avatar, useProfile } from "./profile";
 import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
-import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
+import { imageUrl } from "./images";
+import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
+import { dragThread } from "./threadDrag";
 import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
-import { IconButton, menuItem, menuPanel, moveFocus, openOnContextMenu, TopBar } from "./ui";
+import {
+  IconButton,
+  menuItem,
+  menuPanel,
+  moveFocus,
+  openOnContextMenu,
+  RowBadge,
+  rowShortcut,
+  TopBar,
+  useModHeld,
+} from "./ui";
+import { instanceLogo, instanceName } from "./providers";
+import { UpdateButton } from "./Update";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
 const current = "bg-selected text-foreground";
+const sectionHeading =
+  "flex h-7 items-center gap-1 px-2 text-[12px] font-medium text-faint-foreground";
+const emptyNote = "px-2 py-1 text-[12.5px] text-faint-foreground";
 
 interface SidebarProps {
   open: boolean;
@@ -87,7 +109,8 @@ interface SidebarProps {
 
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
- * spot the main pane shows it while this column is hidden, then the app's name.
+ * spot the main pane shows it while this column is hidden, then the app's mark and name, which
+ * open a new thread.
  */
 export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) {
   return (
@@ -100,17 +123,21 @@ export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) 
       <TopBar className="traffic-light-inset">
         <IconButton
           label="Hide sidebar"
-          keys="B"
+          command="sidebar"
           aria-expanded
           aria-controls="sidebar"
           onClick={onClose}
         >
-          <PanelLeft />
+          <PanelLeftClose />
         </IconButton>
-        <span className="flex-1 text-[13px] font-bold text-muted-foreground">Parallax</span>
-        <IconButton label="New thread" keys="N" onClick={onNewThread}>
-          <SquarePen />
-        </IconButton>
+        <button
+          type="button"
+          onClick={onNewThread}
+          className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-[14px] font-semibold tracking-tight text-foreground hover:bg-hover"
+        >
+          <ParallaxMark className="size-5" />
+          Parallax
+        </button>
       </TopBar>
       {children}
     </nav>
@@ -136,11 +163,13 @@ interface ThreadListProps {
   onOpenSettings: (section: SettingsSection) => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
+  onNewThread: () => void;
 }
 
 /**
- * A Project's icon, in the sidebar, the breadcrumb, its chat, and Create Project: its glyph in its
- * color, or `FolderKanban` in the accent for none, or for a name or color this app doesn't know.
+ * A Project's icon, in the sidebar, the breadcrumb, its chat, and Create Project: its uploaded
+ * image as a rounded square (0038), else its glyph in its color, or `FolderKanban` in the accent
+ * for none, or for a name or color this app doesn't know.
  */
 export function ProjectIcon({
   icon,
@@ -149,6 +178,25 @@ export function ProjectIcon({
   icon?: ProjectIconValue;
   className?: string;
 }) {
+  // An <svg> like the glyph's, so every place's glyph size (`[&_svg]:size-*`) fits the image too.
+  if (icon?.image)
+    return (
+      <svg
+        aria-hidden
+        data-icon-image
+        viewBox="0 0 24 24"
+        width={24}
+        height={24}
+        className={`[clip-path:inset(0_round_22%)] ${className}`}
+      >
+        <image
+          href={imageUrl(icon.image)}
+          width={24}
+          height={24}
+          preserveAspectRatio="xMidYMid slice"
+        />
+      </svg>
+    );
   const { Icon, color } = iconLook(icon);
   return <Icon aria-hidden className={`${color} ${className}`} />;
 }
@@ -183,12 +231,23 @@ const cardDelay = 450;
 /** The Repos filter's choice: every repo, No Repo's threads, or one repo by host and id. */
 type RepoFilter = "all" | "none" | `${string}/${string}`;
 const filterKey = "parallax:repoFilter";
+// "true" while the Projects section is collapsed.
+const collapsedKey = "parallax:projectsCollapsed";
 
-function readFilter(): RepoFilter {
+/** A sidebar setting kept in localStorage, or null while there is none or storage is off. */
+function readStored(key: string): string | null {
   try {
-    return (localStorage.getItem(filterKey) as RepoFilter | null) ?? "all";
+    return localStorage.getItem(key);
   } catch {
-    return "all";
+    return null;
+  }
+}
+
+function saveStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage is off: the setting lasts until the window closes.
   }
 }
 
@@ -207,10 +266,11 @@ type Item = (
 };
 
 /**
- * Search and the Repos filter, then every host's threads and Projects in one list, the most
- * recently prompted first (0033). A row shows its repo, how long ago it was prompted or what it
- * asks of the user, its title, branch, and provider. Snoozed and Archived threads sit under the
- * list. Resting on a thread shows a card with where and how it runs.
+ * Search, the Repos filter, a menu to create a Project or add a repository, and New thread, then
+ * every host's Projects in a collapsible section, then their threads, each the most recently active first (0033). A thread row shows its repo, how long ago
+ * it was prompted or what it asks of the user, its title, branch, and provider. A thread's children
+ * (0041) nest under it, collapsed behind their count and most urgent status. Snoozed and
+ * Archived threads sit under the list. Resting on a thread shows a card with where and how it runs.
  */
 export function ThreadList({
   hosts,
@@ -220,24 +280,35 @@ export function ThreadList({
   onOpenProject,
   onOpenSettings,
   onDelete,
+  onNewThread,
 }: ThreadListProps) {
   const newProject = useRef<HTMLDialogElement>(null);
+  const addMenuId = useId();
+  const addMenu = useRef<HTMLDivElement>(null);
   const addRepositoryDialog = useRef<HTMLDialogElement>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
-  const [toDelete, setToDelete] = useState<{ hostId: string; thread: Thread }>();
+  const projectsId = useId();
+  // The thread or Project the delete dialog asks about.
+  const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [query, setQuery] = useState("");
-  const [filter, setFilterState] = useState<RepoFilter>(readFilter);
+  const [filter, setFilterState] = useState<RepoFilter>(
+    () => (readStored(filterKey) as RepoFilter | null) ?? "all",
+  );
   const setFilter = (next: RepoFilter) => {
     setFilterState(next);
-    try {
-      localStorage.setItem(filterKey, next);
-    } catch {
-      // Storage is off: the filter lasts until the window closes.
-    }
+    saveStored(filterKey, next);
   };
+  const [collapsed, setCollapsedState] = useState(() => readStored(collapsedKey) === "true");
+  const setCollapsed = (next: boolean) => {
+    setCollapsedState(next);
+    saveStored(collapsedKey, String(next));
+  };
+  // The threads whose children show, by key, and the open thread whose groups were last opened.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [revealed, setRevealed] = useState<string>();
   const [card, setCard] = useState<{ item: Item; top: number; left: number }>();
   const cardTimer = useRef<number>(undefined);
   // Snoozes end on time even with nothing else changing.
@@ -294,9 +365,71 @@ export function ThreadList({
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, i.attention, now);
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
-  const listed = shown.filter((i) => !isArchived(i) && !isSnoozed(i));
+  const projects = shown.filter((i) => i.kind === "project");
+  const threads = shown.filter((i) => i.kind === "thread" && !isArchived(i) && !isSnoozed(i));
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
+  // The Projects section shows once any host has a Project, even while search or the filter hides
+  // them all.
+  const hasProjects = items.some((i) => i.kind === "project");
+
+  // A thread whose parent is in the list nests under it (0041), oldest first, collapsed until
+  // opened or until one of them is the open thread.
+  const parentKey = (i: Item) =>
+    i.kind === "thread" && i.view.lineage && i.thread.parent
+      ? `${i.host.id}/${i.thread.parent}`
+      : undefined;
+  const inList = new Set(threads.map((i) => i.key));
+  const children = new Map<string, Item[]>();
+  const created = (i: Item) => (i.kind === "thread" ? i.thread.createdAt : "");
+  for (const i of [...threads].sort((a, b) => created(a).localeCompare(created(b)))) {
+    const key = parentKey(i);
+    if (key && inList.has(key)) children.set(key, [...(children.get(key) ?? []), i]);
+  }
+  const topThreads = threads.filter((i) => !inList.has(parentKey(i) ?? ""));
+  const selectedKey = selection.kind === "thread" ? `${host.id}/${selection.threadId}` : undefined;
+  if (selectedKey !== revealed) {
+    setRevealed(selectedKey);
+    // Opens the groups the open thread is in, so its row shows. A loop of parents stops.
+    const byKey = new Map(threads.map((i) => [i.key, i]));
+    const opened = new Set(expanded);
+    const chosen = selectedKey === undefined ? undefined : byKey.get(selectedKey);
+    let up = chosen && parentKey(chosen);
+    while (up && byKey.has(up) && !opened.has(up)) {
+      opened.add(up);
+      up = parentKey(byKey.get(up)!);
+    }
+    if (opened.size !== expanded.size) setExpanded(opened);
+  }
+  // The rows shown, in order, a group's children after their parent while it's open.
+  const flat = (i: Item): Item[] => [
+    i,
+    ...(expanded.has(i.key) ? (children.get(i.key) ?? []).flatMap(flat) : []),
+  ];
+  const threadRows = topThreads.flatMap(flat);
+
+  // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
+  // Projects section's, unless it's collapsed, then the threads'.
+  const listed = [...(collapsed ? [] : projects), ...threadRows];
+  const modHeld = useModHeld();
+  const openItem = (item: Item) =>
+    onSelect(
+      item.host.id,
+      item.kind === "thread"
+        ? { kind: "thread", threadId: item.thread.id }
+        : { kind: "project", projectId: item.project.id },
+    );
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const n = rowShortcut(e);
+      const item = n === undefined ? undefined : listed[n];
+      if (!item || document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      openItem(item);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   const showCard = (item: Item, row: HTMLElement) => {
     window.clearTimeout(cardTimer.current);
@@ -314,7 +447,16 @@ export function ThreadList({
     setCard(undefined);
   };
 
-  const row = (item: Item) => {
+  const askDelete = (item: Item) => {
+    setToDelete(item);
+    setDeleteError(undefined);
+    deleteDialog.current?.showModal();
+  };
+
+  const row = (item: Item) => itemRow(item, false);
+  const itemRow = (item: Item, nested: boolean) => {
+    const n = modHeld ? listed.indexOf(item) : -1;
+    const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
     const selected =
       item.host.id === host.id &&
       (item.kind === "thread"
@@ -325,16 +467,18 @@ export function ThreadList({
         <ProjectRow
           key={item.key}
           project={item.project}
-          repo={item.repo}
           runs={item.runs}
           attention={item.attention}
           host={many ? item.host : undefined}
           selected={selected}
+          badge={badge}
           editable={item.view.editable}
-          onOpen={() => onSelect(item.host.id, { kind: "project", projectId: item.project.id })}
+          iconImageBytes={item.view.iconImageBytes}
+          onOpen={() => openItem(item)}
           onUpdate={async (change) =>
             setActionError(await item.view.updateProject(item.project.id, change))
           }
+          onDelete={item.view.deletable ? () => askDelete(item) : undefined}
         />
       );
     const { thread: t, view } = item;
@@ -342,26 +486,73 @@ export function ThreadList({
       <ThreadRow
         key={item.key}
         thread={t}
+        hostId={item.host.id}
         title={titleOf(item)}
         run={view.state.runs[t.id]}
         repo={item.repo}
         attention={item.attention}
         selected={selected}
+        badge={badge}
+        nested={nested}
         snoozable={view.attention}
-        onOpen={() => onSelect(item.host.id, { kind: "thread", threadId: t.id })}
+        onOpen={() => openItem(item)}
         onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
-        onSettle={async () => setActionError(await view.update(t.id, { seen: true }))}
         onSnooze={async (until) =>
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
         }
-        onDelete={() => {
-          setToDelete({ hostId: item.host.id, thread: t });
-          setDeleteError(undefined);
-          deleteDialog.current?.showModal();
-        }}
+        onDelete={() => askDelete(item)}
         onRest={(el) => showCard(item, el)}
         onLeave={hideCard}
       />
+    );
+  };
+
+  // Every thread under `key`, at any depth, for its group's most urgent status.
+  const descendants = (key: string): Item[] =>
+    (children.get(key) ?? []).flatMap((c) => [c, ...descendants(c.key)]);
+  // A thread's row, then with children, a toggle with their count and most urgent status, and
+  // while it's open, their rows indented on a guide line.
+  const tree = (item: Item, nested: boolean): ReactNode => {
+    const kids = children.get(item.key);
+    if (!kids) return itemRow(item, nested);
+    const isOpen = expanded.has(item.key);
+    const toggle = () => {
+      const next = new Set(expanded);
+      if (!next.delete(item.key)) next.add(item.key);
+      setExpanded(next);
+    };
+    const urgent = mostUrgent(descendants(item.key).map((c) => c.attention));
+    return (
+      <Fragment key={item.key}>
+        {itemRow(item, nested)}
+        <li>
+          <button
+            type="button"
+            aria-expanded={isOpen}
+            onClick={toggle}
+            className="flex w-full items-center gap-1 rounded-md py-0.5 pr-2 pl-2 text-left text-[11.5px] text-faint-foreground hover:bg-hover hover:text-foreground"
+          >
+            <ChevronRight
+              aria-hidden
+              className={`size-3 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`}
+            />
+            {kids.length} {kids.length === 1 ? "thread" : "threads"}
+            {urgent !== "settled" && (
+              <span className="ml-auto">
+                <AttentionBadge attention={urgent} />
+              </span>
+            )}
+          </button>
+          {isOpen && (
+            <ul
+              aria-label={`Threads ${titleOf(item)} started`}
+              className="mt-0.5 ml-3 flex flex-col gap-0.5 border-l border-border pl-1.5"
+            >
+              {kids.map((k) => tree(k, true))}
+            </ul>
+          )}
+        </li>
+      </Fragment>
     );
   };
 
@@ -377,8 +568,12 @@ export function ThreadList({
   const confirmDelete = async () => {
     if (!toDelete) return;
     setDeleting(true);
-    // A running thread's agent is stopped first, so this can take a moment.
-    const error = await onDelete(toDelete.hostId, toDelete.thread);
+    // Running agents are stopped first, so this can take a moment. Deleting the open Project
+    // leaves it once it's gone from the list (App.tsx).
+    const error =
+      toDelete.kind === "thread"
+        ? await onDelete(toDelete.host.id, toDelete.thread)
+        : await toDelete.view.removeProject(toDelete.project.id);
     setDeleting(false);
     if (error) setDeleteError(error);
     else deleteDialog.current?.close();
@@ -402,11 +597,44 @@ export function ThreadList({
           />
         </label>
         <RepoFilterMenu hosts={hosts} filter={filter} onFilter={setFilter} many={many} />
-        <IconButton label="Add repository" onClick={() => addRepositoryDialog.current?.showModal()}>
+        <IconButton label="New project or repository" popoverTarget={addMenuId}>
           <FolderPlus />
         </IconButton>
-        <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
-          <FolderKanban />
+        <div
+          ref={addMenu}
+          id={addMenuId}
+          popover="auto"
+          role="menu"
+          aria-label="New project or repository"
+          onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+            if (e.newState === "open")
+              e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+          }}
+          onKeyDown={moveFocus}
+          className={`${menuPanel("end")} min-w-40 p-1`}
+        >
+          {(
+            [
+              ["New project…", newProject],
+              ["Add repository…", addRepositoryDialog],
+            ] as const
+          ).map(([label, dialog]) => (
+            <button
+              key={label}
+              type="button"
+              role="menuitem"
+              className={menuItem}
+              onClick={() => {
+                addMenu.current?.hidePopover();
+                dialog.current?.showModal();
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
+          <SquarePen />
         </IconButton>
       </div>
       <div onScroll={hideCard} className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -415,11 +643,43 @@ export function ThreadList({
             {e}
           </p>
         ))}
-        <ul aria-label="Threads and Projects" className="flex flex-col gap-0.5">
-          {listed.map(row)}
+        {hasProjects && (
+          <>
+            {/* The heading holds only its toggle, so its name is just "Projects". */}
+            <div className={`${sectionHeading} pr-0`}>
+              <h2 className="flex flex-1 self-stretch">
+                <button
+                  type="button"
+                  aria-expanded={!collapsed}
+                  aria-controls={projectsId}
+                  onClick={() => setCollapsed(!collapsed)}
+                  className="flex flex-1 items-center gap-1 text-left hover:text-foreground"
+                >
+                  Projects
+                  <ChevronRight
+                    aria-hidden
+                    className={`size-3.5 transition-transform ${collapsed ? "" : "rotate-90"}`}
+                  />
+                </button>
+              </h2>
+              <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
+                <Plus />
+              </IconButton>
+            </div>
+            <div id={projectsId} hidden={collapsed}>
+              <ul aria-label="Projects" className="flex flex-col gap-0.5">
+                {projects.map((i) => row(i))}
+              </ul>
+              {projects.length === 0 && <p className={emptyNote}>Nothing matches</p>}
+            </div>
+            <h2 className={`${sectionHeading} mt-2`}>Threads</h2>
+          </>
+        )}
+        <ul aria-label="Threads" className="flex flex-col gap-0.5">
+          {topThreads.map((i) => tree(i, false))}
         </ul>
-        {listed.length === 0 && (
-          <p className="px-2 py-1 text-[12.5px] text-faint-foreground">
+        {threads.length === 0 && (
+          <p className={emptyNote}>
             {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
           </p>
         )}
@@ -457,21 +717,18 @@ export function ThreadList({
       />
       <dialog
         ref={deleteDialog}
-        aria-labelledby="delete-thread-title"
+        aria-labelledby="delete-title"
         className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
       >
         <form method="dialog" className="px-5 pt-4 pb-4">
-          <h2 id="delete-thread-title" className="text-[15px] font-semibold">
-            Delete this thread?
+          <h2 id="delete-title" className="text-[15px] font-semibold">
+            {toDelete?.kind === "project" ? "Delete this Project?" : "Delete this thread?"}
           </h2>
           <p className="mt-1.5 text-[13px] text-muted-foreground">
-            “
-            {toDelete &&
-              (hosts.find((h) => h.host.id === toDelete.hostId)?.view.state.titles[
-                toDelete.thread.id
-              ] ??
-                "Thread")}
-            ” goes for good, with its transcript, worktree, and branch.
+            “{toDelete && titleOf(toDelete)}” goes for good
+            {toDelete?.kind === "project"
+              ? projectLoss(toDelete.runs.length)
+              : ", with its transcript, worktree, and branch."}
           </p>
           {deleteError && (
             <p role="alert" className="mt-2 text-[12.5px] text-danger">
@@ -506,6 +763,14 @@ export function ThreadList({
       </div>
     </>
   );
+}
+
+/** The rest of Delete Project's warning, after "“name” goes for good", for a Project of `agents` runs. */
+function projectLoss(agents: number): string {
+  if (agents === 0) return ".";
+  if (agents === 1)
+    return ", with its agent's transcript, worktree, and branch. A running agent is stopped first.";
+  return `, with its ${agents} agents' transcripts, worktrees, and branches. Running agents are stopped first.`;
 }
 
 /** `Date.now()`, again each minute. */
@@ -692,101 +957,76 @@ function RepoFilterMenu({
         id={pickerId}
         value={editing?.repo.icon}
         onPick={(icon) => editing && void editing.view.updateRepo(editing.repo.id, icon)}
+        maxImageBytes={editing?.view.iconImageBytes}
       />
     </>
   );
 }
 
 /**
- * The footer's buttons: Settings, Usage, and Update when `updatable`, which shows a download
- * icon with a dot while an update is ready to install: a downloaded release, or under `pnpm dev`
- * the commits the channel's branch has. Its label carries the updater's note, such as an error.
+ * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
+ * initials (0037), Settings, Usage, and Update when `updatable` (Update.tsx).
  */
 function Footer({
   onOpenSettings,
   onOpenUsage,
 }: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {
-  // "Updating…" while Update runs, then its answer until the next click.
-  const [update, setUpdate] = useState<string>();
-  const updating = update === "Updating…";
-  const [state, setState] = useState<UpdateState>({});
-  useEffect(
-    () => (window.parallax.updatable ? window.parallax.onUpdateState(setState) : undefined),
-    [],
-  );
-  const ready = state.ready !== undefined && !updating;
-  const runUpdate = async () => {
-    setUpdate("Updating…");
-    setUpdate(await window.parallax.update());
-  };
+  const profile = useProfile();
   return (
-    <>
-      {update && (
-        <p role="status" className="px-2 py-1 text-[12px] text-muted-foreground">
-          {update}
-        </p>
-      )}
-      <div className="flex items-center gap-1">
-        <IconButton label="Settings" keys="," onClick={() => onOpenSettings("general")}>
-          <Settings />
-        </IconButton>
-        <IconButton label="Usage" onClick={onOpenUsage}>
-          <ChartNoAxesColumn />
-        </IconButton>
-        {window.parallax.updatable && (
-          <span className="ml-auto">
-            <IconButton
-              label={ready ? `Update ready: ${state.ready}` : (state.note ?? "Update Parallax")}
-              disabled={updating}
-              onClick={() => void runUpdate()}
-            >
-              {ready ? (
-                <span className="relative grid">
-                  <Download />
-                  <span
-                    aria-hidden
-                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-accent"
-                  />
-                </span>
-              ) : (
-                <RefreshCw className={updating ? "animate-spin" : undefined} />
-              )}
-            </IconButton>
-          </span>
-        )}
-      </div>
-    </>
+    <div className="flex items-center gap-1">
+      <IconButton
+        label={profile ? profile.name || profile.email : "Profile"}
+        onClick={() => onOpenSettings("account")}
+      >
+        {profile ? <Avatar profile={profile} size={22} /> : <CircleUser />}
+      </IconButton>
+      <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
+        <Settings />
+      </IconButton>
+      <IconButton label="Usage" onClick={onOpenUsage}>
+        <ChartNoAxesColumn />
+      </IconButton>
+      {window.parallax.updatable && <UpdateButton />}
+    </div>
   );
 }
 
 /**
- * A Project's row, one for its whole coordinator and subagents (0033): its repo, then what its
- * runs ask of the user or its age, its icon and name, and how many agents it has run. Where its
- * host's plxd can edit Projects, hovering or focusing it swaps the age for its actions, which also open by right-clicking the row: Rename,
- * which edits the name in place, and Change icon, which opens the icon picker under the row's icon.
+ * A Project's row, one line for its whole coordinator and subagents: its icon and name, then what
+ * its runs ask of the user or its age. Its tooltip counts its agents, and names its host when there
+ * are several. Where its host's plxd can edit or delete Projects, hovering or focusing it swaps the
+ * status for its actions, which also open by right-clicking the row: Rename, which edits the name
+ * in place, Change icon, which opens the icon picker under the row's icon, and Delete….
  */
 function ProjectRow({
   project,
-  repo,
   runs,
   attention,
   host,
   selected,
+  badge,
   editable,
+  iconImageBytes,
   onOpen,
   onUpdate,
+  onDelete,
 }: {
   project: Project;
-  repo?: Repo;
   runs: AgentRun[];
   attention: Attention;
   /** Its host, named when there is more than one. */
   host?: Host;
   selected: boolean;
+  /** Its Mod+number badge, shown in place of its status while Mod is held. */
+  badge?: ReactNode;
   editable: boolean;
+  /** Its host's cap on an icon image, where its plxd keeps them. */
+  iconImageBytes?: number;
   onOpen: () => void;
   /** Sends `project/update`, and settles once plxd has answered. */
   onUpdate: (change: ProjectChange) => Promise<void>;
+  /** Asks to delete it, where its host's plxd can (`projectDelete`). */
+  onDelete?: () => void;
 }) {
   const menuId = useId();
   const pickerId = useId();
@@ -832,6 +1072,11 @@ function ProjectRow({
   };
 
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
+  const actionable = editable || !!onDelete;
+  const tooltip =
+    [runs.length > 0 && `${runs.length} ${runs.length === 1 ? "agent" : "agents"}`, host?.name]
+      .filter(Boolean)
+      .join(" · ") || undefined;
   return (
     <li data-kind="project" className="group/row relative">
       {renaming !== undefined ? (
@@ -861,46 +1106,39 @@ function ProjectRow({
           ref={button}
           type="button"
           aria-current={selected ? "page" : undefined}
+          title={tooltip}
           onClick={onOpen}
-          onContextMenu={editable ? (e) => openOnContextMenu(e, actions.current) : undefined}
-          className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left hover:bg-hover ${selected ? current : ""}`}
+          onContextMenu={actionable ? (e) => openOnContextMenu(e, actions.current) : undefined}
+          className={`${row} ${selected ? current : ""} ${actionable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
         >
-          <RowHead
-            repo={repo}
-            host={host}
-            status={
-              attention === "settled" ? (
+          <span ref={iconSpot} data-project-icon className="grid shrink-0 place-items-center">
+            {icon}
+          </span>
+          <span
+            data-title
+            className={`min-w-0 flex-1 truncate ${selected ? "text-foreground" : "text-foreground/80"}`}
+          >
+            {saving ?? project.name}
+          </span>
+          <span
+            data-status
+            className={`shrink-0 text-[11.5px] text-faint-foreground ${actionable ? "group-has-[:focus-visible]/row:hidden group-hover/row:hidden" : ""}`}
+          >
+            {badge ??
+              (attention === "settled" ? (
                 age(project.updatedAt)
               ) : (
                 <AttentionBadge
                   attention={attention}
                   count={runs.filter((r) => isRunning(r.status)).length}
                 />
-              )
-            }
-            hideStatus={editable}
-          />
-          <span className="flex w-full items-center gap-1.5">
-            <span ref={iconSpot} data-project-icon className="grid shrink-0 place-items-center">
-              {icon}
-            </span>
-            <span
-              data-title
-              className={`min-w-0 flex-1 truncate text-[13px] ${selected ? "text-foreground" : "text-foreground/80"}`}
-            >
-              {saving ?? project.name}
-            </span>
+              ))}
           </span>
-          {runs.length > 0 && (
-            <span className="text-[11.5px] text-faint-foreground">
-              {runs.length} {runs.length === 1 ? "agent" : "agents"}
-            </span>
-          )}
         </button>
       )}
-      {editable && renaming === undefined && (
+      {actionable && renaming === undefined && (
         <>
-          <div className="absolute top-1 right-1 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
+          <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
             <button
               ref={actions}
               type="button"
@@ -925,24 +1163,38 @@ function ProjectRow({
             onKeyDown={moveFocus}
             className={`${menuPanel("end")} min-w-36 p-1`}
           >
-            <button
-              type="button"
-              role="menuitem"
-              className={menuItem}
-              onClick={choose(startRename)}
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className={menuItem}
-              onClick={choose(() =>
-                picker.current?.showPopover({ source: iconSpot.current ?? undefined }),
-              )}
-            >
-              Change icon
-            </button>
+            {editable && (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(startRename)}
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(() =>
+                    picker.current?.showPopover({ source: iconSpot.current ?? undefined }),
+                  )}
+                >
+                  Change icon
+                </button>
+              </>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                role="menuitem"
+                className={`${menuItem} text-danger`}
+                onClick={choose(onDelete)}
+              >
+                Delete…
+              </button>
+            )}
           </div>
         </>
       )}
@@ -953,6 +1205,7 @@ function ProjectRow({
           id={pickerId}
           value={project.icon}
           onPick={(next) => void onUpdate({ icon: next })}
+          maxImageBytes={iconImageBytes}
         />
       )}
     </li>
@@ -967,29 +1220,18 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 };
 
 /**
- * A row's first line: its repo's icon and name (and host, when there are several), then `status`:
- * what it asks of the user, or how long ago it was prompted. With `hideStatus`, hovering or
- * focusing the row hides the status for the row's actions.
+ * A thread row's first line: its repo's icon and name, then `status`: what it asks of the user, or
+ * how long ago it was prompted. Hovering or focusing the row hides the status and keeps the repo
+ * name clear of the row's actions.
  */
-function RowHead({
-  repo,
-  host,
-  status,
-  hideStatus = true,
-}: {
-  repo?: Repo;
-  host?: Host;
-  status: ReactNode;
-  hideStatus?: boolean;
-}) {
+function RowHead({ repo, status }: { repo?: Repo; status: ReactNode }) {
   return (
-    <span className="flex w-full items-center gap-1.5 text-[12px] text-faint-foreground">
+    <span className="flex w-full items-center gap-1.5 text-[12px] text-faint-foreground group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
       <RepoIcon repo={repo} />
       <span className="min-w-0 truncate">{repo && !repo.scratch ? repo.name : "No repo"}</span>
-      {host && <span className="shrink-0 truncate">· {host.name}</span>}
       <span
         data-status
-        className={`ml-auto shrink-0 text-[11.5px] ${hideStatus ? "group-has-[:focus-visible]/row:invisible group-hover/row:invisible" : ""}`}
+        className="ml-auto shrink-0 text-[11.5px] group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
       >
         {status}
       </span>
@@ -1000,37 +1242,43 @@ function RowHead({
 /**
  * A thread's row (0033): its repo and status (what it asks of the user, or how long ago it was
  * prompted), its title, then its branch, diff, and provider. Resting on it shows its card;
- * hovering or focusing it swaps the status for Snooze, Settle (while it has news) or Archive, and
- * more actions, which also open by right-clicking the row: native popovers, so Escape and clicking
- * away close them.
+ * hovering or focusing it swaps the status for Snooze, Archive, and more actions, which also open
+ * by right-clicking the row: native popovers, so Escape and clicking away close them.
  */
 function ThreadRow({
   thread,
+  hostId,
   title,
   run,
   repo,
   attention,
   selected,
+  badge,
+  nested,
   snoozable,
   onOpen,
   onArchive,
-  onSettle,
   onSnooze,
   onDelete,
   onRest,
   onLeave,
 }: {
   thread: Thread;
+  /** Its host, which a drag onto the composer names (PLX-378). */
+  hostId: string;
   title: string;
   run?: AgentRun;
   repo?: Repo;
   attention: Attention;
   selected: boolean;
+  /** Its Mod+number badge, shown in place of its status while Mod is held. */
+  badge?: ReactNode;
+  /** Under its parent's row, which names the repo: its status goes beside its title instead. */
+  nested?: boolean;
   /** Whether its plxd keeps seen and snooze state (`threadAttention`). */
   snoozable: boolean;
   onOpen: () => void;
   onArchive: () => void;
-  onSettle: () => void;
   onSnooze: (until: Date) => void;
   onDelete: () => void;
   onRest: (row: HTMLElement) => void;
@@ -1048,28 +1296,23 @@ function ThreadRow({
     onLeave();
     action();
   };
-  const Logo = run?.backend ? backendLogos[run.backend] : undefined;
+  const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
   const hasDetails = !!(run?.branch || run?.diff || Logo);
-  // Settle while it has news, Archive otherwise.
-  const settle = snoozable && (attention === "done" || attention === "failed");
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
-  const mainLabel = settle ? (
-    <>
-      <Check aria-hidden />
-      Settle
-    </>
-  ) : (
+  const mainLabel = (
     <>
       {thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
       {thread.archived ? "Unarchive" : "Archive"}
     </>
   );
   const status =
-    attention === "settled" ? (
+    badge ??
+    (attention === "settled" ? (
       age(lastPrompt(thread))
     ) : (
       <AttentionBadge attention={attention} since={lastPrompt(thread)} />
-    );
+    ));
+  const titleColor = selected || attention !== "settled" ? "text-foreground" : "text-foreground/70";
   return (
     <li
       data-kind="thread"
@@ -1085,15 +1328,34 @@ function ThreadRow({
           onLeave();
           openOnContextMenu(e, actions.current);
         }}
+        // Dropped on the composer, it attaches the thread to the message (PLX-378).
+        draggable
+        onDragStart={(e) => {
+          onLeave();
+          dragThread(e.dataTransfer, hostId, thread.id);
+        }}
         className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left hover:bg-hover ${selected ? current : ""}`}
       >
-        <RowHead repo={repo} status={status} />
-        <span
-          data-title
-          className={`w-full truncate text-[13px] ${selected || attention !== "settled" ? "text-foreground" : "text-foreground/70"}`}
-        >
-          {title}
-        </span>
+        {nested ? (
+          <span className="flex w-full items-center gap-2 group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
+            <span data-title className={`min-w-0 flex-1 truncate text-[13px] ${titleColor}`}>
+              {title}
+            </span>
+            <span
+              data-status
+              className="shrink-0 text-[11.5px] text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
+            >
+              {status}
+            </span>
+          </span>
+        ) : (
+          <>
+            <RowHead repo={repo} status={status} />
+            <span data-title className={`w-full truncate text-[13px] ${titleColor}`}>
+              {title}
+            </span>
+          </>
+        )}
         {hasDetails && (
           <span className="flex w-full items-center gap-2 text-[11.5px] text-faint-foreground">
             <span className="min-w-0 flex-1 truncate">{run?.branch}</span>
@@ -1124,8 +1386,7 @@ function ThreadRow({
           type="button"
           onClick={() => {
             onLeave();
-            if (settle) onSettle();
-            else onArchive();
+            onArchive();
           }}
           className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
@@ -1272,7 +1533,7 @@ function ThreadCard({
   top: number;
   left: number;
 }) {
-  const Logo = run?.backend ? backendLogos[run.backend] : undefined;
+  const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
   const look = run && (statusLooks[run.status] ?? statusLooks.completed!);
   return (
     <div
@@ -1299,7 +1560,9 @@ function ThreadCard({
         {run?.accountId && (
           <li>
             {Logo ? <Logo /> : <Bot />}
-            <span className="truncate">{accountLabel(run.accountId)}</span>
+            <span className="truncate">
+              {instanceName(run.accountId) ?? accountLabel(run.accountId)}
+            </span>
           </li>
         )}
         {run?.diff && (
@@ -1343,16 +1606,21 @@ export function age(time: string, now = Date.now()): string {
   return days < 7 ? `${days}d` : `${Math.floor(days / 7)}w`;
 }
 
-/** Each Settings section's name, in the nav's order. */
-export const settingsNames: Record<SettingsSection, string> = {
-  general: "General",
-  hosts: "Hosts",
-  providers: "Providers",
-};
-const sections = Object.entries(settingsNames).map(([id, name]) => ({
-  id: id as SettingsSection,
-  name,
-}));
+/** Each Settings section's name and icon, in the nav's order. */
+const sections: { id: SettingsSection; name: string; Icon: LucideIcon }[] = [
+  { id: "account", name: "Account", Icon: CircleUser },
+  { id: "general", name: "General", Icon: Settings },
+  { id: "appearance", name: "Appearance", Icon: Palette },
+  { id: "keybinds", name: "Keybinds", Icon: Keyboard },
+  { id: "providers", name: "Providers", Icon: Bot },
+  { id: "sourceControl", name: "Source control", Icon: GitBranch },
+  { id: "storage", name: "Storage", Icon: HardDrive },
+  { id: "connections", name: "Connections", Icon: Server },
+];
+export const settingsNames = Object.fromEntries(sections.map((s) => [s.id, s.name])) as Record<
+  SettingsSection,
+  string
+>;
 
 /** The sidebar while Settings is open. */
 export function SettingsNav({
@@ -1378,6 +1646,7 @@ export function SettingsNav({
           onClick={() => onSection(s.id)}
           className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
         >
+          <s.Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           {s.name}
         </button>
       ))}

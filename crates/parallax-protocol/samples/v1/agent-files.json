@@ -1,0 +1,78 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/files",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "entries": [
+        { "name": "README.md", "kind": "file", "size": 30 },
+        { "name": "latest", "kind": "symlink" },
+        { "name": "src", "kind": "dir" }
+      ],
+      "truncated": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/files",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "path": "src"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "entries": [{ "name": "main.rs", "kind": "file", "size": 13 }],
+      "truncated": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "agent/file",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "path": "src/main.rs",
+      "side": "working"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "path": "src/main.rs",
+      "side": "working",
+      "exists": true,
+      "size": 13,
+      "content": "Zm4gbWFpbigpIHt9Cg==",
+      "tooLarge": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "agent/files",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "path": "latest"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32602,
+      "message": "Invalid params: path \"latest\" is a symlink"
+    }
+  }
+]

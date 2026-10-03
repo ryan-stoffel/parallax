@@ -13,6 +13,7 @@ import type {
   JsonValue,
   LoggedEvent,
   ParallaxEvent,
+  RunId,
 } from "../protocol/generated/protocol";
 
 /** One row of the transcript. `key` is stable across re-renders; `at` is when it began. */
@@ -21,8 +22,10 @@ export type Item = ItemBody & { at?: string };
 type ItemBody =
   /**
    * `text` is null for a follow-up logged by a plxd from before it recorded the text. `wake` marks
-   * a turn plxd sent a coordinator itself, when runs it started finished (0025). `images` are the
-   * ids of the images sent with it, for `agent/image` (RYA-193).
+   * a turn plxd sent a coordinator itself, when runs it started finished (0025). `from` is the run
+   * id of the thread that sent it with its Parallax tools, not the user (0041). `images` are the
+   * ids of the images sent with it, for `agent/image` (RYA-193), and `threads` the run ids of the
+   * threads attached to it as context (PLX-378).
    */
   | {
       kind: "user";
@@ -30,7 +33,9 @@ type ItemBody =
       text: string | null;
       turnId?: string;
       wake?: boolean;
+      from?: string;
       images?: ImageId[];
+      threads?: RunId[];
     }
   /** `partial` while it is still arriving as `textDelta`s. */
   | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
@@ -51,8 +56,18 @@ type ItemBody =
     }
   /** `active` is the step under way as the agent words it, from Claude Code's task tools. */
   | { kind: "todo"; key: string; items: AgentTodoItem[]; active?: string }
-  /** `turnId` marks a follow-up that never reached the agent. */
-  | { kind: "notice"; key: string; tone: "info" | "warning"; text: string; turnId?: string }
+  /**
+   * `turnId` marks a follow-up that never reached the agent. `from` is the run id of the thread
+   * that stopped the run (0041).
+   */
+  | {
+      kind: "notice";
+      key: string;
+      tone: "info" | "warning";
+      text: string;
+      turnId?: string;
+      from?: string;
+    }
   /**
    * A permission request (RYA-196, 0031): what the agent asks to do, and how it ended, which is
    * absent while it waits.
@@ -178,7 +193,10 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
       items.push({ kind: "session", key, sessionId: item.sessionId });
       break;
     case "turnStarted": {
-      const images = item.images?.length ? { images: item.images } : {};
+      const attached = {
+        ...(!!item.images?.length && { images: item.images }),
+        ...(!!item.threads?.length && { threads: item.threads }),
+      };
       if (item.turnId)
         items.push({
           kind: "user",
@@ -186,14 +204,16 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
           text: item.text ?? null,
           turnId: item.turnId,
           ...(item.wake && { wake: true }),
-          ...images,
+          ...(item.from && { from: item.from }),
+          ...attached,
         });
       else {
-        // The run's first turn has no id; its prompt came with agent.started, and gets its images.
+        // The run's first turn has no id; its prompt came with agent.started, and gets its images
+        // and threads.
         const i = items.findIndex((x) => x.kind === "user" && !x.turnId);
         const prompt = items[i];
-        if (prompt?.kind === "user" && item.images?.length)
-          items[i] = { ...prompt, images: item.images };
+        if (prompt?.kind === "user" && (attached.images || attached.threads))
+          items[i] = { ...prompt, ...attached };
       }
       break;
     }
@@ -252,6 +272,15 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
         tone: "warning",
         text: "A message didn't reach the agent because it stopped first.",
         turnId: item.turnId,
+      });
+      break;
+    case "interrupted":
+      items.push({
+        kind: "notice",
+        key,
+        tone: "info",
+        text: "Stopped by another thread.",
+        from: item.from,
       });
       break;
     case "turnFinished": {
@@ -370,14 +399,45 @@ export interface Work {
 }
 
 /**
- * Folds each run of thinking, tool calls, and checklists into one `Work` row. The agent's messages
- * are never folded: they split runs and pass through, so they stay in order and stream in place.
- * So do a dropped follow-up's notice and other rows (user, end, and whatever the caller adds).
- * Other notices fold, except those after a run's last activity.
+ * The rows of each turn an `end` row closes that fold into its work, as T3 Code shows a finished
+ * turn (PLX-326): its messages before the last, and its answered permission requests. One CLI
+ * process can run several turns, as follow-ups arrive, so its `end` closes them all. A turn still
+ * going has no `end`, so its messages stream in place and its requests stay in view.
+ */
+function finishedTurnRows(rows: readonly { kind: string }[]): Set<number> {
+  const folds = new Set<number>();
+  // The current turn's messages and answered requests, and the earlier turns' that would fold.
+  let turn: number[] = [];
+  let closed: number[] = [];
+  const close = () => {
+    const answer = turn.findLast((j) => rows[j]!.kind === "assistant");
+    closed.push(...turn.filter((j) => j !== answer));
+    turn = [];
+  };
+  rows.forEach((row, i) => {
+    if (row.kind === "user" || row.kind === "pending") close();
+    else if (row.kind === "assistant" || (row.kind === "approval" && (row as Approval).resolved))
+      turn.push(i);
+    else if (row.kind === "end") {
+      close();
+      for (const j of closed) folds.add(j);
+      closed = [];
+    }
+  });
+  return folds;
+}
+
+/**
+ * Folds each run of thinking, tool calls, and checklists into one `Work` row. While a turn goes,
+ * the agent's messages split runs and pass through, so they stay in order and stream in place;
+ * once it ends, all but its last fold too (`finishedTurnRows`). A dropped follow-up's notice,
+ * another thread's stop, and other rows (user, end, and whatever the caller adds) pass through. Other notices fold, except
+ * those after a run's last activity.
  */
 export function groupWork<R extends { kind: string; at?: string }>(
   rows: readonly (Item | R)[],
 ): (Item | R | Work)[] {
+  const folds = finishedTurnRows(rows);
   const out: (Item | R | Work)[] = [];
   let run: Item[] = [];
   const flush = (next?: { kind: string; at?: string }) => {
@@ -398,10 +458,11 @@ export function groupWork<R extends { kind: string; at?: string }>(
     out.push(...run.slice(last + 1));
     run = [];
   };
-  for (const row of rows) {
+  for (const [i, row] of rows.entries()) {
     if (
+      folds.has(i) ||
       ["reasoning", "tool", "todo"].includes(row.kind) ||
-      (row.kind === "notice" && !(row as Item & { turnId?: string }).turnId)
+      (row.kind === "notice" && !(row as Item & { turnId?: string }).turnId && !("from" in row))
     )
       run.push(row as Item);
     else {
@@ -451,6 +512,7 @@ const statuses: Record<AgentStatus, string> = {
   failed: "Failed",
   cancelled: "Stopped",
   interrupted: "Interrupted",
+  waiting: "Waiting",
   accepted: "Accepted",
 };
 

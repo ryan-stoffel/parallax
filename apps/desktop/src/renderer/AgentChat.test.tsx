@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
-import { act, type ReactNode } from "react";
+import { Globe } from "lucide-react";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
@@ -13,11 +14,17 @@ import type {
   AgentToolStatus,
   LoggedEvent,
 } from "../protocol/generated/protocol";
-import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
+import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
+import { GitHubLogo, LinearLogo } from "./logos";
+import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
+import { dragThread } from "./threadDrag";
+import { emptyThreads } from "./threads";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers. Menus are in the DOM either way.
+HTMLElement.prototype.hidePopover = () => {};
 // happy-dom lays nothing out. Give the transcript a tall viewport and each row a
 // small height, so the virtualized list renders every row.
 Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
@@ -73,7 +80,21 @@ test("a message on its way to the agent shows at full strength", () => {
     />,
   );
   expect(document.body.textContent).toBe("And this?");
-  expect(document.querySelector('[class*="opacity"]')).toBeNull();
+  expect(document.querySelector(".bg-selected")!.className).not.toContain("opacity");
+});
+
+test("a prompt shows when it was sent and copies its text, on hover", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  row({ kind: "user", key: "a", text: "Fix the build", at: "2026-09-25T12:00:00Z" });
+  const time = document.querySelector("time")!;
+  expect(time.dateTime).toBe("2026-09-25T12:00:00Z");
+  expect(time.parentElement!.className).toContain("group-hover/prompt:opacity-100");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Copy message"]')!.click(),
+  );
+  expect(writeText).toHaveBeenCalledWith("Fix the build");
+  expect(document.querySelector('button[aria-label="Copied"]')).not.toBeNull();
 });
 
 test("a user message shows its text, or a neutral label when the log has none", () => {
@@ -122,6 +143,41 @@ test("a user message shows its images over its text: fetched by id, or at hand w
   expect(document.body.textContent).toBe("And this?");
 });
 
+// The host's threads (PLX-378): one Codex thread the transcript's chips can open.
+const threadLinks = (): ThreadLinks => ({
+  hostId: "local",
+  state: {
+    ...emptyThreads,
+    threads: [{ id: "run-a", repo: "r", createdAt: new Date().toISOString() }],
+    titles: { "run-a": "Fix the flaky test" },
+    runs: { "run-a": { id: "run-a", backend: "codex" } as AgentRun },
+  },
+  open: vi.fn(),
+});
+
+test("a user message shows its attached threads as chips that open them, while the host lists them (PLX-378)", () => {
+  const links = threadLinks();
+  render(
+    <ThreadLinksContext value={links}>
+      <RowView
+        row={{ kind: "user", key: "a", text: "Compare", threads: ["run-a", "run-gone"] }}
+        live={false}
+        open={false}
+        onToggle={() => {}}
+      />
+    </ThreadLinksContext>,
+  );
+  const chips = [...document.querySelectorAll("[data-thread-chip]")];
+  expect(chips.map((c) => c.textContent)).toEqual([
+    "Thread · nowFix the flaky test",
+    "ThreadUnavailable",
+  ]);
+  // A deleted thread has nothing to open.
+  expect(chips[1]!.querySelector("button")).toBeNull();
+  act(() => chips[0]!.querySelector("button")!.click());
+  expect(links.open).toHaveBeenCalledWith("run-a");
+});
+
 test("a wake-up reads as from Parallax, with its message folded away", () => {
   row({
     kind: "user",
@@ -132,6 +188,25 @@ test("a wake-up reads as from Parallax, with its message folded away", () => {
   expect(document.querySelector("summary")!.textContent).toBe("From Parallax: subagents finished");
   expect(document.querySelector("details")!.open).toBe(false);
   expect(document.querySelector(".bg-selected")).toBeNull();
+});
+
+test("another thread's message and stop name it, with the message folded away (0041)", () => {
+  const user: Item = { kind: "user", key: "f", text: "Rebase first.", turnId: "t", from: "r" };
+  render(<RowView row={user} live={false} open={false} onToggle={() => {}} sender="Notes" />);
+  expect(document.querySelector("summary")!.textContent).toBe("From another thread: Notes");
+  expect(document.querySelector("details")!.open).toBe(false);
+  expect(document.querySelector(".bg-selected")).toBeNull();
+  act(() => unmount());
+
+  const stop: Item = {
+    kind: "notice",
+    key: "s",
+    tone: "info",
+    text: "Stopped by another thread.",
+    from: "r",
+  };
+  render(<RowView row={stop} live={false} open={false} onToggle={() => {}} sender="Notes" />);
+  expect(document.body.textContent).toBe("Stopped by another thread: Notes.");
 });
 
 test("an assistant message renders Markdown, but never raw HTML or images", () => {
@@ -152,6 +227,57 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
   // Its file: source is unsafe, so it has no href at all rather than an empty one.
   expect(links[1]!.hasAttribute("href")).toBe(false);
+});
+
+test("a code block names its language, highlights it, and copies its text", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  row({ kind: "assistant", key: "a", text: "```ts\nconst x = 1;\n```\n\n```\nplain\n```" });
+  const [ts, plain] = [...document.querySelectorAll(".markdown > div")];
+  expect(ts!.firstElementChild!.textContent).toBe("tsCopy");
+  expect(ts!.querySelector(".hljs-keyword")?.textContent).toBe("const");
+  expect(plain!.firstElementChild!.textContent).toBe("textCopy");
+  expect(plain!.querySelector("[class^='hljs-']")).toBeNull();
+  await act(async () => ts!.querySelector<HTMLButtonElement>("button")!.click());
+  expect(writeText).toHaveBeenCalledWith("const x = 1;\n");
+});
+
+test("a diff code block shows added and removed lines, and copies the diff", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const diff = "--- a/q.sql\n+++ b/q.sql\n@@ -1,3 +1,2 @@\n-old\n--- a note\n+new\n same\n";
+  row({ kind: "assistant", key: "a", text: `\`\`\`diff\n${diff}\`\`\`` });
+  // The block's header, then its lines.
+  const lines = [...document.querySelector(".markdown > div")!.lastElementChild!.children];
+  expect(lines.map((l) => l.textContent)).toEqual([
+    "--- a/q.sql",
+    "+++ b/q.sql",
+    "@@ -1,3 +1,2 @@",
+    "−Removed: old",
+    "−Removed: -- a note",
+    "+Added: new",
+    " same",
+  ]);
+  expect(lines[5]!.className).toContain("bg-added/10");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Copy code"]')!.click(),
+  );
+  expect(writeText).toHaveBeenCalledWith(diff);
+});
+
+test("an edit's tool call shows its change as a diff, not JSON", () => {
+  row({
+    kind: "tool",
+    key: "t",
+    callId: "toolu_3",
+    name: "Edit",
+    input: { file_path: "/a.ts", old_string: "let a = 1;", new_string: "let a = 2;" },
+    status: "ok",
+  });
+  const diff = document.querySelector('[role="group"]')!;
+  expect(diff.getAttribute("aria-label")).toBe("Diff: 1 line added, 1 removed");
+  expect(diff.textContent).toBe("−Removed: let a = 1;+Added: let a = 2;");
+  expect(document.querySelector("details")!.textContent).not.toContain("old_string");
 });
 
 test("a tool call collapses its input and output under its name", () => {
@@ -514,7 +640,8 @@ const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
  * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as plxd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
  * plxd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
- * default), and `agent/openPr` answers `prUrl`. `connect` changes the connection's state.
+ * default), `agent/openPr` answers `prUrl`, or fails with `prError`, and `agent/image` a tiny PNG.
+ * `connect` changes the connection's state.
  */
 function fakeBridge(
   seq: number,
@@ -525,17 +652,21 @@ function fakeBridge(
     capabilities = {},
     sent = {} as Partial<AgentRun>,
     prUrl = "",
+    prError = undefined as object | undefined,
   } = {},
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
-  let connection: (hostId: string, state: ConnectionState) => void = () => {};
+  const connections = new Set<(hostId: string, state: ConnectionState) => void>();
   const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
       return { error: { code: -32000, message: cancelError } };
     if (method === "agent/send")
       return { result: { run: { ...sampleRun, status: "running", ...sent } }, logId: "log-1" };
-    if (method === "agent/openPr") return { result: { url: prUrl }, logId: "log-1" };
+    if (method === "agent/openPr")
+      return prError ? { error: prError } : { result: { url: prUrl }, logId: "log-1" };
+    if (method === "agent/image")
+      return { result: { mediaType: "image/png", data: "AAAA" }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
     return { result: { events: rest.slice(0, 2), more: rest.length > 2 }, logId: "log-1" };
@@ -554,9 +685,9 @@ function fakeBridge(
       protocol: 1,
       capabilities,
     }),
-    onConnectionState: (l: typeof connection) => {
-      connection = l;
-      return () => {};
+    onConnectionState: (l: (hostId: string, state: ConnectionState) => void) => {
+      connections.add(l);
+      return () => connections.delete(l);
     },
     request,
     subscribe,
@@ -566,7 +697,8 @@ function fakeBridge(
     subscribe,
     unsubscribe,
     emit: (m: SubscriptionMessage) => act(() => listener(m)),
-    connect: (state: ConnectionState) => act(() => connection("local", state)),
+    connect: (state: ConnectionState) =>
+      act(() => connections.forEach((connection) => connection("local", state))),
   };
 }
 
@@ -686,6 +818,56 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   expect(sendAgain()).toBeUndefined();
 });
 
+test("Stop puts a first prompt's images back too, fetched from plxd by id", async () => {
+  const { request, emit } = fakeBridge(2);
+  await renderChat();
+  // The first turn's turnStarted brings its images' ids, before the agent says anything.
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "turnStarted", images: ["i-1"] }] },
+    },
+  });
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  await settle();
+  expect(request).toHaveBeenCalledWith("local", "agent/image", { runId, imageId: "i-1" });
+  expect(document.querySelector<HTMLImageElement>('img[alt="Image 1"]')!.src).toBe(
+    "data:image/png;base64,AAAA",
+  );
+});
+
+test("a follow-up Stop puts back in the box offers no Send again once plxd drops it", async () => {
+  const { request, emit } = fakeBridge(4);
+  await renderChat();
+  type("Also mention the tests.");
+  await act(async () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const { turnId } = send[2] as { turnId: string };
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  expect(composer().textContent).toBe("Also mention the tests.");
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "followUpDropped", turnId }] },
+    },
+  });
+  expect([...document.querySelectorAll("button")].some((b) => b.textContent === "Send again")).toBe(
+    false,
+  );
+});
+
 test("a message a finished run couldn't take goes back in the box, with no loader", async () => {
   const send = async (text: string) => {
     type(text);
@@ -736,6 +918,31 @@ test("a pasted image goes with agent/send beside the text, and shows while it's 
   vi.unstubAllGlobals();
 });
 
+test("a thread dropped on the composer goes with agent/send as threads, and shows as a chip while pending (PLX-378)", async () => {
+  const { request } = fakeBridge(4, { capabilities: { threadContext: { maxThreads: 8 } } });
+  render(<AgentChat hostId="local" runId={runId} threadLinks={threadLinks()} />);
+  await settle();
+  const data = new DataTransfer();
+  dragThread(data, "local", "run-a");
+  act(() => {
+    document.querySelector("form")!.dispatchEvent(
+      Object.defineProperty(new Event("drop", { bubbles: true }), "dataTransfer", {
+        value: data,
+      }),
+    );
+  });
+  type("Do the same here");
+  await act(async () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+
+  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  expect(send[2]).toMatchObject({ runId, text: "Do the same here", threads: ["run-a"] });
+  expect(document.querySelector('[role="log"] [data-thread-chip]')?.textContent).toBe(
+    "Thread · nowFix the flaky test",
+  );
+});
+
 test("Stop cancels, and a failed cancel says why and allows another try", async () => {
   const { request } = fakeBridge(4, { cancelError: "plxd is gone" });
   await renderChat();
@@ -747,6 +954,31 @@ test("Stop cancels, and a failed cancel says why and allows another try", async 
   expect(document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.disabled).toBe(
     false,
   );
+});
+
+test("Stop or Esc before the agent answers puts the prompt back in the box, but not after", async () => {
+  const prompt = "Add a README that explains how to build the app.";
+  const stopButton = () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!;
+  fakeBridge(2); // started, with nothing from the agent yet
+  await renderChat();
+  await act(async () => stopButton().click());
+  expect(composer().textContent).toBe(prompt);
+  act(() => unmount());
+
+  fakeBridge(2);
+  await renderChat();
+  await act(
+    async () =>
+      void composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+  );
+  expect(composer().textContent).toBe(prompt);
+  act(() => unmount());
+
+  const { request } = fakeBridge(4); // the agent has replied
+  await renderChat();
+  await act(async () => stopButton().click());
+  expect(request).toHaveBeenCalledWith("local", "agent/cancel", { runId });
+  expect(composer().textContent).toBe("");
 });
 
 test("a finished run opens a pull request titled like its thread, then links to it", async () => {
@@ -781,6 +1013,84 @@ test("a finished run opens a pull request titled like its thread, then links to 
   expect(openPr()).toBeUndefined();
 });
 
+test("an Open PR that fails for gh says so in one line by Set up GitHub", async () => {
+  fakeBridge(8, {
+    capabilities: { openPr: {} },
+    prError: {
+      code: -32000,
+      message: "GitHub CLI isn't installed on the host: gh was not found; looked in /usr/bin",
+      data: { kind: "ghUnavailable" },
+    },
+  });
+  const onSetUpGithub = vi.fn();
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+    unmount = () => {};
+  };
+  act(() => root.render(<AgentChat hostId="local" runId={runId} onSetUpGithub={onSetUpGithub} />));
+  await settle();
+  const button = (name: string) =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === name);
+  await act(async () => button("Open PR")!.click());
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe(
+    "GitHub isn't installed on this host.Set up GitHub",
+  );
+  await act(async () => button("Set up GitHub")!.click());
+  expect(onSetUpGithub).toHaveBeenCalledOnce();
+});
+
+test("with the PR view, Open PR opens it, a linked one's chip takes its place, and the view's messages reach the chat", async () => {
+  const url = "https://github.com/me/app/pull/42";
+  const { request } = fakeBridge(8, { capabilities: { openPr: {} }, prUrl: url });
+  const onPrOpened = vi.fn();
+  const onComposed = vi.fn();
+  // One chat, drawn again with new props.
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+    unmount = () => {};
+  };
+  const chat = (props: Partial<ComponentProps<typeof AgentChat>>) =>
+    act(() =>
+      root.render(
+        <AgentChat
+          hostId="local"
+          runId={runId}
+          onPrOpened={onPrOpened}
+          onComposed={onComposed}
+          {...props}
+        />,
+      ),
+    );
+  chat({});
+  await settle();
+  await act(async () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Open PR")!.click(),
+  );
+  expect(onPrOpened).toHaveBeenCalledWith(url);
+  expect(document.querySelector(`a[href="${url}"]`)).toBeNull();
+
+  chat({ pullRequests: <button type="button">#42</button> });
+  expect(document.body.textContent).toContain("#42");
+  expect(document.body.textContent).not.toContain("Open PR");
+
+  chat({ compose: { text: "Explain this pull request", send: true } });
+  await settle();
+  expect(request).toHaveBeenCalledWith(
+    "local",
+    "agent/send",
+    expect.objectContaining({ runId, text: "Explain this pull request" }),
+  );
+  expect(onComposed).toHaveBeenCalledTimes(1);
+  chat({ compose: { text: `${url} `, send: false } });
+  await settle();
+  expect(document.querySelector('[role="textbox"]')!.textContent).toBe(`${url} `);
+  expect(onComposed).toHaveBeenCalledTimes(2);
+});
+
 test("while disconnected, nothing loads and the composer says why", async () => {
   const { request } = fakeBridge(8);
   window.parallax.connectionState = async () => ({
@@ -803,7 +1113,7 @@ test("an open thread's composer picks within its provider and sends only what ch
         backend="claude"
         started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
         unavailable={{
-          Codex: "Codex is unavailable in this thread. Start a new thread to switch providers.",
+          codex: "Codex is unavailable in this thread. Start a new thread to switch providers.",
         }}
         onSend={onSend}
         optionsDisabled={optionsDisabled}
@@ -854,7 +1164,41 @@ test("an open thread's composer picks within its provider and sends only what ch
     "Just the summary",
     { model: "claude-sonnet-5", effort: "low" },
     [],
+    [],
   );
+});
+
+test("on a plxd that takes them, an open thread's context window and fast mode send only what changed", async () => {
+  const onSend = vi.fn(async () => undefined);
+  render(
+    <Composer
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "high", contextWindow: 1_000_000 }}
+      contextAndFast
+      onSend={onSend}
+    />,
+  );
+  const effort = () => document.querySelector('[aria-label^="Reasoning effort: "]')!;
+  expect(effort().getAttribute("aria-label")).toBe("Reasoning effort: High · 1M");
+  const choose = (menu: string, option: string) =>
+    act(() =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          `[role="menu"][aria-label="${menu}"] [role="menuitemradio"]`,
+        ),
+      ]
+        .find((o) => o.textContent === option)!
+        .click(),
+    );
+  choose("Context window", "200K");
+  choose("Fast mode", "On");
+  expect(effort().textContent).toBe("High · 200K");
+  expect(effort().getAttribute("aria-label")).toBe("Reasoning effort: High · 200K, fast");
+  type("Quicker");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
+  );
+  expect(onSend).toHaveBeenCalledWith("Quicker", { contextWindow: 200_000, fast: true }, [], []);
 });
 
 test("another provider's model moves an open thread there, with every option and the account", async () => {
@@ -876,7 +1220,7 @@ test("another provider's model moves an open thread there, with every option and
     m.textContent?.startsWith("GPT-6 Astra"),
   )!;
   await act(async () => astra.click());
-  // Codex maps one access, so there's no choice, and Plan becomes Accept Edits.
+  // Codex has no Plan, so Plan becomes Accept Edits.
   expect(control("Access: Plan")).toBeNull();
   type("Carry on");
   await act(async () =>
@@ -890,6 +1234,7 @@ test("another provider's model moves an open thread there, with every option and
       permission: "edit",
       account: { kind: "subscription", backend: "codex" },
     },
+    [],
     [],
   );
 });
@@ -1055,11 +1400,13 @@ test("the musing changes its word on the wall clock, while screen readers keep h
 
 test("under reduced motion, the musing keeps its word", () => {
   vi.useFakeTimers({ now: 2400 * 8000 });
-  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduced-motion") }));
+  // appearance.ts sets it under the OS's Reduce motion or the app's own.
+  document.documentElement.classList.add("reduce-motion");
   render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
   expect(vi.getTimerCount()).toBe(0);
   act(() => void vi.advanceTimersByTime(4800));
   expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
+  document.documentElement.classList.remove("reduce-motion");
 });
 
 test("a running chat that loses plxd shows no loader", async () => {
@@ -1120,7 +1467,7 @@ const todoWrite = (n: number, done: number): Item[] => [
   { kind: "todo", key: `t${n}`, items: checklist(done) },
 ];
 
-test("a turn's plan is one card where it began, its updates lines in the work, its proposal a card", () => {
+test("a turn's plan is one line where it began, its updates lines in the work, its proposal a card", () => {
   const rows: Item[] = [
     { kind: "user", key: "u", text: "go" },
     { kind: "reasoning", key: "r", text: "A plan first." },
@@ -1145,7 +1492,7 @@ test("a turn's plan is one card where it began, its updates lines in the work, i
     "go",
     "Workedbriefly",
     "ProposedplanShipitReadBuild",
-    "Plan2of2doneDone:ReadDone:Build",
+    "Madeaplan2of2done",
     "Workedbriefly",
     "Done.",
   ]);
@@ -1160,7 +1507,7 @@ test("a turn's plan is one card where it began, its updates lines in the work, i
   expect(transcriptText()).not.toContain("TodoWrite");
 });
 
-test("Claude Code's task tools make the same card and lines as TodoWrite, and their rows go", () => {
+test("Claude Code's task tools make the same lines as TodoWrite, and their rows go", () => {
   // As plxd logs them from Claude Code 2.1.283: each call, with its result's text.
   const task = (
     key: string,
@@ -1204,7 +1551,7 @@ test("Claude Code's task tools make the same card and lines as TodoWrite, and th
   expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
     "go",
     "Workedbriefly",
-    "Plan2of2doneDone:ReadDone:Build",
+    "Madeaplan2of2done",
     "Workedbriefly",
     "Done.",
   ]);
@@ -1221,7 +1568,7 @@ test("Claude Code's task tools make the same card and lines as TodoWrite, and th
   expect(transcriptText()).not.toMatch(/Task(Create|Update|List)/);
 });
 
-test("while a run goes, only its latest plan moves, and the work after a plan muses until it starts", () => {
+test("while a run goes, the work after a plan muses until it starts", () => {
   const rows: Item[] = [
     { kind: "user", key: "u1", text: "go" },
     { kind: "todo", key: "t1", items: checklist(0) },
@@ -1230,8 +1577,6 @@ test("while a run goes, only its latest plan moves, and the work after a plan mu
     ...todoWrite(2, 1),
   ];
   render(<TranscriptView rows={rows} sent={new Map()} live />);
-  const cards = [...document.querySelectorAll('[role="group"]')];
-  expect(cards.map((c) => c.querySelectorAll(".loader").length)).toEqual([0, 1]);
   // After the plan, a work row for what comes next.
   const last = [...document.querySelectorAll("[data-index]")].at(-1)!;
   expect(last.querySelector("button[aria-expanded] .sr-only")!.textContent).toBe("Working");
@@ -1260,14 +1605,12 @@ test("while the run works on a plan, a strip over the composer shows it, until a
   expect(strip()).toBeNull();
   act(() => unmount());
 
-  // Losing plxd stalls it: no strip, and nothing moves in the card.
-  const card = () => document.querySelector('[role="log"] [role="group"]')!;
+  // Losing plxd stalls it: no strip.
   const third = fakeBridge(4);
   await renderChat();
-  expect(card().querySelector(".loader")).not.toBeNull();
+  expect(strip()).not.toBeNull();
   third.connect({ status: "connecting" });
   expect(strip()).toBeNull();
-  expect(card().querySelector(".loader")).toBeNull();
 });
 
 test("a bar beside the transcript for each prompt shows it and its reply, and scrolls back to it", () => {
@@ -1276,8 +1619,10 @@ test("a bar beside the transcript for each prompt shows it and its reply, and sc
     { kind: "user", key: "u1", text: "Add a **README**" },
     { kind: "assistant", key: "a1", text: "Started.\n\nStill going." },
     { kind: "assistant", key: "a2", text: "Wrote `README.md`.\n\nIt lists the commands." },
-    // Parallax's wake-up isn't the user's, and the reply to it isn't the README's.
+    // Parallax's wake-up and another thread's message aren't the user's, and the reply to them
+    // isn't the README's.
     { kind: "user", key: "w", text: "Subagents finished", wake: true },
+    { kind: "user", key: "f", text: "Merge it.", turnId: "t1", from: "r" },
     { kind: "assistant", key: "a3", text: "Merged the PR." },
     { kind: "user", key: "u2", text: null, turnId: "t2" },
   ];
@@ -1290,6 +1635,8 @@ test("a bar beside the transcript for each prompt shows it and its reply, and sc
   ]);
   // Scrolled to the end, the latest prompt is the one being read.
   expect(bars.map((b) => b.getAttribute("aria-current"))).toEqual([null, "true"]);
+  // Only a hovered or focused bar stands out, not the one being read.
+  expect(bars[1]!.firstElementChild!.className).toBe(bars[0]!.firstElementChild!.className);
 
   act(() => bars[0]!.focus());
   const card = document.querySelector('nav[aria-label="Prompts"] + [aria-hidden]')!;
@@ -1344,4 +1691,15 @@ test("scrolled up from the end, Scroll to end shows over the transcript, and goe
   });
   expect(end()).toBeUndefined();
   scrollTo.mockRestore();
+});
+
+test("a web link gets its site's logo, or a globe, and other links none (PLX-330)", () => {
+  expect(linkIcon("https://github.com/ryan-stoffel/parallax/pull/470")).toBe(GitHubLogo);
+  expect(linkIcon("https://gist.github.com/x")).toBe(GitHubLogo);
+  expect(linkIcon("https://linear.app/ryanstoffel/issue/PLX-330")).toBe(LinearLogo);
+  expect(linkIcon("https://notgithub.com/x")).toBe(Globe);
+  expect(linkIcon("http://localhost:5173")).toBe(Globe);
+  expect(linkIcon("mailto:a@b.c")).toBeUndefined();
+  expect(linkIcon("archived.md")).toBeUndefined();
+  expect(linkIcon(undefined)).toBeUndefined();
 });

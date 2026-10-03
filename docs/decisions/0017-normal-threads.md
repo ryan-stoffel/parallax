@@ -1,6 +1,6 @@
 # 0017: Normal threads are agent runs that belong to a repo entry
 
-- Status: accepted; model, effort, and permission added by RYA-97
+- Status: accepted; model, effort, and permission added by RYA-97; a thread runs as full Claude Code with no sandbox, and its first prompt is the user's message, since [0034](0034-threads-are-full-claude-code.md)
 - Date: 2026-09-26
 - Issue: #110
 

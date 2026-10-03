@@ -1,83 +1,28 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Terminal } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useState } from "react";
 
-import type { CliKind } from "../protocol/generated/protocol";
+import type { TerminalTarget } from "../preload/bridge";
+import { TerminalView } from "./Terminal";
 
 /**
- * A terminal running `cli`'s own sign-in on a host (0004), in the main process's pty. What's typed
- * and printed only passes between the two. `onExit` runs when the sign-in ends; closing the pane
- * (`onClose`, or unmounting) ends it if it's still running.
+ * A terminal running a sign-in on a host, in the main process's pty, as the window's terminal
+ * `sign-in`: a CLI's own (0004), or a provider instance's `login`. `onExit` runs when the sign-in
+ * ends; closing the pane (`onClose`, or unmounting) ends it if it's still running.
  */
 export function SignInTerminal({
-  hostId,
-  cli,
+  target,
   name,
   onExit,
   onClose,
 }: {
-  hostId: string;
-  cli: CliKind;
-  /** The CLI as people know it, such as "Claude Code". */
+  /** A CLI's or a provider instance's sign-in. */
+  target: Exclude<TerminalTarget, { path: string }>;
+  /** What signs in, as people know it, such as "Claude Code". */
   name: string;
   onExit: () => void;
   onClose: () => void;
 }) {
-  const container = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string>();
   const [ended, setEnded] = useState(false);
-  const exited = useEffectEvent(onExit);
-
-  useEffect(() => {
-    const element = container.current!;
-    const style = getComputedStyle(element);
-    const color = (token: string) => style.getPropertyValue(token).trim();
-    const term = new Terminal({
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
-      cursorBlink: true,
-      theme: {
-        background: color("--surface"),
-        foreground: color("--foreground"),
-        cursor: color("--foreground"),
-      },
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    // Links, such as the vendor's sign-in page, go to main, which opens https ones in the browser.
-    term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri)));
-    // Outside macOS, Ctrl+V pastes and Ctrl+C copies a selection, as Cmd does on a Mac.
-    term.attachCustomKeyEventHandler(
-      (e) =>
-        window.parallax.platform === "darwin" ||
-        e.type !== "keydown" ||
-        !e.ctrlKey ||
-        !(e.key === "v" || (e.key === "c" && term.hasSelection())),
-    );
-    term.open(element);
-    fit.fit();
-
-    const stop = window.parallax.onTerminal((message) => {
-      if (message.type === "data") return term.write(message.data);
-      setEnded(true);
-      exited();
-    });
-    term.onData((data) => window.parallax.terminalInput(data));
-    term.onResize(({ cols, rows }) => window.parallax.resizeTerminal(cols, rows));
-    const observer = new ResizeObserver(() => fit.fit());
-    observer.observe(element);
-    void window.parallax.openTerminal(hostId, cli, term.cols, term.rows).then(setError);
-    term.focus();
-
-    return () => {
-      observer.disconnect();
-      stop();
-      window.parallax.closeTerminal();
-      term.dispose();
-    };
-  }, [hostId, cli]);
 
   const done = ended || error !== undefined;
   return (
@@ -101,11 +46,16 @@ export function SignInTerminal({
       )}
       {/* The fit addon sizes the terminal to the inner box, so the padding goes outside it. */}
       <div className="h-64 rounded-md border border-border bg-surface p-2">
-        <div
-          ref={container}
-          role="group"
-          aria-label={`${name} sign-in terminal`}
-          className="h-full overflow-hidden"
+        <TerminalView
+          key={JSON.stringify(target)}
+          id="sign-in"
+          target={target}
+          label={`${name} sign-in terminal`}
+          onEnd={(why) => {
+            if (why) return setError(why);
+            setEnded(true);
+            onExit();
+          }}
         />
       </div>
     </div>

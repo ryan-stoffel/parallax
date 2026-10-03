@@ -1,8 +1,11 @@
-//! Detected vendor CLIs (#114): `accounts/list` and `accounts/refresh`.
+//! Detected vendor CLIs (#114): `accounts/list` and `accounts/refresh`. Also the GitHub CLI
+//! (PLX-336): `github/status`, and setting it up (PLX-423, 0050): `github/install`,
+//! `github/signIn`, and `github/signInCancel`.
 //!
-//! Distinct from #117's `accounts/keys/*`, which manages stored API keys. This is read-only:
-//! plxd never signs a CLI in, never touches its credential files, and only runs the status
-//! commands decision record 0004 lists.
+//! Distinct from #117's `accounts/keys/*`, which manages stored API keys. The vendor CLIs are
+//! read-only: plxd never signs one in, never touches its credential files, and only runs the
+//! status commands decision record 0004 lists. `gh` is the one exception (0050): plxd may install
+//! it and start its sign-in, and `gh` keeps the token.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -114,6 +117,91 @@ pub struct AccountsRefreshResult {
     /// When this probe ran.
     pub checked_at: Timestamp,
 }
+
+/// Params of `github/status`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubStatusParams {}
+
+/// The GitHub CLI (`gh`) on the host: the result of `github/status`.
+///
+/// Every field but `installed` and `checkedAt` is best-effort: a field plxd could not read is
+/// absent rather than a guess.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubStatus {
+    /// Whether `gh` resolves on the `PATH` plxd itself uses (#96).
+    pub installed: bool,
+    /// Its version, such as `2.100.0`, from `gh --version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub version: Option<String>,
+    /// Whether `gh` is signed in to github.com. Absent when installed but plxd could not tell (a
+    /// timeout, or an exit code `gh auth status` doesn't use).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub signed_in: Option<bool>,
+    /// The signed-in github.com login, when `gh auth status` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<String>,
+    /// Why a field above is missing, such as `"timed out after 5s"`. Never set on a clean read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+    /// Whether the `gh` in use is the copy `github/install` put in plxd's data folder, rather than
+    /// one the user installed (PLX-423).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub managed: bool,
+    /// Whether `github/install` is downloading and unpacking `gh` now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub installing: bool,
+    /// The sign-in `github/signIn` started, until `gh auth login` exits and `gh auth setup-git`
+    /// has run after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub signing_in: Option<GithubSignIn>,
+    /// What went wrong with the last install or sign-in plxd ran: why it failed, or why `gh auth
+    /// setup-git` failed after a sign-in that worked. Cleared when the next one starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub setup_note: Option<String>,
+    /// When plxd read this.
+    pub checked_at: Timestamp,
+}
+
+/// Params of `github/install`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubInstallParams {}
+
+/// Params of `github/signIn`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubSignInParams {}
+
+/// A pending `gh auth login`: the one-time code to enter on GitHub's device page. The result of
+/// `github/signIn`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubSignIn {
+    /// The one-time code, such as `AA17-58F5`.
+    pub code: String,
+    /// The page to enter it on, `https://github.com/login/device`.
+    pub url: String,
+    /// When plxd stops waiting: GitHub's device codes last 15 minutes.
+    pub expires_at: Timestamp,
+}
+
+/// Params of `github/signInCancel`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubSignInCancelParams {}
+
+/// Result of `github/signInCancel`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubSignInCancelResult {}
 
 #[cfg(test)]
 mod tests {

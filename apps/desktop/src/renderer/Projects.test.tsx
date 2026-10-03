@@ -2,7 +2,7 @@
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import type {
   ConnectionState,
@@ -18,6 +18,7 @@ import type {
   Project,
   Repo,
   ParallaxEvent,
+  Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
 
@@ -83,6 +84,7 @@ const setState = (hostId: string, state: ConnectionState) => {
 beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
+  localStorage.clear();
   popoverSources = [];
   listeners = new Set();
   capabilities = {};
@@ -103,6 +105,7 @@ beforeEach(() => {
     }),
   };
   window.parallax = {
+    onProfile: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async (hostId) =>
@@ -119,6 +122,14 @@ beforeEach(() => {
     pickFolder,
     hosts: async () => sshHosts,
     onHosts: () => () => {},
+    onLocalName: (listener: (name: string) => void) => {
+      listener("This Mac");
+      return () => {};
+    },
+    setZoom: () => {},
+    setAppIcon: () => {},
+    openTargets: async () => [],
+    openTargetIcons: async () => ({}),
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
@@ -178,8 +189,13 @@ const press = (key: string) =>
     document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   });
 
-const openNewProject = () =>
-  click(document.querySelector('#sidebar button[aria-label="New project"]'));
+/** The toolbar's New project or repository menu's items, by label. */
+const addMenuItems = () => [
+  ...document.querySelectorAll<HTMLButtonElement>(
+    '#sidebar [role="menu"][aria-label="New project or repository"] [role="menuitem"]',
+  ),
+];
+const openNewProject = () => click(addMenuItems().find((b) => b.textContent === "New project…"));
 const workspaceButton = () =>
   dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");
 const workspaceMenu = () =>
@@ -462,7 +478,7 @@ test("the Workspace menu searches every host's repositories, Enter picks the fir
 });
 
 const projectsList = () =>
-  document.querySelector<HTMLElement>('#sidebar [aria-label="Threads and Projects"]')!;
+  document.querySelector<HTMLElement>('#sidebar ul[aria-label="Projects"]')!;
 /** A Project's row in the sidebar, by its name. */
 const projectRow = (name: string) =>
   [...projectsList().querySelectorAll<HTMLLIElement>('li[data-kind="project"]')].find((li) =>
@@ -691,6 +707,68 @@ test("another client's project.updated renames a row and changes its icon, in th
     "rocket",
     "text-project-green",
   ]);
+});
+
+test("with iconImages, Change icon uploads an image, and a Project's and its repo's images draw in the row, the Repos filter, the breadcrumb, and the chat", async () => {
+  capabilities = { projectEdit: {}, iconImages: { maxBytes: 65536 } };
+  const logo = { mediaType: "image/webp" as const, data: "UklGRg==" };
+  const repoLogo = { mediaType: "image/png" as const, data: "iVBORw==" };
+  answers["thread/list"] = () => ({
+    result: {
+      repos: [{ ...repo("ember", "/src/ember"), icon: { name: "rocket", image: repoLogo } }],
+      threads: [],
+      seq: 7,
+    },
+  });
+  answers["project/update"] = updates;
+  // happy-dom decodes and draws no images.
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 64, close() {} }));
+  // The image upload draws the picture; the app icon (appearance.ts) draws its circles.
+  const noop = () => {};
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage: noop,
+    ...Object.fromEntries(
+      ["beginPath", "roundRect", "arc", "fill", "save", "restore", "clip"].map((m) => [m, noop]),
+    ),
+  } as never);
+  vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+    `data:image/webp;base64,${logo.data}`,
+  );
+  await renderApp();
+
+  await click(menuItem("ember", "Change icon"));
+  const input = iconPicker(projectRow("ember"))!.querySelector<HTMLInputElement>(
+    'input[type="file"]',
+  )!;
+  Object.defineProperty(input, "files", {
+    value: [new File(["x"], "logo.png", { type: "image/png" })],
+  });
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await settle();
+  expect(calls("project/update")).toEqual([
+    { project: "p-ember", icon: { name: "folder-kanban", image: logo } },
+  ]);
+
+  const drawn = (within: Element | null | undefined) =>
+    [...(within?.querySelectorAll("svg[data-icon-image] image") ?? [])].map((i) =>
+      i.getAttribute("href"),
+    );
+  const projectUrl = `data:image/webp;base64,${logo.data}`;
+  const repoUrl = `data:image/png;base64,${repoLogo.data}`;
+  // The row has no repo line (PLX-340), so the repo's image draws in the Repos filter.
+  expect(drawn(rowButton("ember"))).toEqual([projectUrl]);
+  expect(drawn(document.querySelector('#sidebar [role="menu"][aria-label="Repos"]'))).toEqual([
+    repoUrl,
+  ]);
+  await click(rowButton("ember"));
+  expect(drawn(document.querySelector('[aria-label="Breadcrumb"]'))).toEqual([projectUrl]);
+  expect(drawn(document.querySelector("main svg.size-10")?.parentElement)).toEqual([projectUrl]);
 });
 
 test("an icon name or color this app doesn't know draws FolderKanban or the accent in its place", async () => {
@@ -1460,4 +1538,197 @@ test("a subagent's chat pins the coordinator's request too, and a Project with n
     decision: "allow",
   });
   expect(pinned()).toBeNull();
+});
+
+// The sidebar's Projects section (PLX-340).
+const flaky: Thread = { id: "t-flaky", repo: parallax.id, createdAt: "2026-09-29T11:00:00Z" };
+/** A thread, newer than either Project, and ember's two finished subagents. */
+const withThread = () => {
+  const done = { status: "completed" as const };
+  answers["thread/list"] = () => ({ result: { repos: [parallax], threads: [flaky], seq: 7 } });
+  answers["agent/list"] = () => ({
+    result: {
+      runs: [
+        { ...coordinatorRun(flaky.id, "Fix the flaky test"), ...done, project: parallax.id },
+        subagent("a-1", "Plan", done),
+        subagent("a-2", "Ship", done),
+      ],
+      seq: 7,
+    },
+  });
+};
+/** Every row's title, in the sidebar's order. */
+const sidebarTitles = () =>
+  [...document.querySelectorAll("#sidebar li[data-kind] [data-title]")].map((t) => t.textContent);
+const sectionHeadings = () =>
+  [...document.querySelectorAll("#sidebar > div h2")].map((h) => h.textContent);
+const projectsToggle = () =>
+  document.querySelector<HTMLButtonElement>("#sidebar h2 button[aria-expanded]")!;
+const projectsSection = () =>
+  document.getElementById(projectsToggle().getAttribute("aria-controls")!)!;
+const newProjectButtons = () => [
+  ...document.querySelectorAll('#sidebar button[aria-label="New project"]'),
+];
+/** Whether `button` sits beside the Projects heading, outside it, so the heading's name is just "Projects". */
+const besideProjectsHeading = (button: Element) =>
+  !button.closest("h2") && button.previousElementSibling?.textContent === "Projects";
+const statusOf = (title: string) =>
+  [...document.querySelectorAll("#sidebar li[data-kind]")]
+    .find((li) => li.querySelector("[data-title]")?.textContent === title)
+    ?.querySelector("[data-status]")?.textContent;
+const keyDown = (init: KeyboardEventInit) =>
+  act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", init)));
+const deleteDialog = () =>
+  document.querySelector<HTMLDialogElement>('[aria-labelledby="delete-title"]')!;
+
+test("Projects sit in a collapsible section above Threads, with New project beside its heading, and stay collapsed after a reload", async () => {
+  withThread();
+  await renderApp();
+  expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
+  expect(sidebarTitles()).toEqual(["photon", "ember", "Fix the flaky test"]);
+  expect(newProjectButtons()).toHaveLength(1);
+  expect(besideProjectsHeading(newProjectButtons()[0]!)).toBe(true);
+
+  await click(projectsToggle());
+  expect(projectsToggle().getAttribute("aria-expanded")).toBe("false");
+  expect(projectsSection().hidden).toBe(true);
+
+  act(() => unmount());
+  await renderApp();
+  expect(projectsSection().hidden).toBe(true);
+  await click(projectsToggle());
+  expect(projectsSection().hidden).toBe(false);
+});
+
+test("with no Projects, there's no section, and the toolbar's one menu creates a Project or adds a repository", async () => {
+  answers["project/list"] = () => ({ result: { projects: [], seq: 7 } });
+  await renderApp();
+  expect(sectionHeadings()).toEqual([]);
+  expect(newProjectButtons()).toHaveLength(0);
+  expect(addMenuItems().map((b) => b.textContent)).toEqual(["New project…", "Add repository…"]);
+  await click(addMenuItems()[1]);
+  expect(
+    document.querySelector<HTMLDialogElement>('dialog[aria-label="Add repository"]')!.open,
+  ).toBe(true);
+
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s-1",
+        seq: 8,
+        time: "",
+        event: { kind: "project.created", project: project("ember", "2026-09-29T12:00:00Z") },
+      },
+    }),
+  );
+  expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
+  expect(besideProjectsHeading(newProjectButtons()[0]!)).toBe(true);
+});
+
+test("a Project row is one line, with no repo line, and its agents in its tooltip", async () => {
+  withThread();
+  await renderApp();
+  expect(rowButton("ember").textContent).toBe("ember3d");
+  expect(rowButton("ember").title).toBe("2 agents");
+  expect(rowButton("photon").hasAttribute("title")).toBe(false);
+});
+
+test("search, the repo filter, and Mod+number cover both sections, and a collapsed section's rows get no numbers", async () => {
+  withThread();
+  await renderApp();
+  const search = document.querySelector<HTMLInputElement>(
+    '#sidebar input[aria-label="Search threads and Projects"]',
+  )!;
+  typeInto(search, "fla");
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  expect(projectsSection().textContent).toBe("Nothing matches");
+  typeInto(search, "emb");
+  expect(sidebarTitles()).toEqual(["ember"]);
+  typeInto(search, "");
+
+  const repoChoice = (name: string) =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '#sidebar [role="menu"][aria-label="Repos"] [role="menuitemradio"]',
+      ),
+    ].find((b) => b.textContent === name);
+  // Neither Project's folder is a listed repository.
+  await click(repoChoice("No repo"));
+  expect(sidebarTitles()).toEqual(["photon", "ember"]);
+  await click(repoChoice("parallax"));
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  await click(repoChoice("All repos"));
+
+  await keyDown({ key: "Meta", metaKey: true });
+  expect(["photon", "ember", "Fix the flaky test"].map(statusOf)).toEqual(["⌘1", "⌘2", "⌘3"]);
+  await keyDown({ key: "2", code: "Digit2", metaKey: true });
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+
+  await click(projectsToggle());
+  await keyDown({ key: "Meta", metaKey: true });
+  expect(statusOf("Fix the flaky test")).toBe("⌘1");
+  await keyDown({ key: "1", code: "Digit1", metaKey: true });
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
+});
+
+test("Delete… asks first, shows plxd's error in the dialog, then deletes the open Project and leaves its page", async () => {
+  capabilities = { projectEdit: {}, projectDelete: {} };
+  withThread();
+  answers["project/delete"] = () => ({
+    error: { code: -32000, message: "The project's worktree is locked." },
+  });
+  await renderApp();
+  await click(rowButton("ember"));
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(
+    [...projectRow("ember").querySelectorAll('[role="menuitem"]')].map((b) => b.textContent),
+  ).toEqual(["Rename", "Change icon", "Delete…"]);
+  expect(menuItem("ember", "Delete…")!.className).toContain("text-danger");
+
+  await click(menuItem("ember", "Delete…"));
+  expect(deleteDialog().open).toBe(true);
+  expect(deleteDialog().querySelector("h2")!.textContent).toBe("Delete this Project?");
+  expect(deleteDialog().querySelector("p")!.textContent).toBe(
+    "“ember” goes for good, with its 2 agents' transcripts, worktrees, and branches. Running agents are stopped first.",
+  );
+  const confirm = () =>
+    [...deleteDialog().querySelectorAll("button")].find((b) => b.textContent === "Delete");
+  await click(confirm());
+  expect(deleteDialog().querySelector('[role="alert"]')!.textContent).toBe(
+    "The project's worktree is locked.",
+  );
+  expect(deleteDialog().open).toBe(true);
+
+  answers["project/delete"] = () => ({ result: {} });
+  await click(confirm());
+  expect(calls("project/delete")).toEqual([{ project: "p-ember" }, { project: "p-ember" }]);
+  expect(deleteDialog().open).toBe(false);
+  expect(sidebarTitles()).toEqual(["photon", "Fix the flaky test"]);
+  expect(crumbs().at(-1)).toBe("New thread");
+});
+
+test("without projectDelete there's no Delete…, and another client's project.deleted removes the open Project's row and leaves its page", async () => {
+  capabilities = { projectEdit: {} };
+  await renderApp();
+  expect(menuItem("ember", "Delete…")).toBeUndefined();
+  await click(rowButton("ember"));
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s-1",
+        seq: 8,
+        time: "",
+        event: { kind: "project.deleted", project: "p-ember" },
+      },
+    }),
+  );
+  await settle();
+  expect(sidebarTitles()).toEqual(["photon"]);
+  expect(crumbs().at(-1)).toBe("New thread");
 });

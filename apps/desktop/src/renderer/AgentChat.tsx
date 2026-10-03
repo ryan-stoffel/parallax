@@ -32,6 +32,7 @@ import {
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -41,8 +42,10 @@ import {
   type ReactNode,
 } from "react";
 import Markdown, { type Components } from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
+import type { RpcError } from "../preload/bridge";
 import type {
   AgentRun,
   AgentToolStatus,
@@ -54,29 +57,33 @@ import {
   ApprovalDetails,
   ApprovalQueue,
   ApprovalSummary,
+  DiffRow,
+  diffBand,
   queueOf,
+  RequestPreview,
   useAnswers,
   withAnswers,
   type Asked,
   type ToolLook,
 } from "./Approval";
-import { Composer, tabItem } from "./Composer";
+import { Composer, tabItem, type Unanswered } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
-import { describeError } from "./errors";
+import { describeError, githubProblem } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
-import { backendOf, backends, models, type Provider, type RunOptions } from "./models";
+import { GitHubLogo, LinearLogo } from "./logos";
+import { useCatalog, type Provider, type RunOptions } from "./models";
 import {
   latestPlan,
-  PlanCard,
   PlanStrip,
-  PlanUpdateLine,
+  PlanLine,
   ProposedPlan,
   withPlans,
   type PlanRow,
   type ProposedPlanRow,
 } from "./Plan";
 import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
+import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { titleOf } from "./threads";
 import {
   failureText,
@@ -89,10 +96,20 @@ import {
   type Item,
   type Work,
 } from "./transcript";
+import { SetUpGithub } from "./ui";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
-type Row = Item | { kind: "pending"; key: string; text: string; images?: PromptImage[] };
+type Row =
+  | Item
+  | {
+      kind: "pending";
+      key: string;
+      text: string;
+      images?: PromptImage[];
+      threads?: string[];
+      turnId?: string;
+    };
 /** What the list shows: a turn's activity is folded into one `Work` row, its plan apart. */
 type ViewRow = Row | Work | PlanRow | ProposedPlanRow;
 
@@ -125,6 +142,7 @@ export function PinnedApprovals(
 export function AgentChat({
   hostId,
   runId,
+  title,
   notice,
   prompt,
   going,
@@ -132,9 +150,17 @@ export function AgentChat({
   tab,
   startOver,
   others,
+  pullRequests,
+  onPrOpened,
+  onSetUpGithub,
+  compose,
+  onComposed,
+  threadLinks,
 }: {
   hostId: string;
   runId: string;
+  /** The thread's title, which Open PR names the pull request after. Else, its run's. */
+  title?: string;
   /** A quiet note shown over the composer, such as which account a new thread got. */
   notice?: string;
   /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
@@ -162,20 +188,40 @@ export function AgentChat({
    * runs' are in each of its chats (RYA-196).
    */
   others?: readonly Asked[];
+  /** The run tab's link to its linked pull requests (PLX-319), in place of Open PR. */
+  pullRequests?: ReactNode;
+  /** Opens the pull request Open PR opened, in place of linking to it. */
+  onPrOpened?: (url: string) => void;
+  /** Offered when Open PR fails because `gh` is missing or signed out (PLX-423). */
+  onSetUpGithub?: () => void;
+  /**
+   * A message from outside the chat, such as the PR view's: sent, or put in the composer to finish.
+   * `onComposed` says it's taken, so each one is taken once.
+   */
+  compose?: { text: string; send: boolean };
+  onComposed?: () => void;
+  /**
+   * The host's threads: the composer attaches them where plxd takes them (PLX-378), and the
+   * transcript's attached threads open from their chips.
+   */
+  threadLinks?: ThreadLinks;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
+  const catalog = useCatalog(hostId);
   const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
   // Permission requests (RYA-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
   const [resendError, setResendError] = useState<string>();
-  const [prError, setPrError] = useState<string>();
+  const [prError, setPrError] = useState<RpcError>();
+  // Open PR's failure for `gh` missing or signed out, as a short line by Set up GitHub.
+  const prGithub = onSetUpGithub && githubProblem(prError);
   // Dropped follow-ups already sent again, so their Send again goes away (back on failure).
   const [resent, setResent] = useState<ReadonlySet<string>>(new Set());
   const resend = useCallback(
     (turnId: string, message: SentMessage) => {
       setResent((prev) => new Set(prev).add(turnId));
-      void send(message.text, undefined, message.images).then((failed) => {
+      void send(message.text, undefined, message.images, message.threads).then((failed) => {
         setResendError(failed?.message);
         if (failed)
           setResent((prev) => {
@@ -187,6 +233,11 @@ export function AgentChat({
     },
     [send],
   );
+  useEffect(() => {
+    if (!compose) return;
+    if (compose.send) void send(compose.text).then((failed) => setResendError(failed?.message));
+    onComposed?.();
+  }, [compose, send, onComposed]);
   const unsent = useMemo(
     () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
     [sent, resent],
@@ -212,8 +263,13 @@ export function AgentChat({
     why: string;
   }>();
   const [startingOver, setStartingOver] = useState(false);
-  const sendText = async (text: string, options: RunOptions, images: PromptImage[]) => {
-    const failed = await send(text, options, images);
+  const sendText = async (
+    text: string,
+    options: RunOptions,
+    images: PromptImage[],
+    threads: string[],
+  ) => {
+    const failed = await send(text, options, images, threads);
     if (!startOver || failed?.data?.kind !== "runNotResumable") return failed?.message;
     setRefused({ text, options, images, why: failed.message });
     return ""; // Back in the box; the line above it says why and offers Start over.
@@ -250,11 +306,13 @@ export function AgentChat({
     const seen = new Set(items.flatMap((i) => ("turnId" in i && i.turnId ? [i.turnId] : [])));
     const pending = [...sent]
       .filter(([turnId]) => !seen.has(turnId))
-      .map(([turnId, { text, images }]) => ({
+      .map(([turnId, { text, images, threads }]) => ({
         kind: "pending" as const,
         key: `pending:${turnId}`,
         text,
         images,
+        threads,
+        turnId,
       }));
     const all = [...items, ...pending];
     if (all.length > 0 || !prompt) return all;
@@ -264,6 +322,54 @@ export function AgentChat({
         : { kind: "user", key: "prompt", text: prompt },
     ];
   }, [items, sent, prompt, going]);
+  // The user's prompts, for the composer's Up: not Parallax's wake-ups or other threads' messages.
+  const history = useMemo(
+    () =>
+      rows.flatMap((row) => {
+        if (row.kind === "pending") return [row.text];
+        if (row.kind !== "user" || notTheUsers(row)) return [];
+        const text = row.text ?? (row.turnId && sent.get(row.turnId)?.text);
+        return text ? [text] : [];
+      }),
+    [rows, sent],
+  );
+  // The latest prompt while nothing from the agent follows it, which Stop puts back in the box:
+  // its text, its attached threads, and its images: at hand when sent from here, or fetched from
+  // plxd by id on Stop.
+  const unanswered = useMemo<(Unanswered & { turnId?: string }) | undefined>(() => {
+    const at = rows.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
+    const row = rows[at];
+    if (
+      (row?.kind !== "user" && row?.kind !== "pending") ||
+      (row.kind === "user" && notTheUsers(row))
+    )
+      return undefined;
+    if (!rows.slice(at + 1).every((r) => ["notice", "end", "session"].includes(r.kind)))
+      return undefined;
+    const mine = row.kind === "user" && row.turnId ? sent.get(row.turnId) : undefined;
+    const text = row.text ?? mine?.text;
+    if (text == null) return undefined;
+    const atHand = (row.kind === "pending" ? row.images : mine?.images) ?? [];
+    const ids = row.kind === "user" && !mine ? (row.images ?? []) : [];
+    const images = async () => {
+      const got = await Promise.all(
+        ids.map((imageId) =>
+          window.parallax.request(hostId, "agent/image", { runId, imageId }).catch(() => undefined),
+        ),
+      );
+      return [...atHand, ...got.flatMap((a) => (a && "result" in a ? [a.result] : []))];
+    };
+    const threads = row.threads ?? mine?.threads;
+    // Only one still on its way can be dropped, and so offer Send again.
+    return { text, images, threads, turnId: row.kind === "pending" ? row.turnId : undefined };
+  }, [rows, sent, hostId, runId]);
+  // A stopped prompt goes back in the box, so if plxd drops it, it offers no Send again too.
+  const stop = async () => {
+    const back = unanswered;
+    const failed = await cancel();
+    if (!failed && back?.turnId) setResent((prev) => new Set(prev).add(back.turnId!));
+    return failed;
+  };
 
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
@@ -277,17 +383,16 @@ export function AgentChat({
     optionsDisabled = "This host's plxd can't change a thread's model, effort, or access";
   else if (isRunning(run?.status) && !moves)
     optionsDisabled = "The model, effort, and access can change once it finishes";
-  // The providers the run can't move to, by why: any but its own on a plxd that can't move runs,
-  // and for a coordinator, those whose backend can't run one.
+  // The instances the run can't move to, by why: any but its own on a plxd that can't move runs,
+  // and for a coordinator, those that can't run one.
   const unavailable: Partial<Record<Provider, string>> = {};
-  const own = run && backends[run.backend]?.provider;
-  for (const p of new Set(models.map((m) => m.provider)))
-    if (p === own) continue;
+  for (const i of catalog.instances)
+    if (i.id === run?.backend) continue;
     else if (!moves)
-      unavailable[p] =
-        `${p} is unavailable in this thread. Start a new thread to switch providers.`;
-    else if (run?.policy === "noWrite" && !backends[backendOf(p)]?.coordinator)
-      unavailable[p] = `${p} can't run a Project's coordinator yet.`;
+      unavailable[i.id] =
+        `${i.name} is unavailable in this thread. Start a new thread to switch providers.`;
+    else if (run?.policy === "noWrite" && !i.coordinator)
+      unavailable[i.id] = `${i.name} can't run a Project's coordinator yet.`;
   // Manual's requests come here only from a run that asked for them, on a plxd that sends them.
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
@@ -307,14 +412,16 @@ export function AgentChat({
   return (
     <>
       {rows.length > 0 ? (
-        <TranscriptView
-          rows={rows}
-          sent={unsent}
-          live={isRunning(run?.status)}
-          stalled={stalled}
-          onResend={resend}
-          loadImage={showImage}
-        />
+        <ThreadLinksContext value={threadLinks}>
+          <TranscriptView
+            rows={rows}
+            sent={unsent}
+            live={isRunning(run?.status)}
+            stalled={stalled}
+            onResend={resend}
+            loadImage={showImage}
+          />
+        </ThreadLinksContext>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-[13px] text-faint-foreground">
           {error ? (
@@ -339,8 +446,9 @@ export function AgentChat({
         />
         {/* A loaded transcript that stopped updating, a failed Send again, or Open PR. */}
         {(error ?? resendError ?? prError) && rows.length > 0 && (
-          <p role="alert" className="px-2 pb-2 text-[12.5px] text-danger">
-            {error ?? resendError ?? prError}
+          <p role="alert" className="flex items-center gap-2 px-2 pb-2 text-[12.5px] text-danger">
+            {error ?? resendError ?? (prGithub || describeError(prError!))}
+            {!error && !resendError && prGithub && <SetUpGithub onClick={onSetUpGithub!} />}
           </p>
         )}
         {notice && (
@@ -372,22 +480,40 @@ export function AgentChat({
         )}
         <Composer
           onSend={sendText}
-          onStop={isRunning(run?.status) ? cancel : undefined}
+          history={history}
+          onStop={isRunning(run?.status) ? stop : undefined}
+          unanswered={unanswered}
           disabledReason={disabledReason}
           tab={
             tab ??
             (run && (
               <RunTab run={run}>
-                {canOpenPr && <OpenPr hostId={hostId} run={run} onError={setPrError} />}
+                {pullRequests ||
+                  (canOpenPr && (
+                    <OpenPr
+                      hostId={hostId}
+                      run={run}
+                      title={title ?? titleOf(run)}
+                      onError={setPrError}
+                      onOpened={onPrOpened}
+                    />
+                  ))}
               </RunTab>
             ))
           }
           backend={run?.backend}
           started={run}
+          hostId={hostId}
+          contextAndFast={connected && "contextAndFast" in connection.capabilities}
           unavailable={unavailable}
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
+          insert={compose && !compose.send ? compose.text : undefined}
+          menus={
+            connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
+          }
+          attach={attachThreads(connection, threadLinks, runId)}
         />
       </div>
     </>
@@ -416,6 +542,8 @@ export function TranscriptView({
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Threads' titles, to name the thread that sent a message or stopped this one (0041).
+  const titles = useContext(ThreadLinksContext)?.state.titles;
   const atBottom = useRef(true);
   // Whether Scroll to end's smooth scroll is on its way down.
   const ending = useRef(false);
@@ -551,6 +679,7 @@ export function TranscriptView({
                     onToggle={toggle}
                     onResend={onResend}
                     loadImage={loadImage}
+                    sender={"from" in row && row.from ? titles?.[row.from] : undefined}
                   />
                 </div>
               </div>
@@ -568,13 +697,14 @@ export function TranscriptView({
 /**
  * The user's prompts among `view`'s rows, for the rail: a follow-up's text from `sent` when the
  * log lacks it, and the start of the agent's last reply before the next prompt. Parallax's own
- * wake-ups aren't the user's, and replies to them aren't replies to the prompt before.
+ * wake-ups and other threads' messages aren't the user's, and replies to them aren't replies to
+ * the prompt before.
  */
 function promptsOf(view: readonly ViewRow[], sent: ReadonlyMap<string, SentMessage>): Prompt[] {
   const prompts: Prompt[] = [];
   let last: Prompt | undefined;
   view.forEach((row, index) => {
-    if (row.kind === "user" && row.wake) last = undefined;
+    if (row.kind === "user" && notTheUsers(row)) last = undefined;
     else if (row.kind === "user" || row.kind === "pending") {
       const said = row.text ?? (row.kind === "user" && row.turnId && sent.get(row.turnId)?.text);
       const text = said ? plainText(said) : "";
@@ -630,7 +760,12 @@ interface RowProps {
   onResend?: (turnId: string, message: SentMessage) => void;
   /** Fetches a message's image by id, as a data URL. */
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
+  /** The title of the thread a message or a stop came from, when the row has one and it's known. */
+  sender?: string;
 }
+
+/** A message Parallax or another thread sent, not the user (0025, 0041). */
+const notTheUsers = (row: Extract<Item, { kind: "user" }>) => row.wake || row.from !== undefined;
 
 /** One transcript row. Memoized: an unchanged item keeps its object, so it skips re-rendering. */
 export const RowView = memo(function RowView({
@@ -643,6 +778,7 @@ export const RowView = memo(function RowView({
   onToggle,
   onResend,
   loadImage,
+  sender,
 }: RowProps) {
   switch (row.kind) {
     case "work":
@@ -677,15 +813,43 @@ export const RowView = memo(function RowView({
             </p>
           </Disclosure>
         );
+      // Another thread's message, sent with its Parallax tools (0041).
+      if (row.kind === "user" && row.from)
+        return (
+          <Disclosure
+            id={row.key}
+            open={open}
+            onToggle={onToggle}
+            summary={
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Workflow aria-hidden className="size-3.5" />
+                {sender ? `From another thread: ${sender}` : "From another thread"}
+              </span>
+            }
+          >
+            <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+              {row.text ?? "Follow-up message"}
+            </p>
+          </Disclosure>
+        );
       const text = row.text ?? sent?.text;
       // Images sent from here are at hand; the log's come from plxd by id.
       const images = row.kind === "pending" ? row.images : (sent?.images ?? row.images);
+      const threads = row.threads ?? sent?.threads;
       return (
-        <div className="flex flex-col items-end gap-1.5">
+        <div className="group/prompt flex flex-col items-end gap-1.5">
           {images && images.length > 0 && (
             <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
               {images.map((image, i) => (
                 <MessageImage key={i} image={image} loadImage={loadImage} />
+              ))}
+            </div>
+          )}
+          {/* The threads attached as context, which open from here (PLX-378). */}
+          {threads && threads.length > 0 && (
+            <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+              {threads.map((id) => (
+                <SentThread key={id} runId={id} />
               ))}
             </div>
           )}
@@ -696,6 +860,7 @@ export const RowView = memo(function RowView({
               {text ?? <span className="text-muted-foreground italic">Follow-up message</span>}
             </div>
           )}
+          <PromptMeta at={row.kind === "user" ? row.at : undefined} text={text} />
         </div>
       );
     }
@@ -721,11 +886,10 @@ export const RowView = memo(function RowView({
       );
     case "tool":
       return <ToolCall item={row} live={live} open={open} onToggle={onToggle} />;
-    case "todo":
-      // A later update to the turn's plan, whose card shows the whole list.
-      return <PlanUpdateLine item={row} />;
     case "plan":
-      return <PlanCard items={row.items} live={live && !!row.latest} loader={loaders.planning} />;
+    case "todo":
+      // The turn's plan and its later updates, as lines: the strip shows the whole list.
+      return <PlanLine item={row} />;
     case "proposedPlan":
       return (
         <ProposedPlan id={row.key} status={row.status} open={open} onToggle={onToggle}>
@@ -758,7 +922,7 @@ export const RowView = memo(function RowView({
             <Info aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           )}
           <span>
-            {row.text}
+            {row.from && sender ? `Stopped by another thread: ${sender}.` : row.text}
             {/* A dropped follow-up this window sent: offer it again, rather than lose it. */}
             {row.turnId && sent !== undefined && onResend && (
               <>
@@ -789,7 +953,7 @@ export const RowView = memo(function RowView({
             <p className="font-medium text-danger">Failed: {failureText(outcome.failure)}</p>
             <p className="mt-0.5 text-muted-foreground">{first}</p>
             {changed.length > 0 && (
-              <pre className="mt-2 max-h-60 overflow-auto rounded-lg border border-border bg-sidebar p-2.5 font-mono text-[12px]">
+              <pre className="mt-2 max-h-60 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-[12px]">
                 {changed.join("\n")}
               </pre>
             )}
@@ -949,7 +1113,7 @@ function Musing() {
   const [tick, setTick] = useState(() => Math.floor(Date.now() / musingMs));
   const [first] = useState(tick);
   useEffect(() => {
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (document.documentElement.classList.contains("reduce-motion")) return;
     const timer = setTimeout(
       () => setTick(Math.max(tick + 1, Math.floor(Date.now() / musingMs))),
       musingMs - (Date.now() % musingMs),
@@ -1162,7 +1326,14 @@ function ToolCall({
       }
     >
       <div className="space-y-2 text-[12px]">
-        {item.input !== undefined && <Block label="Input">{inputText(item.input)}</Block>}
+        {item.name && previewed.has(item.name) && isWhole(item.input) ? (
+          <div>
+            <p className="mb-1 text-[11.5px] text-faint-foreground">Input</p>
+            <RequestPreview request={{ toolName: item.name, input: item.input }} />
+          </div>
+        ) : (
+          item.input !== undefined && <Block label="Input">{inputText(item.input)}</Block>
+        )}
         {item.output !== undefined && <Block label="Output">{item.output}</Block>}
       </div>
     </Disclosure>
@@ -1224,7 +1395,7 @@ function Block({ label, children }: { label: string; children: string }) {
   return (
     <div>
       <p className="mb-1 text-[11.5px] text-faint-foreground">{label}</p>
-      <pre className="max-h-80 overflow-auto rounded-lg border border-border bg-sidebar p-2.5 font-mono whitespace-pre-wrap">
+      <pre className="max-h-80 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono leading-relaxed whitespace-pre-wrap">
         {children}
       </pre>
     </div>
@@ -1308,6 +1479,14 @@ function namedTool(item: Extract<Item, { kind: "tool" }>) {
   return undefined;
 }
 
+// Tools whose input reads better as a permission request shows it: an edit's diff.
+const previewed = new Set(["Edit", "MultiEdit", "Write"]);
+
+/** Whether a tool's input arrived whole, not cut for size. */
+const isWhole = (input?: JsonValue): input is JsonValue =>
+  input !== undefined &&
+  !(input && typeof input === "object" && !Array.isArray(input) && input["truncated"] === true);
+
 function inputText(input: JsonValue): string {
   if (input && typeof input === "object" && !Array.isArray(input) && input["truncated"] === true) {
     const bytes = typeof input["bytes"] === "number" ? input["bytes"] : 0;
@@ -1316,16 +1495,50 @@ function inputText(input: JsonValue): string {
   return typeof input === "string" ? input : JSON.stringify(input, null, 2);
 }
 
+/** The icon before a web link, as T3 Code shows one: its site's logo, or a globe (PLX-330). */
+export function linkIcon(href?: string) {
+  let host;
+  try {
+    const url = new URL(href ?? "");
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    host = url.hostname;
+  } catch {
+    return undefined;
+  }
+  const on = (site: string) => host === site || host.endsWith(`.${site}`);
+  return on("github.com") ? GitHubLogo : on("linear.app") ? LinearLogo : Globe;
+}
+
 // Agent output is untrusted: no raw HTML (no rehype-raw), and react-markdown's
 // default urlTransform drops javascript: and other unsafe links. Links open in
 // a new window, which main hands to the system browser, https only.
 const markdownComponents: Components = {
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  ),
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  a: ({ href, children }) => {
+    const Icon = linkIcon(href);
+    return (
+      <a href={href} target="_blank" rel="noreferrer">
+        {Icon && (
+          <Icon aria-hidden className="mr-1 inline size-3.5 align-[-0.15em] text-foreground" />
+        )}
+        {children}
+      </a>
+    );
+  },
+  pre: ({ node, children }) => {
+    const code = node?.children[0];
+    const classes = code?.type === "element" ? code.properties["className"] : undefined;
+    const language = Array.isArray(classes)
+      ? classes
+          .map(String)
+          .find((c) => c.startsWith("language-"))
+          ?.slice("language-".length)
+      : undefined;
+    return (
+      <CodeBlock language={language} text={code ? textOf(code) : ""}>
+        {children}
+      </CodeBlock>
+    );
+  },
   // Never load images: a link with the alt text, which opens externally like any link.
   img: ({ src, alt }) => (
     // An unsafe source arrives as "" from urlTransform: no href at all, then.
@@ -1335,6 +1548,16 @@ const markdownComponents: Components = {
   ),
 };
 
+// Highlights a code block whose fence names its language, never a guess; a diff's lines are
+// drawn by DiffLines instead.
+const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [
+  [rehypeHighlight, { detect: false, plainText: ["diff", "patch"] }],
+];
+
+/** A Markdown tree node's text, as a code block's, for Copy. */
+type TextNode = { value?: string; children?: TextNode[] };
+const textOf = (node: TextNode): string => node.value ?? node.children?.map(textOf).join("") ?? "";
+
 /**
  * An agent message, rendered from Markdown with GitHub's extensions. `components` replace some
  * elements' renderers, such as the Context view's links; they get the same safe, HTML-free tree.
@@ -1342,45 +1565,130 @@ const markdownComponents: Components = {
 export function MarkdownText({ text, components }: { text: string; components?: Components }) {
   return (
     <div className="markdown">
-      <Markdown remarkPlugins={[remarkGfm]} components={{ ...markdownComponents, ...components }}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={highlight}
+        components={{ ...markdownComponents, ...components }}
+      >
         {text}
       </Markdown>
     </div>
   );
 }
 
-function CodeBlock({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLPreElement>(null);
+/** Copies text to the clipboard. `copied` is true for a moment after, for a Copied check. */
+export function useCopy() {
   const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard.writeText(ref.current?.textContent ?? "").then(() => {
+  const copy = (text: string) =>
+    void navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
-  };
+  return [copied, copy] as const;
+}
+
+/** Under a prompt, on hover or focus: when it was sent, and Copy for its text. */
+function PromptMeta({ at, text }: { at?: string; text?: string | null }) {
+  const [copied, copy] = useCopy();
   return (
-    <div className="group/code relative">
-      <pre
-        ref={ref}
-        className="overflow-x-auto rounded-lg border border-border bg-sidebar p-3 font-mono text-[12.5px] leading-relaxed"
-      >
-        {children}
-      </pre>
-      <button
-        type="button"
-        aria-label={copied ? "Copied" : "Copy code"}
-        onClick={copy}
-        className="absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-md bg-sidebar text-muted-foreground opacity-0 group-hover/code:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5"
-      >
-        {copied ? <Check /> : <Copy />}
-      </button>
+    <div className="flex h-6 items-center gap-1 text-[12px] text-faint-foreground opacity-0 group-focus-within/prompt:opacity-100 group-hover/prompt:opacity-100">
+      {at && <time dateTime={at}>{sentAt(at)}</time>}
+      {text && (
+        <button
+          type="button"
+          aria-label={copied ? "Copied" : "Copy message"}
+          onClick={() => copy(text)}
+          className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+        >
+          {copied ? <Check /> : <Copy />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** "3:04 PM" today, and "Sep 25, 3:04 PM" before. */
+function sentAt(at: string) {
+  const date = new Date(at);
+  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString([], time)
+    : date.toLocaleString([], { month: "short", day: "numeric", ...time });
+}
+
+/**
+ * A Markdown code block: a header with its fence's language and Copy, over its code, highlighted,
+ * or a diff's lines.
+ */
+function CodeBlock({
+  language,
+  text,
+  children,
+}: {
+  language?: string;
+  text: string;
+  children: ReactNode;
+}) {
+  const [copied, copy] = useCopy();
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-code">
+      <div className="flex h-8 items-center justify-between border-b border-border pr-1 pl-3 text-[11.5px] text-faint-foreground">
+        <span className="font-mono">{language ?? "text"}</span>
+        <button
+          type="button"
+          aria-label={copied ? "Copied" : "Copy code"}
+          onClick={() => copy(text)}
+          className="flex h-6 items-center gap-1 rounded-md px-1.5 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+        >
+          {copied ? <Check /> : <Copy />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {language === "diff" || language === "patch" ? (
+        <DiffLines text={text} />
+      ) : (
+        <pre className="code-lines overflow-x-auto px-3.5 py-3 font-mono text-[12.5px] leading-relaxed">
+          {children}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A unified diff's lines, as a permission request draws an edit. Hunk headers, and the file headers
+ * before a file's first hunk, are bands, so a removed `-- comment` inside a hunk stays removed.
+ */
+function DiffLines({ text }: { text: string }) {
+  let inHunk = false;
+  return (
+    <div className="code-scroll overflow-x-auto py-1.5 font-mono text-[12px] leading-relaxed">
+      {text
+        .replace(/\n$/, "")
+        .split("\n")
+        .map((line, i) => {
+          if (line.startsWith("diff ")) inHunk = false;
+          if (line.startsWith("@@")) inHunk = true;
+          const op = line[0];
+          if (line.startsWith("@@") || (!inHunk && /^(\+\+\+|---|diff |index )/.test(line)))
+            return (
+              <div key={i} className={`${diffBand} whitespace-pre-wrap`}>
+                {line}
+              </div>
+            );
+          return op === "+" || op === "-" || op === " " ? (
+            <DiffRow key={i} op={op} text={line.slice(1)} />
+          ) : (
+            <DiffRow key={i} op=" " text={line} />
+          );
+        })}
     </div>
   );
 }
 
 /**
  * An open run in the composer's tab: that it runs in a worktree, and the worktree's branch, or in
- * the repository's own checkout, followed by `children`, such as Open PR.
+ * the repository's own checkout, with `children`, such as Open PR, before the branch.
  */
 export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode }) {
   return (
@@ -1397,13 +1705,13 @@ export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode 
         </span>
       )}
       <span className="flex min-w-0 items-center">
+        {children}
         {run.branch && (
           <span className={tabItem} title={`Worktree branch: ${run.branch}`}>
             <GitBranch aria-hidden />
             <span className="truncate">{run.branch}</span>
           </span>
         )}
-        {children}
       </span>
     </>
   );
@@ -1411,17 +1719,21 @@ export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode 
 
 /**
  * Open PR: plxd pushes the run's branch and opens a pull request titled like the thread, then
- * this links to it, in the browser. It unmounts while the run works, so after another turn the
- * button is back, to push the new commit to the same pull request.
+ * this links to it, in the browser, or hands it to `onOpened`. It unmounts while the run works, so
+ * after another turn the button is back, to push the new commit to the same pull request.
  */
 function OpenPr({
   hostId,
   run,
+  title,
   onError,
+  onOpened,
 }: {
   hostId: string;
   run: AgentRun;
-  onError: (error?: string) => void;
+  title: string;
+  onError: (error?: RpcError) => void;
+  onOpened?: (url: string) => void;
 }) {
   const [url, setUrl] = useState<string>();
   const [opening, setOpening] = useState(false);
@@ -1445,10 +1757,11 @@ function OpenPr({
     onError(undefined);
     const answer = await window.parallax.request(hostId, "agent/openPr", {
       runId: run.id,
-      title: titleOf(run),
+      title,
     });
     setOpening(false);
-    if ("error" in answer) onError(describeError(answer.error));
+    if ("error" in answer) onError(answer.error);
+    else if (onOpened) onOpened(answer.result.url);
     else setUrl(answer.result.url);
   };
   return (

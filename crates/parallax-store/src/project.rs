@@ -2,9 +2,9 @@ use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
-use crate::Store;
 use crate::error::StoreError;
 use crate::timestamp;
+use crate::{Store, StoredImage};
 
 /// The fields of a project that a caller supplies.
 ///
@@ -15,14 +15,51 @@ pub struct ProjectFields {
     pub name: String,
     pub repo_path: String,
     pub icon: Option<ProjectIcon>,
+    /// The permission mode, `auto` or `bypass` (decision record 0042).
+    pub permission: String,
 }
 
 /// A project's icon, stored as the client sent it and never read
-/// (RYA-227, decision record 0032).
+/// (RYA-227, decision record 0032), with an optional uploaded image
+/// (PLX-339, decision record 0038).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectIcon {
     pub name: String,
     pub color: Option<String>,
+    pub image: Option<StoredImage>,
+}
+
+/// The icon columns, in [`icon_from_row`]'s order, that the projects and
+/// repos tables share.
+pub(crate) const ICON_COLUMNS: &str = "icon_name, icon_color, icon_image_type, icon_image_data";
+
+/// The icon in [`ICON_COLUMNS`] starting at column `first`. A NULL name
+/// means no icon, and a NULL image type means no image.
+pub(crate) fn icon_from_row(row: &Row<'_>, first: usize) -> rusqlite::Result<Option<ProjectIcon>> {
+    let name: Option<String> = row.get(first)?;
+    let color: Option<String> = row.get(first + 1)?;
+    let media_type: Option<String> = row.get(first + 2)?;
+    let data: Option<String> = row.get(first + 3)?;
+    Ok(name.map(|name| ProjectIcon {
+        name,
+        color,
+        image: media_type
+            .zip(data)
+            .map(|(media_type, data)| StoredImage { media_type, data }),
+    }))
+}
+
+/// The values of [`ICON_COLUMNS`] for `icon`, all NULL for none.
+pub(crate) fn icon_columns(
+    icon: Option<&ProjectIcon>,
+) -> (Option<&str>, Option<&str>, Option<&str>, Option<&str>) {
+    let image = icon.and_then(|icon| icon.image.as_ref());
+    (
+        icon.map(|icon| icon.name.as_str()),
+        icon.and_then(|icon| icon.color.as_deref()),
+        image.map(|image| image.media_type.as_str()),
+        image.map(|image| image.data.as_str()),
+    )
 }
 
 /// What [`Store::update_project`] changes. A field that is `None` stays as
@@ -31,6 +68,7 @@ pub struct ProjectIcon {
 pub struct ProjectEdit {
     pub name: Option<String>,
     pub icon: Option<ProjectIcon>,
+    pub permission: Option<String>,
 }
 
 /// A project row.
@@ -40,6 +78,7 @@ pub struct Project {
     pub name: String,
     pub repo_path: String,
     pub icon: Option<ProjectIcon>,
+    pub permission: String,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -51,29 +90,29 @@ struct RawProject {
     name: String,
     repo_path: String,
     icon: Option<ProjectIcon>,
+    permission: String,
     created_at: String,
     updated_at: String,
 }
 
 impl RawProject {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let icon_name: Option<String> = row.get(5)?;
-        let icon_color: Option<String> = row.get(6)?;
         Ok(Self {
             id: row.get(0)?,
             name: row.get(1)?,
             repo_path: row.get(2)?,
-            icon: icon_name.map(|name| ProjectIcon {
-                name,
-                color: icon_color,
-            }),
+            icon: icon_from_row(row, 6)?,
+            permission: row.get(5)?,
             created_at: row.get(3)?,
             updated_at: row.get(4)?,
         })
     }
 
     fn matches(&self, fields: &ProjectFields) -> bool {
-        self.name == fields.name && self.repo_path == fields.repo_path && self.icon == fields.icon
+        self.name == fields.name
+            && self.repo_path == fields.repo_path
+            && self.icon == fields.icon
+            && self.permission == fields.permission
     }
 
     fn into_project(self) -> Result<Project, StoreError> {
@@ -82,25 +121,20 @@ impl RawProject {
             name: self.name,
             repo_path: self.repo_path,
             icon: self.icon,
+            permission: self.permission,
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
         })
     }
 }
 
-/// The `icon_name` and `icon_color` columns for `icon`, both NULL for none.
-fn icon_columns(icon: Option<&ProjectIcon>) -> (Option<&str>, Option<&str>) {
-    (
-        icon.map(|icon| icon.name.as_str()),
-        icon.and_then(|icon| icon.color.as_deref()),
-    )
-}
-
 fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawProject>, StoreError> {
     Ok(conn
         .query_row(
-            "SELECT id, name, repo_path, created_at, updated_at, icon_name, icon_color
-             FROM projects WHERE id = ?1",
+            &format!(
+                "SELECT id, name, repo_path, created_at, updated_at, permission, {ICON_COLUMNS}
+                 FROM projects WHERE id = ?1"
+            ),
             params![id_text],
             RawProject::from_row,
         )
@@ -140,22 +174,27 @@ impl Store {
 
         let now = timestamp::now();
 
-        let (icon_name, icon_color) = icon_columns(fields.icon.as_ref());
+        let (icon_name, icon_color, image_type, image_data) = icon_columns(fields.icon.as_ref());
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "INSERT INTO projects
-                 (id, name, repo_path, created_at, updated_at, icon_name, icon_color)
-             VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)
-             ON CONFLICT (id) DO NOTHING",
+            &format!(
+                "INSERT INTO projects (id, name, repo_path, created_at, updated_at, permission,
+                     {ICON_COLUMNS})
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT (id) DO NOTHING"
+            ),
             params![
                 id_text,
                 fields.name,
                 fields.repo_path,
                 now,
+                fields.permission,
                 icon_name,
-                icon_color
+                icon_color,
+                image_type,
+                image_data
             ],
         )?;
         let created = tx.changes() == 1;
@@ -191,11 +230,11 @@ impl Store {
     /// Returns a database error, or an error if a stored id or timestamps
     /// are corrupt.
     pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, repo_path, created_at, updated_at, icon_name, icon_color
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT id, name, repo_path, created_at, updated_at, permission, {ICON_COLUMNS}
              FROM projects
-             ORDER BY created_at ASC, id ASC",
-        )?;
+             ORDER BY created_at ASC, id ASC"
+        ))?;
         let rows = stmt.query_map([], RawProject::from_row)?;
 
         let mut projects = Vec::new();
@@ -205,12 +244,12 @@ impl Store {
         Ok(projects)
     }
 
-    /// Renames project `id` or sets its icon, as `edit` says, and returns
+    /// Renames project `id`, or sets its icon or permission mode, as `edit` says, and returns
     /// the project with whether anything changed. When nothing would
     /// change, it writes nothing.
     ///
-    /// `repo_path` never changes, and `updated_at` stays as it is: a rename
-    /// or a new icon is not activity (decision record 0032).
+    /// `repo_path` never changes, and `updated_at` stays as it is: a rename,
+    /// a new icon, or a new mode is not activity (decision record 0032).
     ///
     /// # Errors
     ///
@@ -238,19 +277,35 @@ impl Store {
             raw.icon.clone_from(&edit.icon);
             changed = true;
         }
+        if let Some(permission) = &edit.permission
+            && *permission != raw.permission
+        {
+            raw.permission.clone_from(permission);
+            changed = true;
+        }
 
         if changed {
-            let (icon_name, icon_color) = icon_columns(raw.icon.as_ref());
+            let (icon_name, icon_color, image_type, image_data) = icon_columns(raw.icon.as_ref());
             tx.execute(
-                "UPDATE projects SET name = ?2, icon_name = ?3, icon_color = ?4 WHERE id = ?1",
-                params![id_text, raw.name, icon_name, icon_color],
+                "UPDATE projects SET name = ?2, icon_name = ?3, icon_color = ?4,
+                     icon_image_type = ?5, icon_image_data = ?6, permission = ?7
+                 WHERE id = ?1",
+                params![
+                    id_text,
+                    raw.name,
+                    icon_name,
+                    icon_color,
+                    image_type,
+                    image_data,
+                    raw.permission
+                ],
             )?;
             tx.commit()?;
         }
         Ok((raw.into_project()?, changed))
     }
 
-    /// Deletes a project by id, if it exists.
+    /// Deletes a project by id, if it exists, with its inbox (PLX-401).
     ///
     /// Returns whether a row was deleted.
     ///
@@ -258,6 +313,10 @@ impl Store {
     ///
     /// Returns a database error.
     pub fn delete_project(&self, id: Uuid) -> Result<bool, StoreError> {
+        self.conn.execute(
+            "DELETE FROM inbox WHERE project_id = ?1",
+            params![id.to_string()],
+        )?;
         let changed = self.conn.execute(
             "DELETE FROM projects WHERE id = ?1",
             params![id.to_string()],

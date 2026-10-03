@@ -407,3 +407,74 @@ fn only_a_leading_version_number_is_read_from_a_banner() {
     assert_eq!(super::version_from_banner("Claude Code"), None);
     assert_eq!(super::version_from_banner(""), None);
 }
+
+const FAKE_GH: &str = include_str!("fixtures/fake-gh.sh");
+
+#[tokio::test]
+async fn a_signed_in_gh_reports_its_version_and_account() {
+    let fixture = Fixture::new();
+    fixture.install("gh", FAKE_GH);
+    let mut env = fixture.env();
+    env.set(
+        "FAKE_CLI_STDOUT",
+        "github.com\n  ✓ Logged in to github.com account octocat (keyring)\n  \
+         - Active account: true\n  ✓ Logged in to github.com account hubot (keyring)\n",
+    );
+    let detector = CliDetector::new(fixture.launcher(env), Duration::from_secs(2));
+    let gh = detector.github().await;
+    assert!(gh.installed, "{gh:?}");
+    assert_eq!(gh.version.as_deref(), Some("2.100.0"));
+    assert_eq!(gh.signed_in, Some(true));
+    assert_eq!(gh.account.as_deref(), Some("octocat"));
+    assert_eq!(gh.note, None);
+}
+
+#[tokio::test]
+async fn a_signed_out_gh_reports_no_account_and_a_missing_one_nothing_at_all() {
+    let fixture = Fixture::new();
+    // Only the sandbox's bin: CI's Linux runners have a real gh in /usr/bin.
+    let mut env = fixture.env();
+    env.set("PATH", fixture.bin.display().to_string());
+    let detector = CliDetector::new(fixture.launcher(env), Duration::from_secs(2));
+    let gh = detector.github().await;
+    assert!(!gh.installed);
+    assert_eq!((gh.version, gh.signed_in, gh.note), (None, None, None));
+
+    fixture.install("gh", FAKE_GH);
+    let mut env = fixture.env();
+    env.set("FAKE_CLI_EXIT", "1");
+    let detector = CliDetector::new(fixture.launcher(env), Duration::from_secs(2));
+    let gh = detector.github().await;
+    assert!(gh.installed, "{gh:?}");
+    assert_eq!(gh.signed_in, Some(false));
+    assert_eq!(gh.account, None);
+}
+
+#[test]
+fn gh_account_reads_the_pre_2_40_wording() {
+    assert_eq!(
+        super::gh_account("  ✓ Logged in to github.com as octocat (oauth_token)\n").as_deref(),
+        Some("octocat")
+    );
+    assert_eq!(
+        super::gh_account("You are not logged into any GitHub hosts."),
+        None
+    );
+}
+
+#[tokio::test]
+async fn an_older_gh_is_asked_without_active_which_it_refuses() {
+    let fixture = Fixture::new();
+    fixture.install("gh", FAKE_GH);
+    let mut env = fixture.env();
+    env.set("FAKE_GH_VERSION", "2.45.0");
+    env.set(
+        "FAKE_CLI_STDOUT",
+        "github.com\n  ✓ Logged in to github.com account octocat (keyring)\n",
+    );
+    let detector = CliDetector::new(fixture.launcher(env), Duration::from_secs(2));
+    let gh = detector.github().await;
+    assert_eq!(gh.version.as_deref(), Some("2.45.0"));
+    assert_eq!(gh.signed_in, Some(true), "{gh:?}");
+    assert_eq!(gh.account.as_deref(), Some("octocat"));
+}

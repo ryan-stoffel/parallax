@@ -1,17 +1,18 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "electron";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { stat } from "node:fs/promises";
+import { homedir, hostname } from "node:os";
 import path from "node:path";
 
 import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
 import {
-  UPDATE_CHANNELS,
+  HOME_VARS,
   type ConnectionState,
   type RendererMethod,
   type RpcResponse,
   type SshHost,
   type SubscribeParams,
-  type UpdateChannel,
 } from "../preload/bridge";
 import { Connection, sshCommand } from "./connection";
 import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
@@ -22,6 +23,7 @@ import {
   loginCommand,
   openTerminal,
   resizeTerminal,
+  shellCommand,
   writeTerminal,
   type Command,
 } from "./terminal";
@@ -36,13 +38,18 @@ const rendererMethods: Record<RendererMethod, true> = {
   "project/create": true,
   "project/start": true,
   "project/update": true,
+  "project/delete": true,
   "accounts/keys/add": true,
   "accounts/keys/list": true,
   "accounts/keys/remove": true,
   "accounts/list": true,
   "accounts/refresh": true,
+  "providers/list": true,
+  "providers/save": true,
+  "providers/remove": true,
   "usage/get": true,
   "usage/history": true,
+  "usage/daily": true,
   "accounts/defaults/get": true,
   "accounts/defaults/set": true,
   "context/list": true,
@@ -56,9 +63,13 @@ const rendererMethods: Record<RendererMethod, true> = {
   "agent/image": true,
   "agent/diff": true,
   "agent/file": true,
+  "agent/files": true,
   "agent/accept": true,
   "agent/requestChanges": true,
   "agent/openPr": true,
+  "agent/gitStatus": true,
+  "agent/commit": true,
+  "agent/push": true,
   "agent/approve": true,
   "thread/list": true,
   "repo/add": true,
@@ -66,7 +77,27 @@ const rendererMethods: Record<RendererMethod, true> = {
   "thread/archive": true,
   "thread/delete": true,
   "thread/update": true,
+  "thread/search": true,
+  "thread/fork": true,
   "repo/update": true,
+  "repo/refs": true,
+  "pr/view": true,
+  "pr/act": true,
+  "pr/diff": true,
+  "pr/link": true,
+  "pr/unlink": true,
+  "agent/commands": true,
+  "repo/files": true,
+  "github/status": true,
+  "agent/resumeNow": true,
+  "agent/autoResume": true,
+  "host/settings/get": true,
+  "host/settings/set": true,
+  "github/install": true,
+  "github/signIn": true,
+  "github/signInCancel": true,
+  "inbox/list": true,
+  "inbox/seen": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */
@@ -81,10 +112,9 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 
 /**
  * Connects to the local plxd, as host id `local`, and to every saved SSH host at once, and
- * serves the `window.parallax` calls that reach plxd or edit the hosts and the update channel.
- * `onUpdateChannel` gets the channel at start and whenever it's saved.
+ * serves the `window.parallax` calls that reach plxd or edit the hosts.
  */
-export function startHosts(onUpdateChannel: (channel: UpdateChannel) => void): void {
+export function startHosts(): void {
   addConnection("local", () => {
     const plxd = localPlxd();
     return plxd === undefined ? undefined : [plxd, "attach"];
@@ -100,16 +130,16 @@ export function startHosts(onUpdateChannel: (channel: UpdateChannel) => void): v
   ipcMain.handle("parallax:hosts", () => settings.hosts);
   ipcMain.handle("parallax:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
   ipcMain.handle("parallax:removeHost", (_event, id: unknown) => removeHost(id));
-
-  const channel = () => settings.updateChannel ?? "nightly";
-  onUpdateChannel(channel());
-  ipcMain.handle("parallax:updateChannel", channel);
-  ipcMain.handle("parallax:setUpdateChannel", (_event, next: unknown) => {
-    // Unlike `ssh`, the renderer may set this, to one of the two channels.
-    const chosen = UPDATE_CHANNELS.find((c) => c === next);
-    if (!chosen) return "invalid update channel";
-    const error = saveSettings({ ...settings, updateChannel: chosen });
-    if (!error) onUpdateChannel(chosen);
+  ipcMain.handle("parallax:localName", () => localName());
+  ipcMain.handle("parallax:renameLocal", (_event, name: unknown) => {
+    if (typeof name !== "string") return "invalid name";
+    const label = name
+      .replace(/\p{Cc}/gu, "")
+      .trim()
+      .slice(0, 64);
+    const { localName: _old, ...rest } = settings;
+    const error = saveSettings(label ? { ...rest, localName: label } : rest);
+    if (!error) broadcast("parallax:localName", localName());
     return error;
   });
 
@@ -165,24 +195,38 @@ export function startHosts(onUpdateChannel: (channel: UpdateChannel) => void): v
   ipcMain.handle("parallax:connectionState", (_event, hostId: unknown) => connection(hostId).state);
   ipcMain.handle("parallax:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
-  // A window's sign-in terminal (terminal.ts). The renderer names the host and the CLI; only
-  // main decides what runs.
+  // A window's terminals (terminal.ts), by an id it picks: a CLI's or a provider instance's
+  // sign-in, or a shell in a thread's folder. The renderer names the host and the CLI, instance,
+  // or folder; only main decides what runs.
   ipcMain.handle(
     "parallax:openTerminal",
-    (event, hostId: unknown, cli: unknown, cols: unknown, rows: unknown) => {
-      if (typeof hostId !== "string" || !isCliKind(cli) || !isSize(cols) || !isSize(rows)) {
+    (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {
+      if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      return openTerminal(event.sender, () => signInCommand(hostId, cli), cols, rows);
+      const { hostId, cli, provider, path } = target;
+      if (typeof hostId !== "string") return "invalid terminal";
+      if (isCliKind(cli)) {
+        return openTerminal(event.sender, id, () => signInCommand(hostId, cli), cols, rows);
+      }
+      if (typeof provider === "string") {
+        const command = () => providerSignInCommand(hostId, provider);
+        return openTerminal(event.sender, id, command, cols, rows);
+      }
+      if (typeof path !== "string") return "invalid terminal";
+      return openTerminal(event.sender, id, () => folderCommand(hostId, path), cols, rows);
     },
   );
-  ipcMain.on("parallax:terminalInput", (event, data: unknown) => {
-    if (typeof data === "string") writeTerminal(event.sender, data);
+  ipcMain.on("parallax:terminalInput", (event, id: unknown, data: unknown) => {
+    if (isTerminalId(id) && typeof data === "string") writeTerminal(event.sender, id, data);
   });
-  ipcMain.on("parallax:resizeTerminal", (event, cols: unknown, rows: unknown) => {
-    if (isSize(cols) && isSize(rows)) resizeTerminal(event.sender, cols, rows);
+  ipcMain.on("parallax:resizeTerminal", (event, id: unknown, cols: unknown, rows: unknown) => {
+    if (isTerminalId(id) && isSize(cols) && isSize(rows))
+      resizeTerminal(event.sender, id, cols, rows);
   });
-  ipcMain.on("parallax:closeTerminal", (event) => closeTerminal(event.sender));
+  ipcMain.on("parallax:closeTerminal", (event, id: unknown) => {
+    if (isTerminalId(id)) closeTerminal(event.sender, id);
+  });
 
   powerMonitor.on("resume", () => {
     for (const each of connections.values()) each.heartbeat();
@@ -209,6 +253,75 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
   const path = answer.result.clis.find((each) => each.cli === cli)?.path;
   if (!path) return "That CLI isn't installed on this host anymore.";
   return loginCommand(cli, path, ssh);
+}
+
+/**
+ * What signs in to provider instance `id` on a host: its `login` argv from the host's plxd, run as
+ * it is, with its `loginEnv` and its home's variable set, so a second Codex signs in to its own `CODEX_HOME`. A
+ * program that's the one plxd found runs from where it found it, as a CLI's sign-in does.
+ * Resolves to an error for people.
+ */
+async function providerSignInCommand(hostId: string, id: string): Promise<Command | string> {
+  const host = connections.get(hostId);
+  if (!host) return "That host isn't in Parallax anymore.";
+  const saved = settings.hosts.find((h) => h.id === hostId);
+  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  const answer = await host.request("providers/list", { refresh: false });
+  if ("error" in answer)
+    return `Parallax couldn't ask the host how to sign in: ${answer.error.message}`;
+  const found = answer.result.providers.find((p) => p.instance.id === id);
+  if (!found) return "That provider isn't on this host anymore.";
+  const [program, ...args] = found.login ?? [];
+  if (!program) return "That provider has no sign-in on this host.";
+  const { kind, home } = found.instance;
+  const homeVar = HOME_VARS[kind];
+  const env = {
+    ...Object.fromEntries((found.loginEnv ?? []).map((v) => [v.name, v.value ?? ""])),
+    ...(homeVar && home ? { [homeVar]: home } : {}),
+  };
+  const own = found.path && /[^/\\]+$/.exec(found.path)?.[0].replace(/\.\w+$/, "") === program;
+  return loginCommand(kind, own ? found.path! : program, ssh, undefined, args, env);
+}
+
+/**
+ * This computer's name in Parallax: the user's, else the computer's own. macOS's is the Computer
+ * Name in System Settings, such as "macbook"; elsewhere, the host name.
+ */
+function localName(): string {
+  return settings.localName || (computerName ??= readComputerName());
+}
+let computerName: string | undefined;
+function readComputerName(): string {
+  if (process.platform === "darwin") {
+    try {
+      const name = execFileSync("scutil", ["--get", "ComputerName"], { encoding: "utf8" }).trim();
+      if (name) return name;
+    } catch {
+      // Falls back to the host name.
+    }
+  }
+  return hostname().replace(/\.local$/, "");
+}
+
+/** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
+export const savedHost = (id: string): SshHost | undefined =>
+  settings.hosts.find((h) => h.id === id);
+
+/**
+ * What opens a shell in `folder` on a host: here, if it's still a folder; on an SSH host, over
+ * ssh as the host's connection is. Resolves to an error for people.
+ */
+async function folderCommand(hostId: string, folder: string): Promise<Command | string> {
+  if (!connections.has(hostId)) return "That host isn't in Parallax anymore.";
+  const saved = settings.hosts.find((h) => h.id === hostId);
+  // A Windows path, which can't hold a `"`, goes to the host in double quotes.
+  if (saved && /^[a-z]:\\/i.test(folder) && folder.includes('"'))
+    return `${folder} isn't a folder.`;
+  if (saved)
+    return shellCommand(folder, { destination: saved.destination, ssh: settings.ssh ?? "ssh" });
+  const isFolder =
+    path.isAbsolute(folder) && (await stat(folder).catch(() => undefined))?.isDirectory();
+  return isFolder ? shellCommand(folder) : `${folder} isn't a folder on this computer anymore.`;
 }
 
 /** The local `plxd` binary (plxd.ts). */
@@ -323,6 +436,10 @@ function connection(hostId: unknown): Connection {
   if (!found) throw new Error(`unknown host: ${String(hostId)}`);
   return found;
 }
+
+/** A terminal's id, which its window picks. */
+const isTerminalId = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.length <= 500;
 
 /** A terminal's width or height, in character cells. */
 const isSize = (value: unknown): value is number =>

@@ -1,49 +1,55 @@
 import { Check, ChevronDown, Search, Star } from "lucide-react";
-import {
-  useId,
-  useRef,
-  useState,
-  type ComponentType,
-  type SVGProps,
-  type ToggleEvent,
-} from "react";
+import { useId, useRef, useState, type ToggleEvent } from "react";
 
-import { ClaudeLogo, OpenAILogo } from "./logos";
-import type { Model, Provider } from "./models";
+import {
+  prefsKey,
+  toggleFavorite,
+  useModelPrefs,
+  type Catalog,
+  type Model,
+  type Provider,
+} from "./models";
+import { kindOf, logoOf } from "./providers";
 import { menuButton, menuPanel, moveFocus } from "./ui";
 
-const providers: Record<Provider, ComponentType<SVGProps<SVGSVGElement>>> = {
-  Claude: ClaudeLogo,
-  Codex: OpenAILogo,
-};
-
-// The same model can run under two providers, so a model is known by both.
-const keyOf = (m: Model) => `${m.provider}/${m.name}`;
+// The same model can run on two instances, so a model is known by both.
+const keyOf = (m: Model) => `${m.provider}/${m.id}`;
 
 const railButton =
   "grid size-8 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover aria-pressed:bg-selected aria-pressed:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-4";
 
 /**
- * The model picker: a button showing the chosen model that opens a searchable list of `models`,
- * with a rail to filter by favorites or provider. A native popover, so Escape and clicking away
- * close it, and it flips above the button when there's no room below. The models of providers in
- * `unavailable` aren't listed, and the rail shows those providers disabled, saying why on hover.
+ * The model picker: a button showing the chosen model that opens a searchable list of the
+ * `catalog`'s models, with a rail to filter by favorites or instance. A native popover, so Escape
+ * and clicking away close it, and it flips above the button when there's no room below. The models
+ * of instances in `unavailable` aren't listed, and the rail shows those instances disabled, saying
+ * why on hover. Favorites are kept on this device, per host.
  */
 export function ModelMenu({
-  models: all,
+  catalog,
   unavailable = {},
   value: chosen,
   onChange,
 }: {
-  models: Model[];
-  /** Providers whose models can't be picked here, by why. */
+  catalog: Catalog;
+  /** Instances whose models can't be picked here, by why. */
   unavailable?: Partial<Record<Provider, string>>;
   value: Model;
   onChange: (model: Model) => void;
 }) {
+  const all = catalog.models;
   const models = all.filter((m) => !unavailable[m.provider]);
-  const [favorites, setFavorites] = useState(() => new Set([keyOf(models[0]!)]));
-  const [tab, setTab] = useState<"favorites" | Provider>(chosen.provider);
+  const prefs = useModelPrefs();
+  const starred = (m: Model) =>
+    !!prefs[prefsKey(catalog.hostId, m.provider)]?.favorites?.includes(m.id);
+  const instance = (id: Provider) => catalog.instances.find((i) => i.id === id);
+  const logo = (id: Provider) => {
+    const found = instance(id);
+    return found ? logoOf(found) : kindOf(id).Logo;
+  };
+  const nameOf = (id: Provider) => instance(id)?.name ?? id;
+  // An instance's id, or null for Favorites.
+  const [tab, setTab] = useState<Provider | null>(chosen.provider);
   const [query, setQuery] = useState("");
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -51,25 +57,14 @@ export function ModelMenu({
 
   const q = query.trim().toLowerCase();
   const shown = models.filter((m) =>
-    q
-      ? m.name.toLowerCase().includes(q)
-      : tab === "favorites"
-        ? favorites.has(keyOf(m))
-        : m.provider === tab,
+    q ? m.name.toLowerCase().includes(q) : tab === null ? starred(m) : m.provider === tab,
   );
-  const Logo = providers[chosen.provider];
+  const Logo = logo(chosen.provider);
 
   const pick = (m: Model) => {
     onChange(m);
     menu.current?.hidePopover();
   };
-
-  const toggleFavorite = (key: string) =>
-    setFavorites((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(key)) next.add(key);
-      return next;
-    });
 
   return (
     <>
@@ -99,22 +94,22 @@ export function ModelMenu({
           <button
             type="button"
             aria-label="Favorites"
-            aria-pressed={!q && tab === "favorites"}
-            onClick={() => setTab("favorites")}
+            aria-pressed={!q && tab === null}
+            onClick={() => setTab(null)}
             className={railButton}
           >
             <Star />
           </button>
           <span aria-hidden className="my-1 h-px w-6 bg-border" />
           {[...new Set(all.map((m) => m.provider))].map((p) => {
-            const ProviderLogo = providers[p];
+            const ProviderLogo = logo(p);
             const why = unavailable[p];
             return (
               // A disabled button gets no pointer events, so its wrapper shows the tooltip.
               <span key={p} className="group relative flex">
                 <button
                   type="button"
-                  aria-label={p}
+                  aria-label={nameOf(p)}
                   aria-pressed={!q && tab === p}
                   disabled={!!why}
                   aria-describedby={why ? `${id}-${p}` : undefined}
@@ -154,9 +149,9 @@ export function ModelMenu({
           </label>
           <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
             {shown.map((m) => {
-              const ProviderLogo = providers[m.provider];
+              const ProviderLogo = logo(m.provider);
               const key = keyOf(m);
-              const starred = favorites.has(key);
+              const favorite = starred(m);
               return (
                 <li key={key} className="flex items-center rounded-md hover:bg-hover">
                   <button
@@ -177,7 +172,7 @@ export function ModelMenu({
                       </span>
                       <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-faint-foreground">
                         <ProviderLogo className="size-3" />
-                        {m.provider}
+                        {nameOf(m.provider)}
                       </span>
                     </span>
                     <Check
@@ -187,9 +182,9 @@ export function ModelMenu({
                   </button>
                   <button
                     type="button"
-                    aria-label={starred ? `Unfavorite ${m.name}` : `Favorite ${m.name}`}
-                    aria-pressed={starred}
-                    onClick={() => toggleFavorite(key)}
+                    aria-label={favorite ? `Unfavorite ${m.name}` : `Favorite ${m.name}`}
+                    aria-pressed={favorite}
+                    onClick={() => toggleFavorite(catalog.hostId, m.provider, m.id)}
                     className="mr-1.5 grid size-7 place-items-center rounded text-faint-foreground hover:text-foreground aria-pressed:text-amber-500 [&_svg]:size-4 aria-pressed:[&_svg]:fill-current"
                   >
                     <Star />

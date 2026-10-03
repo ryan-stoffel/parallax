@@ -3,9 +3,11 @@
 //!
 //! [`WorktreeManager`] runs every git command through [`Launcher`], the same process supervisor
 //! backends use: an explicit, scrubbed environment and a timeout per call, so a hung or
-//! credential-prompting git can never block plxd. Only one call changes the project repo's own
+//! credential-prompting git can never block plxd. Only two calls change the project repo's own
 //! working tree: [`WorktreeManager::accept`] (#157), when the user accepts a run, and it refuses
-//! rather than touch uncommitted changes (see `review`). Otherwise `worktree add`, `worktree
+//! rather than touch uncommitted changes (see `review`), and [`WorktreeManager::switch`], when a
+//! Current checkout thread starts on a ref the user picked, which git refuses likewise (see
+//! `refs`). Otherwise `worktree add`, `worktree
 //! remove`, and `worktree prune` only touch `.git/worktrees` metadata and refs, and `status`,
 //! `rev-parse`, and `diff` are read-only.
 //!
@@ -15,6 +17,7 @@
 //! [`WorktreeManager::diff_stat`]. A client reviews the commit through
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
 //! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (RYA-168).
+//! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (RYA-298).
 //!
 //! # Layout and naming
 //!
@@ -30,7 +33,7 @@
 //!
 //! [`WorktreeManager::create`] resolves `base` to a concrete commit once, at creation, so a later
 //! [`WorktreeManager::diff`] is never compared against a ref that has since moved. When the caller
-//! leaves `base` unset (today's only case: the repo's current branch `HEAD`), creation never
+//! leaves `base` unset (the repo's current branch `HEAD`), creation never
 //! refuses over the repo's own working tree (#257): an untracked file was never going to be in a
 //! fresh worktree anyway, and a tracked, uncommitted change simply isn't included either, the same
 //! as checking out any other commit. [`CreatedWorktree::base_dirty`] flags the latter case — the
@@ -92,7 +95,9 @@
 //! repository's git folder — so this needs an unusual repository configuration to matter; #175
 //! tracks closing it.
 
+mod folder;
 mod pull_request;
+mod refs;
 mod review;
 mod scratch;
 #[cfg(all(test, unix))]
@@ -100,7 +105,8 @@ mod tests;
 #[cfg(all(test, windows))]
 mod windows_tests;
 
-pub use pull_request::PrError;
+pub use folder::{PushError, RunFolder};
+pub use pull_request::{PrError, github_pr_urls};
 pub use review::{
     AcceptError, Accepted, Blob, CommitDiff, FileDiff, MAX_BLOB_BYTES, MergeHow, validate_repo_path,
 };
@@ -708,42 +714,11 @@ impl WorktreeManager {
         repo_root: &Path,
         message: &str,
     ) -> Result<Option<Commit>, WorktreeError> {
-        self.stage_all(worktree_path, git_dir).await?;
-        let staged = self
-            .run_worktree_git_ok(worktree_path, git_dir, &["diff", "--cached", "--name-only"])
-            .await?;
-        if staged.trim().is_empty() {
-            return Ok(None);
-        }
-        let Some((name, email)) = self.resolve_identity(repo_root).await? else {
-            return Err(WorktreeError::MissingIdentity {
-                repo: repo_root.to_owned(),
-            });
-        };
-        let user_name_arg = format!("user.name={name}");
-        let user_email_arg = format!("user.email={email}");
-        self.run_worktree_git_ok(
-            worktree_path,
+        let folder = RunFolder::Worktree {
+            path: worktree_path,
             git_dir,
-            &[
-                "-c",
-                user_name_arg.as_str(),
-                "-c",
-                user_email_arg.as_str(),
-                "commit",
-                "--no-verify",
-                "--no-gpg-sign",
-                "--message",
-                message,
-            ],
-        )
-        .await?;
-        let sha = self
-            .run_worktree_git_ok(worktree_path, git_dir, &["rev-parse", "HEAD"])
-            .await?;
-        Ok(Some(Commit {
-            sha: sha.trim().to_owned(),
-        }))
+        };
+        self.commit(folder, repo_root, message).await
     }
 
     /// Removes `worktree_path` and its `branch` from `repo_path`'s repository.
@@ -1032,6 +1007,23 @@ impl WorktreeManager {
         args: &[&str],
         limit: Duration,
     ) -> Result<GitOutput, WorktreeError> {
+        let process = self.launcher.spawn(&self.git_spec(cwd, args))?;
+        let Ok(collected) = timeout(limit, collect(process, cwd, args)).await else {
+            return Err(WorktreeError::Timeout {
+                cwd: cwd.to_owned(),
+                args: owned_args(args),
+                timeout: limit,
+            });
+        };
+        let (stdout, exit) = collected?;
+        Ok(GitOutput {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            exit,
+        })
+    }
+
+    /// The process spec [`WorktreeManager::run_git`] runs.
+    fn git_spec(&self, cwd: &Path, args: &[&str]) -> ProcessSpec {
         let mut spec = ProcessSpec::new("git", cwd);
         spec.args = ["-c", NO_HOOKS]
             .iter()
@@ -1045,20 +1037,7 @@ impl WorktreeManager {
         spec.inject.set("GIT_TERMINAL_PROMPT", "0");
         spec.stdin = StdinMode::Null;
         spec.limits.max_line_bytes = self.max_git_line_bytes;
-
-        let process = self.launcher.spawn(&spec)?;
-        let Ok(collected) = timeout(limit, collect(process, cwd, args)).await else {
-            return Err(WorktreeError::Timeout {
-                cwd: cwd.to_owned(),
-                args: owned_args(args),
-                timeout: limit,
-            });
-        };
-        let (stdout, exit) = collected?;
-        Ok(GitOutput {
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            exit,
-        })
+        spec
     }
 
     /// Like [`WorktreeManager::run_git`], but a non-zero exit becomes [`WorktreeError::GitFailed`]

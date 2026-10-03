@@ -1,6 +1,8 @@
-//! Detecting installed vendor CLIs and their sign-in state (#114, decision record 0004).
+//! Detecting installed vendor CLIs and their sign-in state (#114, decision record 0004), and the
+//! GitHub CLI's (PLX-336).
 //!
-//! plxd never reads a CLI's credential files and never starts a sign-in. It only:
+//! plxd never reads a CLI's credential files, and detection never starts a sign-in (`gh`'s, which
+//! plxd may start since 0050, is in [`crate::github`]). It only:
 //!
 //! - Resolves the binary on the `PATH` it itself uses ([`find_program`], #96), which runs
 //!   nothing.
@@ -23,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use parallax_protocol::{AuthKind, CliKind, DetectedCli};
+use parallax_protocol::{AuthKind, CliKind, DetectedCli, GithubStatus};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -154,8 +156,12 @@ impl CliDetector {
         probe
     }
 
+    /// A fresh probe of the GitHub CLI, for `github/status`. Not cached.
+    pub async fn github(&self) -> GithubStatus {
+        probe_github(&self.launcher, self.timeout).await
+    }
+
     /// The launcher probes run through, whose environment agents' CLIs start from.
-    #[cfg(target_os = "linux")]
     pub(crate) fn launcher(&self) -> &Launcher {
         &self.launcher
     }
@@ -204,7 +210,7 @@ fn installed(cli: CliKind, path: &Path) -> DetectedCli {
 /// A spec for probing `program` in the user's home, which is absolute on every OS, unlike `/` on
 /// Windows (RYA-144), and which only they can write to. `/` if the home folder is unknown or
 /// missing.
-fn probe_spec(program: &str) -> ProcessSpec {
+pub(crate) fn probe_spec(program: &str) -> ProcessSpec {
     let home = std::env::home_dir().filter(|home| home.is_absolute() && home.is_dir());
     ProcessSpec::new(program, home.unwrap_or_else(|| PathBuf::from("/")))
 }
@@ -220,14 +226,16 @@ pub(crate) async fn run(
 ) -> Result<Ran, String> {
     let mut spec = probe_spec(program);
     spec.args = args.iter().map(|arg| (*arg).into()).collect();
-    run_spec(launcher, &spec, timeout).await
+    run_spec(launcher, &spec, b"", timeout).await
 }
 
 /// [`run`] for a caller that builds its own `spec`, such as one that scrubs more of the
-/// environment.
+/// environment. When `spec` pipes stdin, `input` is written to it and it's closed, within the
+/// timeout: the way to hand a process a secret, which `ps` would show in its arguments.
 pub(crate) async fn run_spec(
     launcher: &Launcher,
     spec: &ProcessSpec,
+    input: &[u8],
     timeout: Duration,
 ) -> Result<Ran, String> {
     let mut process = match launcher.spawn(spec) {
@@ -240,7 +248,12 @@ pub(crate) async fn run_spec(
     let mut stdout = String::new();
     let mut exit_code = None;
     let mut stderr_tail = String::new();
+    let stdin = process.take_stdin();
     let collected = tokio::time::timeout(timeout, async {
+        if let Some(mut stdin) = stdin {
+            // A process that exits without reading it all is still answered below.
+            let _ = stdin.write_all(input).await;
+        }
         while let Some(output) = process.next().await {
             match output {
                 Output::Line(bytes) => {
@@ -470,6 +483,91 @@ fn extract_subscription_tier(text: &str) -> Option<String> {
     text.lines().find_map(|line| {
         let tier = line.trim().strip_prefix("Subscription Tier:")?.trim();
         (!tier.is_empty()).then(|| tier.to_owned())
+    })
+}
+
+/// Runs `gh --version` and `gh auth status --hostname github.com`, never with `--show-token`, so
+/// no token is printed, and with prompts off. `gh auth status` exits 0 when signed in and 1 when
+/// not. A `gh` in plxd's tools folder is `managed`. What [`crate::github`] is doing is left for it
+/// to fill in.
+async fn probe_github(launcher: &Launcher, timeout: Duration) -> GithubStatus {
+    let path = resolve(launcher, "gh");
+    let mut status = GithubStatus {
+        installed: path.is_some(),
+        version: None,
+        signed_in: None,
+        account: None,
+        note: None,
+        managed: path.is_some_and(|path| path.starts_with(launcher.data_dir().tools_dir())),
+        installing: false,
+        signing_in: None,
+        setup_note: None,
+        checked_at: Timestamp::now(),
+    };
+    if !status.installed {
+        return status;
+    }
+    let gh = |args: &[&str]| {
+        let mut spec = probe_spec("gh");
+        spec.args = args.iter().map(|arg| (*arg).into()).collect();
+        spec.inject.set("GH_PROMPT_DISABLED", "1");
+        spec
+    };
+    match run_spec(launcher, &gh(&["--version"]), b"", timeout).await {
+        Ok(ran) => status.version = gh_version(&ran.stdout),
+        Err(note) => status.note = Some(note),
+    }
+    // `--active` (gh 2.57.0 and later) checks only the active account, so a stale second one
+    // doesn't read as signed out. Older gh refuses the flag.
+    let parse = crate::backend::claude::parse_version;
+    let active = status
+        .version
+        .as_deref()
+        .is_some_and(|v| parse(v) >= parse("2.57.0"));
+    let mut args = vec!["auth", "status", "--hostname", "github.com"];
+    if active {
+        args.push("--active");
+    }
+    match run_spec(launcher, &gh(&args), b"", timeout).await {
+        Ok(ran) => {
+            status.signed_in = exit_code_signed_in(ran.exit_code);
+            if status.signed_in == Some(true) {
+                // Older gh prints the status to stderr.
+                status.account = gh_account(&ran.stdout).or_else(|| gh_account(&ran.stderr_tail));
+            } else if status.signed_in.is_none() {
+                status.note = Some(match ran.exit_code {
+                    Some(code) => format!("`gh auth status` exited with code {code}"),
+                    None => "`gh auth status` exited from a signal".to_owned(),
+                });
+            }
+        }
+        Err(note) => status.note = Some(note),
+    }
+    status
+}
+
+/// The version in `gh --version`'s first line, such as `2.100.0` in `gh version 2.100.0
+/// (2026-09-01)`.
+fn gh_version(stdout: &str) -> Option<String> {
+    let word = stdout
+        .lines()
+        .next()?
+        .strip_prefix("gh version ")?
+        .split_whitespace()
+        .next()?;
+    crate::backend::claude::parse_version(word).map(|_| word.to_owned())
+}
+
+/// The active account's login in `gh auth status`, which lists it first: `Logged in to github.com
+/// account octocat (keyring)`, or `Logged in to github.com as octocat (oauth_token)` before gh
+/// 2.40.
+fn gh_account(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let (_, rest) = line.split_once("Logged in to github.com ")?;
+        let rest = rest
+            .strip_prefix("account ")
+            .or_else(|| rest.strip_prefix("as "))?;
+        rest.split_whitespace().next().map(str::to_owned)
     })
 }
 

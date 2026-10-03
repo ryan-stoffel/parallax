@@ -1,12 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import {
-  UPDATE_CHANNELS,
-  type HostInput,
-  type SshHost,
-  type UpdateChannel,
-} from "../preload/bridge";
+import type { HostInput, SshHost } from "../preload/bridge";
 
 /** `settings.json` in the app's userData folder. Only the main process reads or writes it (0022). */
 export type Settings = {
@@ -16,8 +11,8 @@ export type Settings = {
    * write it, so it can't choose which program the app runs.
    */
   ssh?: string;
-  /** Which branch Update follows. Nightly when unset. */
-  updateChannel?: UpdateChannel;
+  /** This computer's name in Parallax, when the user renamed it. */
+  localName?: string;
 };
 
 /**
@@ -37,12 +32,11 @@ export function readSettings(file: string): Settings {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error("it isn't a JSON object");
   }
-  const { hosts = [], ssh, updateChannel } = raw as Record<string, unknown>;
+  const { hosts = [], ssh, localName } = raw as Record<string, unknown>;
   if (!Array.isArray(hosts)) throw new Error("`hosts` isn't a list");
   if (ssh !== undefined && typeof ssh !== "string") throw new Error("`ssh` isn't a string");
-  if (updateChannel !== undefined && !UPDATE_CHANNELS.some((c) => c === updateChannel)) {
-    throw new Error(`\`updateChannel\` isn't ${UPDATE_CHANNELS.join(" or ")}`);
-  }
+  if (localName !== undefined && typeof localName !== "string")
+    throw new Error("`localName` isn't a string");
   const ids = new Set(["local"]);
   for (const entry of hosts as unknown[]) {
     const { id, name, destination } = (entry ?? {}) as Record<string, unknown>;

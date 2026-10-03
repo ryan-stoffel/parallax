@@ -102,8 +102,8 @@ let updating;
 let base;
 
 /**
- * Moves this checkout, detached, to the tip of the channel's branch on origin, then installs and
- * rebuilds what changed, backward too when the channel moves from nightly to release. Leaves
+ * Moves this checkout, detached, to the tip of main on origin, then installs and
+ * rebuilds what changed. Nightly and stable both follow main (scripts/channels.mjs). Leaves
  * alone a checkout that whyNotMove refuses. The watchers reload the renderer and restart
  * Electron; a new plxd starts on the app's reconnect. Resolves to one line for the sidebar. New
  * packages, and a change to scripts/ or the Vite config, load only when Parallax restarts, so then

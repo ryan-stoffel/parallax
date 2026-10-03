@@ -1,20 +1,24 @@
 //! `agent/start`, `agent/send`, `agent/cancel`, `agent/list`, and `agent/events` (#156), behind
 //! the `agents` capability; the review methods (#157) behind `agentReview`; `agent/openPr`
-//! (RYA-168) behind `openPr`; `agent/image` (RYA-191) behind `promptImages`; and `agent/approve`
-//! (RYA-222) behind `approvals`. The runner itself is [`crate::agents`].
+//! (RYA-168) behind `openPr`; `agent/image` (RYA-191) behind `promptImages`; `agent/approve`
+//! (RYA-222) behind `approvals`; and `agent/gitStatus`, `agent/commit`, and `agent/push`
+//! (RYA-298) behind `git`. The runner itself is [`crate::agents`].
 
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
-    AgentApproveResult, AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
-    AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams, AgentListParams,
-    AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy, AgentRequestChangesParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind, LoggedEvent, PromptImage,
+    AgentApproveResult, AgentAutoResumeParams, AgentCancelParams, AgentCommitParams,
+    AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileParams,
+    AgentFileResult, AgentFilesParams, AgentFilesResult, AgentGitStatusParams, AgentImageParams,
+    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy,
+    AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams, AgentRunResult,
+    AgentSendParams, AgentStartParams, ErrorKind, GitStatus, LoggedEvent, PromptImage, RunId,
 };
 
 use super::Context;
+use crate::agents::GitAction;
 use crate::{agents, images};
 
 /// The longest prompt or message plxd takes, in bytes. It goes on the CLI's stdin, never in
@@ -62,7 +66,7 @@ pub(super) fn check_message(
 
 pub(crate) async fn start(
     context: &Context,
-    params: AgentStartParams,
+    mut params: AgentStartParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     if params.policy != AgentPolicy::WorkspaceWrite {
         return Err(ErrorObject::invalid_params(
@@ -70,6 +74,7 @@ pub(crate) async fn start(
         ));
     }
     check_message("prompt", &params.prompt, &params.images)?;
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -81,9 +86,10 @@ pub(crate) async fn start(
 
 pub(crate) async fn send(
     context: &Context,
-    params: AgentSendParams,
+    mut params: AgentSendParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     check_message("text", &params.text, &params.images)?;
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let daemon = Arc::clone(&context.daemon);
     let run = context
         .daemon
@@ -101,7 +107,39 @@ pub(crate) async fn cancel(
     let run = context
         .daemon
         .agents
-        .detached(agents::cancel(daemon, params.run_id))
+        .detached(agents::cancel(daemon, params.run_id, params.from))
+        .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `agent/resumeNow` (PLX-371): through the run's actor, detached as `agent/cancel` is.
+pub(crate) async fn resume_now(
+    context: &Context,
+    params: AgentResumeNowParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    let run = context
+        .daemon
+        .agents
+        .detached(agents::resume_now(daemon, params.run_id))
+        .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `agent/autoResume` (PLX-371): through the run's actor.
+pub(crate) async fn auto_resume(
+    context: &Context,
+    params: AgentAutoResumeParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    let AgentAutoResumeParams {
+        run_id,
+        auto_resume,
+    } = params;
+    let run = context
+        .daemon
+        .agents
+        .detached(agents::set_auto_resume(daemon, run_id, auto_resume))
         .await?;
     Ok(AgentRunResult { run })
 }
@@ -210,6 +248,13 @@ pub(crate) async fn file(
     agents::review::file(&context.daemon, params).await
 }
 
+pub(crate) async fn files(
+    context: &Context,
+    params: AgentFilesParams,
+) -> Result<AgentFilesResult, ErrorObject> {
+    agents::review::files(&context.daemon, params).await
+}
+
 pub(crate) async fn accept(
     context: &Context,
     params: AgentAcceptParams,
@@ -251,6 +296,52 @@ pub(crate) async fn open_pr(
         .await
 }
 
+/// `agent/gitStatus` (RYA-298): through the run's actor, like `agent/commit` and `agent/push`.
+pub(crate) async fn git_status(
+    context: &Context,
+    params: AgentGitStatusParams,
+) -> Result<GitStatus, ErrorObject> {
+    git(context, params.run_id, GitAction::Status).await
+}
+
+/// `agent/commit`: the message checked here, then the commit through the run's actor.
+pub(crate) async fn commit(
+    context: &Context,
+    params: AgentCommitParams,
+) -> Result<GitStatus, ErrorObject> {
+    let AgentCommitParams { run_id, message } = params;
+    if message.trim().is_empty() {
+        return Err(ErrorObject::invalid_params("message must not be empty"));
+    }
+    if message.len() > MAX_PR_BODY_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "message must be at most {MAX_PR_BODY_BYTES} bytes"
+        )));
+    }
+    git(context, run_id, GitAction::Commit(message)).await
+}
+
+/// `agent/push`.
+pub(crate) async fn push(
+    context: &Context,
+    params: AgentPushParams,
+) -> Result<GitStatus, ErrorObject> {
+    git(context, params.run_id, GitAction::Push).await
+}
+
+async fn git(
+    context: &Context,
+    run_id: RunId,
+    action: GitAction,
+) -> Result<GitStatus, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    context
+        .daemon
+        .agents
+        .detached(agents::git(daemon, run_id, action))
+        .await
+}
+
 /// `agent/requestChanges`: the reviewer's follow-up, sent the way `agent/send` sends one.
 pub(crate) async fn request_changes(
     context: &Context,
@@ -270,8 +361,12 @@ pub(crate) async fn request_changes(
             model: None,
             effort: None,
             permission: None,
+            context_window: None,
+            fast: None,
             account: None,
             images: Vec::new(),
+            threads: Vec::new(),
+            from: None,
         },
     )
     .await
@@ -363,9 +458,12 @@ mod tests {
                     policy: "workspaceWrite".to_owned(),
                     backend: "fake".to_owned(),
                     coordinator_thread: None,
+                    parent: None,
                     model: None,
                     effort: None,
                     permission: None,
+                    context_window: None,
+                    fast: None,
                     approvals: false,
                     checkout: false,
                 };

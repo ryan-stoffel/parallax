@@ -39,9 +39,11 @@ use crate::backend::run_temp;
 use crate::context::ContextIndex;
 use crate::detect::CliDetector;
 use crate::event_log::EventLog;
+use crate::github::{self, Github};
 use crate::keystore::{self, KeyStore};
 use crate::methods;
 use crate::paths::DataDir;
+use crate::providers::Providers;
 use crate::routing::BackendRegistry;
 use crate::store::StoreHandle;
 use crate::worktree::WorktreeManager;
@@ -97,11 +99,18 @@ pub struct Config {
     /// ([`FakeBackend::from_env`]), and Codex for `OpenAI` accounts; tests register a fake.
     pub backends: Option<BackendRegistry>,
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
-    /// default, is plxd's own with the usual install folders on `PATH` (#96, decision 0014).
+    /// default, is plxd's own with the login shell's `PATH` and the usual install folders filled in
+    /// (#96, decision 0014, PLX-323).
     pub agent_environment: Option<Environment>,
     /// How long a run's permission request waits for an answer before plxd denies it (RYA-222,
     /// decision 0031). 30 minutes by default.
     pub approval_timeout: Duration,
+    /// The most a run a usage limit stopped resumes past its reset, at random (PLX-371, decision
+    /// 0049). 60 seconds by default.
+    pub resume_jitter: Duration,
+    /// How long such a run first waits when no reset time is known, doubling with each resume
+    /// in a row that finds the limit still on, up to 16 times this. 15 minutes by default.
+    pub resume_backoff: Duration,
 }
 
 impl Config {
@@ -121,6 +130,8 @@ impl Config {
             backends: None,
             agent_environment: None,
             approval_timeout: agents::APPROVAL_TIMEOUT,
+            resume_jitter: agents::ResumeTiming::default().jitter,
+            resume_backoff: agents::ResumeTiming::default().backoff,
         }
     }
 }
@@ -210,8 +221,11 @@ pub(crate) struct Daemon {
     /// The operating system and version, for `host/version`.
     pub os: String,
     pub limits: Limits,
-    /// Detects the vendor CLIs for `accounts/list` and `accounts/refresh` (#114).
+    /// Detects the vendor CLIs for `accounts/list` and `accounts/refresh` (#114), and `gh` for
+    /// `github/status` (PLX-336).
     pub cli_detector: CliDetector,
+    /// Installing `gh` and signing it in (PLX-423).
+    pub github: Github,
     /// Where key accounts' API keys live (#117): the OS's real store, except in tests.
     pub keys: Arc<dyn KeyStore>,
     /// plxd's data folder, so `context/*` (#155) and the runner (#156) can find a project's
@@ -221,6 +235,8 @@ pub(crate) struct Daemon {
     pub context: ContextIndex,
     /// Agent runs (#156).
     pub agents: Agents,
+    /// Provider instances (0040), whose backends are in `agents`' registry.
+    pub providers: Providers,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -277,6 +293,7 @@ impl Server {
     ///
     /// [`StartError::AlreadyRunning`] when another server holds the lock, and the other
     /// variants when a startup check fails.
+    #[expect(clippy::too_many_lines, reason = "builds every part of the daemon")]
     pub fn start(config: Config) -> Result<Self, StartError> {
         let data_dir = &config.data_dir;
         prepare_data_dir(data_dir.root())?;
@@ -299,6 +316,7 @@ impl Server {
             .agent_environment
             .clone()
             .unwrap_or_else(agents::worker::agent_environment);
+        let environment = github::with_tools_on_path(environment, data_dir);
         let launcher = Launcher::new(data_dir.clone(), environment);
         let fake = FakeBackend::from_env(&launcher)
             .map_err(|error| StartError::io("setting up the fake backend", error))?;
@@ -313,10 +331,16 @@ impl Server {
                 parallax_protocol::Provider::Openai,
                 Arc::new(CodexBackend::new(launcher.clone())),
             );
+            backends.register(
+                parallax_protocol::Provider::Cursor,
+                Arc::new(crate::providers::cursor_backend(launcher.clone())),
+            );
             backends
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
         let store = StoreHandle::open(&data_dir.store_file());
+        let keys = keystore::system_store();
+        let providers = Providers::load(data_dir.root(), keys.clone(), &launcher, &backends);
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
             log: Arc::new(EventLog::open(
@@ -327,16 +351,23 @@ impl Server {
             )),
             store,
             os: methods::os_version(),
+            github: Github::new(launcher.clone(), github::RELEASE_URL),
             cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout: config.idle_timeout,
                 max_requests_in_flight: config.max_requests_in_flight.max(1),
                 outbound_queue: config.outbound_queue.max(1),
             },
-            keys: keystore::system_store(),
+            keys,
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
-            agents: Agents::new(backends, worktrees).with_approval_timeout(config.approval_timeout),
+            agents: Agents::new(backends, worktrees)
+                .with_approval_timeout(config.approval_timeout)
+                .with_resume_timing(agents::ResumeTiming {
+                    jitter: config.resume_jitter,
+                    backoff: config.resume_backoff,
+                }),
+            providers,
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -585,6 +616,9 @@ impl Daemon {
         );
         let worktrees = WorktreeManager::new(launcher.clone(), dir);
         let store = StoreHandle::open(&dir.join("plxd.sqlite3"));
+        let keys: Arc<dyn KeyStore> = Arc::new(crate::keystore::MemoryKeyStore::new());
+        let backends = BackendRegistry::new();
+        let providers = Providers::load(dir, Arc::clone(&keys), &launcher, &backends);
         Arc::new(Self {
             started: Instant::now(),
             log: Arc::new(EventLog::open(
@@ -595,16 +629,18 @@ impl Daemon {
             )),
             store,
             os: "test".to_owned(),
+            github: Github::new(launcher.clone(), github::RELEASE_URL),
             cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout,
                 max_requests_in_flight: 32,
                 outbound_queue: 32,
             },
-            keys: Arc::new(crate::keystore::MemoryKeyStore::new()),
+            keys,
             data_dir: DataDir::new(dir).unwrap(),
             context: ContextIndex::default(),
-            agents: Agents::new(BackendRegistry::new(), worktrees),
+            agents: Agents::new(backends, worktrees),
+            providers,
         })
     }
 }

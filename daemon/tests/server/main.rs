@@ -9,16 +9,21 @@
 
 mod agents;
 mod approvals;
+mod auto_resume;
 mod context;
 mod coordinator;
 mod events;
+mod git;
 mod handshake;
+mod inbox;
 mod keys;
 mod lifecycle;
 mod mcp;
 mod open_pr;
 mod projects;
+mod pull_requests;
 mod requests;
 mod support;
+mod thread_tools;
 mod threads;
 mod usage;

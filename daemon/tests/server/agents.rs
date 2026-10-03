@@ -12,7 +12,7 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notificat
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
     AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
-    NotificationMethod, ProjectCreate, RequestMethod, UsageGet,
+    NotificationMethod, ProjectCreate, RepoAdd, RequestMethod, UsageGet,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
@@ -22,7 +22,8 @@ use parallax_protocol::{
     AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
     CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
     HostHealthParams, ImageId, ImageMediaType, InitializeResult, ParallaxEvent, Project,
-    ProjectCreateParams, ProjectId, PromptImage, Provider, RunId, TurnId, UsageGetParams,
+    ProjectCreateParams, ProjectId, PromptImage, Provider, RepoAddParams, RepoId, RunId, TurnId,
+    UsageGetParams,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -119,8 +120,11 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         images: Vec::new(),
         approvals: false,
+        threads: Vec::new(),
     }
 }
 
@@ -132,8 +136,12 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         account: None,
         images: Vec::new(),
+        threads: Vec::new(),
+        from: None,
     }
 }
 
@@ -169,6 +177,7 @@ pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
         name: "app".to_owned(),
         repo_path: real_repo(dir).to_str().unwrap().to_owned(),
         icon: None,
+        permission: None,
     }
 }
 
@@ -580,7 +589,9 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         turn_id: Some(first),
         text: Some("and the tests".to_owned()),
         wake: false,
+        from: None,
         images: Vec::new(),
+        threads: Vec::new(),
     }));
     assert!(transcript.contains(&AgentOutputItem::Text {
         message_id: None,
@@ -622,7 +633,9 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         turn_id: Some(second),
         text: Some("one more thing".to_owned()),
         wake: false,
+        from: None,
         images: Vec::new(),
+        threads: Vec::new(),
     }));
     let third = TurnId::generate();
     client
@@ -787,7 +800,7 @@ async fn cancel_stops_a_running_worker() {
     assert_eq!(health.running_agents, 1);
 
     let cancelling = client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
+        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
         .await
         .unwrap();
     assert_eq!(cancelling.run.id, run_id);
@@ -799,7 +812,7 @@ async fn cancel_stops_a_running_worker() {
         .unwrap();
     assert_eq!(health.running_agents, 0);
     let again = client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
+        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
         .await
         .unwrap();
     assert_eq!(again.run.status, AgentStatus::Cancelled, "a no-op");
@@ -807,6 +820,7 @@ async fn cancel_stops_a_running_worker() {
     let unknown = client
         .call::<AgentCancel>(AgentCancelParams {
             run_id: RunId::generate(),
+            from: None,
         })
         .await
         .unwrap_err();
@@ -926,7 +940,9 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
             wake: false,
+            from: None,
             images: Vec::new(),
+            threads: Vec::new(),
         },
         AgentOutputItem::SessionStarted {
             session_id: "hang-1".to_owned(),
@@ -980,7 +996,7 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
     .await;
 
     client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
+        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Cancelled)).await;
@@ -999,7 +1015,9 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
             wake: false,
+            from: None,
             images: Vec::new(),
+            threads: Vec::new(),
         }),
     )
     .await;
@@ -1132,6 +1150,12 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     )
     .unwrap();
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Codex and Cursor installed too, so the host lists them (0040).
+    for program in ["codex", "agent"] {
+        std::fs::write(bin.join(program), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(bin.join(program), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
     let mut environment = Environment::empty();
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
 
@@ -1145,7 +1169,11 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     );
     backends.register(
         Provider::Openai,
-        Arc::new(plxd::backend::codex::CodexBackend::new(launcher)),
+        Arc::new(plxd::backend::codex::CodexBackend::new(launcher.clone())),
+    );
+    backends.register(
+        Provider::Cursor,
+        Arc::new(plxd::providers::cursor_backend(launcher)),
     );
     config.backends = Some(backends);
     let server = InProcess::start(config);
@@ -1177,6 +1205,45 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
         .unwrap_err();
     assert_eq!(kind(&codex), ErrorKind::WorkerUnavailable);
     assert!(codex.message.contains("RYA-145"), "{}", codex.message);
+
+    // Cursor runs only threads (0036), so a project's worker never routes to it.
+    let cursor = client
+        .call::<AgentStart>(AgentStartParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "cursor".to_owned(),
+            }),
+            ..start_params(project.id, "Fix it")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&cursor), ErrorKind::WorkerUnavailable);
+
+    // A Codex worker on a repo entry, such as a coordinator's started on one, isn't a thread, so
+    // it is refused too; only `thread/start` runs Codex unsandboxed (0035).
+    let work = temp_dir();
+    let entry = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: real_repo(work.path()).to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    let on_entry = client
+        .call::<AgentStart>(AgentStartParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "codex".to_owned(),
+            }),
+            coordinator_thread: Some(CoordinatorThreadId::generate()),
+            ..start_params(
+                ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
+                "Fix it",
+            )
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&on_entry), ErrorKind::WorkerUnavailable);
+    assert!(on_entry.message.contains("RYA-145"), "{}", on_entry.message);
 
     server.stop().await;
 }
@@ -1226,7 +1293,7 @@ async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
     host.server.stop().await;
 }
 
-fn decode_base64(text: &str) -> Vec<u8> {
+pub(crate) fn decode_base64(text: &str) -> Vec<u8> {
     let value = |c: u8| -> u32 {
         match c {
             b'A'..=b'Z' => u32::from(c - b'A'),
@@ -1563,7 +1630,7 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
     assert!(busy.message.contains("running"), "{}", busy.message);
 
     client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
+        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Cancelled)).await;

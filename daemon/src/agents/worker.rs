@@ -3,13 +3,16 @@
 //! prompt that tells the agent its limits.
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{AccountId, CliKind, DetectedCli, ErrorKind, Provider};
 
 use crate::backend::Backend;
-use crate::backend::claude::{self, WORKER_MIN_VERSION, parse_version};
+use crate::backend::claude::{WORKER_MIN_VERSION, parse_version};
 use crate::backend::codex;
 use crate::backend::process::Environment;
 use crate::paths::without_verbatim_prefix;
@@ -99,12 +102,72 @@ const INHERITED_ON_WINDOWS: &[&str] = &[
 ];
 
 /// The environment every agent CLI, CLI probe, and worktree git command starts from (#96,
-/// decision 0014): only the [`INHERITED`] part of plxd's own, with [`EXTRA_PATH`] filled in.
+/// decision 0014): only the [`INHERITED`] part of plxd's own, with the login shell's `PATH`
+/// ([`login_shell_path`]) and [`EXTRA_PATH`] filled in.
 pub(crate) fn agent_environment() -> Environment {
+    #[cfg(unix)]
+    let login = std::env::var_os("SHELL").and_then(|shell| login_shell_path(&shell));
+    #[cfg(not(unix))]
+    let login: Option<OsString> = None;
     with_extra_path(
         allowlisted(&Environment::inherited()),
         std::env::home_dir().as_deref(),
+        login.as_deref(),
     )
+}
+
+/// How long [`login_shell_path`] waits for the user's shell.
+#[cfg(unix)]
+const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Marks the `PATH` in the login shell's output, which its startup files may print around.
+#[cfg(unix)]
+const PATH_MARK: &str = "__PLXD_PATH__";
+
+/// The `PATH` that `shell`, run as the user's login, interactive shell, sets up (PLX-323). An app
+/// opened from the Dock, and the plxd it starts, get launchd's `/usr/bin:/bin:/usr/sbin:/sbin`,
+/// which misses what the user's startup files add, such as nix-darwin's
+/// `/run/current-system/sw/bin` or nvm's node. The shell runs detached in its own session, so it
+/// can't take over a terminal. `None` if it fails, prints no `PATH`, or takes longer than
+/// [`LOGIN_SHELL_TIMEOUT`], in which case its process group is killed.
+#[cfg(unix)]
+pub(crate) fn login_shell_path(shell: &OsStr) -> Option<OsString> {
+    use std::io::Read as _;
+    use std::os::fd::AsFd as _;
+
+    use rustix::process::{Signal, WaitOptions, kill_process_group, waitpid};
+
+    let mut command = std::process::Command::new(shell);
+    command.args([
+        "-l",
+        "-i",
+        "-c",
+        &format!("printf '%s%s%s' {PATH_MARK} \"$PATH\" {PATH_MARK}"),
+    ]);
+    let null = std::fs::File::open("/dev/null").ok()?;
+    let (mut reader, writer) = std::io::pipe().ok()?;
+    let stdio = crate::spawn::Stdio {
+        stdin: null.as_fd(),
+        stdout: writer.as_fd(),
+        stderr: null.as_fd(),
+    };
+    let pid = crate::spawn::spawn_detached(&command, stdio).ok()?;
+    drop(writer);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        let _ = sender.send(output);
+    });
+    let output = receiver.recv_timeout(LOGIN_SHELL_TIMEOUT);
+    if output.is_err() {
+        let _ = kill_process_group(pid, Signal::KILL);
+    }
+    let _ = waitpid(Some(pid), WaitOptions::empty());
+    let output = String::from_utf8(output.ok()?).ok()?;
+    let (_, rest) = output.split_once(PATH_MARK)?;
+    let (path, _) = rest.split_once(PATH_MARK)?;
+    (!path.is_empty()).then(|| path.into())
 }
 
 /// The variables of `env` an agent may inherit: [`INHERITED`] and [`INHERITED_PREFIXES`], and on
@@ -124,16 +187,30 @@ pub(crate) fn allowlisted(env: &Environment) -> Environment {
         .collect()
 }
 
-pub(crate) fn with_extra_path(mut env: Environment, home: Option<&Path>) -> Environment {
+/// `env` with the folders of `login`, the login shell's `PATH`, then [`EXTRA_PATH_IN_HOME`] and
+/// [`EXTRA_PATH`], appended to its `PATH` where missing.
+pub(crate) fn with_extra_path(
+    mut env: Environment,
+    home: Option<&Path>,
+    login: Option<&OsStr>,
+) -> Environment {
     let mut dirs: Vec<PathBuf> = env
         .get("PATH")
         .map(|path| std::env::split_paths(path).collect())
         .unwrap_or_default();
+    // An rc file's empty or relative entry would resolve in the agent's worktree.
+    let login = login
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| dir.is_absolute());
     let in_home = home
         .filter(|home| home.is_absolute())
         .into_iter()
         .flat_map(|home| EXTRA_PATH_IN_HOME.iter().map(move |dir| home.join(dir)));
-    for dir in in_home.chain(EXTRA_PATH.iter().map(PathBuf::from)) {
+    for dir in login
+        .chain(in_home)
+        .chain(EXTRA_PATH.iter().map(PathBuf::from))
+    {
         if !dirs.contains(&dir) {
             dirs.push(dir);
         }
@@ -164,7 +241,7 @@ pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().worker_sandbox {
         return Ok(());
     }
-    let why = if backend.name() == codex::PROGRAM {
+    let why = if backend.cli() == Some(CliKind::Codex) {
         "Codex workers are turned off until RYA-145 keeps their commands out of the shared temp \
          folders"
             .to_owned()
@@ -219,18 +296,14 @@ pub(super) async fn check_linux_sandbox(
             "plxd could not tell where Claude Code is installed",
         ));
     };
-    claude::linux_sandbox::check_host(detector.launcher(), Path::new(path))
+    crate::backend::claude::linux_sandbox::check_host(detector.launcher(), Path::new(path))
         .await
         .map_err(worker_unavailable)
 }
 
 /// The detected CLI a backend runs, if plxd checks its version before starting a worker.
 pub(super) fn cli_of(backend: &dyn Backend) -> Option<CliKind> {
-    match backend.name() {
-        claude::PROGRAM => Some(CliKind::Claude),
-        codex::PROGRAM => Some(CliKind::Codex),
-        _ => None,
-    }
+    backend.cli()
 }
 
 /// Characters the vendors read as wildcards in a sandbox path (0013).
@@ -299,59 +372,6 @@ pub(super) fn worker_prompt(task: &str, worktree: &Path, context: &Path) -> Stri
     )
 }
 
-/// The folder a normal thread works in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ThreadFolder {
-    /// A worktree of the user's repository, made for the thread.
-    Worktree,
-    /// A worktree of an empty scratch repository plxd made for a thread with no repo.
-    Scratch,
-    /// The user's repository's own checkout, on the branch they have out.
-    Checkout,
-}
-
-/// The first message of a normal thread (#110): the same limits as a worker's, for an agent the
-/// user talks to directly, then the user's message. `cwd` is the folder `folder` names.
-pub(super) fn thread_prompt(
-    message: &str,
-    cwd: &Path,
-    notes: &Path,
-    folder: ThreadFolder,
-) -> String {
-    let cwd = cwd.display();
-    let place = match folder {
-        ThreadFolder::Scratch => format!(
-            "You are a Parallax agent. Your working folder is {cwd}, a git worktree of an empty \
-             scratch repository plxd made for this conversation; use it for any files you need."
-        ),
-        ThreadFolder::Worktree => format!(
-            "You are a Parallax agent in a git worktree at {cwd}, checked out for this \
-             conversation from the user's repository."
-        ),
-        ThreadFolder::Checkout => format!(
-            "You are a Parallax agent in the user's own checkout of their repository at {cwd}, \
-             on the branch they have out."
-        ),
-    };
-    let git = if folder == ThreadFolder::Checkout {
-        "Don't commit or change git history: your changes stay in the checkout, uncommitted, for \
-         the user to review."
-    } else {
-        "Don't commit or change git history: Parallax commits your changes when you finish."
-    };
-    format!(
-        "{place}\n\
-         - You may write files only in that folder and in the notes folder at {notes}.\n\
-         - Your commands have network access, but this Mac's own services (localhost) are \
-         unreachable.\n\
-         - {git}\n\
-         - The repository's dependencies may not be installed.\n\
-         \n\
-         The user's message:\n{message}",
-        notes = notes.display(),
-    )
-}
-
 /// The home folder, for the sandbox's list of unreadable paths.
 pub(super) fn home() -> Result<PathBuf, ErrorObject> {
     let home = std::env::home_dir()
@@ -368,7 +388,10 @@ mod tests {
     use parallax_protocol::{CliKind, DetectedCli, ErrorKind};
 
     #[cfg(unix)]
-    use super::{allowlisted, with_extra_path};
+    use std::ffi::OsStr;
+
+    #[cfg(unix)]
+    use super::{allowlisted, login_shell_path, with_extra_path};
     use super::{check_version, sandbox_path};
     use crate::backend::process::ALWAYS_SCRUBBED;
     #[cfg(unix)]
@@ -437,10 +460,12 @@ mod tests {
     fn a_minimal_path_is_filled_in_after_the_users_own_folders() {
         let mut env = Environment::empty();
         env.set("PATH", "/usr/bin:/custom/bin");
-        let env = with_extra_path(env, Some(Path::new("/Users/me")));
+        let login = OsStr::new("/run/current-system/sw/bin::.:/usr/bin");
+        let env = with_extra_path(env, Some(Path::new("/Users/me")), Some(login));
         let mut expected = vec![
             "/usr/bin",
             "/custom/bin",
+            "/run/current-system/sw/bin",
             "/Users/me/.local/bin",
             "/Users/me/.cargo/bin",
         ];
@@ -449,8 +474,31 @@ mod tests {
         }
         expected.extend(["/usr/local/bin", "/bin", "/usr/sbin", "/sbin"]);
         assert_eq!(path_entries(&env), expected);
-        let unset = with_extra_path(Environment::empty(), None);
+        let unset = with_extra_path(Environment::empty(), None, None);
         assert_eq!(path_entries(&unset)[0], super::EXTRA_PATH[0]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_login_shells_path_is_read_past_what_its_startup_files_print() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let shell = dir.path().join("shell");
+        // A stand-in for zsh: its "startup files" print a banner and add a folder to PATH, then
+        // it runs the -c command it was given, after -l and -i.
+        std::fs::write(
+            &shell,
+            "#!/bin/sh\necho 'Welcome back'\nPATH=/from/login:$PATH\nexec /bin/sh -c \"$4\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = login_shell_path(shell.as_os_str()).unwrap();
+        assert!(
+            path.to_str().unwrap().starts_with("/from/login:"),
+            "{path:?}"
+        );
+        assert_eq!(login_shell_path(OsStr::new("/nonexistent/shell")), None);
     }
 
     #[cfg(unix)]
@@ -493,7 +541,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let launcher = Launcher::new(
             DataDir::new(dir.path()).unwrap(),
-            with_extra_path(allowlisted(&plxd_env), None),
+            with_extra_path(allowlisted(&plxd_env), None, None),
         );
         let names: Vec<&str> = secrets
             .iter()
@@ -524,8 +572,12 @@ mod tests {
                 model: None,
                 effort: None,
                 permission: None,
+                context_window: None,
+                fast: None,
                 coordinator_tools: None,
+                thread_tools: None,
                 approvals: false,
+                thread: false,
             })
             .unwrap();
         let mut seen = Vec::new();

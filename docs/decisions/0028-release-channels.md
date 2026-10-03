@@ -1,6 +1,6 @@
 # 0028: Nightly and standard releases
 
-- Status: accepted; tags superseded by [0030](0030-release-versions.md); all-or-nothing publishing superseded by RYA-211 (below)
+- Status: accepted; channel setting superseded by RYA-286 (below); tags superseded by [0030](0030-release-versions.md); all-or-nothing publishing superseded by RYA-211 (below); the push trigger and the `develop`/`main` split are superseded by [0051](0051-promote-a-nightly.md)
 - Date: 2026-09-29
 - Issue: RYA-203
 
@@ -22,6 +22,7 @@ People want every `develop` build, or only released code, and Parallax published
 - Until an updater reads the releases, the app follows a channel by branch: nightly is `develop`, standard is `main` (RYA-204).
 - A packaged-app updater (RYA-68) reads the releases instead: `electron-updater` takes the release marked Latest for standard, and the newest `nightly` prerelease for nightly (0030). The channel setting and its plumbing don't change, only where the updater looks.
 - 0030 replaced the date-sha tags with semver versions. The prerelease flag stays the channel contract.
+- **The installed build is the channel (RYA-286).** The Settings choice is gone: a nightly build (its version has `-nightly`) follows nightly releases, any other build Latest. A nightly is named "Parallax (Nightly)" and has its own icon, and keeps the standard build's appId so installed nightlies keep updating. Switching channels means installing the other build. Under `pnpm dev`, Update follows `develop`.
 
 ## Consequences
 

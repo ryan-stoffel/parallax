@@ -1,10 +1,16 @@
-//! `usage/get` and `usage/history`.
+//! `usage/get` and `usage/history`, from what plxd's own runs recorded, and `usage/daily`, from
+//! every Claude Code, Codex, and Cursor session on the host (0039).
 
+mod ccusage;
+mod cursor;
+
+use jiff::tz::TimeZone;
 use jiff::{ToSpan, Zoned};
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountRuns, AccountUsage, UsageGetParams, UsageGetResult, UsageHistoryParams,
-    UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod,
+    AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod, UsageProblem,
+    UsageSource,
 };
 use parallax_store::{LimitSnapshot, Store, StoreError};
 
@@ -99,6 +105,39 @@ fn usage_history(
         .map(|(account_id, runs)| AccountRuns { account_id, runs })
         .collect();
     Ok(UsageHistoryResult { hours, runs })
+}
+
+/// Every Claude Code and Codex session's usage from ccusage, and Cursor's from its API, since
+/// `params.since`, by local day in `params.time_zone`. A source that fails is a problem in the
+/// answer, beside the others' usage.
+pub(crate) async fn daily(
+    context: &Context,
+    params: UsageDailyParams,
+) -> Result<UsageDailyResult, ErrorObject> {
+    let zone = TimeZone::get(&params.time_zone).map_err(ErrorObject::invalid_params)?;
+    let launcher = context.daemon.cli_detector.launcher();
+    let sources = async {
+        tokio::join!(
+            ccusage::daily(launcher, params.since, &params.time_zone),
+            cursor::daily(launcher, params.since, &zone),
+        )
+    };
+    // Dropping the sources kills whatever they're running.
+    let (claude_and_codex, cursor) = tokio::select! {
+        () = context.cancel.cancelled() => return Err(ErrorObject::request_cancelled()),
+        answers = sources => answers,
+    };
+    let mut result = UsageDailyResult::default();
+    for (source, answer) in [
+        (UsageSource::Ccusage, claude_and_codex),
+        (UsageSource::Cursor, cursor),
+    ] {
+        match answer {
+            Ok(days) => result.days.extend(days),
+            Err(message) => result.problems.push(UsageProblem { source, message }),
+        }
+    }
+    Ok(result)
 }
 
 fn usage_period(summary: parallax_store::UsageSummary) -> UsagePeriod {

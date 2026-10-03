@@ -60,6 +60,7 @@ pub(super) const COMPLETED: &str = "completed";
 pub(super) const FAILED: &str = "failed";
 pub(super) const CANCELLED: &str = "cancelled";
 pub(super) const INTERRUPTED: &str = "interrupted";
+pub(super) const WAITING: &str = "waiting";
 pub(super) const ACCEPTED: &str = "accepted";
 
 /// The store's text for the only policy `agent/start` takes.
@@ -76,6 +77,7 @@ fn status(text: &str) -> AgentStatus {
         FAILED => AgentStatus::Failed,
         CANCELLED => AgentStatus::Cancelled,
         INTERRUPTED => AgentStatus::Interrupted,
+        WAITING => AgentStatus::Waiting,
         ACCEPTED => AgentStatus::Accepted,
         _ => AgentStatus::Unknown,
     }
@@ -123,15 +125,20 @@ pub(crate) fn agent_run(
         model: row.fields.model.clone(),
         effort: row.fields.effort.as_deref().and_then(option_value),
         permission: row.fields.permission.as_deref().and_then(option_value),
+        context_window: row.fields.context_window,
+        fast: row.fields.fast,
         approvals: row.fields.approvals,
         checkout: row.fields.checkout,
+        pull_requests: state.pull_requests.clone(),
+        resume_at: state.resume_at,
+        auto_resume: state.auto_resume,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
 }
 
 /// An effort's or a permission's protocol name, such as `high`, as the runs table stores it.
-pub(super) fn option_name(value: impl Serialize) -> Option<String> {
+pub(crate) fn option_name(value: impl Serialize) -> Option<String> {
     serde_json::to_value(value)
         .ok()?
         .as_str()
@@ -140,7 +147,7 @@ pub(super) fn option_name(value: impl Serialize) -> Option<String> {
 
 /// A stored effort or permission, back from its protocol name: `Unknown` for a name this version
 /// doesn't know.
-pub(super) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
+pub(crate) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
     serde_json::from_value(Value::String(name.to_owned())).ok()
 }
 
@@ -157,6 +164,11 @@ pub(super) fn run_state(row: &parallax_store::Run) -> AgentRunState {
         model: row.fields.model.clone(),
         effort: row.fields.effort.as_deref().and_then(option_value),
         permission: row.fields.permission.as_deref().and_then(option_value),
+        context_window: row.fields.context_window,
+        fast: row.fields.fast,
+        pull_requests: state.pull_requests.clone(),
+        resume_at: state.resume_at,
+        auto_resume: state.auto_resume,
         updated_at: row.updated_at,
     }
 }
@@ -332,12 +344,15 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
         },
         // The backend knows only the id; the run's actor adds a follow-up's text (RYA-92), marks
-        // a coordinator's wake-up (RYA-42), and lists the message's images (RYA-191).
+        // a coordinator's wake-up (RYA-42), and lists the message's images (RYA-191) and
+        // attached threads (PLX-372).
         Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted {
             turn_id: *turn_id,
             text: None,
             wake: false,
+            from: None,
             images: Vec::new(),
+            threads: Vec::new(),
         },
         Event::TextDelta { message_id, text } => AgentOutputItem::TextDelta {
             message_id: id(message_id.as_deref()),

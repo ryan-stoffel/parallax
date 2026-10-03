@@ -10,8 +10,8 @@ use parallax_protocol::methods::{
 };
 use parallax_protocol::{
     ErrorKind, EventsEventParams, EventsSubscribeParams, EventsUnsubscribeParams, HostHealthParams,
-    ParallaxEvent, Project, ProjectIcon, ProjectId, ProjectListParams, ProjectUpdateParams,
-    SubscriptionId,
+    ImageMediaType, ParallaxEvent, Project, ProjectIcon, ProjectId, ProjectListParams,
+    ProjectUpdateParams, PromptImage, SubscriptionId,
 };
 use rustix::process::Signal;
 
@@ -103,7 +103,12 @@ async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
         icon: Some(ProjectIcon {
             name: "rocket".to_owned(),
             color: Some("green".to_owned()),
+            image: Some(PromptImage {
+                media_type: ImageMediaType::Png,
+                data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+            }),
         }),
+        permission: None,
     };
     let updated = editor
         .call::<ProjectUpdate>(edit.clone())

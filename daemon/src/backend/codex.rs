@@ -1,12 +1,16 @@
-//! The Codex backend: runs the user's own signed-in `codex` CLI headless for workers (0004,
-//! RYA-38).
+//! The Codex backend: runs the user's own signed-in `codex` CLI headless (0004, RYA-38).
+//!
+//! A normal thread (`RunRequest::thread`, 0017) runs on `codex app-server` as full Codex, with the
+//! user's own configuration, follow-ups, and approval requests: see [`app_server`] and 0035.
+//! Everything below is about a worker, which a coordinator spawns, on `codex exec`.
 //!
 //! # The command
 //!
 //! A new session is `codex exec --json --ignore-user-config --ignore-rules <overrides> -` and a
 //! resumed one is `codex exec resume --json --ignore-user-config --ignore-rules <overrides>
-//! <thread id> -`, both in the run's cwd, with `-m` for the model and `-c
-//! model_reasoning_effort` for the effort. The prompt goes on stdin,
+//! <thread id> -`, both in the run's cwd, with `-m` for the model, `-c
+//! model_reasoning_effort` for the effort, `-c model_context_window` for the context window, and
+//! `-c service_tier` for fast mode. The prompt goes on stdin,
 //! which then closes: `codex exec` runs one turn and exits, so the backend takes no follow-ups,
 //! and 0014's `agent/send` resumes the thread instead.
 //!
@@ -20,7 +24,7 @@
 //! the model, so the model sees plxd's temp path, never the user's file name, which plxd never
 //! gets.
 //!
-//! Only workers run on Codex so far: the coordinator's no-write mode is RYA-39. A worker is held
+//! A coordinator doesn't run on Codex: its no-write mode is RYA-39. A worker is held
 //! to 0013 by Codex's own sandbox (Seatbelt on macOS), configured entirely by
 //! [`worker_overrides`]:
 //!
@@ -71,6 +75,7 @@
 //! `SIGINT` interrupts Codex's turn, and exec then exits 1; the process group is killed if it is
 //! still running after the grace period.
 
+pub mod app_server;
 mod stream;
 #[cfg(all(test, target_os = "macos"))]
 mod tests;
@@ -82,10 +87,12 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 
 use self::stream::{Step, Translator};
+use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, Signal, SpawnError,
@@ -94,8 +101,8 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
-    EventSink, ImageMediaType, PromptImage, RunHandle, RunRequest, StartError, Started, ToolPolicy,
-    TurnId, WorkerSandbox, check_argument, prepend_path_line,
+    EventSink, ImageMediaType, Overrides, PromptImage, RunHandle, RunRequest, StartError, Started,
+    ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::images;
 
@@ -126,8 +133,9 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
-/// The worker permissions Codex maps: only `edit`. `codex exec` has no plan mode.
-const PERMISSIONS: &[AgentPermission] = &[AgentPermission::Edit];
+/// The context windows a run may ask for, in tokens: codex-cli 0.159.3's catalog gives its
+/// models 272k by default, and all but `gpt-5.5` up to 872k through `model_context_window`.
+const CONTEXT_WINDOWS: &[u32] = &[272_000, 872_000];
 
 /// Prefixes of inherited variables no run gets: `OpenAI`'s and Codex's credentials, endpoints,
 /// and configuration (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_API_KEY`, `CODEX_HOME`, ...).
@@ -143,13 +151,25 @@ pub const CONFIG_DIR_ENV: &str = "CODEX_HOME";
 #[derive(Clone, Debug)]
 pub struct CodexBackend {
     launcher: Launcher,
+    overrides: Overrides,
 }
 
 impl CodexBackend {
     /// A backend that starts `codex` through `launcher`.
     #[must_use]
     pub fn new(launcher: Launcher) -> Self {
-        Self { launcher }
+        Self {
+            launcher,
+            overrides: Overrides::default(),
+        }
+    }
+
+    /// Runs as a provider instance (0040): its name, program, `CODEX_HOME`, arguments after
+    /// `app-server`, and variables.
+    #[must_use]
+    pub fn with_overrides(mut self, overrides: Overrides) -> Self {
+        self.overrides = overrides;
+        self
     }
 }
 
@@ -160,8 +180,8 @@ impl CodexBackend {
 ///
 /// [`StartError::Invalid`] if the model or the resume id could be read as an option, if an
 /// image's path has a comma, or if the worker has no usable [`WorkerSandbox`].
-/// [`StartError::Unsupported`] for a no-write run, a permission other than `edit`, or an effort
-/// this version doesn't know.
+/// [`StartError::Unsupported`] for a no-write run, a permission other than `edit`, an effort
+/// this version doesn't know, or a context window not in [`CONTEXT_WINDOWS`].
 pub fn arguments(
     request: &RunRequest,
     zdotdir: Option<&Path>,
@@ -172,6 +192,11 @@ pub fn arguments(
             "plxd runs only workers on Codex so far; its coordinator is RYA-39".into(),
         ));
     };
+    if request.resume.as_ref().is_some_and(|resume| resume.fork) {
+        return Err(StartError::Unsupported(
+            "codex exec can't fork a session; only a thread's app-server can".into(),
+        ));
+    }
     let mut args: Vec<OsString> = vec!["exec".into()];
     if request.resume.is_some() {
         args.push("resume".into());
@@ -190,22 +215,24 @@ pub fn arguments(
         ));
     }
     if let Some(effort) = request.effort {
-        let level = match effort {
-            AgentEffort::Low => "low",
-            AgentEffort::Medium => "medium",
-            AgentEffort::High => "high",
-            AgentEffort::Xhigh => "xhigh",
-            AgentEffort::Max => "max",
-            AgentEffort::Unknown => {
-                return Err(StartError::Unsupported(
-                    "Codex has no such reasoning effort".into(),
-                ));
-            }
-        };
+        let level = effort_level(effort)?;
         args.extend([
             "-c".into(),
             format!(r#"model_reasoning_effort="{level}""#).into(),
         ]);
+    }
+    if let Some(tokens) = request.context_window {
+        if !CONTEXT_WINDOWS.contains(&tokens) {
+            return Err(StartError::Unsupported(format!(
+                "Codex has no {tokens}-token context window"
+            )));
+        }
+        args.extend(["-c".into(), format!("model_context_window={tokens}").into()]);
+    }
+    if let Some(fast) = request.fast {
+        // The catalog's tier named "Fast" is `priority`.
+        let tier = if fast { "priority" } else { "default" };
+        args.extend(["-c".into(), format!(r#"service_tier="{tier}""#).into()]);
     }
     if let Some(model) = &request.model {
         check_argument("model", model)?;
@@ -228,6 +255,26 @@ pub fn arguments(
     }
     args.push("-".into());
     Ok(args)
+}
+
+/// Codex's `model_reasoning_effort` for `effort`.
+///
+/// # Errors
+///
+/// [`StartError::Unsupported`] for an effort this version doesn't know.
+pub fn effort_level(effort: AgentEffort) -> Result<&'static str, StartError> {
+    Ok(match effort {
+        AgentEffort::Low => "low",
+        AgentEffort::Medium => "medium",
+        AgentEffort::High => "high",
+        AgentEffort::Xhigh => "xhigh",
+        AgentEffort::Max => "max",
+        AgentEffort::Unknown => {
+            return Err(StartError::Unsupported(
+                "Codex has no such reasoning effort".into(),
+            ));
+        }
+    })
 }
 
 /// The `-c` overrides that hold a worker in `cwd` to 0013 (see the module docs). Each sets one
@@ -396,13 +443,14 @@ pub fn scrubbed(base: &Environment) -> Vec<OsString> {
 }
 
 impl Backend for CodexBackend {
-    fn name(&self) -> &'static str {
-        PROGRAM
+    fn name(&self) -> &str {
+        self.overrides.name.as_deref().unwrap_or(PROGRAM)
     }
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            follow_ups: false,
+            // A thread's run takes them (`app_server`); a worker's `codex exec` doesn't.
+            follow_ups: true,
             resume: true,
             coordinator: false,
             reports_cost: false,
@@ -410,6 +458,8 @@ impl Backend for CodexBackend {
             // Off everywhere until RYA-145: a worker's commands still write the shared temp
             // folders on macOS (RYA-153).
             worker_sandbox: false,
+            // A thread's `thread/fork` (`app_server`); `codex exec` refuses one.
+            fork: true,
         }
     }
 
@@ -417,11 +467,47 @@ impl Backend for CodexBackend {
         EFFORTS
     }
 
-    fn permissions(&self) -> &'static [AgentPermission] {
-        PERMISSIONS
+    /// A thread's modes ([`app_server::mode`]). A worker on `codex exec` takes only `edit`, and
+    /// is refused anyway until RYA-145 (RYA-153).
+    fn full_thread(&self) -> bool {
+        true
+    }
+
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        Some(parallax_protocol::CliKind::Codex)
+    }
+
+    fn permissions(&self) -> &[AgentPermission] {
+        app_server::PERMISSIONS
+    }
+
+    fn context_windows(&self) -> &'static [u32] {
+        CONTEXT_WINDOWS
+    }
+
+    fn fast_mode(&self) -> bool {
+        true
+    }
+
+    /// `codex app-server` on the default login, asked for `skills/list` ([`commands::codex`]).
+    fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        let home = self.overrides.home.as_deref();
+        let spec = app_server::spec(&self.launcher, &self.overrides, cwd, home);
+        Ok(Some(CommandsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![
+                commands::request(1, "initialize", &app_server::initialize_params()),
+                json!({"jsonrpc": "2.0", "method": "initialized"}),
+                commands::request(commands::LIST_ID, "skills/list", &json!({"cwds": [cwd]})),
+            ],
+            parse: commands::codex,
+        }))
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        if request.thread {
+            return app_server::start(&self.launcher, &self.overrides, request);
+        }
         if request.prompt.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
@@ -449,8 +535,8 @@ impl Backend for CodexBackend {
         )?;
         spec.scrub = scrubbed(self.launcher.base());
         match &request.account.credential {
-            Credential::Subscription { config_home } => {
-                if let Some(home) = config_home {
+            Credential::Subscription { .. } => {
+                if let Some(home) = self.overrides.config_home(&request.account.credential) {
                     spec.inject.set(CONFIG_DIR_ENV, home);
                 }
             }
@@ -459,6 +545,12 @@ impl Backend for CodexBackend {
             }
         }
         spec.stdin = StdinMode::Piped;
+        if let Some(program) = &self.overrides.program {
+            spec.program.clone_from(program);
+        }
+        for (name, value) in &self.overrides.env {
+            spec.inject.set(name, value);
+        }
 
         let mut process = self.launcher.spawn(&spec)?;
         if let Some(mut stdin) = process.take_stdin() {

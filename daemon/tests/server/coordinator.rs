@@ -1,19 +1,23 @@
 //! A project's coordinator chat end to end (RYA-41, decision 0024): `project/start` against an
 //! in-process plxd whose backend is the fake CLI, in a real git repository. The coordinator runs
-//! in the project's repository, in its permission mode (0027).
+//! in the project's repository, in the project's permission mode (0042).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::methods::{
-    AgentCancel, AgentEvents, AgentSend, AgentStart, ProjectList, ProjectStart,
+    AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, EventsSubscribe, HostHealth,
+    ProjectDelete, ProjectList, ProjectStart, ProjectUpdate, RepoAdd,
 };
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentEventsParams, AgentOutputItem, AgentPermission,
-    AgentPolicy, AgentRun, AgentSendParams, AgentStartParams, AgentStatus, CoordinatorThreadId,
-    ErrorKind, ParallaxEvent, ProjectId, ProjectListParams, ProjectStartParams, Provider, RunId,
-    TurnId,
+    AccountChoice, AgentCancelParams, AgentEventsParams, AgentListParams, AgentOutputItem,
+    AgentPermission, AgentPolicy, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
+    CoordinatorThreadId, ErrorKind, EventsEventParams, EventsSubscribeParams, HostHealthParams,
+    ParallaxEvent, ProjectCreateParams, ProjectDeleteParams, ProjectDeleteResult, ProjectId,
+    ProjectListParams, ProjectPermission, ProjectStartParams, ProjectUpdateParams, Provider,
+    RepoAddParams, RepoId, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
@@ -22,7 +26,7 @@ use plxd::routing::BackendRegistry;
 use uuid::Uuid;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params,
+    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params, real_repo,
     send_params, subscribe, text, until, updated_to,
 };
 use crate::support::{PATIENCE, kind, temp_dir};
@@ -34,12 +38,16 @@ struct Recording {
 }
 
 impl Backend for Recording {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.fake.name()
     }
 
     fn capabilities(&self) -> Capabilities {
         self.fake.capabilities()
+    }
+
+    fn permissions(&self) -> &[AgentPermission] {
+        self.fake.permissions()
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
@@ -242,10 +250,11 @@ struct Roles {
     worker: FakeBackend,
     coordinator: Mutex<Vec<FakeBackend>>,
     seen: Arc<Mutex<Vec<RunRequest>>>,
+    permissions: &'static [AgentPermission],
 }
 
 impl Backend for Roles {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.worker.name()
     }
 
@@ -254,11 +263,7 @@ impl Backend for Roles {
     }
 
     fn permissions(&self) -> &'static [AgentPermission] {
-        &[
-            AgentPermission::Edit,
-            AgentPermission::Plan,
-            AgentPermission::Bypass,
-        ]
+        self.permissions
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
@@ -271,11 +276,27 @@ impl Backend for Roles {
     }
 }
 
-/// Workers on `worker`, and each coordinator launch on the next of `coordinator`.
+/// Workers on `worker`, and each coordinator launch on the next of `coordinator`, in Auto or
+/// Bypass.
 fn roles(
     worker: Vec<Step>,
     coordinator: Vec<Vec<Step>>,
     seen: &Arc<Mutex<Vec<RunRequest>>>,
+) -> BackendRegistry {
+    roles_mapping(
+        worker,
+        coordinator,
+        seen,
+        &[AgentPermission::Auto, AgentPermission::Bypass],
+    )
+}
+
+/// [`roles`], mapping only `permissions`.
+fn roles_mapping(
+    worker: Vec<Step>,
+    coordinator: Vec<Vec<Step>>,
+    seen: &Arc<Mutex<Vec<RunRequest>>>,
+    permissions: &'static [AgentPermission],
 ) -> BackendRegistry {
     let mut backends = BackendRegistry::new();
     backends.register(
@@ -284,6 +305,7 @@ fn roles(
             worker: fake_backend(worker),
             coordinator: Mutex::new(coordinator.into_iter().map(fake_backend).collect()),
             seen: Arc::clone(seen),
+            permissions,
         }),
     );
     backends
@@ -334,10 +356,10 @@ async fn sessions(client: &mut Conn, runs: &[RunId]) {
     .await;
 }
 
-/// 0027: the coordinator runs in the mode it was started in, a subagent it spawns inherits it,
-/// and a mode changed between turns applies to its next turn and to the subagents after that.
+/// PLX-394 (0042): the coordinator and the runs it spawns run in the Project's mode, whatever
+/// they ask for, and a mode `project/update` changes applies from each run's next CLI process.
 #[tokio::test]
-async fn subagents_inherit_the_coordinators_permission_mode_as_it_changes() {
+async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_process() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     // Workers never finish, so no wake-up takes a coordinator script.
     let backends = roles(
@@ -350,36 +372,31 @@ async fn subagents_inherit_the_coordinators_permission_mode_as_it_changes() {
     );
     let host = Host::start(temp_dir(), backends);
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let project = create(
+        &mut client,
+        ProjectCreateParams {
+            permission: Some(ProjectPermission::Bypass),
+            ..project_params(host.dir.path())
+        },
+    )
+    .await;
+    assert_eq!(project.permission, Some(ProjectPermission::Bypass));
     subscribe(&mut client, project.id, 0).await;
     let coordinator = client
         .call::<ProjectStart>(ProjectStartParams {
-            permission: Some(AgentPermission::Bypass),
+            permission: Some(AgentPermission::Plan),
             ..start_params(project.id, "Plan.")
         })
         .await
         .unwrap()
         .run;
+    assert_eq!(coordinator.permission, Some(AgentPermission::Bypass));
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     assert_eq!(
         nth_launch(&seen, 0).await.permission,
         Some(AgentPermission::Bypass)
     );
-    let first = spawn(&mut client, &coordinator, "Add a README.").await;
-
-    client
-        .call::<AgentSend>(AgentSendParams {
-            permission: Some(AgentPermission::Plan),
-            ..send_params(coordinator.id, TurnId::generate(), "Only plan now.")
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        nth_launch(&seen, 1).await.permission,
-        Some(AgentPermission::Plan)
-    );
-    let second = spawn(&mut client, &coordinator, "Add a license.").await;
-    let own = client
+    let asked = client
         .call::<AgentStart>(AgentStartParams {
             coordinator_thread: coordinator.coordinator_thread,
             permission: Some(AgentPermission::Edit),
@@ -390,6 +407,30 @@ async fn subagents_inherit_the_coordinators_permission_mode_as_it_changes() {
         .run
         .id;
 
+    let updated = client
+        .call::<ProjectUpdate>(ProjectUpdateParams {
+            project: project.id,
+            name: None,
+            icon: None,
+            permission: Some(ProjectPermission::Auto),
+        })
+        .await
+        .unwrap()
+        .project;
+    assert_eq!(updated.permission, Some(ProjectPermission::Auto));
+    client
+        .call::<AgentSend>(AgentSendParams {
+            permission: Some(AgentPermission::Plan),
+            ..send_params(coordinator.id, TurnId::generate(), "Plan more.")
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        nth_launch(&seen, 1).await.permission,
+        Some(AgentPermission::Auto)
+    );
+    let after = spawn(&mut client, &coordinator, "Add a license.").await;
+
     let launched = |run: RunId| {
         seen.lock()
             .unwrap()
@@ -397,13 +438,58 @@ async fn subagents_inherit_the_coordinators_permission_mode_as_it_changes() {
             .find(|request| request.run_id == run)
             .map(|request| request.permission)
     };
-    assert_eq!(launched(first), Some(Some(AgentPermission::Bypass)));
-    assert_eq!(launched(second), Some(Some(AgentPermission::Plan)));
-    assert_eq!(
-        launched(own),
-        Some(Some(AgentPermission::Edit)),
-        "a named mode wins"
+    assert_eq!(launched(asked), Some(Some(AgentPermission::Bypass)));
+    assert_eq!(launched(after), Some(Some(AgentPermission::Auto)));
+    host.server.stop().await;
+}
+
+/// PLX-394 (0042): a backend without the Project's mode is refused with why, and never moved up
+/// to Bypass. A Project created without a mode, as by an older app, is in Auto.
+#[tokio::test]
+async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let backends = roles_mapping(
+        vec![init("worker-1"), Step::AwaitFollowUp],
+        vec![vec![init("coordinator-1"), end_turn("Planned.")]],
+        &seen,
+        &[AgentPermission::Edit, AgentPermission::Bypass],
     );
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    assert_eq!(project.permission, Some(ProjectPermission::Auto));
+
+    let error = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::UnsupportedOption);
+    assert_eq!(
+        error.message,
+        "fake has no Auto. Set the Project to Bypass to use it."
+    );
+    let worker = client
+        .call::<AgentStart>(crate::agents::start_params(project.id, "Fix a typo."))
+        .await
+        .unwrap_err();
+    assert_eq!(worker.message, error.message);
+    assert!(seen.lock().unwrap().is_empty(), "nothing started");
+
+    client
+        .call::<ProjectUpdate>(ProjectUpdateParams {
+            project: project.id,
+            name: None,
+            icon: None,
+            permission: Some(ProjectPermission::Bypass),
+        })
+        .await
+        .unwrap();
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(coordinator.permission, Some(AgentPermission::Bypass));
     host.server.stop().await;
 }
 
@@ -548,7 +634,9 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         turn_id: wake.turn_id,
         text: Some(wake.prompt.clone()),
         wake: true,
+        from: None,
         images: Vec::new(),
+        threads: Vec::new(),
     }));
     host.server.stop().await;
 }
@@ -611,6 +699,10 @@ async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted
     let store =
         parallax_store::Store::open(DataDir::new(host.dir.path()).unwrap().store_file()).unwrap();
     assert_eq!(store.wake_state(coordinator.id.into()).unwrap().in_a_row, 1);
+    // The coordinator's run is its worker's parent, and its own has none (0041).
+    let parent = |id: RunId| store.get_run(id.into()).unwrap().unwrap().fields.parent;
+    assert_eq!(parent(worker), Some(coordinator.id.into()));
+    assert_eq!(parent(coordinator.id), None);
 }
 
 /// RYA-178: the user stops the coordinator while a run it started is running, then plxd
@@ -635,6 +727,7 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
     client
         .call::<AgentCancel>(AgentCancelParams {
             run_id: coordinator.id,
+            from: None,
         })
         .await
         .unwrap();
@@ -660,5 +753,151 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
         "{}",
         wake.prompt
     );
+    host.server.stop().await;
+}
+
+fn subscribe_host(after: u64) -> EventsSubscribeParams {
+    EventsSubscribeParams {
+        after,
+        project: None,
+    }
+}
+
+async fn delete(client: &mut Conn, project: ProjectId) -> Result<ProjectDeleteResult, ErrorObject> {
+    client
+        .call::<ProjectDelete>(ProjectDeleteParams { project })
+        .await
+}
+
+async fn runs_of(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
+    let params = AgentListParams {
+        project: Some(project),
+    };
+    client.call::<AgentList>(params).await.unwrap().runs
+}
+
+fn deleted(project: ProjectId) -> impl FnMut(&EventsEventParams) -> bool {
+    move |event| matches!(&event.event, ParallaxEvent::ProjectDeleted { project: id } if *id == project)
+}
+
+/// PLX-338: deleting a project stops its coordinator and the subagent it started, and removes
+/// their runs, events, worktree, and branch, its context folder, and the project itself, which
+/// `project.deleted` tells every client, then and on replay.
+#[tokio::test]
+async fn deleting_a_project_stops_its_agents_and_removes_everything() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let backends = roles(
+        vec![init("worker-1"), text("Working"), Step::Hang],
+        vec![vec![init("coordinator-1"), Step::Hang]],
+        &seen,
+    );
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let repo = PathBuf::from(&project.repo_path);
+    let context = host.dir.path().join("context").join(project.id.to_string());
+    assert!(context.is_dir());
+    client
+        .call::<EventsSubscribe>(subscribe_host(0))
+        .await
+        .unwrap();
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    let worker = spawn(&mut client, &coordinator, "Build it.").await;
+    let mut running = vec![coordinator.id, worker];
+    until(&mut client, |event| {
+        if let ParallaxEvent::AgentUpdated { run_id, state } = &event.event
+            && state.status == AgentStatus::Running
+        {
+            running.retain(|run| run != run_id);
+        }
+        running.is_empty()
+    })
+    .await;
+    let run = runs_of(&mut client, project.id)
+        .await
+        .into_iter()
+        .find(|run| run.id == worker)
+        .unwrap();
+    let worktree = PathBuf::from(run.worktree_path.unwrap());
+    let branch = run.branch.unwrap();
+    assert!(worktree.is_dir());
+
+    delete(&mut client, project.id).await.unwrap();
+    until(&mut client, deleted(project.id)).await;
+    let health = client
+        .call::<HostHealth>(HostHealthParams {})
+        .await
+        .unwrap();
+    assert_eq!(health.running_agents, 0, "both agents were stopped");
+    let projects = client
+        .call::<ProjectList>(ProjectListParams {})
+        .await
+        .unwrap()
+        .projects;
+    assert!(projects.is_empty());
+    assert!(runs_of(&mut client, project.id).await.is_empty());
+    for run_id in [coordinator.id, worker] {
+        let events = client
+            .call::<AgentEvents>(AgentEventsParams {
+                run_id,
+                after: 0,
+                limit: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(kind(&events), ErrorKind::RunNotFound);
+    }
+    assert!(!worktree.exists(), "the worktree is removed");
+    let branches = git(&repo, &["branch", "--list", &branch]);
+    assert!(branches.is_empty(), "the branch is removed: {branches}");
+    assert!(!context.exists(), "the project's notes are removed");
+    assert!(repo.join("README.md").is_file(), "the repository stays");
+
+    let mut replay = host.client().await;
+    replay
+        .call::<EventsSubscribe>(subscribe_host(0))
+        .await
+        .unwrap();
+    until(&mut replay, deleted(project.id)).await;
+
+    let again = delete(&mut client, project.id).await.unwrap_err();
+    assert_eq!(kind(&again), ErrorKind::ProjectNotFound);
+    host.server.stop().await;
+}
+
+/// PLX-338: only a project can be deleted. An unknown id and a repo entry's id, which its
+/// threads' runs use as their project id, both fail with `projectNotFound`.
+#[tokio::test]
+async fn deleting_an_unknown_project_or_a_repo_entry_fails() {
+    let host = Host::start(temp_dir(), fake(Vec::new()));
+    let mut client = host.client().await;
+    let work = temp_dir();
+    let entry = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: real_repo(work.path()).to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    let scope = ProjectId::try_from(Uuid::from(entry.id)).unwrap();
+    for project in [ProjectId::generate(), scope] {
+        let error = delete(&mut client, project).await.unwrap_err();
+        assert_eq!(kind(&error), ErrorKind::ProjectNotFound, "{project}");
+    }
+    let listed = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: entry.path.clone(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    assert_eq!(listed.id, entry.id, "the repo entry stays");
     host.server.stop().await;
 }

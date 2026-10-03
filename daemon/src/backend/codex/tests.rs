@@ -158,8 +158,12 @@ fn request(cwd: &Path) -> RunRequest {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         coordinator_tools: None,
+        thread_tools: None,
         approvals: false,
+        thread: false,
     }
 }
 
@@ -408,6 +412,7 @@ async fn a_resumed_thread_reports_only_what_it_adds() {
             model: None,
             usage: tokens(18_922, 184, 36_352),
         }],
+        fork: false,
     });
     let events = run(&fake.backend, resumed).await;
 
@@ -606,12 +611,45 @@ async fn requests_codex_can_t_run_are_refused_before_spawning() {
     let mut plan = request(&cwd);
     plan.permission = Some(AgentPermission::Plan);
     assert!(matches!(refuse(plan), StartError::Unsupported(_)));
+    let mut window = request(&cwd);
+    window.context_window = Some(1_000_000);
+    assert!(matches!(refuse(window), StartError::Unsupported(_)));
     assert!(fake.argv().is_empty(), "nothing was spawned");
     let comma = [PathBuf::from("/Users/a,b/1.png")];
     assert!(matches!(
         arguments(&request(&cwd), None, &comma),
         Err(StartError::Invalid(_))
     ));
+}
+
+/// A context window and fast mode are `-c` overrides on a new and a resumed session alike: fast
+/// is the `priority` service tier, and standard the `default` one.
+#[test]
+fn a_context_window_and_fast_mode_are_overrides_on_every_session() {
+    let fake = Fake::new("worker");
+    let mut worker = request(&fake.root());
+    worker.context_window = Some(872_000);
+    for (fast, tier) in [(true, "priority"), (false, "default")] {
+        worker.fast = Some(fast);
+        for resume in [None, Some("thread-1")] {
+            worker.resume = resume.map(|id| Resume {
+                session_id: id.into(),
+                usage_totals: Vec::new(),
+                fork: false,
+            });
+            let argv: Vec<String> = arguments(&worker, None, &[])
+                .unwrap()
+                .into_iter()
+                .map(|arg| arg.into_string().unwrap())
+                .collect();
+            let values = overrides(&argv);
+            let tier = format!(r#"service_tier="{tier}""#);
+            assert_eq!(
+                values[values.len() - 2..],
+                ["model_context_window=872000", &tier]
+            );
+        }
+    }
 }
 
 #[test]

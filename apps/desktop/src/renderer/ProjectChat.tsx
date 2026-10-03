@@ -160,9 +160,11 @@ export function ProjectChat({
           newThread
           onSend={send}
           backend={backend}
+          hostId={hostId}
           disabledReason={disabledReason}
           tab={tab}
           imageCaps={imageCaps(connection)}
+          menus={connected && "composerMenus" in connection.capabilities ? { hostId } : undefined}
           // The coordinator asks only through a plxd that sends its requests.
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
         />

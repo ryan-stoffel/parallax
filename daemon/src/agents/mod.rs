@@ -1,7 +1,7 @@
 //! The M3 runner (#156, decision 0014): runs a worker end to end.
 //!
 //! `agent/start` resolves the worker's account through routing (#119), refuses a worker plxd
-//! can't sandbox (0013) or a model, effort, or permission its backend can't honor (RYA-97),
+//! can't sandbox (0013) or a run option its backend can't honor (RYA-97),
 //! creates the run's worktree (#154), records the run, and starts the
 //! backend in the worktree with the project's shared context folder (#155) writable. From then
 //! on one [`actor`] task per run owns it: it streams the backend's events into the event log as
@@ -24,15 +24,24 @@
 //! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
 //! ([`wake`]).
 //!
-//! A thread started with `checkout` has no worktree either: it runs in its repo entry's own
-//! checkout, on the branch the user has out, in the same worker sandbox with that checkout as its
-//! cwd. plxd never commits it, since the checkout can hold the user's own uncommitted work, so its
-//! changes stay there for the user to review, and it has no diff to accept or open a PR from.
+//! Every run in a Project, its coordinator included, runs in the Project's permission mode, Auto
+//! or Bypass (0042), whatever its request or a later `agent/send` asks for. Each new CLI process
+//! reads the mode again, so one `project/update` changed applies from the run's next process. A
+//! backend that doesn't map the mode is refused ([`in_mode`]), never moved to another mode.
+//!
+//! A normal thread's run is full Claude Code in every mode, with no worker sandbox, when its client
+//! answers permission requests, and its first message is the user's own (0034). A thread started
+//! with `checkout` has no worktree either: it runs in its repo entry's own checkout, on the branch
+//! the user has out or the one `checkoutRef` switches it to first. plxd never commits it, since the
+//! checkout can hold the user's own uncommitted work, so its changes stay there for the user to
+//! review, and it has no diff to accept or open a PR from.
 
 mod actor;
 mod approvals;
-mod convert;
+pub(crate) mod attached;
+pub(crate) mod convert;
 pub(crate) mod coordinator;
+mod resume;
 pub(crate) mod review;
 mod wake;
 pub(crate) mod worker;
@@ -46,26 +55,33 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
-    AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentPermission, AgentRun,
-    AgentRunState, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind,
-    ImageMediaType, ParallaxEvent, ProjectId, PromptImage, Role, RunId, TurnId,
+    AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentOutputItem,
+    AgentPermission, AgentRun, AgentRunState, AgentSendParams, AgentStartParams, ApprovalId,
+    CoordinatorThreadId, ErrorKind, GitStatus, ImageMediaType, ParallaxEvent, PrActParams,
+    PrDiffResult, PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest, Role,
+    RunId, TurnId,
 };
-use parallax_store::{RunFields, RunState, StoreError, WorktreeFields};
+use parallax_store::{RunFields, RunState, StoreError, ThreadFields, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+pub(crate) use self::actor::GitAction;
 use self::actor::{Actor, Command};
+pub(crate) use self::actor::{logged_events, session_account};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
-use self::convert::{STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value};
-use self::worker::{StoredKeyAccounts, ThreadFolder, sandbox_path, worker_unavailable};
+use self::convert::{
+    COMPLETED, RUNNING, STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value,
+};
+pub(crate) use self::resume::Timing as ResumeTiming;
+use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
-use crate::worktree::{CreatedWorktree, WorktreeError, WorktreeManager};
+use crate::worktree::{CreatedWorktree, PrError, WorktreeError, WorktreeManager, github_pr_urls};
 
 /// How long a stopping plxd waits for its runs to record that they were interrupted.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
@@ -85,6 +101,8 @@ pub(crate) struct Agents {
     shutdown: CancellationToken,
     /// How long a run's permission request waits for an answer (RYA-222).
     approval_timeout: Duration,
+    /// When a run a usage limit stopped resumes (PLX-371).
+    resume_timing: ResumeTiming,
 }
 
 /// Per-run-id locks for [`Agents::starting`] (#190).
@@ -166,10 +184,13 @@ pub(super) struct Prepared {
 /// Where a run's CLI starts, and what that needs.
 pub(super) enum Place {
     /// A worker, in its worktree, inside the worker sandbox (0013), which needs these folders.
+    /// A normal thread is placed the same way (`thread`), and with `approvals` runs as full
+    /// Claude Code instead (0034).
     Worker {
         home: PathBuf,
         data_dir: PathBuf,
         context: PathBuf,
+        thread: bool,
     },
     /// A project's coordinator, with no sandbox (0024), in a detached worktree of `repo` that the
     /// actor refreshes before each CLI process (RYA-171).
@@ -188,6 +209,7 @@ impl Agents {
             tracker: TaskTracker::new(),
             shutdown: CancellationToken::new(),
             approval_timeout: APPROVAL_TIMEOUT,
+            resume_timing: ResumeTiming::default(),
         }
     }
 
@@ -202,6 +224,18 @@ impl Agents {
     /// How long a permission request waits for an answer.
     pub(super) fn approval_timeout(&self) -> Duration {
         self.approval_timeout
+    }
+
+    /// Resumes runs a usage limit stopped with `timing` instead of the default.
+    #[must_use]
+    pub fn with_resume_timing(mut self, timing: ResumeTiming) -> Self {
+        self.resume_timing = timing;
+        self
+    }
+
+    /// When a run a usage limit stopped resumes.
+    pub(super) fn resume_timing(&self) -> ResumeTiming {
+        self.resume_timing
     }
 
     /// Locks `run_id`'s per-run start lock, waiting only on another call for the same run id
@@ -281,7 +315,7 @@ pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
     ErrorObject::internal_error(format!("the project store failed: {error}"))
 }
 
-pub(super) fn run_not_found(id: RunId) -> ErrorObject {
+pub(crate) fn run_not_found(id: RunId) -> ErrorObject {
     ErrorObject::parallax(ErrorKind::RunNotFound, format!("no agent run has id {id}"))
 }
 
@@ -298,7 +332,7 @@ fn requested_account(account: Option<&AccountChoice>) -> Option<String> {
 
 /// The project's repository, the routing inputs, and the paths run `run` of `project` needs,
 /// checked: everything that can refuse a worker, or a coordinator when `role` is one, before
-/// anything is created.
+/// anything is created. For a run that exists already, or one that isn't a thread.
 pub(super) async fn prepare(
     daemon: &Arc<Daemon>,
     project: ProjectId,
@@ -306,23 +340,51 @@ pub(super) async fn prepare(
     requested: Option<AccountChoice>,
     role: Role,
 ) -> Result<(Prepared, String), ErrorObject> {
-    let (repo_path, context_scope, defaults, accounts) = store(daemon, move |db| {
-        let repo_path = crate::threads::scope_path(db, project)?;
-        let context_scope = crate::threads::context_scope(db, project, run)?;
-        let defaults = crate::methods::read_defaults(db)?;
-        let mut accounts = HashMap::new();
-        for account in db.list_accounts().map_err(|error| store_error(&error))? {
-            let account = crate::store::key_account(account)?;
-            accounts.insert(account.id, account.provider);
-        }
-        Ok((
-            repo_path,
-            context_scope,
-            defaults,
-            StoredKeyAccounts(accounts),
-        ))
-    })
-    .await?;
+    prepare_run(daemon, project, run, requested, role, false).await
+}
+
+/// [`prepare`], where `new_thread` says the run being created is a normal thread's
+/// (`thread/start`), whose thread row doesn't exist yet.
+async fn prepare_run(
+    daemon: &Arc<Daemon>,
+    project: ProjectId,
+    run: RunId,
+    requested: Option<AccountChoice>,
+    role: Role,
+    new_thread: bool,
+) -> Result<(Prepared, String), ErrorObject> {
+    let (repo_path, context_scope, thread, thread_run, defaults, accounts) =
+        store(daemon, move |db| {
+            let repo_path = crate::threads::scope_path(db, project)?;
+            // A run whose scope is a repo entry is a normal thread's (0017).
+            let thread = db
+                .get_repo(project.into())
+                .map_err(|e| store_error(&e))?
+                .is_some();
+            // The run itself is a thread: one `thread/start` made, not any run on a repo entry,
+            // such as a coordinator's worker started on one.
+            let thread_run = new_thread
+                || db
+                    .get_thread(run.into())
+                    .map_err(|e| store_error(&e))?
+                    .is_some();
+            let context_scope = crate::threads::context_scope(db, project, run)?;
+            let defaults = crate::methods::read_defaults(db)?;
+            let mut accounts = HashMap::new();
+            for account in db.list_accounts().map_err(|error| store_error(&error))? {
+                let account = crate::store::key_account(account)?;
+                accounts.insert(account.id, account.provider);
+            }
+            Ok((
+                repo_path,
+                context_scope,
+                thread,
+                thread_run,
+                defaults,
+                StoredKeyAccounts(accounts),
+            ))
+        })
+        .await?;
     let defaults = Defaults {
         coordinator: defaults.coordinator,
         worker: defaults.worker,
@@ -352,7 +414,12 @@ pub(super) async fn prepare(
         };
         return Ok((prepared, repo_path));
     }
-    worker::check_backend(resolved.backend())?;
+    // A Codex or Cursor thread is full Codex or Cursor Agent, with no worker sandbox to check
+    // (0035, 0036). Any other run on them is refused, even one on a repo entry: Cursor runs
+    // nothing else, and Codex workers wait on RYA-153.
+    if !(thread_run && resolved.backend().full_thread()) {
+        worker::check_backend(resolved.backend())?;
+    }
     if let Some(cli) = worker::cli_of(resolved.backend()) {
         // Only this CLI's status: a full probe also waits on the slowest of the others.
         let mut detected = daemon.cli_detector.get(cli).await;
@@ -382,6 +449,7 @@ pub(super) async fn prepare(
             home,
             data_dir,
             context,
+            thread,
         },
     };
     Ok((prepared, repo_path))
@@ -394,11 +462,13 @@ pub(crate) struct RunOptions {
     pub model: Option<String>,
     pub effort: Option<AgentEffort>,
     pub permission: Option<AgentPermission>,
+    pub context_window: Option<u32>,
+    pub fast: Option<bool>,
 }
 
 impl RunOptions {
     /// Refuses, with `unsupportedOption`, a model name that can't be a CLI argument, or an
-    /// effort or permission that `backend` doesn't map.
+    /// effort, permission, context window, or fast mode that `backend` doesn't map.
     fn check(&self, backend: &dyn Backend) -> Result<(), ErrorObject> {
         let refuse = |detail: String| ErrorObject::parallax(ErrorKind::UnsupportedOption, detail);
         let name = backend.name();
@@ -425,7 +495,44 @@ impl RunOptions {
                 "the {name} backend can't run with permission {permission}"
             )));
         }
+        if let Some(tokens) = self.context_window
+            && !backend.context_windows().contains(&tokens)
+        {
+            return Err(refuse(format!(
+                "the {name} backend can't run with a {tokens}-token context window"
+            )));
+        }
+        if self.fast.is_some() && !backend.fast_mode() {
+            return Err(refuse(format!(
+                "the {name} backend can't run in or out of fast mode"
+            )));
+        }
         Ok(())
+    }
+
+    /// For a fork onto `backend` when its parent ran on another (0050): drops the effort,
+    /// permission, context window, and fast mode `backend` doesn't map, and the parent's model
+    /// unless `thread/fork` named one, here and in `fields`.
+    fn fork_onto(&mut self, fork: Option<&NewFork>, backend: &dyn Backend, fields: &mut RunFields) {
+        let Some(fork) = fork.filter(|fork| backend.name() != fork.parent_backend) else {
+            return;
+        };
+        if !fork.model_given {
+            self.model = None;
+        }
+        self.effort = self.effort.filter(|e| backend.efforts().contains(e));
+        self.permission = self
+            .permission
+            .filter(|p| backend.permissions().contains(p));
+        self.context_window = self
+            .context_window
+            .filter(|w| backend.context_windows().contains(w));
+        self.fast = self.fast.filter(|_| backend.fast_mode());
+        fields.model.clone_from(&self.model);
+        fields.effort = self.effort.and_then(option_name);
+        fields.permission = self.permission.and_then(option_name);
+        fields.context_window = self.context_window;
+        fields.fast = self.fast;
     }
 }
 
@@ -452,13 +559,47 @@ fn routing_error(error: &RoutingError) -> ErrorObject {
     }
 }
 
+/// Switches the checkout at `repo_path`, `project`'s (a thread's repo entry), to `reference`.
+/// Refuses, with `worktreeFailed`, while another thread runs in it, since the switch would move
+/// that thread's work to a branch it never chose.
+async fn switch_checkout(
+    daemon: &Daemon,
+    project: ProjectId,
+    repo_path: &Path,
+    reference: &str,
+) -> Result<(), ErrorObject> {
+    let busy = store(daemon, move |db| {
+        db.list_runs(Some(project.into()))
+            .map(|runs| {
+                runs.iter().any(|run| {
+                    run.fields.checkout && [STARTING, RUNNING].contains(&run.state.status.as_str())
+                })
+            })
+            .map_err(|e| store_error(&e))
+    })
+    .await?;
+    if busy {
+        return Err(ErrorObject::parallax(
+            ErrorKind::WorktreeFailed,
+            "another thread is running in this checkout; switching its branch would move that \
+             thread's work",
+        ));
+    }
+    daemon
+        .agents
+        .worktrees
+        .switch(repo_path, reference)
+        .await
+        .map_err(|error| worktree_failed(&error))
+}
+
 fn worktree_failed(error: &WorktreeError) -> ErrorObject {
     ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string())
 }
 
 /// The run `run_id` already is, for a retry of `agent/start` that asks for the same `fields`, or
 /// `idConflict` if they differ. The backend isn't compared: routing resolves it, not the
-/// request. `None` for a new run.
+/// request, and neither is a parent the store no longer has. `None` for a new run.
 async fn existing(
     daemon: &Arc<Daemon>,
     run_id: RunId,
@@ -477,8 +618,11 @@ async fn existing(
     let Some((row, worktree)) = found else {
         return Ok(None);
     };
+    // An empty stored parent isn't compared: deleting the parent cleared it (0041), and a retry
+    // still names it.
     let stored = RunFields {
         backend: fields.backend.clone(),
+        parent: row.fields.parent.or(fields.parent),
         ..row.fields.clone()
     };
     if stored != *fields {
@@ -486,7 +630,8 @@ async fn existing(
             ErrorKind::IdConflict,
             format!(
                 "run {run_id} exists with a different project, prompt, account, policy, \
-                 coordinator thread, model, effort, permission, or approvals"
+                 coordinator thread, parent, model, effort, permission, context window, fast mode, \
+                 or approvals"
             ),
         ));
     }
@@ -503,9 +648,10 @@ async fn create_worktree(
     thread: Option<&NewThread>,
 ) -> Result<(CreatedWorktree, PathBuf, PathBuf), ErrorObject> {
     let branch_slug = thread.and_then(|thread| thread.branch_slug.as_deref());
+    let base = thread.and_then(|thread| thread.git_ref.as_deref());
     let created = agents
         .worktrees
-        .create_named(repo_path, run_id, None, branch_slug)
+        .create_named(repo_path, run_id, base, branch_slug)
         .await
         .map_err(|error| worktree_failed(&error))?;
     let paths = async {
@@ -550,14 +696,14 @@ pub(super) async fn checkout_paths(
     Ok((cwd, common))
 }
 
-/// Records a new run and its worktree, with its thread row for a normal thread, in one
-/// transaction. If that fails, removes the worktree again. A thread in the current checkout has
-/// no worktree (`created` is `None`); any other run must have one.
+/// Records a new run and its worktree, with its thread row for a normal thread (`thread` is
+/// `Some`), in one transaction. If that fails, removes the worktree again. A thread in the
+/// current checkout has no worktree (`created` is `None`); any other run must have one.
 async fn record(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     (fields, state): (RunFields, RunState),
-    is_thread: bool,
+    thread: Option<ThreadFields>,
     repo_path: &Path,
     created: Option<&CreatedWorktree>,
 ) -> Result<
@@ -578,13 +724,27 @@ async fn record(
     });
     let scope = fields.project_id;
     let recorded = store(daemon, move |db| {
-        if is_thread {
+        // `prepare_run` read the scope in an earlier job: a Project that `project/delete` removed
+        // since gets no run (PLX-338).
+        if db
+            .get_project(scope)
+            .map_err(|e| store_error(&e))?
+            .is_none()
+            && db.get_repo(scope).map_err(|e| store_error(&e))?.is_none()
+        {
+            return Err(ErrorObject::parallax(
+                ErrorKind::ProjectNotFound,
+                format!("no project has id {scope}"),
+            ));
+        }
+        if let Some(thread) = &thread {
             db.create_thread_run(
                 run_id.into(),
                 scope,
                 &fields,
                 &state,
                 worktree_fields.as_ref(),
+                thread,
             )
             .map(|(thread, run, worktree)| (run, worktree, Some(thread)))
             .map_err(|e| store_error(&e))
@@ -611,37 +771,76 @@ async fn record(
     recorded
 }
 
-/// A coordinator's subagent runs in the coordinator's current permission mode unless it names its
-/// own (0027), and forwards its permission requests when the coordinator does (0031): sets
-/// `options`' permission to the mode of the coordinator whose thread is `coordinator_thread`, its
-/// own run (0024), sets `approvals` when that run has them, and returns the inherited mode. The
-/// coordinator's mode only changes between its turns, and its `approvals` never do, so a retried
-/// spawn from the same turn inherits the same.
-// ponytail: `create` drops an inherited mode the subagent's backend lacks, so a retry of that
-// spawn gets idConflict; keep requested and inherited modes apart if that bites.
+/// A coordinator's subagent forwards its permission requests when the coordinator does (0031):
+/// sets `approvals` when the run whose thread is `coordinator_thread`, the coordinator's own run
+/// (0024), has them. Its `approvals` never change, so a retried spawn gets the same.
 async fn inherit(
     daemon: &Arc<Daemon>,
     coordinator_thread: Option<CoordinatorThreadId>,
-    options: &mut RunOptions,
     approvals: &mut bool,
-) -> Result<Option<AgentPermission>, ErrorObject> {
+) -> Result<(), ErrorObject> {
     let Some(thread) = coordinator_thread else {
-        return Ok(None);
+        return Ok(());
     };
     let id = Uuid::from(thread);
-    let Some(row) = store(daemon, move |db| {
+    let row = store(daemon, move |db| {
         db.get_run(id).map_err(|e| store_error(&e))
     })
-    .await?
-    else {
-        return Ok(None);
-    };
-    *approvals |= row.fields.approvals;
-    if options.permission.is_some() {
-        return Ok(None);
+    .await?;
+    if let Some(row) = row {
+        *approvals |= row.fields.approvals;
     }
-    options.permission = row.fields.permission.as_deref().and_then(option_value);
-    Ok(options.permission)
+    Ok(())
+}
+
+/// The permission mode every run in `scope` runs in (0042): its Project's, or `None` when `scope`
+/// is a repo entry, whose threads keep their own.
+pub(super) async fn project_mode(
+    daemon: &Arc<Daemon>,
+    scope: ProjectId,
+) -> Result<Option<ProjectPermission>, ErrorObject> {
+    store(daemon, move |db| {
+        let row = db.get_project(scope.into()).map_err(|e| store_error(&e))?;
+        Ok(row.map(|row| crate::store::project_permission(&row.permission)))
+    })
+    .await
+}
+
+/// The Project's `mode` as a run on `backend` takes it, or `unsupportedOption` saying why it
+/// can't: a run in a Project is never moved to another mode (0042).
+pub(super) fn in_mode(
+    backend: &dyn Backend,
+    mode: ProjectPermission,
+) -> Result<AgentPermission, ErrorObject> {
+    let name = actor::backend_name(backend.name());
+    let maps = |mode: ProjectPermission| {
+        mode.agent()
+            .filter(|permission| backend.permissions().contains(permission))
+    };
+    let (label, other) = match mode {
+        ProjectPermission::Auto => ("Auto", ProjectPermission::Bypass),
+        ProjectPermission::Bypass => ("Bypass Permissions", ProjectPermission::Auto),
+        ProjectPermission::Unknown => {
+            return Err(ErrorObject::parallax(
+                ErrorKind::UnsupportedOption,
+                "the Project's permission mode is one this plxd doesn't know",
+            ));
+        }
+    };
+    if let Some(permission) = maps(mode) {
+        return Ok(permission);
+    }
+    let detail = if maps(other).is_some() {
+        let other = if other == ProjectPermission::Bypass {
+            "Bypass"
+        } else {
+            "Auto"
+        };
+        format!("{name} has no {label}. Set the Project to {other} to use it.")
+    } else {
+        format!("{name} has neither Auto nor Bypass Permissions, so it can't run in a Project.")
+    };
+    Err(ErrorObject::parallax(ErrorKind::UnsupportedOption, detail))
 }
 
 /// Logs `run`'s `agent.started` on `project`'s events.
@@ -670,8 +869,11 @@ pub(crate) async fn start(
         model,
         effort,
         permission,
+        context_window,
+        fast,
         images,
         approvals,
+        threads,
         ..
     } = params;
     let new = NewRun {
@@ -679,12 +881,15 @@ pub(crate) async fn start(
         scope: project,
         prompt,
         images,
+        threads,
         account,
         coordinator_thread,
         options: RunOptions {
             model,
             effort,
             permission,
+            context_window,
+            fast,
         },
         approvals,
         thread: None,
@@ -701,6 +906,8 @@ pub(crate) struct NewRun {
     pub prompt: String,
     /// The prompt's images (RYA-191), already checked.
     pub images: Vec<PromptImage>,
+    /// The threads attached to the prompt (PLX-372), already checked.
+    pub threads: Vec<RunId>,
     pub account: Option<AccountChoice>,
     /// The coordinator thread starting the run through `plxd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
@@ -719,6 +926,25 @@ pub(crate) struct NewThread {
     pub branch_slug: Option<String>,
     /// Work in the repo entry's own checkout instead of a worktree. Never set with `scratch`.
     pub checkout: bool,
+    /// The ref the worktree starts from, or with `checkout`, the ref the checkout switches to
+    /// first. Already checked.
+    pub git_ref: Option<String>,
+    /// The run that launches it (0041), already checked to exist.
+    pub parent: Option<RunId>,
+    /// Its fork origin and title (0041), already checked.
+    pub fields: ThreadFields,
+    /// Set for a fork (0050): no CLI starts, and its log begins with the parent's transcript.
+    pub fork: Option<NewFork>,
+}
+
+/// What a fork (0050) adds to a new thread.
+pub(crate) struct NewFork {
+    /// The parent's backend: its model carries over only to the same one.
+    pub parent_backend: String,
+    /// Whether `thread/fork` named the model.
+    pub model_given: bool,
+    /// The parent's `agent.output` items up to the fork point, one list per event, oldest first.
+    pub transcript: Vec<Vec<AgentOutputItem>>,
 }
 
 /// A created run, and its thread row for a normal thread.
@@ -727,7 +953,45 @@ pub(crate) struct CreatedRun {
     pub thread: Option<parallax_store::Thread>,
 }
 
-/// Creates and starts a run: see the module documentation. Idempotent on the run id.
+/// A new run's parent (0041): the one its thread names, or the coordinator that starts it, whose
+/// subagents are its children.
+fn parent(thread: Option<&NewThread>, coordinator: Option<CoordinatorThreadId>) -> Option<Uuid> {
+    thread
+        .and_then(|thread| thread.parent)
+        .map(Uuid::from)
+        .or(coordinator.map(Uuid::from))
+}
+
+/// A new fork's run, recorded with no CLI (0050): logs the parent's transcript up to the fork
+/// point as the fork's own, after its `agent.started`. Its first `agent/send` starts a CLI.
+async fn fork_created(
+    daemon: &Daemon,
+    project: ProjectId,
+    run_id: RunId,
+    fork: NewFork,
+    row: &parallax_store::Run,
+    worktree: Option<parallax_store::Worktree>,
+    thread: Option<parallax_store::Thread>,
+) -> Result<CreatedRun, ErrorObject> {
+    for items in fork.transcript {
+        let event = ParallaxEvent::AgentOutput { run_id, items };
+        daemon
+            .log
+            .append(row.created_at, Some(project), event)
+            .await;
+    }
+    Ok(CreatedRun {
+        run: agent_run(row, worktree.as_ref())?,
+        thread,
+    })
+}
+
+/// Creates and starts a run: see the module documentation. Idempotent on the run id. A fork
+/// (`NewThread::fork`) is created with no CLI, at rest where its parent's turn ended.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sequence of steps, each of which must happen before the next"
+)]
 pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRun, ErrorObject> {
     let agents = &daemon.agents;
     let NewRun {
@@ -735,14 +999,23 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         scope: project,
         prompt,
         images,
+        threads,
         account,
         coordinator_thread,
         mut options,
         mut approvals,
-        thread,
+        mut thread,
     } = new;
+    let fork = thread.as_mut().and_then(|thread| thread.fork.take());
     let _starting = agents.start_guard(run_id).await;
-    let inherited = inherit(&daemon, coordinator_thread, &mut options, &mut approvals).await?;
+    inherit(&daemon, coordinator_thread, &mut approvals).await?;
+    // A run in a Project runs in its mode, whatever the request asked for (0042).
+    // ponytail: a retry after `project/update` changed the mode gets idConflict; compare the
+    // stored mode instead if that bites.
+    let mode = project_mode(&daemon, project).await?;
+    if let Some(mode) = mode {
+        options.permission = mode.agent();
+    }
     // What the request asks for, as the runs table stores it. Routing fills in the backend below.
     let mut fields = RunFields {
         project_id: project.into(),
@@ -751,9 +1024,12 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         policy: WORKSPACE_WRITE.to_owned(),
         backend: String::new(),
         coordinator_thread: coordinator_thread.map(Uuid::from),
+        parent: parent(thread.as_ref(), coordinator_thread),
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
+        context_window: options.context_window,
+        fast: options.fast,
         approvals,
         checkout: thread.as_ref().is_some_and(|thread| thread.checkout),
     };
@@ -766,16 +1042,30 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         };
         return Ok(CreatedRun { run, thread: row });
     }
-    let (prepared, scope_path) = prepare(&daemon, project, run_id, account, Role::Worker).await?;
-    if inherited.is_some_and(|mode| !prepared.resolved.backend().permissions().contains(&mode)) {
-        (options.permission, fields.permission) = (None, None);
+    // The attached threads are read before anything is created, so a failure leaves nothing.
+    let sent = attached::prompt(&daemon, &threads, &prompt).await?;
+    let (prepared, scope_path) = prepare_run(
+        &daemon,
+        project,
+        run_id,
+        account,
+        Role::Worker,
+        thread.is_some(),
+    )
+    .await?;
+    if let Some(mode) = mode {
+        in_mode(prepared.resolved.backend(), mode)?;
     }
+    options.fork_onto(fork.as_ref(), prepared.resolved.backend(), &mut fields);
     options.check(prepared.resolved.backend())?;
     let repo_path = match thread.as_ref().and_then(|thread| thread.scratch.clone()) {
         Some(scratch) => scratch.to_string_lossy().into_owned(),
         None => scope_path,
     };
     let (created, (cwd, git_common_dir)) = if fields.checkout {
+        if let Some(reference) = thread.as_ref().and_then(|thread| thread.git_ref.as_deref()) {
+            switch_checkout(&daemon, project, Path::new(&repo_path), reference).await?;
+        }
         (None, checkout_paths(agents, Path::new(&repo_path)).await?)
     } else {
         let (created, worktree_path, git_common_dir) =
@@ -785,7 +1075,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
 
     fields.backend = prepared.resolved.backend().name().into();
     let state = RunState {
-        status: STARTING.to_owned(),
+        status: if fork.is_some() { COMPLETED } else { STARTING }.to_owned(),
         account_id: prepared.resolved.account_id(),
         ..RunState::default()
     };
@@ -794,7 +1084,7 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         &daemon,
         run_id,
         (fields, state),
-        is_thread,
+        thread.map(|thread| thread.fields),
         Path::new(&repo_path),
         created.as_ref(),
     )
@@ -804,16 +1094,15 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         crate::threads::log_started(&daemon, thread).await;
     }
     info!(run = %run_id, project = %project, backend = %row.fields.backend, thread = is_thread, checkout = row.fields.checkout, "created an agent run");
+    if let Some(fork) = fork {
+        return fork_created(&daemon, project, run_id, fork, &row, worktree, thread_row).await;
+    }
 
     // A run just created here has no sent turns yet.
     let mut actor = Actor::new(Arc::clone(&daemon), row, worktree, HashMap::new());
-    let Place::Worker { context, .. } = &prepared.place else {
-        return Err(ErrorObject::internal_error(
-            "a worker was prepared as a coordinator",
-        ));
-    };
-    let task = first_prompt(&prompt, thread.as_ref(), &cwd, context);
+    let task = first_prompt(&sent, &prepared.place, &cwd)?;
     let paths = Some((cwd, git_common_dir));
+    actor.attach(None, threads);
     actor
         .launch(prepared, task, images, None, None, paths)
         .await;
@@ -826,20 +1115,17 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
     })
 }
 
-/// A new run's first message: a thread's or a worker's limits, for its CLI started in `cwd`, then
-/// `prompt`.
-fn first_prompt(prompt: &str, thread: Option<&NewThread>, cwd: &Path, context: &Path) -> String {
-    let Some(thread) = thread else {
-        return worker::worker_prompt(prompt, cwd, context);
-    };
-    let folder = if thread.checkout {
-        ThreadFolder::Checkout
-    } else if thread.scratch.is_some() {
-        ThreadFolder::Scratch
-    } else {
-        ThreadFolder::Worktree
-    };
-    worker::thread_prompt(prompt, cwd, context, folder)
+/// A new run's first message: a worker's limits, for its CLI started in `cwd`, then `prompt`. A
+/// thread's (a run whose scope is a repo entry) is `prompt` as the user wrote it, as in Claude
+/// Code (0034).
+fn first_prompt(prompt: &str, place: &Place, cwd: &Path) -> Result<String, ErrorObject> {
+    match place {
+        Place::Worker { thread: true, .. } => Ok(prompt.to_owned()),
+        Place::Worker { context, .. } => Ok(worker::worker_prompt(prompt, cwd, context)),
+        Place::Coordinator { .. } => Err(ErrorObject::internal_error(
+            "a worker was prepared as a coordinator",
+        )),
+    }
 }
 
 impl Agents {
@@ -854,6 +1140,11 @@ impl Agents {
     /// The worktrees every run is created in.
     pub(crate) fn worktrees(&self) -> &WorktreeManager {
         &self.worktrees
+    }
+
+    /// The backends runs start on.
+    pub(crate) fn backends(&self) -> &BackendRegistry {
+        &self.backends
     }
 }
 
@@ -913,8 +1204,8 @@ async fn ask<T>(
     let (reply, answer) = oneshot::channel();
     let mut command = command(reply);
     let stopping = || ErrorObject::internal_error("plxd is stopping");
-    // An actor that `thread/delete` just stopped has closed its channel: look the run up again,
-    // which then finds it gone.
+    // An actor that `thread/delete` or `project/delete` just stopped has closed its channel: look
+    // the run up again, which then finds it gone.
     for _ in 0..2 {
         let actor = actor_for(daemon, id).await?;
         match actor.send(command).await {
@@ -937,20 +1228,31 @@ pub(crate) async fn send(
         model,
         effort,
         permission,
+        context_window,
+        fast,
         account,
         images,
+        threads,
+        from,
     } = params;
+    if let Some(from) = from {
+        sender_exists(&daemon, from).await?;
+    }
     let options = RunOptions {
         model,
         effort,
         permission,
+        context_window,
+        fast,
     };
     ask(&daemon, run_id, |reply| Command::Send {
         turn_id,
         text,
         images,
+        threads,
         options,
         account,
+        from,
         reply,
     })
     .await
@@ -986,9 +1288,67 @@ pub(crate) async fn image(
     })
 }
 
-/// `agent/cancel`.
-pub(crate) async fn cancel(daemon: Arc<Daemon>, id: RunId) -> Result<AgentRun, ErrorObject> {
-    ask(&daemon, id, |reply| Command::Cancel { reply }).await
+/// `agent/cancel`, by the user or, with `from`, by another thread's Parallax tools (0041).
+pub(crate) async fn cancel(
+    daemon: Arc<Daemon>,
+    id: RunId,
+    from: Option<RunId>,
+) -> Result<AgentRun, ErrorObject> {
+    if let Some(from) = from {
+        sender_exists(&daemon, from).await?;
+    }
+    ask(&daemon, id, |reply| Command::Cancel { from, reply }).await
+}
+
+/// Fails with `runNotFound` unless `from`, the thread a message or interrupt comes from (0041), is
+/// a run on the host.
+async fn sender_exists(daemon: &Daemon, from: RunId) -> Result<(), ErrorObject> {
+    store(daemon, move |db| {
+        db.get_run(from.into())
+            .map_err(|e| store_error(&e))?
+            .map(|_| ())
+            .ok_or_else(|| run_not_found(from))
+    })
+    .await
+}
+
+/// `pr/link` and `pr/unlink` (0041): adds `url`, a GitHub pull request's, to run `run_id`'s
+/// links, or removes it, through the run's actor.
+pub(crate) async fn link_pr(
+    daemon: Arc<Daemon>,
+    run_id: RunId,
+    url: String,
+    linked: bool,
+) -> Result<AgentRun, ErrorObject> {
+    if linked && github_pr_urls(&url) != [url.as_str()] {
+        return Err(ErrorObject::invalid_params(format!(
+            "{url:?} is not a GitHub pull request URL, such as https://github.com/owner/repo/pull/1"
+        )));
+    }
+    ask(&daemon, run_id, |reply| Command::LinkPr {
+        url,
+        linked,
+        reply,
+    })
+    .await
+}
+
+/// `agent/resumeNow` (PLX-371): resumes a run waiting for its usage limit to reset now.
+pub(crate) async fn resume_now(daemon: Arc<Daemon>, id: RunId) -> Result<AgentRun, ErrorObject> {
+    ask(&daemon, id, |reply| Command::ResumeNow { reply }).await
+}
+
+/// `agent/autoResume` (PLX-371): sets or clears a run's auto-resume override.
+pub(crate) async fn set_auto_resume(
+    daemon: Arc<Daemon>,
+    id: RunId,
+    auto_resume: Option<bool>,
+) -> Result<AgentRun, ErrorObject> {
+    ask(&daemon, id, |reply| Command::AutoResume {
+        auto_resume,
+        reply,
+    })
+    .await
 }
 
 /// `agent/approve` (RYA-222): through the run's actor, which keeps its permission requests. The
@@ -1008,8 +1368,8 @@ pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObjec
     )
 }
 
-/// `thread/delete`'s part in the runner: through the run's actor, which stops a running CLI
-/// first and never races the run's own resume, commit, or accept.
+/// `thread/delete`'s and `project/delete`'s part in the runner: deletes a run through its actor,
+/// which stops a running CLI first and never races the run's own resume, commit, or accept.
 pub(crate) async fn delete(daemon: &Arc<Daemon>, id: RunId) -> Result<(), ErrorObject> {
     ask(daemon, id, |reply| Command::Delete { reply }).await
 }
@@ -1045,10 +1405,104 @@ pub(crate) async fn open_pr(
     Ok(AgentOpenPrResult { url })
 }
 
+/// `pr/view` (PLX-318): one of a run's linked pull requests, read with `gh`. Not through the
+/// run's actor, so a slow GitHub never holds up a running agent.
+pub(crate) async fn view_pr(
+    daemon: Arc<Daemon>,
+    params: PrViewParams,
+) -> Result<PullRequest, ErrorObject> {
+    let PrViewParams { run_id, url } = params;
+    linked(&daemon, run_id, &url).await?;
+    daemon
+        .agents
+        .worktrees
+        .view_pr(&url)
+        .await
+        .map_err(|error| pr_error(&error))
+}
+
+/// `pr/diff` (PLX-328): one of a run's linked pull requests' unified diff, read with `gh` as
+/// `pr/view` reads one.
+pub(crate) async fn diff_pr(
+    daemon: Arc<Daemon>,
+    params: PrViewParams,
+) -> Result<PrDiffResult, ErrorObject> {
+    let PrViewParams { run_id, url } = params;
+    linked(&daemon, run_id, &url).await?;
+    daemon
+        .agents
+        .worktrees
+        .diff_pr(&url)
+        .await
+        .map_err(|error| pr_error(&error))
+}
+
+/// `pr/act` (PLX-318): does an action to one of a run's linked pull requests with `gh`, as
+/// `pr/view` reads one.
+pub(crate) async fn act_pr(
+    daemon: Arc<Daemon>,
+    params: PrActParams,
+) -> Result<PullRequest, ErrorObject> {
+    let PrActParams {
+        run_id,
+        url,
+        action,
+    } = params;
+    linked(&daemon, run_id, &url).await?;
+    let acted = daemon
+        .agents
+        .worktrees
+        .act_pr(&url, action)
+        .await
+        .map_err(|error| pr_error(&error))?;
+    info!(run = %run_id, %url, ?action, "acted on a pull request");
+    Ok(acted)
+}
+
+/// Refuses `url` unless it is linked to run `run_id`, so a client can't make plxd run `gh` on
+/// any other argument.
+async fn linked(daemon: &Daemon, run_id: RunId, url: &str) -> Result<(), ErrorObject> {
+    let url = url.to_owned();
+    store(daemon, move |db| {
+        let row = db
+            .get_run(run_id.into())
+            .map_err(|e| store_error(&e))?
+            .ok_or_else(|| run_not_found(run_id))?;
+        if row.state.pull_requests.contains(&url) {
+            Ok(())
+        } else {
+            Err(ErrorObject::invalid_params(format!(
+                "{url} is not a pull request linked to run {run_id}"
+            )))
+        }
+    })
+    .await
+}
+
+/// A failed `gh` or push as the protocol's error.
+pub(super) fn pr_error(error: &PrError) -> ErrorObject {
+    let kind = match error {
+        PrError::Push(_) => ErrorKind::PushFailed,
+        PrError::GhUnavailable(_) => ErrorKind::GhUnavailable,
+        PrError::Gh(_) => ErrorKind::PrFailed,
+    };
+    ErrorObject::parallax(kind, error.to_string())
+}
+
+/// `agent/gitStatus`, `agent/commit`, and `agent/push`: through the run's actor (RYA-298).
+pub(crate) async fn git(
+    daemon: Arc<Daemon>,
+    run_id: RunId,
+    action: GitAction,
+) -> Result<GitStatus, ErrorObject> {
+    ask(&daemon, run_id, |reply| Command::Git { action, reply }).await
+}
+
 /// Marks every run the store still has as `starting` or `running` as `interrupted`: plxd
 /// stopped without recording how they ended, as after a crash. Then wakes each project's
-/// coordinator for what it missed while plxd was stopped ([`wake::catch_up`], RYA-178). Called
-/// once at startup, before any connection is accepted.
+/// coordinator for what it missed while plxd was stopped ([`wake::catch_up`], RYA-178), and
+/// starts the timers of runs waiting for a usage limit to reset ([`resume::restore`], PLX-371).
+/// Called once at startup, before any connection is accepted.
 pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     let recovered = store(daemon, |db| {
         let mut recovered = Vec::new();
@@ -1099,6 +1553,11 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                                 model: run.model,
                                 effort: run.effort,
                                 permission: run.permission,
+                                context_window: run.context_window,
+                                fast: run.fast,
+                                pull_requests: run.pull_requests,
+                                resume_at: run.resume_at,
+                                auto_resume: run.auto_resume,
                                 updated_at: run.updated_at,
                             },
                         },
@@ -1109,6 +1568,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
         Err(error) => warn!(error = %error.message, "could not recover interrupted agent runs"),
     }
     wake::catch_up(daemon).await;
+    resume::restore(daemon).await;
 }
 
 #[cfg(test)]
@@ -1116,9 +1576,115 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use parallax_protocol::RunId;
+    use std::path::Path;
 
-    use super::StartLocks;
+    use parallax_protocol::{ErrorKind, RunId};
+    use parallax_store::{ProjectFields, RunFields, RunState};
+    use uuid::Uuid;
+
+    use super::{StartLocks, in_mode, record, store, store_error};
+    use crate::server::Daemon;
+
+    /// PLX-394 (0042): each built-in kind in each Project mode. Claude Code and Codex map both,
+    /// and Cursor only Bypass, so a Cursor run in an Auto Project is refused with why, never
+    /// moved up to Bypass.
+    #[test]
+    fn each_kind_runs_a_projects_mode_or_says_why_not() {
+        use parallax_protocol::jsonrpc::PLX_ERROR;
+        use parallax_protocol::{AgentPermission, ProjectPermission};
+
+        use crate::backend::claude::ClaudeBackend;
+        use crate::backend::codex::CodexBackend;
+        use crate::backend::process::{Environment, Launcher};
+        use crate::paths::DataDir;
+
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = Launcher::new(
+            DataDir::new(dir.path().join("data")).unwrap(),
+            Environment::default(),
+        );
+        let claude = ClaudeBackend::new(launcher.clone());
+        let codex = CodexBackend::new(launcher.clone());
+        let cursor = crate::providers::cursor_backend(launcher);
+        let (auto, bypass) = (ProjectPermission::Auto, ProjectPermission::Bypass);
+        for backend in [&claude as &dyn crate::backend::Backend, &codex] {
+            assert_eq!(in_mode(backend, auto).unwrap(), AgentPermission::Auto);
+            assert_eq!(in_mode(backend, bypass).unwrap(), AgentPermission::Bypass);
+        }
+        assert_eq!(in_mode(&cursor, bypass).unwrap(), AgentPermission::Bypass);
+        let refused = in_mode(&cursor, auto).unwrap_err();
+        assert_eq!(refused.code, PLX_ERROR);
+        assert_eq!(
+            refused.parallax_data().unwrap().kind,
+            ErrorKind::UnsupportedOption
+        );
+        assert_eq!(
+            refused.message,
+            "Cursor has no Auto. Set the Project to Bypass to use it."
+        );
+    }
+
+    /// PLX-338: a worker start that read its Project before `project/delete` removed it records
+    /// no run once the row is gone, so the delete leaves no orphan behind.
+    #[tokio::test]
+    async fn a_start_racing_a_project_delete_records_no_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let project = Uuid::now_v7();
+        let fields = ProjectFields {
+            name: "app".to_owned(),
+            repo_path: "/src/app".to_owned(),
+            icon: None,
+            permission: "auto".to_owned(),
+        };
+        // The start's `prepare_run` saw the project; the delete then removed it.
+        store(&daemon, move |db| {
+            db.create_project(project, &fields)
+                .map_err(|e| store_error(&e))?;
+            db.delete_project(project).map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+
+        let run_id = RunId::generate();
+        let run = RunFields {
+            project_id: project,
+            prompt: "Build it.".to_owned(),
+            requested_account: None,
+            policy: super::WORKSPACE_WRITE.to_owned(),
+            backend: "fake".to_owned(),
+            coordinator_thread: None,
+            parent: None,
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            approvals: false,
+            checkout: false,
+        };
+        let state = RunState::default();
+        let error = record(
+            &daemon,
+            run_id,
+            (run, state),
+            None,
+            Path::new("/src/app"),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.parallax_data().map(|data| data.kind),
+            Some(ErrorKind::ProjectNotFound)
+        );
+        let stored = store(&daemon, move |db| {
+            db.get_run(run_id.into()).map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+        assert_eq!(stored, None);
+    }
 
     #[test]
     fn different_run_ids_get_independent_locks() {

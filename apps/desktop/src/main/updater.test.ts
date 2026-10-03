@@ -1,18 +1,30 @@
 import { expect, test } from "vite-plus/test";
 
-import { updateError, updaterSettings } from "./updater";
+import { notesText, updateError, updaterSettings } from "./updater";
 
-test("nightly takes nightly prereleases; standard takes Latest and may go back to it", () => {
-  expect(updaterSettings("nightly")).toEqual({
+test("a nightly build takes nightly prereleases; any other takes Latest", () => {
+  expect(updaterSettings("2610.10205.13230-nightly")).toEqual({
     channel: "nightly",
     allowPrerelease: true,
     allowDowngrade: false,
   });
-  expect(updaterSettings("release")).toEqual({
+  expect(updaterSettings("2610.10205.13230")).toEqual({
     channel: "latest",
     allowPrerelease: false,
-    allowDowngrade: true,
+    allowDowngrade: false,
   });
+});
+
+test("release notes read as plain lines, without the Full Changelog line", () => {
+  // As GitHub's releases feed has them.
+  const html = `<h2>What&#39;s Changed</h2>
+<ul>
+<li>feat: show &lt;b&gt; tags &amp; more (RYA-1) by <a href="https://github.com/me">@me</a> in <a href="https://github.com/o/r/pull/1">#1</a></li>
+</ul>
+<p><strong>Full Changelog</strong>: <a href="https://github.com/o/r/compare/a...b"><tt>a...b</tt></a></p>`;
+  expect(notesText(html)).toBe("What's Changed\n• feat: show <b> tags & more (RYA-1) by @me in #1");
+  expect(notesText([{ version: "1", note: "<p>one</p>" }])).toBe("one");
+  expect(notesText(null)).toBe("");
 });
 
 test("errors read as one line for people", () => {

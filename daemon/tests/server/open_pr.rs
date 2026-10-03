@@ -6,10 +6,12 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::methods::{AgentCancel, AgentOpenPr, AgentStart, RepoAdd, ThreadStart};
+use parallax_protocol::methods::{
+    AgentCancel, AgentList, AgentOpenPr, AgentStart, RepoAdd, ThreadStart,
+};
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentOpenPrParams, AgentStatus, ErrorKind, ProjectId,
-    RepoAddParams, RepoId, RunId, ThreadStartParams,
+    AccountChoice, AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind,
+    ParallaxEvent, ProjectId, RepoAddParams, RepoId, RunId, ThreadStartParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, find_program};
@@ -25,11 +27,14 @@ const URL: &str = "https://github.com/example/app/pull/7";
 
 /// A folder that is plxd's whole `PATH`: the real git, and a fake `gh` that logs its arguments to
 /// `gh.log`, answers `pr list` with a fork's pull request from a branch of the same name, then the
-/// one `pr create` made, and fails as `gh-mode` says: `signed-out` (exit 4, as gh does) or `fail`.
-struct Tools(TempDir);
+/// one `pr create` made, answers `pr view` with what [`Tools::view`] wrote, `pr diff` with a
+/// one-line diff, succeeds at `pr merge`,
+/// `pr ready`, and `pr close`, and fails as `gh-mode` says: `signed-out` (exit 4, as gh does) or
+/// `fail`.
+pub(crate) struct Tools(TempDir);
 
 impl Tools {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let tools = Self(temp_dir());
         let bin = tools.0.path().join("bin");
         fs::create_dir(&bin).unwrap();
@@ -54,6 +59,9 @@ case "$1 $2" in
     fi
     echo "[$list]" ;;
   'pr create') echo '{URL}' > "$dir/pr"; echo 'Creating pull request' >&2; echo '{URL}' ;;
+  'pr view') while IFS= read -r line; do printf '%s\n' "$line"; done < "$dir/view.json" ;;
+  'pr diff') echo 'diff --git a/README.md b/README.md' ;;
+  'pr merge' | 'pr ready' | 'pr close') ;;
   *) exit 1 ;;
 esac
 "#,
@@ -72,7 +80,7 @@ esac
         env
     }
 
-    fn log(&self) -> Vec<String> {
+    pub(crate) fn log(&self) -> Vec<String> {
         fs::read_to_string(self.0.path().join("gh.log"))
             .unwrap_or_default()
             .lines()
@@ -80,7 +88,12 @@ esac
             .collect()
     }
 
-    fn mode(&self, mode: &str) {
+    /// What `gh pr view` prints.
+    pub(crate) fn view(&self, json: &str) {
+        fs::write(self.0.path().join("view.json"), format!("{json}\n")).unwrap();
+    }
+
+    pub(crate) fn mode(&self, mode: &str) {
         fs::write(self.0.path().join("gh-mode"), mode).unwrap();
     }
 
@@ -98,7 +111,7 @@ esac
     }
 }
 
-fn start(dir: TempDir, steps: Vec<Step>, tools: &Tools) -> Host {
+pub(crate) fn start(dir: TempDir, steps: Vec<Step>, tools: &Tools) -> Host {
     let mut config = InProcess::config(dir.path());
     config.backends = Some(fake(steps));
     config.agent_environment = Some(tools.environment());
@@ -108,7 +121,7 @@ fn start(dir: TempDir, steps: Vec<Step>, tools: &Tools) -> Host {
     }
 }
 
-fn editing() -> Vec<Step> {
+pub(crate) fn editing() -> Vec<Step> {
     vec![
         init("s"),
         Step::WriteFile {
@@ -120,17 +133,19 @@ fn editing() -> Vec<Step> {
 }
 
 /// A bare repository under `dir`, added to `repo` as its `origin`.
-fn add_origin(repo: &Path, dir: &Path) -> PathBuf {
+pub(crate) fn add_origin(repo: &Path, dir: &Path) -> PathBuf {
     let origin = dir.join("origin.git");
     git(dir, &["init", "-q", "--bare", origin.to_str().unwrap()]);
     git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
     origin
 }
 
-fn thread(repo: Option<RepoId>) -> ThreadStartParams {
+pub(crate) fn thread(repo: Option<RepoId>) -> ThreadStartParams {
     ThreadStartParams {
         run_id: RunId::generate(),
         repo,
+        parent: None,
+        title: None,
         prompt: "Rewrite the README".to_owned(),
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
@@ -138,14 +153,19 @@ fn thread(repo: Option<RepoId>) -> ThreadStartParams {
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         branch_slug: None,
         images: Vec::new(),
         approvals: false,
         checkout: false,
+        base: None,
+        checkout_ref: None,
+        threads: Vec::new(),
     }
 }
 
-fn open(run_id: RunId, title: &str, body: Option<&str>) -> AgentOpenPrParams {
+pub(crate) fn open(run_id: RunId, title: &str, body: Option<&str>) -> AgentOpenPrParams {
     AgentOpenPrParams {
         run_id,
         title: title.to_owned(),
@@ -206,6 +226,14 @@ async fn a_finished_run_pushes_its_branch_and_opens_one_pull_request() {
     assert_eq!(again.url, URL);
     assert_eq!(pushed(), git(&worktree, &["rev-parse", "HEAD"]));
     assert_eq!(tools.log().len(), 3, "a list, and no second create");
+
+    // The run links its pull request once (PLX-318).
+    let runs = client
+        .call::<AgentList>(AgentListParams::default())
+        .await
+        .unwrap()
+        .runs;
+    assert_eq!(runs[0].pull_requests, [URL]);
     host.server.stop().await;
 }
 
@@ -274,7 +302,12 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
     let started = client.call::<ThreadStart>(start).await.unwrap();
     let scope = ProjectId::try_from(uuid::Uuid::from(started.thread.repo)).unwrap();
     subscribe(&mut client, scope, 0).await;
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    // Not the first thread's `agent.updated` for the pull request it linked.
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+            if *run_id == scratch && state.status == AgentStatus::Completed)
+    })
+    .await;
     let error = client
         .call::<AgentOpenPr>(open(scratch, "Rewrite the README", None))
         .await
@@ -310,7 +343,7 @@ async fn a_running_run_or_one_with_nothing_committed_is_refused() {
     );
 
     client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
+        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Cancelled)).await;

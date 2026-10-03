@@ -15,48 +15,106 @@ const loginArgs: Record<CliKind, string[]> = {
 export const isCliKind = (value: unknown): value is CliKind =>
   typeof value === "string" && Object.hasOwn(loginArgs, value);
 
-/** A program and its arguments, or on Windows its command line, already quoted. */
-export type Command = { file: string; args: string[] | string };
+/**
+ * A program and its arguments, or on Windows its command line, already quoted, the folder it
+ * starts in (the home folder if absent), and variables it gets besides the app's.
+ */
+export type Command = {
+  file: string;
+  args: string[] | string;
+  cwd?: string;
+  env?: Record<string, string>;
+};
 
 /** An SSH host's destination, checked when it was saved (`checkHost`), and the ssh program. */
 export type SshTarget = { destination: string; ssh: string };
 
 /**
- * The command that signs in to `cli` at `path`, where the host's plxd found it: run here, or
- * with `ssh -t` on an SSH host.
- * - Windows can't run an npm `.cmd` shim by itself, so one goes through `cmd.exe`. node-pty looks
- *   a bare name up on PATH without PATHEXT there, so `ssh` becomes `ssh.exe`.
+ * The command that signs in to an agent of `kind` at `path`, where the host's plxd found it, with
+ * `args` (a CLI's own by default) and `env`: run here, or with `ssh -t` on an SSH host.
+ * - Windows can't run an npm `.cmd` shim by itself, so one goes through `cmd.exe`.
  * - Over ssh, Codex's browser callback to localhost:1455 is forwarded back here, where the
  *   browser is, and fails at once if that port is taken. Cursor is told not to open a browser on
- *   the host. Claude Code needs neither: with no browser, it asks for a code to paste. `-e none`
- *   turns off ssh's escape character, so what's typed only ever reaches the CLI.
+ *   the host. Claude Code needs neither: with no browser, it asks for a code to paste.
+ * ponytail: over ssh, `env` goes as `NAME=value` before the command, for a POSIX shell, unless
+ * `path` is a Windows one; a bare program name on a Windows host gets it too, and fails.
  */
 export function loginCommand(
-  cli: CliKind,
+  kind: string,
   path: string,
   ssh?: SshTarget,
   platform = process.platform,
+  args: string[] = loginArgs[kind as CliKind] ?? [],
+  env: Record<string, string> = {},
 ): Command {
-  const args = loginArgs[cli];
+  const line = args.map(quote).join(" ");
   if (!ssh) {
+    const vars = Object.keys(env).length ? { env } : {};
     if (platform === "win32" && /\.(cmd|bat)$/i.test(path)) {
-      const line = `/d /s /c ""${path}" ${args.join(" ")}"`;
-      return { file: process.env["ComSpec"] ?? "cmd.exe", args: line };
+      return {
+        file: process.env["ComSpec"] ?? "cmd.exe",
+        args: `/d /s /c ""${path}" ${line}"`,
+        ...vars,
+      };
     }
-    return { file: path, args };
+    return { file: path, args, ...vars };
   }
   const forward =
-    cli === "codex" ? ["-o", "ExitOnForwardFailure=yes", "-L", "1455:localhost:1455"] : [];
-  const env = cli === "cursor" && path.startsWith("/") ? "NO_OPEN_BROWSER=1 " : "";
+    kind === "codex" ? ["-o", "ExitOnForwardFailure=yes", "-L", "1455:localhost:1455"] : [];
+  const posix = !/^[a-z]:\\/i.test(path);
+  const vars = {
+    ...(kind === "cursor" && { NO_OPEN_BROWSER: "1" }),
+    ...env,
+  };
+  const prefix = posix
+    ? Object.entries(vars)
+        .map(([name, value]) => `${name}=${quote(value)} `)
+        .join("")
+    : "";
+  return overSsh(ssh, `${prefix}${quote(path)} ${line}`, forward, platform);
+}
+
+/**
+ * The command that opens the user's login shell in `path`, a thread's folder: here, `$SHELL -l`
+ * (PowerShell on Windows), or on an SSH host, the host's login shell after a `cd` to it over
+ * `ssh -t`. A Windows host's path (`C:\...`) runs under its default shell, cmd.exe.
+ */
+export function shellCommand(
+  path: string,
+  ssh?: SshTarget,
+  platform = process.platform,
+  env = process.env,
+): Command {
+  if (!ssh) {
+    if (platform === "win32") return { file: "powershell.exe", args: ["-NoLogo"], cwd: path };
+    return { file: env["SHELL"] || "/bin/sh", args: ["-l"], cwd: path };
+  }
+  const remote = /^[a-z]:\\/i.test(path)
+    ? `cd /d ${quote(path)} && cmd`
+    : `cd ${quote(path)} && exec "$SHELL" -l`;
+  return overSsh(ssh, remote, [], platform);
+}
+
+/**
+ * `remote` run on an SSH host with `ssh -t`. `-e none` turns off ssh's escape character, so
+ * what's typed only ever reaches the host. node-pty looks a bare name up on PATH without PATHEXT
+ * on Windows, so `ssh` becomes `ssh.exe` there.
+ */
+function overSsh(ssh: SshTarget, remote: string, options: string[], platform: string): Command {
   const bare = platform === "win32" && !/\.\w+$/.test(ssh.ssh);
-  // prettier-ignore
   return {
     file: bare ? `${ssh.ssh}.exe` : ssh.ssh,
-    args: [
-      "-t", "-e", "none", "-o", "ControlPath=none", ...forward,
-      "--", ssh.destination, `${env}${quote(path)} ${args.join(" ")}`,
-    ],
+    args: ["-t", "-e", "none", "-o", "ControlPath=none", ...options, "--", ssh.destination, remote],
   };
+}
+
+/**
+ * What a terminal's program runs with: `env`, plus a UTF-8 `LANG` if `env` sets no locale, as when
+ * launchd starts the app. In the C locale, zsh counts each byte of a character like a prompt's
+ * U+E0A0 as a column, so its line editor draws in the wrong place.
+ */
+export function terminalEnv(env = process.env): NodeJS.ProcessEnv {
+  return env["LC_ALL"] || env["LC_CTYPE"] || env["LANG"] ? env : { ...env, LANG: "en_US.UTF-8" };
 }
 
 /** `path` as the host's shell reads it: bare if it can be, else quoted for cmd.exe or POSIX. */
@@ -66,29 +124,33 @@ function quote(path: string): string {
   return `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
-/** A window's terminal. `pty` is unset while its command is still being found. */
-type Session = { pty?: IPty };
-const sessions = new Map<WebContents, Session>();
-const watched = new WeakSet<WebContents>();
+/**
+ * A terminal. `pty` is unset while its command is still being found; `size` is the last one asked
+ * for, which it starts at.
+ */
+type Session = { pty?: IPty; size: { cols: number; rows: number } };
+/** Each window's terminals, by the id it gave each. */
+const sessions = new Map<WebContents, Map<string, Session>>();
 
 /**
- * Starts `sender`'s terminal once `command` says what to run, replacing any terminal it had.
- * Resolves to an error for people, or undefined once it runs. What it prints goes only to
- * `sender`, as `parallax:terminal` messages, and is never logged or kept.
+ * Starts `sender`'s terminal `id` once `command` says what to run, replacing any terminal it had
+ * with that id. Resolves to an error for people, or undefined once it runs. What it prints goes
+ * only to `sender`, as `parallax:terminal` messages with `id`, and is never logged or kept.
  */
 export async function openTerminal(
   sender: WebContents,
+  id: string,
   command: () => Promise<Command | string>,
   cols: number,
   rows: number,
 ): Promise<string | undefined> {
-  closeTerminal(sender);
-  watch(sender);
-  const session: Session = {};
-  sessions.set(sender, session);
-  const current = () => sessions.get(sender) === session;
+  closeTerminal(sender, id);
+  const own = windowSessions(sender);
+  const session: Session = { size: { cols, rows } };
+  own.set(id, session);
+  const current = () => own.get(id) === session;
   const send = (message: TerminalMessage) => {
-    if (current() && !sender.isDestroyed()) sender.send("parallax:terminal", message);
+    if (current() && !sender.isDestroyed()) sender.send("parallax:terminal", id, message);
   };
 
   try {
@@ -96,45 +158,48 @@ export async function openTerminal(
     const [found, { spawn }] = await Promise.all([command(), import("node-pty")]);
     if (!current()) return undefined; // Closed or replaced meanwhile.
     if (typeof found === "string") {
-      sessions.delete(sender);
+      own.delete(id);
       return found;
     }
     const pty = spawn(found.file, found.args, {
       name: "xterm-256color",
-      cols,
-      rows,
-      cwd: os.homedir(),
-      env: process.env,
+      ...session.size,
+      cwd: found.cwd ?? os.homedir(),
+      env: { ...terminalEnv(), ...found.env },
     });
     session.pty = pty;
     pty.onData((data) => send({ type: "data", data }));
     pty.onExit(({ exitCode }) => {
       send({ type: "exit", exitCode });
-      if (current()) sessions.delete(sender);
+      if (current()) own.delete(id);
     });
     return undefined;
   } catch (error) {
-    if (current()) sessions.delete(sender);
-    return `The sign-in couldn't start: ${(error as Error).message}`;
+    if (current()) own.delete(id);
+    return `The terminal couldn't start: ${(error as Error).message}`;
   }
 }
 
-export function writeTerminal(sender: WebContents, data: string): void {
-  sessions.get(sender)?.pty?.write(data);
+export function writeTerminal(sender: WebContents, id: string, data: string): void {
+  sessions.get(sender)?.get(id)?.pty?.write(data);
 }
 
-export function resizeTerminal(sender: WebContents, cols: number, rows: number): void {
+export function resizeTerminal(sender: WebContents, id: string, cols: number, rows: number): void {
   try {
-    sessions.get(sender)?.pty?.resize(cols, rows);
+    const session = sessions.get(sender)?.get(id);
+    if (!session) return;
+    session.size = { cols, rows };
+    session.pty?.resize(cols, rows);
   } catch {
     // It exited, and its exit is on the way.
   }
 }
 
-/** Ends `sender`'s terminal, killing what runs in it. */
-export function closeTerminal(sender: WebContents): void {
-  const pty = sessions.get(sender)?.pty;
-  sessions.delete(sender);
+/** Ends `sender`'s terminal `id`, killing what runs in it. */
+export function closeTerminal(sender: WebContents, id: string): void {
+  const own = sessions.get(sender);
+  const pty = own?.get(id)?.pty;
+  own?.delete(id);
   try {
     pty?.kill();
   } catch {
@@ -143,14 +208,24 @@ export function closeTerminal(sender: WebContents): void {
 }
 
 export function closeAllTerminals(): void {
-  for (const sender of sessions.keys()) closeTerminal(sender);
+  for (const [sender, own] of sessions) for (const id of own.keys()) closeTerminal(sender, id);
 }
 
-/** Closes a window's terminal when it reloads or closes, since nothing there can anymore. */
-function watch(sender: WebContents): void {
-  if (watched.has(sender)) return;
-  watched.add(sender);
-  const close = () => closeTerminal(sender);
-  sender.on("did-navigate", close);
-  sender.once("destroyed", close);
+/** A window's terminals, closed when it reloads or closes, since nothing there can use them. */
+function windowSessions(sender: WebContents): Map<string, Session> {
+  let own = sessions.get(sender);
+  if (!own) {
+    const created = new Map<string, Session>();
+    const closeAll = () => {
+      for (const id of created.keys()) closeTerminal(sender, id);
+    };
+    sender.on("did-navigate", closeAll);
+    sender.once("destroyed", () => {
+      closeAll();
+      sessions.delete(sender);
+    });
+    sessions.set(sender, created);
+    own = created;
+  }
+  return own;
 }

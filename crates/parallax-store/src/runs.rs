@@ -7,8 +7,9 @@ use crate::worktree::insert_worktree;
 use crate::{Store, Worktree, WorktreeFields, timestamp};
 
 /// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only model,
-/// effort, and permission change after the run is created, through `agent/send` (RYA-161,
-/// RYA-163), and the backend, when `agent/send` moves the run to another backend's account.
+/// effort, permission, context window, and fast mode change after the run is created, through
+/// `agent/send` (RYA-161, RYA-163), and the backend, when `agent/send` moves the run to another
+/// backend's account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFields {
     pub project_id: Uuid,
@@ -19,11 +20,19 @@ pub struct RunFields {
     pub backend: String,
     /// The coordinator thread that started the run (#195), or `None` for a client's own run.
     pub coordinator_thread: Option<Uuid>,
+    /// The run that launched this one (PLX-369, decision 0041): a coordinator's thread for its
+    /// subagents, or the parent a client named for a thread. `None` for a top-level run, and once
+    /// the parent is deleted.
+    pub parent: Option<Uuid>,
     /// The model, effort, and permission the run asked for (RYA-97), each `None` for the CLI's
     /// default. Effort and permission are their protocol names, such as `high` and `plan`.
     pub model: Option<String>,
     pub effort: Option<String>,
     pub permission: Option<String>,
+    /// The context window in tokens and fast mode the run asked for, each `None` for the CLI's
+    /// default.
+    pub context_window: Option<u32>,
+    pub fast: Option<bool>,
     /// Whether the run forwards its CLI's permission requests to the client (RYA-222, decision
     /// 0031). Fixed when the run is created.
     pub approvals: bool,
@@ -50,6 +59,15 @@ pub struct RunState {
     pub deletions: Option<u64>,
     /// How `agent/accept` merged the run, once it did (#157).
     pub accept: Option<RunAccept>,
+    /// The web URLs of the pull requests linked to the run, oldest first (PLX-318). None holds a
+    /// newline, since the column stores them one per line.
+    pub pull_requests: Vec<String>,
+    /// The run's auto-resume override (PLX-371, decision 0049), `None` for the host's setting.
+    pub auto_resume: Option<bool>,
+    /// When plxd resumes the run after a usage limit, while it waits.
+    pub resume_at: Option<Timestamp>,
+    /// How many resumes in a row had no reset time to wait for, for the backoff.
+    pub resume_tries: u32,
 }
 
 /// What `agent/accept` did for a run (#157).
@@ -79,7 +97,8 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
-                       approvals, checkout";
+                       approvals, checkout, context_window, fast, pull_requests, parent, \
+                       auto_resume, resume_at, resume_tries";
 
 struct RawRun {
     id: String,
@@ -108,6 +127,13 @@ struct RawRun {
     permission: Option<String>,
     approvals: bool,
     checkout: bool,
+    context_window: Option<u32>,
+    fast: Option<bool>,
+    pull_requests: String,
+    parent: Option<String>,
+    auto_resume: Option<bool>,
+    resume_at: Option<String>,
+    resume_tries: u32,
 }
 
 impl RawRun {
@@ -139,6 +165,13 @@ impl RawRun {
             permission: row.get(23)?,
             approvals: row.get(24)?,
             checkout: row.get(25)?,
+            context_window: row.get(26)?,
+            fast: row.get(27)?,
+            pull_requests: row.get(28)?,
+            parent: row.get(29)?,
+            auto_resume: row.get(30)?,
+            resume_at: row.get(31)?,
+            resume_tries: row.get(32)?,
         })
     }
 
@@ -170,9 +203,12 @@ impl RawRun {
                     .as_deref()
                     .map(Uuid::parse_str)
                     .transpose()?,
+                parent: self.parent.as_deref().map(Uuid::parse_str).transpose()?,
                 model: self.model,
                 effort: self.effort,
                 permission: self.permission,
+                context_window: self.context_window,
+                fast: self.fast,
                 approvals: self.approvals,
                 checkout: self.checkout,
             },
@@ -186,6 +222,14 @@ impl RawRun {
                 insertions: self.insertions,
                 deletions: self.deletions,
                 accept,
+                pull_requests: self.pull_requests.lines().map(str::to_owned).collect(),
+                auto_resume: self.auto_resume,
+                resume_at: self
+                    .resume_at
+                    .as_deref()
+                    .map(timestamp::parse)
+                    .transpose()?,
+                resume_tries: self.resume_tries,
             },
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
@@ -245,6 +289,22 @@ impl Store {
         Ok((run, worktree))
     }
 
+    /// Deletes run `id` with its worktree row, stored events, sent turns, images, and wake-up
+    /// state, in one transaction: how `project/delete` (PLX-338) removes a Project's run. Returns
+    /// whether the run existed.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn delete_run(&mut self, id: Uuid) -> Result<bool, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existed = delete_run_rows(&tx, id)?;
+        tx.commit()?;
+        Ok(existed)
+    }
+
     /// Reads a run.
     ///
     /// # Errors
@@ -282,54 +342,26 @@ impl Store {
         update(&self.conn, id, state)
     }
 
-    /// Replaces run `id`'s model, effort, and permission (RYA-161, RYA-163), and returns the
-    /// updated row.
+    /// Replaces run `id`'s backend, model, effort, permission, context window, and fast mode with
+    /// those of `fields` (RYA-161, RYA-163), and returns the updated row. Its other fields never
+    /// change.
     ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no run has `id`, or a database error.
-    pub fn set_run_options(
-        &self,
-        id: Uuid,
-        model: Option<&str>,
-        effort: Option<&str>,
-        permission: Option<&str>,
-    ) -> Result<Run, StoreError> {
-        let changed = self.conn.execute(
-            "UPDATE runs SET model = ?2, effort = ?3, permission = ?4, updated_at = ?5
-             WHERE id = ?1",
-            params![id.to_string(), model, effort, permission, timestamp::now()],
-        )?;
-        if changed == 0 {
-            return Err(StoreError::NotFound { id });
-        }
-        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
-    }
-
-    /// Moves run `id` to `backend`, with its model, effort, and permission there, and returns the
-    /// updated row.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::NotFound`] if no run has `id`, or a database error.
-    pub fn move_run(
-        &self,
-        id: Uuid,
-        backend: &str,
-        model: Option<&str>,
-        effort: Option<&str>,
-        permission: Option<&str>,
-    ) -> Result<Run, StoreError> {
+    pub fn set_run_options(&self, id: Uuid, fields: &RunFields) -> Result<Run, StoreError> {
         let changed = self.conn.execute(
             "UPDATE runs SET backend = ?2, model = ?3, effort = ?4, permission = ?5,
-                             updated_at = ?6
+                             context_window = ?6, fast = ?7, updated_at = ?8
              WHERE id = ?1",
             params![
                 id.to_string(),
-                backend,
-                model,
-                effort,
-                permission,
+                fields.backend,
+                fields.model,
+                fields.effort,
+                fields.permission,
+                fields.context_window,
+                fields.fast,
                 timestamp::now()
             ],
         )?;
@@ -366,7 +398,9 @@ fn update(conn: &Connection, id: Uuid, state: &RunState) -> Result<Run, StoreErr
         "UPDATE runs SET status = ?2, account_id = ?3, session_id = ?4, error = ?5,
                          commit_sha = ?6, files_changed = ?7, insertions = ?8,
                          deletions = ?9, updated_at = ?10, accept_id = ?11,
-                         merge_commit = ?12, merge_into = ?13, merge_how = ?14
+                         merge_commit = ?12, merge_into = ?13, merge_how = ?14,
+                         pull_requests = ?15, auto_resume = ?16, resume_at = ?17,
+                         resume_tries = ?18
          WHERE id = ?1",
         params![
             id.to_string(),
@@ -383,6 +417,10 @@ fn update(conn: &Connection, id: Uuid, state: &RunState) -> Result<Run, StoreErr
             accept.map(|accept| accept.commit.as_str()),
             accept.map(|accept| accept.into.as_str()),
             accept.map(|accept| accept.how.as_str()),
+            state.pull_requests.join("\n"),
+            state.auto_resume,
+            state.resume_at.map(timestamp::format),
+            state.resume_tries,
         ],
     )?;
     if changed == 0 {
@@ -402,9 +440,10 @@ pub(crate) fn insert_run(
         "INSERT INTO runs (id, project_id, prompt, requested_account, policy, backend,
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
-                           coordinator_thread, model, effort, permission, approvals, checkout)
+                           coordinator_thread, model, effort, permission, approvals, checkout,
+                           context_window, fast, parent)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
-                 ?17, ?18, ?19, ?20, ?21)
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -428,10 +467,38 @@ pub(crate) fn insert_run(
             fields.permission,
             fields.approvals,
             fields.checkout,
+            fields.context_window,
+            fields.fast,
+            fields.parent.map(|id| id.to_string()),
         ],
     )?;
     if inserted == 0 {
         return Err(StoreError::IdConflict { id });
     }
     fetch(conn, id)?.ok_or(StoreError::NotFound { id })
+}
+
+/// Deletes run `id`'s rows in every table that keeps them. None of them has a foreign key to
+/// `runs`, so nothing else removes them. Its children lose their parent and its forks their fork
+/// origin, so nothing points at a run that is gone (PLX-369). Returns whether the run row existed.
+pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, StoreError> {
+    let key = id.to_string();
+    let existed = conn.execute("DELETE FROM runs WHERE id = ?1", params![key])? > 0;
+    conn.execute("DELETE FROM worktrees WHERE id = ?1", params![key])?;
+    for table in ["events", "turns", "images", "wakes"] {
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE run_id = ?1"),
+            params![key],
+        )?;
+    }
+    conn.execute(
+        "UPDATE runs SET parent = NULL WHERE parent = ?1",
+        params![key],
+    )?;
+    conn.execute(
+        "UPDATE threads SET forked_from_run = NULL, forked_from_turn = NULL \
+         WHERE forked_from_run = ?1",
+        params![key],
+    )?;
+    Ok(existed)
 }

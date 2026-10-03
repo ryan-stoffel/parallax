@@ -4,7 +4,8 @@
 //!
 //! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json` in
 //! the run's cwd, plus the policy's flags, `--model`, `--effort`, and `--resume <session id>`
-//! (0004 [10]):
+//! (0004 [10]), with `--fork-session` for a fork's first run (0050). Fast mode is `fastMode` in the run's one `--settings`, and a 200k context window
+//! is [`DISABLE_1M_ENV`]:
 //!
 //! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
 //!   also keeps the file tools out of Claude Code's shared temp folder (RYA-176). As a second
@@ -19,11 +20,15 @@
 //!   terminal. As a second check, a coordinator whose `system/init` reports another permission
 //!   mode fails with [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
-//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
-//!   each writable folder. In [`AgentPermission::Bypass`] a worker is full Claude Code instead,
-//!   as on the user's own machine (0027): only its permission mode, `--allowedTools` with
-//!   [`TODO_TOOLS`], `--add-dir`, and `--settings` with only [`settings_env`], with no sandbox,
-//!   and its `system/init` may list any tool. Otherwise:
+//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for each
+//!   writable folder. A normal thread in any mode whose client answers permission requests (0034),
+//!   and a worker in [`AgentPermission::Bypass`] (0027), are full Claude Code instead, as on the
+//!   user's own machine ([`unsandboxed`]): only the permission mode, for a thread `--mcp-config`
+//!   with its `plxd mcp --thread` server (0041), `--allowedTools` with that server's
+//!   [`crate::mcp::thread::ALLOWED_TOOLS`] and [`TODO_TOOLS`], `--add-dir`, and `--settings`
+//!   with only [`settings_env`], with no sandbox, so
+//!   the user's settings, `CLAUDE.md` files, skills, plugins, hooks, subagents, and MCP servers all
+//!   load, and its `system/init` may list any tool. Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
@@ -122,18 +127,19 @@
 //!
 //! # Permission requests
 //!
-//! In Manual, Auto, and Plan, a worker's, a thread's, or a coordinator's CLI gets
-//! [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its `canUseTool` (RYA-222, 0031), when
-//! its client answers permission requests ([`RunRequest::approvals`]).
-//! Instead of denying a tool call nobody approved, the CLI writes a `can_use_tool` control request
-//! on stdout and waits. The driver reports it as [`Event::ApprovalRequested`] and writes the
-//! answer that [`Run::answer`] gives as a `control_response` on stdin, which stays open while a
-//! request waits. A `control_cancel_request` withdraws one, as the CLI's exit withdraws every one
-//! left, and any other control request gets an error response. Accept Edits and Bypass
-//! Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`), and a run
-//! without `approvals` denies what would prompt, so their CLIs run as before. In Plan, the plan
-//! itself is a request: `ExitPlanMode`'s, which a coordinator always has with the channel and a
-//! worker gets with it (RYA-243).
+//! In Manual, Auto, and Plan, a worker's, a thread's, or a coordinator's CLI, and a thread's in
+//! Accept Edits too, gets [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its
+//! `canUseTool` (RYA-222, 0031), when its client answers permission requests
+//! ([`RunRequest::approvals`]). Instead of denying a tool call nobody approved, the CLI writes a
+//! `can_use_tool` control request on stdout and waits. The driver reports it as
+//! [`Event::ApprovalRequested`] and writes the answer that [`Run::answer`] gives as a
+//! `control_response` on stdin, which stays open while a request waits. A
+//! `control_cancel_request` withdraws one, as the CLI's exit withdraws every one left, and any
+//! other control request gets an error response. A sandboxed worker in Accept Edits and every run
+//! in Bypass Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`),
+//! and a run without `approvals` denies what would prompt, so their CLIs run as before. In Plan,
+//! the plan itself is a request: `ExitPlanMode`'s, which a coordinator and a thread always have
+//! with the channel and a worker gets with it (RYA-243).
 //!
 //! # Cancel
 //!
@@ -154,13 +160,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 
+pub(crate) use self::stream::micros as usd_micros;
 pub(crate) use self::stream::version as parse_version;
 use self::stream::{Ask, Step, Translator, TurnDone};
+use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
@@ -169,8 +177,8 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     AgentEffort, AgentPermission, Answer, AnswerError, ApprovalId, Backend, CancelSwitch,
-    Capabilities, Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, PromptImage, Run,
-    RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
+    Capabilities, Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, Overrides, PromptImage,
+    Run, RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy, TurnId,
     WorkerSandbox, check_argument, prepend_path_line,
 };
 use crate::mcp;
@@ -345,6 +353,14 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
+/// The context windows a run may ask for, in tokens. Claude Code 2.1.286 runs Opus 5.5, Fable
+/// 5.1, and Sonnet 5 with 1M by default, which [`DISABLE_1M_ENV`] caps at 200k; Haiku 4.5 has
+/// only 200k. So 1M passes nothing.
+const CONTEXT_WINDOWS: &[u32] = &[200_000, 1_000_000];
+
+/// Set to `1` for a run that asks for a 200k context window.
+const DISABLE_1M_ENV: &str = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
+
 /// Claude Code's permission modes, in the order its own picker lists them (0027).
 const PERMISSIONS: &[AgentPermission] = &[
     AgentPermission::Auto,
@@ -398,6 +414,16 @@ pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// What `system/init` reports as `apiKeySource` for an API key account. Happens to be the same
 /// string as [`API_KEY_ENV`] (0004's table), but the two names are checked independently.
 pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
+
+/// The variables that pick the model behind each of Claude Code's aliases, background tasks, and
+/// subagents, which a run on a model service sets to its own model.
+const GATEWAY_MODEL_ENV: &[&str] = &[
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+];
 
 /// Variables every run gets: report a startup failure as a `result` instead of on stderr alone.
 const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")];
@@ -504,6 +530,7 @@ pub struct ClaudeBackend {
     program: OsString,
     cancel: CancelPolicy,
     limits: OutputLimits,
+    overrides: Overrides,
 }
 
 impl ClaudeBackend {
@@ -515,7 +542,20 @@ impl ClaudeBackend {
             program: PROGRAM.into(),
             cancel: CancelPolicy::default(),
             limits: OutputLimits::default(),
+            overrides: Overrides::default(),
         }
+    }
+
+    /// Runs as a provider instance (0040): its name, program, folder, arguments, and variables,
+    /// such as a model service's `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, which Claude
+    /// Code reports as `apiKeySource` `none`, as it does a login.
+    #[must_use]
+    pub fn with_overrides(mut self, overrides: Overrides) -> Self {
+        if let Some(program) = &overrides.program {
+            self.program.clone_from(program);
+        }
+        self.overrides = overrides;
+        self
     }
 
     /// Runs `program`, a name on `PATH` or an absolute path, instead of `claude`.
@@ -523,6 +563,26 @@ impl ClaudeBackend {
     pub fn with_program(mut self, program: impl Into<OsString>) -> Self {
         self.program = program.into();
         self
+    }
+
+    /// For an instance that points Claude Code at another endpoint (a model service, 0040):
+    /// every model alias, background tasks', and subagents' model become the run's `model`,
+    /// which the endpoint serves, unless the instance set them; and the user's settings can't
+    /// route it elsewhere.
+    fn pin_gateway_model(&self, spec: &mut ProcessSpec, model: Option<&str>) {
+        let set = |name: &str| self.overrides.env.iter().any(|(var, _)| var == name);
+        if !set("ANTHROPIC_BASE_URL") {
+            return;
+        }
+        spec.inject.set("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
+        let Some(model) = model else {
+            return;
+        };
+        for name in GATEWAY_MODEL_ENV {
+            if !set(name) {
+                spec.inject.set(name, model);
+            }
+        }
     }
 
     /// Cancels with `policy` instead of `SIGINT` and a 10 s grace period.
@@ -537,6 +597,34 @@ impl ClaudeBackend {
     pub fn with_limits(mut self, limits: OutputLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// What every run and the command list start from: the program in `cwd`, inherited
+    /// credentials [`scrubbed`] and `credential`'s injected ([`apply_credential`], whose
+    /// `apiKeySource` it returns), [`ALWAYS_SET`], stdin piped, and the backend's output limits.
+    fn spec(
+        &self,
+        cwd: &Path,
+        credential: &Credential,
+    ) -> Result<(ProcessSpec, &'static str), StartError> {
+        let mut spec = ProcessSpec::new(self.program.clone(), cwd);
+        spec.scrub = scrubbed(self.launcher.base());
+        let credential = match credential {
+            Credential::Subscription { .. } => Credential::Subscription {
+                config_home: self.overrides.config_home(credential),
+            },
+            Credential::ApiKey(_) => credential.clone(),
+        };
+        let key_source = apply_credential(&credential, &mut spec)?;
+        for (name, value) in ALWAYS_SET {
+            spec.inject.set(name, value);
+        }
+        for (name, value) in &self.overrides.env {
+            spec.inject.set(name, value);
+        }
+        spec.stdin = StdinMode::Piped;
+        spec.limits = self.limits;
+        Ok((spec, key_source))
     }
 }
 
@@ -555,23 +643,29 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             "plxd's coordinator tools are only for a no-write run".into(),
         ));
     }
-    let bypass = request.policy == ToolPolicy::WorkspaceWrite
-        && request.permission == Some(AgentPermission::Bypass);
+    let unsandboxed = unsandboxed(request);
     let policy: &[&str] = match request.policy {
         ToolPolicy::NoWrite if coordinator => &[],
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
-        ToolPolicy::WorkspaceWrite if bypass => &[],
+        ToolPolicy::WorkspaceWrite if unsandboxed => &[],
         ToolPolicy::WorkspaceWrite if hands_over_plans(request) => PLAN_WORKSPACE_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
+    // Headless Claude Code turns fast mode on only when the flag settings opt in.
+    let settings = |mut settings: Value| -> OsString {
+        if let Some(fast) = request.fast {
+            settings["fastMode"] = fast.into();
+        }
+        settings.to_string().into()
+    };
     if request.policy == ToolPolicy::NoWrite && !coordinator {
         if request.permission.is_some() {
             return Err(StartError::Invalid(
                 "a no-write run takes no permission; its mode is fixed (0004)".into(),
             ));
         }
-        args.extend(["--settings".into(), no_write_settings().to_string().into()]);
+        args.extend(["--settings".into(), settings(no_write_settings())]);
     } else {
         let mode = permission_mode(request.permission)?;
         args.extend(["--permission-mode".into(), mode.into()]);
@@ -591,27 +685,40 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             "--allowedTools".into(),
             allowed.join(",").into(),
         ]);
-    } else if bypass {
-        args.extend(["--allowedTools".into(), TODO_TOOLS.join(",").into()]);
+    } else if unsandboxed {
+        // A thread's host-wide tools join the user's own MCP servers (0041), and the allowlist
+        // lets them run in every mode.
+        let thread_tools: &[&str] = match &request.thread_tools {
+            Some(tools) => {
+                args.extend([
+                    "--mcp-config".into(),
+                    tools.mcp_config()?.to_string().into(),
+                ]);
+                mcp::thread::ALLOWED_TOOLS
+            }
+            None => &[],
+        };
+        let allowed: Vec<&str> = thread_tools.iter().chain(TODO_TOOLS).copied().collect();
+        args.extend(["--allowedTools".into(), allowed.join(",").into()]);
     }
     if let Some(sandbox) = worker_sandbox(request)? {
-        if !bypass {
+        if !unsandboxed {
             let config_home = match &request.account.credential {
                 Credential::Subscription { config_home } => config_home.as_deref(),
                 Credential::ApiKey(_) => None,
             };
-            let settings = worker_settings(sandbox, &request.cwd, config_home);
-            args.extend(["--settings".into(), settings.to_string().into()]);
+            let worker = worker_settings(sandbox, &request.cwd, config_home);
+            args.extend(["--settings".into(), settings(worker)]);
         }
         for dir in &sandbox.writable {
             args.extend(["--add-dir".into(), dir.into()]);
         }
     }
-    if coordinator || bypass {
+    if coordinator || unsandboxed {
         // Full Claude Code loads the user's and the project's settings, whose `env` could share
         // its task list, so it gets `--settings` only for this (RYA-251).
-        let settings = serde_json::json!({"env": settings_env()});
-        args.extend(["--settings".into(), settings.to_string().into()]);
+        let env = serde_json::json!({"env": settings_env()});
+        args.extend(["--settings".into(), settings(env)]);
     }
     if let Some(model) = &request.model {
         check_argument("model", model)?;
@@ -623,6 +730,9 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     if let Some(resume) = &request.resume {
         check_argument("resume id", &resume.session_id)?;
         args.extend(["--resume".into(), resume.session_id.clone().into()]);
+        if resume.fork {
+            args.push("--fork-session".into());
+        }
     }
     Ok(args)
 }
@@ -701,25 +811,50 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
         .collect()
 }
 
+/// Whether `request` runs as full Claude Code with no worker sandbox, though it may write: a
+/// normal thread in any mode whose client answers permission requests ([`full_thread`], 0034),
+/// or a worker in [`AgentPermission::Bypass`] (0027). Its tools, settings, and MCP servers are
+/// whatever the user's configuration loads.
+#[must_use]
+pub fn unsandboxed(request: &RunRequest) -> bool {
+    request.policy == ToolPolicy::WorkspaceWrite
+        && (full_thread(request) || request.permission == Some(AgentPermission::Bypass))
+}
+
+/// Whether `request` is a normal thread that runs as full Claude Code (0034): one whose client
+/// answers permission requests. Without `approvals`, such as a thread started before the app
+/// showed them, its commands would be denied wherever they'd prompt, so it keeps the worker
+/// sandbox, where they run without asking, as before.
+#[must_use]
+pub fn full_thread(request: &RunRequest) -> bool {
+    request.thread && request.approvals
+}
+
 /// Whether `request`'s CLI asks plxd before a tool call that would prompt (RYA-222, 0031): a
-/// worker, a thread, or a coordinator in Manual, Auto, or Plan, whose client answers
-/// ([`RunRequest::approvals`]). Accept Edits and Bypass Permissions don't ask about what they run,
-/// a plain no-write run denies anything not allowed (`dontAsk`), and a run without `approvals`
-/// denies what would prompt, as headless Claude Code does.
+/// worker, a thread, or a coordinator in Manual, Auto, or Plan, and a thread in Accept Edits too,
+/// whose client answers ([`RunRequest::approvals`]). A thread has no sandbox to run its commands
+/// without asking, so in Accept Edits its Bash calls prompt, as in a terminal (0034). A sandboxed
+/// worker's don't, and Bypass Permissions asks about nothing. A plain no-write run denies
+/// anything not allowed (`dontAsk`), and a run without `approvals` denies what would prompt, as
+/// headless Claude Code does.
 #[must_use]
 pub fn prompts(request: &RunRequest) -> bool {
     let plain_no_write =
         request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none();
+    let thread_edits =
+        full_thread(request) && matches!(request.permission, None | Some(AgentPermission::Edit));
     request.approvals
         && !plain_no_write
-        && matches!(
-            request.permission,
-            Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)
-        )
+        && (thread_edits
+            || matches!(
+                request.permission,
+                Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)
+            ))
 }
 
 /// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], RYA-243):
-/// a worker or a thread in Plan whose CLI asks plxd ([`prompts`]). Headless Claude Code offers
+/// a sandboxed worker in Plan whose CLI asks plxd ([`prompts`]). A thread has no `--tools`, so
+/// it has the tool as a coordinator does (0034). Headless Claude Code offers
 /// the tool only to a run that asks a host, and asking with it is how the plan reaches the user
 /// (0031). The tool runs nothing and writes nothing in the worktree. Allowing it only moves the
 /// CLI to `default` (Manual), a mode a worker can start in, under the same `--restricted`,
@@ -729,6 +864,7 @@ pub fn prompts(request: &RunRequest) -> bool {
 #[must_use]
 pub fn hands_over_plans(request: &RunRequest) -> bool {
     request.policy == ToolPolicy::WorkspaceWrite
+        && !full_thread(request)
         && request.permission == Some(AgentPermission::Plan)
         && prompts(request)
 }
@@ -809,8 +945,12 @@ pub fn apply_credential(
 }
 
 impl Backend for ClaudeBackend {
-    fn name(&self) -> &'static str {
-        "claude"
+    fn name(&self) -> &str {
+        self.overrides.name.as_deref().unwrap_or(PROGRAM)
+    }
+
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        Some(parallax_protocol::CliKind::Claude)
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -821,6 +961,7 @@ impl Backend for ClaudeBackend {
             reports_cost: true,
             rate_limits: true,
             worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
+            fork: true,
         }
     }
 
@@ -828,8 +969,33 @@ impl Backend for ClaudeBackend {
         EFFORTS
     }
 
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         PERMISSIONS
+    }
+
+    fn context_windows(&self) -> &'static [u32] {
+        CONTEXT_WINDOWS
+    }
+
+    fn fast_mode(&self) -> bool {
+        true
+    }
+
+    /// `claude -p` in stream-json on the user's login, asked to `initialize`
+    /// ([`commands::claude`]).
+    fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
+        spec.args = BASE_ARGS.iter().map(OsString::from).collect();
+        spec.args.extend(self.overrides.args.iter().cloned());
+        Ok(Some(CommandsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![json!({
+                "type": "control_request",
+                "request_id": "commands",
+                "request": {"subtype": "initialize"},
+            })],
+            parse: commands::claude,
+        }))
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
@@ -843,20 +1009,30 @@ impl Backend for ClaudeBackend {
                     .into(),
             ));
         }
-        let mut spec = ProcessSpec::new(self.program.clone(), &request.cwd);
+        let (mut spec, expected_key_source) =
+            self.spec(&request.cwd, &request.account.credential)?;
         spec.args = arguments(&request)?;
+        spec.args.extend(self.overrides.args.iter().cloned());
+        self.pin_gateway_model(&mut spec, request.model.as_deref());
         let asks = prompts(&request);
         let plan_exit = hands_over_plans(&request);
+        let full = full_thread(&request);
         if let Some(sandbox) = worker_sandbox(&request)? {
             spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
         }
-        spec.scrub = scrubbed(self.launcher.base());
-        let expected_key_source = apply_credential(&request.account.credential, &mut spec)?;
-        for (name, value) in ALWAYS_SET {
-            spec.inject.set(name, value);
-        }
         if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
             spec.inject.set(SCRUB_ENV, "1");
+        }
+        match request.context_window {
+            None | Some(1_000_000) => {}
+            Some(200_000) => {
+                spec.inject.set(DISABLE_1M_ENV, "1");
+            }
+            Some(tokens) => {
+                return Err(StartError::Unsupported(format!(
+                    "Claude Code has no {tokens}-token context window"
+                )));
+            }
         }
         let env_file = match self.launcher.base().get("PATH") {
             Some(path) if request.policy == ToolPolicy::WorkspaceWrite => {
@@ -867,8 +1043,6 @@ impl Backend for ClaudeBackend {
             }
             _ => None,
         };
-        spec.stdin = StdinMode::Piped;
-        spec.limits = self.limits;
 
         let process = self.launcher.spawn(&spec)?;
         let switch = CancelSwitch::new();
@@ -890,6 +1064,7 @@ impl Backend for ClaudeBackend {
             stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
                 .with_coordinator_tools(request.coordinator_tools.is_some())
+                .with_thread(full)
                 .with_permission_mode(permission_mode(request.permission)?)
                 .with_prompts(asks)
                 .with_plan_exit(plan_exit),

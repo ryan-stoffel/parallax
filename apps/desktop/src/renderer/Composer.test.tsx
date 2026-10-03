@@ -4,16 +4,40 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { PromptImage } from "../protocol/generated/protocol";
-import { Composer } from "./Composer";
+import type { ParallaxBridge } from "../preload/bridge";
+import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
+import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
+import { setCliEnabled } from "./models";
+import type { AttachThreads } from "./threadContext";
+import { dragThread } from "./threadDrag";
+import { emptyThreads } from "./threads";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers. The model menu's items are in the DOM either way.
+HTMLElement.prototype.hidePopover = () => {};
 // happy-dom decodes no images. Every image is small enough to send as it is.
 vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 48, close() {} }));
+// The composer's image reads, so a test can wait for them: happy-dom reads a file on two chained
+// timers, which a fixed wait races when the event loop stalls (PLX-277).
+const reads = vi.hoisted(() => [] as Promise<unknown>[]);
+vi.mock(import("./images"), async (importOriginal) => {
+  const images = await importOriginal();
+  return {
+    ...images,
+    readImage: (...args) => {
+      const read = images.readImage(...args);
+      reads.push(read);
+      return read;
+    },
+  };
+});
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  act(() => unmount());
+  vi.useRealTimers();
+});
 
 // plxd's caps (RYA-191).
 const caps: ImageCaps = { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 };
@@ -22,9 +46,12 @@ function render(
   onSend: (text: string) => Promise<string | undefined>,
   // null: a plxd that takes no images.
   imageCaps: ImageCaps | null = caps,
+  props: Partial<ComposerProps> = {},
 ) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<Composer onSend={onSend} imageCaps={imageCaps ?? undefined} />));
+  act(() =>
+    root.render(<Composer onSend={onSend} imageCaps={imageCaps ?? undefined} {...props} />),
+  );
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
@@ -62,8 +89,8 @@ function render(
   return { box, type, press, paste };
 }
 
-// Waits out reading the added files, which happy-dom does on a timer.
-const read = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+// Waits for the added files to be read and shown.
+const read = () => act(() => Promise.all(reads.splice(0)));
 
 // A 1×1 PNG, and what's sent for it.
 const png =
@@ -97,6 +124,35 @@ test("Manual says its requests are denied when they can't come to the chat, and 
   );
 });
 
+test("a new thread's Cursor model starts it on Cursor, which takes no effort (0036)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend, caps, { newThread: true, backend: "claude" });
+  const control = (label: string) => document.querySelector(`[aria-label="${label}"]`);
+  const effort = () => document.querySelector('[aria-label^="Reasoning effort"]');
+  expect(effort()).not.toBeNull();
+  const menu = document.getElementById(
+    control("Model: Claude Opus 5.5")!.getAttribute("popovertarget")!,
+  )!;
+  act(() => menu.querySelector<HTMLButtonElement>('button[aria-label="Cursor"]')!.click());
+  const composer = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((m) =>
+    m.textContent?.startsWith("Composer 2.5 Fast"),
+  )!;
+  await act(async () => composer.click());
+  expect(effort()).toBeNull();
+  type("Hello");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "Hello",
+    {
+      model: "composer-2.5-fast",
+      permission: "edit",
+      account: { kind: "subscription", backend: "cursor" },
+    },
+    [],
+    [],
+  );
+});
+
 test("Markdown formats as you type and is sent as Markdown, with the text as typed", async () => {
   const onSend = vi.fn(async () => undefined);
   const { box, type, press } = render(onSend);
@@ -123,8 +179,25 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
     "Two things:\n\n- first\n- second\n\nrename foo_bar in <div>, **all** of it\nthanks",
     {},
     [],
+    [],
   );
   expect(box.textContent).toBe("");
+});
+
+test("insert adds its text after what's typed, as the PR view's Ask a question does", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  const draw = (insert?: string) =>
+    act(() => root.render(<Composer onSend={onSend} insert={insert} />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  draw();
+  const box = document.querySelector<TiptapEditorHTMLElement>('[role="textbox"]')!;
+  act(() => void box.editor!.commands.setContent("About"));
+  draw("https://github.com/me/app/pull/42 ");
+  expect(box.textContent).toBe("About https://github.com/me/app/pull/42 ");
 });
 
 test("typed text that only looks like Markdown is sent as typed", async () => {
@@ -140,6 +213,7 @@ test("typed text that only looks like Markdown is sent as typed", async () => {
     "rename __init__ and _private_, then a * b * c\n--- a/file.ts",
     {},
     [],
+    [],
   );
 });
 
@@ -152,7 +226,7 @@ test("an ordered list's nested lines indent past its widest number", async () =>
     );
   });
   await press("Enter");
-  expect(onSend).toHaveBeenCalledWith("9.  a\n10. b\n    - c", {}, []);
+  expect(onSend).toHaveBeenCalledWith("9.  a\n10. b\n    - c", {}, [], []);
 });
 
 test("``` and Shift+Enter start a code block, where Enter adds a line and Cmd+Enter sends", async () => {
@@ -167,7 +241,7 @@ test("``` and Shift+Enter start a code block, where Enter adds a line and Cmd+En
   expect(onSend).not.toHaveBeenCalled();
 
   await press("Enter", { metaKey: true });
-  expect(onSend).toHaveBeenCalledWith("```ts\nlet a = 1;\na += 1;\n```", {}, []);
+  expect(onSend).toHaveBeenCalledWith("```ts\nlet a = 1;\na += 1;\n```", {}, [], []);
 });
 
 test("paste takes the plain text, its lines as they are", async () => {
@@ -182,7 +256,7 @@ test("paste takes the plain text, its lines as they are", async () => {
   expect(box.querySelector("h1, b, strong, [style]")).toBeNull();
 
   await press("Enter");
-  expect(onSend).toHaveBeenCalledWith("Error\n  at main\n\nfn __init__()", {}, []);
+  expect(onSend).toHaveBeenCalledWith("Error\n  at main\n\nfn __init__()", {}, [], []);
 });
 
 test("copying within one block gives just its text", async () => {
@@ -227,7 +301,7 @@ test("cut gives the Markdown as text, which pastes back the same", async () => {
     box.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
   });
   await press("Enter");
-  expect(onSend).toHaveBeenCalledWith("- first\n- second", {}, []);
+  expect(onSend).toHaveBeenCalledWith("- first\n- second", {}, [], []);
 });
 
 test("a failed send puts the same text and images back, ahead of anything added meanwhile", async () => {
@@ -251,10 +325,12 @@ test("a failed send puts the same text and images back, ahead of anything added 
 
   await press("Enter");
   const gif = { mediaType: "image/gif", data: "R0lG" };
-  expect(onSend).toHaveBeenLastCalledWith("- first\n\nmore", {}, [
-    gif,
-    ...Array<PromptImage>(9).fill(sentPng),
-  ]);
+  expect(onSend).toHaveBeenLastCalledWith(
+    "- first\n\nmore",
+    {},
+    [gif, ...Array<PromptImage>(9).fill(sentPng)],
+    [],
+  );
 });
 
 test("a pasted image sits above the text, with its name nowhere in it, and is sent beside it", async () => {
@@ -272,13 +348,13 @@ test("a pasted image sits above the text, with its name nowhere in it, and is se
 
   type("What's wrong here?");
   await press("Enter");
-  expect(onSend).toHaveBeenCalledWith("What's wrong here?", {}, [sentPng, sentPng]);
+  expect(onSend).toHaveBeenCalledWith("What's wrong here?", {}, [sentPng, sentPng], []);
   expect(thumbnails()).toEqual([]);
 
   // Images alone can be sent too.
   await paste([pngFile()]);
   await press("Enter");
-  expect(onSend).toHaveBeenLastCalledWith("", {}, [sentPng]);
+  expect(onSend).toHaveBeenLastCalledWith("", {}, [sentPng], []);
 });
 
 test("an image copied from a browser, with its URL as text, pastes as the image", async () => {
@@ -335,4 +411,343 @@ test("a picked image is a thumbnail, and any other file is a chip", async () => 
   await read();
   expect(thumbnails()).toEqual(["Image 1"]);
   expect(document.querySelector('[aria-label="Remove notes.md"]')).not.toBeNull();
+});
+
+test("Up and Down recall the thread's earlier prompts until one is edited (PLX-325)", async () => {
+  const { box, type, press } = render(async () => undefined, caps, {
+    history: ["first", "second\nline two"],
+  });
+  const shown = () => box.editor!.getText({ blockSeparator: "\n" });
+  await press("ArrowUp");
+  expect(shown()).toBe("second\nline two");
+  await press("ArrowUp");
+  expect(shown()).toBe("first");
+  await press("ArrowUp");
+  expect(shown()).toBe("first");
+  await press("ArrowDown");
+  expect(shown()).toBe("second\nline two");
+  await press("ArrowDown");
+  expect(shown()).toBe("");
+  // An edited prompt is the user's own, so the arrows leave it be.
+  await press("ArrowUp");
+  type("!");
+  await press("ArrowUp");
+  expect(shown()).toBe("second\nline two!");
+});
+
+test("a recalled prompt sends as it was first sent, Markdown and all (PLX-325)", async () => {
+  const prompt = "**all** of `it`\n- one\n- two";
+  const onSend = vi.fn(async () => undefined);
+  const { press } = render(onSend, caps, { history: [prompt] });
+  await press("ArrowUp");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(prompt, {}, [], []);
+});
+
+// plxd's lists for the `/` and `@` menus (PLX-359): Claude's own `model` is the composer's.
+const commandsResult = {
+  logId: "log-1",
+  result: {
+    commands: ["ponytail:ponytail-help", "model", "review", "code-review"].map((name) => ({
+      text: `/${name}`,
+      name,
+      description: `About ${name}`,
+    })),
+  },
+};
+const request = vi.fn(async (_host: string, method: string, _params?: unknown) =>
+  method === "agent/commands"
+    ? commandsResult
+    : method === "thread/search"
+      ? { logId: "log-1", result: { threads: [{ id: "t-flaky" }, { id: "t-docs" }] } }
+      : {
+          logId: "log-1",
+          result: { files: ["README.md", "src/lib.rs", "src/main.rs"], truncated: false },
+        },
+);
+const settle = async () => {
+  for (let i = 0; i < 5; i++) await act(async () => {});
+};
+// The composer keeps each CLI's commands while the app runs, so each test gets its own run.
+let runs = 0;
+const withMenus = async (
+  onSend: (text: string) => Promise<string | undefined>,
+  props: Partial<ComposerProps> = {},
+) => {
+  request.mockClear();
+  window.parallax = { platform: "darwin", request } as Partial<ParallaxBridge> as ParallaxBridge;
+  const runId = `run-${++runs}`;
+  const composer = render(onSend, caps, {
+    backend: "claude",
+    menus: { hostId: "local", runId },
+    ...props,
+  });
+  await settle();
+  // Typing settles too, for the lists fetched on the first `/` or `@`.
+  const type = async (text: string) => {
+    composer.type(text);
+    await settle();
+  };
+  return { ...composer, type, runId };
+};
+const options = () =>
+  [...document.querySelectorAll('[role="option"]')].map((o) => o.firstChild?.textContent);
+const highlighted = () => document.querySelector('[aria-selected="true"]')?.firstChild?.textContent;
+const loadingRow = () => document.querySelector('[role="listbox"] [role="status"]')?.textContent;
+
+test("/ lists the composer's commands, then the CLI's, filtered as typed, and picks with the keyboard (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = await withMenus(onSend);
+  await type("/");
+  expect(options()).toEqual([
+    "/model",
+    "/effort",
+    "/permissions",
+    "/ponytail:ponytail-help",
+    "/review",
+    "/code-review",
+  ]);
+  // Names that start with it, then names that contain it.
+  await type("rev");
+  expect(options()).toEqual(["/review", "/code-review"]);
+  expect(highlighted()).toBe("/review");
+  await press("ArrowDown");
+  expect(highlighted()).toBe("/code-review");
+  await press("Tab");
+  expect(box.textContent).toBe("/code-review ");
+  expect(options()).toEqual([]);
+  await type("the diff");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("/code-review the diff", expect.anything(), [], []);
+});
+
+test("commands are fetched on the first /, once per host, backend, and run, with a loading row meanwhile (PLX-359)", async () => {
+  let answer: (result: typeof commandsResult) => void = () => {};
+  request.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+  const { type, runId } = await withMenus(async () => undefined);
+  expect(request).not.toHaveBeenCalled();
+  await type("/");
+  expect(request).toHaveBeenCalledExactlyOnceWith("local", "agent/commands", {
+    backend: "claude",
+    runId,
+  });
+  // The composer's own commands show at once.
+  expect(options()).toEqual(["/model", "/effort", "/permissions"]);
+  expect(loadingRow()).toBe("Loading commands…");
+  await act(async () => answer(commandsResult));
+  expect(options()).toHaveLength(6);
+  expect(loadingRow()).toBeUndefined();
+  act(() => unmount());
+
+  // Opening the thread again lists them without starting the CLI.
+  request.mockClear();
+  const again = await withMenus(async () => undefined, {
+    menus: { hostId: "local", runId },
+  });
+  await again.type("/");
+  expect(request).not.toHaveBeenCalled();
+  expect(options()).toHaveLength(6);
+});
+
+test("/model opens the composer's model picker instead of reaching the CLI (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = await withMenus(onSend);
+  const opened = vi.fn();
+  document.querySelector('[aria-label^="Model:"]')!.addEventListener("click", opened);
+  await type("/mod");
+  expect(options()).toEqual(["/model"]);
+  await press("Enter");
+  expect(opened).toHaveBeenCalledOnce();
+  expect(box.textContent).toBe("");
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+test("@ lists the thread's files, fetched again on each new @, and inserts @path (PLX-359)", async () => {
+  const { box, type, press, runId } = await withMenus(async () => undefined);
+  expect(request).not.toHaveBeenCalled();
+  await type("see @main");
+  expect(request).toHaveBeenCalledExactlyOnceWith("local", "repo/files", { runId });
+  expect(options()).toEqual(["src/main.rs"]);
+  await press("Enter");
+  expect(box.textContent).toBe("see @src/main.rs ");
+
+  // A file the agent made since: the last list shows until the new one arrives.
+  let answer: (files: string[]) => void = () => {};
+  request.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = (files) => resolve({ logId: "log-1", result: { files, truncated: false } });
+      }),
+  );
+  await type("and @src/");
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(options()).toEqual(["src/lib.rs", "src/main.rs"]);
+  expect(loadingRow()).toBeUndefined();
+  await act(async () => answer(["src/lib.rs", "src/main.rs", "src/new.rs"]));
+  expect(options()).toEqual(["src/lib.rs", "src/main.rs", "src/new.rs"]);
+});
+
+test("Esc closes the menu, Enter then sends, and a plxd without composerMenus shows none (PLX-359)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = await withMenus(onSend);
+  await type("/rev");
+  await press("Escape");
+  expect(options()).toEqual([]);
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("/rev", expect.anything(), [], []);
+  act(() => unmount());
+
+  const { type: typeAgain } = await withMenus(onSend, { menus: undefined });
+  await typeAgain("/");
+  expect(request).not.toHaveBeenCalled();
+  expect(options()).toEqual([]);
+});
+
+// The host's threads, for attaching (PLX-378): the open one, and three others on two providers.
+const hostThreads = (self: string, max = 8): AttachThreads => {
+  const thread = (id: string, lastPromptAt: string) => ({
+    id,
+    repo: "r",
+    createdAt: lastPromptAt,
+    lastPromptAt,
+  });
+  const run = (id: string, backend: string) => ({ id, backend }) as AgentRun;
+  return {
+    hostId: "local",
+    state: {
+      ...emptyThreads,
+      threads: [
+        thread("t-flaky", "2026-10-01T10:00:00Z"),
+        thread("t-docs", "2026-10-03T10:00:00Z"),
+        thread(self, "2026-10-03T11:00:00Z"),
+        thread("t-ci", "2026-10-02T10:00:00Z"),
+      ],
+      titles: {
+        "t-flaky": "Fix the flaky test",
+        "t-docs": "Write the docs",
+        "t-ci": "Speed up CI",
+      },
+      runs: { "t-flaky": run("t-flaky", "codex"), "t-docs": run("t-docs", "claude") },
+    },
+    open: vi.fn(),
+    max,
+    self,
+  };
+};
+const rows = () => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent);
+const groups = () =>
+  [...document.querySelectorAll('[role="listbox"] [role="presentation"]')].map(
+    (g) => g.textContent,
+  );
+const chips = () =>
+  [...document.querySelectorAll("form [data-thread-chip]")].map((c) => c.textContent);
+
+test("@ lists the host's threads above the files: its newest, then what thread/search finds, and attaches one as a chip (PLX-378)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = await withMenus(onSend, { attach: hostThreads("run-self") });
+  // With nothing typed, the newest, but not the open thread, with how long ago each was prompted.
+  vi.useFakeTimers({ now: Date.parse("2026-10-03T12:00:00Z"), toFake: ["Date"] });
+  await type("@");
+  expect(groups()).toEqual(["Threads", "Files"]);
+  expect(rows()).toEqual([
+    "Write the docs2h",
+    "Speed up CI1d",
+    "Fix the flaky test2d",
+    "README.md",
+    "src/lib.rs",
+    "src/main.rs",
+  ]);
+  expect(request).not.toHaveBeenCalledWith("local", "thread/search", expect.anything());
+
+  // Typed, plxd's matches, and files only under their own heading.
+  await type("flaky");
+  expect(request).toHaveBeenCalledWith("local", "thread/search", { query: "flaky" });
+  expect(rows()).toEqual(["Fix the flaky test2d", "Write the docs2h"]);
+  await press("Enter");
+  expect(box.textContent).toBe("");
+  expect(chips()).toEqual(["Thread · 2dFix the flaky test"]);
+
+  // An attached thread isn't offered again, and its chip comes off.
+  await type("@docs");
+  expect(rows()).toEqual(["Write the docs2h"]);
+  await press("Enter");
+  act(() =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Remove Fix the flaky test"]')!.click(),
+  );
+  expect(chips()).toEqual(["Thread · 2hWrite the docs"]);
+  await type("summarize it");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("summarize it", expect.anything(), [], ["t-docs"]);
+  expect(chips()).toEqual([]);
+});
+
+// Drops a sidebar row's drag of thread `runId` on host `hostId` on the composer.
+const drop = (hostId: string, runId: string) => {
+  const data = new DataTransfer();
+  dragThread(data, hostId, runId);
+  // happy-dom's DragEvent takes no dataTransfer.
+  const event = (type: string) =>
+    Object.defineProperty(new Event(type, { bubbles: true }), "dataTransfer", { value: data });
+  const form = document.querySelector("form")!;
+  act(() => {
+    form.dispatchEvent(event("dragover"));
+    form.dispatchEvent(event("drop"));
+  });
+};
+
+test("a sidebar row dropped on the box attaches its thread once, but not another computer's, the open one, or past the cap (PLX-378)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = await withMenus(onSend, { attach: hostThreads("run-self", 2) });
+  drop("local", "t-flaky");
+  drop("local", "t-flaky");
+  drop("local", "run-self");
+  expect(chips()).toHaveLength(1);
+  expect(chips()[0]).toContain("Fix the flaky test");
+  expect(alert()).toBeUndefined();
+
+  drop("ssh-box", "t-docs");
+  expect(alert()).toBe("A thread on another computer can't be attached here.");
+  drop("local", "t-docs");
+  drop("local", "t-ci");
+  expect(alert()).toBe("A message takes at most 2 attached threads.");
+  expect(chips()).toHaveLength(2);
+
+  await type("compare these");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "compare these",
+    expect.anything(),
+    [],
+    ["t-flaky", "t-docs"],
+  );
+  act(() => unmount());
+
+  // Without the capability, neither a drop nor `@` attaches anything.
+  const without = await withMenus(onSend);
+  drop("local", "t-flaky");
+  await without.type("@flaky");
+  expect(chips()).toEqual([]);
+  expect(request).not.toHaveBeenCalledWith("local", "thread/search", expect.anything());
+});
+
+test("a provider turned off in Settings leaves the menu, and a new thread starts on the next", async () => {
+  setCliEnabled("claude", false);
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend, caps, { newThread: true, backend: "claude" });
+  const menu = document.getElementById(
+    document.querySelector('[aria-label="Model: GPT-6.1 Sol"]')!.getAttribute("popovertarget")!,
+  )!;
+  expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Claude"]')!.disabled).toBe(true);
+  type("Hello");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "Hello",
+    expect.objectContaining({
+      model: "gpt-6.1-sol",
+      account: { kind: "subscription", backend: "codex" },
+    }),
+    [],
+    [],
+  );
+  setCliEnabled("claude", true);
 });

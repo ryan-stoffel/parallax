@@ -30,20 +30,29 @@ use crate::{
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
-    AgentApproveParams, AgentApproveResult, AgentCancelParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams,
-    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult,
-    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams,
-    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    AgentApproveParams, AgentApproveResult, AgentAutoResumeParams, AgentCancelParams,
+    AgentCommandsParams, AgentCommandsResult, AgentCommitParams, AgentDiffParams, AgentDiffResult,
+    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams,
+    AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
+    AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
+    AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams,
+    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
     ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, HostHealthParams, HostHealthResult,
-    HostVersionParams, HostVersionResult, InitializeParams, InitializeResult, ProjectCreateParams,
-    ProjectCreateResult, ProjectListParams, ProjectListResult, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult, PromptImage, RepoAddParams, RepoAddResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, GithubInstallParams, GithubSignIn,
+    GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
+    GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
+    HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
+    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, PrActParams,
+    PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest, RepoAddParams,
+    RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
     RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult,
+    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -149,12 +158,26 @@ method_table! {
         /// `accounts/refresh`: like `accounts/list`, but always probes again instead of using the
         /// cache. Gated on the `agentClis` capability.
         AccountsRefresh = "accounts/refresh": AccountsRefreshParams => AccountsRefreshResult;
+        /// `providers/list`: this host's provider instances (0040), each with its detected state
+        /// and models. May answer from a short-lived cache unless `refresh` is set. Gated on the
+        /// `providers` capability.
+        ProvidersList = "providers/list": ProvidersListParams => ProvidersListResult;
+        /// `providers/save`: adds an instance, or replaces the one with its id, and returns every
+        /// instance. A secret variable sent without a value keeps its stored one.
+        ProvidersSave = "providers/save": ProvidersSaveParams => ProvidersListResult;
+        /// `providers/remove`: removes an instance the user added, and its secrets, and returns
+        /// every instance. Fails with `invalidParams` for a built-in one.
+        ProvidersRemove = "providers/remove": ProvidersRemoveParams => ProvidersListResult;
         /// `usage/get`: per-account tokens and cost for today and this week (local time on this
         /// host), and the latest limit windows.
         UsageGet = "usage/get": UsageGetParams => UsageGetResult;
         /// `usage/history`: tokens and cost since a time, summed per UTC hour, account, and
         /// model, and each account's run count over the same range.
         UsageHistory = "usage/history": UsageHistoryParams => UsageHistoryResult;
+        /// `usage/daily`: every Claude Code, Codex, and Cursor session's tokens and cost on this
+        /// host since a local day, per local day, agent, and model (0039), and each source that
+        /// failed.
+        UsageDaily = "usage/daily": UsageDailyParams => UsageDailyResult;
         /// `accounts/defaults/get`: this host's default account for the coordinator role and for
         /// a worker role, absent where none is set (#119).
         AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
@@ -192,8 +215,13 @@ method_table! {
         /// capability, like every review method.
         AgentDiff = "agent/diff": AgentDiffParams => AgentDiffResult;
         /// `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
-        /// size-capped, for a diff editor.
+        /// size-capped, for a diff editor. Its `working` side, behind the `files` capability,
+        /// reads the file on disk now.
         AgentFile = "agent/file": AgentFileParams => AgentFileResult;
+        /// `agent/files`: one folder of a run's worktree, or a Current checkout thread's
+        /// checkout, without `.git` or what git ignores, for browsing (RYA-296). Gated on the
+        /// `files` capability.
+        AgentFiles = "agent/files": AgentFilesParams => AgentFilesResult;
         /// `agent/accept`: merges a run's commit into the project repository's current branch on
         /// the host, fast-forward when possible, then removes its worktree and branch. Never
         /// pushes. Idempotent on its client-generated id.
@@ -205,6 +233,13 @@ method_table! {
         /// a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
         /// `openPr` capability.
         AgentOpenPr = "agent/openPr": AgentOpenPrParams => AgentOpenPrResult;
+        /// `agent/gitStatus`: the git state of a run's folder (RYA-298). Gated on the `git`
+        /// capability, like `agent/commit` and `agent/push`.
+        AgentGitStatus = "agent/gitStatus": AgentGitStatusParams => GitStatus;
+        /// `agent/commit`: stages everything in a finished run's folder and commits it.
+        AgentCommit = "agent/commit": AgentCommitParams => GitStatus;
+        /// `agent/push`: pushes a finished run's branch to `origin`, setting its upstream.
+        AgentPush = "agent/push": AgentPushParams => GitStatus;
         /// `agent/approve`: answers a run's permission request, from its `approvalRequested`
         /// item, by allowing or denying the tool call (RYA-222, decision 0031). Idempotent on the
         /// request. Gated on the `approvals` capability.
@@ -219,10 +254,15 @@ method_table! {
         /// scratch repository of its own when no repo is given. Idempotent on its
         /// client-generated run id.
         ThreadStart = "thread/start": ThreadStartParams => ThreadStartResult;
+        /// `thread/fork`: a new thread that continues a thread's conversation from one of its
+        /// turns, in a workspace of the same kind (0050). Idempotent on its client-generated
+        /// run id. Gated on the `threadFork` capability.
+        ThreadFork = "thread/fork": ThreadForkParams => ThreadStartResult;
         /// `thread/archive`: archives a normal thread or brings it back.
         ThreadArchive = "thread/archive": ThreadArchiveParams => ThreadArchiveResult;
-        /// `thread/update`: marks a normal thread seen or snoozes it (0033). Gated on the
-        /// `threadAttention` capability.
+        /// `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the
+        /// `threadAttention` capability, or sets its title or settled flag (0041), gated on
+        /// `threadLineage`.
         ThreadUpdate = "thread/update": ThreadUpdateParams => ThreadUpdateResult;
         /// `repo/update`: sets a repo entry's icon (0033). Gated on the `threadAttention`
         /// capability.
@@ -239,6 +279,67 @@ method_table! {
         /// it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
         /// `projectEdit` capability, like `Project.icon`.
         ProjectUpdate = "project/update": ProjectUpdateParams => ProjectUpdateResult;
+        /// `repo/refs`: a repo entry's local and remote-tracking branches, for picking the ref a
+        /// thread starts from. Gated on the `repoRefs` capability.
+        RepoRefs = "repo/refs": RepoRefsParams => RepoRefsResult;
+        /// `pr/view`: one of a run's linked pull requests as GitHub has it now, read with `gh`
+        /// (PLX-318). Gated on the `pullRequests` capability, like `pr/act`.
+        PrView = "pr/view": PrViewParams => PullRequest;
+        /// `pr/act`: merges, squashes, sets auto-merge on or off, drafts, readies, or closes one
+        /// of a run's linked pull requests with `gh`, and returns it as it is after.
+        PrAct = "pr/act": PrActParams => PullRequest;
+        /// `pr/diff`: one of a run's linked pull requests' unified diff, read with `gh pr diff`
+        /// and cut at a size cap (PLX-328). Gated on the `prDiff` capability.
+        PrDiff = "pr/diff": PrViewParams => PrDiffResult;
+        /// `pr/link`: links a GitHub pull request URL to a run, unless it already is, and reports
+        /// the run as `agent.updated` (0041). Fails with `invalidParams` for another URL. Gated
+        /// on the `threadTools` capability, like `pr/unlink`.
+        PrLink = "pr/link": PrViewParams => AgentRunResult;
+        /// `pr/unlink`: removes a pull request URL from a run's links. Unlinking one that isn't
+        /// linked changes nothing.
+        PrUnlink = "pr/unlink": PrViewParams => AgentRunResult;
+        /// `project/delete`: deletes a project with every run in it, stopping their CLIs first
+        /// (PLX-338). Fails with `projectNotFound` for an unknown project or a repo entry's id.
+        /// Gated on the `projectDelete` capability.
+        ProjectDelete = "project/delete": ProjectDeleteParams => ProjectDeleteResult;
+        /// `agent/commands`: a CLI's own slash commands and skills, for the composer's `/` menu
+        /// (PLX-359). Gated on the `composerMenus` capability, like `repo/files`.
+        AgentCommands = "agent/commands": AgentCommandsParams => AgentCommandsResult;
+        /// `repo/files`: a thread's files that git tracks or doesn't ignore, capped, for the
+        /// composer's `@` menu.
+        RepoFiles = "repo/files": RepoFilesParams => RepoFilesResult;
+        /// `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
+        /// github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
+        /// `githubStatus` capability.
+        GithubStatusGet = "github/status": GithubStatusParams => GithubStatus;
+        /// `thread/search`: the host's threads whose messages contain a query, the one with the
+        /// newest message first (PLX-372). Gated on the `threadContext` capability.
+        ThreadSearch = "thread/search": ThreadSearchParams => ThreadSearchResult;
+        /// `agent/resumeNow`: resumes a run waiting for its usage limit to reset now (PLX-371,
+        /// decision 0049). Gated on the `autoResume` capability, like `agent/autoResume` and
+        /// `host/settings/*`.
+        AgentResumeNow = "agent/resumeNow": AgentResumeNowParams => AgentRunResult;
+        /// `agent/autoResume`: sets or clears a run's auto-resume override.
+        AgentAutoResume = "agent/autoResume": AgentAutoResumeParams => AgentRunResult;
+        /// `host/settings/get`: this host's settings.
+        HostSettingsGet = "host/settings/get": HostSettingsGetParams => HostSettings;
+        /// `host/settings/set`: changes this host's settings and returns them.
+        HostSettingsSet = "host/settings/set": HostSettingsSetParams => HostSettings;
+        /// `inbox/list`: a Project's inbox, oldest first, and the `seq` the list reflects (PLX-401,
+        /// 0043). Gated on the `inbox` capability, like `inbox/seen`.
+        InboxList = "inbox/list": InboxListParams => InboxListResult;
+        /// `inbox/seen`: marks items of a Project's inbox seen, and returns them as they stand.
+        InboxSeen = "inbox/seen": InboxSeenParams => InboxSeenResult;
+        /// `github/install`: starts installing `gh` into plxd's data folder, from the latest
+        /// GitHub release, and answers at once with `installing` set (PLX-423, 0050). Refused
+        /// with `githubSetupFailed` while a `gh` is found. Gated on the `githubSetup` capability,
+        /// like `github/signIn` and `github/signInCancel`.
+        GithubInstall = "github/install": GithubInstallParams => GithubStatus;
+        /// `github/signIn`: starts `gh auth login --web` and answers with its one-time code, or
+        /// the pending sign-in's. `github/status` reports it until it ends.
+        GithubSignInStart = "github/signIn": GithubSignInParams => GithubSignIn;
+        /// `github/signInCancel`: stops a pending sign-in, if there is one.
+        GithubSignInCancel = "github/signInCancel": GithubSignInCancelParams => GithubSignInCancelResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -289,8 +390,12 @@ mod tests {
                 "accounts/keys/remove",
                 "accounts/list",
                 "accounts/refresh",
+                "providers/list",
+                "providers/save",
+                "providers/remove",
                 "usage/get",
                 "usage/history",
+                "usage/daily",
                 "accounts/defaults/get",
                 "accounts/defaults/set",
                 "context/list",
@@ -304,19 +409,44 @@ mod tests {
                 "agent/image",
                 "agent/diff",
                 "agent/file",
+                "agent/files",
                 "agent/accept",
                 "agent/requestChanges",
                 "agent/openPr",
+                "agent/gitStatus",
+                "agent/commit",
+                "agent/push",
                 "agent/approve",
                 "thread/list",
                 "repo/add",
                 "thread/start",
+                "thread/fork",
                 "thread/archive",
                 "thread/update",
                 "repo/update",
                 "thread/delete",
                 "project/start",
                 "project/update",
+                "repo/refs",
+                "pr/view",
+                "pr/act",
+                "pr/diff",
+                "pr/link",
+                "pr/unlink",
+                "project/delete",
+                "agent/commands",
+                "repo/files",
+                "github/status",
+                "thread/search",
+                "agent/resumeNow",
+                "agent/autoResume",
+                "host/settings/get",
+                "host/settings/set",
+                "inbox/list",
+                "inbox/seen",
+                "github/install",
+                "github/signIn",
+                "github/signInCancel",
                 "$/cancelRequest",
                 "events/event",
             ]

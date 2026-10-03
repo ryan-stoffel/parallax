@@ -9,7 +9,7 @@
 //! themselves the same way once each is done with its copy.
 //!
 //! Anthropic's keys run on Claude Code (#116) and `OpenAI`'s on Codex (RYA-38), and both are the
-//! same arm. Cursor (RYA-40) joins it once its backend exists.
+//! same arm. Cursor keys run nowhere: Cursor runs only on its subscription (0004, 0036).
 
 use parallax_protocol::{AccountId, Provider};
 

@@ -2,6 +2,7 @@ import { expect, test } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/threads.json";
 import type {
+  AgentRun,
   EventsEventParams,
   ThreadStartResult,
   ParallaxEvent,
@@ -48,6 +49,25 @@ test("repo.added, thread.started, and project.created add entries, and repeating
   expect(state.projects).toEqual([project]);
 });
 
+test("project.deleted drops the project and its runs, and keeps the rest", () => {
+  const project = (id: string) => ({
+    id,
+    name: id,
+    repoPath: "/src/parallax",
+    createdAt: "2026-09-26T12:00:00Z",
+    updatedAt: "2026-09-26T12:00:00Z",
+  });
+  const run = (id: string, inProject: string) => ({ id, project: inProject }) as AgentRun;
+  const state: ThreadsState = {
+    ...emptyThreads,
+    projects: [project("p-1"), project("p-2")],
+    runs: { a: run("a", "p-1"), b: run("b", "p-1"), c: run("c", "p-2"), t: run("t", "r-1") },
+  };
+  const after = apply(state, { kind: "project.deleted", project: "p-1" });
+  expect(after.projects.map((p) => p.id)).toEqual(["p-2"]);
+  expect(Object.keys(after.runs)).toEqual(["c", "t"]);
+});
+
 test("project.updated replaces the project with its new name and icon, and repeating it changes nothing", () => {
   const project = {
     id: "p-1",
@@ -85,6 +105,24 @@ test("a thread's title is the first line of its run's prompt", () => {
     runs: [run],
   });
   expect(state.titles).toEqual({ [run.id]: "Fix the flaky attach test." });
+});
+
+test("a thread's own title wins over its run's, a later run list keeps it, and clearing it falls back", () => {
+  const titled = { ...started.thread, title: "Flaky attach test" };
+  let state = threadsReducer(emptyThreads, {
+    type: "snapshot",
+    projects: [],
+    repos: [],
+    threads: [titled],
+    runs: [started.run],
+  });
+  expect(state.titles[titled.id]).toBe("Flaky attach test");
+  state = threadsReducer(state, { type: "runs", runs: [started.run] });
+  expect(state.titles[titled.id]).toBe("Flaky attach test");
+  state = apply(state, { kind: "thread.updated", thread: { ...titled, title: "Renamed" } });
+  expect(state.titles[titled.id]).toBe("Renamed");
+  state = apply(state, { kind: "thread.updated", thread: started.thread });
+  expect(state.titles[titled.id]).toBe(started.run.prompt.trim().split("\n")[0]);
 });
 
 test("runs are kept by id: a later list replaces the runs it has, and keeps the rest", () => {

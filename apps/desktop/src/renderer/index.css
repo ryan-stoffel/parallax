@@ -1,13 +1,52 @@
 @import "tailwindcss";
+@import "@fontsource-variable/sora";
+
+/*! Symbols Nerd Font Mono is Nerd Fonts' icons alone (v3.4.0, https://www.nerdfonts.com), the
+   terminal's last font (Terminal.tsx): prompts' icons draw from it, and everything else from the
+   system's monospace font. Its icon sets keep their own licenses, listed at
+   https://github.com/ryanoasis/nerd-fonts/blob/master/license-audit.md. Nerd Fonts is under the
+   MIT License:
+
+   The MIT License (MIT)
+
+   Copyright (c) 2014 Ryan L McIntyre
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE. */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("./fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
+}
 
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
    (theme.ts). Components use only these tokens, never raw colors. Every
    *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
 
-   --accent is the one color a setting will change: the send button, focus
-   rings (--ring), selected states, highlights, links, and the working loaders
+   --accent is the color Settings > Appearance's preset changes (appearance.ts,
+   which sets --preset-accent-light and -dark): the send button, focus rings
+   (--ring), selected states, highlights, links, and the working loaders
    (--working) all derive from it. Text and icons on it are black or white,
-   whichever reads better, so they keep at least 4.5:1 on any accent. */
+   whichever reads better, so they keep at least 4.5:1 on any accent. The
+   preset's --mark-blue and --mark-coral are the logo's two circles.
+
+   Classes on <html> from the same settings: .contrast-more strengthens text and
+   borders, .reduce-motion stops animations (it's also set when the OS asks),
+   and .diff-blue-orange swaps red and green for blue and orange. */
 :root {
   color-scheme: light;
   --background: #ffffff;
@@ -19,7 +58,7 @@
   --border: rgb(0 0 0 / 9%);
   --hover: rgb(0 0 0 / 4.5%);
   --selected: rgb(0 0 0 / 7%);
-  --accent: #2563eb;
+  --accent: var(--preset-accent-light, #2563eb);
   /* Black or white, whichever reads better on a fill, as a channel of
      color(from <fill> srgb-linear ...): white while the fill's WCAG luminance (from its linear
      r, g, and b, clipped as the screen clips them) is under 0.1791, where the two tie at 4.58:1. */
@@ -44,6 +83,14 @@
   --warning: #d97706;
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
   --added: #15803d;
+  /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
+  --code: #f7f7f8;
+  --syntax-keyword: #cf222e;
+  --syntax-string: #0a3069;
+  --syntax-number: #0550ae;
+  --syntax-title: #8250df;
+  --syntax-type: #953800;
+  --syntax-comment: #6e7781;
   --working: var(--accent);
   /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
      each mixed into the surface so they stay opaque. Both modes compute from their own surface,
@@ -63,6 +110,10 @@
   --project-violet: #7c3aed;
   --project-pink: #db2777;
   --project-gray: #71717a;
+  /* The app's two-circle mark (logos.tsx): the brand blue and coral, and their overlap. */
+  --mark-blue: #2b5cff;
+  --mark-coral: #ff4a1f;
+  --mark-overlap: #1e1b4b;
 }
 
 :root.dark {
@@ -76,7 +127,7 @@
   --border: rgb(255 255 255 / 8%);
   --hover: rgb(255 255 255 / 4.5%);
   --selected: rgb(255 255 255 / 8%);
-  --accent: #3b82f6;
+  --accent: var(--preset-accent-dark, #3b82f6);
   /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
   --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
   --primary: #ececec;
@@ -84,6 +135,13 @@
   --danger: #ff8f8a;
   --warning: #f59e0b;
   --added: #4ade80;
+  --code: #151515;
+  --syntax-keyword: #ff7b72;
+  --syntax-string: #a5d6ff;
+  --syntax-number: #79c0ff;
+  --syntax-title: #d2a8ff;
+  --syntax-type: #ffa657;
+  --syntax-comment: #8b949e;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
   --project-red: #f87171;
   --project-orange: #fb923c;
@@ -94,10 +152,74 @@
   --project-violet: #a78bfa;
   --project-pink: #f472b6;
   --project-gray: #a1a1aa;
+  --mark-overlap: #e4e4e7;
+}
+
+/* More contrast: muted text nearer the foreground, and borders and fills that show. */
+:root.contrast-more {
+  --muted-foreground: #333333;
+  --faint-foreground: #474747;
+  --border: rgb(0 0 0 / 24%);
+  --hover: rgb(0 0 0 / 7%);
+  --selected: rgb(0 0 0 / 12%);
+}
+:root.dark.contrast-more {
+  --muted-foreground: #d4d4d4;
+  --faint-foreground: #b8b8b8;
+  --border: rgb(255 255 255 / 24%);
+  --hover: rgb(255 255 255 / 8%);
+  --selected: rgb(255 255 255 / 14%);
+}
+/* Blue for added and done, orange for removed and failed, as GitHub's color-blind themes do. */
+:root.diff-blue-orange {
+  --added: #0969da;
+  --danger: #bc4c00;
+}
+:root.dark.diff-blue-orange {
+  --added: #58a6ff;
+  --danger: #f0883e;
+}
+
+/* Tailwind's motion-safe and motion-reduce follow .reduce-motion, which also covers the OS's
+   setting (appearance.ts). */
+@custom-variant motion-safe (&:where(:root:not(.reduce-motion) *));
+@custom-variant motion-reduce (&:where(:root.reduce-motion *));
+:root.reduce-motion .animate-pulse {
+  animation: none;
+}
+
+/* Long lines in code blocks, diffs, and file previews (.code-lines) wrap under .word-wrap, from
+   Settings > Appearance, or else run on and their box (.code-scroll) scrolls. Unlayered, so they
+   win over the elements' own whitespace utilities. */
+:root.word-wrap .code-lines {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+:root:not(.word-wrap) .code-lines {
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+:root:not(.word-wrap) .code-scroll {
+  overflow-x: auto;
+}
+:root:not(.word-wrap) .code-scroll > * {
+  width: max-content;
+  min-width: 100%;
+}
+/* The monospace size from Appearance, as a zoom on the outermost code, so each keeps its size
+   relative to the rest. The terminal takes the size itself (Terminal.tsx). */
+:is(.font-mono, pre):not(:is(.font-mono, pre, .xterm) *) {
+  zoom: var(--code-zoom, 1);
 }
 
 @theme inline {
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* A font the user picked in Appearance comes first. */
+  --font-sans: var(--ui-font, -apple-system), BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono:
+    var(--code-font, ui-monospace), SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* The app's name in the sidebar. */
+  --font-brand: "Sora Variable", var(--font-sans);
   --color-background: var(--background);
   --color-sidebar: var(--sidebar);
   --color-surface: var(--surface);
@@ -117,6 +239,7 @@
   --color-danger: var(--danger);
   --color-warning: var(--warning);
   --color-added: var(--added);
+  --color-code: var(--code);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -130,6 +253,9 @@
   --color-project-violet: var(--project-violet);
   --color-project-pink: var(--project-pink);
   --color-project-gray: var(--project-gray);
+  --color-mark-blue: var(--mark-blue);
+  --color-mark-coral: var(--mark-coral);
+  --color-mark-overlap: var(--mark-overlap);
   --shadow-composer: var(--shadow-composer);
 }
 
@@ -164,13 +290,15 @@ body {
 }
 
 /* The top row doubles as the title bar on macOS and Windows (frame.ts hides
-   theirs). Linux keeps a native frame, so nothing there drags. */
+   theirs). Linux keeps a native frame, so nothing there drags. A menu opened
+   from it inherits the drag, and the window then treats every click outside
+   the menu's buttons as a drag, so none reaches the page to close it. */
 :is([data-platform="darwin"], [data-platform="win32"]) .titlebar {
   -webkit-app-region: drag;
 }
 :is([data-platform="darwin"], [data-platform="win32"])
   .titlebar
-  :is(button, a, input, select, textarea, fieldset, [role="tab"]) {
+  :is(button, a, input, select, textarea, fieldset, [role="tab"], [popover]) {
   -webkit-app-region: no-drag;
 }
 /* Room for the traffic lights, where a row starts at the window's left edge. */
@@ -196,10 +324,14 @@ body {
 .markdown :is(h1, h2, h3, h4) {
   font-weight: 600;
   line-height: 1.3;
-  margin-top: 1.25em;
+  letter-spacing: -0.01em;
+  margin-top: 1.4em;
+}
+.markdown > :is(h1, h2, h3, h4):first-child {
+  margin-top: 0;
 }
 .markdown h1 {
-  font-size: 1.3em;
+  font-size: 1.35em;
 }
 .markdown h2 {
   font-size: 1.15em;
@@ -217,36 +349,112 @@ body {
   list-style: decimal;
 }
 .markdown li + li {
-  margin-top: 0.25em;
+  margin-top: 0.3em;
+}
+.markdown li::marker {
+  color: var(--faint-foreground);
+}
+/* GitHub's task lists: the checkbox in the bullet's place. */
+.markdown .contains-task-list {
+  list-style: none;
+  padding-left: 0.1em;
+}
+.markdown .task-list-item input {
+  margin: 0 0.55em 0 0;
+  vertical-align: -0.1em;
+  accent-color: var(--accent);
 }
 .markdown a {
   color: var(--accent);
-  text-decoration: underline;
   text-underline-offset: 2px;
 }
+.markdown a:hover {
+  text-decoration: underline;
+}
 .markdown blockquote {
-  border-left: 2px solid var(--border);
+  border-left: 3px solid color-mix(in oklab, var(--foreground) 18%, transparent);
   padding-left: 0.9em;
   color: var(--muted-foreground);
 }
 .markdown :not(pre) > code {
-  border-radius: 4px;
-  background: var(--selected);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--code);
   padding: 0.1em 0.35em;
-  font-size: 0.88em;
+  font-family: var(--font-mono);
+  font-size: 0.86em;
 }
+/* A table scrolls on its own, in a rounded box, with its header on a fill. */
 .markdown table {
   display: block;
+  width: max-content;
+  max-width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
 }
 .markdown :is(th, td) {
-  border: 1px solid var(--border);
-  padding: 0.3em 0.7em;
+  padding: 0.4em 0.8em;
   text-align: left;
+}
+.markdown th {
+  background: var(--hover);
+  font-weight: 600;
+}
+.markdown tr:not(:last-child) > td,
+.markdown th {
+  border-bottom: 1px solid var(--border);
+}
+.markdown :is(th, td) + :is(th, td) {
+  border-left: 1px solid var(--border);
 }
 .markdown hr {
   border-color: var(--border);
+  margin-block: 1.5em;
+}
+
+/* Code highlighted by rehype-highlight (AgentChat.tsx), in GitHub's colors for each theme. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-meta .hljs-keyword,
+.hljs-doctag {
+  color: var(--syntax-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string {
+  color: var(--syntax-string);
+}
+.hljs-number,
+.hljs-literal,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-meta,
+.hljs-operator {
+  color: var(--syntax-number);
+}
+.hljs-title,
+.hljs-section {
+  color: var(--syntax-title);
+}
+.hljs-type,
+.hljs-built_in,
+.hljs-symbol,
+.hljs-name,
+.hljs-tag {
+  color: var(--syntax-type);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--syntax-comment);
+  font-style: italic;
 }
 
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
@@ -261,8 +469,8 @@ body {
 }
 .composer-input pre {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--sidebar);
+  border-radius: 12px;
+  background: var(--code);
   padding: 0.75rem;
   font-family: var(--font-mono);
   font-size: 12.5px;
@@ -305,18 +513,7 @@ body {
   }
 }
 
-/* The level's icon pops in whenever the level changes. */
-.effort-icon {
-  animation: effort-icon-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-@keyframes effort-icon-in {
-  from {
-    transform: scale(0.4) rotate(-20deg);
-    opacity: 0;
-  }
-}
-
-/* At Max: the thumb pops once, the fill shimmers, the track glows, and the bolt buzzes. */
+/* At Max: the thumb pops once, the fill shimmers, and the track glows. */
 @keyframes effort-shimmer {
   from {
     background-position: 200% 0;
@@ -339,18 +536,6 @@ body {
     transform: scale(1.2);
   }
 }
-@keyframes effort-buzz {
-  0%,
-  100% {
-    transform: rotate(0);
-  }
-  25% {
-    transform: rotate(-14deg) scale(1.15);
-  }
-  75% {
-    transform: rotate(10deg) scale(1.1);
-  }
-}
 .effort-full .effort-fill {
   background-image: linear-gradient(
     90deg,
@@ -367,16 +552,11 @@ body {
 .effort-full .effort-thumb {
   animation: effort-pop 0.45s ease-out;
 }
-.effort-full .effort-icon svg {
-  animation: effort-buzz 0.9s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
+:root.reduce-motion {
   .effort-fill::after,
-  .effort-icon,
   .effort-full .effort-fill,
   .effort-full .effort-track,
-  .effort-full .effort-thumb,
-  .effort-full .effort-icon svg {
+  .effort-full .effort-thumb {
     animation: none;
   }
 }
@@ -423,7 +603,7 @@ body {
     clip-path: inset(0);
   }
 }
-@media (prefers-reduced-motion: reduce) {
+:root.reduce-motion {
   .usage-rise,
   .usage-fill {
     animation: none;
@@ -490,7 +670,7 @@ body {
     translate: 0 8px;
   }
 }
-@media (prefers-reduced-motion: reduce) {
+:root.reduce-motion {
   .plan-bar {
     transition: none;
   }
@@ -954,7 +1134,7 @@ body {
 }
 
 /* Under reduced motion, loaders stand still and words just change. */
-@media (prefers-reduced-motion: reduce) {
+:root.reduce-motion {
   .loader-part {
     animation: none !important;
     opacity: 0.65 !important;
@@ -984,10 +1164,10 @@ body {
   opacity: 0.85;
 }
 .mark-blue {
-  fill: #2b5cff;
+  fill: var(--mark-blue);
 }
 .mark-coral {
-  fill: #ff4a1f;
+  fill: var(--mark-coral);
 }
 /* Each slides through the other and back; the one passing in front grows, the other shrinks. */
 .mark-working .mark-blue {
@@ -1069,7 +1249,7 @@ body {
     opacity: 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
+:root.reduce-motion {
   .mark-working :is(.mark-blue, .mark-coral),
   .mark-done-animate :is(.mark-disc, .mark-check) {
     animation: none;

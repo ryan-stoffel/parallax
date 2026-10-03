@@ -17,8 +17,10 @@
 //! failure, arrives on the stream; and `send` and `cancel` only enqueue. The price is a virtual
 //! call per start, send, or cancel, never per event.
 
+pub mod acp;
 pub mod claude;
 pub mod codex;
+pub mod commands;
 pub mod event;
 pub mod fake;
 pub mod key_account;
@@ -27,9 +29,9 @@ pub mod run_temp;
 pub mod sandbox;
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
@@ -42,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use zeroize::Zeroize;
 
+pub use self::commands::CommandsProbe;
 pub use self::event::{
     ApprovalRequest, CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus,
     LimitWindow, ModelUsage, Outcome, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
@@ -55,7 +58,7 @@ pub const EVENT_BUFFER: usize = 256;
 /// A vendor CLI that runs agents.
 pub trait Backend: Send + Sync {
     /// A short, stable name for logs and records, such as `claude`, `codex`, or `cursor`.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// What this backend can do.
     fn capabilities(&self) -> Capabilities;
@@ -80,8 +83,43 @@ pub trait Backend: Send + Sync {
     /// The [`RunRequest::permission`] values this backend maps to its CLI, all inside the worker
     /// sandbox (0013). None by default, like [`Backend::efforts`]; an absent permission always
     /// means [`AgentPermission::Edit`].
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         &[]
+    }
+
+    /// The vendor CLI it runs, which plxd checks before starting a worker on it (0013), whatever
+    /// the instance's name (0040). None by default.
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        None
+    }
+
+    /// Whether a thread on it runs as the full agent with no worker sandbox to check (0035,
+    /// 0036, 0038), and nothing else runs on it. Not by default.
+    fn full_thread(&self) -> bool {
+        false
+    }
+
+    /// The [`RunRequest::context_window`] sizes this backend maps to its CLI. None by default,
+    /// like [`Backend::efforts`].
+    fn context_windows(&self) -> &'static [u32] {
+        &[]
+    }
+
+    /// Whether this backend maps [`RunRequest::fast`] to its CLI. Not by default, like
+    /// [`Backend::efforts`].
+    fn fast_mode(&self) -> bool {
+        false
+    }
+
+    /// Starts the CLI in `cwd` to list its own slash commands and skills (PLX-359), with the
+    /// program and environment a thread on the user's own login gets, for
+    /// [`commands::list`]. `None` for a backend with no list, the default.
+    ///
+    /// # Errors
+    ///
+    /// If the CLI can't be started.
+    fn commands(&self, _cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        Ok(None)
     }
 }
 
@@ -171,13 +209,26 @@ pub struct RunRequest {
     /// How a worker may act inside its sandbox, or [`AgentPermission::Edit`]. Only a value in
     /// [`Backend::permissions`], and only for a [`ToolPolicy::WorkspaceWrite`] run.
     pub permission: Option<AgentPermission>,
+    /// The model's context window in tokens, or the CLI's default. Only a size in
+    /// [`Backend::context_windows`].
+    pub context_window: Option<u32>,
+    /// Fast mode on or off, or the CLI's default. Only for a backend with [`Backend::fast_mode`].
+    pub fast: Option<bool>,
     /// plxd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
     /// Routing drops them for every other role, and a backend refuses them on a worker.
     pub coordinator_tools: Option<CoordinatorTools>,
+    /// plxd's host-wide thread tools, for a normal thread's run only (0041). Routing drops them
+    /// for every other run, and Claude Code attaches them only to a thread that runs as full
+    /// Claude Code ([`claude::unsandboxed`]), since the server runs outside any sandbox.
+    pub thread_tools: Option<ThreadTools>,
     /// The client answers permission requests (RYA-222, 0031): a CLI that can ask before a tool
     /// call asks through [`Event::ApprovalRequested`] and [`Run::answer`]. Without it, the CLI
     /// runs as it did before, denying what would prompt.
     pub approvals: bool,
+    /// A normal thread's run (0017), which the user talks to directly. With [`Self::approvals`],
+    /// Claude Code runs it as full Claude Code in every mode, with no worker sandbox (0034);
+    /// without, it keeps the sandbox. A coordinator's subagents leave it false.
+    pub thread: bool,
 }
 
 /// How a coordinator's CLI launches `plxd mcp` (0019): the server is bound to one project and one
@@ -202,28 +253,63 @@ impl CoordinatorTools {
     ///
     /// [`StartError::Invalid`] if the program's or the data folder's path isn't UTF-8.
     pub fn mcp_config(&self) -> Result<serde_json::Value, StartError> {
-        let text = |path: &std::path::Path, what: &str| {
-            path.to_str().map(str::to_owned).ok_or_else(|| {
-                StartError::Invalid(format!("{what} {} is not UTF-8", path.display()))
-            })
-        };
-        let program = text(&self.program, "plxd's executable")?;
-        let data_dir = text(&self.data_dir, "the data folder")?;
-        Ok(serde_json::json!({
-            "mcpServers": {
-                crate::mcp::SERVER: {
-                    "type": "stdio",
-                    "command": program,
-                    "args": [
-                        "mcp",
-                        "--data-dir", data_dir,
-                        "--project", self.project.to_string(),
-                        "--coordinator-thread", self.thread.to_string(),
-                    ],
-                },
-            },
-        }))
+        let (project, thread) = (self.project.to_string(), self.thread.to_string());
+        mcp_config(
+            &self.program,
+            &self.data_dir,
+            &["--project", &project, "--coordinator-thread", &thread],
+        )
     }
+}
+
+/// How a normal thread's CLI launches `plxd mcp --thread` (0041): the server is bound to the
+/// thread's own run, which plxd sets and the model never sees or chooses, so a thread it
+/// launches records it as the parent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadTools {
+    /// The `plxd` executable that serves the tools.
+    pub program: PathBuf,
+    /// plxd's data folder, which tells `plxd mcp` where the socket is.
+    pub data_dir: PathBuf,
+    /// The thread's run: the caller of every tool.
+    pub run: RunId,
+}
+
+impl ThreadTools {
+    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`, as [`CoordinatorTools`]'s.
+    ///
+    /// # Errors
+    ///
+    /// [`StartError::Invalid`] if the program's or the data folder's path isn't UTF-8.
+    pub fn mcp_config(&self) -> Result<serde_json::Value, StartError> {
+        let run = self.run.to_string();
+        mcp_config(&self.program, &self.data_dir, &["--thread", &run])
+    }
+}
+
+/// The one stdio server `plxd mcp --data-dir <data_dir> <binding>`, as `--mcp-config` takes it.
+fn mcp_config(
+    program: &Path,
+    data_dir: &Path,
+    binding: &[&str],
+) -> Result<serde_json::Value, StartError> {
+    let text = |path: &Path, what: &str| {
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| StartError::Invalid(format!("{what} {} is not UTF-8", path.display())))
+    };
+    let mut args = vec!["mcp".to_owned(), "--data-dir".to_owned()];
+    args.push(text(data_dir, "the data folder")?);
+    args.extend(binding.iter().map(|&arg| arg.to_owned()));
+    Ok(serde_json::json!({
+        "mcpServers": {
+            crate::mcp::SERVER: {
+                "type": "stdio",
+                "command": text(program, "plxd's executable")?,
+                "args": args,
+            },
+        },
+    }))
 }
 
 /// Checks that `value`, such as a model or a session id, can be a CLI's argument: not empty,
@@ -263,6 +349,46 @@ pub fn prepend_path_line(path: &OsStr) -> Vec<u8> {
     line
 }
 
+/// What a provider instance (0040) changes about how a built-in backend starts its CLI.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Overrides {
+    /// The backend's name, the instance's id, instead of the backend's own.
+    pub name: Option<String>,
+    /// The program, a name on `PATH` or an absolute path, instead of the backend's own.
+    pub program: Option<OsString>,
+    /// The CLI's configuration folder for a subscription account that names none.
+    pub home: Option<PathBuf>,
+    /// Arguments after the backend's own.
+    pub args: Vec<OsString>,
+    /// Variables set last, after the backend's own.
+    pub env: Vec<(OsString, OsString)>,
+}
+
+impl Overrides {
+    /// `spec` with the instance's program, arguments, and variables, for a spec whose own
+    /// arguments are already set.
+    pub fn apply(&self, spec: &mut process::ProcessSpec) {
+        if let Some(program) = &self.program {
+            spec.program.clone_from(program);
+        }
+        spec.args.extend(self.args.iter().cloned());
+        for (name, value) in &self.env {
+            spec.inject.set(name, value);
+        }
+    }
+
+    /// The configuration folder for `credential`: its own, or else the instance's.
+    #[must_use]
+    pub fn config_home(&self, credential: &Credential) -> Option<PathBuf> {
+        match credential {
+            Credential::Subscription { config_home } => {
+                config_home.clone().or_else(|| self.home.clone())
+            }
+            Credential::ApiKey(_) => None,
+        }
+    }
+}
+
 /// A vendor session for a run to continue.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Resume {
@@ -273,6 +399,9 @@ pub struct Resume {
     /// run reports only what it adds, even for vendors whose totals carry over into a resumed
     /// session (Claude, Codex) and across a plxd restart. Empty for a session with no usage.
     pub usage_totals: Vec<ModelUsage>,
+    /// Continue a copy of the session under a new id, leaving it as it is: a fork's first run
+    /// (0050). Only a backend whose [`Capabilities::fork`] is set gets it.
+    pub fork: bool,
 }
 
 impl Resume {
@@ -281,6 +410,7 @@ impl Resume {
         Self {
             session_id: session_id.into(),
             usage_totals: Vec::new(),
+            fork: false,
         }
     }
 }
@@ -425,9 +555,11 @@ pub struct Capabilities {
     /// Its runs report limit windows.
     pub rate_limits: bool,
     /// It enforces the worker sandbox (0013) for a [`ToolPolicy::WorkspaceWrite`] run on this
-    /// OS, so M3's runner may start workers on it. Cursor joins once RYA-40 implements its part
-    /// of 0013.
+    /// OS, so M3's runner may start workers on it. Cursor never does: it runs only threads
+    /// (0036).
     pub worker_sandbox: bool,
+    /// [`Resume::fork`] works for a thread's run (0050).
+    pub fork: bool,
 }
 
 /// Why a run could not start.

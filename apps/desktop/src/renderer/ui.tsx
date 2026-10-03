@@ -1,6 +1,7 @@
 import { Check, ChevronDown, Search } from "lucide-react";
 import {
   Fragment,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -11,25 +12,100 @@ import {
   type ToggleEvent,
 } from "react";
 
-/** A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere. */
-export const shortcut = (keys: string) =>
-  window.parallax.platform === "darwin" ? `⌘${keys.replace("Alt+", "⌥")}` : `Ctrl+${keys}`;
+import { commandOf, keybindingOf, useShortcutLabel, type Command } from "./keybindings";
 
 /**
- * A square, icon-only toolbar button. `label` is its accessible name and tooltip; `aria-pressed`
- * shows it on.
+ * A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere, and
+ * "Shift+N" is "⌘⇧N" on macOS.
+ */
+export const shortcut = (keys: string) =>
+  window.parallax.platform === "darwin"
+    ? `⌘${keys.replace("Alt+", "⌥").replace("Shift+", "⇧")}`
+    : `Ctrl+${keys}`;
+
+/** The parts of a key press shortcuts read, from a DOM or React keyboard event. */
+export type KeyPress = Pick<
+  globalThis.KeyboardEvent,
+  "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "code" | "key" | "getModifierState"
+>;
+
+/**
+ * The app's own shortcut `e` presses, if any: a command's binding (keybindings.ts), or Mod+1 to
+ * Mod+9 a sidebar row (`rowShortcut`), which can't be rebound. App, ThreadList, and OpenMenu act
+ * on them, and a repository action's keybinding can't be one.
+ */
+export function appShortcut(e: KeyPress): Command | "row" | undefined {
+  if (rowShortcut(e) !== undefined) return "row";
+  const keybinding = keybindingOf(e);
+  return keybinding ? commandOf(keybinding) : undefined;
+}
+
+/**
+ * Whether a press in a terminal is the app's alone. On macOS every app shortcut is. Elsewhere,
+ * where they're Ctrl, a plain Ctrl+letter one (Ctrl+N, Ctrl+S) stays the shell's, which readline
+ * and editors use; the terminal's toggle, Ctrl+1 to Ctrl+9, and any with Shift or Alt are the app's.
+ */
+export function terminalAppShortcut(e: KeyPress): boolean {
+  const command = appShortcut(e);
+  if (command === undefined) return false;
+  const mac = window.parallax.platform === "darwin";
+  return mac || command === "terminal" || command === "row" || e.shiftKey || e.altKey;
+}
+
+/** The 0-based row Mod+1 to Mod+9 picks, from the digit `e` presses with Mod and nothing else. */
+export function rowShortcut(e: KeyPress): number | undefined {
+  const digit = /^Digit([1-9])$/.exec(e.code)?.[1];
+  const mod = window.parallax.platform === "darwin" ? e.metaKey : e.ctrlKey;
+  return digit && mod && !e.shiftKey && !e.altKey ? Number(digit) - 1 : undefined;
+}
+
+/** Whether Mod is held, so lists can show their Mod+1 to Mod+9 badges. */
+export function useModHeld() {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    const mod = window.parallax.platform === "darwin" ? "Meta" : "Control";
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key === mod) setHeld(e.type === "keydown");
+    };
+    // Switching apps with Cmd+Tab never sends its keyup.
+    const blur = () => setHeld(false);
+    window.addEventListener("keydown", key);
+    window.addEventListener("keyup", key);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("keyup", key);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+  return held;
+}
+
+/** The ⌘1 to ⌘9 badge on a row that Mod and its number open. */
+export function RowBadge({ index }: { index: number }) {
+  return (
+    <kbd className="shrink-0 rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+      {shortcut(String(index + 1))}
+    </kbd>
+  );
+}
+
+/**
+ * A square, icon-only toolbar button. `label` is its accessible name and tooltip, with
+ * `command`'s current shortcut; `aria-pressed` shows it on.
  */
 export function IconButton({
   label,
-  keys,
+  command,
   children,
   ...props
-}: { label: string; keys?: string } & ButtonHTMLAttributes<HTMLButtonElement>) {
+}: { label: string; command?: Command } & ButtonHTMLAttributes<HTMLButtonElement>) {
+  const keys = useShortcutLabel(command);
   return (
     <button
       type="button"
       aria-label={label}
-      title={keys ? `${label} (${shortcut(keys)})` : label}
+      title={keys ? `${label} (${keys})` : label}
       className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
       {...props}
     >
@@ -38,9 +114,25 @@ export function IconButton({
   );
 }
 
+/**
+ * Set up GitHub, beside a pull request action that failed because `gh` is missing or signed out
+ * on the host (PLX-423). It opens Settings > Source control on that host.
+ */
+export function SetUpGithub({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="shrink-0 rounded-md border border-border px-2 py-0.5 text-[12px] font-medium text-foreground hover:bg-hover"
+    >
+      Set up GitHub
+    </button>
+  );
+}
+
 /** A segmented control's option: a label around a visually hidden radio. */
 export const segment =
-  "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
+  "flex items-center gap-1.5 rounded-md whitespace-nowrap px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
 
 /**
  * A row of radios drawn as one segmented control, named by `label`. Disabled, it stays in place
@@ -59,6 +151,8 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   disabled?: boolean;
 }) {
+  // Its own radio group, even when another control on the page has the same label.
+  const name = useId();
   return (
     <fieldset
       aria-label={label}
@@ -69,7 +163,7 @@ export function Segmented<T extends string>({
         <label key={o.value} className={segment}>
           <input
             type="radio"
-            name={label}
+            name={name}
             value={o.value}
             checked={value === o.value}
             onChange={() => onChange(o.value)}
@@ -324,35 +418,66 @@ export function Picker({
 export interface Crumb {
   label: string;
   icon?: ReactNode;
-  /** Makes it a link back to that page. */
+  /**
+   * Makes it a button to that page, such as back to a coordinator or on to New thread. The last
+   * crumb with one isn't the current page.
+   */
   onClick?: () => void;
 }
 
-/** Where the user is: host, workspace, then the current page, split by slashes. */
-export function Breadcrumb({ items }: { items: Crumb[] }) {
+/**
+ * Where the user is: host, workspace, then the current page, split by slashes. `trail` follows
+ * the last crumb after a `›`, such as a thread's children (Lineage.tsx).
+ */
+export function Breadcrumb({ items, trail }: { items: Crumb[]; trail?: ReactNode }) {
   return (
-    <nav aria-label="Breadcrumb" className="min-w-0">
+    // A trail takes the room the crumbs leave, and fits itself to it. A pane too narrow even for
+    // the crumbs' minimum widths, below the default window with the side panel open, cuts them
+    // off rather than sliding them under the top bar's buttons.
+    <nav aria-label="Breadcrumb" className={`min-w-0 overflow-x-clip ${trail ? "flex-1" : ""}`}>
       <ol className="flex min-w-0 items-center gap-2 text-[13px]">
         {items.map(({ label, icon, onClick }, i) => {
           const last = i === items.length - 1;
+          const current = last && !onClick;
           const Tag = onClick ? "button" : "span";
+          // Before a trail, which asks for 8rem, the last crumb keeps to 14rem and gives way last:
+          // the first and then the crumbs between give way first, so the trail keeps room for a
+          // chip, or at least +N.
+          const room = last
+            ? trail
+              ? "max-w-56 min-w-16"
+              : ""
+            : i === 0
+              ? "max-w-48 min-w-10 shrink-[100]"
+              : trail
+                ? "max-w-48 min-w-10 shrink-[10]"
+                : "max-w-48 shrink-0";
           return (
-            // The slash is CSS content, so it stays out of the crumb's text.
+            // The slash is CSS content, so it stays out of the crumb's text. Crumbs before the
+            // last are cut short at 12rem, and the first, such as a computer's name, gives way
+            // first when there's no room, so it never pushes the rest under the top bar's buttons.
             <li
               key={i}
-              className={`flex min-w-0 items-center gap-2 ${last ? "" : "shrink-0"} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""}`}
+              className={`flex min-w-0 items-center gap-2 ${room} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""}`}
             >
               <Tag
                 {...(onClick && { type: "button", onClick })}
-                aria-current={last ? "page" : undefined}
-                className={`flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${last ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "rounded-md hover:text-foreground" : ""}`}
+                aria-current={current ? "page" : undefined}
+                className={`flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${current ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "rounded-md hover:text-foreground" : ""}`}
               >
                 {icon}
-                <span className="truncate">{label}</span>
+                <span className="truncate" title={typeof label === "string" ? label : undefined}>
+                  {label}
+                </span>
               </Tag>
             </li>
           );
         })}
+        {trail && (
+          <li className="flex min-w-12 flex-[1_1_8rem] items-center gap-1.5 before:text-faint-foreground before:content-['›']">
+            {trail}
+          </li>
+        )}
       </ol>
     </nav>
   );
