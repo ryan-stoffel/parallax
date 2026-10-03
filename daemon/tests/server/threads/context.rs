@@ -1,4 +1,4 @@
-//! `thread/search` and threads attached to a message as context (PLX-372, decision 0042).
+//! `thread/search` and threads attached to a message as context (PLX-372, decision 0047).
 
 use parallax_protocol::methods::ThreadSearch;
 use parallax_protocol::{AgentOutputItem, Thread, ThreadSearchParams};
@@ -87,7 +87,10 @@ async fn an_attached_threads_summary_goes_ahead_of_the_message_and_its_turn_list
     let (host, prompts) = recording();
     let mut client = host.client().await;
     let earlier = client
-        .finished_thread(on_other("Fix the flaky attach test"))
+        .finished_thread(ThreadStartParams {
+            title: Some("Flaky attach".to_owned()),
+            ..on_other("Fix the flaky attach test")
+        })
         .await;
 
     let params = ThreadStartParams {
@@ -108,7 +111,8 @@ async fn an_attached_threads_summary_goes_ahead_of_the_message_and_its_turn_list
     client.until(completed(run)).await;
 
     let summary = format!(
-        "<thread id=\"{earlier}\">\nUser:\nFix the flaky attach test\n\nAgent:\nDone.\n</thread>"
+        "<thread id=\"{earlier}\">\nTitle: Flaky attach\nUser:\nFix the flaky attach test\n\n\
+         Agent:\nDone.\n</thread>"
     );
     let prompts = prompts.lock().unwrap().clone();
     let [_, (first, false), (follow_up, true)] = prompts.as_slice() else {

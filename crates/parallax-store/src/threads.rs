@@ -361,8 +361,8 @@ impl Store {
         Ok(threads)
     }
 
-    /// The threads whose messages contain `query`, the one with the newest message first, at
-    /// most `limit` (PLX-372). A message is the run's prompt, a sent turn's text, or the agent's
+    /// The threads whose title or messages contain `query`, the one with the newest message
+    /// first, at most `limit` (PLX-372). A message is the run's prompt, a sent turn's text, or the agent's
     /// reply: a `text` item of the run's `agent.output` events. Tool calls and their output don't
     /// count. Matching is SQLite's `LIKE`: case-insensitive for ASCII letters only.
     ///
@@ -377,7 +377,8 @@ impl Store {
         let payload_pattern = like_pattern(&escaped[1..escaped.len() - 1]);
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {THREAD_COLUMNS} FROM threads WHERE
-                EXISTS (SELECT 1 FROM runs WHERE runs.id = threads.id
+                title LIKE ?1 ESCAPE '\\'
+                OR EXISTS (SELECT 1 FROM runs WHERE runs.id = threads.id
                     AND runs.prompt LIKE ?1 ESCAPE '\\')
                 OR EXISTS (SELECT 1 FROM turns WHERE turns.run_id = threads.id
                     AND turns.text LIKE ?1 ESCAPE '\\')

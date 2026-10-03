@@ -28,7 +28,8 @@ use parallax_protocol::{
     ErrorKind, ForkedFrom, MAX_THREAD_TITLE_BYTES, ParallaxEvent, ProjectId, Repo, RepoAddParams,
     RepoAddResult, RepoId, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
     RunId, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadListResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnId,
+    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, TurnId,
 };
 use parallax_store::{RepoFields, ThreadFields, ThreadUpdate};
 use tokio_util::sync::CancellationToken;

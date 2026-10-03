@@ -298,7 +298,7 @@ pub struct ThreadStartParams {
     pub threads: Vec<RunId>,
 }
 
-/// Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0042),
+/// Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
 /// behind the `threadContext` capability.
 ///
 /// Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the

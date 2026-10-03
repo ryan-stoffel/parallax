@@ -288,7 +288,7 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
 }
 
 #[test]
-fn search_matches_prompts_turns_and_replies_but_not_tool_calls_newest_first() {
+fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls_newest_first() {
     let (_dir, mut store) = open();
     let repo = store
         .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
@@ -300,7 +300,14 @@ fn search_matches_prompts_turns_and_replies_but_not_tool_calls_newest_first() {
             ..run_fields(repo.id)
         };
         store
-            .create_thread_run(id, repo.id, &fields, &state(), Some(&worktree_fields(id)))
+            .create_thread_run(
+                id,
+                repo.id,
+                &fields,
+                &state(),
+                Some(&worktree_fields(id)),
+                &ThreadFields::default(),
+            )
             .unwrap();
         id
     };
@@ -330,6 +337,12 @@ fn search_matches_prompts_turns_and_replies_but_not_tool_calls_newest_first() {
         r#"[{"kind":"text","text":"The \"flaky\" attach test passes now"}]"#,
     );
     let tool_only = thread(&mut store, "Read the logs");
+    let titled = thread(&mut store, "Go");
+    let title = ThreadUpdate {
+        title: Some(Some("Quarantine the attach test".to_owned())),
+        ..ThreadUpdate::default()
+    };
+    store.update_thread(titled, &title).unwrap();
     output(
         &mut store,
         2,
@@ -362,6 +375,11 @@ fn search_matches_prompts_turns_and_replies_but_not_tool_calls_newest_first() {
         "`_` is literal, not a wildcard"
     );
     assert_eq!(ids(&store, "flaky", 1), [replied], "the limit holds");
+    assert_eq!(
+        ids(&store, "attach test", 10),
+        [titled, replied, prompted],
+        "a title matches"
+    );
 }
 
 /// Two branches each added a migration: a database that has a newer version but is missing an

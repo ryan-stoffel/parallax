@@ -1,8 +1,8 @@
-//! Threads attached to a message as context (PLX-372, decision 0042).
+//! Threads attached to a message as context (PLX-372, decision 0047).
 //!
 //! `agent/start`, `thread/start`, and `agent/send` take `threads`, which [`check`] checks when
 //! the request arrives. Once the message reaches a CLI, [`prompt`] puts a summary of each thread
-//! ahead of the user's text: its id and what was said in it, rendered as 0014's handoff renders a
+//! ahead of the user's text: its id, its title, and what was said in it, rendered as 0014's handoff renders a
 //! conversation, without tool calls, and cut from the front to [`SUMMARY_BYTES`]. The transcript
 //! keeps the user's own text, and the message's `turnStarted` lists the threads.
 
@@ -76,11 +76,24 @@ pub(super) async fn prompt(
          it, oldest first, without tool calls:\n\n",
     );
     for &id in threads {
+        let _ = writeln!(prompt, "<thread id=\"{id}\">");
+        if let Some(title) = title(daemon, id).await? {
+            let _ = writeln!(prompt, "Title: {title}");
+        }
         let summary = summary(daemon, id).await?;
-        let _ = write!(prompt, "<thread id=\"{id}\">\n{summary}\n</thread>\n\n");
+        let _ = write!(prompt, "{summary}\n</thread>\n\n");
     }
     let _ = write!(prompt, "The user's message:\n{text}");
     Ok(prompt)
+}
+
+/// Thread `id`'s title, when it has one (0041). A thread deleted since [`check`] has none.
+async fn title(daemon: &Daemon, id: RunId) -> Result<Option<String>, ErrorObject> {
+    store(daemon, move |db| {
+        let thread = db.get_thread(id.into()).map_err(|e| store_error(&e))?;
+        Ok(thread.and_then(|thread| thread.fields.title))
+    })
+    .await
 }
 
 /// Thread `id`'s conversation, cut to [`SUMMARY_BYTES`]. Its events are read newest first, a page

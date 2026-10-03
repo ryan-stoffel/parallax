@@ -1412,7 +1412,7 @@ export type AgentStartParams = {
 	approvals?: boolean,
 	/**
 	 * Threads attached to the prompt as context, by their run ids, sent only to a plxd that
-	 * advertises `threadContext` (PLX-372, decision 0042). The agent gets a summary of each ahead
+	 * advertises `threadContext` (PLX-372, decision 0047). The agent gets a summary of each ahead
 	 * of the prompt: its id and what was said in it, without tool calls, cut from the front to
 	 * the capability's `maxSummaryBytes`. At most the capability's `maxThreads`. An id that is
 	 * no thread's fails with `threadNotFound`. A retry must repeat them; plxd doesn't compare
@@ -3673,7 +3673,7 @@ export type GithubStatus = {
 };
 
 /**
- * Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0042),
+ * Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
  * behind the `threadContext` capability.
  *
  * Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the
