@@ -54,7 +54,7 @@ function nextDay(key: string): string {
   return dayKey(new Date(y, m - 1, d + 1).getTime());
 }
 
-/** What the Profile page shows of the agents every host has run. */
+/** What Settings > Account shows of the agents every host has run. */
 export interface Activity {
   /** Agents started on each local day, by `dayKey`. Days with none are left out. */
   days: Map<string, number>;

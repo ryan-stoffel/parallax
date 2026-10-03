@@ -113,6 +113,7 @@ const bridge: ParallaxBridge = {
     return () => ipcRenderer.removeListener("parallax:profile", forward);
   },
   signIn: (create) => ipcRenderer.invoke("parallax:signIn", create),
+  saveName: (firstName, lastName) => ipcRenderer.invoke("parallax:saveName", firstName, lastName),
   signOut: () => ipcRenderer.invoke("parallax:signOut"),
   storage: () => ipcRenderer.invoke("parallax:storage"),
   showFolder: (id) => ipcRenderer.invoke("parallax:showFolder", id),
