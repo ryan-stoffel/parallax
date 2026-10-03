@@ -10,7 +10,7 @@ import { IconButton } from "./ui";
  * above the button with its version, notes, and GitHub page, and starts the download, whose
  * progress the popover shows. Once downloaded, a dialog in the middle of the window asks to
  * restart, which installs it; Later leaves it to install on quit, and the button asks again.
- * Under `pnpm dev` it's the commits develop has, and a click takes them, with the answer in the
+ * Under `pnpm dev` it's the commits main has, and a click takes them, with the answer in the
  * popover. Its label carries the updater's note, such as an error.
  */
 export function UpdateButton() {

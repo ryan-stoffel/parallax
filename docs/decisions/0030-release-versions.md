@@ -1,6 +1,6 @@
 # 0030: Release versions, update metadata, and macOS signing
 
-- Status: accepted; supersedes in part [0028](0028-release-channels.md) (tags) and [0029](0029-app-packaging.md) (versions, unsigned macOS builds, one installer per OS). RYA-211 moved `plxd`'s version out of the binary and notarization after publishing (below).
+- Status: accepted; supersedes in part [0028](0028-release-channels.md) (tags) and [0029](0029-app-packaging.md) (versions, unsigned macOS builds, one installer per OS). RYA-211 moved `plxd`'s version out of the binary and notarization after publishing (below). Which commit is tagged `-nightly` is superseded by [0051](0051-promote-a-nightly.md); the version formula is unchanged.
 - Date: 2026-09-30
 - Issue: RYA-206 (absorbs RYA-205)
 

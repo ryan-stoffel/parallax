@@ -44,7 +44,7 @@ export interface ParallaxBridge {
   /**
    * Packaged: installs the downloaded release and relaunches, else downloads the available one,
    * else checks now. A packaged app follows its own build's channel (0028): a nightly follows
-   * nightly releases, any other build Latest. Under `pnpm dev`: moves the checkout to develop and
+   * nightly releases, any other build Latest. Under `pnpm dev`: moves the checkout to main and
    * rebuilds what changed; the app then reloads itself. Resolves to one line for people, such as
    * "Up to date" or why it failed.
    */
