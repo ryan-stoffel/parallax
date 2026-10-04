@@ -921,6 +921,94 @@ test("Create Project's icon follows the Workspace's host: an icon only where tha
   expect(hostsOf("project/create")).toEqual([mini.id, "local"]);
 });
 
+const modeChoice = (within: Element) =>
+  [...within.querySelectorAll<HTMLInputElement>('input[type="radio"]')].filter((r) =>
+    ["auto", "bypass"].includes(r.value),
+  );
+const pickMode = (within: Element, mode: "auto" | "bypass") =>
+  click(modeChoice(within).find((r) => r.value === mode));
+
+test("with projectPermission, Create Project shows the disclaimer, starts on Auto every time, and sends the mode, which is part of a retry", async () => {
+  capabilities = { projectPermission: {} };
+  let fails = 1;
+  answers["project/create"] = (p) =>
+    fails-- > 0
+      ? { error: { code: -32000, message: "not a repository" } }
+      : { result: { project: { ...project("parallax", "2026-09-29T12:00:00Z"), id: p["id"] } } };
+  await renderApp();
+  await openNewProject();
+  const text = dialog().textContent!;
+  // Why, what it lets agents do, that Bypass has no second check, and which providers need it.
+  expect(text).toContain("stops at its first command until someone answers");
+  expect(text).toContain(
+    "edit files, run commands, use the network, and push with your credentials",
+  );
+  expect(text).toContain("no second check");
+  expect(text).toContain(
+    "Cursor, Grok Build, Hermes Agent, and the Ollama Cloud, OpenRouter, and local model providers need it",
+  );
+  expect(modeChoice(dialog()).map((r) => [r.value, r.checked])).toEqual([
+    ["auto", true],
+    ["bypass", false],
+  ]);
+
+  await click(inDialog("Create Project"));
+  await pickMode(dialog(), "bypass");
+  await click(inDialog("Create Project"));
+  const [first, second] = calls("project/create");
+  expect(first).toEqual({
+    id: expect.any(String),
+    name: "parallax",
+    repoPath: "/src/parallax",
+    permission: "auto",
+  });
+  // A new mode is a new try, with a new id.
+  expect(second).toEqual({ ...first, id: expect.any(String), permission: "bypass" });
+  expect(second!["id"]).not.toBe(first!["id"]);
+  expect(dialog().open).toBe(false);
+
+  // It shows again on Auto.
+  await openNewProject();
+  expect(modeChoice(dialog()).find((r) => r.checked)?.value).toBe("auto");
+});
+
+test("without projectPermission, Create Project shows no mode and sends none, and a row has no Permissions…", async () => {
+  capabilities = { projectEdit: {} };
+  await renderApp();
+  expect(menuItem("ember", "Permissions…")).toBeUndefined();
+  await openNewProject();
+  expect(modeChoice(dialog())).toEqual([]);
+  expect(dialog().textContent).not.toContain("no second check");
+});
+
+test("Permissions… opens on the Project's mode with the same disclaimer, and Save sends the new one", async () => {
+  capabilities = { projectPermission: {} };
+  answers["project/list"] = () => ({
+    result: {
+      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), permission: "bypass" }],
+      seq: 7,
+    },
+  });
+  answers["project/update"] = (p) => ({
+    result: {
+      project: { ...project("ember", "2026-09-26T12:00:00Z"), permission: p["permission"] },
+    },
+  });
+  await renderApp();
+  const settings = projectRow("ember").querySelector<HTMLDialogElement>(
+    'dialog[aria-label="ember permissions"]',
+  )!;
+  await click(menuItem("ember", "Permissions…"));
+  expect(settings.open).toBe(true);
+  expect(settings.textContent).toContain("stops at its first command until someone answers");
+  expect(modeChoice(settings).find((r) => r.checked)?.value).toBe("bypass");
+
+  await pickMode(settings, "auto");
+  await click([...settings.querySelectorAll("button")].find((b) => b.textContent === "Save"));
+  expect(settings.open).toBe(false);
+  expect(calls("project/update")).toEqual([{ project: "p-ember", permission: "auto" }]);
+});
+
 /** A Project's coordinator run, as `project/start` answers it (0024). */
 const coordinatorRun = (id: string, prompt: string): AgentRun => ({
   id,
