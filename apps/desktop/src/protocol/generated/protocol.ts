@@ -3706,8 +3706,8 @@ export type ProjectStartParams = {
 	 */
 	images?: Array<PromptImage>,
 	/**
-	 * Forward the coordinator's permission requests to the client, as `agent/start` takes it.
-	 * The runs it spawns forward theirs too.
+	 * Ignored: plxd starts the coordinator as if it were set, as it does every Project child,
+	 * since the inbox answers its permission requests (0042).
 	 */
 	approvals?: boolean,
 };

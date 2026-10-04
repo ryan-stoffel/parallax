@@ -45,7 +45,9 @@ pub(crate) async fn start(
         // It runs in the project's mode instead (0042).
         permission: _,
         images,
-        approvals,
+        // It asks through the inbox, as every Project child does (0042), and so gets plxd's tools
+        // on Codex and ACP, which attach them only with `approvals`.
+        approvals: _,
     } = params;
     let _starting = daemon.agents.start_guard(run_id).await;
     // An unknown project has no mode, and fails below with `projectNotFound`.
@@ -71,7 +73,7 @@ pub(crate) async fn start(
         permission: options.permission.and_then(option_name),
         context_window: None,
         fast: None,
-        approvals,
+        approvals: true,
         checkout: false,
         explore: false,
     };

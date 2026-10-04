@@ -3,6 +3,7 @@
 //! in a detached worktree at the integration branch's tip, in the project's permission mode
 //! (0042).
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,6 +22,7 @@ use parallax_protocol::{
     Provider, RepoAddParams, RepoId, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
+use plxd::backend::process::{Environment, Launcher};
 use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
@@ -30,7 +32,7 @@ use crate::agents::{
     Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params, real_repo,
     send_params, subscribe, text, until, updated_to,
 };
-use crate::support::{PATIENCE, kind, temp_dir};
+use crate::support::{InProcess, PATIENCE, kind, temp_dir};
 
 /// The fake backend, keeping every request it is asked to start.
 struct Recording {
@@ -584,9 +586,8 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
     host.server.stop().await;
 }
 
-/// PLX-222 (0031): a coordinator whose client answers permission requests keeps `approvals` when
-/// it resumes. One started without them, as an older app starts it, never asks. Every child asks
-/// either way, since the inbox answers (0042).
+/// PLX-222 (0031): a coordinator keeps `approvals` when it resumes. One started without them, as
+/// an older app starts it, asks too (PLX-473), as every child does, since the inbox answers (0042).
 #[tokio::test]
 async fn approvals_last_through_a_resume_and_every_child_has_them() {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -628,7 +629,7 @@ async fn approvals_last_through_a_resume_and_every_child_has_them() {
         .await
         .unwrap()
         .run;
-    assert!(!nth_launch(&seen, 2).await.approvals);
+    assert!(nth_launch(&seen, 2).await.approvals);
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let quiet_subagent = spawn(&mut client, &quiet, "Add a license.").await;
 
@@ -641,6 +642,80 @@ async fn approvals_last_through_a_resume_and_every_child_has_them() {
     };
     assert_eq!(launched(subagent), Some(true));
     assert_eq!(launched(quiet_subagent), Some(true));
+    host.server.stop().await;
+}
+
+/// A `codex app-server` stand-in for one turn, in the Codex backend's fixture format: it answers
+/// `initialize`, `thread/start`, and `turn/start`, then completes the turn.
+const CODEX_TURN: &str = r#"<
+{"id":1,"result":{"userAgent":"plxd/0.159.3","codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-1","sessionId":"t-1","preview":"","ephemeral":false,"modelProvider":"openai","model":"gpt-6-sol","status":{"type":"idle"},"turns":[]},"model":"gpt-6-sol","modelProvider":"openai","cwd":"/repo","approvalPolicy":"on-request","sandbox":{"type":"readOnly"},"reasoningEffort":"high"}}
+<
+{"id":3,"result":{"turn":{"id":"u-1","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}
+{"method":"turn/completed","params":{"threadId":"t-1","turn":{"id":"u-1","items":[],"itemsView":"summary","status":"completed","error":null,"startedAt":1790919494,"completedAt":1790919501,"durationMs":7424}}}
+"#;
+
+/// PLX-473: a Codex coordinator started without `approvals` still gets plxd's MCP server, which
+/// app-server attaches only with them, so it can launch threads.
+#[tokio::test]
+async fn a_codex_coordinator_started_without_approvals_gets_plxds_tools() {
+    let dir = temp_dir();
+    let root = dir.path().canonicalize().unwrap();
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let codex = bin.join("codex");
+    std::fs::write(
+        &codex,
+        include_str!("../../src/backend/codex/fixtures/fake-app-server.sh"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fixture = root.join("conversation.jsonl");
+    std::fs::write(&fixture, CODEX_TURN).unwrap();
+    let mut environment = Environment::empty();
+    environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+    environment.set("FAKE_CODEX_DIR", root.display().to_string());
+    environment.set("FAKE_CODEX_FIXTURE", fixture.display().to_string());
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Openai,
+        Arc::new(plxd::backend::codex::CodexBackend::new(Launcher::new(
+            DataDir::new(&root).unwrap(),
+            environment.clone(),
+        ))),
+    );
+    let mut config = InProcess::config(&root);
+    config.agent_environment = Some(environment);
+    config.backends = Some(backends);
+    let host = Host {
+        dir,
+        server: InProcess::start(config),
+    };
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(&root)).await;
+    subscribe(&mut client, project.id, 0).await;
+
+    let run = client
+        .call::<ProjectStart>(ProjectStartParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "codex".to_owned(),
+            }),
+            ..start_params(project.id, "Plan.")
+        })
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let start = std::fs::read_to_string(root.join("stdin"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|message| message["method"] == "thread/start")
+        .expect("plxd started a thread");
+    let args = &start["params"]["config"]["mcp_servers.plxd.args"];
+    assert_eq!(args[4], run.id.to_string(), "bound to its own run: {args}");
     host.server.stop().await;
 }
 

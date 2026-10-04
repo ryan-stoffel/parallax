@@ -284,8 +284,8 @@ pub struct ProjectStartParams {
     /// Images for the first message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
-    /// Forward the coordinator's permission requests to the client, as `agent/start` takes it.
-    /// The runs it spawns forward theirs too.
+    /// Ignored: plxd starts the coordinator as if it were set, as it does every Project child,
+    /// since the inbox answers its permission requests (0042).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
 }
