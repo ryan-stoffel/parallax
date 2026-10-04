@@ -13,19 +13,22 @@ import type { RunOptions } from "./models";
 import { accountOptions, defaultBackend } from "./NewThread";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
+import { appShortcut } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
 /**
  * A Project's coordinator chat (0024). Until its first message the Project introduces itself, and
  * sending starts the coordinator. From then on it is the coordinator run's `AgentChat`, so replies,
  * Stop, and the transcript work as a thread's do. Either way the Project's unread inbox (0043) sits
- * at the top, on a plxd with `inbox`. Key it by host and Project.
+ * at the top, on a plxd with `inbox`. On a plxd with `projectTasks`, its composer sends a New task,
+ * which starts a child, or Ask, which goes to the coordinator (0042). Key it by host and Project.
  */
 export function ProjectChat({
   hostId,
   project,
   prompt,
   startCoordinator,
+  startTask,
   others,
   onOpenRun,
 }: {
@@ -34,6 +37,7 @@ export function ProjectChat({
   /** The coordinator's first message, shown until its transcript loads. */
   prompt?: string;
   startCoordinator: ThreadsView["startCoordinator"];
+  startTask: ThreadsView["startTask"];
   /** Permission requests the Project's subagents wait on, pinned over the composer (PLX-196). */
   others?: readonly Asked[];
   /** Opens a run's chat, as an inbox item links to its child. */
@@ -58,6 +62,21 @@ export function ProjectChat({
   const [notice, setNotice] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
   const [backend, setBackend] = useState<string>();
+  const tasks = connected && "projectTasks" in connection.capabilities;
+  // The worker default's backend, a New task's, as New Thread's.
+  const [taskBackend, setTaskBackend] = useState<string>();
+  // The composer's target, New task until switched, kept as the coordinator starts.
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (!tasks) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (appShortcut(e) !== "projectTarget") return;
+      e.preventDefault();
+      setAsking((a) => !a);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [tasks]);
   // Before there's a coordinator, subagents started by hand still ask here (PLX-196).
   const { answers, answer, dismiss } = useAnswers(hostId);
   const asked = useMemo(() => queueOf(others ?? [], answers), [others, answers]);
@@ -65,10 +84,11 @@ export function ProjectChat({
     if (!connected) return;
     let live = true;
     void defaultBackend(hostId, "coordinator").then((b) => live && setBackend(b));
+    if (tasks) void defaultBackend(hostId, "worker").then((b) => live && setTaskBackend(b));
     return () => {
       live = false;
     };
-  }, [hostId, connected]);
+  }, [hostId, connected, tasks]);
 
   // The Project's repository and branch, which the coordinator runs in (0027).
   const tab = (
@@ -114,6 +134,24 @@ export function ProjectChat({
     return error && describeError(error);
   };
 
+  // A New task never waits on the coordinator, so the box is free for the next one at once.
+  const newTask = tasks
+    ? {
+        backend: taskBackend,
+        asking,
+        onAsking: setAsking,
+        onSend: async (
+          text: string,
+          options: RunOptions,
+          images: PromptImage[],
+          threads: string[],
+        ) => {
+          const error = await startTask(project.id, uuidv7(), text, images, options, threads);
+          return error && describeError(error);
+        },
+      }
+    : undefined;
+
   if (project.coordinator)
     return (
       <>
@@ -130,6 +168,7 @@ export function ProjectChat({
           startOver={(text, options, images) => start(uuidv7(), text, options, images)}
           others={others}
           projectMode={project.permission}
+          newTask={newTask}
         />
       </>
     );
@@ -186,6 +225,7 @@ export function ProjectChat({
           // The coordinator asks only through a plxd that sends its requests.
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
           projectMode={project.permission}
+          newTask={newTask}
         />
       </div>
     </>

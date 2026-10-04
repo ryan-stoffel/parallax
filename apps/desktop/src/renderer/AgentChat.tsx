@@ -166,6 +166,7 @@ export function AgentChat({
   startOver,
   others,
   projectMode,
+  newTask,
   pullRequests,
   onPrOpened,
   onSetUpGithub,
@@ -209,6 +210,8 @@ export function AgentChat({
   others?: readonly Asked[];
   /** The Project's permission mode, shown in place of Access, for a run in a Project (0042). */
   projectMode?: ComposerProps["projectMode"];
+  /** A Project coordinator's New task target, for its composer's toggle (0042). */
+  newTask?: ComposerProps["newTask"];
   /** The run tab's link to its linked pull requests (PLX-319), in place of Open PR. */
   pullRequests?: ReactNode;
   /** Opens the pull request Open PR opened, in place of linking to it. */
@@ -616,6 +619,7 @@ export function AgentChat({
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
           projectMode={projectMode}
+          newTask={newTask}
           insert={compose && !compose.send ? compose.text : undefined}
           menus={
             connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined

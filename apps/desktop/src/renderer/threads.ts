@@ -376,6 +376,19 @@ export interface ThreadsView {
     images: PromptImage[],
     options: CoordinatorOptions,
   ) => Promise<RpcError | undefined>;
+  /**
+   * Starts a child of Project `project` with `prompt` (0042): `thread/start` with `project`, behind
+   * `projectTasks`. plxd answers at once, and the child joins the Project's runs. Resolves to
+   * plxd's error, or undefined.
+   */
+  startTask: (
+    project: string,
+    runId: string,
+    prompt: string,
+    images: PromptImage[],
+    options: RunOptions,
+    attached: string[],
+  ) => Promise<RpcError | undefined>;
   /** Whether the host's plxd keeps seen and snooze state and repo icons (`threadAttention`, 0033). */
   attention: boolean;
   /** Whether the host's plxd renames Projects and sets their icons (`projectEdit`, 0032). */
@@ -727,6 +740,32 @@ export function useThreads(
     [hostId, approvals],
   );
 
+  const startTask = useCallback(
+    async (
+      project: string,
+      runId: string,
+      prompt: string,
+      images: PromptImage[],
+      options: RunOptions,
+      attached: string[],
+    ) => {
+      const answer = await window.parallax.request(hostId, "thread/start", {
+        runId,
+        project,
+        prompt,
+        ...(images.length > 0 && { images }),
+        ...(attached.length > 0 && { threads: attached }),
+        ...options,
+      });
+      if ("error" in answer) return answer.error;
+      if (shown.current !== hostId) return undefined;
+      dispatch({ type: "runs", runs: [answer.result.run] });
+      dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
+      return undefined;
+    },
+    [hostId],
+  );
+
   const update = useCallback(
     async (runId: string, change: ThreadChange) => {
       const answer = await window.parallax.request(hostId, "thread/update", { runId, ...change });
@@ -770,6 +809,7 @@ export function useThreads(
       updateProject,
       removeProject,
       startCoordinator,
+      startTask,
     }),
     [
       state,
@@ -792,6 +832,7 @@ export function useThreads(
       updateProject,
       removeProject,
       startCoordinator,
+      startTask,
     ],
   );
 }
@@ -838,6 +879,7 @@ export const idleThreads: ThreadsView = {
   updateProject: async () => notConnected,
   removeProject: async () => notConnected,
   startCoordinator: async () => ({ code: -32000, message: notConnected }),
+  startTask: async () => ({ code: -32000, message: notConnected }),
   update: async () => notConnected,
   updateRepo: async () => notConnected,
 };

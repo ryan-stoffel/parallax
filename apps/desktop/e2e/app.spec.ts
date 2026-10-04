@@ -306,7 +306,9 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Back to app" }).click();
 
-  // The last test left the ember project open.
+  // The last test left the ember project open. Ask sends to the coordinator, in place of the
+  // default New task (0042).
+  await page.getByRole("group", { name: "Send as" }).getByText("Ask", { exact: true }).click();
   const message = page.getByRole("textbox", { name: "Message" });
   await message.fill("Plan the ember release");
   await page.getByRole("button", { name: "Send" }).click();

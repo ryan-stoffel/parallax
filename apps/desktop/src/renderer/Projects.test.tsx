@@ -1085,6 +1085,8 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   // Claude's models and permission modes: a coordinator runs in the mode it's given (0027).
   expect(button("Model: Claude Opus 5.5")).not.toBeNull();
   expect(button("Access: Accept Edits")).not.toBeNull();
+  // Without projectTasks every message goes to the coordinator, with no New task.
+  expect(document.querySelector('main fieldset[aria-label="Send as"]')).toBeNull();
 
   type("Add a dark mode");
   await click(button("Send"));
@@ -1572,6 +1574,114 @@ const pinned = () => document.querySelector('main section[aria-label="Approval r
 const pinnedButton = (name: string) =>
   [...(pinned()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === name);
 const asking = (run: AgentRun): AgentRun => ({ ...run, approvals: true });
+
+/** `thread/start` with `project` answering with the Project's new child (0042). */
+const startsTask = (p: Record<string, unknown>) => {
+  const run = subagent(p["runId"] as string, p["prompt"] as string, {
+    coordinatorThread: undefined,
+  });
+  return { result: { run, thread: { id: run.id, repo: "p-ember", createdAt: run.createdAt } } };
+};
+// The Project composer's New task / Ask toggle (0042), and which is on.
+const target = () => document.querySelector('main fieldset[aria-label="Send as"]');
+const targetOn = () => target()?.querySelector("input:checked")?.parentElement?.textContent;
+// The default Switch New task and Ask, Cmd+. on macOS.
+const flipTarget = () =>
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Period", key: ".", metaKey: true }));
+  });
+
+test("with projectTasks, New task is the default: Enter starts a child through thread/start with the composer's picks, and the box is free at once", async () => {
+  capabilities = { coordinator: {}, projectTasks: {} };
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  let release = () => {};
+  answers["thread/start"] = async (p) => {
+    await new Promise<void>((resolve) => (release = resolve));
+    return startsTask(p);
+  };
+  await renderApp();
+  await openEmber();
+  expect(targetOn()).toBe("New task");
+  expect(target()!.parentElement!.title).toBe(
+    "New task starts a thread in the Project. Ask sends to its coordinator. (⌘.)",
+  );
+
+  type("Add a dark mode");
+  await click(button("Send"));
+  // Still in flight, and the box already takes the next one.
+  expect(composer()!.textContent).toBe("");
+  expect(composer()!.getAttribute("aria-placeholder")).toBe(
+    "Describe a change, paste an error, or drop in a plan",
+  );
+  type("Add a light mode");
+  expect(button("Send")!.disabled).toBe(false);
+  await act(async () => release());
+  await settle();
+  expect(calls("thread/start")).toEqual([
+    {
+      runId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7/),
+      project: "p-ember",
+      prompt: "Add a dark mode",
+      model: "claude-opus-5-5",
+      effort: "high",
+      permission: "edit",
+    },
+  ]);
+  expect(calls("project/start")).toEqual([]);
+
+  // The child shows in the Project's side panel.
+  await click(button("Show side panel"));
+  await click(
+    [...document.querySelectorAll("#side-panel button")].find((b) =>
+      b.textContent?.startsWith("Agents"),
+    ),
+  );
+  expect(agentRows()[0]).toMatch(/^Add a dark mode/);
+});
+
+test("the shortcut flips the Project composer to Ask, which starts and then messages the coordinator, and back to New task in its chat", async () => {
+  capabilities = { coordinator: {}, projectTasks: {} };
+  let started: AgentRun | undefined;
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  answers["project/start"] = (p) => {
+    started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
+    return { result: { run: started } };
+  };
+  answers["agent/events"] = serveEvents(() => [started]);
+  answers["agent/send"] = () => ({ result: { run: started } });
+  answers["thread/start"] = startsTask;
+  await renderApp();
+  await openEmber();
+  flipTarget();
+  expect(targetOn()).toBe("Ask");
+  type("How should we split this?");
+  await click(button("Send"));
+  expect(calls("project/start")).toEqual([
+    expect.objectContaining({ project: "p-ember", prompt: "How should we split this?" }),
+  ]);
+  expect(transcript()).toContain("I'll plan it.");
+
+  // The coordinator's chat keeps Ask, so a follow-up goes to it.
+  expect(targetOn()).toBe("Ask");
+  type("Which is riskier?");
+  await click(button("Send"));
+  expect(calls("agent/send")).toEqual([
+    { runId: started!.id, turnId: expect.any(String), text: "Which is riskier?" },
+  ]);
+  flipTarget();
+  expect(targetOn()).toBe("New task");
+  type("Add a dark mode");
+  await click(button("Send"));
+  expect(calls("thread/start")).toEqual([
+    expect.objectContaining({ project: "p-ember", prompt: "Add a dark mode" }),
+  ]);
+  expect(calls("agent/send")).toHaveLength(1);
+  expect(calls("project/start")).toHaveLength(1);
+});
 
 test("with approvals, a coordinator and a subagent started here ask plxd to forward their requests", async () => {
   capabilities = { coordinator: {}, approvals: {} };
