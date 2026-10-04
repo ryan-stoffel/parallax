@@ -342,7 +342,7 @@ impl Server {
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
         let store = StoreHandle::open(&data_dir.store_file());
-        let reader = StoreHandle::open_reader(&data_dir.store_file());
+        let reader = store.open_reader(&data_dir.store_file());
         let keys = keystore::system_store();
         let providers = Providers::load(data_dir.root(), keys.clone(), &launcher, &backends);
         let daemon = Arc::new(Daemon {
@@ -625,7 +625,7 @@ impl Daemon {
         );
         let worktrees = WorktreeManager::new(launcher.clone(), dir);
         let store = StoreHandle::open(&dir.join("plxd.sqlite3"));
-        let reader = StoreHandle::open_reader(&dir.join("plxd.sqlite3"));
+        let reader = store.open_reader(&dir.join("plxd.sqlite3"));
         let keys: Arc<dyn KeyStore> = Arc::new(crate::keystore::MemoryKeyStore::new());
         let backends = BackendRegistry::new();
         let providers = Providers::load(dir, Arc::clone(&keys), &launcher, &backends);

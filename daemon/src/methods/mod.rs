@@ -387,3 +387,83 @@ pub(crate) fn success(id: RequestId, result: &impl Serialize) -> Response {
         Err(error) => Response::error(Some(id), ErrorObject::internal_error(error)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use parallax_protocol::jsonrpc::Request;
+    use parallax_protocol::methods::{HostSettingsSet, RequestMethod, ThreadSearch};
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{Context, Reply, dispatch};
+    use crate::server::Daemon;
+
+    /// Answers `M` with `params` through the dispatcher, as a connection would.
+    async fn call<M: RequestMethod>(daemon: Arc<Daemon>, params: serde_json::Value) -> M::Result {
+        let context = Context {
+            daemon,
+            cancel: CancellationToken::new(),
+            stopped_reading: CancellationToken::new(),
+        };
+        let request = Request {
+            id: 1.into(),
+            method: M::NAME.to_owned(),
+            params: Some(params),
+        };
+        let Reply::Response(response) = dispatch(context, request).await else {
+            panic!("expected a response");
+        };
+        response.into_result().unwrap()
+    }
+
+    /// `thread/search` runs on the reader, so while the reader is busy the search waits and a
+    /// write doesn't (PLX-457). The blocked job stands in for a slow search.
+    #[tokio::test]
+    async fn a_busy_reader_holds_up_search_but_not_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let reader = Arc::clone(&daemon);
+        let blocked = tokio::spawn(async move {
+            reader
+                .reader
+                .run(&CancellationToken::new(), move |_| {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+            .await
+            .unwrap();
+
+        let search = tokio::spawn(call::<ThreadSearch>(
+            Arc::clone(&daemon),
+            json!({ "query": "notes" }),
+        ));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!search.is_finished(), "the search waits for the reader");
+
+        let settings = tokio::time::timeout(
+            Duration::from_secs(10),
+            call::<HostSettingsSet>(Arc::clone(&daemon), json!({ "autoResume": false })),
+        )
+        .await
+        .expect("the write doesn't wait for the reader");
+        assert!(!settings.auto_resume);
+        assert!(!search.is_finished(), "the reader is still busy");
+
+        release_tx.send(()).unwrap();
+        blocked.await.unwrap().unwrap();
+        let found = tokio::time::timeout(Duration::from_secs(10), search)
+            .await
+            .expect("the search answers once the reader is free")
+            .unwrap();
+        assert!(found.threads.is_empty());
+    }
+}

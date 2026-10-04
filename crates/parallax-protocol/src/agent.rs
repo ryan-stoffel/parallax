@@ -965,7 +965,8 @@ pub struct AgentListParams {
 pub struct AgentListResult {
     /// The runs, oldest first.
     pub runs: Vec<AgentRun>,
-    /// The `seq` of the last event the list reflects, to subscribe after.
+    /// The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+    /// list may already reflect some events after it, and replaying them is harmless.
     pub seq: u64,
 }
 

@@ -70,7 +70,7 @@ The editor and `plxd` need one protocol, whether `plxd` runs on this Mac or on a
 - **Event log:** every state change goes into one event log, numbered by a daemon-wide `seq`.
   - From M3 the log is stored in SQLite (#58).
   - `logId` changes only when the log starts over, such as after a wiped data folder or after an M1 restart that loses an in-memory log.
-- **Subscribing:** snapshot methods such as `project/list` return the `seq` they reflect. `events/subscribe {after, project?}` replays newer events, then streams live `events/event` notifications: `{subscription, seq, time, project?, event: {kind, ...}}`. Without `project`, it gets host-level events such as `project.created`.
+- **Subscribing:** snapshot methods such as `project/list` return the event log's `seq` from before they read, so they may already reflect some events after it, and replaying those is harmless (PLX-457). `events/subscribe {after, project?}` replays newer events, then streams live `events/event` notifications: `{subscription, seq, time, project?, event: {kind, ...}}`. Without `project`, it gets host-level events such as `project.created`.
 - **Several clients:** any number of connections may attach, each with its own subscriptions, and plxd broadcasts every change to all of them.
 - **Resuming:** after a reconnect, the editor resubscribes from its last `seq`. It reloads its snapshots instead if `logId` changed, or if plxd answers `resyncRequired` because the history is gone or too long to replay. From M3, `agent/output` rebuilds a running agent's transcript after a resync.
 - **Backpressure:** each connection has a bounded outbound queue.

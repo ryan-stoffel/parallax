@@ -173,7 +173,8 @@ pub struct ProjectListParams {}
 pub struct ProjectListResult {
     /// Every project, oldest first.
     pub projects: Vec<Project>,
-    /// The `seq` of the last event the snapshot reflects. Subscribe with `after` set to it.
+    /// The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+    /// list may already reflect some events after it, and replaying them is harmless.
     pub seq: u64,
 }
 

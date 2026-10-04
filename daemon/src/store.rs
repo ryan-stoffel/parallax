@@ -127,10 +127,14 @@ impl StoreHandle {
         Self::start(path, Store::open(path), "plxd-store")
     }
 
-    /// Opens a read-only connection to the store that [`StoreHandle::open`] opened at `path`, on
-    /// a thread of its own: the daemon's `reader`, for lists and search.
+    /// Opens a read-only connection to this store's file at `path`, on a thread of its own: the
+    /// daemon's `reader`, for lists and search. Unavailable when this store is, so a database this
+    /// build can't migrate (a newer schema, say) is never read either.
     // ponytail: one read thread, so reads queue behind each other; a pool if that shows up.
-    pub fn open_reader(path: &Path) -> Self {
+    pub fn open_reader(&self, path: &Path) -> Self {
+        if self.state() != StoreState::Ok {
+            return Self::unavailable();
+        }
         Self::start(path, Store::open_read_only(path), "plxd-store-read")
     }
 
@@ -877,7 +881,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plxd.sqlite3");
         let store = StoreHandle::open(&path);
-        let reader = StoreHandle::open_reader(&path);
+        let reader = store.open_reader(&path);
         let log = Arc::new(EventLog::new(10));
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
@@ -923,12 +927,44 @@ mod tests {
         reader.stop().await;
     }
 
+    /// A database from a newer build: the writer won't open it, so the reader doesn't either and
+    /// lists fail as unavailable instead of reading a schema this build doesn't know.
+    #[tokio::test]
+    async fn the_reader_is_unavailable_when_the_writer_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let first = StoreHandle::open(&path);
+        first.stop().await;
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (1000000, 'now')",
+                [],
+            )
+            .unwrap();
+
+        let store = StoreHandle::open(&path);
+        let reader = store.open_reader(&path);
+        assert_eq!(store.state(), StoreState::Unavailable);
+        assert_eq!(reader.state(), StoreState::Unavailable);
+        let error = reader
+            .run(&CancellationToken::new(), |db| {
+                db.list_projects().map_err(|error| store_error(&error))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.message,
+            "Internal error: the project store is unavailable"
+        );
+    }
+
     #[tokio::test]
     async fn the_reader_refuses_writes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plxd.sqlite3");
         let store = StoreHandle::open(&path);
-        let reader = StoreHandle::open_reader(&path);
+        let reader = store.open_reader(&path);
         let (id, fields) = fields(ProjectCreateParams {
             id: ProjectId::generate(),
             name: "n".to_owned(),

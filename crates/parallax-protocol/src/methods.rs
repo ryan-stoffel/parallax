@@ -140,7 +140,7 @@ method_table! {
         /// `host/version`: plxd's release and protocol versions, operating system, and CPU
         /// architecture.
         HostVersion = "host/version": HostVersionParams => HostVersionResult;
-        /// `project/list`: every project, and the `seq` the list reflects.
+        /// `project/list`: every project, and the event log's `seq` from before the read.
         ProjectList = "project/list": ProjectListParams => ProjectListResult;
         /// `project/create`: creates a project, idempotent on its client-generated id.
         ProjectCreate = "project/create": ProjectCreateParams => ProjectCreateResult;
@@ -209,7 +209,8 @@ method_table! {
         AgentSend = "agent/send": AgentSendParams => AgentRunResult;
         /// `agent/cancel`: stops a running agent. Does nothing to a run that isn't running.
         AgentCancel = "agent/cancel": AgentCancelParams => AgentRunResult;
-        /// `agent/list`: every run, or one project's, and the `seq` the list reflects.
+        /// `agent/list`: every run, or one project's, and the event log's `seq` from before the
+        /// read.
         AgentList = "agent/list": AgentListParams => AgentListResult;
         /// `agent/events`: one run's events from plxd's log, a page at a time.
         AgentEvents = "agent/events": AgentEventsParams => AgentEventsResult;
@@ -250,8 +251,8 @@ method_table! {
         /// item, by allowing or denying the tool call (PLX-222, decision 0031). Idempotent on the
         /// request. Gated on the `approvals` capability.
         AgentApprove = "agent/approve": AgentApproveParams => AgentApproveResult;
-        /// `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
-        /// (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
+        /// `thread/list`: every repo entry and normal thread, and the event log's `seq` from before
+        /// the read (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
         ThreadList = "thread/list": ThreadListParams => ThreadListResult;
         /// `repo/add`: registers a repository on the host for normal threads, idempotent on its
         /// client-generated id and on its path.
@@ -331,8 +332,8 @@ method_table! {
         HostSettingsGet = "host/settings/get": HostSettingsGetParams => HostSettings;
         /// `host/settings/set`: changes this host's settings and returns them.
         HostSettingsSet = "host/settings/set": HostSettingsSetParams => HostSettings;
-        /// `inbox/list`: a Project's inbox, oldest first, and the `seq` the list reflects (PLX-401,
-        /// 0043). Gated on the `inbox` capability, like `inbox/seen`.
+        /// `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
+        /// read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
         InboxList = "inbox/list": InboxListParams => InboxListResult;
         /// `inbox/seen`: marks items of a Project's inbox seen, and returns them as they stand.
         InboxSeen = "inbox/seen": InboxSeenParams => InboxSeenResult;
