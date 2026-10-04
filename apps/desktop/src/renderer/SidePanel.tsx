@@ -1,4 +1,5 @@
 import {
+  Brain,
   FolderTree,
   GitCompare,
   GitPullRequest,
@@ -46,6 +47,12 @@ const surfaces: Surface[] = [
     empty: { title: "No shared context", hint: "Only a Project's agents share context." },
   },
   {
+    name: "Memory",
+    icon: Brain,
+    key: "M",
+    empty: { title: "No memory here", hint: "A Project or a thread in a repository has memory." },
+  },
+  {
     name: "Agents",
     icon: Workflow,
     key: "A",
@@ -79,7 +86,7 @@ const surfaces: Surface[] = [
  * a view keeps its state behind another. The top bar keeps the hide button where the main pane
  * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
  * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents`,
- * `context`, and `files` are those views, such as a Project's, in place of their empty states.
+ * `context`, `memory`, and `files` are those views, such as a Project's, in place of their empty states.
  * `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal view,
  * told whether it's shown and given its empty state. Each new `browse` opens the Browser
  * view at its url. `pullRequests` are the open thread's linked pull requests (PLX-319): its URLs,
@@ -95,6 +102,7 @@ export function SidePanel({
   topBarClassName = "",
   agents,
   context,
+  memory,
   remoteHost,
   terminal,
   files,
@@ -110,6 +118,7 @@ export function SidePanel({
   topBarClassName?: string;
   agents?: ReactNode;
   context?: ReactNode;
+  memory?: ReactNode;
   remoteHost?: string;
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
   files?: ReactNode;
@@ -167,6 +176,8 @@ export function SidePanel({
       agents
     ) : s.name === "Context" && context ? (
       context
+    ) : s.name === "Memory" && memory ? (
+      memory
     ) : s.name === "Terminal" && terminal ? (
       terminal(open && s === current, emptyOf(s))
     ) : s.name === "Files" && files ? (
