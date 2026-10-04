@@ -1,7 +1,7 @@
 import { PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { Thread } from "../protocol/generated/protocol";
+import type { InboxItem, Thread } from "../protocol/generated/protocol";
 import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import type { Asked } from "./Approval";
@@ -21,7 +21,7 @@ import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } fr
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { attentionOf } from "./attention";
-import { useSnoozeAlarms } from "./alarms";
+import { useNeedsYouAlarm, useSnoozeAlarms } from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
@@ -241,6 +241,9 @@ export function App() {
     setOpening(undefined);
   };
   useSnoozeAlarms(listed, (hostId, threadId) => openOnHost(hostId, { kind: "thread", threadId }));
+  const needsYou = useNeedsYouAlarm(listed, (hostId, projectId) =>
+    openOnHost(hostId, { kind: "project", projectId }),
+  );
 
   // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
   const lineage = threads.lineage && openThread ? lineageOf(threads.state, openThread) : undefined;
@@ -412,7 +415,7 @@ export function App() {
   return (
     <div className="flex h-full">
       {hosts.map((h) => (
-        <HostLoader key={h.id} hostId={h.id} onView={report} />
+        <HostLoader key={h.id} hostId={h.id} onView={report} onNeedsYou={needsYou} />
       ))}
       {window.parallax.updatable && <UpdateToast />}
       <NewThreadPicker
@@ -596,6 +599,7 @@ export function App() {
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
                   startCoordinator={threads.startCoordinator}
                   others={othersAsked(project.coordinator)}
+                  onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
                 />
               )
             )}
@@ -698,9 +702,11 @@ export function App() {
 function HostLoader({
   hostId,
   onView,
+  onNeedsYou,
 }: {
   hostId: string;
   onView: (hostId: string, view: ThreadsView) => void;
+  onNeedsYou: (hostId: string, projectId: string, item: InboxItem) => void;
 }) {
   const connection = useConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
@@ -710,9 +716,11 @@ function HostLoader({
     editable: !!capabilities && "projectEdit" in capabilities,
     deletable: !!capabilities && "projectDelete" in capabilities,
     moded: !!capabilities && "projectPermission" in capabilities,
+    autonomous: !!capabilities && "projectAutonomy" in capabilities,
     iconImageBytes: iconImageBytes(connection),
     lineage: !!capabilities && "threadLineage" in capabilities,
     autoResume: !!capabilities && "autoResume" in capabilities,
+    onNeedsYou: (projectId, item) => onNeedsYou(hostId, projectId, item),
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;

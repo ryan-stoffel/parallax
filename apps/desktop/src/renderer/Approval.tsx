@@ -599,9 +599,9 @@ function Context({ request }: { request: ApprovalRequest }) {
 // composer or out of the card's border.
 const pinnedMaxHeight = "45vh";
 
-const quietButton =
+export const quietButton =
   "h-7 shrink-0 rounded-md px-2.5 text-[12.5px] text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50";
-const outlineButton =
+export const outlineButton =
   "h-7 shrink-0 rounded-md border border-border px-2.5 text-[12.5px] text-foreground enabled:hover:bg-hover disabled:opacity-50";
 const approveButton =
   "h-7 shrink-0 rounded-md bg-send px-3 text-[12.5px] font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";

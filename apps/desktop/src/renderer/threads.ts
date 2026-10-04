@@ -7,6 +7,7 @@ import type {
   Project,
   ProjectIcon as ProjectIconValue,
   ProjectPermission,
+  InboxItem,
   ProjectStartParams,
   ProjectUpdateParams,
   PromptImage,
@@ -383,6 +384,8 @@ export interface ThreadsView {
   deletable: boolean;
   /** Whether the host's plxd keeps a Project's permission mode (`projectPermission`, 0042). */
   moded: boolean;
+  /** Whether the host's plxd keeps a Project's autonomy (`projectAutonomy`, 0043). */
+  autonomous: boolean;
   /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
   iconImageBytes?: number;
   /** Whether the host's plxd keeps threads' parents and titles (`threadLineage`, 0041). */
@@ -401,7 +404,7 @@ export interface ThreadsView {
 /** What `thread/update` changes. */
 export type ThreadChange = { seen?: boolean; snoozedUntil?: string };
 
-/** What `project/update` changes: a project's name, icon, or permission mode. */
+/** What `project/update` changes: a project's name, icon, permission mode, or autonomy. */
 export type ProjectChange = Omit<ProjectUpdateParams, "project">;
 
 /** What a new coordinator runs on: its model, effort, permission, and account (`project/start`'s). */
@@ -418,7 +421,8 @@ export type CoordinatorOptions = Pick<
  * `approvals`, the threads and coordinators started here forward their permission requests
  * (PLX-196, 0031); with `lineage`, a thread's generated title goes to plxd (0041), and titles kept
  * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`, and
- * `lineage`, and `autoResume` are passed through for the sidebar and top bar.
+ * `lineage`, and `autoResume` are passed through for the sidebar and top bar. A Project's new Needs
+ * you inbox item (0043) goes to `onNeedsYou`.
  */
 export function useThreads(
   hostId: string,
@@ -429,16 +433,27 @@ export function useThreads(
     editable = false,
     deletable = false,
     moded = false,
+    autonomous = false,
     iconImageBytes,
     lineage = false,
     autoResume = false,
+    onNeedsYou,
   }: Partial<
     Pick<
       ThreadsView,
-      "attention" | "editable" | "deletable" | "moded" | "iconImageBytes" | "lineage" | "autoResume"
+      | "attention"
+      | "editable"
+      | "deletable"
+      | "moded"
+      | "autonomous"
+      | "iconImageBytes"
+      | "lineage"
+      | "autoResume"
     >
   > & {
     approvals?: boolean;
+    /** Called for each new Needs you item in one of the host's Projects' inboxes (0043). */
+    onNeedsYou?: (project: string, item: InboxItem) => void;
   } = {},
 ): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
@@ -455,6 +470,10 @@ export function useThreads(
   useEffect(() => {
     shown.current = hostId;
   }, [hostId]);
+  const needsYou = useRef(onNeedsYou);
+  useEffect(() => {
+    needsYou.current = onNeedsYou;
+  });
 
   useEffect(() => {
     if (!connected) return;
@@ -470,7 +489,11 @@ export function useThreads(
         window.parallax.subscribe(hostId, { after, project: scope, logId }, (message) => {
           if (stopped) return;
           if (message.type === "resync") return void load();
-          if (message.type === "event") dispatch({ type: "scope", events: [message.event] });
+          if (message.type !== "event") return;
+          dispatch({ type: "scope", events: [message.event] });
+          const { event } = message.event;
+          if (event.kind === "inbox.added" && event.item.kind === "needsYou")
+            needsYou.current?.(scope, event.item);
         }),
       );
     };
@@ -733,6 +756,7 @@ export function useThreads(
       editable,
       deletable,
       moded,
+      autonomous,
       iconImageBytes,
       lineage,
       autoResume,
@@ -754,6 +778,7 @@ export function useThreads(
       editable,
       deletable,
       moded,
+      autonomous,
       iconImageBytes,
       lineage,
       autoResume,
@@ -802,6 +827,7 @@ export const idleThreads: ThreadsView = {
   editable: false,
   deletable: false,
   moded: false,
+  autonomous: false,
   lineage: false,
   autoResume: false,
   addRepo: async () => notConnected,
