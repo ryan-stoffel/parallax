@@ -37,11 +37,12 @@ import type {
 import { lastPrompt } from "./attention";
 import { EffortMenu } from "./EffortMenu";
 import { imageUrl, readImage, type ImageCaps } from "./images";
+import { useShortcutLabel } from "./keybindings";
 import { ModelMenu } from "./ModelMenu";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
-import { menuButton, menuItem, Picker, type PickerOption } from "./ui";
+import { menuButton, menuItem, Picker, Segmented, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
@@ -358,6 +359,18 @@ export interface ComposerProps {
    */
   projectMode?: ProjectPermission;
   /**
+   * A Project's New task target, on a plxd with `projectTasks` (0042): a New task / Ask toggle,
+   * whose tooltip names the `projectTarget` keybinding. New task sends through this `onSend`
+   * with a new thread's options on `backend`, the worker default's; Ask is the composer as it is
+   * without it.
+   */
+  newTask?: {
+    onSend: NonNullable<ComposerProps["onSend"]>;
+    backend?: string;
+    asking: boolean;
+    onAsking: (asking: boolean) => void;
+  };
+  /**
    * Text to add at the end of the box, which takes focus, such as a pull request's URL. Each new
    * value is added once.
    */
@@ -396,28 +409,38 @@ export interface ComposerProps {
  */
 export function Composer({
   newThread,
-  onSend,
+  onSend: onAsk,
   onSendInBackground,
-  onSteer,
+  onSteer: onSteerAsk,
   onStop,
   unanswered,
   disabledReason,
   tab,
   footer,
-  backend,
-  started,
+  backend: askBackend,
+  started: askStarted,
   contextAndFast,
   hostId: host,
-  unavailable,
-  optionsDisabled,
+  unavailable: askUnavailable,
+  optionsDisabled: askOptionsDisabled,
   imageCaps,
   manualDenied,
   projectMode,
+  newTask,
   insert,
   history = [],
   menus,
   attach,
 }: ComposerProps) {
+  // A New task composer is a new thread's on the worker default; Ask is the open run's.
+  const task = !!newTask && !newTask.asking;
+  const onSend = task ? newTask.onSend : onAsk;
+  const onSteer = task ? undefined : onSteerAsk;
+  const backend = task ? newTask.backend : askBackend;
+  const started = task ? undefined : askStarted;
+  const unavailable = task ? undefined : askUnavailable;
+  const optionsDisabled = task ? undefined : askOptionsDisabled;
+  const targetKeys = useShortcutLabel(newTask ? "projectTarget" : undefined);
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
@@ -776,7 +799,7 @@ export function Composer({
 
   const placeholder =
     disabledReason ??
-    (newThread
+    (newThread || task
       ? "Describe a change, paste an error, or drop in a plan"
       : "Reply, add detail, or steer what it does next");
   // Its props are read again on every render, so its handlers see this render's state.
@@ -1097,6 +1120,22 @@ export function Composer({
           </div>
         )}
         <div className="flex items-center gap-0.5 px-3 pt-1 pb-3">
+          {newTask && (
+            <div
+              className="mr-1"
+              title={`New task starts a thread in the Project. Ask sends to its coordinator.${targetKeys ? ` (${targetKeys})` : ""}`}
+            >
+              <Segmented
+                label="Send as"
+                value={task ? "task" : "ask"}
+                onChange={(v) => newTask.onAsking(v === "ask")}
+                options={[
+                  { value: "task", name: "New task" },
+                  { value: "ask", name: "Ask" },
+                ]}
+              />
+            </div>
+          )}
           {run && (
             <>
               {/* A disabled fieldset turns off every control in it, and its title says why. */}

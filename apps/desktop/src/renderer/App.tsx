@@ -663,6 +663,7 @@ export function App() {
                   project={project}
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
                   startCoordinator={threads.startCoordinator}
+                  startTask={threads.startTask}
                   others={othersAsked(project.coordinator)}
                   onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
                 />
