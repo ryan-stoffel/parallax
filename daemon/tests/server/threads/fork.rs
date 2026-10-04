@@ -368,14 +368,16 @@ impl Backend for Modes {
 async fn a_fork_for_a_parent_refuses_a_mode_its_backend_cant_run() {
     use AgentPermission::{Auto, Bypass, Edit, Manual, Plan};
     let mut backends = BackendRegistry::new();
+    // Claude Code's modes, Codex's, and those of an ACP agent with no Manual. Not named after
+    // the built-in CLIs, which plxd would look for on the machine.
     for (provider, name, permissions) in [
         (
             Provider::Anthropic,
             "fake",
             &[Auto, Manual, Edit, Plan, Bypass][..],
         ),
-        (Provider::Openai, "codex", &[Auto, Manual, Edit, Bypass][..]),
-        (Provider::Cursor, "cursor", &[Auto, Edit, Bypass][..]),
+        (Provider::Openai, "other", &[Auto, Manual, Edit, Bypass][..]),
+        (Provider::Cursor, "acp", &[Auto, Edit, Bypass][..]),
     ] {
         let modes = Modes {
             name,
@@ -392,7 +394,7 @@ async fn a_fork_for_a_parent_refuses_a_mode_its_backend_cant_run() {
         .unwrap()
         .run
         .id;
-    for (mode, backend) in [(Plan, "codex"), (Manual, "cursor")] {
+    for (mode, backend) in [(Plan, "other"), (Manual, "acp")] {
         // Its own subscription, so the last thread's events don't end this one's turns.
         let mut client = host.client().await;
         let original = ThreadStartParams {
