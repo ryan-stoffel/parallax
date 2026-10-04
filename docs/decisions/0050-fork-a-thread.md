@@ -1,6 +1,6 @@
 # 0050: Forking a thread at a turn
 
-- Status: accepted; extends [0041](0041-thread-lineage-and-host-mcp.md) (it sets `forkedFrom`) and reuses [0014](0014-agent-runs.md)'s handoff
+- Status: accepted; extends [0041](0041-thread-lineage-and-host-mcp.md) (it sets `forkedFrom`) and reuses [0014](0014-agent-runs.md)'s handoff; PLX-465 added `parent`, for 0041's `thread_fork`
 - Date: 2026-10-03
 - Issue: PLX-375 (part of PLX-368)
 
@@ -16,13 +16,13 @@ Ryan wants to branch a conversation without losing the original (PLX-368). 0041 
 
 ### `thread/fork`, behind `threadFork`
 
-`thread/fork {runId, newRunId, turnId?, account?, model?}` returns `{thread, run}`, as `thread/start` does.
+`thread/fork {runId, newRunId, turnId?, account?, model?, parent?}` returns `{thread, run}`, as `thread/start` does.
 
 - **The turn.** `turnId` is a follow-up's turn id. The prompt's turn has none of its own, so the parent's run id names it. Absent means the parent's latest recorded turn. A turn the parent didn't record is `invalidParams`, and so is a turn that hasn't ended while the parent is starting or running.
 - **A fork's copied turns** aren't its own: a fork's history up to its first message is its prompt's turn, named by its run id. Forking it at a copied turn id is `invalidParams`, since the thread the turn came from can be forked at it instead.
-- **The fork** is a new thread in the parent's repo entry, with `forkedFrom` set, no `parent`, and no title. Its run has the parent's prompt, approvals, and options. It runs on `account` if given, or else on the account the parent's session is on. A fork onto another backend keeps only the options that backend maps, and the parent's model only if `model` is absent and the backend is the same.
-- **No CLI starts.** The run is recorded `completed`, where the parent's turn ended. The fork's first `agent/send` starts its CLI.
-- **Idempotent** on `newRunId`. A retry returns the fork. A run id that is anything but a fork of `runId` (at `turnId`, when given) is `idConflict`.
+- **The fork** is a new thread in the parent's repo entry, with `forkedFrom` set and no title. Its `parent` is the `parent` param, the run that asked for the fork (0041's `thread_fork`, PLX-465), which must exist (`runNotFound`) and which it wakes when its CLIs end, as a launched child does. Without it, as from the app, the fork has none. Its run has the parent's prompt, approvals, and options. It runs on `account` if given, or else on the account the parent's session is on. A fork onto another backend keeps only the options that backend maps, and the parent's model only if `model` is absent and the backend is the same. The exception is a fork with `parent`: it keeps the parent's permission, and a backend that doesn't map it, such as Codex for Plan, refuses the fork with `unsupportedOption`. 0041's ceiling checked the caller against that mode, and dropping it would run the fork in Edit, which can need less approval than the caller's.
+- **No CLI starts.** The run is recorded `completed`, where the parent's turn ended. The fork's first `agent/send` starts its CLI. Until the fork has a turn of its own, a restart's catch-up (0025) doesn't wake its `parent` for it.
+- **Idempotent** on `newRunId`. A retry returns the fork. A run id that is anything but a fork of `runId` (at `turnId`, when given, and for `parent`, unless deleting it cleared the stored one) is `idConflict`.
 
 ### Workspace
 

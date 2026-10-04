@@ -344,6 +344,9 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
                     && run.fields.notify_parent
                     && run.updated_at > since
             }) {
+                if unrun_fork(db, run.id)? {
+                    continue;
+                }
                 let worktree = db.get_worktree(run.id).map_err(|e| store_error(&e))?;
                 if let Some(line) = agent_run(run, worktree.as_ref())
                     .ok()
@@ -370,6 +373,16 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
             warn!(error = %error.message, "could not find what parents missed while plxd was stopped");
         }
     }
+}
+
+/// Whether run `id` is a fork that hasn't started a turn of its own (0050): its row reads
+/// `completed`, where its parent's turn ended, but no CLI of its ever ran to wake anyone.
+fn unrun_fork(db: &parallax_store::Store, id: Uuid) -> Result<bool, ErrorObject> {
+    let fork = db
+        .get_thread(id)
+        .map_err(|e| store_error(&e))?
+        .is_some_and(|thread| thread.fields.forked_from.is_some());
+    Ok(fork && db.latest_turn(id).map_err(|e| store_error(&e))?.is_none())
 }
 
 /// The summary line for a coordinator whose own turn a stop interrupted.

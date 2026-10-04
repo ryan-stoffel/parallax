@@ -3,10 +3,10 @@
 //!
 //! plxd writes `--thread` into the thread's `--mcp-config` ([`crate::backend::ThreadTools`]), so
 //! the server knows its caller and no tool takes the caller's id. The tools reach every thread on
-//! the host, as the user can with clicks: list, read, launch, message, wait on, interrupt, rename,
-//! settle, and archive them, and link pull requests to them. A launched thread records the caller
-//! as its `parent`, and a message or interrupt names the caller in the target's transcript
-//! (`agent/send`'s and `agent/cancel`'s `from`). Framing, connections, errors, and size caps are
+//! the host, as the user can with clicks: list, read, launch, fork, message or steer, wait on,
+//! interrupt, rename, settle, and archive them, and link pull requests to them. A launched or
+//! forked thread records the caller as its `parent`, and a message or interrupt names the caller
+//! in the target's transcript (`agent/send`'s and `agent/cancel`'s `from`). Framing, connections, errors, and size caps are
 //! 0019's, from [`super`].
 //!
 //! A caller in a Project also gets [`CONTEXT_TOOLS`], the Project's shared context, and the
@@ -21,17 +21,17 @@ use std::time::Duration;
 
 use parallax_protocol::methods::{
     AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, ContextList, ContextRead,
-    ContextWrite, PrLink, PrUnlink, ProjectList, RepoAdd, ThreadArchive, ThreadList, ThreadSearch,
-    ThreadStart, ThreadUpdate,
+    ContextWrite, PrLink, PrUnlink, ProjectList, RepoAdd, ThreadArchive, ThreadFork, ThreadList,
+    ThreadSearch, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
-    AccountChoice, AccountId, AgentCancelParams, AgentEffort, AgentEventsParams, AgentListParams,
-    AgentOutcome, AgentOutputItem, AgentPermission, AgentPolicy, AgentRun, AgentSendParams,
-    AgentStartParams, AgentStatus, AgentToolStatus, ContextListParams, ContextReadParams,
-    ContextWriteId, ContextWriteParams, CoordinatorThreadId, ParallaxEvent, PrViewParams,
-    ProjectId, ProjectListParams, Repo, RepoAddParams, RepoId, RunId, Thread, ThreadArchiveParams,
-    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadStartParams, ThreadUpdateParams,
-    TurnId,
+    AccountChoice, AccountId, AgentCancelParams, AgentDelivery, AgentEffort, AgentEventsParams,
+    AgentListParams, AgentOutcome, AgentOutputItem, AgentPermission, AgentPolicy, AgentRun,
+    AgentSendParams, AgentStartParams, AgentStatus, AgentToolStatus, ContextListParams,
+    ContextReadParams, ContextWriteId, ContextWriteParams, CoordinatorThreadId, ParallaxEvent,
+    PrViewParams, ProjectId, ProjectListParams, Repo, RepoAddParams, RepoId, RunId, Thread,
+    ThreadArchiveParams, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
+    ThreadStartParams, ThreadUpdateParams, TurnId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -51,6 +51,7 @@ pub const TOOLS: &[&str] = &[
     "thread_read",
     "thread_search",
     "thread_launch",
+    "thread_fork",
     "thread_send",
     "thread_wait",
     "thread_interrupt",
@@ -68,6 +69,7 @@ const PROJECT_TOOLS: &[&str] = &[
     "thread_read",
     "thread_search",
     "thread_launch",
+    "thread_fork",
     "thread_send",
     "thread_wait",
     "thread_interrupt",
@@ -87,6 +89,7 @@ pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__plxd__thread_read",
     "mcp__plxd__thread_search",
     "mcp__plxd__thread_launch",
+    "mcp__plxd__thread_fork",
     "mcp__plxd__thread_send",
     "mcp__plxd__thread_wait",
     "mcp__plxd__thread_interrupt",
@@ -255,7 +258,7 @@ fn definitions(project: bool) -> Value {
         ),
         tool(
             "thread_read",
-            "Read a thread's transcript, oldest first, about 64 KiB a page: its messages and who sent them, the agent's replies, tool calls, and how its runs ended. A longer one ends with the `after` to pass for the next page.",
+            "Read a thread's transcript, oldest first, about 64 KiB a page: its messages with who sent them and their turn ids, the agent's replies, tool calls, and how its runs ended. A longer one ends with the `after` to pass for the next page.",
             object(
                 json!({
                     "runId": target,
@@ -301,13 +304,29 @@ fn definitions(project: bool) -> Value {
             false,
         ),
         tool(
+            "thread_fork",
+            "Fork a thread at one of its turns as your child: a new thread, in the same kind of workspace, whose conversation is the original's up to the end of that turn. It runs in the original's mode and starts nothing until you thread_send it a message. A turn the thread is still running can't be forked.",
+            object(
+                json!({
+                    "runId": target,
+                    "turnId": {"type": "string", "description": "The turn to fork at, from thread_read: a message's turn id, or the thread's run id for its first message. Default: its latest turn."},
+                    "backend": {"type": "string", "description": "The CLI to continue on with the user's own login, such as claude, codex, or cursor. Default: the original's."},
+                    "account": {"type": "string", "description": "A key account's id to continue on instead of a backend's login."},
+                    "model": {"type": "string", "description": "The model. Default: the original's, on the same backend, or else the CLI's default."},
+                }),
+                &["runId"]
+            ),
+            false,
+        ),
+        tool(
             "thread_send",
-            "Send a thread a message, marked in its transcript as from you. A running thread gets it after its current turn; a stopped one resumes with it.",
+            "Send a thread a message, marked in its transcript as from you. A running thread gets it after its current turn, or within it with steer; a stopped one resumes with it.",
             object(
                 json!({
                     "runId": target,
                     "text": {"type": "string", "description": "The message, at most 64 KiB."},
                     "threads": threads,
+                    "steer": {"type": "boolean", "description": "Send it into the turn the thread is running now, ahead of anything waiting, rather than after it. Only for a running thread. Default false."},
                 }),
                 &["runId", "text"]
             ),
@@ -485,6 +504,22 @@ struct SendArgs {
     text: String,
     #[serde(default)]
     threads: Vec<RunId>,
+    #[serde(default)]
+    steer: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ForkArgs {
+    run_id: RunId,
+    #[serde(default)]
+    turn_id: Option<TurnId>,
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default)]
+    account: Option<AccountId>,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -577,35 +612,8 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
         }
         "thread_launch" if server.coordinator => launch_child(server, parse(arguments)?).await,
         "thread_launch" => launch(binding, parse(arguments)?).await,
-        "thread_send" => {
-            let SendArgs {
-                run_id,
-                text,
-                threads,
-            } = parse(arguments)?;
-            not_yourself(caller, run_id, "send a message to")?;
-            check_text("text", &text, MAX_TEXT_BYTES)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            let run = plxd
-                .call::<AgentSend>(AgentSendParams {
-                    run_id,
-                    turn_id: TurnId::generate(),
-                    text,
-                    model: None,
-                    effort: None,
-                    permission: None,
-                    context_window: None,
-                    fast: None,
-                    account: None,
-                    images: Vec::new(),
-                    threads,
-                    from: Some(caller),
-                    delivery: None,
-                })
-                .await?
-                .run;
-            Ok(pretty(&describe(&run, None, &[], caller)))
-        }
+        "thread_fork" => fork(binding, parse(arguments)?).await,
+        "thread_send" => send(binding, parse(arguments)?).await,
         "thread_wait" => {
             let WaitArgs {
                 run_id,
@@ -736,6 +744,11 @@ fn not_yourself(caller: RunId, target: RunId, what: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// Whether `run`'s CLI is starting or working on a turn.
+fn running(run: &AgentRun) -> bool {
+    matches!(run.status, AgentStatus::Starting | AgentStatus::Running)
+}
+
 /// Every thread and repo entry, and every run on the host.
 async fn host(plxd: &mut Plxd) -> Result<(ThreadListResult, Vec<AgentRun>), String> {
     let listed = plxd.call::<ThreadList>(ThreadListParams {}).await?;
@@ -860,6 +873,7 @@ impl Render {
     fn item(&mut self, item: &AgentOutputItem) -> String {
         match item {
             AgentOutputItem::TurnStarted {
+                turn_id,
                 text: Some(text),
                 wake,
                 from,
@@ -870,7 +884,9 @@ impl Render {
                     Some(from) => format!("Thread {from}"),
                     None => "User".to_owned(),
                 };
-                format!("{who}:\n{}\n\n", clip(text.trim(), ITEM_BYTES))
+                // The turn id is what thread_fork takes.
+                let turn = turn_id.map(|id| format!(", turn {id}")).unwrap_or_default();
+                format!("{who}{turn}:\n{}\n\n", clip(text.trim(), ITEM_BYTES))
             }
             AgentOutputItem::Text { text, .. } if !text.trim().is_empty() => {
                 text.trim().clone_into(&mut self.last_reply);
@@ -1014,7 +1030,88 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
     )))
 }
 
-/// `thread_launch`'s account: a backend's login or a key account, or the default.
+/// `thread_send`: `agent/send` from the caller, queued behind the target's running turn, or into
+/// it with `steer` (0048).
+async fn send(binding: &Binding, args: SendArgs) -> Result<String, String> {
+    let caller = binding.run;
+    let SendArgs {
+        run_id,
+        text,
+        threads,
+        steer,
+    } = args;
+    not_yourself(caller, run_id, "send a message to")?;
+    check_text("text", &text, MAX_TEXT_BYTES)?;
+    let mut plxd = Plxd::open(&binding.socket).await?;
+    // plxd resumes an idle run with a steer, as with any message, so refuse it here.
+    // ponytail: the target can still end between this check and the send, and then resumes with
+    // the message as an ordinary one.
+    if steer && !running(&find_run(&mut plxd, run_id).await?) {
+        return Err(format!(
+            "thread {run_id} isn't running a turn, so there is nothing to steer; send without \
+             steer to start its next turn"
+        ));
+    }
+    let run = plxd
+        .call::<AgentSend>(AgentSendParams {
+            run_id,
+            turn_id: TurnId::generate(),
+            text,
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            account: None,
+            images: Vec::new(),
+            threads,
+            from: Some(caller),
+            delivery: steer.then_some(AgentDelivery::Steer),
+        })
+        .await?
+        .run;
+    Ok(pretty(&describe(&run, None, &[], caller)))
+}
+
+/// `thread_fork`: `thread/fork` with the caller as the fork's parent. The fork runs in its
+/// original's mode, so that mode must be within the caller's, as a launched child's is (0041).
+/// plxd's refusals, such as a turn still running or one a fork copied, are the tool's errors.
+async fn fork(binding: &Binding, args: ForkArgs) -> Result<String, String> {
+    let ForkArgs {
+        run_id,
+        turn_id,
+        backend,
+        account,
+        model,
+    } = args;
+    let account = account_choice(backend, account)?;
+    let mut plxd = Plxd::open(&binding.socket).await?;
+    let (_, runs) = host(&mut plxd).await?;
+    let find = |id: RunId| runs.iter().find(|run| run.id == id);
+    let caller = find(binding.run).ok_or("your thread is no longer on this host")?;
+    let original = find(run_id).ok_or_else(|| format!("no thread has run id {run_id}"))?;
+    check_mode(caller.permission, original.permission)?;
+    let forked = plxd
+        .call::<ThreadFork>(ThreadForkParams {
+            run_id,
+            new_run_id: RunId::generate(),
+            turn_id,
+            account,
+            model,
+            parent: Some(binding.run),
+        })
+        .await?;
+    let (listed, _) = host(&mut plxd).await?;
+    Ok(pretty(&describe(
+        &forked.run,
+        Some(&forked.thread),
+        &listed.repos,
+        binding.run,
+    )))
+}
+
+/// `thread_launch`'s and `thread_fork`'s account: a backend's login or a key account, or the
+/// default.
 fn account_choice(
     backend: Option<String>,
     account: Option<AccountId>,
@@ -1095,8 +1192,8 @@ async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, Strin
     Ok(pretty(&describe(&run, None, &[], caller)))
 }
 
-/// Refuses a child `mode` that needs less approval than the caller's `theirs` (0041). No mode
-/// means Edit.
+/// Refuses a child `mode`, launched or forked, that needs less approval than the caller's `theirs`
+/// (0041). No mode means Edit.
 fn check_mode(
     theirs: Option<AgentPermission>,
     mode: Option<AgentPermission>,
@@ -1108,7 +1205,8 @@ fn check_mode(
     }
     let name = |mode| crate::agents::convert::option_name(mode).unwrap_or_default();
     Err(format!(
-        "you run in {} mode, so a thread you launch can't run in {}, which needs less approval",
+        "you run in {} mode, so a thread you launch or fork can't run in {}, which needs less \
+         approval",
         name(theirs),
         name(child)
     ))
@@ -1171,7 +1269,7 @@ async fn wait(
         match Plxd::open(socket).await {
             Ok(mut plxd) => {
                 let run = find_run(&mut plxd, run_id).await?;
-                let idle = !matches!(run.status, AgentStatus::Starting | AgentStatus::Running);
+                let idle = !running(&run);
                 if idle || Instant::now() >= deadline {
                     let output = last_output(&mut plxd, run_id).await?;
                     return Ok(pretty(&json!({

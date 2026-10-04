@@ -94,6 +94,7 @@ fn fork_params(run_id: RunId) -> ThreadForkParams {
         turn_id: None,
         account: None,
         model: None,
+        parent: None,
     }
 }
 
@@ -298,6 +299,127 @@ fn follow_ups(items: &[AgentOutputItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+/// PLX-465: a fork records the run that asked for it as its parent, which must exist, and a retry
+/// naming another parent is `idConflict`.
+#[tokio::test]
+async fn a_fork_records_the_run_that_asked_for_it_as_its_parent() {
+    let (host, _, _) = host();
+    let mut client = host.client().await;
+    let (parent, _) = two_turns(&mut client, start_params(None, "Write the notes")).await;
+    let asker = client
+        .call::<ThreadStart>(start_params(None, "Fork it"))
+        .await
+        .unwrap()
+        .run
+        .id;
+    let missing = ThreadForkParams {
+        parent: Some(RunId::generate()),
+        ..fork_params(parent.thread.id)
+    };
+    let refused = client.call::<ThreadFork>(missing).await.unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::RunNotFound, "{refused:?}");
+
+    let params = ThreadForkParams {
+        parent: Some(asker),
+        ..fork_params(parent.thread.id)
+    };
+    let forked = client.call::<ThreadFork>(params.clone()).await.unwrap();
+    assert_eq!(forked.thread.parent, Some(asker));
+    let other = ThreadForkParams {
+        parent: None,
+        ..params
+    };
+    let conflict = client.call::<ThreadFork>(other).await.unwrap_err();
+    assert_eq!(kind(&conflict), ErrorKind::IdConflict, "{conflict:?}");
+    host.server.stop().await;
+}
+
+/// The fake CLI as a backend named `name` that maps only `permissions`.
+struct Modes {
+    name: &'static str,
+    fake: FakeBackend,
+    permissions: &'static [AgentPermission],
+}
+
+impl Backend for Modes {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.fake.capabilities()
+    }
+
+    fn permissions(&self) -> &[AgentPermission] {
+        self.permissions
+    }
+
+    fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        self.fake.start(request)
+    }
+}
+
+/// PLX-465: a fork a thread asks for keeps its parent's mode, so onto a backend that doesn't map
+/// it, as Codex has no Plan and an ACP agent may have no Manual, it is refused rather than run in
+/// the default, Edit, which needs less approval. A fork from the app still drops it (0050).
+#[tokio::test]
+async fn a_fork_for_a_parent_refuses_a_mode_its_backend_cant_run() {
+    use AgentPermission::{Auto, Bypass, Edit, Manual, Plan};
+    let mut backends = BackendRegistry::new();
+    // Claude Code's modes, Codex's, and those of an ACP agent with no Manual. Not named after
+    // the built-in CLIs, which plxd would look for on the machine.
+    for (provider, name, permissions) in [
+        (
+            Provider::Anthropic,
+            "fake",
+            &[Auto, Manual, Edit, Plan, Bypass][..],
+        ),
+        (Provider::Openai, "other", &[Auto, Manual, Edit, Bypass][..]),
+        (Provider::Cursor, "acp", &[Auto, Edit, Bypass][..]),
+    ] {
+        let modes = Modes {
+            name,
+            fake: fake_backend(editing()),
+            permissions,
+        };
+        backends.register(provider, Arc::new(modes));
+    }
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let asker = client
+        .call::<ThreadStart>(start_params(None, "Fork it"))
+        .await
+        .unwrap()
+        .run
+        .id;
+    for (mode, backend) in [(Plan, "other"), (Manual, "acp")] {
+        // Its own subscription, so the last thread's events don't end this one's turns.
+        let mut client = host.client().await;
+        let original = ThreadStartParams {
+            permission: Some(mode),
+            ..start_params(None, "Write the notes")
+        };
+        let (original, _) = two_turns(&mut client, original).await;
+        let onto = ThreadForkParams {
+            account: Some(AccountChoice::Subscription {
+                backend: backend.to_owned(),
+            }),
+            ..fork_params(original.thread.id)
+        };
+        let refused = client
+            .call::<ThreadFork>(ThreadForkParams {
+                parent: Some(asker),
+                ..onto.clone()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(kind(&refused), ErrorKind::UnsupportedOption, "{refused:?}");
+        let forked = client.call::<ThreadFork>(onto).await.unwrap();
+        assert_eq!(forked.run.permission, None, "the app's fork drops it");
+    }
+    host.server.stop().await;
 }
 
 /// A fork at the latest turn of a thread in a worktree: its own worktree from the parent's latest

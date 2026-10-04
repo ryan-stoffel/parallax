@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use parallax_protocol::methods::{AgentEvents, RepoAdd, ThreadList, ThreadStart};
 use parallax_protocol::{
-    AccountChoice, AgentEventsParams, AgentOutputItem, ParallaxEvent, RepoAddParams, RepoId, RunId,
-    ThreadListParams, ThreadStartParams,
+    AccountChoice, AgentEventsParams, AgentOutputItem, AgentPermission, ParallaxEvent,
+    RepoAddParams, RepoId, RunId, Thread, ThreadListParams, ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
 use plxd::mcp::thread::TOOLS;
@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::time::{Instant, sleep};
 
-use crate::agents::{Conn, Host, end_turn, fake, init, real_repo};
+use crate::agents::{Conn, Host, end_turn, fake, init, real_repo, text};
 use crate::mcp::{Mcp, mcp_command};
 use crate::support::{PATIENCE, temp_dir};
 
@@ -100,6 +100,32 @@ async fn transcript(client: &mut Conn, run: RunId) -> Vec<AgentOutputItem> {
         .collect()
 }
 
+/// `run`'s first follow-up: its text and sender, and its turn id.
+async fn follow_up(client: &mut Conn, run: RunId) -> ((String, Option<RunId>), TurnId) {
+    transcript(client, run)
+        .await
+        .into_iter()
+        .find_map(|item| match item {
+            AgentOutputItem::TurnStarted {
+                turn_id: Some(turn),
+                text: Some(text),
+                from,
+                ..
+            } => Some(((text, from), turn)),
+            _ => None,
+        })
+        .expect("a follow-up")
+}
+
+/// Thread `run` as plxd lists it.
+async fn thread(client: &mut Conn, run: RunId) -> Thread {
+    let listed = client
+        .call::<ThreadList>(ThreadListParams {})
+        .await
+        .unwrap();
+    listed.threads.into_iter().find(|t| t.id == run).unwrap()
+}
+
 fn id(value: &Value) -> RunId {
     value["runId"].as_str().unwrap().parse().unwrap()
 }
@@ -168,26 +194,16 @@ async fn a_thread_launches_waits_on_reads_searches_and_messages_a_child() {
     .await;
     let waited = mcp.ok("thread_wait", json!({"runId": child})).await;
     assert_eq!(waited["idle"], true, "{waited}");
-    let sent = transcript(&mut client, child)
-        .await
-        .into_iter()
-        .find_map(|item| match item {
-            AgentOutputItem::TurnStarted {
-                text: Some(text),
-                from,
-                ..
-            } => Some((text, from)),
-            _ => None,
-        });
+    let (sent, turn) = follow_up(&mut client, child).await;
     assert_eq!(
         sent,
-        Some(("Add a summary.".to_owned(), Some(me))),
+        ("Add a summary.".to_owned(), Some(me)),
         "the message is marked with the thread that sent it"
     );
     let (read, _) = mcp.tool("thread_read", json!({"runId": child})).await;
     assert!(
-        read.contains(&format!("Thread {me}:\nAdd a summary.\n")),
-        "{read}"
+        read.contains(&format!("Thread {me}, turn {turn}:\nAdd a summary.\n")),
+        "the turn id thread_fork takes: {read}"
     );
 
     let list = mcp.ok("thread_list", json!({})).await;
@@ -427,4 +443,234 @@ async fn a_thread_wakes_when_a_child_it_launched_finishes_unless_it_opted_out() 
     );
     assert!(!wakes[0].contains(&quiet.to_string()), "{}", wakes[0]);
     host.server.stop().await;
+}
+
+/// PLX-465: `thread_send` with `steer` goes into the target's running turn, and is refused for a
+/// target with no turn running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_steers_another_only_while_it_runs() {
+    // Each turn waits for a message from inside it, so only a steer lets it end.
+    let host = Host::start(
+        temp_dir(),
+        fake(vec![
+            init("steer-1"),
+            text("Working"),
+            Step::AwaitFollowUp,
+            end_turn("Started."),
+            end_turn("Steered."),
+        ]),
+    );
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch =
+        json!({"prompt": "Work.", "backend": "fake", "workspace": "none", "notify": false});
+    let target = id(&mcp.ok("thread_launch", launch).await);
+    let deadline = Instant::now() + PATIENCE;
+    while !transcript(&mut client, target)
+        .await
+        .iter()
+        .any(|item| matches!(item, AgentOutputItem::Text { text, .. } if text == "Working"))
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the target never started working"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    mcp.ok(
+        "thread_send",
+        json!({"runId": target, "text": "Change course.", "steer": true}),
+    )
+    .await;
+    let waited = mcp
+        .ok(
+            "thread_wait",
+            json!({"runId": target, "timeoutSeconds": 30}),
+        )
+        .await;
+    assert_eq!(
+        waited["idle"], true,
+        "a queued message would wait forever: {waited}"
+    );
+    assert_eq!(waited["thread"]["status"], "completed");
+    let (sent, _) = follow_up(&mut client, target).await;
+    assert_eq!(sent, ("Change course.".to_owned(), Some(me)));
+
+    let refused = mcp
+        .refused(
+            "thread_send",
+            json!({"runId": target, "text": "Again.", "steer": true}),
+        )
+        .await;
+    assert!(refused.contains("isn't running a turn"), "{refused}");
+    host.server.stop().await;
+}
+
+/// PLX-465: `thread_fork` forks a thread at its latest turn or a given one, as the caller's child,
+/// and passes on plxd's refusal of a turn a fork copied.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_forks_another_at_its_latest_or_a_given_turn() {
+    let host = Host::start(temp_dir(), fake(echo()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch = json!({"prompt": "Write the notes.", "backend": "fake", "workspace": "none", "notify": false});
+    let original = id(&mcp.ok("thread_launch", launch).await);
+    mcp.ok("thread_wait", json!({"runId": original})).await;
+    mcp.ok(
+        "thread_send",
+        json!({"runId": original, "text": "Add a summary."}),
+    )
+    .await;
+    mcp.ok("thread_wait", json!({"runId": original})).await;
+    let (_, turn) = follow_up(&mut client, original).await;
+
+    let latest = mcp.ok("thread_fork", json!({"runId": original})).await;
+    assert_eq!(latest["parent"], me.to_string(), "{latest}");
+    assert_eq!(latest["status"], "completed", "no CLI until a message");
+    let latest = id(&latest);
+    let first = id(&mcp
+        .ok(
+            "thread_fork",
+            json!({"runId": original, "turnId": original}),
+        )
+        .await);
+    for (fork, at) in [(latest, turn.to_string()), (first, original.to_string())] {
+        let thread = thread(&mut client, fork).await;
+        assert_eq!(thread.parent, Some(me), "the caller is the fork's parent");
+        let from = thread.forked_from.unwrap();
+        assert_eq!((from.run, from.turn.to_string()), (original, at));
+    }
+
+    let refused = mcp
+        .refused("thread_fork", json!({"runId": latest, "turnId": turn}))
+        .await;
+    assert!(refused.contains("of its own"), "a copied turn: {refused}");
+    host.server.stop().await;
+}
+
+/// PLX-465: `thread_fork` refuses a turn still running, and a thread in a mode that needs less
+/// approval than the caller's, since the fork runs in it (0041).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_fork_refuses_a_running_turn_and_more_permission() {
+    let host = Host::start(temp_dir(), fake(hang()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch =
+        json!({"prompt": "Wait here.", "backend": "fake", "workspace": "none", "notify": false});
+    let running = id(&mcp.ok("thread_launch", launch).await);
+    let refused = mcp.refused("thread_fork", json!({"runId": running})).await;
+    assert!(refused.contains("still running"), "{refused}");
+
+    let bypass = client
+        .call::<ThreadStart>(ThreadStartParams {
+            run_id: RunId::generate(),
+            repo: None,
+            project: None,
+            parent: None,
+            notify: None,
+            title: None,
+            prompt: "Do anything.".to_owned(),
+            account: Some(AccountChoice::Subscription {
+                backend: "fake".to_owned(),
+            }),
+            model: None,
+            effort: None,
+            permission: Some(AgentPermission::Bypass),
+            context_window: None,
+            fast: None,
+            branch_slug: None,
+            images: Vec::new(),
+            threads: Vec::new(),
+            approvals: false,
+            checkout: false,
+            base: None,
+            checkout_ref: None,
+        })
+        .await
+        .unwrap()
+        .run
+        .id;
+    let refused = mcp.refused("thread_fork", json!({"runId": bypass})).await;
+    assert!(
+        refused.contains("you run in edit mode") && refused.contains("can't run in bypass"),
+        "{refused}"
+    );
+    host.server.stop().await;
+}
+
+/// PLX-465: a fork wakes the thread that forked it once its CLI ends, as a launched child does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_wakes_when_a_fork_it_made_finishes() {
+    let host = Host::start(temp_dir(), fake(echo()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch = json!({"prompt": "Write the notes.", "backend": "fake", "workspace": "none", "notify": false});
+    let original = id(&mcp.ok("thread_launch", launch).await);
+    mcp.ok("thread_wait", json!({"runId": original})).await;
+    let fork = id(&mcp.ok("thread_fork", json!({"runId": original})).await);
+    mcp.ok("thread_send", json!({"runId": fork, "text": "Go on."}))
+        .await;
+    mcp.ok("thread_wait", json!({"runId": fork})).await;
+
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let woken = wakes(&mut client, me).await;
+        if !woken.is_empty() {
+            assert_eq!(woken.len(), 1, "{woken:?}");
+            assert!(woken[0].contains(&format!("- Run {fork} ")), "{}", woken[0]);
+            break;
+        }
+        assert!(Instant::now() < deadline, "the caller was never woken");
+        sleep(Duration::from_millis(100)).await;
+    }
+    host.server.stop().await;
+}
+
+/// PLX-465: a fork that never ran reads `completed`, but a restart doesn't wake the thread that
+/// forked it, since no CLI of the fork's ever ended.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_doesnt_wake_a_thread_for_a_fork_that_never_ran() {
+    let host = Host::start(temp_dir(), fake(echo()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch = json!({"prompt": "Write the notes.", "backend": "fake", "workspace": "none", "notify": false});
+    let original = id(&mcp.ok("thread_launch", launch).await);
+    mcp.ok("thread_wait", json!({"runId": original})).await;
+    mcp.ok("thread_fork", json!({"runId": original})).await;
+    drop(mcp);
+    drop(client);
+
+    let host = host.restart(fake(echo())).await;
+    let mut client = host.client().await;
+    // Past wake-ups' batching.
+    sleep(Duration::from_secs(3)).await;
+    assert_eq!(wakes(&mut client, me).await, Vec::<String>::new());
+    host.server.stop().await;
+}
+
+/// The wake-up turns in `run`'s transcript, oldest first.
+async fn wakes(client: &mut Conn, run: RunId) -> Vec<String> {
+    transcript(client, run)
+        .await
+        .into_iter()
+        .filter_map(|item| match item {
+            AgentOutputItem::TurnStarted {
+                text: Some(text),
+                wake: true,
+                ..
+            } => Some(text),
+            _ => None,
+        })
+        .collect()
 }

@@ -1,8 +1,8 @@
 # 0041: Threads have lineage, and every thread gets the host-wide Parallax MCP
 
-- Status: accepted; the store and protocol are PLX-369's, the thread tools and Claude Code's server are PLX-373's, and PLX-380 replaced [0019](0019-coordinator-mcp-tools.md)'s eight tools with them for a coordinator, kept `read_context` and `write_context` for a thread in a Project, and made a parent wake when its children finish ([0025](0025-coordinator-wake-ups.md)); fork, which sets `forkedFrom`, is [0050](0050-fork-a-thread.md)
+- Status: accepted; the store and protocol are PLX-369's, the thread tools and Claude Code's server are PLX-373's, and PLX-380 replaced [0019](0019-coordinator-mcp-tools.md)'s eight tools with them for a coordinator, kept `read_context` and `write_context` for a thread in a Project, and made a parent wake when its children finish ([0025](0025-coordinator-wake-ups.md)); fork, which sets `forkedFrom`, is [0050](0050-fork-a-thread.md); PLX-465 added `thread_fork` and `thread_send`'s `steer`
 - Date: 2026-10-03
-- Issue: PLX-368, PLX-369, PLX-373, PLX-382
+- Issue: PLX-368, PLX-369, PLX-373, PLX-382, PLX-465
 
 ## Context
 
@@ -29,21 +29,22 @@ Agents in Parallax can't act on other threads. `plxd mcp` (0019) gives only a Pr
 | Tool | Arguments | plxd methods |
 | --- | --- | --- |
 | `thread_list` | `includeArchived?` | `thread/list` and `agent/list`; newest first, each with run id, title, status, backend, model, mode, repo, branch, parent, settled, archived, and `you` for the caller |
-| `thread_read` | `runId`, `after?` (an event `seq`) | `agent/events`, rendered as a transcript: messages with their sender (User, Parallax, or `Thread <id>`), replies, tool calls and results at 300 bytes each, interrupts, and how each run ended. A page is about 64 KiB and ends with the `after` for the next one |
+| `thread_read` | `runId`, `after?` (an event `seq`) | `agent/events`, rendered as a transcript: messages with their sender (User, Parallax, or `Thread <id>`) and turn id, replies, tool calls and results at 300 bytes each, interrupts, and how each run ended. A page is about 64 KiB and ends with the `after` for the next one |
 | `thread_search` | `query`, `limit?` (at most 100) | `thread/search` (0047) |
 | `thread_launch` | `prompt`, `threads?`, `title?`, `backend?` or `account?` (a key account id), `model?`, `effort?`, `mode?`, `workspace?` (`worktree`, `checkout`, `none`), `repo?` (an id or absolute path), `base?` (worktree), `branch?` (checkout) | `thread/start` with `parent` set to the caller and `approvals`. Defaults: the caller's repo in a new worktree, or no repo if it has none; the caller's mode when the child runs on the caller's backend. A path with no repo entry is registered with `repo/add` |
-| `thread_send` | `runId`, `text`, `threads?` | `agent/send` with `from` set to the caller; queued behind a running turn |
+| `thread_fork` | `runId`, `turnId?` (a turn id from `thread_read`, or the run id for the first message), `backend?` or `account?`, `model?` | `thread/fork` (0050) with `parent` set to the caller, at the latest turn by default. The fork runs in the original's mode. plxd's refusals, a turn still running, a turn a fork copied, or an unknown thread, are tool errors |
+| `thread_send` | `runId`, `text`, `threads?`, `steer?` | `agent/send` with `from` set to the caller; queued behind a running turn, or with `steer`, `delivery: steer` into it (0048). A steer at a run that is neither `starting` nor `running` is a tool error, since plxd would just resume it |
 | `thread_wait` | `runId`, `timeoutSeconds?` (default 300, at most 1800) | `agent/list` every 0.5 s, each on a new connection, until the run is neither `starting` nor `running`; returns `idle`, `timedOut`, the run, and the last 8 KiB of its last output |
 | `thread_interrupt` | `runId` | `agent/cancel` with `from` set to the caller |
 | `thread_update` | `runId?` (default the caller), `title?`, `settled?`, `archived?` | `thread/update`, then `thread/archive` |
 | `pr_link`, `pr_unlink` | `url`, `runId?` (default the caller) | `pr/link`, `pr/unlink` |
+| `memory_read`, and `memory_propose` or a coordinator's `memory_write` | `scope?` (`you`, `repo`, `project`), and each tool's own (0044) | `memory/list` and `memory/read`, then `memory/propose` or `memory/write`. A thread outside a Project reaches only its repository's scope, and its proposals wait for the user (0044, PLX-405) |
 
-- **A child gets no more permission than its caller.** `thread_launch` refuses a `mode` that needs less approval than the caller's, in the order `plan`, `manual`, `edit`, `auto`, `bypass`, and a mode plxd doesn't know. Edit still asks before each command, and Auto never asks, so Auto ranks above it. No mode means `edit`, on either side. The refusal is a tool error naming both modes. A Plan thread can launch only Plan children, and only a Bypass thread can launch a Bypass one, so a prompt injection in a thread that asks before each write can't start a run that doesn't.
+- **A child gets no more permission than its caller.** `thread_launch` refuses a `mode` that needs less approval than the caller's, in the order `plan`, `manual`, `edit`, `auto`, `bypass`, and a mode plxd doesn't know. `thread_fork` refuses a thread in such a mode, since the fork keeps it. Edit still asks before each command, and Auto never asks, so Auto ranks above it. No mode means `edit`, on either side. The refusal is a tool error naming both modes. A Plan thread can launch only Plan children, and only a Bypass thread can launch a Bypass one, so a prompt injection in a thread that asks before each write can't start a run that doesn't.
 - `thread_send`, `thread_wait`, and `thread_interrupt` refuse the caller itself, which can't message, wait on, or stop its own turn from inside it. Prompts and messages are at most 64 KiB, and a result at most 256 KiB, as 0019's.
 - **Provenance.** `agent/send` and `agent/cancel` take `from?`, a run that must exist, or the call fails with `runNotFound`. The message's `turnStarted` carries `from`, and an interrupt of a running run logs an `interrupted {from}` item before its `agent.finished`. The actor keeps a message's sender in memory until its `turnStarted`, as waiting messages are kept today. A provider handoff's conversation names such a message's sender as `Thread <id>`. The app shows such a message folded away as "From another thread: <title>", as it shows a wake-up, leaves it out of the composer's Up and the prompt rail, and shows an interrupt as "Stopped by another thread: <title>".
 - **`pr/link` and `pr/unlink`** take `{runId, url}`. A link must be a GitHub pull request URL, or it fails with `invalidParams`. Both answer with the run and report it as `agent.updated`.
 - **Capability.** The new params, items, and methods are behind `threadTools`. The app allows the two methods from its renderer.
-- **Deferred.** `thread_send`'s `delivery: queue | steer` waits for PLX-370's durable queue and steer; until then a message queues. `thread_fork` is PLX-375's.
 - They replace 0019's eight tools in PLX-380. A coordinator becomes an ordinary parent thread, and 0025's wake-ups become "a parent wakes when a child it launched finishes".
 - **Host-wide writes, with provenance.** Write tools reach any thread on the host, not only the caller's children. The target thread's transcript records which thread sent each message or interrupt, so the user can tell an agent's message from their own.
 
