@@ -213,18 +213,10 @@ pub(crate) async fn list(
         .daemon
         .store
         .run(&context.cancel, move |db| {
-            let rows = db
-                .list_runs(project)
+            let runs = db
+                .list_runs_with_worktrees(project)
                 .map_err(|error| crate::agents::store_error(&error))?;
-            let seq = log.head();
-            let mut runs = Vec::with_capacity(rows.len());
-            for row in rows {
-                let worktree = db
-                    .get_worktree(row.id)
-                    .map_err(|error| crate::agents::store_error(&error))?;
-                runs.push((row, worktree));
-            }
-            Ok((runs, seq))
+            Ok((runs, log.head()))
         })
         .await?;
     let runs = runs

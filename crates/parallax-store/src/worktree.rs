@@ -40,7 +40,7 @@ pub struct Worktree {
 
 /// A worktree row with its id and timestamp still as the TEXT SQLite stored them, before the
 /// fallible conversion to [`Worktree`].
-struct RawWorktree {
+pub(crate) struct RawWorktree {
     id: String,
     repo_path: String,
     path: String,
@@ -53,15 +53,20 @@ struct RawWorktree {
 
 impl RawWorktree {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Self::at(row, 0)
+    }
+
+    /// Reads the columns `fetch_raw` selects, in its order, starting at column `start`.
+    pub(crate) fn at(row: &Row<'_>, start: usize) -> rusqlite::Result<Self> {
         Ok(Self {
-            id: row.get(0)?,
-            repo_path: row.get(1)?,
-            path: row.get(2)?,
-            branch: row.get(3)?,
-            base: row.get(4)?,
-            git_dir: row.get(5)?,
-            base_dirty: row.get(6)?,
-            created_at: row.get(7)?,
+            id: row.get(start)?,
+            repo_path: row.get(start + 1)?,
+            path: row.get(start + 2)?,
+            branch: row.get(start + 3)?,
+            base: row.get(start + 4)?,
+            git_dir: row.get(start + 5)?,
+            base_dirty: row.get(start + 6)?,
+            created_at: row.get(start + 7)?,
         })
     }
 
@@ -74,7 +79,7 @@ impl RawWorktree {
             && self.base_dirty == fields.base_dirty
     }
 
-    fn into_worktree(self) -> Result<Worktree, StoreError> {
+    pub(crate) fn into_worktree(self) -> Result<Worktree, StoreError> {
         Ok(Worktree {
             id: Uuid::parse_str(&self.id)?,
             repo_path: self.repo_path,

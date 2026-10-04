@@ -385,6 +385,52 @@ fn a_run_and_its_worktree_are_created_together_or_not_at_all() {
     assert_eq!(store.get_worktree(run_only).unwrap(), None);
 }
 
+/// PLX-450: `agent/list`'s one query reads what `list_runs` and `get_worktree` per run read.
+#[test]
+fn runs_list_with_their_worktrees_as_read_one_by_one() {
+    let (_dir, mut store) = open();
+    let (one, two) = (Uuid::now_v7(), Uuid::now_v7());
+    store
+        .create_run_with_worktree(
+            Uuid::now_v7(),
+            &fields(one),
+            &starting(),
+            &worktree_fields(),
+        )
+        .unwrap();
+    let checkout = RunFields {
+        checkout: true,
+        ..fields(one)
+    };
+    store
+        .create_run(Uuid::now_v7(), &checkout, &starting())
+        .unwrap();
+    store
+        .create_run_with_worktree(
+            Uuid::now_v7(),
+            &fields(two),
+            &starting(),
+            &worktree_fields(),
+        )
+        .unwrap();
+
+    let all = store.list_runs_with_worktrees(None).unwrap();
+    let has_worktree = all.iter().map(|(_, worktree)| worktree.is_some());
+    assert_eq!(has_worktree.collect::<Vec<_>>(), [true, false, true]);
+    for project in [None, Some(one), Some(two), Some(Uuid::now_v7())] {
+        let one_by_one = store
+            .list_runs(project)
+            .unwrap()
+            .into_iter()
+            .map(|run| {
+                let worktree = store.get_worktree(run.id).unwrap();
+                (run, worktree)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(store.list_runs_with_worktrees(project).unwrap(), one_by_one);
+    }
+}
+
 /// PLX-338: `project/delete` removes each of a Project's runs with every row kept for it.
 #[test]
 fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
