@@ -97,6 +97,168 @@ fn fork_params(run_id: RunId) -> ThreadForkParams {
     }
 }
 
+/// Two calls claiming one new id must create exactly one fork with the winning origin.
+async fn conflicting_forks(host: &Host, left: ThreadForkParams, right: ThreadForkParams) {
+    assert_eq!(left.new_run_id, right.new_run_id);
+    let mut a = host.client().await;
+    let mut b = host.client().await;
+    let (a, b) = tokio::join!(
+        a.call::<ThreadFork>(left.clone()),
+        b.call::<ThreadFork>(right.clone())
+    );
+    let (winner, params, error) = match (a, b) {
+        (Ok(winner), Err(error)) => (winner, left, error),
+        (Err(error), Ok(winner)) => (winner, right, error),
+        other => panic!("one fork succeeds and the other conflicts: {other:?}"),
+    };
+    assert_eq!(kind(&error), ErrorKind::IdConflict, "{error:?}");
+    let from = winner.thread.forked_from.unwrap();
+    assert_eq!(from.run, params.run_id);
+    assert_eq!(Some(from.turn), params.turn_id);
+    let mut client = host.client().await;
+    assert_eq!(
+        client
+            .call::<ThreadFork>(params.clone())
+            .await
+            .unwrap()
+            .thread,
+        winner.thread
+    );
+    let list = client
+        .call::<ThreadList>(ThreadListParams {})
+        .await
+        .unwrap();
+    assert_eq!(
+        list.threads
+            .iter()
+            .filter(|thread| thread.id == params.new_run_id)
+            .count(),
+        1
+    );
+    let events = client
+        .call::<AgentEvents>(AgentEventsParams {
+            run_id: params.new_run_id,
+            after: 0,
+            limit: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        events
+            .events
+            .iter()
+            .filter(|logged| matches!(logged.event, ParallaxEvent::AgentStarted { .. }))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn concurrent_forks_from_different_threads_conflict() {
+    let (host, _, _) = host();
+    let mut client = host.client().await;
+    let path = real_repo(host.work.path(), "app");
+    let repo = client.add(&path).await;
+    let params = || ThreadStartParams {
+        checkout: true,
+        ..start_params(Some(repo.id), "Write the notes")
+    };
+    let (a, _) = two_turns(&mut client, params()).await;
+    let (b, _) = two_turns(&mut client, params()).await;
+    let left = ThreadForkParams {
+        turn_id: Some(first_turn(a.thread.id)),
+        ..fork_params(a.thread.id)
+    };
+    let right = ThreadForkParams {
+        new_run_id: left.new_run_id,
+        turn_id: Some(first_turn(b.thread.id)),
+        ..fork_params(b.thread.id)
+    };
+    conflicting_forks(&host, left, right).await;
+    host.server.stop().await;
+}
+
+#[tokio::test]
+async fn concurrent_forks_at_different_turns_conflict() {
+    let (host, _, _) = host();
+    let mut client = host.client().await;
+    let path = real_repo(host.work.path(), "app");
+    let repo = client.add(&path).await;
+    let (parent, follow_up) = two_turns(
+        &mut client,
+        ThreadStartParams {
+            checkout: true,
+            ..start_params(Some(repo.id), "Write the notes")
+        },
+    )
+    .await;
+    let left = ThreadForkParams {
+        turn_id: Some(first_turn(parent.thread.id)),
+        ..fork_params(parent.thread.id)
+    };
+    let right = ThreadForkParams {
+        turn_id: Some(follow_up),
+        ..left.clone()
+    };
+    conflicting_forks(&host, left, right).await;
+    host.server.stop().await;
+}
+
+/// Concurrent identical cross-provider forks share one scratch workspace and filtered model.
+#[tokio::test]
+async fn concurrent_cross_provider_fork_retries_return_the_same_fork() {
+    let (host, _, other) = host();
+    let mut client = host.client().await;
+    let (parent, _) = two_turns(
+        &mut client,
+        ThreadStartParams {
+            model: Some("parent-model".to_owned()),
+            ..start_params(None, "Write the notes")
+        },
+    )
+    .await;
+    let params = ThreadForkParams {
+        account: Some(AccountChoice::Subscription {
+            backend: "other".to_owned(),
+        }),
+        ..fork_params(parent.thread.id)
+    };
+    let mut retry_client = host.client().await;
+    let (first, retry) = tokio::join!(
+        client.call::<ThreadFork>(params.clone()),
+        retry_client.call::<ThreadFork>(params.clone())
+    );
+    let (first, retry) = (first.unwrap(), retry.unwrap());
+    assert_eq!(first.thread, retry.thread);
+    assert_eq!(first.run, retry.run);
+    assert_eq!(first.run.backend, "other");
+    assert_eq!(first.run.model, None, "the parent's model is filtered");
+    let scratch = host
+        .data()
+        .join("scratch")
+        .join(params.new_run_id.to_string());
+    assert!(scratch.join(".git").is_dir());
+    let (_, copied) = transcript(&mut client, params.new_run_id).await;
+    assert_eq!(follow_ups(&copied), ["Now the tests"]);
+    assert_eq!(texts(&copied), ["Done.", "Done."], "history copied once");
+    client
+        .call::<AgentSend>(message(params.new_run_id, "Carry on"))
+        .await
+        .unwrap();
+    client.until(finished(params.new_run_id)).await;
+    {
+        let starts = other.lock().unwrap();
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0].resume, None);
+        assert!(
+            starts[0]
+                .prompt
+                .contains("began with another agent, on fake,")
+        );
+    }
+    host.server.stop().await;
+}
+
 /// The `agent.output` items in run `run_id`'s log, oldest first, and its `agent.started` prompt.
 async fn transcript(client: &mut Conn, run_id: RunId) -> (String, Vec<AgentOutputItem>) {
     let events = client
