@@ -1042,6 +1042,7 @@ async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, Strin
             // plxd gives the run its coordinator's (0031).
             approvals: false,
             threads,
+            explore: false,
         })
         .await?
         .run;

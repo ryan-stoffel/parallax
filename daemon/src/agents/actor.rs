@@ -2895,6 +2895,7 @@ mod tests {
                 fast: None,
                 approvals: false,
                 checkout: false,
+                explore: false,
             },
             state: RunState {
                 status: "running".to_owned(),

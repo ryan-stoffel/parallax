@@ -43,6 +43,9 @@ pub struct RunFields {
     /// rather than in a worktree of its own. Such a run has no worktree row. Fixed when the run is
     /// created.
     pub checkout: bool,
+    /// Whether a Project's child explores, such as a spike, and never lands (PLX-409, decision
+    /// 0045). Fixed when the run is created.
+    pub explore: bool,
 }
 
 /// A run's state, which changes as it runs.
@@ -101,7 +104,7 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
                        approvals, checkout, context_window, fast, pull_requests, parent, \
-                       auto_resume, resume_at, resume_tries, notify_parent";
+                       auto_resume, resume_at, resume_tries, notify_parent, explore";
 
 struct RawRun {
     id: String,
@@ -138,6 +141,7 @@ struct RawRun {
     resume_at: Option<String>,
     resume_tries: u32,
     notify_parent: bool,
+    explore: bool,
 }
 
 impl RawRun {
@@ -177,6 +181,7 @@ impl RawRun {
             resume_at: row.get(31)?,
             resume_tries: row.get(32)?,
             notify_parent: row.get(33)?,
+            explore: row.get(34)?,
         })
     }
 
@@ -217,6 +222,7 @@ impl RawRun {
                 fast: self.fast,
                 approvals: self.approvals,
                 checkout: self.checkout,
+                explore: self.explore,
             },
             state: RunState {
                 status: self.status,
@@ -447,9 +453,9 @@ pub(crate) fn insert_run(
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
                            coordinator_thread, model, effort, permission, approvals, checkout,
-                           context_window, fast, parent, notify_parent)
+                           context_window, fast, parent, notify_parent, explore)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
-                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -477,6 +483,7 @@ pub(crate) fn insert_run(
             fields.fast,
             fields.parent.map(|id| id.to_string()),
             fields.notify_parent,
+            fields.explore,
         ],
     )?;
     if inserted == 0 {

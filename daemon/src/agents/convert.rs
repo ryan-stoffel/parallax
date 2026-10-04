@@ -129,6 +129,7 @@ pub(crate) fn agent_run(
         fast: row.fields.fast,
         approvals: row.fields.approvals,
         checkout: row.fields.checkout,
+        explore: row.fields.explore,
         pull_requests: state.pull_requests.clone(),
         resume_at: state.resume_at,
         auto_resume: state.auto_resume,

@@ -179,6 +179,8 @@ mod tests {
             permission: None,
             created_at: "2026-09-24T12:00:00Z".parse().unwrap(),
             updated_at: "2026-09-24T12:05:00.125Z".parse().unwrap(),
+            base_branch: None,
+            integration_branch: None,
         }
     }
 
@@ -329,6 +331,7 @@ mod tests {
                 repo_path: "/".to_owned(),
                 icon: icon.clone(),
                 permission: None,
+                base_branch: None,
             });
             round_trip(&ProjectUpdateResult {
                 project: with_icon.clone(),
@@ -346,6 +349,7 @@ mod tests {
                     name,
                     icon: icon.clone(),
                     permission: None,
+                    base_branch: None,
                 });
             }
         }
@@ -364,6 +368,7 @@ mod tests {
                 name: None,
                 icon: None,
                 permission: None,
+                base_branch: None,
             })
             .unwrap(),
             json!({"project": id}),
@@ -401,12 +406,14 @@ mod tests {
                 repo_path: "/".to_owned(),
                 icon: None,
                 permission: Some(permission),
+                base_branch: None,
             });
             round_trip(&ProjectUpdateParams {
                 project: ProjectId::generate(),
                 name: None,
                 icon: None,
                 permission: Some(permission),
+                base_branch: None,
             });
         }
         assert_eq!(

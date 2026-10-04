@@ -196,6 +196,10 @@ pub struct DiffSummary {
 /// One agent run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a run, not states of one thing"
+)]
 pub struct AgentRun {
     /// The run's id.
     pub id: RunId,
@@ -273,6 +277,10 @@ pub struct AgentRun {
     /// Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkout: bool,
+    /// True for a Project's exploration child, started with `explore` (0045): it never lands.
+    /// Absent means false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explore: bool,
     /// The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
     /// `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
     /// `pullRequests` capability. Absent means none.
@@ -765,6 +773,11 @@ pub struct AgentStartParams {
     /// them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<RunId>,
+    /// Start a Project's child as an exploration, such as a spike or a comparison, which never
+    /// lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must repeat
+    /// it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explore: bool,
 }
 
 /// Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and

@@ -71,6 +71,7 @@ pub(crate) async fn start(
         fast: None,
         approvals,
         checkout: false,
+        explore: false,
     };
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
         return Ok(run);

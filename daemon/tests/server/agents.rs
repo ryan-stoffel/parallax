@@ -12,7 +12,7 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notificat
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
     AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
-    NotificationMethod, ProjectCreate, RepoAdd, RequestMethod, UsageGet,
+    NotificationMethod, ProjectCreate, ProjectDelete, RepoAdd, RequestMethod, UsageGet,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
@@ -22,8 +22,8 @@ use parallax_protocol::{
     AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
     CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
     HostHealthParams, ImageId, ImageMediaType, InitializeResult, ParallaxEvent, Project,
-    ProjectCreateParams, ProjectId, PromptImage, Provider, RepoAddParams, RepoId, RunId, TurnId,
-    UsageGetParams,
+    ProjectCreateParams, ProjectDeleteParams, ProjectId, PromptImage, Provider, RepoAddParams,
+    RepoId, RunId, TurnId, UsageGetParams,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -126,6 +126,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         images: Vec::new(),
         approvals: false,
         threads: Vec::new(),
+        explore: false,
     }
 }
 
@@ -180,6 +181,7 @@ pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
         repo_path: real_repo(dir).to_str().unwrap().to_owned(),
         icon: None,
         permission: None,
+        base_branch: None,
     }
 }
 
@@ -1270,7 +1272,8 @@ async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
     assert!(!untracked.base_dirty, "an untracked file needs no notice");
     assert!(untracked.branch.is_some(), "a worktree was made");
 
-    // A tracked, uncommitted change: still starts the worktree from HEAD, but is flagged.
+    // A tracked, uncommitted change: a Project's run is cut from its integration branch, not the
+    // checkout (0045), so the change isn't the run's to flag.
     std::fs::write(Path::new(&project.repo_path).join("README.md"), "dirty\n").unwrap();
     let dirty = client
         .call::<AgentStart>(start_params(project.id, "Fix it too"))
@@ -1278,8 +1281,8 @@ async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
         .unwrap()
         .run;
     assert!(
-        dirty.base_dirty,
-        "a tracked, uncommitted change is flagged so the editor can tell the user"
+        !dirty.base_dirty,
+        "the checkout's changes are never in a Project's run"
     );
     assert!(
         dirty.branch.is_some(),
@@ -1291,6 +1294,66 @@ async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
         worktree_count(host.dir.path()),
         2,
         "and both worktrees were made"
+    );
+    host.server.stop().await;
+}
+
+/// PLX-409 (0045): a new Project gets its integration branch, cut from the repository's default
+/// branch. A run in it is cut from that branch's tip, not the checkout's HEAD, and keeps
+/// `explore`. Deleting the Project removes the worktree and keeps the branch.
+#[tokio::test]
+async fn a_project_run_is_cut_from_the_integration_branch_tip() {
+    let dir = temp_dir();
+    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    assert_eq!(project.base_branch.as_deref(), Some("main"));
+    assert_eq!(project.integration_branch.as_deref(), Some("parallax/app"));
+    let repo = Path::new(&project.repo_path);
+    let tip = git(repo, &["rev-parse", "parallax/app"]);
+    assert_eq!(tip, git(repo, &["rev-parse", "main"]));
+    let integration = host
+        .dir
+        .path()
+        .join("integration")
+        .join(project.id.to_string());
+    assert_eq!(
+        git(&integration, &["branch", "--show-current"]),
+        "parallax/app"
+    );
+
+    git(
+        repo,
+        &["commit", "-q", "--allow-empty", "-m", "the user's own work"],
+    );
+    let run = client
+        .call::<AgentStart>(AgentStartParams {
+            explore: true,
+            ..start_params(project.id, "Spike it")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert!(run.explore);
+    let worktree = PathBuf::from(run.worktree_path.expect("a worktree"));
+    assert_eq!(
+        git(&worktree, &["rev-parse", "HEAD"]),
+        tip,
+        "cut from the integration branch's tip, not the checkout's HEAD"
+    );
+    assert!(list(&mut client).await[0].explore, "stored");
+
+    client
+        .call::<ProjectDelete>(ProjectDeleteParams {
+            project: project.id,
+        })
+        .await
+        .unwrap();
+    assert!(!integration.exists(), "the worktree is removed");
+    assert_eq!(
+        git(repo, &["rev-parse", "parallax/app"]),
+        tip,
+        "the branch stays"
     );
     host.server.stop().await;
 }

@@ -493,6 +493,7 @@ pub(crate) async fn start(
             fast,
         },
         approvals,
+        explore: false,
         thread: Some(NewThread {
             scratch: scratch.clone(),
             branch_slug,
@@ -626,6 +627,7 @@ pub(crate) async fn fork(
                 transcript,
             }),
         }),
+        explore: false,
     };
     let created = match agents::create_started(Arc::clone(&daemon), new, &starting).await {
         Ok(created) => created,

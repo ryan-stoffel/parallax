@@ -648,9 +648,10 @@ async fn create_worktree(
     repo_path: &Path,
     run_id: RunId,
     thread: Option<&NewThread>,
+    base: Option<&str>,
 ) -> Result<(CreatedWorktree, PathBuf, PathBuf), ErrorObject> {
     let branch_slug = thread.and_then(|thread| thread.branch_slug.as_deref());
-    let base = thread.and_then(|thread| thread.git_ref.as_deref());
+    let base = base.or(thread.and_then(|thread| thread.git_ref.as_deref()));
     let created = agents
         .worktrees
         .create_named(repo_path, run_id, base, branch_slug)
@@ -808,6 +809,52 @@ pub(super) async fn project_mode(
     .await
 }
 
+/// Cuts Project `scope`'s integration branch and its worktree when either is missing (0045), and
+/// returns the project row as it stands, with its integration branch. `None` when `scope` is a
+/// repo entry, not a Project.
+pub(crate) async fn integration(
+    daemon: &Arc<Daemon>,
+    scope: ProjectId,
+) -> Result<Option<parallax_store::Project>, ErrorObject> {
+    let Some(mut row) = store(daemon, move |db| {
+        db.get_project(scope.into()).map_err(|e| store_error(&e))
+    })
+    .await?
+    else {
+        return Ok(None);
+    };
+    let worktrees = &daemon.agents.worktrees;
+    let repo = Path::new(&row.repo_path);
+    let base = match &row.base_branch {
+        Some(base) => base.clone(),
+        None => worktrees
+            .default_branch(repo)
+            .await
+            .map_err(|error| worktree_failed(&error))?,
+    };
+    let branch = worktrees
+        .ensure_integration(
+            repo,
+            scope,
+            row.integration_branch.as_deref(),
+            &row.name,
+            &base,
+        )
+        .await
+        .map_err(|error| worktree_failed(&error))?;
+    if row.integration_branch.as_ref() != Some(&branch) || row.base_branch.is_none() {
+        let (recorded, base_branch) = (branch.clone(), base.clone());
+        store(daemon, move |db| {
+            db.set_integration_branch(scope.into(), &recorded, &base_branch)
+                .map_err(|e| store_error(&e))
+        })
+        .await?;
+        row.base_branch.get_or_insert(base);
+        row.integration_branch = Some(branch);
+    }
+    Ok(Some(row))
+}
+
 /// The Project's `mode` as a run on `backend` takes it, from its [`Backend::project_permissions`],
 /// or `unsupportedOption` saying why it can't: a run in a Project is never moved to another mode
 /// (0042).
@@ -887,6 +934,7 @@ pub(crate) async fn start(
         approvals,
         threads,
         notify,
+        explore,
         ..
     } = params;
     let new = NewRun {
@@ -906,6 +954,7 @@ pub(crate) async fn start(
             fast,
         },
         approvals,
+        explore,
         thread: None,
     };
     Ok(create(daemon, new).await?.run)
@@ -930,6 +979,8 @@ pub(crate) struct NewRun {
     pub options: RunOptions,
     /// The client answers the run's permission requests (PLX-222, 0031).
     pub approvals: bool,
+    /// A Project's exploration child, which never lands (0045).
+    pub explore: bool,
     pub thread: Option<NewThread>,
 }
 
@@ -1033,6 +1084,7 @@ pub(crate) async fn create_started(
         notify,
         mut options,
         mut approvals,
+        explore,
         mut thread,
     } = new;
     let fork = thread.as_mut().and_then(|thread| thread.fork.take());
@@ -1061,6 +1113,7 @@ pub(crate) async fn create_started(
         fast: options.fast,
         approvals,
         checkout: thread.as_ref().is_some_and(|thread| thread.checkout),
+        explore,
     };
 
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
@@ -1097,8 +1150,21 @@ pub(crate) async fn create_started(
         }
         (None, checkout_paths(agents, Path::new(&repo_path)).await?)
     } else {
-        let (created, worktree_path, git_common_dir) =
-            create_worktree(agents, Path::new(&repo_path), run_id, thread.as_ref()).await?;
+        // A Project's run is cut from its integration branch's tip (0045).
+        let base = match mode {
+            Some(_) => integration(&daemon, project)
+                .await?
+                .and_then(|row| row.integration_branch),
+            None => None,
+        };
+        let (created, worktree_path, git_common_dir) = create_worktree(
+            agents,
+            Path::new(&repo_path),
+            run_id,
+            thread.as_ref(),
+            base.as_deref(),
+        )
+        .await?;
         (Some(created), (worktree_path, git_common_dir))
     };
 
@@ -1779,6 +1845,7 @@ mod tests {
             repo_path: "/src/app".to_owned(),
             icon: None,
             permission: "auto".to_owned(),
+            base_branch: None,
         };
         // The start's `prepare_run` saw the project; the delete then removed it.
         store(&daemon, move |db| {
@@ -1806,6 +1873,7 @@ mod tests {
             fast: None,
             approvals: false,
             checkout: false,
+            explore: false,
         };
         let state = RunState::default();
         let error = record(

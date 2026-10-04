@@ -468,6 +468,7 @@ mod tests {
                     fast: None,
                     approvals: false,
                     checkout: false,
+                    explore: false,
                 };
                 let state = RunState {
                     status: "running".to_owned(),

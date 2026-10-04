@@ -414,6 +414,7 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
             name: None,
             icon: None,
             permission: Some(ProjectPermission::Auto),
+            base_branch: None,
         })
         .await
         .unwrap()
@@ -482,6 +483,7 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
             name: None,
             icon: None,
             permission: Some(ProjectPermission::Bypass),
+            base_branch: None,
         })
         .await
         .unwrap();
