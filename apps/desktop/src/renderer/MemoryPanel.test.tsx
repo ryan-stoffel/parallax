@@ -59,7 +59,11 @@ test("promote goes Project to Repo to You, past a missing Repo", () => {
 
 let lists: Record<string, MemoryFile[]>;
 let bodies: Record<string, string>;
+// Methods that answer with an error.
+let failing: Set<string>;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
+  if (failing.has(method))
+    return { logId: "log-1", error: { code: -32000, message: `${method} failed` } };
   const scope = params["scope"] as MemoryScope | undefined;
   const key = scope && (scope.kind === "you" ? "you" : scope.id);
   if (method === "agent/list") return { logId: "log-1", result: { runs: [], seq: 1 } };
@@ -77,6 +81,7 @@ beforeEach(() => {
   request.mockClear();
   lists = {};
   bodies = {};
+  failing = new Set();
   window.parallax = {
     platform: "darwin",
     request,
@@ -192,4 +197,53 @@ test("the box sends the change to the coordinator, and is off without one", asyn
     },
   ]);
   expect(box().value).toBe("");
+});
+
+const sqlite = () =>
+  file("memory/decision/sqlite.md", { kind: "decision", title: "Keep SQLite", source: "user" });
+
+test("promote asks before replacing an entry at the next scope", async () => {
+  lists = { "r-1": [{ ...sqlite(), title: "An older note" }], "p-1": [sqlite()] };
+  await render();
+  await click("Keep SQLite");
+  await click("Promote to Repo");
+  expect(document.querySelector('[aria-label="Replace"]')?.textContent).toContain(
+    "Repo already has memory/decision/sqlite.md",
+  );
+  expect(calls("memory/write")).toEqual([]);
+
+  await click("Cancel");
+  expect(document.querySelector('[aria-label="Replace"]')).toBeNull();
+  expect(calls("memory/write")).toEqual([]);
+
+  await click("Promote to Repo");
+  await click("Replace");
+  expect(calls("memory/write").map((p) => p["scope"])).toEqual([repo]);
+  expect(calls("memory/delete")).toEqual([{ scope: project, path: "memory/decision/sqlite.md" }]);
+});
+
+test("a failed write deletes nothing, and a failed delete says the copy was made", async () => {
+  lists = { "p-1": [sqlite()] };
+  failing = new Set(["memory/write"]);
+  await render();
+  await click("Keep SQLite");
+  await click("Promote to Repo");
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe("memory/write failed");
+  expect(calls("memory/delete")).toEqual([]);
+
+  failing = new Set(["memory/delete"]);
+  await click("Promote to Repo");
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+    "Copied to Repo, but couldn't remove it from Project: memory/delete failed",
+  );
+});
+
+test("entries show as plain text, so a link shows where it goes", async () => {
+  lists = { "p-1": [sqlite()] };
+  bodies = { "memory/decision/sqlite.md": "See [the docs](https://evil.example)." };
+  await render();
+  await click("Keep SQLite");
+  const decisions = document.querySelector('[aria-label="Decisions"]')!;
+  expect(decisions.querySelector("a")).toBeNull();
+  expect(decisions.textContent).toContain("[the docs](https://evil.example)");
 });

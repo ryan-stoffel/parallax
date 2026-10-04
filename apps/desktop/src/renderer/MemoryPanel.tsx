@@ -69,6 +69,23 @@ export const changeMessage = (text: string) =>
 
 const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
 
+/** Where a file goes: Promote's next scope, or a proposal's entry. */
+interface Target {
+  scope: MemoryScope;
+  path: string;
+}
+
+/**
+ * The entry a proposal saves as, `memory/<kind>/<slug>.md`, in the folder it waits in, or
+ * undefined for a kind this version doesn't know.
+ * ponytail: `MemoryFile` doesn't carry a proposal's `Scope:` line; PLX-476 adds it.
+ */
+export const savedAs = (file: Memory): Target | undefined =>
+  file.kind && { scope: file.scope, path: `memory/${file.kind}/${fileName(file.path)}.md` };
+
+const sameScope = (a: MemoryScope, b: MemoryScope) =>
+  a.kind === b.kind && (a.kind === "you" || (b.kind !== "you" && a.id === b.id));
+
 type Result = Promise<string | undefined>;
 
 /** Runs `memory/*` requests on one host, each resolving to an error message or undefined. */
@@ -97,24 +114,19 @@ function memoryCalls(hostId: string) {
     });
     return "error" in answer ? describeError(answer.error) : undefined;
   };
-  // Writes `file`'s body at `scope` and `path`, then deletes it.
-  const move = async (file: Memory, scope: MemoryScope, path: string): Result => {
+  /**
+   * Writes `file`'s body at `to`, then deletes it, but only once the write succeeds. A failed
+   * delete says the write, `done`, happened.
+   */
+  const move = async (file: Memory, to: Target, done: string): Result => {
     const body = await read(file);
     if (typeof body === "string") return body;
-    return (await write(scope, path, body.content, file)) ?? remove(file);
+    const failed = await write(to.scope, to.path, body.content, file);
+    if (failed) return failed;
+    const left = await remove(file);
+    return left && `${done}, but couldn't remove it from ${scopeLabels[file.scope.kind]}: ${left}`;
   };
-  return {
-    read,
-    write,
-    remove,
-    promote: (file: Memory, to: MemoryScope) => move(file, to, file.path),
-    // ponytail: `MemoryFile` doesn't carry a proposal's `Scope:` line, so it saves in the folder
-    // it waits in; PLX-476 adds the scope.
-    save: (file: Memory) =>
-      file.kind
-        ? move(file, file.scope, `memory/${file.kind}/${fileName(file.path)}.md`)
-        : Promise.resolve("This proposal has no kind this version knows."),
-  };
+  return { read, write, remove, move };
 }
 
 /**
@@ -194,6 +206,8 @@ export function MemoryPanel({
   const { files, error, reload } = useMemory(hostId, project, repo);
   const calls = useMemo(() => memoryCalls(hostId), [hostId]);
   const sections = files && sectionsOf(files);
+  const taken = ({ scope, path }: Target) =>
+    !!files?.some((f) => f.path === path && sameScope(f.scope, scope));
   const row = (file: Memory, title?: string) => (
     <MemoryRow
       key={`${file.scope.kind}/${file.path}`}
@@ -201,6 +215,7 @@ export function MemoryPanel({
       title={title}
       calls={calls}
       next={file.path === "brief.md" ? undefined : nextScope(file.scope, repo)}
+      taken={taken}
       onChanged={reload}
     />
   );
@@ -309,13 +324,16 @@ function BriefStart({
 
 /**
  * One memory file: its title, scope, source, and stale mark, opening to its text and actions.
- * The brief opens at once and only edits. A proposal saves or discards.
+ * The brief opens at once and only edits. A proposal saves or discards. Promote and Save ask
+ * before replacing a file already at their target. Entries and proposals show as plain text, so an
+ * agent's link can't hide where it goes.
  */
 function MemoryRow({
   file,
   title = file.title ?? fileName(file.path),
   calls,
   next,
+  taken,
   onChanged,
 }: {
   file: Memory;
@@ -323,15 +341,20 @@ function MemoryRow({
   calls: ReturnType<typeof memoryCalls>;
   /** Where Promote moves it, or absent for none. */
   next?: MemoryScope;
+  /** Whether a listed file is already at a target. */
+  taken: (target: Target) => boolean;
   onChanged: () => void;
 }) {
   const brief = file.path === "brief.md";
   const proposal = file.path.startsWith("proposals/");
+  const plain = proposal || file.path.startsWith("memory/");
   const [open, setOpen] = useState(brief);
   const [content, setContent] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // A Promote or Save waiting on Replace, since its target is taken.
+  const [replacing, setReplacing] = useState<{ to: Target; done: string }>();
 
   // Read again whenever the listed file changes, since it's a new object for each list.
   useEffect(() => {
@@ -347,12 +370,18 @@ function MemoryRow({
     };
   }, [open, file, calls]);
 
+  // A failed move may still have written, so the list reloads either way.
   const act = async (run: () => Result) => {
     setBusy(true);
     const failed = await run();
     setBusy(false);
     setError(failed);
-    if (!failed) onChanged();
+    onChanged();
+  };
+  const move = (to: Target | undefined, done: string) => {
+    if (!to) return setError("This proposal has no kind this version knows.");
+    if (taken(to)) return setReplacing({ to, done });
+    void act(() => calls.move(file, to, done));
   };
 
   return (
@@ -394,64 +423,101 @@ function MemoryRow({
             />
           ) : (
             <>
-              {content !== undefined && (
-                <div className="context-doc text-[13px]">
-                  <MarkdownText text={content} />
-                </div>
-              )}
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {proposal ? (
-                  <>
+              {content !== undefined &&
+                (plain ? (
+                  <p className="text-[13px] whitespace-pre-wrap">{content}</p>
+                ) : (
+                  <div className="context-doc text-[13px]">
+                    <MarkdownText text={content} />
+                  </div>
+                ))}
+              {replacing ? (
+                <div role="group" aria-label="Replace" className="mt-1.5">
+                  <p className="text-[12.5px] text-muted-foreground">
+                    {scopeLabels[replacing.to.scope.kind]} already has {replacing.to.path}. Replace
+                    it with this one?
+                  </p>
+                  <div className="mt-1 flex gap-1.5">
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => void act(() => calls.save(file))}
+                      onClick={() => {
+                        setReplacing(undefined);
+                        void act(() => calls.move(file, replacing.to, replacing.done));
+                      }}
                       className={outlineButton}
                     >
-                      Save
+                      Replace
                     </button>
                     <button
                       type="button"
-                      disabled={busy}
-                      onClick={() => void act(() => calls.remove(file))}
+                      onClick={() => setReplacing(undefined)}
                       className={quietButton}
                     >
-                      Discard
+                      Cancel
                     </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busy || content === undefined}
-                      onClick={() => setEditing(true)}
-                      className={outlineButton}
-                    >
-                      Edit
-                    </button>
-                    {next && (
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {proposal ? (
+                    <>
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() => void act(() => calls.promote(file, next))}
-                        className={quietButton}
+                        onClick={() => move(savedAs(file), "Saved")}
+                        className={outlineButton}
                       >
-                        Promote to {scopeLabels[next.kind]}
+                        Save
                       </button>
-                    )}
-                    {!brief && (
                       <button
                         type="button"
                         disabled={busy}
                         onClick={() => void act(() => calls.remove(file))}
                         className={quietButton}
                       >
-                        Delete
+                        Discard
                       </button>
-                    )}
-                  </>
-                )}
-              </div>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={busy || content === undefined}
+                        onClick={() => setEditing(true)}
+                        className={outlineButton}
+                      >
+                        Edit
+                      </button>
+                      {next && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            move(
+                              { scope: next, path: file.path },
+                              `Copied to ${scopeLabels[next.kind]}`,
+                            )
+                          }
+                          className={quietButton}
+                        >
+                          Promote to {scopeLabels[next.kind]}
+                        </button>
+                      )}
+                      {!brief && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void act(() => calls.remove(file))}
+                          className={quietButton}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </>
           )}
           {error && (
@@ -507,7 +573,11 @@ function Editor({
           Save
         </button>
       </div>
-      {error && <p className="mt-1 text-[12px] text-danger">{error}</p>}
+      {error && (
+        <p role="alert" className="mt-1 text-[12px] text-danger">
+          {error}
+        </p>
+      )}
     </form>
   );
 }
