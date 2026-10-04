@@ -18,10 +18,11 @@
 //! vendor session in the same worktree. When plxd stops, running CLIs are cancelled and their
 //! runs recorded `interrupted`; a run still `starting` or `running` in the store when plxd
 //! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`, and
-//! either wakes the coordinator that started it once plxd starts again ([`wake::catch_up`]).
+//! either wakes the parent that launched it once plxd starts again ([`wake::catch_up`]).
 //!
 //! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
-//! no recorded worktree; the same actor runs it. Runs it started wake it when they finish
+//! no recorded worktree; the same actor runs it. Children wake the run that launched them when they
+//! finish, a coordinator or any thread, and a run started in a Project wakes its coordinator
 //! ([`wake`]).
 //!
 //! Every run in a Project, its coordinator included, runs in the Project's permission mode, Auto
@@ -631,8 +632,8 @@ async fn existing(
             ErrorKind::IdConflict,
             format!(
                 "run {run_id} exists with a different project, prompt, account, policy, \
-                 coordinator thread, parent, model, effort, permission, context window, fast mode, \
-                 or approvals"
+                 coordinator thread, parent, notify, model, effort, permission, context window, \
+                 fast mode, or approvals"
             ),
         ));
     }
@@ -885,6 +886,7 @@ pub(crate) async fn start(
         images,
         approvals,
         threads,
+        notify,
         ..
     } = params;
     let new = NewRun {
@@ -895,6 +897,7 @@ pub(crate) async fn start(
         threads,
         account,
         coordinator_thread,
+        notify: notify.unwrap_or(true),
         options: RunOptions {
             model,
             effort,
@@ -922,6 +925,8 @@ pub(crate) struct NewRun {
     pub account: Option<AccountChoice>,
     /// The coordinator thread starting the run through `plxd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// The run wakes its parent, if it has one, when a CLI process of its ends (PLX-380, 0025).
+    pub notify: bool,
     pub options: RunOptions,
     /// The client answers the run's permission requests (PLX-222, 0031).
     pub approvals: bool,
@@ -1025,6 +1030,7 @@ pub(crate) async fn create_started(
         threads,
         account,
         coordinator_thread,
+        notify,
         mut options,
         mut approvals,
         mut thread,
@@ -1047,6 +1053,7 @@ pub(crate) async fn create_started(
         backend: String::new(),
         coordinator_thread: coordinator_thread.map(Uuid::from),
         parent: parent(thread.as_ref(), coordinator_thread),
+        notify_parent: notify && parent(thread.as_ref(), coordinator_thread).is_some(),
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
@@ -1131,8 +1138,13 @@ pub(crate) async fn create_started(
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
     agents.spawn(actor);
+    let run = run?;
+    // A run started in a Project wakes its coordinator, unless the coordinator launched it (0043).
+    if mode.is_some() && coordinator_thread.is_none() {
+        wake::started(&daemon, &run);
+    }
     Ok(CreatedRun {
-        run: run?,
+        run,
         thread: thread_row,
     })
 }
@@ -1786,6 +1798,7 @@ mod tests {
             backend: "fake".to_owned(),
             coordinator_thread: None,
             parent: None,
+            notify_parent: false,
             model: None,
             effort: None,
             permission: None,

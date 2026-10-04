@@ -1,6 +1,6 @@
 # 0024: A project's coordinator chat is a no-write run in the project's repository
 
-- Status: accepted; where it runs amended by PLX-171; wake-ups are in [0025](0025-coordinator-wake-ups.md); where it runs, its per-turn check, and its fixed permission superseded by [0027](0027-claude-permission-modes.md); any provider runs it, in a worktree at the integration branch's tip, since [0042](0042-project-children-are-threads.md)
+- Status: accepted; where it runs amended by PLX-171; wake-ups are in [0025](0025-coordinator-wake-ups.md); where it runs, its per-turn check, and its fixed permission superseded by [0027](0027-claude-permission-modes.md); any provider runs it, in a worktree at the integration branch's tip, since [0042](0042-project-children-are-threads.md); its tools are a thread's `plxd mcp --thread` since PLX-380 ([0041](0041-thread-lineage-and-host-mcp.md)), which don't list its own run either
 - Date: 2026-09-29
 - Issue: PLX-41
 

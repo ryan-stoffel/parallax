@@ -208,6 +208,7 @@ pub(crate) fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartPar
         run_id: RunId::generate(),
         repo,
         parent: None,
+        notify: None,
         title: None,
         prompt: prompt.to_owned(),
         account: Some(AccountChoice::Subscription {

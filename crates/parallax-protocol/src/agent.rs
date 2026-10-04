@@ -710,6 +710,11 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// Whether the run wakes its coordinator when a CLI process of its ends (PLX-380, 0025), for
+    /// a run with a `coordinatorThread`. Absent means true. A retry must repeat it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notify: Option<bool>,
     /// The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
     /// it, `effort`, and `permission` only to a plxd that advertises `runOptions`. The run keeps
     /// all three when it resumes, and a retry must repeat them.

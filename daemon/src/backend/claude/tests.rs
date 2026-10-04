@@ -6,7 +6,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use parallax_protocol::{CoordinatorThreadId, ProjectId};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -19,11 +18,11 @@ use super::{
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
-    AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend,
-    CoordinatorTools, Credential, Decision, Event, EventStream, FailureKind, FollowUp,
-    ImageMediaType, LimitStatus, LimitWindow, ModelUsage, Outcome, PromptImage, Resume, RunId,
-    RunRequest, SendError, StartError, Started, ThreadTools, TodoItem, TodoStatus, ToolPolicy,
-    ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
+    AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential,
+    Decision, Event, EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow,
+    ModelUsage, Outcome, PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started,
+    ThreadTools, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind,
+    WorkerSandbox,
 };
 use crate::mcp;
 use crate::paths::DataDir;
@@ -408,11 +407,10 @@ async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
     let fake = Fake::new("tool-call");
     let cwd = fake.root();
     let request = RunRequest {
-        coordinator_tools: Some(CoordinatorTools {
+        coordinator_tools: Some(ThreadTools {
             program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
             data_dir: cwd.join("data"),
-            project: ProjectId::generate(),
-            thread: CoordinatorThreadId::generate(),
+            run: RunId::generate(),
         }),
         ..request(&cwd)
     };
@@ -1999,7 +1997,7 @@ fn a_coordinator_and_a_bypass_worker_allow_the_todo_tools_in_every_mode() {
             .map(|(at, _)| args[at + 1].clone())
             .collect()
     };
-    let coordinator_list = format!("{},{todo}", mcp::ALLOWED_TOOLS.join(","));
+    let coordinator_list = format!("{},{todo}", mcp::thread::ALLOWED_TOOLS.join(","));
     for permission in [
         None,
         Some(AgentPermission::Edit),
@@ -2360,11 +2358,10 @@ fn retries_and_rejected_limits_name_a_failed_turn_s_kind_until_it_ends() {
 /// A coordinator's request at `cwd`, whose plxd tools make it full Claude Code (0027).
 fn coordinator(cwd: &Path) -> RunRequest {
     RunRequest {
-        coordinator_tools: Some(CoordinatorTools {
+        coordinator_tools: Some(ThreadTools {
             program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
             data_dir: cwd.join("data"),
-            project: ProjectId::generate(),
-            thread: CoordinatorThreadId::generate(),
+            run: RunId::generate(),
         }),
         ..request(cwd)
     }

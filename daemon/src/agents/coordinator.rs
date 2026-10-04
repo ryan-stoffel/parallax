@@ -1,5 +1,5 @@
-//! A project's coordinator chat (PLX-41, decision 0024): a no-write run with plxd's MCP tools
-//! bound to the project and to the run's own id as its coordinator thread (0019). The Claude
+//! A project's coordinator chat (PLX-41, decision 0024): a no-write run whose coordinator thread is
+//! its own id, with a thread's Parallax tools bound to that run (0041, PLX-380). The Claude
 //! backend runs it as full Claude Code (0027) in the project's permission mode (0042).
 //!
 //! `project/start` records it like any run, without a worktree row, and hands it to the same
@@ -63,6 +63,7 @@ pub(crate) async fn start(
         coordinator_thread: Some(Uuid::from(run_id)),
         // Its own thread, never its own parent (0041).
         parent: None,
+        notify_parent: false,
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),

@@ -444,6 +444,7 @@ pub(crate) async fn start(
         base,
         checkout_ref,
         threads,
+        notify,
     } = params;
     if let Some(slug) = &branch_slug
         && !valid_branch_slug(slug)
@@ -483,6 +484,7 @@ pub(crate) async fn start(
         threads,
         account,
         coordinator_thread: None,
+        notify: notify.unwrap_or(true),
         options: RunOptions {
             model,
             effort,
@@ -595,6 +597,8 @@ pub(crate) async fn fork(
             account.unwrap_or_else(|| agents::session_account(&parent.run.state.account_id)),
         ),
         coordinator_thread: None,
+        // A fork has no parent to wake (0050).
+        notify: false,
         options: RunOptions {
             model: model.clone().or_else(|| fields.model.clone()),
             effort: fields.effort.as_deref().and_then(option_value),

@@ -24,6 +24,9 @@ pub struct RunFields {
     /// subagents, or the parent a client named for a thread. `None` for a top-level run, and once
     /// the parent is deleted.
     pub parent: Option<Uuid>,
+    /// Whether the run wakes its `parent` when a CLI process of its ends (PLX-380, decision
+    /// 0025). Fixed when the run is created.
+    pub notify_parent: bool,
     /// The model, effort, and permission the run asked for (PLX-97), each `None` for the CLI's
     /// default. Effort and permission are their protocol names, such as `high` and `plan`.
     pub model: Option<String>,
@@ -98,7 +101,7 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
                        approvals, checkout, context_window, fast, pull_requests, parent, \
-                       auto_resume, resume_at, resume_tries";
+                       auto_resume, resume_at, resume_tries, notify_parent";
 
 struct RawRun {
     id: String,
@@ -134,6 +137,7 @@ struct RawRun {
     auto_resume: Option<bool>,
     resume_at: Option<String>,
     resume_tries: u32,
+    notify_parent: bool,
 }
 
 impl RawRun {
@@ -172,6 +176,7 @@ impl RawRun {
             auto_resume: row.get(30)?,
             resume_at: row.get(31)?,
             resume_tries: row.get(32)?,
+            notify_parent: row.get(33)?,
         })
     }
 
@@ -204,6 +209,7 @@ impl RawRun {
                     .map(Uuid::parse_str)
                     .transpose()?,
                 parent: self.parent.as_deref().map(Uuid::parse_str).transpose()?,
+                notify_parent: self.notify_parent,
                 model: self.model,
                 effort: self.effort,
                 permission: self.permission,
@@ -441,9 +447,9 @@ pub(crate) fn insert_run(
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
                            coordinator_thread, model, effort, permission, approvals, checkout,
-                           context_window, fast, parent)
+                           context_window, fast, parent, notify_parent)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
-                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -470,6 +476,7 @@ pub(crate) fn insert_run(
             fields.context_window,
             fields.fast,
             fields.parent.map(|id| id.to_string()),
+            fields.notify_parent,
         ],
     )?;
     if inserted == 0 {
