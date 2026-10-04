@@ -5,7 +5,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import type { MemoryFile, MemoryScope } from "../protocol/generated/protocol";
-import { changeMessage, MemoryPanel, nextScope, sectionsOf, type Memory } from "./MemoryPanel";
+import {
+  changeMessage,
+  MemoryPanel,
+  nextScope,
+  savedAs,
+  sectionsOf,
+  type Memory,
+} from "./MemoryPanel";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -142,6 +149,45 @@ test("a proposal saves as an entry at its folder's scope, keeping its title and 
     },
   ]);
   expect(calls("memory/delete")).toEqual([{ scope: repo, path: "proposals/use-vitest.md" }]);
+});
+
+test("a coordinator's proposal saves at the scope it names", async () => {
+  lists = {
+    "p-1": [
+      file("proposals/use-vitest.md", {
+        kind: "convention",
+        title: "Use Vitest",
+        source: "coordinator k-1",
+        writer: "coordinator k-1",
+        forScope: "repo",
+      }),
+    ],
+  };
+  bodies = { "proposals/use-vitest.md": "Tests run on Vitest." };
+  await render();
+  await click("Use Vitest");
+  await click("Save");
+  expect(calls("memory/write")).toEqual([
+    {
+      scope: repo,
+      path: "memory/convention/use-vitest.md",
+      content: "Tests run on Vitest.",
+      title: "Use Vitest",
+      source: "coordinator k-1",
+    },
+  ]);
+  expect(calls("memory/delete")).toEqual([{ scope: project, path: "proposals/use-vitest.md" }]);
+});
+
+test("savedAs: You, the folder without a repo entry, the entry it replaces, and a coordinator's brief", () => {
+  const proposal = (more: Partial<Memory>) =>
+    memory(project, "proposals/x.md", { writer: "coordinator k-1", ...more });
+  expect(savedAs(proposal({ kind: "gotcha", forScope: "you" }), "r-1")?.scope).toEqual(you);
+  expect(savedAs(proposal({ kind: "gotcha", forScope: "repo" }))?.scope).toEqual(project);
+  const rewrite = proposal({ kind: "decision", replaces: "memory/decision/vitest.md" });
+  expect(savedAs(rewrite)).toEqual({ scope: project, path: "memory/decision/vitest.md" });
+  expect(savedAs(proposal({}))).toEqual({ scope: project, path: "brief.md" });
+  expect(savedAs(proposal({ writer: "thread t-1" }))).toBeUndefined();
 });
 
 test("an entry shows its scope, source, and stale mark, and promotes to the next scope", async () => {

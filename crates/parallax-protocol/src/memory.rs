@@ -38,6 +38,24 @@ pub enum MemoryScope {
     },
 }
 
+/// A scope's name, as a proposal's file names the scope it is for.
+///
+/// A newer plxd may send a value this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum MemoryScopeKind {
+    /// The user's own.
+    You,
+    /// The repository's of the folder's Project, or the folder's own repository.
+    Repo,
+    /// The Project's.
+    Project,
+    /// A value this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
 /// What an entry records (0044).
 ///
 /// A newer plxd may send a kind this version does not know; treat it as unknown.
@@ -85,10 +103,21 @@ pub struct MemoryFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub date: Option<String>,
-    /// Who wrote it: `user`, or `coordinator <run id>`, or for a proposal `thread <run id>`.
+    /// Who wrote it: `user`, or `coordinator <run id>`, or for a proposal `thread <run id>` or
+    /// `coordinator <run id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub writer: Option<String>,
+    /// For a proposal in a Project's folder, the scope it is for: a child's, which its
+    /// coordinator curates, or a coordinator's, which the user saves there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub for_scope: Option<MemoryScopeKind>,
+    /// For a coordinator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
+    /// `for_scope`, which saving it replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replaces: Option<String>,
 }
 
 /// Params of `memory/list`.
@@ -130,7 +159,7 @@ pub struct MemoryReadResult {
 /// Params of `memory/write`: replaces `brief.md`, `knowledge/<slug>.md`, or an entry,
 /// `memory/<kind>/<slug>.md`, in full. For an entry, plxd writes the header from `title`, which it
 /// then needs, `source`, today's UTC date, and the writer. Fails with `contextTooLarge` over the
-/// shared context caps.
+/// shared context caps. Only the user writes the brief: a coordinator proposes it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryWriteParams {
@@ -183,8 +212,9 @@ pub struct MemoryDeleteResult {}
 /// Params of `memory/propose`, for a thread's Parallax tools: run `from` proposes an entry, saved
 /// as `proposals/<slug>.md`. A Project's child's is saved in the Project's folder, with a `Scope:`
 /// line naming `scope`, and its coordinator's next wake-up carries it, then removes it; it
-/// doesn't wake the coordinator. A plain thread's, only at its own repository's scope, is saved
-/// there for the user. Any other run's fails with `invalidParams`.
+/// doesn't wake the coordinator. A coordinator's is saved the same way, for the user, and no
+/// wake-up carries it. A plain thread's, only at its own repository's scope, is saved there for
+/// the user. Any other run's fails with `invalidParams`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryProposeParams {
@@ -192,12 +222,20 @@ pub struct MemoryProposeParams {
     pub from: RunId,
     /// The scope the entry belongs in.
     pub scope: MemoryScope,
-    /// Its kind.
-    pub kind: MemoryKind,
+    /// Its kind. Absent: a rewrite of the Project's brief, which only its coordinator proposes,
+    /// at the Project's scope. Its proposal has no kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<MemoryKind>,
     /// Its title, one line.
     pub title: String,
     /// Its body.
     pub content: String,
+    /// The entry it rewrites, `memory/<kind>/<name>.md` of the same kind at `scope`, which must
+    /// exist. Only a coordinator names one; its proposal records it as `replaces`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replaces: Option<String>,
 }
 
 /// Who a proposal went to.

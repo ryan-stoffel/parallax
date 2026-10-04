@@ -4,10 +4,11 @@
 //! Memory lives in a scope's context folder ([`crate::context`]): You in `context/you`, a repo
 //! entry's in `context/<repo id>`, a Project's in `context/<project id>`. The app writes as the
 //! user. A thread's Parallax tools name their run in `from`: only a Project's current coordinator
-//! writes, and its write adds a `learned` item to the Project's inbox (0043). A proposal is saved
-//! as `proposals/<slug>.md`: a Project's child's in the Project's folder, naming the scope it is
-//! for, until its coordinator's next wake-up carries it, and a plain thread's in its repository's
-//! folder, for the user.
+//! writes, though not the brief, and its write adds a `learned` item to the Project's inbox (0043).
+//! A proposal is saved as `proposals/<slug>.md`: a Project's child's in the Project's folder,
+//! naming the scope it is for, until its coordinator's next wake-up carries it; a coordinator's
+//! the same way, for the user, such as a rewrite the Memory tab asked for, naming the entry it
+//! replaces, or the brief's; and a plain thread's in its repository's folder, for the user.
 
 use std::path::{Path, PathBuf};
 
@@ -16,9 +17,10 @@ use parallax_protocol::methods::{
     MemoryDelete, MemoryList, MemoryPropose, MemoryRead, MemoryWrite, RequestMethod,
 };
 use parallax_protocol::{
-    ErrorKind, InboxKind, MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryListParams,
-    MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
-    MemoryReadResult, MemoryScope, MemoryWriteParams, MemoryWriteResult, ProjectId, RunId,
+    ErrorKind, InboxKind, MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind,
+    MemoryListParams, MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult,
+    MemoryReadParams, MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams,
+    MemoryWriteResult, ProjectId, RunId,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -160,6 +162,12 @@ async fn write(
     let writer = match from {
         Some(from) => {
             let project = coordinator_project(context, from).await?;
+            // 0044: the user writes or approves the brief.
+            if place(&path) == Place::Brief {
+                return Err(ErrorObject::invalid_params(
+                    "only the user writes the brief; propose your rewrite with memory_propose",
+                ));
+            }
             Some((from, project))
         }
         None => None,
@@ -172,7 +180,7 @@ async fn write(
                 None => ("user".to_owned(), "user".to_owned()),
             };
             let source = source.unwrap_or(default_source);
-            memory::render(kind, title, &source, &today(), &who, None, &content)
+            memory::render(kind, title, &source, &today(), &who, &[], &content)
         }
         _ => content,
     };
@@ -215,24 +223,49 @@ async fn propose(
         kind,
         title,
         content,
+        replaces,
     } = params;
     let title = check_title(&title)?;
-    if memory::kind_name(kind).is_none() {
+    if kind.is_some_and(|kind| memory::kind_name(kind).is_none()) {
         return Err(ErrorObject::invalid_params("unknown memory kind"));
     }
-    if content.trim().is_empty() || content.len() > MAX_PROPOSAL_BYTES {
+    // An entry is short (0044); a brief is a whole file.
+    let cap = if kind.is_some() {
+        MAX_PROPOSAL_BYTES as u64
+    } else {
+        context::MAX_FILE_BYTES
+    };
+    if content.trim().is_empty() || content.len() as u64 > cap {
         return Err(ErrorObject::invalid_params(format!(
-            "a proposal needs content of at most {MAX_PROPOSAL_BYTES} bytes"
+            "a proposal needs content of at most {cap} bytes"
         )));
     }
     // A child's proposal waits in its Project's folder, naming the scope it is for, until the
-    // coordinator's next wake-up carries it ([`crate::agents::wake`]); a plain thread's waits in
-    // its repository's for the user.
-    let (folder, for_scope, to) = match proposer(context, from).await? {
+    // coordinator's next wake-up carries it ([`crate::agents::wake`]); a coordinator's waits there
+    // for the user, and a plain thread's in its repository's folder. Only a coordinator proposes
+    // the brief, its Project's, as a proposal with no kind.
+    let proposer = proposer(context, from).await?;
+    let own_project = match proposer {
+        Proposer::Coordinator { project } => Some(MemoryScope::Project { id: project }),
+        Proposer::Child { .. } | Proposer::Thread { .. } => None,
+    };
+    if kind.is_none() && own_project != Some(scope) {
+        return Err(ErrorObject::invalid_params(
+            "only a Project's coordinator proposes a brief, its Project's; anything else needs a kind",
+        ));
+    }
+    let (folder, for_scope, to, who) = match proposer {
         Proposer::Child { project } => (
             MemoryScope::Project { id: project },
             Some(scope_name(scope)),
             MemoryProposalTo::Coordinator,
+            "thread",
+        ),
+        Proposer::Coordinator { project } => (
+            MemoryScope::Project { id: project },
+            Some(scope_name(scope)),
+            MemoryProposalTo::User,
+            "coordinator",
         ),
         Proposer::Thread { repo } => {
             if scope != (MemoryScope::Repo { id: repo }) {
@@ -240,18 +273,25 @@ async fn propose(
                     "a thread outside a Project proposes only at its repository's scope",
                 ));
             }
-            (scope, None, MemoryProposalTo::User)
+            (scope, None, MemoryProposalTo::User, "thread")
         }
     };
+    if let Some(replaces) = &replaces {
+        check_replaces(context, own_project.is_some(), scope, kind, replaces).await?;
+    }
     let dir = scope_dir(context, folder).await?;
-    let writer = format!("thread {from}");
+    let writer = format!("{who} {from}");
+    let extra: Vec<(&str, &str)> = [("Scope", for_scope), ("Replaces", replaces.as_deref())]
+        .into_iter()
+        .filter_map(|(field, value)| Some((field, value?)))
+        .collect();
     let text = memory::render(
-        kind,
+        kind.unwrap_or(MemoryKind::Unknown),
         &title,
         &writer,
         &today(),
         &writer,
-        for_scope,
+        &extra,
         &content,
     );
     let slug = memory::slug(&title);
@@ -266,10 +306,42 @@ async fn propose(
     })
 }
 
+/// Checks the entry a proposal `replaces`: only a coordinator names one, and it is an existing
+/// entry of the proposal's `kind` at `scope`.
+async fn check_replaces(
+    context: &Context,
+    coordinator: bool,
+    scope: MemoryScope,
+    kind: Option<MemoryKind>,
+    replaces: &str,
+) -> Result<(), ErrorObject> {
+    if !coordinator {
+        return Err(ErrorObject::invalid_params(
+            "only a Project's coordinator names the entry a proposal replaces",
+        ));
+    }
+    let path = context::validate_relative_path(replaces)?.to_owned();
+    if kind.is_none() || memory::entry_kind(&path) != kind {
+        return Err(ErrorObject::invalid_params(format!(
+            "{path} isn't an entry of the proposal's kind, memory/<kind>/<name>.md"
+        )));
+    }
+    let dir = scope_dir(context, scope).await?;
+    if !run_blocking(move || Ok(dir.join(&path).is_file())).await? {
+        return Err(ErrorObject::invalid_params(format!(
+            "{replaces} isn't an entry at the {} scope",
+            scope_name(scope)
+        )));
+    }
+    Ok(())
+}
+
 /// Who proposes, by its run.
 enum Proposer {
     /// A Project's run other than its coordinator.
     Child { project: ProjectId },
+    /// A Project's current coordinator, proposing for the user.
+    Coordinator { project: ProjectId },
     /// A thread in a repo entry with a repository.
     Thread { repo: parallax_protocol::RepoId },
 }
@@ -289,13 +361,13 @@ async fn proposer(context: &Context, from: RunId) -> Result<Proposer, ErrorObjec
                 .map_err(|e| store_error(&e))?
                 .is_some()
             {
-                if crate::agents::coordinator::coordinator_of(db, project)? == Some(from) {
-                    return Err(ErrorObject::invalid_params(
-                        "a Project's coordinator writes memory itself, with memory_write",
-                    ));
-                }
+                let coordinator = crate::agents::coordinator::coordinator_of(db, project)?;
                 let project = ProjectId::try_from(project).map_err(|_| corrupt(project))?;
-                return Ok(Proposer::Child { project });
+                return Ok(if coordinator == Some(from) {
+                    Proposer::Coordinator { project }
+                } else {
+                    Proposer::Child { project }
+                });
             }
             let repo = db
                 .get_thread(from.into())
@@ -457,6 +529,13 @@ fn memory_file(path: &str, metadata: &std::fs::Metadata, header: memory::Header)
         source: header.source,
         date: header.date,
         writer: header.writer,
+        for_scope: header.scope.as_deref().and_then(|scope| match scope {
+            "you" => Some(MemoryScopeKind::You),
+            "repo" => Some(MemoryScopeKind::Repo),
+            "project" => Some(MemoryScopeKind::Project),
+            _ => None,
+        }),
+        replaces: header.replaces,
     }
 }
 

@@ -110,19 +110,29 @@
   {
     "jsonrpc": "2.0",
     "id": 6,
-    "method": "memory/write",
+    "method": "memory/propose",
     "params": {
+      "from": "01a0f755-f200-74dd-8cfc-06d0b225c5e3",
       "scope": { "kind": "project", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" },
-      "path": "brief.md",
-      "content": "# Goal\n",
-      "from": "01a0f755-f200-74dd-8cfc-06d0b225c5e3"
+      "title": "Ship v2 first",
+      "content": "# Goal\n\nShip v2 before the redesign.\n"
     }
   },
   {
     "jsonrpc": "2.0",
     "id": 6,
     "result": {
-      "file": { "path": "brief.md", "size": 7, "modifiedAt": "2026-10-04T12:00:00Z" }
+      "to": "user",
+      "file": {
+        "path": "proposals/ship-v2-first.md",
+        "size": 190,
+        "modifiedAt": "2026-10-04T12:00:00Z",
+        "title": "Ship v2 first",
+        "source": "coordinator 01a0f755-f200-74dd-8cfc-06d0b225c5e3",
+        "date": "2026-10-04",
+        "writer": "coordinator 01a0f755-f200-74dd-8cfc-06d0b225c5e3",
+        "forScope": "project"
+      }
     }
   }
 ]

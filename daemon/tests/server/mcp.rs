@@ -214,7 +214,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
             CONTEXT_TOOLS,
             COORDINATOR_TOOLS,
             land::TOOLS,
-            &["memory_read", "memory_write"]
+            &["memory_read", "memory_propose", "memory_write"]
         ]
         .concat()
     );

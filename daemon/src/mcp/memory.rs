@@ -1,7 +1,8 @@
 //! A thread's memory tools (0044, PLX-405), served next to [`super::thread`]'s.
 //!
-//! - A Project's coordinator gets `memory_read` and `memory_write`, at the You, Repo, and Project
-//!   scopes. Its writes add a `learned` inbox item.
+//! - A Project's coordinator gets `memory_read`, `memory_propose`, and `memory_write`, at the You,
+//!   Repo, and Project scopes. Its writes add a `learned` inbox item. It proposes for the user a
+//!   rewrite the Memory tab asked for, and any change to the brief, which only the user writes.
 //! - A Project's child gets `memory_read` and `memory_propose` at the same scopes. A proposal
 //!   waits for the coordinator's next wake-up.
 //! - A thread outside a Project, in a repository, gets `memory_read` and `memory_propose` at its
@@ -15,9 +16,8 @@ use std::path::Path;
 
 use parallax_protocol::methods::{MemoryList, MemoryPropose, MemoryRead, MemoryWrite, ThreadList};
 use parallax_protocol::{
-    AgentRun, MemoryKind, MemoryListParams, MemoryProposalTo, MemoryProposeParams,
-    MemoryReadParams, MemoryScope, MemoryWriteParams, Project, ProjectId, RepoId, RunId,
-    ThreadListParams,
+    AgentRun, MemoryListParams, MemoryProposalTo, MemoryProposeParams, MemoryReadParams,
+    MemoryScope, MemoryWriteParams, Project, ProjectId, RepoId, RunId, ThreadListParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -31,7 +31,7 @@ pub const TOOLS: &[&str] = &["memory_read", "memory_propose", "memory_write"];
 pub const CHILD_TOOLS: &[&str] = &["memory_read", "memory_propose"];
 
 /// A coordinator's memory tools.
-pub const COORDINATOR_TOOLS: &[&str] = &["memory_read", "memory_write"];
+pub const COORDINATOR_TOOLS: &[&str] = &["memory_read", "memory_propose", "memory_write"];
 
 /// The longest title, in bytes, as plxd takes it.
 const MAX_TITLE_BYTES: usize = 256;
@@ -157,42 +157,54 @@ impl Memory {
             ),
             true,
         );
-        let other = match self.role {
-            Role::Coordinator => tool(
-                "memory_write",
-                "Write memory, replacing the file: the brief (brief.md), an entry (memory/<preference|convention|decision|gotcha>/<slug>.md, which needs a title), or knowledge (knowledge/<slug>.md). Check memory_read first, so an entry isn't saved twice. Only lasting facts belong here.",
-                object(
-                    json!({
-                        "scope": scope,
-                        "path": {"type": "string", "description": "The file's path."},
-                        "content": {"type": "string", "description": "An entry's body, or the whole brief or knowledge file, at most 1 MiB."},
-                        "title": title,
-                        "source": {"type": "string", "description": "The run or message the entry came from, such as a child's run id. Default: you."},
-                    }),
-                    &["path", "content"],
-                ),
-                false,
-            ),
-            Role::Thread | Role::Child => tool(
-                "memory_propose",
-                if self.role == Role::Child {
-                    "Propose a memory entry: a lasting fact a later thread should start with, not what you did today. Your coordinator reviews it at its next wake-up and saves it or drops it."
-                } else {
-                    "Propose a memory entry for your repository: a lasting fact a later thread should start with, not what you did today. The user reviews it and saves it or drops it."
-                },
-                object(
-                    json!({
-                        "scope": scope,
-                        "kind": {"type": "string", "enum": ["preference", "convention", "decision", "gotcha"]},
-                        "title": title,
-                        "content": {"type": "string", "description": "The entry, at most 4 KiB: the fact, and for a decision why."},
-                    }),
-                    &["kind", "title", "content"],
-                ),
-                false,
-            ),
+        let kinds: &[&str] = match self.role {
+            Role::Coordinator => &["preference", "convention", "decision", "gotcha", "brief"],
+            Role::Thread | Role::Child => &["preference", "convention", "decision", "gotcha"],
         };
-        vec![read, other]
+        let mut properties = json!({
+            "scope": scope,
+            "kind": {"type": "string", "enum": kinds},
+            "title": title,
+            "content": {"type": "string", "description": "The entry, at most 4 KiB: the fact, and for a decision why. For a brief, the whole brief, at most 1 MiB."},
+        });
+        if self.role == Role::Coordinator {
+            properties["path"] = json!({"type": "string", "description": "The entry this rewrites, memory/<kind>/<name>.md at scope, as memory_read lists it. Saving the proposal replaces it. Omit it for a new entry or a brief."});
+        }
+        let propose = tool(
+            "memory_propose",
+            match self.role {
+                Role::Coordinator => {
+                    "Propose a memory change for the user to save or discard: a rewrite the Memory tab asked for, or a new brief (kind brief, project scope; only the user writes the brief). To rewrite an existing entry, name it in path."
+                }
+                Role::Child => {
+                    "Propose a memory entry: a lasting fact a later thread should start with, not what you did today. Your coordinator reviews it at its next wake-up and saves it or drops it."
+                }
+                Role::Thread => {
+                    "Propose a memory entry for your repository: a lasting fact a later thread should start with, not what you did today. The user reviews it and saves it or drops it."
+                }
+            },
+            object(properties, &["kind", "title", "content"]),
+            false,
+        );
+        if self.role != Role::Coordinator {
+            return vec![read, propose];
+        }
+        let write = tool(
+            "memory_write",
+            "Write memory, replacing the file: an entry (memory/<preference|convention|decision|gotcha>/<slug>.md, which needs a title) or knowledge (knowledge/<slug>.md). Not the brief: propose it with memory_propose. Check memory_read first, so an entry isn't saved twice. Only lasting facts belong here.",
+            object(
+                json!({
+                    "scope": scope,
+                    "path": {"type": "string", "description": "The file's path."},
+                    "content": {"type": "string", "description": "An entry's body, or the whole knowledge file, at most 1 MiB."},
+                    "title": title,
+                    "source": {"type": "string", "description": "The run or message the entry came from, such as a child's run id. Default: you."},
+                }),
+                &["path", "content"],
+            ),
+            false,
+        );
+        vec![read, propose, write]
     }
 
     /// The protocol's scope for `name`, one of [`Memory::scopes`], or the default.
@@ -246,10 +258,25 @@ impl Memory {
                     kind,
                     title,
                     content,
+                    path,
                 } = parse(arguments)?;
                 let scope = self.scope(scope.as_deref())?;
                 check_text("title", &title, MAX_TITLE_BYTES)?;
-                check_text("content", &content, MAX_PROPOSAL_BYTES)?;
+                let cap = if kind == "brief" {
+                    MAX_CONTEXT_BYTES
+                } else {
+                    MAX_PROPOSAL_BYTES
+                };
+                check_text("content", &content, cap)?;
+                if let Some(path) = &path {
+                    check_text("path", path, MAX_PATH_BYTES)?;
+                }
+                // `brief` is the coordinator's rewrite of the brief, which has no kind. plxd
+                // refuses it from anyone else, and any kind it doesn't know.
+                let kind = match kind.as_str() {
+                    "brief" => None,
+                    other => Some(serde_json::from_value(json!(other)).map_err(|e| e.to_string())?),
+                };
                 let mut plxd = Plxd::open(socket).await?;
                 let proposed = plxd
                     .call::<MemoryPropose>(MemoryProposeParams {
@@ -258,6 +285,7 @@ impl Memory {
                         kind,
                         title,
                         content,
+                        replaces: path,
                     })
                     .await?;
                 Ok(match proposed.to {
@@ -312,9 +340,11 @@ struct ReadArgs {
 struct ProposeArgs {
     #[serde(default)]
     scope: Option<String>,
-    kind: MemoryKind,
+    kind: String,
     title: String,
     content: String,
+    #[serde(default)]
+    path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -332,7 +362,7 @@ struct WriteArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{Memory, Role, TOOLS};
+    use super::{CHILD_TOOLS, COORDINATOR_TOOLS, Memory, Role, TOOLS};
 
     fn memory(role: Role) -> Memory {
         Memory {
@@ -347,9 +377,9 @@ mod tests {
     #[test]
     fn each_role_gets_its_own_tools_and_scopes() {
         for (role, names) in [
-            (Role::Coordinator, ["memory_read", "memory_write"]),
-            (Role::Child, ["memory_read", "memory_propose"]),
-            (Role::Thread, ["memory_read", "memory_propose"]),
+            (Role::Coordinator, COORDINATOR_TOOLS),
+            (Role::Child, CHILD_TOOLS),
+            (Role::Thread, CHILD_TOOLS),
         ] {
             let memory = memory(role);
             assert_eq!(memory.names(), names);
@@ -364,5 +394,11 @@ mod tests {
         let thread = memory(Role::Thread);
         let refused = thread.scope(Some("you")).unwrap_err();
         assert!(refused.contains("one of repo"), "{refused}");
+        // Only a coordinator proposes the brief.
+        let kinds = |role| {
+            memory(role).definitions()[1]["inputSchema"]["properties"]["kind"]["enum"].clone()
+        };
+        assert!(kinds(Role::Coordinator).to_string().contains("brief"));
+        assert!(!kinds(Role::Child).to_string().contains("brief"));
     }
 }
