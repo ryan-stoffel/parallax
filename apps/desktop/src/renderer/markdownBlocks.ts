@@ -1,42 +1,53 @@
-// An opening or closing code fence: up to three spaces, then three or more ` or ~.
-const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-// A line that can't continue the block above a blank line: it starts at column 0, so it isn't
-// indented code or a list item's continuation, and it isn't a list item, which would join a
-// list above into one loose list.
-const STARTS_BLOCK = /^(?![-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$))\S/;
-// Markdown that reaches across blank lines: link and footnote definitions, which any block can
-// use, and raw HTML blocks that only end at their closing tag.
-const CROSS_BLOCK = /^ {0,3}(?:\[[^\]]+\]:|<[!?]|<(?:pre|script|style|textarea)(?:[\s>]|$))/im;
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
+
+// The parser MarkdownText renders with (react-markdown runs remark-parse and its remark plugins),
+// without the HTML, highlighting, and React steps after it.
+const parser = unified().use(remarkParse).use(remarkGfm).freeze();
+
+// A blank line: Markdown counts only spaces and tabs as blank.
+const BLANK_LINE = /\n[ \t]*\r?\n/;
+
+type Tree = { type: string; children?: Tree[] };
+
+/** Whether a tree holds a link or footnote definition, which any block can use. */
+const defines = (node: Tree): boolean =>
+  node.type === "definition" ||
+  node.type === "footnoteDefinition" ||
+  (node.children?.some(defines) ?? false);
 
 /**
- * Splits Markdown at the top-level blank lines outside code fences where each block renders
- * exactly as it does in the whole text. Joined, the blocks are the text. A streaming message
- * renders them one by one, so only its last, growing block re-parses (PLX-448).
+ * Splits Markdown into blocks that each render on their own exactly as they do in the whole
+ * text. Joined, the blocks are the text. A streaming message renders them one by one, so only
+ * its last, growing block goes through the whole render (PLX-448).
+ *
+ * The split points come from the renderer's own parser, so fences, lists, and line endings mean
+ * the same here as there: the starts of the lines that begin top-level nodes, where a blank line
+ * comes between them and neither is raw HTML. Text with a definition isn't split, since a
+ * definition reaches every block.
+ *
+ * `previous` is this function's blocks for an earlier text. When `text` extends it, as a
+ * streaming message grows, all but its last two blocks are kept and only the rest is parsed.
+ * Markdown is parsed line by line and appending changes only the last line, so it can't move a
+ * split point whose next block's first line is complete: one before a block another follows.
  */
-export function markdownBlocks(text: string): string[] {
-  if (CROSS_BLOCK.test(text)) return [text];
-  const blocks: string[] = [];
+export function markdownBlocks(text: string, previous: string[] = []): string[] {
+  const blocks = text.startsWith(previous.join("")) ? previous.slice(0, -2) : [];
+  const rest = text.slice(blocks.join("").length);
+  const tree = parser.parse(rest);
+  if (defines(tree)) return [text];
   let start = 0;
-  let offset = 0;
-  let blank = false;
-  // The open fence's run of ` or ~, which a run as long of the same character closes.
-  let fence: string | undefined;
-  for (const line of text.split("\n")) {
-    const run = FENCE.exec(line);
-    if (fence) {
-      const [, marks = "", rest = ""] = run ?? [];
-      if (marks[0] === fence[0] && marks.length >= fence.length && !rest.trim()) fence = undefined;
-    } else {
-      if (blank && offset > start && STARTS_BLOCK.test(line)) {
-        blocks.push(text.slice(start, offset));
-        start = offset;
-      }
-      // A backtick fence's info string can't hold a backtick; then it's inline code.
-      if (run && !(run[1]!.startsWith("`") && run[2]!.includes("`"))) fence = run[1];
-    }
-    blank = !line.trim();
-    offset += line.length + 1;
-  }
-  blocks.push(text.slice(start));
+  tree.children.forEach((node, i) => {
+    const before = tree.children[i - 1];
+    if (!before || before.type === "html" || node.type === "html") return;
+    const end = before.position!.end.offset!;
+    // The start of its line, so an indented node keeps its indent, which a fence strips.
+    const line = rest.lastIndexOf("\n", node.position!.start.offset! - 1) + 1;
+    if (!BLANK_LINE.test(rest.slice(end, line))) return;
+    blocks.push(rest.slice(start, line));
+    start = line;
+  });
+  blocks.push(rest.slice(start));
   return blocks;
 }

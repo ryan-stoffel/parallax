@@ -1813,13 +1813,17 @@ const gfm = [remarkGfm];
 
 /**
  * A streaming agent message, rendered as MarkdownText renders it, but block by block: an
- * unchanged block keeps its string, so its memo skips re-parsing it, and each update re-parses
- * only the last block (PLX-448).
+ * unchanged block keeps its string, so its memo skips rendering it again, and each update
+ * renders only the last block (PLX-448). When the message finishes, its row switches to
+ * MarkdownText, which renders it whole once and remounts its code blocks.
  */
 function StreamingMarkdown({ text }: { text: string }) {
+  // The last update's blocks, so the split parses only the end of the message again.
+  const blocks = useRef<string[]>([]);
+  blocks.current = markdownBlocks(text, blocks.current);
   return (
     <div className="markdown">
-      {markdownBlocks(text).map((block, i) => (
+      {blocks.current.map((block, i) => (
         <MarkdownBlock key={i} text={block} />
       ))}
     </div>

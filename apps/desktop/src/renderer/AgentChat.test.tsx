@@ -3,7 +3,6 @@ import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { Globe } from "lucide-react";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
@@ -274,28 +273,50 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
 });
 
 test("a streaming message renders as the whole text does, at every line", () => {
-  const reply = [
-    "Setext\n===\n\nIntro with `code` and **bold**.",
-    "- loose\n\n- list\n  continued\n\n  - nested\n\n    ```sh\n    cargo test\n\n    ```",
-    "1. one\n\n2) two\n\n10. ten",
-    "    indented code\n\n    more\n\n> quote\n> lines",
-    "| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\n- [x] done\n- [ ] not",
-    "```ts\nconst a = 1;\n\n~~~\n```\n\n~~~~\n```\n\n~~~~\n\nEnd.",
-  ].join("\n\n");
-  const html = (text: string, partial: boolean) =>
-    renderToStaticMarkup(
-      <RowView
-        row={{ kind: "assistant", key: "a", text, partial }}
-        live={false}
-        open={false}
-        onToggle={() => {}}
-      />,
-    ).replaceAll(">\n<", "><");
-  // Each length that ends a line or stops in its first characters, which decide its kind.
-  for (let n = 1; n <= reply.length; n++) {
-    const column = n - 1 - reply.lastIndexOf("\n", n - 1);
-    if (column > 4 && n < reply.length && reply[n] !== "\n") continue;
-    expect(html(reply.slice(0, n), true)).toBe(html(reply.slice(0, n), false));
+  const replies = [
+    [
+      "Setext\n===\n\nIntro with `code` and **bold**.",
+      "- loose\n\n- list\n  continued\n\n  - nested\n\n    ```sh\n    cargo test\n\n    ```",
+      "1. one\n\n2) two\n\n10. ten",
+      "    indented code\n\n    more\n\n> quote\n> lines",
+      "| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\n- [x] done\n- [ ] not",
+      "```ts\nconst a = 1;\n\n~~~\n```\n\n~~~~\n```\n\n~~~~\n\nEnd.",
+      "- tight\n- list\n\nText\n\n  ```\n  indented fence\n  ```\n\nEnd.",
+    ].join("\n\n"),
+    // A list item's fence that a column-0 fence ends, which opens a new one.
+    "1. Run:\n   ```sh\n   cargo test\n```\n\nThen check.\n\nDone.",
+    // A fence on a list marker's line.
+    "- ```\n  a\n  ```\n\nText\n\n```\ncode\n\nmore\n```",
+    // A fence inside an HTML block.
+    "<details>\n```ts\nconst a = 1;\n\nconst b = 2;\n```\n\n</details>\n\nAfter",
+    "```\r\ncode\r\n\r\nmore\r\n```\r\n\r\n- a\r\n\r\n- b\r\n-\r\n\r\nEnd",
+    // Definitions inside containers.
+    "See [x].\n\n> [x]: https://example.com",
+    "See [x].\n\nok\n\n- [x]: https://example.com",
+    "A[^1]\n\nB\n\n> [^1]: Note",
+    "a\n\u00a0\nb",
+    // A loose list whose next item, while it arrives, reads as a paragraph.
+    "1. a\n\n2. b\n\n3. c\n\nText\n\n- d\n\n- e",
+  ];
+  // A row in a root of its own, which keeps it across renders, as the transcript does.
+  const view = () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    return (text: string, partial: boolean) => {
+      const row: Item = { kind: "assistant", key: "a", text, partial };
+      act(() => root.render(<RowView row={row} live={false} open={false} onToggle={() => {}} />));
+      return container.innerHTML.replaceAll(">\n<", "><");
+    };
+  };
+  for (const reply of replies) {
+    const streaming = view();
+    // Each length that ends a line or stops in its first characters, which decide its kind.
+    for (let n = 1; n <= reply.length; n++) {
+      const column = n - 1 - reply.lastIndexOf("\n", n - 1);
+      if (column > 4 && n < reply.length && reply[n] !== "\n") continue;
+      const text = reply.slice(0, n);
+      expect(streaming(text, true), JSON.stringify(text)).toBe(view()(text, false));
+    }
   }
   // Hundreds of renders, a few seconds when other files run alongside.
 }, 30_000);
