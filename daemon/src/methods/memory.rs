@@ -191,7 +191,8 @@ async fn write(
         Ok((save(&dir, &written_path, &text)?, existed))
     })
     .await?;
-    // A new entry corrects nothing, so only a changed one is sent to running children.
+    // A new entry corrects nothing, so only a changed one is sent to running children. Saving a
+    // proposal that `replaces` an entry writes over it, so it counts as a change.
     if existed {
         context::corrections::tell(
             &context.daemon,

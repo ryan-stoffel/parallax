@@ -150,7 +150,8 @@ async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_mi
 }
 
 /// Changing or deleting an entry a running child reads queues a message for it naming the
-/// change, its title quoted as data. A new entry corrects nothing, so it sends none.
+/// change, its title quoted as data. The change is a write over the entry under a new title, as
+/// saving a proposal that `replaces` it is. A new entry corrects nothing, so it sends none.
 #[tokio::test]
 async fn a_changed_or_deleted_entry_reaches_running_children_as_a_queued_message() {
     let busy = vec![init("s-1"), text("Working"), Step::Hang];

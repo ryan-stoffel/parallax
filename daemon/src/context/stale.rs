@@ -183,7 +183,7 @@ mod tests {
             "s",
             "d",
             "w",
-            None,
+            &[],
             "See `a/b.rs`.\n",
         );
         let marked = mark(&entry, Some("a/b.rs"));
@@ -206,7 +206,7 @@ mod tests {
         let write = |path: &str, body: &str| {
             let file = dir.path().join(path);
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            let text = render(MemoryKind::Convention, "T", "s", "d", "w", None, body);
+            let text = render(MemoryKind::Convention, "T", "s", "d", "w", &[], body);
             std::fs::write(file, text).unwrap();
         };
         write(
