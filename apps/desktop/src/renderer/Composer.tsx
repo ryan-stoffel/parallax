@@ -1153,8 +1153,9 @@ export function Composer({
                       className={menuButton}
                       title="This Project's mode. Change it from the Project's Permissions…"
                     >
-                      {accessOptions[projectMode].icon}
-                      {projectMode === "auto" ? "Auto" : "Bypass"}
+                      {/* A newer plxd's mode this app doesn't know shows as plxd names it. */}
+                      {accessOptions[projectMode]?.icon}
+                      {{ auto: "Auto", bypass: "Bypass" }[projectMode] ?? projectMode}
                     </span>
                   </>
                 )}

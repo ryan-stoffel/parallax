@@ -16,6 +16,7 @@ import type {
   AgentRun,
   LoggedEvent,
   Project,
+  ProjectPermission,
   Repo,
   ParallaxEvent,
   Thread,
@@ -1155,6 +1156,20 @@ test("with projectPermission, a Project's composers show its mode in place of Ac
   expect(calls("agent/send")).toEqual([
     { runId: started!.id, turnId: expect.any(String), text: "Start with the settings page" },
   ]);
+});
+
+test("a Project's mode this app doesn't know shows by its name, not as Bypass", async () => {
+  capabilities = { coordinator: {}, projectPermission: {} };
+  const permission = "ask" as ProjectPermission;
+  answers["project/list"] = () => ({
+    result: { projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), permission }], seq: 7 },
+  });
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  await renderApp();
+  await openEmber();
+  expect(document.querySelector('main [title^="This Project\'s mode"]')?.textContent).toBe("ask");
 });
 
 test("a Project whose coordinator ran before opens on its transcript", async () => {
