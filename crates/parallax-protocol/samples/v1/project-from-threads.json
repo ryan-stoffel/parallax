@@ -35,7 +35,7 @@
       "run": {
         "id": "01a10700-1300-7b4c-9d5e-6f7a8b9c0d1e",
         "project": "01a10700-1200-7a3b-8c4d-5e6f7a8b9c0d",
-        "prompt": "I made this Project from these threads, which are now your children:\n- 01a106f0-0100-7c5d-8e6f-7a8b9c0d1e2f\n- 01a106f0-0200-7d6e-9f7a-8b9c0d1e2f3a\n\nRead each with thread_read. Then draft the Project's brief: its goal, scope, and constraints, in a few lines, from what the threads were doing. Reply with the draft for me to approve, and start no new work until I do. Once I approve it, save it as brief.md with memory_write.",
+        "prompt": "I made this Project from these threads, which are now your children:\n- 01a106f0-0100-7c5d-8e6f-7a8b9c0d1e2f\n- 01a106f0-0200-7d6e-9f7a-8b9c0d1e2f3a\n\nRead each with thread_read. Then draft the Project's brief: its goal, scope, and constraints, in a few lines, from what the threads were doing. Propose it with memory_propose (kind brief, project scope) for me to save or discard, and start no new work until I save it.",
         "policy": "noWrite",
         "status": "running",
         "backend": "claude",

@@ -347,15 +347,22 @@ pub struct ProjectStartParams {
 ///
 /// Each thread must be on the same repo entry and have its own worktree, so a thread on the
 /// scratch entry, one in the user's checkout, one whose worktree `agent/accept` removed, or one
-/// already in a Project fails with `invalidParams`, as do threads on two repo entries. An unknown
-/// thread fails with `threadNotFound`.
+/// already in a Project fails with `invalidParams`, as do threads on two repo entries. A thread
+/// whose kind has no `permission` in a Project fails with `unsupportedOption`. An unknown thread
+/// fails with `threadNotFound`.
 ///
 /// plxd creates the Project on the threads' repository as `project/create` does, starts its
 /// coordinator as `project/start` does, with a first message asking it to read the threads and
-/// draft the brief for the user to approve, and makes each thread the coordinator's child. A
-/// thread keeps its history, worktree, branch, and `Thread.repo`, takes the coordinator as its
-/// `parent` (reported as `thread.updated`), and runs in the Project's mode from its next CLI
-/// process. Idempotent on `id` and `runId`: a retry returns the same Project and coordinator.
+/// propose the brief with `memory_propose` for the user to save, and makes each thread the
+/// coordinator's child. When the coordinator can't start, plxd removes the Project it just
+/// created and leaves the threads as they were.
+///
+/// A thread keeps its history, worktree, branch, and `Thread.repo`. Its run moves to the
+/// Project, so its later `agent.*` events are on the Project's scope, and it forwards its
+/// permission requests (`approvals`) to the inbox. It takes the coordinator as its `parent`
+/// (reported as `thread.updated`), replacing any parent it had: a thread another thread started
+/// stops waking that thread. It runs in the Project's mode from its next CLI process. Idempotent
+/// on `id` and `runId`: a retry returns the same Project and coordinator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectFromThreadsParams {

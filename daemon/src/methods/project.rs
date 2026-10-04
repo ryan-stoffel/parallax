@@ -68,6 +68,14 @@ pub(crate) async fn create(
     context: &Context,
     params: ProjectCreateParams,
 ) -> Result<ProjectCreateResult, ErrorObject> {
+    Ok(create_or_get(context, params).await?.0)
+}
+
+/// [`create`], and whether the project already existed.
+async fn create_or_get(
+    context: &Context,
+    params: ProjectCreateParams,
+) -> Result<(ProjectCreateResult, bool), ErrorObject> {
     check(&params)?;
     let log = Arc::clone(&context.daemon.log);
     let data_dir = context.daemon.data_dir.clone();
@@ -123,7 +131,7 @@ pub(crate) async fn create(
             }
         }
     }
-    Ok(result)
+    Ok((result, existed))
 }
 
 /// Starts the project's coordinator, detached from the request as `agent/start` is, so a dropped
@@ -145,7 +153,9 @@ pub(crate) async fn start(
 /// Makes a Project from threads (0042): checks them, creates the Project on their repository as
 /// `project/create` does, starts its coordinator, and moves each thread into it as the
 /// coordinator's child. The coordinator and the moves are detached from the request, as
-/// `project/start` is. Each step is idempotent, so a retry finishes what a failed request left.
+/// `project/start` is. Each step is idempotent, so a retry finishes what a failed request left,
+/// except a coordinator that can't start: that refusal would repeat, so the Project this call
+/// created is removed.
 pub(crate) async fn from_threads(
     context: &Context,
     params: ProjectFromThreadsParams,
@@ -168,8 +178,14 @@ pub(crate) async fn from_threads(
             "threads must not name a thread twice",
         ));
     }
-    let repo_path = threads_repo(context, id, threads.clone()).await?;
-    let mut created = create(
+    let (repo_path, backends) = threads_repo(context, id, threads.clone()).await?;
+    for (thread, backend) in backends {
+        agents::fits_mode(&context.daemon, &backend, permission).map_err(|mut error| {
+            error.message = format!("thread {thread}: {}", error.message);
+            error
+        })?;
+    }
+    let (mut created, existed) = create_or_get(
         context,
         ProjectCreateParams {
             id,
@@ -198,7 +214,16 @@ pub(crate) async fn from_threads(
         .daemon
         .agents
         .detached(async move {
-            let run = coordinator::start(Arc::clone(&daemon), start).await?;
+            let run = match coordinator::start(Arc::clone(&daemon), start).await {
+                Ok(run) => run,
+                Err(error) => {
+                    // A retry would be refused the same way, so don't leave an empty Project.
+                    if !existed && let Err(error) = remove(Arc::clone(&daemon), id).await {
+                        warn!(project = %id, %error, "could not remove the project its coordinator didn't start in");
+                    }
+                    return Err(error);
+                }
+            };
             for thread in threads {
                 agents::join(&daemon, thread, id, run_id).await?;
                 report_thread(&daemon, thread).await?;
@@ -213,20 +238,21 @@ pub(crate) async fn from_threads(
     })
 }
 
-/// The path of the repository `threads` are all on, or why they can't make Project `project`:
-/// each must be a thread on a repo entry, not the scratch one, with a worktree of its own, and
-/// in no Project but this one, which a retry finds them in. One plxd is one host, so threads on
-/// one repo entry share a host too.
+/// The path of the repository `threads` are all on, with each thread's backend, or why they
+/// can't make Project `project`: each must be a thread on a repo entry, not the scratch one, with
+/// a worktree of its own, and in no Project but this one, which a retry finds them in. One plxd
+/// is one host, so threads on one repo entry share a host too.
 async fn threads_repo(
     context: &Context,
     project: ProjectId,
     threads: Vec<RunId>,
-) -> Result<String, ErrorObject> {
+) -> Result<(String, Vec<(RunId, String)>), ErrorObject> {
     context
         .daemon
         .store
         .run(&context.cancel, move |db| {
             let mut repo: Option<parallax_store::Repo> = None;
+            let mut backends = Vec::new();
             for id in threads {
                 let not_found = || {
                     ErrorObject::parallax(
@@ -279,8 +305,9 @@ async fn threads_repo(
                     Some(_) => {}
                     None => repo = Some(entry),
                 }
+                backends.push((id, run.fields.backend));
             }
-            repo.map(|repo| repo.fields.path)
+            repo.map(|repo| (repo.fields.path, backends))
                 .ok_or_else(|| ErrorObject::invalid_params("threads must name at least one thread"))
         })
         .await

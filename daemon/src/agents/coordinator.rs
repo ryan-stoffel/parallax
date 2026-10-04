@@ -167,9 +167,7 @@ fn newest(
 }
 
 /// The user's first message to the coordinator of a Project made from `threads`
-/// (`project/fromThreads`, 0042): read them and draft the brief for the user to approve.
-// ponytail: the draft is text in its reply; make it a memory proposal once PLX-476 lets a
-// coordinator propose one.
+/// (`project/fromThreads`, 0042): read them and propose a brief for the user to save.
 pub(crate) fn from_threads_prompt(threads: &[RunId]) -> String {
     let mut list = String::new();
     for id in threads {
@@ -178,8 +176,8 @@ pub(crate) fn from_threads_prompt(threads: &[RunId]) -> String {
     format!(
         "I made this Project from these threads, which are now your children:\n{list}\nRead each \
          with thread_read. Then draft the Project's brief: its goal, scope, and constraints, in a \
-         few lines, from what the threads were doing. Reply with the draft for me to approve, and \
-         start no new work until I do. Once I approve it, save it as brief.md with memory_write."
+         few lines, from what the threads were doing. Propose it with memory_propose (kind brief, \
+         project scope) for me to save or discard, and start no new work until I save it."
     )
 }
 

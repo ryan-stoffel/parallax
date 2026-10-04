@@ -904,6 +904,19 @@ pub(super) fn in_mode(
     Err(ErrorObject::parallax(ErrorKind::UnsupportedOption, detail))
 }
 
+/// `project/fromThreads`' check that a run on backend `name` can run in Project mode `mode`. A
+/// backend this host no longer has passes, since its run can't start anywhere.
+pub(crate) fn fits_mode(
+    daemon: &Daemon,
+    name: &str,
+    mode: ProjectPermission,
+) -> Result<(), ErrorObject> {
+    match daemon.agents.backends.by_backend_name(name) {
+        Some((_, backend)) => in_mode(backend.as_ref(), mode).map(|_| ()),
+        None => Ok(()),
+    }
+}
+
 /// Logs `run`'s `agent.started` on `project`'s events.
 async fn log_started(daemon: &Daemon, project: ProjectId, run: AgentRun) {
     let event = ParallaxEvent::AgentStarted {

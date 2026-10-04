@@ -16,7 +16,7 @@ use tokio::time::Instant;
 
 use super::{Host, message, real_repo, start_params};
 use crate::agents::{end_turn, init};
-use crate::coordinator::{nth_launch, roles};
+use crate::coordinator::{nth_launch, roles_mapping};
 use crate::support::{PATIENCE, kind};
 
 fn params(threads: Vec<RunId>) -> ProjectFromThreadsParams {
@@ -33,13 +33,14 @@ fn params(threads: Vec<RunId>) -> ProjectFromThreadsParams {
 }
 
 /// Workers end each turn at once, and the coordinator has a script for its first turn and the
-/// wake-ups the joined threads send it.
-fn host(seen: &Arc<Mutex<Vec<RunRequest>>>) -> Host {
+/// wake-ups the joined threads send it. Both run in a Project only in `permissions`.
+fn host(seen: &Arc<Mutex<Vec<RunRequest>>>, permissions: &'static [AgentPermission]) -> Host {
     let coordinator = || vec![init("coordinator-1"), end_turn("Here's a draft brief.")];
-    Host::start(roles(
+    Host::start(roles_mapping(
         vec![init("worker-1"), end_turn("Done.")],
         vec![coordinator(), coordinator(), coordinator()],
         seen,
+        permissions,
     ))
 }
 
@@ -63,12 +64,12 @@ async fn worker_launches(seen: &Mutex<Vec<RunRequest>>, n: usize) -> Vec<RunRequ
 }
 
 /// Two threads become a Project's children: the Project is on their repository, its coordinator
-/// is asked to read them and draft the brief, and each keeps its repo entry and worktree, takes
+/// is asked to read them and propose the brief, and each keeps its repo entry and worktree, takes
 /// the coordinator as its parent, and runs its next turn in the Project's mode.
 #[tokio::test]
 async fn threads_become_a_projects_children_under_its_coordinator() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let host = host(&seen);
+    let host = host(&seen, &[AgentPermission::Auto, AgentPermission::Bypass]);
     let path = real_repo(host.work.path(), "app");
     let mut client = host.client().await;
     let repo = client.add(&path).await;
@@ -96,7 +97,7 @@ async fn threads_become_a_projects_children_under_its_coordinator() {
 
     let kickoff = nth_launch(&seen, 0).await.prompt;
     assert!(kickoff.contains("thread_read"), "{kickoff}");
-    assert!(kickoff.contains("brief"), "{kickoff}");
+    assert!(kickoff.contains("memory_propose (kind brief"), "{kickoff}");
     for thread in &threads {
         assert!(kickoff.contains(&thread.id.to_string()), "{kickoff}");
     }
@@ -133,12 +134,13 @@ async fn threads_become_a_projects_children_under_its_coordinator() {
     host.server.stop().await;
 }
 
-/// Threads on two repositories, on the scratch entry, or in the user's checkout can't make a
-/// Project, nor can an unknown one, and a refusal creates nothing.
+/// Threads on two repositories, on the scratch entry, in the user's checkout, or whose kind lacks
+/// the Project's mode can't make a Project, nor can an unknown one. A refusal, or a coordinator
+/// that can't start, leaves no Project.
 #[tokio::test]
 async fn threads_on_two_repos_or_without_a_worktree_are_refused() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let host = host(&seen);
+    let host = host(&seen, &[AgentPermission::Bypass]);
     let mut client = host.client().await;
     let app = client.add(&real_repo(host.work.path(), "app")).await;
     let lib = client.add(&real_repo(host.work.path(), "lib")).await;
@@ -177,11 +179,29 @@ async fn threads_on_two_repos_or_without_a_worktree_are_refused() {
         .await
         .unwrap_err();
     assert_eq!(kind(&unknown), ErrorKind::ThreadNotFound);
+    let auto = client
+        .call::<ProjectFromThreads>(ProjectFromThreadsParams {
+            permission: ProjectPermission::Auto,
+            ..params(vec![on_app])
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&auto), ErrorKind::UnsupportedOption);
+    assert!(auto.message.contains("has no Auto"), "{}", auto.message);
+    let no_coordinator = client
+        .call::<ProjectFromThreads>(ProjectFromThreadsParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "missing".to_owned(),
+            }),
+            ..params(vec![on_app])
+        })
+        .await;
+    assert!(no_coordinator.is_err(), "{no_coordinator:?}");
     let projects = client
         .call::<ProjectList>(ProjectListParams {})
         .await
         .unwrap()
         .projects;
-    assert!(projects.is_empty(), "a refusal creates nothing");
+    assert!(projects.is_empty(), "a refusal leaves no Project");
     host.server.stop().await;
 }
