@@ -70,6 +70,7 @@ import {
 import { Composer, tabItem, type ComposerProps, type Unanswered } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
+import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { GitHubLogo, LinearLogo } from "./logos";
@@ -94,7 +95,7 @@ import {
   SubagentsContext,
   type NativeSubagent,
 } from "./Subagents";
-import { titleOf } from "./threads";
+import { titleOf, type ForkChoice } from "./threads";
 import {
   failureText,
   groupWork,
@@ -175,6 +176,8 @@ export function AgentChat({
   subagent,
   onOpenSubagent,
   onSubagents,
+  forked,
+  onFork,
 }: {
   hostId: string;
   runId: string;
@@ -232,6 +235,13 @@ export function AgentChat({
   onOpenSubagent?: (runId: string, callId: string) => void;
   /** Told run `runId`'s own subagents whenever they change, for the top bar's chips. */
   onSubagents?: (runId: string, subagents: NativeSubagent[]) => void;
+  /** Whether the thread is a fork (0050), whose history copied from the original shows muted. */
+  forked?: boolean;
+  /**
+   * Forks the thread at a turn, or at its latest with none, and opens the fork (0050). Its
+   * messages offer Fork only with it. Resolves to plxd's error, if it refused.
+   */
+  onFork?: (turnId: string | undefined, choice: ForkChoice) => Promise<RpcError | undefined>;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -473,6 +483,10 @@ export function AgentChat({
     !isRunning(run.status) &&
     run.status !== "accepted";
 
+  const forkTarget = useMemo<ForkTarget | undefined>(
+    () => (run && onFork && connected ? { hostId, run, onFork } : undefined),
+    [hostId, run, onFork, connected],
+  );
   const pinned = (
     <PinnedApprovals
       asked={asked}
@@ -501,19 +515,23 @@ export function AgentChat({
     <SubagentsContext value={subagents}>
       {rows.length > 0 ? (
         <ThreadLinksContext value={threadLinks}>
-          <TranscriptView
-            rows={rows}
-            sent={unsent}
-            live={isRunning(run?.status)}
-            stalled={stalled}
-            onResend={resend}
-            loadImage={showImage}
-            end={
-              run?.status === "waiting" && (
-                <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
-              )
-            }
-          />
+          <ForkContext value={forkTarget}>
+            <TranscriptView
+              rows={rows}
+              sent={unsent}
+              live={isRunning(run?.status)}
+              stalled={stalled}
+              // plxd logs a fork's copied history with its agent.started, at its creation (0050).
+              copiedAt={forked ? run?.createdAt : undefined}
+              onResend={resend}
+              loadImage={showImage}
+              end={
+                run?.status === "waiting" && (
+                  <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+                )
+              }
+            />
+          </ForkContext>
         </ThreadLinksContext>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-[13px] text-faint-foreground">
@@ -672,6 +690,7 @@ export function TranscriptView({
   onResend,
   loadImage,
   end,
+  copiedAt,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
@@ -683,6 +702,8 @@ export function TranscriptView({
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
   /** Shown after the last row, such as a waiting run's resume card. */
   end?: ReactNode;
+  /** In a fork, when its history copied from the original was logged: rows up to it show muted. */
+  copiedAt?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Threads' titles, to name the thread that sent a message or stopped this one (0041).
@@ -725,6 +746,12 @@ export function TranscriptView({
   const tail = view.findLastIndex((r) => r.kind !== "notice");
   const activeIndex =
     view[tail]?.kind === "work" && (going || view[tail].key === "work:pending") ? tail : -1;
+  const copied = (row: ViewRow) => {
+    const at = row.kind === "work" ? row.startedAt : "at" in row ? row.at : undefined;
+    return !!copiedAt && !!at && Date.parse(at) <= Date.parse(copiedAt);
+  };
+  // A turn forks once it ends (0050), so the latest message offers no Fork while the run goes.
+  const latest = view.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
 
   const virtualizer = useVirtualizer({
     count: view.length,
@@ -803,6 +830,7 @@ export function TranscriptView({
         <div className="relative w-full" style={{ height: total }}>
           {virtualizer.getVirtualItems().map((v) => {
             const row = view[v.index]!;
+            const muted = copied(row);
             return (
               <div
                 key={v.key}
@@ -811,7 +839,10 @@ export function TranscriptView({
                 className="absolute top-0 left-0 w-full"
                 style={{ transform: `translateY(${v.start}px)` }}
               >
-                <div className="mx-auto max-w-3xl px-6 py-2">
+                <div
+                  data-copied={muted || undefined}
+                  className={`mx-auto max-w-3xl px-6 py-2 ${muted ? "opacity-60" : ""}`}
+                >
                   <RowView
                     row={row}
                     sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
@@ -823,6 +854,8 @@ export function TranscriptView({
                     onResend={onResend}
                     loadImage={loadImage}
                     sender={"from" in row && row.from ? titles?.[row.from] : undefined}
+                    copied={muted}
+                    forkable={!muted && !(live && v.index === latest)}
                   />
                 </div>
               </div>
@@ -906,6 +939,10 @@ interface RowProps {
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
   /** The title of the thread a message or a stop came from, when the row has one and it's known. */
   sender?: string;
+  /** Whether a fork copied it from the original (0050), so its logged time is the fork's. */
+  copied?: boolean;
+  /** For a user's message: whether its turn can fork, where the chat offers Fork. */
+  forkable?: boolean;
 }
 
 /** A message Parallax or another thread sent, not the user (0025, 0041). */
@@ -923,6 +960,8 @@ export const RowView = memo(function RowView({
   onResend,
   loadImage,
   sender,
+  copied,
+  forkable,
 }: RowProps) {
   switch (row.kind) {
     case "work":
@@ -934,6 +973,7 @@ export const RowView = memo(function RowView({
           open={open}
           openKeys={openKeys ?? new Set()}
           onToggle={onToggle}
+          copied={copied}
         />
       );
     case "user":
@@ -1004,7 +1044,11 @@ export const RowView = memo(function RowView({
               {text ?? <span className="text-muted-foreground italic">Follow-up message</span>}
             </div>
           )}
-          <PromptMeta at={row.kind === "user" ? row.at : undefined} text={text} />
+          <PromptMeta
+            at={row.kind === "user" && !copied ? row.at : undefined}
+            text={text}
+            fork={forkable && row.kind === "user" && <ForkButton turnId={row.turnId} />}
+          />
         </div>
       );
     }
@@ -1168,7 +1212,8 @@ function MessageImage({
 /**
  * A run of thinking, tool calls, and checklists under one dropdown. While the agent works its
  * header says what it's doing now, with a loader for that; afterward it says how long it worked,
- * and hides the rest. Before the agent does anything, it's empty and muses.
+ * and hides the rest. Before the agent does anything, it's empty and muses. A fork's `copied`
+ * work says only "Worked", since its logged times are all the fork's creation (0050).
  */
 function WorkGroup({
   work,
@@ -1177,6 +1222,7 @@ function WorkGroup({
   open,
   openKeys,
   onToggle,
+  copied,
 }: {
   work: Work;
   active: boolean;
@@ -1184,6 +1230,7 @@ function WorkGroup({
   open: boolean;
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
+  copied?: boolean;
 }) {
   const now = active ? activity(work.items.at(-1)) : undefined;
   return (
@@ -1207,7 +1254,9 @@ function WorkGroup({
             {now.detail && <span className="truncate text-muted-foreground">{now.detail}</span>}
           </>
         ) : (
-          <span className="text-muted-foreground">{workedFor(work.startedAt, work.endedAt)}</span>
+          <span className="text-muted-foreground">
+            {copied ? "Worked" : workedFor(work.startedAt, work.endedAt)}
+          </span>
         )}
         {work.items.length > 0 && (
           <ChevronRight
@@ -1735,8 +1784,8 @@ export function useCopy() {
   return [copied, copy] as const;
 }
 
-/** Under a prompt, on hover or focus: when it was sent, and Copy for its text. */
-function PromptMeta({ at, text }: { at?: string; text?: string | null }) {
+/** Under a prompt, on hover or focus: when it was sent, Copy for its text, and `fork`. */
+function PromptMeta({ at, text, fork }: { at?: string; text?: string | null; fork?: ReactNode }) {
   const [copied, copy] = useCopy();
   return (
     <div className="flex h-6 items-center gap-1 text-[12px] text-faint-foreground opacity-0 group-focus-within/prompt:opacity-100 group-hover/prompt:opacity-100">
@@ -1751,6 +1800,7 @@ function PromptMeta({ at, text }: { at?: string; text?: string | null }) {
           {copied ? <Check /> : <Copy />}
         </button>
       )}
+      {fork}
     </div>
   );
 }

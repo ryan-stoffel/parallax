@@ -1,4 +1,4 @@
-import { Bot, PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
+import { Bot, GitFork, PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InboxItem, Thread } from "../protocol/generated/protocol";
@@ -40,6 +40,7 @@ import {
   threadProjects,
   titleOf,
   useThreads,
+  type ForkChoice,
   type ThreadsView,
 } from "./threads";
 import { isRunning } from "./transcript";
@@ -326,6 +327,14 @@ export function App() {
         ? [crumbs[0]!, repo, back]
         : [crumbs[0]!, repo, back, { label: page }];
     }
+    // A fork's original, while it's listed, goes before the fork's own crumb (0050).
+    const original = threads.state.threads.find((t) => t.id === openThread?.forkedFrom?.run);
+    if (original)
+      crumbs.splice(-1, 0, {
+        label: `Forked from ${threads.state.titles[original.id] ?? "Thread"}`,
+        icon: <GitFork />,
+        onClick: () => openThreadId(original.id),
+      });
     // An open subagent's crumb comes last, and its thread's, when shown, goes back to the thread.
     if (selection.kind === "thread" && subagentOpen) {
       const threadId = selection.threadId;
@@ -337,6 +346,13 @@ export function App() {
       });
     }
   }
+  // Forks a thread (0050) and opens the fork. Resolves to plxd's error, if it refused.
+  const forkThread = async (runId: string, turnId: string | undefined, choice: ForkChoice) => {
+    const forked = await threads.fork(runId, turnId, choice);
+    if (typeof forked !== "string") return forked;
+    openThreadId(forked);
+    return undefined;
+  };
 
   // A Project created on the open host is in its list already. Another host's list loads once
   // that host is open.
@@ -599,6 +615,12 @@ export function App() {
                 subagent={selection.subagent}
                 onOpenSubagent={openSubagent}
                 onSubagents={reportNative}
+                forked={!!openThread?.forkedFrom}
+                onFork={
+                  threads.forkable
+                    ? (turnId, choice) => forkThread(selection.threadId, turnId, choice)
+                    : undefined
+                }
               />
             ) : selection.kind === "new" ? (
               <NewThread
@@ -775,6 +797,7 @@ function HostLoader({
     lineage: !!capabilities && "threadLineage" in capabilities,
     autoResume: !!capabilities && "autoResume" in capabilities,
     onNeedsYou: (projectId, item) => onNeedsYou(hostId, projectId, item),
+    forkable: !!capabilities && "threadFork" in capabilities,
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;

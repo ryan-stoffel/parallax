@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 
 import type { RpcError, ThreadName } from "../preload/bridge";
 import type {
+  AccountChoice,
   AgentRun,
   LoggedEvent,
   Project,
@@ -339,6 +340,15 @@ export interface ThreadsView {
     name?: ThreadName,
     attached?: string[],
   ) => Promise<RpcError | undefined>;
+  /**
+   * Forks thread `runId` at `turnId`, or at its latest turn (`thread/fork`, 0050), keeping its model
+   * or running on `choice`'s. Resolves to the fork's id, or plxd's error.
+   */
+  fork: (
+    runId: string,
+    turnId: string | undefined,
+    choice: ForkChoice,
+  ) => Promise<string | RpcError>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
   /**
@@ -392,6 +402,8 @@ export interface ThreadsView {
   lineage: boolean;
   /** Whether the host's plxd resumes runs after usage limits (`autoResume`, 0049). */
   autoResume: boolean;
+  /** Whether the host's plxd forks threads (`threadFork`, 0050). */
+  forkable: boolean;
   /**
    * Marks a thread seen, or snoozes it until a time (a past one ends the snooze). Resolves to an
    * error message, or undefined.
@@ -400,6 +412,9 @@ export interface ThreadsView {
   /** Sets a repo entry's icon. Resolves to an error message, or undefined. */
   updateRepo: (repo: string, icon: ProjectIconValue) => Promise<string | undefined>;
 }
+
+/** What a fork runs on: absent keeps the thread's model and account. */
+export type ForkChoice = { model?: string; account?: AccountChoice };
 
 /** What `thread/update` changes. */
 export type ThreadChange = { seen?: boolean; snoozedUntil?: string };
@@ -420,9 +435,9 @@ export type CoordinatorOptions = Pick<
  * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
  * `approvals`, the threads and coordinators started here forward their permission requests
  * (PLX-196, 0031); with `lineage`, a thread's generated title goes to plxd (0041), and titles kept
- * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`, and
- * `lineage`, and `autoResume` are passed through for the sidebar and top bar. A Project's new Needs
- * you inbox item (0043) goes to `onNeedsYou`.
+ * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`,
+ * `lineage`, `autoResume`, and `forkable` are passed through for the sidebar and top bar. A
+ * Project's new Needs you inbox item (0043) goes to `onNeedsYou`.
  */
 export function useThreads(
   hostId: string,
@@ -438,6 +453,7 @@ export function useThreads(
     lineage = false,
     autoResume = false,
     onNeedsYou,
+    forkable = false,
   }: Partial<
     Pick<
       ThreadsView,
@@ -449,6 +465,7 @@ export function useThreads(
       | "iconImageBytes"
       | "lineage"
       | "autoResume"
+      | "forkable"
     >
   > & {
     approvals?: boolean;
@@ -626,6 +643,23 @@ export function useThreads(
     [hostId, approvals, lineage],
   );
 
+  const fork = useCallback(
+    async (runId: string, turnId: string | undefined, choice: ForkChoice) => {
+      const newRunId = uuidv7();
+      const answer = await window.parallax.request(hostId, "thread/fork", {
+        runId,
+        newRunId,
+        ...(turnId && { turnId }),
+        ...choice,
+      });
+      if ("error" in answer) return answer.error;
+      dispatch({ type: "runs", runs: [answer.result.run] });
+      dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
+      return newRunId;
+    },
+    [hostId],
+  );
+
   const archive = useCallback(
     async (runId: string, archived: boolean) => {
       const answer = await window.parallax.request(hostId, "thread/archive", { runId, archived });
@@ -760,10 +794,12 @@ export function useThreads(
       iconImageBytes,
       lineage,
       autoResume,
+      forkable,
       update,
       updateRepo,
       addRepo,
       start,
+      fork,
       archive,
       remove,
       createProject,
@@ -782,10 +818,12 @@ export function useThreads(
       iconImageBytes,
       lineage,
       autoResume,
+      forkable,
       update,
       updateRepo,
       addRepo,
       start,
+      fork,
       archive,
       remove,
       createProject,
@@ -830,8 +868,10 @@ export const idleThreads: ThreadsView = {
   autonomous: false,
   lineage: false,
   autoResume: false,
+  forkable: false,
   addRepo: async () => notConnected,
   start: async () => ({ code: -32000, message: notConnected }),
+  fork: async () => ({ code: -32000, message: notConnected }),
   archive: async () => notConnected,
   remove: async () => notConnected,
   createProject: async () => notConnected,
