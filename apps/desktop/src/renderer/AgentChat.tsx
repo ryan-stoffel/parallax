@@ -406,7 +406,9 @@ export function AgentChat({
       (row.kind === "user" && notTheUsers(row))
     )
       return undefined;
-    if (!rows.slice(at + 1).every((r) => ["notice", "end", "session"].includes(r.kind)))
+    if (
+      !rows.slice(at + 1).every((r) => ["notice", "end", "session", "modelSwitch"].includes(r.kind))
+    )
       return undefined;
     const mine = row.kind === "user" && row.turnId ? sent.get(row.turnId) : undefined;
     const text = row.text ?? mine?.text;
