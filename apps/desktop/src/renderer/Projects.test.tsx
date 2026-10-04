@@ -937,8 +937,6 @@ test("with projectPermission, Create Project has no mode choice, says it gives f
       ? { error: { code: -32000, message: "not a repository" } }
       : { result: { project: { ...project("parallax", "2026-09-29T12:00:00Z"), id: p["id"] } } };
   await renderApp();
-  // Nor does a row offer Permissions…: a Project always has full access.
-  expect(menuItem("ember", "Permissions…")).toBeUndefined();
   await openNewProject();
   expect(modeChoice(dialog())).toEqual([]);
   expect(dialog().textContent).toContain("Full access");
@@ -957,6 +955,40 @@ test("with projectPermission, Create Project has no mode choice, says it gives f
   });
   expect(retry).toEqual(first);
   expect(dialog().open).toBe(false);
+});
+
+test("with projectPermission, a Project not in Bypass offers Full access…, a one-way move to Bypass, and one in Bypass offers no mode", async () => {
+  capabilities = { projectPermission: {} };
+  answers["project/list"] = () => ({
+    result: {
+      projects: [
+        { ...project("ember", "2026-09-26T12:00:00Z"), permission: "auto" },
+        { ...project("photon", "2026-09-29T09:00:00Z"), permission: "bypass" },
+      ],
+      seq: 7,
+    },
+  });
+  answers["project/update"] = (p) => ({
+    result: {
+      project: { ...project("ember", "2026-09-26T12:00:00Z"), permission: p["permission"] },
+    },
+  });
+  await renderApp();
+  expect(menuItem("photon", "Full access…")).toBeUndefined();
+  expect(menuItem("photon", "Permissions…")).toBeUndefined();
+  const access = projectRow("ember").querySelector<HTMLDialogElement>(
+    'dialog[aria-label="ember full access"]',
+  )!;
+  await click(menuItem("ember", "Full access…"));
+  expect(access.open).toBe(true);
+  expect(access.textContent).toContain("You can't switch back.");
+  expect(modeChoice(access)).toEqual([]);
+  await click(
+    [...access.querySelectorAll("button")].find((b) => b.textContent === "Give full access"),
+  );
+  expect(access.open).toBe(false);
+  expect(calls("project/update")).toEqual([{ project: "p-ember", permission: "bypass" }]);
+  expect(menuItem("ember", "Full access…")).toBeUndefined();
 });
 
 test("without projectPermission, Create Project shows no mode and sends none, and a row has no Permissions…", async () => {

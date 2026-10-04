@@ -491,6 +491,7 @@ export function ThreadList({
           selected={selected}
           badge={badge}
           editable={item.view.editable}
+          moded={item.view.moded}
           autonomous={item.view.autonomous}
           iconImageBytes={item.view.iconImageBytes}
           onOpen={() => openItem(item)}
@@ -1033,9 +1034,9 @@ function Footer({
  * its runs ask of the user or its age. Its tooltip counts its agents, and names its host when there
  * are several. Where its host's plxd can edit or delete Projects, hovering or focusing it swaps the
  * status for its actions, which also open by right-clicking the row: Rename, which edits the name
- * in place, Change icon, which opens the icon picker under the row's icon, Autonomy…, which sets
- * who answers its children's questions (0043), and Delete…. A Project's permission mode isn't
- * offered: Create Project gives it full access (0042).
+ * in place, Change icon, which opens the icon picker under the row's icon, Full access…, which
+ * moves a Project not yet in Bypass there for good (0042), as Create Project now starts every
+ * one, Autonomy…, which sets who answers its children's questions (0043), and Delete….
  */
 function ProjectRow({
   project,
@@ -1045,6 +1046,7 @@ function ProjectRow({
   selected,
   badge,
   editable,
+  moded,
   autonomous,
   iconImageBytes,
   onOpen,
@@ -1060,6 +1062,8 @@ function ProjectRow({
   /** Its Mod+number badge, shown in place of its status while Mod is held. */
   badge?: ReactNode;
   editable: boolean;
+  /** Whether its host's plxd keeps its permission mode (`projectPermission`). */
+  moded: boolean;
   /** Whether its host's plxd keeps its autonomy (`projectAutonomy`, 0043). */
   autonomous: boolean;
   /** Its host's cap on an icon image, where its plxd keeps them. */
@@ -1078,6 +1082,9 @@ function ProjectRow({
   const iconSpot = useRef<HTMLSpanElement>(null);
   const picker = useRef<HTMLDivElement>(null);
   const autonomyDialog = useRef<HTMLDialogElement>(null);
+  const accessDialog = useRef<HTMLDialogElement>(null);
+  // A Project made before full access was the only mode, such as one on Auto, can move to it.
+  const upgradable = moded && project.permission !== "bypass";
   // The level picked in Autonomy…, which opens on the Project's own.
   const [autonomy, setAutonomy] = useState<ProjectAutonomy>("routine");
   // The name the field opened with, while Rename is open.
@@ -1117,7 +1124,7 @@ function ProjectRow({
   };
 
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
-  const actionable = editable || autonomous || !!onDelete;
+  const actionable = editable || upgradable || autonomous || !!onDelete;
   const tooltip =
     [runs.length > 0 && `${runs.length} ${runs.length === 1 ? "agent" : "agents"}`, host?.name]
       .filter(Boolean)
@@ -1230,6 +1237,16 @@ function ProjectRow({
                 </button>
               </>
             )}
+            {upgradable && (
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(() => accessDialog.current?.showModal())}
+              >
+                Full access…
+              </button>
+            )}
             {autonomous && (
               <button
                 type="button"
@@ -1266,6 +1283,21 @@ function ProjectRow({
           maxImageBytes={iconImageBytes}
         />
       )}
+      {upgradable && (
+        <SettingDialog
+          ref={accessDialog}
+          label={`${project.name} full access`}
+          action="Give full access"
+          onSave={() => void onUpdate({ permission: "bypass" })}
+        >
+          <p className="text-[13px] font-medium">Full access</p>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">
+            Agents in this Project run commands and edit files without asking, as in new Projects.
+            Agents on Cursor, Grok Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models
+            need it. You can't switch back.
+          </p>
+        </SettingDialog>
+      )}
       {autonomous && (
         <SettingDialog
           ref={autonomyDialog}
@@ -1279,15 +1311,17 @@ function ProjectRow({
   );
 }
 
-/** A Project setting's dialog: its choice, then Cancel and Save, which closes it and saves. */
+/** A Project setting's dialog: its choice, then Cancel and `action`, which closes it and saves. */
 function SettingDialog({
   ref,
   label,
+  action = "Save",
   onSave,
   children,
 }: {
   ref: RefObject<HTMLDialogElement | null>;
   label: string;
+  action?: string;
   onSave: () => void;
   children: ReactNode;
 }) {
@@ -1319,7 +1353,7 @@ function SettingDialog({
             type="submit"
             className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
           >
-            Save
+            {action}
           </button>
         </div>
       </form>
