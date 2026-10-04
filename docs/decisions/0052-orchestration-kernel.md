@@ -36,15 +36,16 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 - Every store job that writes runs in `BEGIN IMMEDIATE` … `COMMIT`. A job stages its events. Staging assigns each event the next `seq` from a counter only the writer thread changes, and inserts its row. After `COMMIT`, the writer publishes the staged events to the in-memory window in `seq` order, then hands work to the effect dispatcher (below), then replies. A job that fails or panics rolls back. Nothing is published, and the counter goes back to where it was.
 - The actor's `append` and `save`, the threads, inbox, queue, and project methods, and the context watcher become store jobs. Each stages its own events. An `agent.output` batch is one job.
 - The shared connection runs with `synchronous = NORMAL`, as the event log's does today (`relax_sync` in `crates/parallax-store/src/events.rs`). With WAL, a process crash loses nothing, and a power loss can lose the newest commits but never corrupts the file. `FULL` would fsync once per output batch, up to 600 times a second at 30 runs.
-- When the store can't open, the log runs in memory only with a new `logId`, as today.
+- A batch whose transaction fails is logged and dropped, for live subscribers too. Today such an event is delivered but not kept (`EventLog::append` in `daemon/src/event_log.rs`). Never publishing what didn't commit is the point of the change.
+- When the store can't open, the log runs in memory only with a new `logId`, as today. Commit, push, Open PR, and Accept then fail with the store's error, as project methods do, since there is no outbox to put them in.
 
 ### Command ids (PLX-482)
 
 - Every request may carry `commandId`, a UUID, in its params. The dispatcher (`daemon/src/methods/mod.rs`) takes it out before a method parses its params, so methods that deny unknown fields still parse. Capability `commandIds`.
 - These methods keep a receipt: `agent/approve`, `agent/commit`, `agent/push`, `agent/openPr`, `agent/resumeNow`, `queue/cancel`, `queue/steer`, `question/ask`, `question/answer`, `question/escalate`, `land/queue`, `land/approve`, `land/sendBack`, `project/start`, `project/delete`, and `thread/delete`. Other methods ignore it:
   - Methods with their own id keep it: `agent/start`, `thread/start`, `project/create` (the new id), `thread/fork` (`newRunId`), `agent/send` and `agent/requestChanges` (`turnId`), and `agent/accept` (`id`).
-  - Methods that set a value are safe to repeat: `*/update`, `thread/archive`, `inbox/seen`, `pr/link`, `pr/unlink`, `agent/autoResume`, `agent/cancel`, `queue/edit`, `queue/reorder`, and `repo/add` (unique by path).
-  - Methods whose change is files, the keychain, or the network, which no transaction covers: `memory/*`, `context/write`, `providers/*`, `github/*`, and `pr/act`.
+  - Methods that set a value are safe to repeat: `*/update`, `thread/archive`, `inbox/seen`, `pr/link`, `pr/unlink`, `agent/autoResume`, `agent/cancel`, `queue/edit`, `queue/reorder`, `accounts/defaults/set`, `host/settings/set`, and `repo/add` (unique by path).
+  - Methods whose change is files, the keychain, or the network, which no transaction covers: `memory/*`, `context/write`, `providers/*`, `accounts/keys/add`, `accounts/keys/remove`, `accounts/refresh`, `github/*`, and `pr/act`.
 - Table `command_receipts`:
 
 | Column | |
@@ -54,12 +55,19 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 | `params_hash` | TEXT, SHA-256 of the parsed params serialized again, without `commandId` |
 | `run_id` | TEXT, null when the method names no run |
 | `effect_id` | INTEGER, null unless the method enqueued an effect |
-| `result` | TEXT, the JSON result or error object; null while its effect runs |
+| `result` | TEXT, the JSON result or error object; null until the command ends |
 | `created_at`, `finished_at` | TEXT |
 
   Index `command_receipts_run (run_id, created_at)` serves the timeline. Index `command_receipts_age (created_at)` serves pruning.
-- The receipt is written in the transaction that makes the change. A method whose change is one store job writes the result there. A method that enqueues an effect writes `effect_id` there, and the effect's final transaction writes the result. A method that fails rolls back, receipt included, so a repeat runs it again.
-- A repeat with the same id and hash returns the stored result without running. A repeat whose effect hasn't ended waits for it. The same id with a different method or hash is `idConflict`.
+- **Claim first.** Before a listed method runs, the dispatcher claims its id in a writer job. The job inserts the row with `result` null. If the row already exists:
+  - with the same method and hash and a result, it returns that result without running anything
+  - with the same method and hash and no result, it waits for the result. Each claim has an in-memory waiter, so a retry that arrives on a new connection while the first request still runs gets the same answer.
+  - with a different method or hash, it answers `idConflict`.
+- **The result.** The method's last write fills `result`.
+  - A method whose change is one store job fills it in that job, so the change and its result commit together.
+  - A method that enqueues an effect sets `effect_id` in the transaction that enqueues it. The effect's final transaction, or its settlement at start, fills the result.
+  - A method that returns an error deletes the claim, so a repeat runs it again. A listed method that can fail after it has changed something stores that error as its result instead.
+- **At start,** claims with no result and no `effect_id` are deleted, since the process that held them is gone, and a retry runs again. So a method made of several jobs, such as `question/answer` (a row, then a message) or `project/start` (rows, then a CLI), can apply twice across a crash. That is at least once, as 0048's queue is. A one-job method can't apply twice.
 - Receipts are kept 7 days. Each insert deletes receipts older than that. A retry comes within seconds of a lost response, and the timeline (PLX-492) wants the last week.
 - The app sends a new `commandId` with every mutating request and reuses it on retry. `plxd mcp` does the same for its write tools.
 
@@ -74,15 +82,16 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 | `kind` | TEXT: `checkpoint`, `commit`, `push`, `openPr`, `accept` |
 | `params` | TEXT, JSON |
 | `status` | TEXT: `pending`, `running`, `done`, `failed` |
-| `attempts` | INTEGER, starts it has had |
+| `starts` | INTEGER, how many times it has started |
 | `replay_safe` | INTEGER, set from the kind |
 | `result` | TEXT, the JSON result or error object |
 | `created_at`, `started_at`, `finished_at` | TEXT |
 
   Indexes `effects_run (run_id, id)`, and `effects_open (status) WHERE status IN ('pending', 'running')`.
-- A dispatcher task runs each run's effects oldest first, one at a time. Different runs run in parallel, with no host-wide cap. Starting an effect is a job that sets `running` and increments `attempts`. Ending one is a single transaction. It records the result, fills the receipt, and makes the effect's own changes, such as the run accepted or a pull request linked. It stages their events and `agent.effectFinished {runId, id, kind, ok}`.
+- A dispatcher task runs each run's effects oldest first, one at a time. Different runs run in parallel, with no host-wide cap. Starting an effect is a job that sets `running` and increments `starts`. Ending one is a single transaction. It records the result, fills the receipt, and makes the effect's own changes, such as the run accepted or a pull request linked. It stages their events and `agent.effectFinished {runId, id, kind, ok}`.
 - `agent/commit`, `agent/push`, `agent/openPr`, and `agent/accept` enqueue and await their effect, so their results on the wire don't change. A second effect on the same run waits its turn instead of failing as busy. `thread/delete` and `project/delete` fail every pending effect of the run ("run deleted") and refuse while one runs.
-- While a run has an open effect, its actor sends the CLI no turn. Messages wait in 0048's queue. Commit, push, and accept already refuse a running run (0014), so an effect never races a turn.
+- While a run has an open effect, its actor sends the CLI no turn, the first prompt included. Messages wait in 0048's queue. Commit, push, and accept already refuse a running run (0014), so an effect never races a turn.
+- An effect that fails ends `failed` at once, with its error as the result. A push that the remote refuses is one example. plxd doesn't retry it, and the user does.
 - There is no lease. `plxd.lock` admits one `serve` per data folder (`daemon/src/server/setup.rs`), so at start every `running` row belongs to a dead process. Before any actor resumes a run (0048's queue, 0049's timers, 0025's catch-up), plxd settles them:
 
 | Kind | Replay-safe | A `running` row at start |
@@ -93,7 +102,8 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 | `commit` | no | Fails with "plxd restarted during the commit". The user checks the Git menu. |
 | `accept` | no | Fails with "plxd restarted during Accept". The user retries. |
 
-  `pending` rows never started, so they all run. A replay-safe effect stops after 3 attempts.
+  Each failed row's error also fills its receipt, in the same transaction, so a repeat of the command gets the error instead of waiting. `pending` rows never started, so they all run. `starts` only bounds restart loops: a replay-safe effect found `running` at its third start ends `failed`.
+- The commit plxd makes when a CLI ends (0014, `commit_all` from `Actor::finish`) stays inline, not an effect. It is the CLI's last step, and its result sets the run's outcome. It can run while the turn's checkpoint does. That's harmless, because the checkpoint reads `HEAD` once and snapshots files, not commits.
 - CLI start and stop aren't effects. A CLI is a live process whose pipes die with plxd. Its durable record is its attempt (below), and restart keeps 0014's rule: interrupted, then resumed by session.
 - Effect rows stay as long as their run, like its events (0016), and go when the run is deleted.
 
@@ -117,17 +127,17 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 
 ### Per-turn checkpoints (PLX-485)
 
-- `runs.turns` (INTEGER, default 0) counts a run's finished turns. The transaction that stores a turn's end increments it and enqueues a `checkpoint {turn}` effect.
-- The effect snapshots the run's folder, a worktree or a Current checkout thread's checkout, without touching the user's index or branch. It uses a temporary `GIT_INDEX_FILE` in the run's temp folder: `read-tree HEAD`, then `add -A` (untracked files that aren't ignored are included), then `write-tree`, then `commit-tree` parented on `HEAD`, then `update-ref refs/parallax/checkpoints/<run>/turn/<n>`. It uses #166's pinned git folder, with no hooks. A coordinator's run writes nothing (0024) and gets none.
-- The next turn waits for the checkpoint, as for any open effect, so the snapshot is the turn's own. One exception is a background subagent that writes after its turn ends. Its writes land in the next turn's checkpoint.
-- `agent/turnDiff {runId, turn}` diffs turn `n`'s checkpoint tree against `n - 1`'s, and turn 1's against the worktree's base. It uses 0014's caps.
-- Pruning: a run keeps its newest 101 checkpoints, and each capture deletes refs beyond that. `agent/turnDiff` answers for the newest 100. The 101st is kept only as the oldest one's diff base, and an older turn is `invalidParams`. All of a run's refs are deleted when it is accepted or deleted, with its worktree and branch.
+- `runs.finished_turns` (INTEGER, default 0) counts a run's finished turns. The transaction that stores a turn's end increments it and enqueues `checkpoint {turn: n}`. When an attempt starts and the run has no checkpoint yet, plxd first enqueues `checkpoint {turn: 0}`, the state before the agent's first edit. Runs from before the migration get theirs at their next CLI.
+- The effect snapshots the run's folder, a worktree or a Current checkout thread's checkout, without touching the user's index or branch. It resolves `HEAD` once, then uses a temporary `GIT_INDEX_FILE` in the run's temp folder: `read-tree <head>`, then `add -A` (untracked files that aren't ignored are included), then `write-tree`, then `commit-tree -p <head>`, then `update-ref refs/parallax/checkpoints/<run>/turn/<n>`. It uses #166's pinned git folder, with no hooks. A coordinator's run writes nothing (0024) and gets none.
+- The next turn waits for the checkpoint, as for any open effect, so the snapshot is the turn's own. There are two exceptions. A background subagent that writes after its turn ends has those writes land in the next turn's checkpoint. A turn that ends without being stored as finished (a crash, or a restart) gets no checkpoint, and its edits land in the next one.
+- `agent/turnDiff {runId, turn}` diffs turn `n`'s checkpoint tree against `n - 1`'s, for worktrees and checkout threads alike. It uses 0014's caps. A turn whose own ref or `n - 1`'s is missing is `invalidParams`.
+- Pruning: a run keeps its newest 101 checkpoints, and each capture deletes refs beyond that. `agent/turnDiff` answers for the newest 100, and the 101st is kept only as the oldest one's diff base. All of a run's refs are deleted when it is accepted or deleted, with its worktree and branch.
 
 ### The handoff budget (PLX-486)
 
 - `handoff(events, budget)` in `daemon/src/agents/handoff.rs` replaces both callers of `conversation`. Budgets:
-  - `summary {cap}`: the whole conversation when it fits. Otherwise, walking newest first, turns stay whole while they fit, older turns shrink to their first and last lines, and if it is still too long, the oldest shortened turns go. The run's first message, its task, is always kept.
-  - `since {seq, cap}`: only what was logged after event `seq`, as `summary` within the cap.
+  - `summary {cap}`: the whole conversation when it fits. Otherwise, walking newest first, turns stay whole while they fit, older turns shrink to their first and last lines, and if it is still too long, the oldest shortened turns go. The run's first message, its task, is always kept. A task that is over half the cap on its own is cut to half the cap, keeping its start.
+  - `since {seq, cap}`: only what was logged after event `seq`, as `summary` within the cap. A `seq` inside a compacted turn (below) starts at that turn's `from`, so the turn is sent whole again rather than skipped.
 - There is no uncapped `full`. A summary that fits is the full transcript, and an uncapped one is what blows the target's context.
 
 | Caller | Budget |
@@ -136,22 +146,29 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 | A fork with no session to continue (0050) | `summary`, 64 KiB, of the log up to the fork's turn |
 | An attached thread the target hasn't seen (0047) | `summary`, 32 KiB (`maxSummaryBytes` stays) |
 | An attached thread the target saw before | `since` the source `seq` its last summary covered, 32 KiB |
+| `thread_read` (0041) | Not a handoff and unchanged: it pages `agent/events` in about 64 KiB pages, and the calling agent picks `after` |
+| A wake-up (0025) | Unchanged: each finished child's task cut to 200 bytes, and a 500-byte excerpt (`TASK_BYTES`, `EXCERPT_BYTES` in `daemon/src/agents/wake.rs`) |
 
   The cursor is the source's own: the newest `seq` the summary read. It is stored in `attached_seen`, primary key `(target_run, source_run)`, with column `seq`, upserted in the transaction that records the target's turn. The target's later `turnStarted` would be the wrong cursor, because a running source can log events between the read and that event, and `since` would then skip them. Rows go with either run. A resume by session gets no handoff, since the session has it.
 
 ### Compacting finished turns (PLX-491)
 
-- A finished turn's `agent.output` batches become one row, in place. In one transaction, the last batch's payload is rewritten to the turn's final items, and the turn's other batches are deleted. The final items merge consecutive text deltas and drop deltas that a whole `text` repeats. Tool calls and results stay as they are. Reusing the last batch's `seq` keeps the turn's place in the log, and no new table or reader logic is needed. The rewritten event carries `compacted: {from}`, the turn's first `seq`.
+- A finished turn's `agent.output` batches become one row, in place. In one transaction, the last batch's payload is rewritten to the turn's final items, and the turn's other `agent.output` batches are deleted. Other events inside the turn keep their rows. The final items merge consecutive text deltas and drop deltas that a whole `text` repeats. Tool calls and results stay as they are. Reusing the last batch's `seq` keeps the turn's place in the log. The rewritten event carries `compacted: {from}`, the turn's first `seq`.
 - Only turns whose last batch is older than the in-memory window's oldest `seq` are compacted, so a live subscriber never sees a change. A sweep runs at start and hourly, one turn per job so it never holds the writer for long.
-- A cursor that falls inside a compacted turn (`from` ≤ cursor < the row's `seq`) gets `resyncRequired`. That covers an `events/subscribe` cursor after a restart reloads further back, and an `agent/events` pager whose `after` ended a page inside a turn the sweep then compacted. Without it, the pager's next page would repeat the items it already read. The client reads the run again from 0, as it does after any resync.
+- **The reader rule.** A reader that meets a compacted row first drops any `agent.output` events of that run it holds with `seq` in [`from`, the row's `seq`), then takes the row. Two readers can hold raw batches of a turn that is later compacted:
+  - an `agent/events` pager whose page ended inside a turn the sweep then compacted. Its next page starts with the compacted row.
+  - an `events/subscribe` cursor after a restart reloads further back.
+  
+  Either way the client ends up with the turn once, nothing skipped and nothing repeated. The app's transcript store applies the rule. An older app that doesn't shows that one turn's items twice until it reloads the run.
+- plxd's own readers that page newest first (`attached::summary`, through `run_events_before`) read inside one read transaction, so a sweep can't land between their pages.
 - PLX-491 updates 0016: a run's events still stay as long as its run does, now one row per finished turn.
 
 ### Write path
 
 ```
-request ─► dispatcher (commandId: receipt hit? return it)
+request ─► dispatcher: claim commandId (writer job; hit: return or wait)
         ─► writer: BEGIN IMMEDIATE
-                   rows + staged events (seq) + receipt + effects rows
+                   rows + staged events (seq) + receipt result + effects rows
                    COMMIT
         ─► publish events to the window ─► subscribers
         ─► dispatcher: per-run FIFO ─► effect ─► writer: result + receipt + events, COMMIT ─► publish
@@ -163,22 +180,36 @@ request ─► dispatcher (commandId: receipt hit? return it)
 | --- | --- |
 | Keep two writers and publish an event after its row commits | A crash between the two still leaves a row with no event, and the two keep taking turns on one write lock |
 | Whole-entity events with projections rebuilt from them (T3 Code) | plxd's rows are already the state, and its events are deltas for clients. Rebuilding state from events is a rewrite with no user-facing gain |
-| A receipt for every method, written by the dispatcher in its own transaction | Its transaction isn't the change's, so a crash between them answers a repeat wrongly. Methods with their own id, or that set a value, don't need one |
+| Write the receipt only in the transaction that makes the change | A retry in flight misses it and runs too, and methods that aren't one store job (`agent/approve`, `project/start`, `question/answer`) have no such transaction |
+| A receipt for every method | Methods with their own id, or that set a value, don't need one |
 | Leases on effects | One `serve` per data folder already makes every `running` row at start an orphan, so a lease adds a timer and says nothing new |
 | A host-wide cap on running effects | Pushes and checkpoints of different runs don't contend, and a global gate makes one slow origin hold up every run |
 | CLI start and stop in the outbox | A process and its pipes can't survive a restart, so replaying a start is a new attempt, which 0014's resume already does |
 | Checkpoint while the next turn runs | The snapshot would race the agent's next edits |
 | An uncapped `full` handoff | The size of a long run is the problem being fixed. A summary that fits is the full transcript |
-| Write a compact record at turn end and delete the batches later | Both copies exist in between, so readers would need to skip one. Rewriting in place after the window has passed needs no reader change |
+| Write a compact record at turn end and delete the batches later | Both copies exist for the whole delay, so every reader would need to skip one. Rewriting in place needs the reader rule only for readers that already hold a turn's raw batches |
 | Receipts kept forever, or 24 hours | Forever grows with every click. A day is too short for the timeline |
+
+## Where this differs from the issues
+
+Each issue's acceptance criteria follow this record:
+
+| Issue | Its wording | This record |
+| --- | --- | --- |
+| PLX-482 | Receipt written in the same transaction as the change | Claimed before the method runs, and filled by its last write |
+| PLX-483 | A lease expiry column | No lease. `starts` bounds restart loops |
+| PLX-484 | `agent/get` (or `agent/list`) returns attempts | `agent/timeline` |
+| PLX-485 | Turn diffs against the turn before | Plus `turn/0`, the base for turn 1 and for checkout threads |
+| PLX-486 | Budgets `full`, `summary`, `since` | `summary` and `since`. A summary that fits is the full transcript |
+| PLX-491 | Write a compact record at turn end, delete the batches after a delay | Rewrite in place once the turn has left the window, with the reader rule |
 
 ## Consequences
 
 - A crash can't leave a row without its event, or an effect requested without its row. Subscribers never see an event that rolled back.
 - Every output batch becomes a transaction on the one writer, up to 600 a second at 30 runs. PLX-481 has to show the harness at N=30 no worse than the baselines above, with the store's queue wait before and after.
-- A retried request is applied once for the methods listed, and the app retries without asking. Methods outside the list need a key of their own if they ever stop being safe to repeat.
+- A retried request is applied once for the methods listed, even while the first is still running, and the app retries without asking. Across a crash, a method made of several jobs can apply twice. Methods outside the list need a key of their own if they ever stop being safe to repeat.
 - A push or PR survives a restart. A commit or Accept a restart interrupts fails with a clear reason instead of disappearing.
 - A run's history names each CLI process, its session, account, and model, and each native subagent.
 - Each turn's diff is available, and rewinding to a turn (not decided here) has the ref to start from. Every turn costs a `git add -A` into a temporary index before the next one starts.
-- Handoffs keep the task and recent turns within the same caps as today, and a coordinator re-reading a child sees only what's new.
+- Handoffs keep the task and recent turns within the same caps as today, and a thread attached again sends only what's new since its last summary.
 - The database grows by one row per finished turn instead of one per 50 ms batch. Deleting finished runs (#207) stays open.
