@@ -117,7 +117,10 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
              proposals/, with no \"..\", no leading \"/\", and no hidden (dot) name",
         )
     };
-    if path.is_empty() || path.len() > 255 || path.contains(['\0', '\\', ':']) {
+    // Control characters and line separators would let a file name break a line where plxd
+    // shows it, such as a child's memory index.
+    let breaks = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
+    if path.is_empty() || path.len() > 255 || path.contains(['\\', ':']) || path.contains(breaks) {
         return Err(invalid());
     }
     let parts: Vec<&str> = path.split('/').collect();
@@ -576,6 +579,12 @@ mod tests {
             "knowledge\\notes.md",
             "c:notes.md",
             "/knowledge/notes.md",
+            "nul\0.md",
+            "memory/decision/a\nb.md",
+            "knowledge/a\rb.md",
+            "knowledge/a\u{1b}b.md",
+            "knowledge/a\u{2028}b.md",
+            "knowledge/a\u{85}b.md",
         ] {
             let error = validate_relative_path(bad).unwrap_err();
             assert_eq!(error.code, INVALID_PARAMS, "{bad}");
