@@ -218,6 +218,9 @@ pub(crate) struct Daemon {
     pub started: Instant,
     pub log: Arc<EventLog>,
     pub store: StoreHandle,
+    /// A read-only connection to the same store on a thread of its own, for lists and search
+    /// (PLX-457), so they never queue a write behind them.
+    pub reader: StoreHandle,
     /// The operating system and version, for `host/version`.
     pub os: String,
     pub limits: Limits,
@@ -339,6 +342,7 @@ impl Server {
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
         let store = StoreHandle::open(&data_dir.store_file());
+        let reader = StoreHandle::open_reader(&data_dir.store_file());
         let keys = keystore::system_store();
         let providers = Providers::load(data_dir.root(), keys.clone(), &launcher, &backends);
         let daemon = Arc::new(Daemon {
@@ -350,6 +354,7 @@ impl Server {
                 config.host_event_retention,
             )),
             store,
+            reader,
             os: methods::os_version(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
             cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
@@ -439,6 +444,7 @@ impl Server {
             Err(error) => {
                 socket.remove();
                 daemon.store.stop().await;
+                daemon.reader.stop().await;
                 lock.release();
                 return Err(error);
             }
@@ -505,6 +511,7 @@ impl Server {
         }
         daemon.agents.shutdown().await;
         daemon.store.stop().await;
+        daemon.reader.stop().await;
         lock.release();
         info!("stopped");
         Ok(())
@@ -618,6 +625,7 @@ impl Daemon {
         );
         let worktrees = WorktreeManager::new(launcher.clone(), dir);
         let store = StoreHandle::open(&dir.join("plxd.sqlite3"));
+        let reader = StoreHandle::open_reader(&dir.join("plxd.sqlite3"));
         let keys: Arc<dyn KeyStore> = Arc::new(crate::keystore::MemoryKeyStore::new());
         let backends = BackendRegistry::new();
         let providers = Providers::load(dir, Arc::clone(&keys), &launcher, &backends);
@@ -630,6 +638,7 @@ impl Daemon {
                 usize::MAX,
             )),
             store,
+            reader,
             os: "test".to_owned(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
             cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),

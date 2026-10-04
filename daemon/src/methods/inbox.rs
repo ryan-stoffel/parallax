@@ -17,29 +17,26 @@ use super::Context;
 use crate::server::Daemon;
 use crate::store::store_error;
 
-/// `project`'s inbox, oldest first, with the `seq` of the last event it reflects.
+/// `project`'s inbox, oldest first, with the event log's `seq` from before the read, to
+/// subscribe after.
 pub(crate) async fn list(
     context: &Context,
     params: InboxListParams,
 ) -> Result<InboxListResult, ErrorObject> {
-    let log = Arc::clone(&context.daemon.log);
-    context
+    let (items, seq) = context
         .daemon
-        .store
-        .run(&context.cancel, move |store| {
+        .reader
+        .snapshot(&context.cancel, &context.daemon.log, move |store| {
             found(store, params.project)?;
-            let items = store
+            store
                 .inbox(params.project.into())
                 .map_err(|error| store_error(&error))?
                 .into_iter()
                 .map(item)
-                .collect::<Result<_, _>>()?;
-            Ok(InboxListResult {
-                items,
-                seq: log.head(),
-            })
+                .collect::<Result<_, _>>()
         })
-        .await
+        .await?;
+    Ok(InboxListResult { items, seq })
 }
 
 /// Marks items of `project`'s inbox seen now, and returns them as they stand.
@@ -62,9 +59,9 @@ pub(crate) async fn seen(
         .await
 }
 
-/// Adds an item about `run` to `project`'s inbox and appends `inbox.added`, in one store job so
-/// `inbox/list`'s `seq` always agrees with its items. Never fails its caller: a store error is
-/// logged.
+/// Adds an item about `run` to `project`'s inbox and appends `inbox.added` after the row is
+/// written, so a subscriber after `inbox/list`'s `seq` never misses it. Never fails its caller:
+/// a store error is logged.
 pub(crate) async fn add(
     daemon: &Arc<Daemon>,
     project: ProjectId,

@@ -27,28 +27,26 @@ use crate::repo;
 use crate::server::Daemon;
 use crate::store::{self, store_error};
 
-/// Every project, oldest first, with the `seq` of the last event the list reflects.
+/// Every project, oldest first, with the event log's `seq` from before the read, to subscribe
+/// after.
 pub(crate) async fn list(
     context: &Context,
     _: ProjectListParams,
 ) -> Result<ProjectListResult, ErrorObject> {
-    let log = Arc::clone(&context.daemon.log);
-    context
+    let (projects, seq) = context
         .daemon
-        .store
-        .run(&context.cancel, move |store| {
+        .reader
+        .snapshot(&context.cancel, &context.daemon.log, move |store| {
             let rows = store.list_projects().map_err(|error| store_error(&error))?;
-            let seq = log.head();
-            let projects = rows
-                .into_iter()
+            rows.into_iter()
                 .map(|row| {
                     let coordinator = coordinator::coordinator_of(store, row.id)?;
                     store::project(row, coordinator)
                 })
-                .collect::<Result<_, _>>()?;
-            Ok(ProjectListResult { projects, seq })
+                .collect::<Result<_, _>>()
         })
-        .await
+        .await?;
+    Ok(ProjectListResult { projects, seq })
 }
 
 /// Creates a project, or returns the one that already has this id and these params.
@@ -148,8 +146,9 @@ pub(crate) async fn start(
 /// (0046). A new proposal for its checks adds a `needsYou` item for the user to confirm it
 /// (PLX-411).
 ///
-/// The event is appended in the job that writes the row, as `project/create`'s is, so a
-/// `project/list` snapshot and its `seq` always agree. `updatedAt` stays as it is (0032).
+/// The event is appended after the row is written, as `project/create`'s is, so a subscriber
+/// after a `project/list` snapshot's `seq` never misses the change. `updatedAt` stays as it is
+/// (0032).
 pub(crate) async fn update(
     context: &Context,
     mut params: ProjectUpdateParams,

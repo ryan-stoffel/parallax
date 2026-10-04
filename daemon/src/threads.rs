@@ -223,21 +223,22 @@ pub(crate) async fn log_started(daemon: &Daemon, row: &parallax_store::Thread) {
 
 /// `thread/list`.
 pub(crate) async fn list(daemon: &Arc<Daemon>) -> Result<ThreadListResult, ErrorObject> {
-    let log = Arc::clone(&daemon.log);
-    store(daemon, move |db| {
-        let repos = db.list_repos().map_err(|e| store_error(&e))?;
-        let threads = db.list_threads().map_err(|e| store_error(&e))?;
-        let seq = log.head();
-        Ok(ThreadListResult {
-            repos: repos
-                .into_iter()
-                .map(repo_entry)
-                .collect::<Result<_, _>>()?,
-            threads: threads.iter().map(thread_entry).collect::<Result<_, _>>()?,
-            seq,
+    let ((repos, threads), seq) = daemon
+        .reader
+        .snapshot(&CancellationToken::new(), &daemon.log, |db| {
+            let repos = db.list_repos().map_err(|e| store_error(&e))?;
+            let threads = db.list_threads().map_err(|e| store_error(&e))?;
+            Ok((repos, threads))
         })
+        .await?;
+    Ok(ThreadListResult {
+        repos: repos
+            .into_iter()
+            .map(repo_entry)
+            .collect::<Result<_, _>>()?,
+        threads: threads.iter().map(thread_entry).collect::<Result<_, _>>()?,
+        seq,
     })
-    .await
 }
 
 fn check_path(path: &str) -> Result<(), ErrorObject> {
@@ -1052,14 +1053,15 @@ pub(crate) async fn search(
         .limit
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
         .min(MAX_SEARCH_LIMIT) as usize;
-    store(daemon, move |db| {
-        let rows = db
-            .search_threads(&query, limit)
-            .map_err(|e| store_error(&e))?;
-        let threads = rows.iter().map(thread_entry).collect::<Result<_, _>>()?;
-        Ok(ThreadSearchResult { threads })
-    })
-    .await
+    let rows = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| {
+            db.search_threads(&query, limit)
+                .map_err(|e| store_error(&e))
+        })
+        .await?;
+    let threads = rows.iter().map(thread_entry).collect::<Result<_, _>>()?;
+    Ok(ThreadSearchResult { threads })
 }
 
 /// `thread/archive`.
