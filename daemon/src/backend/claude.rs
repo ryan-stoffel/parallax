@@ -534,6 +534,7 @@ pub struct ClaudeBackend {
     cancel: CancelPolicy,
     limits: OutputLimits,
     overrides: Overrides,
+    project_permissions: &'static [AgentPermission],
 }
 
 impl ClaudeBackend {
@@ -546,7 +547,16 @@ impl ClaudeBackend {
             cancel: CancelPolicy::default(),
             limits: OutputLimits::default(),
             overrides: Overrides::default(),
+            project_permissions: PERMISSIONS,
         }
+    }
+
+    /// Runs a Project's agents only in Bypass, for a model service whose endpoint Auto's
+    /// classifier isn't tested against (0042). Its threads keep every mode.
+    #[must_use]
+    pub fn bypass_only_in_projects(mut self) -> Self {
+        self.project_permissions = &[AgentPermission::Bypass];
+        self
     }
 
     /// Runs as a provider instance (0040): its name, program, folder, arguments, and variables,
@@ -974,6 +984,10 @@ impl Backend for ClaudeBackend {
 
     fn permissions(&self) -> &[AgentPermission] {
         PERMISSIONS
+    }
+
+    fn project_permissions(&self) -> &[AgentPermission] {
+        self.project_permissions
     }
 
     fn context_windows(&self) -> &'static [u32] {

@@ -87,6 +87,11 @@ pub trait Backend: Send + Sync {
         &[]
     }
 
+    /// The [`Backend::permissions`] a run in a Project may take (0042). All of them by default.
+    fn project_permissions(&self) -> &[AgentPermission] {
+        self.permissions()
+    }
+
     /// The vendor CLI it runs, which plxd checks before starting a worker on it (0013), whatever
     /// the instance's name (0040). None by default.
     fn cli(&self) -> Option<parallax_protocol::CliKind> {
