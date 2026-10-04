@@ -10,6 +10,7 @@ import { ContextPanel } from "./ContextPanel";
 import { FilesPanel } from "./FilesPanel";
 import { GitMenu } from "./GitMenu";
 import { LineageTrail } from "./Lineage";
+import { MemoryPanel } from "./MemoryPanel";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
@@ -176,6 +177,16 @@ export function App() {
   const agentTitle = agentId
     ? (threads.state.titles[agentId] ?? (agent ? titleOf(agent) : "Subagent"))
     : undefined;
+  // Whose memory the side panel's Memory view shows, on a plxd with `memory` (0044): the open
+  // Project's, with its repository's, or the open thread's repository's.
+  // ponytail: a repo entry's path is canonical and a Project's is as created, so a Project made
+  // through a symlink finds no Repo scope; match canonical paths if that shows up.
+  const memoryRepo = project
+    ? threads.state.repos.find((r) => !r.scratch && r.path === project.repoPath)?.id
+    : selection.kind === "thread" && group.id !== noRepo
+      ? group.id
+      : undefined;
+  const memory = connected && "memory" in connection.capabilities && (project || memoryRepo);
   // The run whose folder the side panel's Files view browses: the open thread or subagent.
   const filesRunId = selection.kind === "thread" ? selection.threadId : agentId;
   // The open thread's linked pull requests, on a plxd that links them (PLX-318).
@@ -713,6 +724,17 @@ export function App() {
               project={project.id}
               name={project.name}
               connected={connected}
+            />
+          )
+        }
+        memory={
+          memory && (
+            <MemoryPanel
+              key={`${host.id}/${project?.id ?? memoryRepo}`}
+              hostId={host.id}
+              project={project?.id}
+              repo={memoryRepo}
+              coordinator={project?.coordinator}
             />
           )
         }
