@@ -17,7 +17,6 @@ import type {
 } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import type { RunOptions } from "./models";
-import type { Autonomy } from "./ProjectPermission";
 import { isRunning, trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
@@ -406,7 +405,7 @@ export interface ThreadsView {
 export type ThreadChange = { seen?: boolean; snoozedUntil?: string };
 
 /** What `project/update` changes: a project's name, icon, permission mode, or autonomy. */
-export type ProjectChange = Omit<ProjectUpdateParams, "project"> & { autonomy?: Autonomy };
+export type ProjectChange = Omit<ProjectUpdateParams, "project">;
 
 /** What a new coordinator runs on: its model, effort, permission, and account (`project/start`'s). */
 export type CoordinatorOptions = Pick<

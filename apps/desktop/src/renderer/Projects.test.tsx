@@ -1913,7 +1913,7 @@ test("Autonomy… opens on the Project's level, one line on each, and Save sends
   capabilities = { projectAutonomy: {} };
   answers["project/list"] = () => ({
     result: {
-      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), autonomy: "full" } as Project],
+      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), autonomy: "full" }],
       seq: 7,
     },
   });

@@ -51,6 +51,7 @@ import type {
   AgentRun,
   AgentStatus,
   Project,
+  ProjectAutonomy,
   ProjectIcon as ProjectIconValue,
   ProjectPermission,
   Repo,
@@ -70,12 +71,7 @@ import {
   type Attention,
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
-import {
-  AutonomyChoice,
-  autonomyOf,
-  ProjectPermissionChoice,
-  type Autonomy,
-} from "./ProjectPermission";
+import { AutonomyChoice, ProjectPermissionChoice } from "./ProjectPermission";
 import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
@@ -1078,7 +1074,7 @@ function ProjectRow({
   // The mode picked in Permissions…, which opens on the Project's own.
   const [mode, setMode] = useState<ProjectPermission>("auto");
   // The level picked in Autonomy…, which opens on the Project's own.
-  const [autonomy, setAutonomy] = useState<Autonomy>("routine");
+  const [autonomy, setAutonomy] = useState<ProjectAutonomy>("routine");
   // The name the field opened with, while Rename is open.
   const [renaming, setRenaming] = useState<string>();
   // The new name, shown until plxd answers.
@@ -1248,7 +1244,7 @@ function ProjectRow({
                 role="menuitem"
                 className={menuItem}
                 onClick={choose(() => {
-                  setAutonomy(autonomyOf(project));
+                  setAutonomy(project.autonomy ?? "routine");
                   autonomyDialog.current?.showModal();
                 })}
               >

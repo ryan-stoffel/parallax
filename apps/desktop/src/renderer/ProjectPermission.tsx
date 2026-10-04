@@ -1,16 +1,6 @@
 import { useId, type ReactNode } from "react";
 
-import type { ProjectPermission } from "../protocol/generated/protocol";
-
-/**
- * A Project's autonomy: who answers its children's questions (0043). plxd keeps it behind the
- * `projectAutonomy` capability (PLX-403); the app names it here until the generated protocol does.
- */
-export type Autonomy = "ask" | "routine" | "full";
-
-/** A Project's autonomy, Routine where plxd sends none. */
-export const autonomyOf = (project: object): Autonomy =>
-  (project as { autonomy?: Autonomy }).autonomy ?? "routine";
+import type { ProjectAutonomy, ProjectPermission } from "../protocol/generated/protocol";
 
 type Option<T> = { value: T; name: string; detail: string };
 
@@ -29,7 +19,7 @@ const modes: Option<ProjectPermission>[] = [
   },
 ];
 
-const levels: Option<Autonomy>[] = [
+const levels: Option<ProjectAutonomy>[] = [
   {
     value: "ask",
     name: "Ask me",
@@ -67,7 +57,10 @@ export function ProjectPermissionChoice(props: {
 }
 
 /** A Project's autonomy (0043), in its Autonomy… dialog. */
-export function AutonomyChoice(props: { value: Autonomy; onChange: (value: Autonomy) => void }) {
+export function AutonomyChoice(props: {
+  value: ProjectAutonomy;
+  onChange: (value: ProjectAutonomy) => void;
+}) {
   return (
     <Choice legend="Autonomy" options={levels} {...props}>
       A child never waits on a question: it goes on with what it assumed. This decides who answers
