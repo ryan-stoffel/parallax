@@ -31,6 +31,7 @@ import type {
   AgentEffort,
   AgentPermission,
   AgentRun,
+  ProjectPermission,
   PromptImage,
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
@@ -40,7 +41,7 @@ import { ModelMenu } from "./ModelMenu";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
-import { menuItem, Picker, type PickerOption } from "./ui";
+import { menuButton, menuItem, Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
@@ -350,6 +351,11 @@ export interface ComposerProps {
    */
   manualDenied?: keyof typeof manualDenials;
   /**
+   * The Project's permission mode, where plxd keeps one (0042): every run in the Project runs in
+   * it, so it shows in place of Access, and no permission is sent.
+   */
+  projectMode?: ProjectPermission;
+  /**
    * Text to add at the end of the box, which takes focus, such as a pull request's URL. Each new
    * value is added once.
    */
@@ -402,6 +408,7 @@ export function Composer({
   optionsDisabled,
   imageCaps,
   manualDenied,
+  projectMode,
   insert,
   history = [],
   menus,
@@ -459,7 +466,8 @@ export function Composer({
   // Where the message goes: the run's backend, or the instance that runs the picked model.
   const target = run && model && model.provider !== run.id ? model.provider : backend;
   const targetBackend = instanceOf(target);
-  const permissions = targetBackend?.permissions ?? [];
+  // A Project's mode isn't a choice here.
+  const permissions = projectMode ? [] : (targetBackend?.permissions ?? []);
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
   const startedEffort = started?.effort ?? "high";
@@ -507,6 +515,7 @@ export function Composer({
       ...speed,
       ...(target !== backend && { account }),
     };
+  if (projectMode) delete options.permission;
   // The `/` and `@` menus: what's typed, the lists, and the highlighted row. Esc closes the menu
   // until its `/` or `@` goes.
   const [trigger, setTrigger] = useState<Trigger>();
@@ -1135,6 +1144,18 @@ export function Composer({
                       )}
                       panelClassName="w-[25rem]"
                     />
+                  </>
+                )}
+                {projectMode && (
+                  <>
+                    {divider}
+                    <span
+                      className={menuButton}
+                      title="This Project's mode. Change it from the Project's Permissions…"
+                    >
+                      {accessOptions[projectMode].icon}
+                      {projectMode === "auto" ? "Auto" : "Bypass"}
+                    </span>
                   </>
                 )}
               </fieldset>

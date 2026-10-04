@@ -1114,6 +1114,49 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   expect(calls("project/start")).toHaveLength(1);
 });
 
+test("with projectPermission, a Project's composers show its mode in place of Access and send no permission", async () => {
+  capabilities = { coordinator: {}, projectPermission: {} };
+  let started: AgentRun | undefined;
+  answers["project/list"] = () => ({
+    result: {
+      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), permission: "bypass" }],
+      seq: 7,
+    },
+  });
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  answers["project/start"] = (p) => {
+    started = {
+      ...coordinatorRun(p["runId"] as string, p["prompt"] as string),
+      permission: "edit",
+    };
+    return { result: { run: started } };
+  };
+  answers["agent/events"] = serveEvents(() => [started]);
+  answers["agent/send"] = () => ({ result: { run: started } });
+  const mode = () => document.querySelector('main [title^="This Project\'s mode"]')?.textContent;
+  const access = () => document.querySelector('main button[aria-label^="Access:"]');
+  await renderApp();
+  await openEmber();
+  expect(mode()).toBe("Bypass");
+  expect(access()).toBeNull();
+
+  type("Add a dark mode");
+  await click(button("Send"));
+  expect(calls("project/start")).toEqual([
+    expect.not.objectContaining({ permission: expect.anything() }),
+  ]);
+  // The coordinator's chat too, though its run says another mode.
+  expect(mode()).toBe("Bypass");
+  expect(access()).toBeNull();
+  type("Start with the settings page");
+  await click(button("Send"));
+  expect(calls("agent/send")).toEqual([
+    { runId: started!.id, turnId: expect.any(String), text: "Start with the settings page" },
+  ]);
+});
+
 test("a Project whose coordinator ran before opens on its transcript", async () => {
   capabilities = { coordinator: {} };
   const run = coordinatorRun("01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b", "Add a dark mode");
