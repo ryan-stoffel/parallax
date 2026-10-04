@@ -2557,9 +2557,25 @@ impl Actor {
         }))
     }
 
+    /// Adds `item` to the pending batch. A `TextDelta` right after one for the same message joins
+    /// it, up to the text cap, so a streamed reply is one item per message per batch (PLX-449).
+    /// The byte count still adds the whole item, which only flushes a merged batch a little early.
     async fn push(&mut self, item: AgentOutputItem) {
         self.batch.bytes += item_bytes(&item);
-        self.batch.items.push(item);
+        match (&item, self.batch.items.last_mut()) {
+            (
+                AgentOutputItem::TextDelta { message_id, text },
+                Some(AgentOutputItem::TextDelta {
+                    message_id: last_id,
+                    text: last,
+                }),
+            ) if last_id == message_id
+                && last.len() + text.len() <= convert::MAX_TEXT_ITEM_BYTES =>
+            {
+                last.push_str(text);
+            }
+            _ => self.batch.items.push(item),
+        }
         self.batch.since.get_or_insert_with(Instant::now);
         if self.batch.bytes >= MAX_BATCH_BYTES {
             self.flush().await;
@@ -3246,6 +3262,57 @@ mod tests {
             })
             .collect();
         assert_eq!(dropped, [first, second]);
+    }
+
+    /// Codex-style deltas in one batch join while they follow one another for the same message,
+    /// never across another item or message, so each message's text reads the same (PLX-449).
+    #[tokio::test]
+    async fn adjacent_text_deltas_of_a_message_join_in_a_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let delta = |id: Option<&str>, text: &str| AgentOutputItem::TextDelta {
+            message_id: id.map(str::to_owned),
+            text: text.to_owned(),
+        };
+        let call = AgentOutputItem::ToolCall {
+            call_id: "call_1".to_owned(),
+            name: "command_execution".to_owned(),
+            input: serde_json::json!({}),
+        };
+        for item in [
+            delta(Some("msg_1"), "I’ll"),
+            delta(Some("msg_1"), " look"),
+            delta(Some("msg_1"), "."),
+            delta(Some("msg_2"), "Found"),
+            call.clone(),
+            delta(Some("msg_2"), " it"),
+            delta(None, "a"),
+            delta(None, "b"),
+        ] {
+            actor.push(item).await;
+        }
+        actor.flush().await;
+
+        let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
+        let batches: Vec<_> = logged
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                ParallaxEvent::AgentOutput { items, .. } => Some(items.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            batches,
+            [vec![
+                delta(Some("msg_1"), "I’ll look."),
+                delta(Some("msg_2"), "Found"),
+                call,
+                delta(Some("msg_2"), " it"),
+                delta(None, "ab"),
+            ]]
+        );
     }
 
     /// A backend that takes no messages while it runs gets one once its CLI exits, rather than
