@@ -1,5 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { expect, test } from "@playwright/test";
 
+import { uuidv7 } from "../src/renderer/uuidv7";
 import { close, launch, printFailure, type Launched } from "./launch";
 
 let launched: Launched;
@@ -21,8 +27,24 @@ test("forks a thread from a message and from its menu, and the fork links back (
     role: "worker", account: { kind: "subscription", backend: "fake" }
   })`);
   expect(defaults).not.toHaveProperty("error");
+  // In a repository, so each fork gets a worktree. ponytail: a fork of a No Repo thread fails on
+  // Windows (PLX-471), so this covers the app's side where every OS can fork.
+  const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "quill");
+  mkdirSync(repo);
+  execFileSync("git", ["init", "-q", repo]);
+  const identity = ["-c", "user.name=parallax", "-c", "user.email=parallax@localhost"];
+  execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
+  const added = await page.evaluate(
+    `window.parallax.request("local", "repo/add", ${JSON.stringify({ id: uuidv7(), path: repo })})`,
+  );
+  expect(added).not.toHaveProperty("error");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("heading", { level: 1 }).getByRole("button").click();
+  await page.getByRole("menuitemradio", { name: "quill" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "What should we build in quill?",
+  );
   const box = page.getByRole("textbox", { name: "Message", exact: true });
   const transcript = page.getByRole("log", { name: "Transcript" });
   const answers = transcript.getByText("The fake agent answered.", { exact: true });
