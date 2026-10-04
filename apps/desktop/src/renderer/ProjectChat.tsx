@@ -18,7 +18,7 @@ import { uuidv7 } from "./uuidv7";
 const steps = [
   "Start tasks from New task. Each gets its own agent and worktree, side by side.",
   "Talk to the coordinator here to plan the work, split it up, or change course.",
-  "Come back to the sidebar: what needs you, what's working, and what's done.",
+  "Check the Overview on the right: what needs you, what's working, and what's done.",
 ];
 
 /**

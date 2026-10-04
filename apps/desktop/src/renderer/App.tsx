@@ -18,7 +18,7 @@ import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
-import { ProjectNav } from "./ProjectNav";
+import { ProjectOverview } from "./ProjectOverview";
 import { ProjectTask } from "./ProjectTask";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
@@ -181,6 +181,12 @@ export function App() {
   );
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
+  // Entering a Project shows its overview in the side panel.
+  const [panelProject, setPanelProject] = useState(project?.id);
+  if (project?.id !== panelProject) {
+    setPanelProject(project?.id);
+    if (project) setPanelOpen(true);
+  }
   // Whether the Project's New task page is open, in place of its coordinator's chat.
   const taskOpen = selection.kind === "project" && !!selection.task;
   const agent = agents.runs.find((r) => r.id === agentId);
@@ -219,8 +225,6 @@ export function App() {
     setPanelOpen(true);
     setShowPr({ url });
   };
-  // Each new one opens that side panel view, as the Project's agent strip opens Agents.
-  const [showView, setShowView] = useState<{ name: string }>();
   // Shrinks an expanded side panel, which hides the main pane the chat opens in.
   const openAgent = (id?: string) => {
     if (!project) return;
@@ -520,26 +524,6 @@ export function App() {
             onSection={(section) => openSettings(section)}
             onBack={() => setSettings(null)}
           />
-        ) : project ? (
-          <ProjectNav
-            key={`${host.id}/${project.id}`}
-            host={host}
-            project={project}
-            agents={agents}
-            titles={threads.state.titles}
-            openId={agentId}
-            task={taskOpen}
-            tasks={connected && "projectTasks" in connection.capabilities}
-            onBack={() => newThread()}
-            onOpen={openAgent}
-            onNewTask={openTask}
-            onOpenKnowledge={() => {
-              setPanelOpen(true);
-              setShowView({ name: "Knowledge" });
-            }}
-            onOpenSettings={openSettings}
-            onOpenUsage={() => openOnHost(host.id, { kind: "usage" })}
-          />
         ) : (
           <ThreadList
             hosts={listed}
@@ -753,7 +737,24 @@ export function App() {
         remoteHost={host.id === localId ? undefined : host.name}
         browse={browse}
         pullRequest={showPr}
-        show={showView}
+        project={
+          project && {
+            overview: (
+              <ProjectOverview
+                key={`${host.id}/${project.id}`}
+                host={host}
+                project={project}
+                agents={agents}
+                titles={threads.state.titles}
+                openId={agentId}
+                task={taskOpen}
+                tasks={connected && "projectTasks" in connection.capabilities}
+                onOpen={openAgent}
+                onNewTask={openTask}
+              />
+            ),
+          }
+        }
         pullRequests={
           linksPrs && threadRun
             ? {

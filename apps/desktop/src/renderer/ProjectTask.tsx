@@ -71,7 +71,7 @@ export function ProjectTask({
           <h2 className="text-[20px] font-medium tracking-tight">New task</h2>
           <p className="mt-1.5 max-w-lg text-[14px] text-muted-foreground">
             Each task gets its own agent and worktree in {project.name}. Send one, then the next;
-            they run side by side and report back in the sidebar.
+            they run side by side and report back in the Overview.
           </p>
           {started.length > 0 && (
             <section aria-label="Started here" className="mt-5 min-h-0 overflow-y-auto">

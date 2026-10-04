@@ -502,7 +502,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       ),
       {
         kind: "text",
-        text: "**Retry failed update downloads** is done: 4 files, +142 −37, with retries at 2s, 8s, and 30s and range resumes. Tests pass; it's ready to land when you are.\n\nI answered the palette's question myself (Mod+K waits for an open dialog, like Mod+N) and saved that as a convention.\n\nOne thing does need you: **Inbox read state** is asking whether scrolling past an item should mark it seen. It's waiting for you in the sidebar.",
+        text: "**Retry failed update downloads** is done: 4 files, +142 −37, with retries at 2s, 8s, and 30s and range resumes. Tests pass; it's ready to land when you are.\n\nI answered the palette's question myself (Mod+K waits for an open dialog, like Mod+N) and saved that as a convention.\n\nOne thing does need you: **Inbox read state** is asking whether scrolling past an item should mark it seen. It's waiting for you in the Overview.",
       },
       usageItem(31_800, 1_250),
       { kind: "turnFinished" },

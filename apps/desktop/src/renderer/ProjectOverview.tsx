@@ -1,14 +1,13 @@
-import { ArrowLeft, Brain, MessagesSquare, ShieldQuestion, SquarePen } from "lucide-react";
+import { MessagesSquare, ShieldQuestion, SquarePen } from "lucide-react";
 
 import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";
 import { childOrder, runAttention, type Attention } from "./attention";
-import { ConnectionStatus, useConnection } from "./ConnectionStatus";
+import { useConnection } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { AnswerForm, questionOf, useInbox, type InboxView } from "./Inbox";
 import { useShortcutLabel } from "./keybindings";
 import type { ProjectAgentsView } from "./ProjectAgents";
-import { age, current, Footer, ProjectIcon, row, sectionHeading, statusLooks } from "./Sidebar";
-import type { SettingsSection } from "./App";
+import { age, current, ProjectIcon, row, sectionHeading, statusLooks } from "./Sidebar";
 import { titleOf } from "./threads";
 
 const groupLabels: Partial<Record<Attention, string>> = {
@@ -22,13 +21,12 @@ const groupLabels: Partial<Record<Attention, string>> = {
 const waiting = (q?: Question) => q?.status === "open" || q?.status === "escalated";
 
 /**
- * The sidebar while a Project is open, in place of the thread list: the way back, the Project,
- * New task, its coordinator, then its agents grouped by what they ask of the user, each with its
- * latest unread inbox item (0043) under its title. The inbox lives here: a question waiting on the
- * user is answered in place, and opening an agent marks its news seen. Knowledge opens the side
- * panel's view, and the footer is the thread list's.
+ * A Project's overview, the side panel's first view while it's open: the Project, New task, its
+ * coordinator, then its agents grouped by what they ask of the user, each with its latest unread
+ * inbox item (0043) under its title. The inbox lives here: a question waiting on the user is
+ * answered in place, and opening an agent marks its news seen.
  */
-export function ProjectNav({
+export function ProjectOverview({
   host,
   project,
   agents,
@@ -36,12 +34,8 @@ export function ProjectNav({
   openId,
   task,
   tasks,
-  onBack,
   onOpen,
   onNewTask,
-  onOpenKnowledge,
-  onOpenSettings,
-  onOpenUsage,
 }: {
   host: Host;
   project: Project;
@@ -53,13 +47,9 @@ export function ProjectNav({
   task: boolean;
   /** Whether the host's plxd starts tasks (`projectTasks`), which New task needs. */
   tasks: boolean;
-  onBack: () => void;
   /** Opens a child's chat, or the coordinator's for none. */
   onOpen: (runId?: string) => void;
   onNewTask: () => void;
-  onOpenKnowledge: () => void;
-  onOpenSettings: (section: SettingsSection) => void;
-  onOpenUsage: () => void;
 }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
@@ -98,13 +88,9 @@ export function ProjectNav({
   const coordinatorLook = coordinatorRun && statusLooks[coordinatorRun.status];
 
   return (
-    <>
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-col gap-px px-2">
-        <button type="button" onClick={onBack} className={`${row} text-muted-foreground`}>
-          <ArrowLeft aria-hidden className="size-4" />
-          All threads
-        </button>
-        <div className="flex items-center gap-2.5 px-2 pt-3 pb-3">
+        <div className="flex items-center gap-2.5 px-2 pt-1 pb-3">
           <ProjectIcon icon={project.icon} className="size-6 shrink-0 [&_svg]:size-6" />
           <div className="min-w-0">
             <h2 className="truncate text-[14px] font-medium">{project.name}</h2>
@@ -203,16 +189,7 @@ export function ProjectNav({
           );
         })}
       </div>
-
-      <div className="border-t border-border p-2">
-        <button type="button" onClick={onOpenKnowledge} className={`${row} mb-1`}>
-          <Brain aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-          <span className="flex-1">Knowledge</span>
-        </button>
-        <ConnectionStatus hostId={host.id} />
-        <Footer onOpenSettings={onOpenSettings} onOpenUsage={onOpenUsage} />
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -280,8 +257,7 @@ function AgentNavRow({
         )}
       </button>
       {ask && (
-        // The answer box takes the row's width, its buttons under it.
-        <div className="pr-2 pb-2 pl-7.5 [&_form>div]:flex-wrap [&_input]:basis-full">
+        <div className="pr-2 pb-2 pl-7.5">
           <p className="line-clamp-3 text-[12.5px] text-foreground">{ask.question.question}</p>
           {ask.question.assumption && (
             <p className="mt-0.5 line-clamp-2 text-[12px] text-muted-foreground">
