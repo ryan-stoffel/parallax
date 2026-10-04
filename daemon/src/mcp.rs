@@ -1,5 +1,6 @@
 //! `plxd mcp --thread <runId>`: a thread's Parallax tools, as an MCP server on stdio (decisions
-//! 0019 and 0041). The tools are [`thread`]'s; this module is the server they share.
+//! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads; this
+//! module is the server they share.
 //!
 //! A Project's coordinator gets the same server as any thread (PLX-380): its 0019 tools, bound to
 //! one project, are gone.
@@ -30,6 +31,7 @@ use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 
 use crate::transport::{self, Stream};
 
+pub mod question;
 pub mod thread;
 
 /// The server's name in a thread's `--mcp-config`, which prefixes its tools' names there.
@@ -58,7 +60,7 @@ const MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-
 /// One server's tools: what `tools/list` shows, and how `tools/call` runs one.
 trait Tools {
     /// Every tool's name, as [`Tools::definitions`] lists them.
-    fn names(&self) -> &'static [&'static str];
+    fn names(&self) -> Vec<&'static str>;
     /// `tools/list`'s `tools`.
     fn definitions(&self) -> Value;
     /// Runs tool `name`, one of [`Tools::names`]: its text, or an error the model sees.

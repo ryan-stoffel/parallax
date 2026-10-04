@@ -496,6 +496,7 @@ async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() 
          mcp__plxd__thread_launch,mcp__plxd__thread_send,mcp__plxd__thread_wait,\
          mcp__plxd__thread_interrupt,mcp__plxd__thread_update,mcp__plxd__pr_link,\
          mcp__plxd__pr_unlink,mcp__plxd__read_context,mcp__plxd__write_context,\
+         mcp__plxd__ask,mcp__plxd__answer,mcp__plxd__escalate,\
          TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate"
             .to_owned(),
         "--settings".to_owned(),

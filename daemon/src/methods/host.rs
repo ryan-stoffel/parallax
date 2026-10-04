@@ -151,6 +151,8 @@ pub(crate) fn initialize(
 /// `queue` (PLX-370, 0048): `queue/list`, `queue/edit`, `queue/reorder`, `queue/cancel`,
 /// `queue/steer`, and `queue.updated`, and `agent/send` takes `delivery`, which an older plxd
 /// would silently ignore, queueing a steer.
+/// `questions` (PLX-402, 0043): `question/ask`, `question/answer`, `question/escalate`, and
+/// `question/list`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -187,6 +189,7 @@ fn capabilities_advertised() -> Capabilities {
         ("promptImages".to_owned(), prompt_images),
         ("pullRequests".to_owned(), serde_json::Map::new()),
         ("queue".to_owned(), serde_json::Map::new()),
+        ("questions".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("sendAccount".to_owned(), serde_json::Map::new()),

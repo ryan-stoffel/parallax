@@ -44,7 +44,7 @@ pub(crate) mod convert;
 pub(crate) mod coordinator;
 mod resume;
 pub(crate) mod review;
-mod wake;
+pub(crate) mod wake;
 pub(crate) mod worker;
 
 use std::collections::HashMap;

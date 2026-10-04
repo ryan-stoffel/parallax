@@ -323,7 +323,7 @@ fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
 }
 
 /// The `n`th coordinator launch, once it happens.
-async fn nth_launch(seen: &Mutex<Vec<RunRequest>>, n: usize) -> RunRequest {
+pub(crate) async fn nth_launch(seen: &Mutex<Vec<RunRequest>>, n: usize) -> RunRequest {
     let deadline = Instant::now() + PATIENCE;
     loop {
         if let Some(launch) = coordinator_launches(seen).get(n) {
@@ -335,7 +335,7 @@ async fn nth_launch(seen: &Mutex<Vec<RunRequest>>, n: usize) -> RunRequest {
 }
 
 /// A worker `project`'s coordinator starts through its tools, as `spawn_agent` would.
-async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
+pub(crate) async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
     let params = AgentStartParams {
         coordinator_thread: coordinator.coordinator_thread,
         ..crate::agents::start_params(coordinator.project, task)
@@ -344,7 +344,7 @@ async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
 }
 
 /// Waits until each of `runs` has reported its session, so it can be resumed.
-async fn sessions(client: &mut Conn, runs: &[RunId]) {
+pub(crate) async fn sessions(client: &mut Conn, runs: &[RunId]) {
     let mut left = runs.to_vec();
     until(client, |event| {
         if let ParallaxEvent::AgentUpdated { run_id, state } = &event.event

@@ -103,6 +103,10 @@ const rendererMethods: Record<RendererMethod, true> = {
   "queue/reorder": true,
   "queue/cancel": true,
   "queue/steer": true,
+  "question/ask": true,
+  "question/answer": true,
+  "question/escalate": true,
+  "question/list": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */

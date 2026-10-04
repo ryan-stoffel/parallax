@@ -349,7 +349,7 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Deletes a project by id, if it exists, with its inbox (PLX-401).
+    /// Deletes a project by id, if it exists, with its inbox (PLX-401) and questions (PLX-402).
     ///
     /// Returns whether a row was deleted.
     ///
@@ -359,6 +359,10 @@ impl Store {
     pub fn delete_project(&self, id: Uuid) -> Result<bool, StoreError> {
         self.conn.execute(
             "DELETE FROM inbox WHERE project_id = ?1",
+            params![id.to_string()],
+        )?;
+        self.conn.execute(
+            "DELETE FROM questions WHERE project_id = ?1",
             params![id.to_string()],
         )?;
         let changed = self.conn.execute(

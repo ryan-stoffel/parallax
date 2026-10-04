@@ -396,6 +396,24 @@ export type ParallaxRequests = {
 	 * `queue/steer`: sends a waiting message into the turn running now.
 	 */
 	"queue/steer": { params: QueueSteerParams, result: QueueResult },
+	/**
+	 * `question/ask`: records a Project child's question and wakes its coordinator; the
+	 * child goes on with its assumption (PLX-402, 0043). Gated on the `questions`
+	 * capability, like every `question/*` method.
+	 */
+	"question/ask": { params: QuestionAskParams, result: QuestionResult },
+	/**
+	 * `question/answer`: the coordinator's or the user's answer to a question.
+	 */
+	"question/answer": { params: QuestionAnswerParams, result: QuestionResult },
+	/**
+	 * `question/escalate`: the coordinator passes a question to the user.
+	 */
+	"question/escalate": { params: QuestionEscalateParams, result: QuestionResult },
+	/**
+	 * `question/list`: a Project's questions, oldest first.
+	 */
+	"question/list": { params: QuestionListParams, result: QuestionListResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -4469,6 +4487,139 @@ export type QueueSteerParams = {
 	 * The message.
 	 */
 	id: TurnId,
+};
+
+/**
+ * Params of `question/ask`. Fails with `invalidParams` unless `run` is in a Project and isn't
+ * its coordinator, and with `runNotFound` for an unknown run.
+ */
+export type QuestionAskParams = {
+	/**
+	 * The child asking.
+	 */
+	run: RunId,
+	/**
+	 * The question, at most 64 KiB.
+	 */
+	question: string,
+	/**
+	 * What the child goes on assuming until it hears otherwise, at most 64 KiB.
+	 */
+	assumption: string,
+};
+
+/**
+ * Result of `question/ask`, `question/answer`, and `question/escalate`.
+ */
+export type QuestionResult = {
+	/**
+	 * The question as it stands.
+	 */
+	question: Question,
+};
+
+/**
+ * A question a child asked.
+ */
+export type Question = {
+	/**
+	 * The question's id.
+	 */
+	id: QuestionId,
+	/**
+	 * The child that asked it.
+	 */
+	run: RunId,
+	/**
+	 * The question.
+	 */
+	question: string,
+	/**
+	 * What the child went on assuming.
+	 */
+	assumption: string,
+	/**
+	 * Where it stands.
+	 */
+	status: QuestionStatus,
+	/**
+	 * The coordinator's or the user's answer. Absent while `open` or `escalated`.
+	 */
+	answer?: string,
+	/**
+	 * When the child asked it, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Identifies one question. plxd generates it.
+ */
+export type QuestionId = string;
+
+/**
+ * Where a question stands.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type QuestionStatus = "open" | "escalated" | "decided" | "answered";
+
+/**
+ * Params of `question/answer`. With `from`, the Project's current coordinator answers an `open`
+ * question, which becomes `decided`; otherwise it fails with `invalidParams`. Without `from`,
+ * the user answers any question, which becomes `answered`. The child gets the answer as a
+ * queued message when it differs from what it was last told: its assumption, or the decided
+ * answer the user changes. Fails with `invalidParams` for an unknown question.
+ */
+export type QuestionAnswerParams = {
+	/**
+	 * The question.
+	 */
+	question: QuestionId,
+	/**
+	 * The answer, at most 64 KiB.
+	 */
+	text: string,
+	/**
+	 * The coordinator's run, when it answers. Absent for the user.
+	 */
+	from?: RunId,
+};
+
+/**
+ * Params of `question/escalate`: the Project's current coordinator passes an `open` question to
+ * the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or for
+ * a question that isn't open or is unknown.
+ */
+export type QuestionEscalateParams = {
+	/**
+	 * The question.
+	 */
+	question: QuestionId,
+	/**
+	 * The coordinator's run.
+	 */
+	from: RunId,
+};
+
+/**
+ * Params of `question/list`. Fails with `projectNotFound` for an unknown project.
+ */
+export type QuestionListParams = {
+	/**
+	 * The Project.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Result of `question/list`.
+ */
+export type QuestionListResult = {
+	/**
+	 * Every question, oldest first.
+	 */
+	questions: Array<Question>,
 };
 
 /**

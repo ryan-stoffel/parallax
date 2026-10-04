@@ -49,6 +49,7 @@ pub mod methods;
 mod project;
 mod provider;
 mod pull_request;
+mod question;
 mod queue;
 mod review;
 mod thread;
@@ -121,6 +122,10 @@ pub use provider::{
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
     PrMergeState, PrReview, PrReviewState, PrState, PrViewParams, PullRequest,
+};
+pub use question::{
+    Question, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionId,
+    QuestionListParams, QuestionListResult, QuestionResult, QuestionStatus,
 };
 pub use queue::{
     AgentDelivery, QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams,
