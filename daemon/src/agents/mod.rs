@@ -518,8 +518,8 @@ impl RunOptions {
     }
 
     /// For a fork onto `backend` when its parent ran on another (0050): drops the effort,
-    /// permission, context window, and fast mode `backend` doesn't map, and the parent's model
-    /// unless `thread/fork` named one, here and in `fields`.
+    /// permission (unless [`NewFork::keep_permission`]), context window, and fast mode `backend`
+    /// doesn't map, and the parent's model unless `thread/fork` named one, here and in `fields`.
     fn fork_onto(&mut self, fork: Option<&NewFork>, backend: &dyn Backend, fields: &mut RunFields) {
         let Some(fork) = fork.filter(|fork| backend.name() != fork.parent_backend) else {
             return;
@@ -530,7 +530,7 @@ impl RunOptions {
         self.effort = self.effort.filter(|e| backend.efforts().contains(e));
         self.permission = self
             .permission
-            .filter(|p| backend.permissions().contains(p));
+            .filter(|p| fork.keep_permission || backend.permissions().contains(p));
         self.context_window = self
             .context_window
             .filter(|w| backend.context_windows().contains(w));
@@ -993,6 +993,11 @@ pub(crate) struct NewFork {
     pub parent_backend: String,
     /// Whether `thread/fork` named the model.
     pub model_given: bool,
+    /// Whether the fork keeps its parent's permission onto a backend that doesn't map it, so
+    /// [`RunOptions::check`] refuses it: set for a fork a thread asked for, whose mode is capped
+    /// at its caller's (PLX-465). Dropping it would run the fork in the default, Edit, which can
+    /// be more than the caller's.
+    pub keep_permission: bool,
     /// The parent's `agent.output` items up to the fork point, one list per event, oldest first.
     pub transcript: Vec<Vec<AgentOutputItem>>,
 }

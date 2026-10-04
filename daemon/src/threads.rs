@@ -698,6 +698,7 @@ pub(crate) async fn fork(
             fork: Some(NewFork {
                 parent_backend: fields.backend.clone(),
                 model_given: model.is_some(),
+                keep_permission: caller.is_some(),
                 transcript,
             }),
         }),

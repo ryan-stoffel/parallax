@@ -603,3 +603,73 @@ async fn thread_fork_refuses_a_running_turn_and_more_permission() {
     );
     host.server.stop().await;
 }
+
+/// PLX-465: a fork wakes the thread that forked it once its CLI ends, as a launched child does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_wakes_when_a_fork_it_made_finishes() {
+    let host = Host::start(temp_dir(), fake(echo()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch = json!({"prompt": "Write the notes.", "backend": "fake", "workspace": "none", "notify": false});
+    let original = id(&mcp.ok("thread_launch", launch).await);
+    mcp.ok("thread_wait", json!({"runId": original})).await;
+    let fork = id(&mcp.ok("thread_fork", json!({"runId": original})).await);
+    mcp.ok("thread_send", json!({"runId": fork, "text": "Go on."}))
+        .await;
+    mcp.ok("thread_wait", json!({"runId": fork})).await;
+
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let woken = wakes(&mut client, me).await;
+        if !woken.is_empty() {
+            assert_eq!(woken.len(), 1, "{woken:?}");
+            assert!(woken[0].contains(&format!("- Run {fork} ")), "{}", woken[0]);
+            break;
+        }
+        assert!(Instant::now() < deadline, "the caller was never woken");
+        sleep(Duration::from_millis(100)).await;
+    }
+    host.server.stop().await;
+}
+
+/// PLX-465: a fork that never ran reads `completed`, but a restart doesn't wake the thread that
+/// forked it, since no CLI of the fork's ever ended.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_doesnt_wake_a_thread_for_a_fork_that_never_ran() {
+    let host = Host::start(temp_dir(), fake(echo()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch = json!({"prompt": "Write the notes.", "backend": "fake", "workspace": "none", "notify": false});
+    let original = id(&mcp.ok("thread_launch", launch).await);
+    mcp.ok("thread_wait", json!({"runId": original})).await;
+    mcp.ok("thread_fork", json!({"runId": original})).await;
+    drop(mcp);
+    drop(client);
+
+    let host = host.restart(fake(echo())).await;
+    let mut client = host.client().await;
+    // Past wake-ups' batching.
+    sleep(Duration::from_secs(3)).await;
+    assert_eq!(wakes(&mut client, me).await, Vec::<String>::new());
+    host.server.stop().await;
+}
+
+/// The wake-up turns in `run`'s transcript, oldest first.
+async fn wakes(client: &mut Conn, run: RunId) -> Vec<String> {
+    transcript(client, run)
+        .await
+        .into_iter()
+        .filter_map(|item| match item {
+            AgentOutputItem::TurnStarted {
+                text: Some(text),
+                wake: true,
+                ..
+            } => Some(text),
+            _ => None,
+        })
+        .collect()
+}
