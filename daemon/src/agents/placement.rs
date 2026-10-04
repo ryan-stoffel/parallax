@@ -18,7 +18,10 @@
 //! queue, so a restart keeps it. [`start`]'s dispatcher looks at the queue, oldest first, when a
 //! child ends, when a Project's settings change, and every [`EVERY`], and starts each child that
 //! now has room through its actor. A message or Resume now starts a waiting child at once on its
-//! picked instance; Cancel or delete takes it out of the queue.
+//! picked instance; Cancel or delete takes it out of the queue. One lock covers placing a child
+//! until it counts as starting or waiting, so children placed at once never overshoot
+//! `maxChildren`. A waiting child is recorded on its picked instance, or on a blocked sibling when
+//! the picked one can't run.
 //!
 //! An API key account is used only when the Project allows it: `agents::prepare_run` refuses one
 //! otherwise, and turns off routing's automatic fallback to one (0012) for a Project's children.
@@ -31,7 +34,7 @@ use jiff::tz::TimeZone;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentRun, ErrorKind, InboxKind, ProjectId, ProjectPermission, PromptImage,
-    ProviderKind, RunId,
+    ProviderKind, Role, RunId,
 };
 use parallax_store::LimitSnapshot;
 use serde::{Deserialize, Serialize};
@@ -109,10 +112,12 @@ impl Instance {
 pub(crate) enum Decision {
     /// Start on this instance.
     Start(String),
-    /// Wait for quota on the picked instance, named `name`, until `until` when it's known.
+    /// Wait for quota on the picked instance, named `name`, until `until` when it's known,
+    /// recorded on instance `on`: the picked one, or when it can't run, a blocked sibling.
     Wait {
         name: String,
         until: Option<Timestamp>,
+        on: String,
     },
     /// Start on the picked instance as it is: it isn't an instance plxd lists, or something
     /// other than quota stops every instance, which the start reports.
@@ -160,18 +165,19 @@ pub(crate) fn decide(
             .iter()
             .filter_map(|instance| instance.frees_at(now))
             .min(),
+        on: blocked[0].id.clone(),
     }
 }
 
 /// A waiting child's reason, for people, in `zone`'s time: "Waiting for Claude Code quota,
-/// resets at 3:40 PM".
+/// resets at 3:40 PM PDT".
 pub(crate) fn quota_reason(name: &str, until: Option<Timestamp>, zone: &TimeZone) -> String {
     let Some(until) = until else {
         return format!("Waiting for {name} quota");
     };
     let at = until.to_zoned(zone.clone());
     let today = Timestamp::now().to_zoned(zone.clone()).date() == at.date();
-    let time = at.strftime("%-I:%M %p");
+    let time = at.strftime("%-I:%M %p %Z");
     if today {
         format!("Waiting for {name} quota, resets at {time}")
     } else {
@@ -186,8 +192,11 @@ pub(crate) fn quota_reason(name: &str, until: Option<Timestamp>, zone: &TimeZone
 pub(super) enum Placed {
     /// On this account.
     Start(AccountChoice),
-    /// Nowhere yet, for this reason.
-    Wait(String),
+    /// Nowhere yet, for `reason`. Recorded on `on`, or the account it asked for when `None`.
+    Wait {
+        reason: String,
+        on: Option<AccountChoice>,
+    },
     /// On the account it asked for, or the worker default.
     Picked,
 }
@@ -219,23 +228,44 @@ pub(super) async fn place(
         Ok((max, running, default))
     })
     .await?;
-    if running >= usize::try_from(max).unwrap_or(usize::MAX) {
-        let children = if max == 1 { "child" } else { "children" };
-        return Ok(Placed::Wait(format!(
-            "Waiting for a free slot: the Project runs at most {max} {children} at once"
-        )));
-    }
     let Some(AccountChoice::Subscription { backend: picked }) = account.cloned().or(default) else {
-        return Ok(Placed::Picked);
+        return Ok(slot(running, max, None).unwrap_or(Placed::Picked));
     };
     let instances = instances(daemon, mode).await?;
-    Ok(match decide(&picked, model, &instances, Timestamp::now()) {
-        Decision::Start(id) if id == picked => Placed::Picked,
-        Decision::Start(backend) => Placed::Start(AccountChoice::Subscription { backend }),
-        Decision::Wait { name, until } => {
-            Placed::Wait(quota_reason(&name, until, &TimeZone::system()))
+    let decision = decide(&picked, model, &instances, Timestamp::now());
+    // Where it goes, or waits, when that isn't the instance it asked for.
+    let elsewhere = match &decision {
+        Decision::Start(id) | Decision::Wait { on: id, .. } if *id != picked => {
+            Some(AccountChoice::Subscription {
+                backend: id.clone(),
+            })
         }
-        Decision::Picked => Placed::Picked,
+        _ => None,
+    };
+    if let Some(full) = slot(running, max, elsewhere.clone()) {
+        return Ok(full);
+    }
+    Ok(match (decision, elsewhere) {
+        (Decision::Wait { name, until, .. }, on) => Placed::Wait {
+            reason: quota_reason(&name, until, &TimeZone::system()),
+            on,
+        },
+        (Decision::Start(_), Some(account)) => Placed::Start(account),
+        _ => Placed::Picked,
+    })
+}
+
+/// A wait for a free slot, recorded on `on`, when the Project already runs `max` children.
+fn slot(running: usize, max: u32, on: Option<AccountChoice>) -> Option<Placed> {
+    if running < usize::try_from(max).unwrap_or(usize::MAX) {
+        return None;
+    }
+    let children = if max == 1 { "child" } else { "children" };
+    Some(Placed::Wait {
+        reason: format!(
+            "Waiting for a free slot: the Project runs at most {max} {children} at once"
+        ),
+        on,
     })
 }
 
@@ -278,15 +308,17 @@ async fn instances(
     Ok(instances)
 }
 
-/// Refuses an API key account, `chosen` for a child of `project`, unless the Project allows API
-/// keys, and then takes every key account out of `accounts`, so routing never falls back to one
-/// (0046). Leaves a run outside a Project alone.
+/// Refuses an API key account, `chosen` for a child of `project` (a run in `role` `Worker`),
+/// unless the Project allows API keys, and then takes every key account out of `accounts`, so
+/// routing never falls back to one (0046). Leaves a coordinator or a run outside a Project alone.
 pub(super) fn api_keys(
+    role: Role,
     project: Option<&parallax_store::Project>,
     chosen: Option<&AccountChoice>,
     accounts: &mut StoredKeyAccounts,
 ) -> Result<(), ErrorObject> {
-    let Some(project) = project.filter(|project| !project.allow_api_keys) else {
+    let Some(project) = project.filter(|project| !project.allow_api_keys && role == Role::Worker)
+    else {
         return Ok(());
     };
     if matches!(chosen, Some(AccountChoice::Key { .. })) {
@@ -437,6 +469,8 @@ async fn dispatch_one(
     }
     let extra: Extra = serde_json::from_str(&row.extra).unwrap_or_default();
     let model = run.fields.model.as_deref();
+    // Held until the child runs, so a new child can't take the same slot meanwhile.
+    let placing = daemon.agents.placing.lock().await;
     let account = match place(
         daemon,
         project,
@@ -447,7 +481,7 @@ async fn dispatch_one(
     )
     .await?
     {
-        Placed::Wait(_) => return Ok(()),
+        Placed::Wait { .. } => return Ok(()),
         Placed::Start(account) => account,
         Placed::Picked => session_account(&run.state.account_id),
     };
@@ -459,6 +493,7 @@ async fn dispatch_one(
         reply,
     })
     .await?;
+    drop(placing);
     drop_row(daemon, run_id).await
 }
 
@@ -535,7 +570,8 @@ mod tests {
             decided,
             Decision::Wait {
                 name: "Claude a".to_owned(),
-                until: Some(at(60))
+                until: Some(at(60)),
+                on: "a".to_owned(),
             }
         );
     }
@@ -579,6 +615,21 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_pick_whose_siblings_are_full_waits_recorded_on_a_sibling() {
+        let mut disabled = claude("a");
+        disabled.enabled = false;
+        let full = used(claude("b"), 100.0, 45);
+        assert_eq!(
+            decide("a", None, &[disabled, full], now()),
+            Decision::Wait {
+                name: "Claude a".to_owned(),
+                until: Some(at(45)),
+                on: "b".to_owned(),
+            }
+        );
+    }
+
+    #[test]
     fn another_instance_must_be_the_same_kind_serve_the_model_and_have_the_most_headroom() {
         let full = used(claude("a"), 100.0, 60);
         let mut codex = claude("codex");
@@ -609,7 +660,8 @@ mod tests {
             decide("a", None, &instances, now()),
             Decision::Wait {
                 name: "Claude a".to_owned(),
-                until: Some(at(30))
+                until: Some(at(30)),
+                on: "a".to_owned(),
             }
         );
     }
@@ -627,7 +679,7 @@ mod tests {
     fn without_the_projects_allowance_a_child_never_uses_or_falls_back_to_an_api_key() {
         use std::collections::HashMap;
 
-        use parallax_protocol::{AccountChoice, AccountId, Provider};
+        use parallax_protocol::{AccountChoice, AccountId, Provider, Role};
 
         use super::api_keys;
         use crate::agents::worker::StoredKeyAccounts;
@@ -655,15 +707,37 @@ mod tests {
         };
 
         let mut accounts = keys();
-        assert!(api_keys(Some(&project(false)), Some(&on_key), &mut accounts).is_err());
-        api_keys(Some(&project(false)), Some(&on_login), &mut accounts).unwrap();
+        assert!(
+            api_keys(
+                Role::Worker,
+                Some(&project(false)),
+                Some(&on_key),
+                &mut accounts
+            )
+            .is_err()
+        );
+        api_keys(
+            Role::Worker,
+            Some(&project(false)),
+            Some(&on_login),
+            &mut accounts,
+        )
+        .unwrap();
         assert!(accounts.0.is_empty(), "no fallback to a key");
 
         for (project, choice) in [(Some(project(true)), &on_key), (None, &on_key)] {
             let mut accounts = keys();
-            api_keys(project.as_ref(), Some(choice), &mut accounts).unwrap();
+            api_keys(Role::Worker, project.as_ref(), Some(choice), &mut accounts).unwrap();
             assert_eq!(accounts.0.len(), 1);
         }
+        let coordinator = parallax_protocol::Role::Coordinator;
+        api_keys(
+            coordinator,
+            Some(&project(false)),
+            Some(&on_key),
+            &mut keys(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -676,9 +750,10 @@ mod tests {
             .to_zoned(zone.clone())
             .unwrap()
             .timestamp();
+        let named = reset.to_zoned(zone.clone()).strftime("%Z").to_string();
         assert_eq!(
             quota_reason("Claude", Some(reset), &zone),
-            "Waiting for Claude quota, resets at 3:40 PM"
+            format!("Waiting for Claude quota, resets at 3:40 PM {named}")
         );
         assert_eq!(
             quota_reason("Claude", None, &zone),
@@ -686,7 +761,7 @@ mod tests {
         );
         let later = reset + SignedDuration::from_hours(48);
         assert!(
-            quota_reason("Claude", Some(later), &zone).contains(" at 3:40 PM"),
+            quota_reason("Claude", Some(later), &zone).contains(" at 3:40 PM "),
             "a reset on another day names the day"
         );
     }

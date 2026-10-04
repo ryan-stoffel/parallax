@@ -305,6 +305,45 @@ async fn tasks_over_max_children_wait_across_a_restart_and_start_as_slots_free()
     host.server.stop().await;
 }
 
+/// PLX-413 (0046): tasks started at the same moment, each on its own connection, never run more
+/// than `maxChildren` at once: the rest wait.
+#[tokio::test]
+async fn concurrent_tasks_never_exceed_max_children() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host::start(
+        temp_dir(),
+        roles(vec![init("worker"), Step::Hang], Vec::new(), &seen),
+    );
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    client
+        .call::<ProjectUpdate>(placement_update(project.id, Some(2), None))
+        .await
+        .unwrap();
+    let mut clients = Vec::new();
+    for _ in 0..6 {
+        clients.push(host.client().await);
+    }
+    let starts = clients.into_iter().enumerate().map(|(n, mut client)| {
+        let params = task_params(project.id, &format!("Task {n}."));
+        tokio::spawn(async move { client.call::<ThreadStart>(params).await.unwrap().run })
+    });
+    let runs: Vec<_> = futures_util::future::join_all(starts)
+        .await
+        .into_iter()
+        .map(Result::unwrap)
+        .collect();
+    let waiting = runs
+        .iter()
+        .filter(|run| run.status == AgentStatus::Waiting)
+        .count();
+    assert_eq!(waiting, 4, "{runs:?}");
+    // Nothing else starts while the two run.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(worker_prompts(&seen, 2).await.len(), 2);
+    host.server.stop().await;
+}
+
 /// PLX-413 (0046): a Project's child runs on an API key account only when the Project allows it.
 #[tokio::test]
 async fn a_task_on_an_api_key_needs_the_project_to_allow_api_keys() {

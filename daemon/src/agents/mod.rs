@@ -114,6 +114,9 @@ pub(crate) struct Agents {
     resume_timing: ResumeTiming,
     /// Wakes the dispatcher of children waiting to be placed (PLX-413, [`placement`]).
     pub(crate) placement: tokio::sync::Notify,
+    /// Held from placing a Project's child until it counts as running or waiting, so two at once
+    /// never both take a Project's last free slot (0046).
+    placing: tokio::sync::Mutex<()>,
 }
 
 /// Per-run-id locks for [`Agents::starting`] (#190).
@@ -223,6 +226,7 @@ impl Agents {
             approval_timeout: APPROVAL_TIMEOUT,
             resume_timing: ResumeTiming::default(),
             placement: tokio::sync::Notify::new(),
+            placing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -358,10 +362,6 @@ pub(super) async fn prepare(
 
 /// [`prepare`], where `new_thread` says the run being created is a normal thread's
 /// (`thread/start`), whose thread row doesn't exist yet.
-#[expect(
-    clippy::too_many_lines,
-    reason = "checks every part of a run before it starts"
-)]
 async fn prepare_run(
     daemon: &Arc<Daemon>,
     project: ProjectId,
@@ -403,11 +403,8 @@ async fn prepare_run(
             ))
         })
         .await?;
-    let project_name = project_row.as_ref().map(|row| row.name.clone());
-    if role == Role::Worker {
-        let chosen = requested.as_ref().or(defaults.worker.as_ref());
-        placement::api_keys(project_row.as_ref(), chosen, &mut accounts)?;
-    }
+    let chosen = requested.as_ref().or(defaults.worker.as_ref());
+    placement::api_keys(role, project_row.as_ref(), chosen, &mut accounts)?;
     let defaults = Defaults {
         coordinator: defaults.coordinator,
         worker: defaults.worker,
@@ -464,7 +461,7 @@ async fn prepare_run(
     })?;
     let context = sandbox_path(&context, "the shared context folder")?;
     sandbox_path(Path::new(&repo_path), "the project's repository")?;
-    let header = match project_name {
+    let header = match project_row.map(|row| row.name) {
         Some(name) => Some(child_header(&name, &memory::start(daemon, project).await?)),
         None => None,
     };
@@ -1139,11 +1136,16 @@ pub(crate) async fn create_started(
     // A Project's child goes where its rules say, or waits (0046).
     let requested = account.clone();
     let mut waiting = None;
+    let mut placing = None;
     if let Some(mode) = mode.filter(|_| fork.is_none()) {
+        placing = Some(daemon.agents.placing.lock().await);
         let model = options.model.as_deref();
         match placement::place(&daemon, project, None, account.as_ref(), model, mode).await? {
             placement::Placed::Start(placed) => account = Some(placed),
-            placement::Placed::Wait(reason) => waiting = Some(reason),
+            placement::Placed::Wait { reason, on } => {
+                waiting = Some(reason);
+                account = on.or(account);
+            }
             placement::Placed::Picked => {}
         }
     }
@@ -1211,6 +1213,8 @@ pub(crate) async fn create_started(
         created.as_ref(),
     )
     .await?;
+    // It counts as starting or waiting now.
+    drop(placing);
     log_started(&daemon, project, agent_run(&row, worktree.as_ref())?).await;
     if let Some(thread) = &thread_row {
         crate::threads::log_started(&daemon, thread).await;
