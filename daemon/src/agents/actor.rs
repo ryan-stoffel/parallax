@@ -997,6 +997,11 @@ impl Actor {
     /// call is told by its input's JSON text, not by the tool's name, and remembered until its
     /// result.
     fn created_prs(&mut self, event: &Event) -> Vec<String> {
+        // A subagent's `gh pr create` opens the thread's pull request too (PLX-382).
+        let event = match event {
+            Event::Subagent { event, .. } => event,
+            event => event,
+        };
         match event {
             Event::ToolCall { call_id, input, .. }
                 if input.to_string().contains("gh pr create") =>

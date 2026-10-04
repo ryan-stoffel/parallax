@@ -12,6 +12,7 @@ import {
   waitingApprovals,
   workedFor,
   type Item,
+  type Subagent,
   type Work,
 } from "./transcript";
 import { uuidv7 } from "./uuidv7";
@@ -551,7 +552,10 @@ test("a subagent works until it says how it ended, whatever its call's result", 
   );
   expect(subagentState({ ...sub, finished: { status: "failed" } }, true)).toBe("failed");
   expect(subagentState({ ...sub, call: "error" }, true)).toBe("failed");
-  // Once the run is done: a call that succeeded finished it, and one without a result stopped.
-  expect(subagentState({ ...sub, call: "ok" }, false)).toBe("completed");
+  // Once the run is done without its finish, it was stopped, its call launched or not.
+  expect(subagentState({ ...sub, call: "ok" }, false)).toBe("stopped");
   expect(subagentState(sub, false)).toBe("stopped");
+  // A finish this app doesn't know isn't Done.
+  const newer = { status: "paused" } as unknown as NonNullable<Subagent["finished"]>;
+  expect(subagentState({ ...sub, finished: newer }, true)).toBe("stopped");
 });

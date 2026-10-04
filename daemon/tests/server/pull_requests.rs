@@ -20,6 +20,7 @@ use crate::support::{kind, temp_dir};
 
 const FIRST: &str = "https://github.com/me/app/pull/1";
 const SECOND: &str = "https://github.com/me/app/pull/2";
+const SUBAGENT_S: &str = "https://github.com/me/app/pull/4";
 
 /// A tool call and its result, as the fake CLI prints them.
 fn tool(call_id: &str, name: &str, input: serde_json::Value, output: &str) -> [Step; 2] {
@@ -102,6 +103,24 @@ fn opening() -> Vec<Step> {
         json!({"command": "gh pr create --fill"}),
         &format!("a pull request for branch \"x\" into branch \"main\" already exists:\n{FIRST}"),
     ));
+    // One of Claude Code's own subagents (PLX-382).
+    steps.extend(
+        tool(
+            "c5",
+            "Bash",
+            json!({"command": "gh pr create --fill"}),
+            &format!("{SUBAGENT_S}\n"),
+        )
+        .map(|step| match step {
+            Step::Emit(event) => Step::Emit(Event::Subagent {
+                call_id: "agent1".to_owned(),
+                agent_type: Some("general-purpose".to_owned()),
+                model: None,
+                event: Box::new(event),
+            }),
+            step => step,
+        }),
+    );
     // Another command that prints a pull request doesn't link it.
     steps.extend(tool(
         "c4",
@@ -131,7 +150,7 @@ async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_vie
             ParallaxEvent::AgentUpdated { state, .. } if state.pull_requests == [FIRST])),
         "linking appends agent.updated"
     );
-    assert_eq!(linked(&mut client).await, [FIRST, SECOND]);
+    assert_eq!(linked(&mut client).await, [FIRST, SECOND, SUBAGENT_S]);
 
     tools.view(
         &json!({
@@ -209,6 +228,6 @@ async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_vie
     // The links outlive plxd.
     let host = host.restart(fake(Vec::new())).await;
     let mut client = host.client().await;
-    assert_eq!(linked(&mut client).await, [FIRST, SECOND]);
+    assert_eq!(linked(&mut client).await, [FIRST, SECOND, SUBAGENT_S]);
     host.server.stop().await;
 }

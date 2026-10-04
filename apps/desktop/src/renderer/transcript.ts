@@ -133,17 +133,17 @@ export const isSubagentTool = (name: string | null) => name === "Agent" || name 
 export type SubagentState = "running" | "completed" | "failed" | "stopped";
 
 /**
- * Where a subagent stands: how it said it ended, or a failed call, or working while its run is
- * `live`. Without either once the run is done, a call that succeeded finished it, as on a Claude
- * Code that doesn't report its end, and anything else was stopped with the run.
+ * Where a subagent stands. Only its finish says it's done: a status this app doesn't know reads as
+ * stopped. Without one, a call that failed failed it, and otherwise it works while its run is
+ * `live` and was stopped with the run once it isn't, since a background subagent's call succeeds
+ * as soon as it launches.
  */
 export function subagentState(s: Subagent, live: boolean): SubagentState {
   const status = s.finished?.status;
-  if (status === "failed" || status === "stopped") return status;
-  if (status) return "completed";
+  if (status === "completed" || status === "failed") return status;
+  if (status) return "stopped";
   if (s.call === "error" || s.call === "denied") return "failed";
-  if (live) return "running";
-  return s.call === "ok" ? "completed" : "stopped";
+  return live ? "running" : "stopped";
 }
 
 export const subagentLabels: Record<SubagentState, string> = {
