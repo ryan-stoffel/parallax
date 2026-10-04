@@ -41,6 +41,7 @@ import {
 } from "./threads";
 import { isRunning } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
+import { UpdateToast } from "./Update";
 import { UsagePage } from "./UsagePage";
 
 /**
@@ -401,6 +402,7 @@ export function App() {
       {hosts.map((h) => (
         <HostLoader key={h.id} hostId={h.id} onView={report} />
       ))}
+      {window.parallax.updatable && <UpdateToast />}
       <NewThreadPicker
         ref={picker}
         groups={groups}
