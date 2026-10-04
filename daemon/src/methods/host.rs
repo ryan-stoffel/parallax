@@ -80,23 +80,23 @@ pub(crate) fn initialize(
 /// `agentReview` (#157): `agent/diff`, `agent/file`, `agent/accept`, `agent/requestChanges`, and
 /// `agent.accepted`, so an editor can tell a host that reviews runs from one that only runs them,
 /// `threads` (#110): normal threads, with the `thread/*` and `repo/*` methods and the `repo.*`
-/// and `thread.*` events, `runOptions` (RYA-97): `agent/start` and `thread/start` take
+/// and `thread.*` events, `runOptions` (PLX-97): `agent/start` and `thread/start` take
 /// `model`, `effort`, and `permission`, which an older plxd would silently ignore (0007), and
-/// `sendOptions` (RYA-161): `agent/send` takes `effort` and `permission`, likewise, and its
-/// successor `sendModel` (RYA-163): `agent/send` also takes `model`, which a `sendOptions`-only
+/// `sendOptions` (PLX-161): `agent/send` takes `effort` and `permission`, likewise, and its
+/// successor `sendModel` (PLX-163): `agent/send` also takes `model`, which a `sendOptions`-only
 /// plxd would silently ignore, and `sendAccount`: `agent/send` also takes `account`, which can move
 /// a run to another backend, a message changing the model, effort, permission, or account waits
 /// for a running CLI to exit instead of failing, and `agent.updated` reports the run's `backend`.
-/// M4 adds `coordinator` (RYA-41, 0024): `project/start` and
-/// `Project.coordinator`, and `openPr` (RYA-168): `agent/openPr`. `promptImages` (RYA-191, 0026):
+/// M4 adds `coordinator` (PLX-41, 0024): `project/start` and
+/// `Project.coordinator`, and `openPr` (PLX-168): `agent/openPr`. `promptImages` (PLX-191, 0026):
 /// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
 /// older plxd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
 /// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
-/// `approvals` (RYA-222, 0031): `agent/start`, `thread/start`, and `project/start` take
+/// `approvals` (PLX-222, 0031): `agent/start`, `thread/start`, and `project/start` take
 /// `approvals`, which an older plxd would silently ignore. A run started with it, in Manual,
 /// Auto, or Plan, and a thread in Accept Edits too (0034), asks through `approvalRequested`
 /// items, which `agent/approve` answers, instead of denying what would prompt.
-/// `projectEdit` (RYA-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
+/// `projectEdit` (PLX-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
 /// and `project/create`, which an older plxd would silently drop.
 /// `iconImages` (PLX-339, 0038): `image` on a project's or repo entry's `icon`, which an older
 /// plxd would silently drop. Its option `maxBytes` is the cap on the image's base64 `data`.
@@ -104,7 +104,7 @@ pub(crate) fn initialize(
 /// `projectPermission` (PLX-394, 0042): a project's `permission`, Auto or Bypass, on `Project`,
 /// `project/create`, and `project/update`, which an older plxd would silently drop. Every run in
 /// the project, its coordinator included, runs in it.
-/// `threadAttention` (RYA-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
+/// `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
 /// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
 /// `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on `Thread`,
 /// `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`, which an
@@ -117,9 +117,9 @@ pub(crate) fn initialize(
 /// `contextAndFast`: `agent/start`, `agent/send`, and `thread/start` take `contextWindow` and
 /// `fast`, and `AgentRun` and `agent.updated` report them; an older plxd would silently ignore
 /// them.
-/// `git` (RYA-298): `agent/gitStatus`, `agent/commit`, and `agent/push`, and `agent/openPr` on a
+/// `git` (PLX-298): `agent/gitStatus`, `agent/commit`, and `agent/push`, and `agent/openPr` on a
 /// Current checkout thread.
-/// `files` (RYA-296): `agent/files`, and `agent/file`'s `working` side, which an older plxd
+/// `files` (PLX-296): `agent/files`, and `agent/file`'s `working` side, which an older plxd
 /// would refuse, to browse a run's folder.
 /// `pullRequests` (PLX-318): `pr/view` and `pr/act`, and `pullRequests` on `AgentRun` and
 /// `agent.updated`, which an older plxd never fills.

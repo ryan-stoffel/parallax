@@ -1,6 +1,6 @@
 # Recorded from Claude Code 2.1.283 for Linux x64 (CI's pinned SHA-256) on 2026-10-01, run as a worker
 # with WORKER_TOOLS as --tools against a fake Messages API that asked for TaskCreate, then TaskUpdate
-# twice (RYA-248). Changed: the session id is the tests' own, the cwd is shortened, apiKeySource is a
+# twice (PLX-248). Changed: the session id is the tests' own, the cwd is shortened, apiKeySource is a
 # subscription's, and init's fields plxd doesn't read are left out. 2.1.283 lists the task tools and
 # not TodoWrite, which it turns off while they are on.
 @read

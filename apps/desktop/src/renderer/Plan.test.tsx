@@ -187,7 +187,7 @@ test("the strip's plan is the latest turn's, with the step under way as TodoWrit
   expect(latestPlan([])).toBeUndefined();
 });
 
-// Claude Code 2.1.283's task tools as plxd logs them (RYA-248): the call, and its result's text,
+// Claude Code 2.1.283's task tools as plxd logs them (PLX-248): the call, and its result's text,
 // which is all plxd keeps of it. Without `output`, the result hasn't arrived.
 const taskCall = (
   key: string,
@@ -430,7 +430,7 @@ test("a task list rebuilt from the logged events, as on opening a thread or resu
   });
 });
 
-test("a TaskUpdate counts by the id its result names, whichever name its call gave the id (RYA-250)", () => {
+test("a TaskUpdate counts by the id its result names, whichever name its call gave the id (PLX-250)", () => {
   // 2.1.283 reads `id`, then `task_id`, as `taskId`, and `active_form` as `activeForm`, on both
   // tools. Its answer names the id it used.
   const items = [
@@ -489,7 +489,7 @@ test("a TaskUpdate counts by the id its result names, whichever name its call ga
   }
 });
 
-test("a new session starts a new task list, as an account fallback's does; a resume keeps its own (RYA-250)", () => {
+test("a new session starts a new task list, as an account fallback's does; a resume keeps its own (PLX-250)", () => {
   const events = [
     output({ kind: "sessionStarted", sessionId: "first" }),
     output({ kind: "turnStarted", turnId: "t1", text: "Add tests" }),
@@ -554,7 +554,7 @@ test("a new session starts a new task list, as an account fallback's does; a res
   ]);
 });
 
-test("a finished list stays put away through updates that don't reopen a step (RYA-250)", () => {
+test("a finished list stays put away through updates that don't reopen a step (PLX-250)", () => {
   const finished = [
     user("u1"),
     create("c1", "1", "Add tests"),

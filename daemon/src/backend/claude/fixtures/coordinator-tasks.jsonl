@@ -1,6 +1,6 @@
 # Recorded from Claude Code 2.1.283 for Linux x64 (CI's pinned SHA-256) on 2026-10-01, run as a
 # coordinator in Accept Edits with --model claude-opus-5-5 against a fake Messages API that asked for
-# TaskCreate, TaskUpdate, and TaskList (RYA-249). Its --allowedTools named plxd's tools and the todo
+# TaskCreate, TaskUpdate, and TaskList (PLX-249). Its --allowedTools named plxd's tools and the todo
 # tools, which turns the task tools on for a model outside Claude Code's built-in list; without them
 # 2.1.283 lists none and fails TaskCreate with "No such tool available". The plxd server in its
 # --mcp-config was a stand-in that exits at once, so it failed. Changed: the session id is the tests' own,

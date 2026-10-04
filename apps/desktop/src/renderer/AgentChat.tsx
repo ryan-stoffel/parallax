@@ -119,7 +119,7 @@ const focusComposer = () => document.getElementById("composer-input")?.focus();
 const markdown = (text: string) => <MarkdownText text={text} />;
 
 /**
- * The permission requests waiting on the user, pinned over the composer (RYA-196): tools named as
+ * The permission requests waiting on the user, pinned over the composer (PLX-196): tools named as
  * the transcript names them, and focus back to the composer once the last one goes.
  */
 export function PinnedApprovals(
@@ -185,7 +185,7 @@ export function AgentChat({
   ) => Promise<string | undefined>;
   /**
    * Permission requests other runs wait on, pinned here with this run's own, as a Project's other
-   * runs' are in each of its chats (RYA-196).
+   * runs' are in each of its chats (PLX-196).
    */
   others?: readonly Asked[];
   /** The run tab's link to its linked pull requests (PLX-319), in place of Open PR. */
@@ -210,7 +210,7 @@ export function AgentChat({
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
   const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
-  // Permission requests (RYA-196): those answered here read as answered at once.
+  // Permission requests (PLX-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
   const [resendError, setResendError] = useState<string>();
   const [prError, setPrError] = useState<RpcError>();
@@ -376,7 +376,7 @@ export function AgentChat({
   else if (!connected) disabledReason = "Connecting to plxd…";
   else if (!run) disabledReason = error ? "This chat couldn't load" : "Loading…";
   let optionsDisabled: string | undefined;
-  // `sendModel` is `sendOptions`' successor, which also takes the model (RYA-163). With
+  // `sendModel` is `sendOptions`' successor, which also takes the model (PLX-163). With
   // `sendAccount`, a message that changes them while the run works waits for it to finish.
   const moves = connected && "sendAccount" in connection.capabilities;
   if (connected && !("sendModel" in connection.capabilities))
@@ -397,7 +397,7 @@ export function AgentChat({
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
   else if (run && !run.approvals) manualDenied = "run";
-  // A finished run with a commit can go to GitHub (RYA-168), until Accept removes its branch.
+  // A finished run with a commit can go to GitHub (PLX-168), until Accept removes its branch.
   const canOpenPr =
     connected &&
     "openPr" in connection.capabilities &&
@@ -722,7 +722,7 @@ function promptsOf(view: readonly ViewRow[], sent: ReadonlyMap<string, SentMessa
 const sentBack = new WeakMap<ProposedPlanRow, ProposedPlanRow>();
 
 /**
- * Proposed plans with their `ExitPlanMode` requests (RYA-196): one still waiting is pinned over the
+ * Proposed plans with their `ExitPlanMode` requests (PLX-196): one still waiting is pinned over the
  * composer instead, so it doesn't show twice, and one the user sent back reads as not approved,
  * however its call ended.
  */
@@ -897,7 +897,7 @@ export const RowView = memo(function RowView({
         </ProposedPlan>
       );
     case "approval":
-      // A permission request's line: waiting, then how it was answered (RYA-196).
+      // A permission request's line: waiting, then how it was answered (PLX-196).
       return (
         <Disclosure
           id={row.key}
@@ -1225,7 +1225,7 @@ const toolKinds: Partial<Record<string, Kind>> = {
   Agent: "agent",
   Skill: "skill",
   TodoWrite: "planning",
-  // Claude Code's task tools, which keep its plan in place of TodoWrite (RYA-248).
+  // Claude Code's task tools, which keep its plan in place of TodoWrite (PLX-248).
   TaskCreate: "planning",
   TaskUpdate: "planning",
   TaskList: "planning",
@@ -1454,7 +1454,7 @@ function mcpTool(name: string | null) {
 const skillName = (input?: JsonValue) => toolHint(input, ["skill", "command"]);
 
 /**
- * A tool as a permission request names it (RYA-196): its kind's icon, then its name and what it
+ * A tool as a permission request names it (PLX-196): its kind's icon, then its name and what it
  * acts on, as its row would, or an MCP server's tool by the server, plxd's too. It hasn't run
  * yet, so a plxd tool isn't named by what it did.
  */

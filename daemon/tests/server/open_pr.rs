@@ -1,4 +1,4 @@
-//! `agent/openPr` end to end (RYA-168): a run's branch goes to a local bare `origin`, and a fake
+//! `agent/openPr` end to end (PLX-168): a run's branch goes to a local bare `origin`, and a fake
 //! `gh` stands in for GitHub. plxd's `PATH` holds only git and that fake, so no test can reach
 //! the real GitHub.
 

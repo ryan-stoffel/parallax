@@ -43,7 +43,7 @@ function useProjectContext(hostId: string, project: string, connected: boolean) 
     let unsubscribe = () => {};
 
     async function load() {
-      // ponytail: `context/list` has no `seq` of its own (RYA-187), so subscribe after
+      // ponytail: `context/list` has no `seq` of its own (PLX-187), so subscribe after
       // `agent/list`'s, taken first: a change that lands before the list replays, harmlessly.
       const position = await window.parallax.request(hostId, "agent/list", { project });
       if (stopped) return;

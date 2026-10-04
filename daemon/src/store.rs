@@ -215,7 +215,7 @@ pub(crate) fn fields(params: ProjectCreateParams) -> (Uuid, ProjectFields) {
     )
 }
 
-/// The store's id and edit for a `project/update` (RYA-227).
+/// The store's id and edit for a `project/update` (PLX-227).
 pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
     (
         params.project.into(),
@@ -392,7 +392,7 @@ pub(crate) fn role_default(
 ) -> Result<RoleDefault, ErrorObject> {
     match choice {
         AccountChoice::Subscription { backend } => {
-            // The app's end-to-end tests make the fake backend the default (RYA-16).
+            // The app's end-to-end tests make the fake backend the default (PLX-16).
             let fake = cfg!(feature = "fake-backend") && backend == "fake";
             if fake || KNOWN_BACKENDS.contains(&backend.as_str()) {
                 Ok(RoleDefault::Subscription {

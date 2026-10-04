@@ -135,7 +135,7 @@ pub enum Event {
         reason: FailureKind,
     },
     /// The CLI asks whether a tool call may run, and waits for
-    /// [`Run::answer`](super::Run::answer) (RYA-222): Claude Code's `can_use_tool` control
+    /// [`Run::answer`](super::Run::answer) (PLX-222): Claude Code's `can_use_tool` control
     /// request.
     ApprovalRequested(ApprovalRequest),
     /// The CLI no longer waits for an answer to a request, because its turn was interrupted:

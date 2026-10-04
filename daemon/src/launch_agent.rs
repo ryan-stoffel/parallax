@@ -1,10 +1,10 @@
 //! Starting the per-user service that `plxd service` installs (0010, 0023), as `attach` does
 //! when it finds plxd not running: the `LaunchAgent` on macOS (#61), with `launchctl
-//! kickstart`, and the systemd user unit on Linux (RYA-18), with `systemctl --user start`.
+//! kickstart`, and the systemd user unit on Linux (PLX-18), with `systemctl --user start`.
 //!
 //! The label and file paths are `crate::service`'s. The service under its `DEFAULT_LABEL` serves
 //! the default data folder, which `plxd service install` enforces. Windows has no service yet
-//! (RYA-22), so there `attach` always starts `serve` itself.
+//! (PLX-22), so there `attach` always starts `serve` itself.
 
 use std::fmt;
 use std::io::{self, Read as _};

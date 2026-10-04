@@ -33,7 +33,7 @@ test("rebuilds the sample run's transcript, item by item", () => {
   expect(t.seq).toBe(8);
   expect(t.items.map((i) => i.kind)).toEqual([
     "user", // the prompt, from agent.started
-    "session", // the CLI's session, never shown (RYA-250)
+    "session", // the CLI's session, never shown (PLX-250)
     "assistant", // msg_1: its delta, then its full text
     "reasoning",
     "todo",
@@ -152,7 +152,7 @@ test("a follow-up shows the text its turnStarted logged", () => {
   expect(of(t.items, "user").at(-1)).toMatchObject({ text: "And the tests.", turnId });
 });
 
-test("a message's image ids come from its turnStarted: the prompt's from the turn with no id (RYA-193)", () => {
+test("a message's image ids come from its turnStarted: the prompt's from the turn with no id (PLX-193)", () => {
   const turnId = uuidv7();
   const t = build(
     ...upTo(1),
@@ -325,7 +325,7 @@ test("a coordinator's plxd tool that names a subagent gets its prompt's first li
   ]);
 });
 
-// RYA-196: permission requests (0031).
+// PLX-196: permission requests (0031).
 const asked = (approvalId: string, more: Partial<AgentOutputItem> = {}): AgentOutputItem =>
   ({
     kind: "approvalRequested",

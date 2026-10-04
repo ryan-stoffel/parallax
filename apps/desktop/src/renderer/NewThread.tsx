@@ -90,7 +90,7 @@ export async function accountOptions(hostId: string): Promise<AccountOption[] | 
   ]);
   if ("error" in clis) return describeError(clis.error);
   if ("error" in keys) return describeError(keys.error);
-  // ponytail: mirrors plxd's backend registry, where only Claude runs workers today. RYA-99 has
+  // ponytail: mirrors plxd's backend registry, where only Claude runs workers today. PLX-99 has
   // plxd report which accounts can run a thread, so this stops hard-coding it.
   return [
     ...clis.result.clis
@@ -458,7 +458,7 @@ export function NewThread({
               ? { hostId, repo: group.id === noRepo ? undefined : group.id }
               : undefined
           }
-          // A new thread asks only through a plxd that sends its requests (RYA-196).
+          // A new thread asks only through a plxd that sends its requests (PLX-196).
           manualDenied={
             connection?.status === "connected" && !("approvals" in connection.capabilities)
               ? "host"

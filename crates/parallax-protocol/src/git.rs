@@ -1,4 +1,4 @@
-//! A run's git actions (RYA-298), behind the `git` capability: `agent/gitStatus` reads the git
+//! A run's git actions (PLX-298), behind the `git` capability: `agent/gitStatus` reads the git
 //! state of the folder a run works in (its worktree, or a Current checkout thread's checkout),
 //! `agent/commit` stages and commits everything there, and `agent/push` pushes its branch to
 //! `origin`, setting the upstream. Commit and push refuse a running run.

@@ -1,4 +1,4 @@
-// Images sent with a message (RYA-193, decision 0026): read from a pasted, dropped, or picked
+// Images sent with a message (PLX-193, decision 0026): read from a pasted, dropped, or picked
 // file into what plxd takes, and fetched back for the transcript. Also a Project's or repo's
 // icon image (PLX-341, decision 0038).
 import type { ConnectionState } from "../preload/bridge";

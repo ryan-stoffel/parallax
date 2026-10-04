@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-01
-- Issue: RYA-273
+- Issue: PLX-273
 
 ## Context
 

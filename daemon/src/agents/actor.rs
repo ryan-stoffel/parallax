@@ -4,7 +4,7 @@
 //! `agent/openPr`, the Git menu's in `git`, `thread/delete`) and the run's backend events in one
 //! loop, so nothing about a run needs a lock, and events are logged in the order they happened.
 //!
-//! It also keeps the permission requests its CLI waits on (RYA-222, decision 0031): it logs each
+//! It also keeps the permission requests its CLI waits on (PLX-222, decision 0031): it logs each
 //! one with when it expires, passes `agent/approve`'s answer to the CLI, denies one nobody
 //! answered in time, and logs how each one ended, including when a cancel, a stop, or the CLI's
 //! exit ends it first.
@@ -20,9 +20,9 @@
 //! the CLI and resuming it with the message where the backend takes no messages while it runs.
 //!
 //! A project's coordinator (0024) differs in four places: it starts in a detached worktree of
-//! the project's repository (RYA-171) with plxd's tools and no sandbox, that worktree is checked
+//! the project's repository (PLX-171) with plxd's tools and no sandbox, that worktree is checked
 //! after every turn (0004), it is never committed, and runs it started wake it when they finish
-//! (RYA-42, [`super::wake`]).
+//! (PLX-42, [`super::wake`]).
 //!
 //! A thread in its repository's own checkout has no worktree: every launch, a resume included,
 //! starts in the checkout, and it is never committed either.
@@ -129,11 +129,11 @@ pub(super) enum Command {
     Send {
         turn_id: TurnId,
         text: String,
-        /// The message's images, already checked (RYA-191).
+        /// The message's images, already checked (PLX-191).
         images: Vec<PromptImage>,
         /// The threads attached to it, already checked (PLX-372).
         threads: Vec<RunId>,
-        /// New options for the run (RYA-161, RYA-163).
+        /// New options for the run (PLX-161, PLX-163).
         options: RunOptions,
         /// A new account for the run, perhaps on another backend.
         account: Option<AccountChoice>,
@@ -160,7 +160,7 @@ pub(super) enum Command {
         linked: bool,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
-    /// `agent/approve` (RYA-222), with its params checked.
+    /// `agent/approve` (PLX-222), with its params checked.
     Approve {
         params: AgentApproveParams,
         reply: oneshot::Sender<Result<AgentApproveResult, ErrorObject>>,
@@ -171,13 +171,13 @@ pub(super) enum Command {
         reviewed: Option<String>,
         reply: oneshot::Sender<Result<(AgentRun, AgentMerge), ErrorObject>>,
     },
-    /// `agent/openPr` (RYA-168).
+    /// `agent/openPr` (PLX-168).
     OpenPr {
         title: String,
         body: String,
         reply: oneshot::Sender<Result<String, ErrorObject>>,
     },
-    /// `agent/gitStatus`, `agent/commit`, or `agent/push` (RYA-298).
+    /// `agent/gitStatus`, `agent/commit`, or `agent/push` (PLX-298).
     Git {
         action: GitAction,
         reply: oneshot::Sender<Result<GitStatus, ErrorObject>>,
@@ -187,7 +187,7 @@ pub(super) enum Command {
     Delete {
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
-    /// A run this coordinator started finished, as [`wake::summary`] tells it (RYA-42).
+    /// A run this coordinator started finished, as [`wake::summary`] tells it (PLX-42).
     Wake(String),
     /// `agent/resumeNow` (PLX-371).
     ResumeNow {
@@ -324,7 +324,7 @@ impl Queued {
 struct Live {
     run: Arc<dyn Run>,
     events: EventStream,
-    /// A worker's temp folder (RYA-130), removed once the CLI has exited: `events` ends only
+    /// A worker's temp folder (PLX-130), removed once the CLI has exited: `events` ends only
     /// then.
     temp: Option<RunTemp>,
 }
@@ -365,7 +365,7 @@ pub(super) struct Actor {
     /// `agent/send` idempotent across CLI processes and fill in the logged `TurnStarted.text`.
     turns: HashMap<TurnId, String>,
     /// The stored images of messages a CLI took, by turn id (`None` for the prompt's), until
-    /// their `TurnStarted` lists them (RYA-191, decision 0026).
+    /// their `TurnStarted` lists them (PLX-191, decision 0026).
     images: HashMap<Option<TurnId>, Vec<ImageId>>,
     /// The threads attached to messages a CLI took, by turn id as `images`, until their
     /// `TurnStarted` lists them (PLX-372).
@@ -386,11 +386,11 @@ pub(super) struct Actor {
     /// Set once `thread/delete` or `project/delete` removed the run: the actor stops, refusing
     /// what is still queued.
     deleted: bool,
-    /// A coordinator's wake-ups (RYA-42).
+    /// A coordinator's wake-ups (PLX-42).
     wakes: Wakes,
     /// What a usage limit's resume needs (PLX-371).
     resumes: Resumes,
-    /// The permission requests its CLIs asked (RYA-222).
+    /// The permission requests its CLIs asked (PLX-222).
     approvals: Approvals,
     /// The tool calls running `gh pr create`, by call id, until their results link the pull
     /// requests they print (PLX-318).
@@ -662,7 +662,7 @@ impl Actor {
     }
 
     /// Sends what is waiting as the coordinator's next turn, through the same resume as
-    /// `agent/send` (RYA-42). Pauses wake-ups at the cap, or when this fails, keeping what is
+    /// `agent/send` (PLX-42). Pauses wake-ups at the cap, or when this fails, keeping what is
     /// waiting. Only the project's current coordinator wakes: a replaced one drops them, so a
     /// project never has two live (0024).
     async fn wake(&mut self) {
@@ -711,7 +711,7 @@ impl Actor {
         }
     }
 
-    /// Stops waking the coordinator until the user writes, and says so once (RYA-42). A pause
+    /// Stops waking the coordinator until the user writes, and says so once (PLX-42). A pause
     /// plxd makes on its own, `notify`, also adds a `needsYou` inbox item (PLX-401); the user's
     /// own Stop doesn't.
     async fn pause_wakes(&mut self, notify: bool) {
@@ -728,7 +728,7 @@ impl Actor {
     }
 
     /// Takes up the coordinator's wake-up count and pause where the last plxd left them
-    /// (RYA-178). If they can't be read, pauses wake-ups, as a failed check does.
+    /// (PLX-178). If they can't be read, pauses wake-ups, as a failed check does.
     async fn load_wakes(&mut self) {
         let id = self.row.id;
         let stored = store(&self.daemon, move |db| {
@@ -744,7 +744,7 @@ impl Actor {
         }
     }
 
-    /// Stores the coordinator's wake-up count and pause, so a restart keeps them (RYA-178).
+    /// Stores the coordinator's wake-up count and pause, so a restart keeps them (PLX-178).
     async fn save_wakes(&self) {
         let (id, state) = (self.row.id, self.wakes.state());
         let saved = store(&self.daemon, move |db| {
@@ -878,7 +878,7 @@ impl Actor {
     }
 
     /// `agent/openPr`: pushes the run's branch to its repository's `origin` and returns the URL
-    /// of its pull request, opening one if none is open (RYA-168). Running here, between commands,
+    /// of its pull request, opening one if none is open (PLX-168). Running here, between commands,
     /// it never races a turn or its commit.
     async fn open_pr(&self, title: &str, body: &str) -> Result<String, ErrorObject> {
         if self.accepted() {
@@ -891,7 +891,7 @@ impl Actor {
                 self.id
             )));
         }
-        // A Current checkout thread pushes the branch its checkout has out (RYA-298).
+        // A Current checkout thread pushes the branch its checkout has out (PLX-298).
         if self.row.fields.checkout {
             let repo = self.checkout_path().await?;
             let worktrees = &self.daemon.agents.worktrees;
@@ -1001,7 +1001,7 @@ impl Actor {
         }
     }
 
-    /// `agent/approve` (RYA-222): passes the user's answer to the CLI and logs it as the
+    /// `agent/approve` (PLX-222): passes the user's answer to the CLI and logs it as the
     /// request's resolution. A request that already ended answers with how it ended.
     async fn approve(
         &mut self,
@@ -1091,7 +1091,7 @@ impl Actor {
         }
     }
 
-    /// Denies every permission request nobody answered in time (RYA-222).
+    /// Denies every permission request nobody answered in time (PLX-222).
     async fn expire_approvals(&mut self) {
         for approval_id in self.approvals.expired(Instant::now()) {
             info!(run = %self.id, approval = %approval_id, "a permission request expired");
@@ -1960,7 +1960,7 @@ impl Actor {
     }
 
     /// Stores the images of `turn_id`'s message, which its CLI has now taken, for its
-    /// `TurnStarted` to list (RYA-191, decision 0026). If they can't be stored, the CLI still has
+    /// `TurnStarted` to list (PLX-191, decision 0026). If they can't be stored, the CLI still has
     /// them, and the transcript shows the message without them.
     async fn keep_images(&mut self, turn_id: Option<TurnId>, images: Vec<PromptImage>) {
         if images.is_empty() {
@@ -2157,7 +2157,7 @@ impl Actor {
         })
     }
 
-    /// A new temp folder for the run's CLI (RYA-130), a resumed run's too, and its canonical
+    /// A new temp folder for the run's CLI (PLX-130), a resumed run's too, and its canonical
     /// path for the sandbox.
     fn run_temp(&self) -> Result<(RunTemp, PathBuf), ErrorObject> {
         let temp = run_temp::create(&self.daemon.data_dir).map_err(|error| {
@@ -2219,7 +2219,7 @@ impl Actor {
 
     /// Fills in a `TurnStarted` what only the actor knows: a follow-up's text, which `send`
     /// recorded before its CLI could report the turn, so a transcript rebuilt from the log shows
-    /// it (RYA-92), capped like every other text item, the ids of any message's images (RYA-191),
+    /// it (PLX-92), capped like every other text item, the ids of any message's images (PLX-191),
     /// the threads attached to it (PLX-372), and who sent it. Leaves any other item alone.
     fn fill_turn_started(&mut self, item: &mut AgentOutputItem) {
         let AgentOutputItem::TurnStarted {
@@ -2980,7 +2980,7 @@ mod tests {
         }
     }
 
-    /// RYA-222: a request still pending when its attempt ended, answered while a fallback attempt
+    /// PLX-222: a request still pending when its attempt ended, answered while a fallback attempt
     /// runs in its place, is withdrawn at once. Waiting for the run's end would hold up the actor,
     /// and every command and expiry with it, for the fallback attempt's whole run.
     #[tokio::test]

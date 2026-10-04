@@ -13,7 +13,7 @@ use tempfile::TempDir;
 const HEADROOM: usize = 32;
 
 /// A fresh folder, removed when dropped: under `$TMPDIR` when a socket inside it fits the OS
-/// limit, which a Claude worker needs since it can write only there (RYA-128), and under `/tmp`
+/// limit, which a Claude worker needs since it can write only there (PLX-128), and under `/tmp`
 /// otherwise.
 pub fn temp_dir() -> TempDir {
     let dir = temp_dir_in(&std::env::temp_dir());

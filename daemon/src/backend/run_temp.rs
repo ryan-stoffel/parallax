@@ -1,4 +1,4 @@
-//! Each worker run's own temp folder (RYA-130), whichever backend runs it.
+//! Each worker run's own temp folder (PLX-130), whichever backend runs it.
 //!
 //! A vendor CLI's default temp is shared: Claude Code's `/tmp/claude-<uid>` holds what every
 //! session of the user leaves there. So plxd makes a new, owner-only folder for each worker's
@@ -73,7 +73,7 @@ pub fn create(data_dir: &DataDir) -> io::Result<RunTemp> {
 }
 
 /// Removes every run's temp folder, with the roots, and the data folder's `tmp/`, which holds
-/// files such as a Claude worker's `CLAUDE_ENV_FILE` (RYA-126). For `serve` at startup, when its
+/// files such as a Claude worker's `CLAUDE_ENV_FILE` (PLX-126). For `serve` at startup, when its
 /// instance lock means none of them is in use. A root someone else owns is left alone.
 pub fn sweep(data_dir: &DataDir) {
     let roots = data_dir

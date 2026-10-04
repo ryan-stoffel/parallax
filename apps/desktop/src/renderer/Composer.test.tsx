@@ -39,7 +39,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// plxd's caps (RYA-191).
+// plxd's caps (PLX-191).
 const caps: ImageCaps = { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 };
 
 function render(
@@ -102,7 +102,7 @@ const thumbnails = () =>
   [...document.querySelectorAll("form img")].map((img) => img.getAttribute("alt"));
 const alert = () => document.querySelector('[role="alert"]')?.textContent;
 
-test("Manual says its requests are denied when they can't come to the chat, and why (RYA-196)", () => {
+test("Manual says its requests are denied when they can't come to the chat, and why (PLX-196)", () => {
   const manual = () =>
     [
       ...document.querySelectorAll('[role="menu"][aria-label="Access"] [role="menuitemradio"]'),

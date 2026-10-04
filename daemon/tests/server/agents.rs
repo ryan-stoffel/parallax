@@ -647,7 +647,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
     host.server.stop().await;
 }
 
-/// The ids of the images a transcript's `turnStarted` for `turn` lists (RYA-191).
+/// The ids of the images a transcript's `turnStarted` for `turn` lists (PLX-191).
 fn turn_images(transcript: &[AgentOutputItem], turn: Option<TurnId>) -> Vec<ImageId> {
     transcript
         .iter()
@@ -717,7 +717,7 @@ async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_a
     let turn = TurnId::generate();
     let follow_up = AgentSendParams {
         images: vec![gif.clone(), png.clone()],
-        // Images alone, with no text (RYA-193).
+        // Images alone, with no text (PLX-193).
         ..send_params(run_id, turn, "")
     };
     client.call::<AgentSend>(follow_up).await.unwrap();
@@ -750,7 +750,7 @@ async fn an_image_sent_alone_after_the_cli_exits_resumes_the_run() {
     client.call::<AgentStart>(params).await.unwrap();
     until(&mut client, updated_to(AgentStatus::Completed)).await;
 
-    // The CLI has exited, so this starts a new process on the same session (RYA-202).
+    // The CLI has exited, so this starts a new process on the same session (PLX-202).
     let png = PromptImage {
         media_type: ImageMediaType::Png,
         data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
@@ -935,7 +935,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         .unwrap();
     assert_eq!(resumed.run.status, AgentStatus::Running);
     // The resumed CLI reports its session after the turn has started, so the two can land in
-    // separate 50 ms `agent.output` batches (RYA-132): wait for both.
+    // separate 50 ms `agent.output` batches (PLX-132): wait for both.
     let mut wanted = vec![
         AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
@@ -1194,7 +1194,7 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     assert!(old.message.contains("2.1.100"), "{}", old.message);
     assert!(old.message.contains("2.1.248"), "{}", old.message);
 
-    // Codex workers are off until RYA-145 isolates their temp folder (RYA-153).
+    // Codex workers are off until PLX-145 isolates their temp folder (PLX-153).
     let codex = client
         .call::<AgentStart>(AgentStartParams {
             account: Some(AccountChoice::Subscription {
@@ -1205,7 +1205,7 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
         .await
         .unwrap_err();
     assert_eq!(kind(&codex), ErrorKind::WorkerUnavailable);
-    assert!(codex.message.contains("RYA-145"), "{}", codex.message);
+    assert!(codex.message.contains("PLX-145"), "{}", codex.message);
 
     // Cursor runs only threads (0036), so a project's worker never routes to it.
     let cursor = client
@@ -1244,7 +1244,7 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
         .await
         .unwrap_err();
     assert_eq!(kind(&on_entry), ErrorKind::WorkerUnavailable);
-    assert!(on_entry.message.contains("RYA-145"), "{}", on_entry.message);
+    assert!(on_entry.message.contains("PLX-145"), "{}", on_entry.message);
 
     server.stop().await;
 }

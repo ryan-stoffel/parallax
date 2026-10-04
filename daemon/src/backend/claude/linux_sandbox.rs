@@ -10,7 +10,7 @@
 //! [`check_host`] probes that same helper, inside the namespaces Claude's sandbox uses.
 //!
 //! [`check_host`] also refuses a Claude Code that runs with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on,
-//! which widens every command's writes on Linux (RYA-112).
+//! which widens every command's writes on Linux (PLX-112).
 
 use std::os::unix::net::UnixListener;
 use std::path::Path;
@@ -146,7 +146,7 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
 /// `policyHelper`, and WSL's inherited settings join the same managed tier inside Claude Code,
 /// but weren't tried. This runs in its own process, which can still see other settings than the
 /// worker does, so a worker whose `system/init` shows the permission mode the flag forces fails
-/// too (RYA-118).
+/// too (PLX-118).
 ///
 /// Fails closed: anything but a successful run that prints [`STATUS_VERSION`] with one of
 /// [`SCRUB_OFF`] is refused.

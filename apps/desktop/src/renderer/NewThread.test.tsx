@@ -358,7 +358,7 @@ test("No Repo starts a thread with no repo", async () => {
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
 });
 
-test("a new thread asks plxd to forward its permission requests only when plxd advertises approvals (RYA-196)", async () => {
+test("a new thread asks plxd to forward its permission requests only when plxd advertises approvals (PLX-196)", async () => {
   answers["thread/start"] = (p) => ({
     result: {
       thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
@@ -390,7 +390,7 @@ describe("with plxd's run options", () => {
     answers["thread/start"] = started;
   });
 
-  test("Manual says its requests come to the chat only when plxd advertises approvals (RYA-196)", async () => {
+  test("Manual says its requests come to the chat only when plxd advertises approvals (PLX-196)", async () => {
     const manual = () =>
       [
         ...document.querySelectorAll(

@@ -1,6 +1,6 @@
 //! `plxd service`: installs, removes, and reports on the per-user service that keeps
 //! `plxd serve` running: a `LaunchAgent` on macOS ([`launchd`], #61) and a systemd user unit on
-//! Linux ([`systemd`], RYA-18), both named after [`DEFAULT_LABEL`] (0010, 0023).
+//! Linux ([`systemd`], PLX-18), both named after [`DEFAULT_LABEL`] (0010, 0023).
 //!
 //! Each OS module renders its file with a pure function, covered by a golden-file test, and drives
 //! its service manager. Both compile on every Unix, so their tests run everywhere; the running

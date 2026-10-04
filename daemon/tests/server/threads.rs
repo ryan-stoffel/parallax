@@ -89,7 +89,7 @@ type Options = (
 );
 
 /// The fake CLI as a backend that maps only `low` and `high` effort and the `plan` permission
-/// (RYA-97), and records each run's options.
+/// (PLX-97), and records each run's options.
 struct WithOptions {
     fake: FakeBackend,
     seen: Arc<Mutex<Vec<Options>>>,
@@ -1146,7 +1146,7 @@ async fn a_checkout_thread_never_switches_under_a_running_one() {
     assert_eq!(client.list().await.threads.len(), 1);
 }
 
-/// RYA-276, 0034: a thread's CLI gets the user's message as is, with no Parallax limits before it,
+/// PLX-276, 0034: a thread's CLI gets the user's message as is, with no Parallax limits before it,
 /// as in Claude Code.
 #[tokio::test]
 async fn a_threads_first_message_is_the_users_own() {
@@ -1178,7 +1178,7 @@ async fn a_threads_first_message_is_the_users_own() {
     host.server.stop().await;
 }
 
-/// RYA-97, RYA-222: a thread's model, effort, permission, and approvals reach its backend when it
+/// PLX-97, PLX-222: a thread's model, effort, permission, and approvals reach its backend when it
 /// starts and when it resumes, come back on its run, and count for `thread/start`'s idempotency.
 /// What the backend can't honor is refused before anything is made.
 #[tokio::test]
@@ -1271,7 +1271,7 @@ async fn a_thread_keeps_its_model_effort_permission_and_approvals() {
     assert_eq!(seen.lock().unwrap().len(), 2, "no other run started");
 }
 
-/// RYA-161, RYA-163: a message to a finished thread can change its model and effort. The change
+/// PLX-161, PLX-163: a message to a finished thread can change its model and effort. The change
 /// is stored, reported on its run and on `agent.updated`, and used by the resumed CLI. An effort
 /// the backend can't honor is refused before anything changes.
 #[tokio::test]

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::Store;
 use crate::error::StoreError;
 
-/// A coordinator's wake-ups as they survive a restart (RYA-178, decision 0025): how many turns
+/// A coordinator's wake-ups as they survive a restart (PLX-178, decision 0025): how many turns
 /// they have taken since the user last wrote, and whether they are paused.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WakeState {

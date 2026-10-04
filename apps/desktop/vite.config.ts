@@ -9,7 +9,7 @@ import type { PackUserConfig } from "vite-plus/pack";
 // rows with <style> tags it writes, as Vite's dev server does. Scripts stay
 // 'self', except for React Refresh's inline preamble in dev. The dev server's
 // HMR websocket is same-origin, so 'self'. Images may be data: URLs, which is
-// how a message's images show (RYA-193); agent Markdown never loads images.
+// how a message's images show (PLX-193); agent Markdown never loads images.
 const csp = (dev: boolean) =>
   [
     "default-src 'self'",
@@ -36,7 +36,7 @@ const cspMeta: Plugin = {
 // Main and preload are separate CommonJS bundles: a sandboxed preload must be
 // one self-contained file. Every dependency is inlined except Electron itself,
 // node-pty, and node-llama-cpp, whose native binaries can't be, so the packaged
-// app needs only their folders from node_modules (RYA-66, RYA-152).
+// app needs only their folders from node_modules (PLX-66, PLX-152).
 const external = ["electron", "node-pty", "node-llama-cpp"];
 const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
   entry: { [name]: `src/${name}/${name}.ts` },

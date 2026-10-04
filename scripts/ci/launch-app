@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Launches the built desktop app (run `scripts/ci/check-app` first) and fails unless its window
-// loads with `window.parallax` working, then checks the app quits cleanly (RYA-84).
+// loads with `window.parallax` working, then checks the app quits cleanly (PLX-84).
 //
 // This one file plays two parts:
 // - Run by node, it starts `electron -r <this file> apps/desktop`: the real app, with this file

@@ -220,7 +220,7 @@ method_table! {
         /// reads the file on disk now.
         AgentFile = "agent/file": AgentFileParams => AgentFileResult;
         /// `agent/files`: one folder of a run's worktree, or a Current checkout thread's
-        /// checkout, without `.git` or what git ignores, for browsing (RYA-296). Gated on the
+        /// checkout, without `.git` or what git ignores, for browsing (PLX-296). Gated on the
         /// `files` capability.
         AgentFiles = "agent/files": AgentFilesParams => AgentFilesResult;
         /// `agent/accept`: merges a run's commit into the project repository's current branch on
@@ -231,10 +231,10 @@ method_table! {
         /// a message. Idempotent on its client-generated turn id.
         AgentRequestChanges = "agent/requestChanges": AgentRequestChangesParams => AgentRunResult;
         /// `agent/openPr`: pushes a finished run's branch to the repository's `origin` and opens
-        /// a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
+        /// a pull request for it with `gh`, or finds the one already open (PLX-168). Gated on the
         /// `openPr` capability.
         AgentOpenPr = "agent/openPr": AgentOpenPrParams => AgentOpenPrResult;
-        /// `agent/gitStatus`: the git state of a run's folder (RYA-298). Gated on the `git`
+        /// `agent/gitStatus`: the git state of a run's folder (PLX-298). Gated on the `git`
         /// capability, like `agent/commit` and `agent/push`.
         AgentGitStatus = "agent/gitStatus": AgentGitStatusParams => GitStatus;
         /// `agent/commit`: stages everything in a finished run's folder and commits it.
@@ -242,7 +242,7 @@ method_table! {
         /// `agent/push`: pushes a finished run's branch to `origin`, setting its upstream.
         AgentPush = "agent/push": AgentPushParams => GitStatus;
         /// `agent/approve`: answers a run's permission request, from its `approvalRequested`
-        /// item, by allowing or denying the tool call (RYA-222, decision 0031). Idempotent on the
+        /// item, by allowing or denying the tool call (PLX-222, decision 0031). Idempotent on the
         /// request. Gated on the `approvals` capability.
         AgentApprove = "agent/approve": AgentApproveParams => AgentApproveResult;
         /// `thread/list`: every repo entry and normal thread, and the `seq` the list reflects

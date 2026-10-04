@@ -5,6 +5,6 @@
 {"type":"assistant","message":{"id":"msg_01Cn1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"Starting a long review."}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":14000,"output_tokens":40,"service_tier":"standard"}},"parent_tool_use_id":null,"session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68","uuid":"a0000000-0000-4000-8000-000000000057"}
 # Block on stdin, which cancel closes right after its SIGINT, not in `wait` (@hang): bash 3.2
 # leaves a trap pending while `wait` blocks if the signal lands just before it, but runs it once
-# `read` returns (RYA-120). Without a SIGINT, the fake still hangs after EOF.
+# `read` returns (PLX-120). Without a SIGINT, the fake still hangs after EOF.
 @eof
 @hang

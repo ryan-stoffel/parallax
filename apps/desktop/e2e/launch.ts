@@ -5,7 +5,7 @@ import path from "node:path";
 import { _electron, type ElectronApplication, type Page } from "@playwright/test";
 
 // The built app against a real plxd whose workers are the fake backend playing a script from
-// this folder (RYA-16). PLXD_PATH defaults to the repo's debug build, which must have the fake
+// this folder (PLX-16). PLXD_PATH defaults to the repo's debug build, which must have the fake
 // backend: `cargo build -p plxd --features fake-backend`, then `pnpm build` and `pnpm e2e`.
 // Never point it at an installed plxd: without the feature, serve refuses to start.
 

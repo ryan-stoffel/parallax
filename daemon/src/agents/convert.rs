@@ -29,7 +29,7 @@ pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 /// a `Write` of a big file, becomes `{"truncated": true, "bytes": n}`.
 pub(super) const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;
 
-/// The largest tool input an `approvalRequested` item carries as JSON, in bytes (RYA-222): more
+/// The largest tool input an `approvalRequested` item carries as JSON, in bytes (PLX-222): more
 /// than a tool call's, since the user has to see what they allow, such as a long plan.
 pub(super) const MAX_APPROVAL_INPUT_BYTES: usize = 256 * 1024;
 
@@ -343,8 +343,8 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             session_id: truncate(session_id, MAX_ID_BYTES),
             model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
         },
-        // The backend knows only the id; the run's actor adds a follow-up's text (RYA-92), marks
-        // a coordinator's wake-up (RYA-42), and lists the message's images (RYA-191) and
+        // The backend knows only the id; the run's actor adds a follow-up's text (PLX-92), marks
+        // a coordinator's wake-up (PLX-42), and lists the message's images (PLX-191) and
         // attached threads (PLX-372).
         Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted {
             turn_id: *turn_id,
@@ -423,7 +423,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
 }
 
 /// The transcript item for a permission request that plxd denies at `expires_at` if nobody
-/// answers it (RYA-222).
+/// answers it (PLX-222).
 pub(super) fn approval_requested(
     request: &ApprovalRequest,
     expires_at: Timestamp,
@@ -448,7 +448,7 @@ pub(super) fn approval_requested(
     }
 }
 
-/// The transcript item for how a permission request ended (RYA-222).
+/// The transcript item for how a permission request ended (PLX-222).
 pub(super) fn approval_resolved(
     approval_id: ApprovalId,
     resolution: &AgentApproveResult,
@@ -485,7 +485,7 @@ mod tests {
         TodoStatus, ToolStatus, Usage,
     };
 
-    /// RYA-222: a permission request carries a larger input than a tool call, so the user sees a
+    /// PLX-222: a permission request carries a larger input than a tool call, so the user sees a
     /// long plan whole, and is cut like every other item past that. The actor logs requests
     /// itself, with when they expire, so they're no plain transcript item.
     #[test]

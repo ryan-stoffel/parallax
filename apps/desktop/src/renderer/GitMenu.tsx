@@ -54,7 +54,7 @@ export function gitActions(
 }
 
 /**
- * The top bar's Git split button for a thread (RYA-298). The main part runs the next useful
+ * The top bar's Git split button for a thread (PLX-298). The main part runs the next useful
  * action; the chevron lists Commit, Push, and Create PR, each disabled with its reason. Commit
  * asks for a message, prefilled with the thread's title. Create PR pushes and opens the pull
  * request through `agent/openPr`, in the browser, or with `onPrOpened`, in the PR view. The status

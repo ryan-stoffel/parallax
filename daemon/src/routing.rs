@@ -9,7 +9,7 @@
 //! # What owns calling this, and how
 //!
 //! #156's runner (`crate::agents`) calls `resolve` and `start` for workers, and for a project's
-//! coordinator (RYA-41, 0024). Who owns what (see #119's decision record, 0012):
+//! coordinator (PLX-41, 0024). Who owns what (see #119's decision record, 0012):
 //!
 //! - #156 (the M3 runner, workers only) calls `resolve` and `start` for a worker's
 //!   `workspace-write` run, maps [`Event::AccountFallback`] to an `agent/*` notification, and

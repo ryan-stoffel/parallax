@@ -1,7 +1,7 @@
 //! The M3 runner (#156, decision 0014): runs a worker end to end.
 //!
 //! `agent/start` resolves the worker's account through routing (#119), refuses a worker plxd
-//! can't sandbox (0013) or a run option its backend can't honor (RYA-97),
+//! can't sandbox (0013) or a run option its backend can't honor (PLX-97),
 //! creates the run's worktree (#154), records the run, and starts the
 //! backend in the worktree with the project's shared context folder (#155) writable. From then
 //! on one [`actor`] task per run owns it: it streams the backend's events into the event log as
@@ -10,7 +10,7 @@
 //! #166's hardened `commit_all` and reports `agent.diffReady`.
 //!
 //! A run whose client started it with `approvals`, and a subagent of a coordinator that has them,
-//! lets its CLI ask before a tool call (RYA-222, decision 0031). It logs the request, takes
+//! lets its CLI ask before a tool call (PLX-222, decision 0031). It logs the request, takes
 //! `agent/approve`'s answer, and denies it itself when nobody answers in time ([`approvals`]).
 //! Every launch of the run, a resume included, keeps the flag.
 //!
@@ -98,7 +98,7 @@ pub(crate) struct Agents {
     running: AtomicU32,
     tracker: TaskTracker,
     shutdown: CancellationToken,
-    /// How long a run's permission request waits for an answer (RYA-222).
+    /// How long a run's permission request waits for an answer (PLX-222).
     approval_timeout: Duration,
     /// When a run a usage limit stopped resumes (PLX-371).
     resume_timing: ResumeTiming,
@@ -192,7 +192,7 @@ pub(super) enum Place {
         thread: bool,
     },
     /// A project's coordinator, with no sandbox (0024), in a detached worktree of `repo` that the
-    /// actor refreshes before each CLI process (RYA-171).
+    /// actor refreshes before each CLI process (PLX-171).
     Coordinator { repo: PathBuf },
 }
 
@@ -415,7 +415,7 @@ async fn prepare_run(
     }
     // A Codex or Cursor thread is full Codex or Cursor Agent, with no worker sandbox to check
     // (0035, 0036). Any other run on them is refused, even one on a repo entry: Cursor runs
-    // nothing else, and Codex workers wait on RYA-153.
+    // nothing else, and Codex workers wait on PLX-153.
     if !(thread_run && resolved.backend().full_thread()) {
         worker::check_backend(resolved.backend())?;
     }
@@ -454,7 +454,7 @@ async fn prepare_run(
     Ok((prepared, repo_path))
 }
 
-/// What a run asks of its CLI beyond the prompt (RYA-97), each `None` for the CLI's default. The
+/// What a run asks of its CLI beyond the prompt (PLX-97), each `None` for the CLI's default. The
 /// run keeps them for every launch, including a resume. A waiting message stores its own as JSON
 /// (PLX-370).
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -905,7 +905,7 @@ pub(crate) struct NewRun {
     /// The project, or for a thread its repo entry, whose id the run's events go to.
     pub scope: ProjectId,
     pub prompt: String,
-    /// The prompt's images (RYA-191), already checked.
+    /// The prompt's images (PLX-191), already checked.
     pub images: Vec<PromptImage>,
     /// The threads attached to the prompt (PLX-372), already checked.
     pub threads: Vec<RunId>,
@@ -913,7 +913,7 @@ pub(crate) struct NewRun {
     /// The coordinator thread starting the run through `plxd mcp` (#195).
     pub coordinator_thread: Option<CoordinatorThreadId>,
     pub options: RunOptions,
-    /// The client answers the run's permission requests (RYA-222, 0031).
+    /// The client answers the run's permission requests (PLX-222, 0031).
     pub approvals: bool,
     pub thread: Option<NewThread>,
 }
@@ -1301,7 +1301,7 @@ pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>) {
     }
 }
 
-/// `agent/image`: one of a run's stored images (RYA-191, decision 0026).
+/// `agent/image`: one of a run's stored images (PLX-191, decision 0026).
 pub(crate) async fn image(
     daemon: &Arc<Daemon>,
     params: AgentImageParams,
@@ -1394,7 +1394,7 @@ pub(crate) async fn set_auto_resume(
     .await
 }
 
-/// `agent/approve` (RYA-222): through the run's actor, which keeps its permission requests. The
+/// `agent/approve` (PLX-222): through the run's actor, which keeps its permission requests. The
 /// caller has checked `params`.
 pub(crate) async fn approve(
     daemon: Arc<Daemon>,
@@ -1432,7 +1432,7 @@ pub(crate) async fn accept(
     Ok(AgentAcceptResult { run, merge })
 }
 
-/// `agent/openPr`: through the run's actor, as `agent/accept` is (RYA-168).
+/// `agent/openPr`: through the run's actor, as `agent/accept` is (PLX-168).
 pub(crate) async fn open_pr(
     daemon: Arc<Daemon>,
     run_id: RunId,
@@ -1532,7 +1532,7 @@ pub(super) fn pr_error(error: &PrError) -> ErrorObject {
     ErrorObject::parallax(kind, error.to_string())
 }
 
-/// `agent/gitStatus`, `agent/commit`, and `agent/push`: through the run's actor (RYA-298).
+/// `agent/gitStatus`, `agent/commit`, and `agent/push`: through the run's actor (PLX-298).
 pub(crate) async fn git(
     daemon: Arc<Daemon>,
     run_id: RunId,
@@ -1543,7 +1543,7 @@ pub(crate) async fn git(
 
 /// Marks every run the store still has as `starting` or `running` as `interrupted`: plxd
 /// stopped without recording how they ended, as after a crash. Then wakes each project's
-/// coordinator for what it missed while plxd was stopped ([`wake::catch_up`], RYA-178), and
+/// coordinator for what it missed while plxd was stopped ([`wake::catch_up`], PLX-178), and
 /// starts the timers of runs waiting for a usage limit to reset ([`resume::restore`], PLX-371).
 /// Called once at startup, before any connection is accepted.
 pub(crate) async fn recover(daemon: &Arc<Daemon>) {
@@ -1808,7 +1808,7 @@ mod tests {
         assert!(!retry_task.is_finished(), "the retry is still queued");
 
         // Only the map, the first attempt's guard, and the queued retry may hold the lock when
-        // `release` runs, as in real use (RYA-91): the test's own `first`/`retry` clones would
+        // `release` runs, as in real use (PLX-91): the test's own `first`/`retry` clones would
         // keep the entry alive by themselves and hide a `release` that removes it too eagerly.
         // Checked with a `Weak`, which also serves the sweep check at the end.
         let old = Arc::downgrade(&retry);
@@ -1816,7 +1816,7 @@ mod tests {
 
         // The first attempt "fails" and releases, exactly as `agents::start`/`actor_for` do on any
         // error path. `Starting::drop` calls `release` while its guard is still alive, so the
-        // guard is dropped only after the check below (RYA-91): dropping it first let the retry
+        // guard is dropped only after the check below (PLX-91): dropping it first let the retry
         // take the lock on the other worker before the check ran.
         locks.release(id);
 

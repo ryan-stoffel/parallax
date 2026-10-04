@@ -80,7 +80,7 @@ pub(super) enum Step {
     TurnDone(TurnDone),
     /// The run broke its account or tool policy. The driver stops the CLI at once.
     Violation(Failure),
-    /// A `can_use_tool` control request (RYA-222): the event to report, and what answering it
+    /// A `can_use_tool` control request (PLX-222): the event to report, and what answering it
     /// needs. The CLI waits for the answer.
     Ask(ApprovalRequest, Ask),
     /// A `control_cancel_request`: the CLI no longer waits for the answer to this request id.
@@ -95,7 +95,7 @@ pub(super) enum Step {
     },
 }
 
-/// What answering a `can_use_tool` request needs (RYA-222).
+/// What answering a `can_use_tool` request needs (PLX-222).
 #[derive(Debug, PartialEq)]
 pub(super) struct Ask {
     /// The CLI's id for the request, which the answer repeats.
@@ -139,10 +139,10 @@ pub(super) struct Translator {
     /// The permission mode a worker or a coordinator asked for, which its `system/init` must
     /// report.
     permission_mode: &'static str,
-    /// The CLI asks plxd before a tool call that would prompt (RYA-222), so its control
+    /// The CLI asks plxd before a tool call that would prompt (PLX-222), so its control
     /// requests are plxd's to answer.
     prompts: bool,
-    /// A worker's `--tools` named `ExitPlanMode` too (RYA-243), so its `system/init` may list it.
+    /// A worker's `--tools` named `ExitPlanMode` too (PLX-243), so its `system/init` may list it.
     plan_exit: bool,
     /// The user approved an `ExitPlanMode`, so the CLI left plan mode for the mode it was in
     /// before, which later `system/init`s report.
@@ -197,7 +197,7 @@ impl Translator {
     }
 
     /// Expects a worker's or a coordinator's `system/init` to report `mode` instead of
-    /// [`DEFAULT_PERMISSION_MODE`], for a run that asked for another permission (RYA-97, 0027).
+    /// [`DEFAULT_PERMISSION_MODE`], for a run that asked for another permission (PLX-97, 0027).
     /// [`BYPASS_PERMISSION_MODE`] also lifts a worker's tool check: it runs as full Claude Code.
     pub fn with_permission_mode(mut self, mode: &'static str) -> Self {
         self.permission_mode = mode;
@@ -205,14 +205,14 @@ impl Translator {
     }
 
     /// Takes the CLI's permission requests when it was started with `--permission-prompt-tool
-    /// stdio` (RYA-222). Otherwise its control requests are skipped, as before.
+    /// stdio` (PLX-222). Otherwise its control requests are skipped, as before.
     pub fn with_prompts(mut self, prompts: bool) -> Self {
         self.prompts = prompts;
         self
     }
 
     /// Lets a worker's `system/init` list `ExitPlanMode` besides [`WORKER_TOOLS`], when its
-    /// `--tools` named it (`hands_over_plans`, RYA-243).
+    /// `--tools` named it (`hands_over_plans`, PLX-243).
     pub fn with_plan_exit(mut self, plan_exit: bool) -> Self {
         self.plan_exit = plan_exit;
         self
@@ -724,7 +724,7 @@ fn signed_out(result: &str) -> bool {
 }
 
 /// The allow rules among a `can_use_tool` request's `permission_suggestions`, as updates that
-/// last the rest of the CLI process, and as `Tool(content)` for people (RYA-222). Their own
+/// last the rest of the CLI process, and as `Tool(content)` for people (PLX-222). Their own
 /// destination, often a settings file, is replaced with `session`. Every other suggestion, such
 /// as a mode or an added directory, is dropped: an added directory would let a worker's file
 /// tools out of its worktree. Only the rules `approvalRequested` shows whole are kept, at most

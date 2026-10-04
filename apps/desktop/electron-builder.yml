@@ -4,7 +4,7 @@ appId: dev.parallax.desktop
 productName: Parallax
 directories:
   output: release
-# Where the app's updater (electron-updater, RYA-68) looks: the app ships this as app-update.yml
+# Where the app's updater (electron-updater, PLX-68) looks: the app ships this as app-update.yml
 # in its resources folder, and the build writes the channel's update metadata next to the
 # installers (0030). `${channel}` is the version's first prerelease identifier, or `latest`:
 # nightly builds write nightly*.yml, standard builds latest*.yml. The owner and repo are explicit
@@ -55,7 +55,7 @@ mac:
   entitlementsInherit: entitlements.mac.plist
   # Chromium's 223 .pak files (locales and resources) aren't code, so they aren't signed one by one (each a codesign
   # run and a trip to Apple's timestamp server, about two minutes in all): Electron Framework's own
-  # signature seals them as resources, like every other data file (RYA-211).
+  # signature seals them as resources, like every other data file (PLX-211).
   signIgnore: ['\.pak$']
 # Signed with the app's identity when there is one. The updater reads the zip, so the dmg stays out
 # of the update metadata.

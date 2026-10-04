@@ -11,7 +11,7 @@ import { uuidv7 } from "../src/renderer/uuidv7";
 import { close, launch, printFailure, servePids, type Launched } from "./launch";
 
 // The built app against a real plxd whose workers are the fake backend playing agent.json
-// (RYA-16). See launch.ts for the plxd it needs.
+// (PLX-16). See launch.ts for the plxd it needs.
 
 test.describe.configure({ mode: "serial" });
 
@@ -110,7 +110,7 @@ test("a top bar menu closes on a click outside it (PLX-363)", async () => {
   await expect(menu).toBeHidden();
 });
 
-test("opens a terminal in the thread's folder, kept while hidden (RYA-295)", async () => {
+test("opens a terminal in the thread's folder, kept while hidden (PLX-295)", async () => {
   const listed = (await page.evaluate(`window.parallax.request("local", "agent/list", {})`)) as {
     result: { runs: { prompt: string; branch?: string }[] };
   };
@@ -138,7 +138,7 @@ const edit = (command: "copy" | "paste") =>
     BrowserWindow.getAllWindows()[0]!.webContents[command]();
   }, command);
 
-test("copies the agent's reply into the composer, and right-click offers Copy and Paste (RYA-184)", async () => {
+test("copies the agent's reply into the composer, and right-click offers Copy and Paste (PLX-184)", async () => {
   // Context menus are recorded instead of shown, since a shown one holds the main process.
   await app.evaluate(({ Menu }) => {
     const shown: string[][] = [];
@@ -167,7 +167,7 @@ test("copies the agent's reply into the composer, and right-click offers Copy an
   await message.press("Backspace");
 });
 
-test("the composer grows upward as it fills, up to 40% of the window (RYA-184)", async () => {
+test("the composer grows upward as it fills, up to 40% of the window (PLX-184)", async () => {
   const message = page.getByRole("textbox", { name: "Message" });
   const before = (await message.boundingBox())!;
   const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
@@ -184,7 +184,7 @@ test("the composer grows upward as it fills, up to 40% of the window (RYA-184)",
   await message.press("Backspace");
 });
 
-test("a follow-up's text is still there after a reload (RYA-92)", async () => {
+test("a follow-up's text is still there after a reload (PLX-92)", async () => {
   await page.getByRole("textbox", { name: "Message" }).fill("Check the links too");
   await page.getByRole("button", { name: "Send" }).click();
   // The resumed fake answers again, after plxd logged the follow-up's turnStarted.
@@ -198,7 +198,7 @@ test("a follow-up's text is still there after a reload (RYA-92)", async () => {
   await expect(transcript.getByText("Follow-up message")).toHaveCount(0);
 });
 
-test("a pasted image sits in the composer, goes with the message, and outlives a reload (RYA-193)", async () => {
+test("a pasted image sits in the composer, goes with the message, and outlives a reload (PLX-193)", async () => {
   // Wider than the 2000 px an image is sent at, so the composer redraws it smaller.
   await app.evaluate(async ({ clipboard, ClipboardItem, nativeImage }) => {
     const [width, height] = [2400, 12];
@@ -231,7 +231,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
   expect(await sent.evaluate(width)).toBe(2000);
 });
 
-test("the usage period picker shows its choice on each provider (RYA-284)", async () => {
+test("the usage period picker shows its choice on each provider (PLX-284)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();
   // Every provider's pane stays mounted, so a radio group shared across them would leave only the
@@ -247,7 +247,7 @@ test("the usage period picker shows its choice on each provider (RYA-284)", asyn
   await page.getByRole("button", { name: "Back to app" }).click();
 });
 
-test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", async () => {
+test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();
   const codex = page.getByRole("tab", { name: /^Codex/ });
@@ -264,7 +264,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (RYA-35)", a
   await expect(codex).toHaveText("CodexAuthenticated");
 });
 
-test("creates a project on a repository it adds, and opens it (RYA-166)", async () => {
+test("creates a project on a repository it adds, and opens it (PLX-166)", async () => {
   const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "ember");
   mkdirSync(repo);
   execFileSync("git", ["init", "-q", repo]);
@@ -293,7 +293,7 @@ test("creates a project on a repository it adds, and opens it (RYA-166)", async 
   await expect(page.locator('#sidebar li[data-kind="project"] [data-title]')).toHaveText(["ember"]);
 });
 
-test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (RYA-46)", async () => {
+test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (PLX-46)", async () => {
   // Reconnecting after the restart waits out the app's backoff.
   test.slow();
   // As for threads: the fake runs coordinators once it's their default.
@@ -337,7 +337,7 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 });
 
-test("lists the project's subagents, opens their chats, and marks the coordinator's wake-up (RYA-47)", async () => {
+test("lists the project's subagents, opens their chats, and marks the coordinator's wake-up (PLX-47)", async () => {
   // The last test left ember's coordinator open, interrupted by the restart.
   await page.getByRole("button", { name: "Show side panel" }).click();
   const panel = page.getByRole("complementary", { name: "Side panel" });
@@ -384,7 +384,7 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
   await expect(transcript.getByText("From Parallax: subagents finished")).toBeVisible();
 });
 
-test("renames the project and picks its icon from its row, and both outlive a reload (RYA-230)", async () => {
+test("renames the project and picks its icon from its row, and both outlive a reload (PLX-230)", async () => {
   // The last test left ember open. Its row's actions show on hover.
   const projects = page.locator('#sidebar li[data-kind="project"]');
   await projects.hover();

@@ -13,7 +13,7 @@
 //! The child gets its arguments as the vendor CLIs would: the resume id, the prompt as a JSON
 //! string, the policy, and the model. A fork's run gets no resume id, so it starts the script's
 //! session, and [`FORKED_FROM_ENV`] names the session it forked. Follow-ups reach it on stdin, one JSON string per line, and
-//! so do answers to its permission requests (RYA-222), each a JSON object in that string. As
+//! so do answers to its permission requests (PLX-222), each a JSON object in that string. As
 //! Claude Code without its prompt channel denies instead of asking, a run without
 //! [`RunRequest::approvals`] skips the script's requests and takes no answers.
 //! With an API key account, the key is in `FAKE_API_KEY`; with a subscription it is scrubbed, as
@@ -22,7 +22,7 @@
 //! enforces none of it.
 //!
 //! Outside unit tests, a `plxd` built with the `fake-backend` feature runs every worker on this
-//! backend when [`SCRIPT_ENV`] names a script, for the app's end-to-end tests (RYA-16).
+//! backend when [`SCRIPT_ENV`] names a script, for the app's end-to-end tests (PLX-16).
 
 use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
@@ -128,7 +128,7 @@ pub enum Step {
     /// stdin ends first.
     AwaitFollowUp,
     /// Prints [`Event::ApprovalRequested`] with a new approval id, as Claude Code's
-    /// `can_use_tool` asks whether a tool call may run (RYA-222).
+    /// `can_use_tool` asks whether a tool call may run (PLX-222).
     RequestApproval(AskedApproval),
     /// Waits for the answer to a permission request on stdin and prints [`Event::Text`] with
     /// it, as JSON: `{"approvalId", "decision": "allow", "input"?, "always"?}` or
@@ -297,7 +297,7 @@ impl Backend for FakeBackend {
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
-        // Images alone are a message too (RYA-202), as a resumed run's may be.
+        // Images alone are a message too (PLX-202), as a resumed run's may be.
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
@@ -395,7 +395,7 @@ enum Delivery {
 enum Input {
     /// A follow-up, whose delivery is reported.
     FollowUp(FollowUp),
-    /// An answer to a permission request, as [`answer_json`] writes it (RYA-222).
+    /// An answer to a permission request, as [`answer_json`] writes it (PLX-222).
     Answer(String),
 }
 

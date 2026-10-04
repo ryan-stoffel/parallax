@@ -1,12 +1,12 @@
 # 0003: Parallax and `plxd`
 
 - Status: accepted
-- Date: 2026-09-23, renamed 2026-10-01 ([RYA-262](https://linear.app/ryanstoffel/issue/RYA-262))
-- Issue: #17, #19, RYA-262
+- Date: 2026-09-23, renamed 2026-10-01 ([PLX-262](https://linear.app/ryanstoffel/issue/PLX-262))
+- Issue: #17, #19, PLX-262
 
 ## Context
 
-The plan left two naming questions open: what the product is called, and whether the host daemon, `projectd`, is shared with Roster. The daemon uses neither Roster nor the name `projectd`. The working name was replaced by the final name, Parallax, in RYA-262.
+The plan left two naming questions open: what the product is called, and whether the host daemon, `projectd`, is shared with Roster. The daemon uses neither Roster nor the name `projectd`. The working name was replaced by the final name, Parallax, in PLX-262.
 
 ## Decision
 

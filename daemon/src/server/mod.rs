@@ -102,7 +102,7 @@ pub struct Config {
     /// default, is plxd's own with the login shell's `PATH` and the usual install folders filled in
     /// (#96, decision 0014, PLX-323).
     pub agent_environment: Option<Environment>,
-    /// How long a run's permission request waits for an answer before plxd denies it (RYA-222,
+    /// How long a run's permission request waits for an answer before plxd denies it (PLX-222,
     /// decision 0031). 30 minutes by default.
     pub approval_timeout: Duration,
     /// The most a run a usage limit stopped resumes past its reset, at random (PLX-371, decision

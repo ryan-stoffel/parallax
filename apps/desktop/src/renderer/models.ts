@@ -164,7 +164,7 @@ export interface Catalog {
 
 /**
  * The built-in backends of a plxd without `providers`, whose names the model menu has always shown.
- * Every one maps efforts but Cursor, whose model ids carry the effort (RYA-97, RYA-38, 0036).
+ * Every one maps efforts but Cursor, whose model ids carry the effort (PLX-97, PLX-38, 0036).
  * ponytail: mirrors plxd's `Backend::permissions`, `Backend::efforts`, and
  * `Capabilities::coordinator`; a plxd with `providers` reports them (`ProviderInfo`).
  */

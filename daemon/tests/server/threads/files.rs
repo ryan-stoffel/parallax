@@ -1,4 +1,4 @@
-//! `agent/files` and `agent/file`'s `working` side (RYA-296): browsing a thread's folder on disk,
+//! `agent/files` and `agent/file`'s `working` side (PLX-296): browsing a thread's folder on disk,
 //! for a thread in a worktree and one in the user's own checkout.
 
 use parallax_protocol::methods::{AgentFile, AgentFiles};
