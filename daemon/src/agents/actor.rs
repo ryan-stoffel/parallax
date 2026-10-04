@@ -214,6 +214,12 @@ pub(super) enum Command {
         pending: super::placement::Pending,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
+    /// `project/fromThreads` (0042): the run joins Project `project` as `parent`'s child.
+    Join {
+        project: ProjectId,
+        parent: RunId,
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
 }
 
 impl Command {
@@ -225,7 +231,8 @@ impl Command {
             | Self::LinkPr { reply, .. }
             | Self::ResumeNow { reply }
             | Self::AutoResume { reply, .. }
-            | Self::Place { reply, .. } => {
+            | Self::Place { reply, .. }
+            | Self::Join { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Accept { reply, .. } => {
@@ -674,7 +681,33 @@ impl Actor {
             } => {
                 let _ = reply.send(self.place(account, pending).await);
             }
+            Command::Join {
+                project,
+                parent,
+                reply,
+            } => {
+                let _ = reply.send(self.join(project, parent).await);
+            }
         }
+    }
+
+    /// Moves the run into Project `project` as `parent`'s child (0042). Its mode, inbox, wake-ups,
+    /// and Project tools all follow its scope, so it runs as a child from its next CLI process,
+    /// and a live CLI keeps what it started with. Joining the Project it is in changes nothing.
+    async fn join(&mut self, project: ProjectId, parent: RunId) -> Result<AgentRun, ErrorObject> {
+        if self.project != project {
+            let id = self.row.id;
+            // Only its fields: its state may be newer here than in the store.
+            self.row.fields = store(&self.daemon, move |db| {
+                db.join_project(id, project.into(), parent.into())
+                    .map_err(|error| store_error(&error))
+            })
+            .await?
+            .fields;
+            self.project = project;
+            info!(run = %self.id, %project, "a thread joined a Project");
+        }
+        self.snapshot()
     }
 
     /// `agent/cancel`, by the user or by thread `from` through its Parallax tools (0041). A push

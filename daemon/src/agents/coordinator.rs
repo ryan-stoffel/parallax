@@ -10,6 +10,7 @@
 //! the last one unless that one is still starting or running, and takes over the same worktree.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
@@ -163,6 +164,23 @@ fn newest(
         .into_iter()
         .rev()
         .find(|run| run.fields.policy == NO_WRITE))
+}
+
+/// The user's first message to the coordinator of a Project made from `threads`
+/// (`project/fromThreads`, 0042): read them and draft the brief for the user to approve.
+// ponytail: the draft is text in its reply; make it a memory proposal once PLX-476 lets a
+// coordinator propose one.
+pub(crate) fn from_threads_prompt(threads: &[RunId]) -> String {
+    let mut list = String::new();
+    for id in threads {
+        let _ = writeln!(list, "- {id}");
+    }
+    format!(
+        "I made this Project from these threads, which are now your children:\n{list}\nRead each \
+         with thread_read. Then draft the Project's brief: its goal, scope, and constraints, in a \
+         few lines, from what the threads were doing. Reply with the draft for me to approve, and \
+         start no new work until I do. Once I approve it, save it as brief.md with memory_write."
+    )
 }
 
 /// The coordinator's first message: its instructions, where it is, the Project's autonomy level

@@ -1561,6 +1561,22 @@ pub(crate) async fn set_auto_resume(
     .await
 }
 
+/// `project/fromThreads` (0042): moves run `id` into Project `project` as the child of its
+/// coordinator `parent`, through the run's actor, so a live actor takes the new scope too.
+pub(crate) async fn join(
+    daemon: &Arc<Daemon>,
+    id: RunId,
+    project: ProjectId,
+    parent: RunId,
+) -> Result<AgentRun, ErrorObject> {
+    ask(daemon, id, |reply| Command::Join {
+        project,
+        parent,
+        reply,
+    })
+    .await
+}
+
 /// `agent/approve` (PLX-222): through the run's actor, which keeps its permission requests. The
 /// caller has checked `params`.
 pub(crate) async fn approve(

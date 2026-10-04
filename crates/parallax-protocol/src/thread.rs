@@ -14,7 +14,10 @@
 //! fork origin, a title, and a settled flag.
 //!
 //! Since 0042, behind `projectTasks`, `thread/start` with `project` starts a Project's child: a
-//! thread whose run, and `repo`, is the Project's id, whose parent is its coordinator.
+//! thread whose run, and `repo`, is the Project's id, whose parent is its coordinator. Behind
+//! `projectFromThreads`, `project/fromThreads` makes existing threads a new Project's children:
+//! their runs move to the Project, so their later `agent.*` events take its id, while `repo`
+//! keeps their repo entry.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -65,7 +68,8 @@ pub struct Thread {
     /// The thread's run id.
     pub id: RunId,
     /// Its repo entry: the scratch entry for a thread with no repo. A Project's child started with
-    /// `thread/start`'s `project` has the Project's id here instead (0042).
+    /// `thread/start`'s `project` has the Project's id here instead (0042), while a thread
+    /// `project/fromThreads` made a Project's child keeps its repo entry.
     pub repo: RepoId,
     /// Whether the user archived it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

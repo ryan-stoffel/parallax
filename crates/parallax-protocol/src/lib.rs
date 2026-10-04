@@ -123,8 +123,9 @@ pub use memory::{
 };
 pub use project::{
     Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, ProjectIcon, ProjectId, ProjectListParams, ProjectListResult,
-    ProjectPermission, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
+    ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectIcon,
+    ProjectId, ProjectListParams, ProjectListResult, ProjectPermission, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use provider::{
     ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,

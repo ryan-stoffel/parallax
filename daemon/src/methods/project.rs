@@ -3,9 +3,11 @@
 //! icon behind the `projectEdit` capability (PLX-227, 0032), its permission mode behind
 //! `projectPermission` (0042), its autonomy level behind `projectAutonomy` (0043), its base
 //! branch behind `integrationBranch` (0045), how its children are placed behind
-//! `projectPlacement` (0046), or its checks behind `checks` (PLX-411, 0045), and
-//! `project/delete`, behind `projectDelete` (PLX-338).
+//! `projectPlacement` (0046), or its checks behind `checks` (PLX-411, 0045),
+//! `project/delete`, behind `projectDelete` (PLX-338), and `project/fromThreads`, behind
+//! `projectFromThreads` (0042).
 
+use std::collections::HashSet;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
@@ -13,12 +15,13 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentRunResult, ErrorKind, InboxKind, ParallaxEvent, ProjectAutonomy, ProjectCreateParams,
-    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectIcon, ProjectId,
-    ProjectListParams, ProjectListResult, ProjectPermission, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult, RunId,
+    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams,
+    ProjectFromThreadsResult, ProjectIcon, ProjectId, ProjectListParams, ProjectListResult,
+    ProjectPermission, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, RunId,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use super::Context;
 use crate::agents::{self, coordinator};
@@ -137,6 +140,169 @@ pub(crate) async fn start(
         .detached(coordinator::start(daemon, params))
         .await?;
     Ok(AgentRunResult { run })
+}
+
+/// Makes a Project from threads (0042): checks them, creates the Project on their repository as
+/// `project/create` does, starts its coordinator, and moves each thread into it as the
+/// coordinator's child. The coordinator and the moves are detached from the request, as
+/// `project/start` is. Each step is idempotent, so a retry finishes what a failed request left.
+pub(crate) async fn from_threads(
+    context: &Context,
+    params: ProjectFromThreadsParams,
+) -> Result<ProjectFromThreadsResult, ErrorObject> {
+    let ProjectFromThreadsParams {
+        id,
+        run_id,
+        name,
+        permission,
+        threads,
+        account,
+    } = params;
+    if threads.is_empty() {
+        return Err(ErrorObject::invalid_params(
+            "threads must name at least one thread",
+        ));
+    }
+    if threads.iter().collect::<HashSet<_>>().len() != threads.len() {
+        return Err(ErrorObject::invalid_params(
+            "threads must not name a thread twice",
+        ));
+    }
+    let repo_path = threads_repo(context, id, threads.clone()).await?;
+    let mut created = create(
+        context,
+        ProjectCreateParams {
+            id,
+            name,
+            repo_path,
+            icon: None,
+            permission: Some(permission),
+            autonomy: None,
+            base_branch: None,
+        },
+    )
+    .await?;
+    let daemon = Arc::clone(&context.daemon);
+    let start = ProjectStartParams {
+        project: id,
+        run_id,
+        prompt: coordinator::from_threads_prompt(&threads),
+        account,
+        model: None,
+        effort: None,
+        permission: None,
+        images: Vec::new(),
+        approvals: true,
+    };
+    let run = context
+        .daemon
+        .agents
+        .detached(async move {
+            let run = coordinator::start(Arc::clone(&daemon), start).await?;
+            for thread in threads {
+                agents::join(&daemon, thread, id, run_id).await?;
+                report_thread(&daemon, thread).await?;
+            }
+            Ok(run)
+        })
+        .await?;
+    created.project.coordinator = Some(run_id);
+    Ok(ProjectFromThreadsResult {
+        project: created.project,
+        run,
+    })
+}
+
+/// The path of the repository `threads` are all on, or why they can't make Project `project`:
+/// each must be a thread on a repo entry, not the scratch one, with a worktree of its own, and
+/// in no Project but this one, which a retry finds them in. One plxd is one host, so threads on
+/// one repo entry share a host too.
+async fn threads_repo(
+    context: &Context,
+    project: ProjectId,
+    threads: Vec<RunId>,
+) -> Result<String, ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |db| {
+            let mut repo: Option<parallax_store::Repo> = None;
+            for id in threads {
+                let not_found = || {
+                    ErrorObject::parallax(
+                        ErrorKind::ThreadNotFound,
+                        format!("no thread has run id {id}"),
+                    )
+                };
+                let thread = db
+                    .get_thread(id.into())
+                    .map_err(|e| store_error(&e))?
+                    .ok_or_else(not_found)?;
+                let run = db
+                    .get_run(id.into())
+                    .map_err(|e| store_error(&e))?
+                    .ok_or_else(not_found)?;
+                let in_other_project = run.fields.project_id != Uuid::from(project)
+                    && db
+                        .get_project(run.fields.project_id)
+                        .map_err(|e| store_error(&e))?
+                        .is_some();
+                // A child `thread/start` made has the Project's id as its repo, not an entry's.
+                let entry = db.get_repo(thread.repo_id).map_err(|e| store_error(&e))?;
+                let Some(entry) = entry.filter(|_| !in_other_project) else {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "thread {id} is already in a Project"
+                    )));
+                };
+                if entry.fields.scratch {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "thread {id} has no repository, so it has no branch to land"
+                    )));
+                }
+                if db
+                    .get_worktree(id.into())
+                    .map_err(|e| store_error(&e))?
+                    .is_none()
+                {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "thread {id} has no worktree of its own: it works in the repository's \
+                         checkout, or its worktree was removed"
+                    )));
+                }
+                match &repo {
+                    Some(first) if first.id != entry.id => {
+                        return Err(ErrorObject::invalid_params(format!(
+                            "the threads are on two repositories, {} and {}",
+                            first.fields.path, entry.fields.path
+                        )));
+                    }
+                    Some(_) => {}
+                    None => repo = Some(entry),
+                }
+            }
+            repo.map(|repo| repo.fields.path)
+                .ok_or_else(|| ErrorObject::invalid_params("threads must name at least one thread"))
+        })
+        .await
+}
+
+/// Reports thread `run`'s new parent as `thread.updated`.
+async fn report_thread(daemon: &Arc<Daemon>, run: RunId) -> Result<(), ErrorObject> {
+    let log = Arc::clone(&daemon.log);
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            if let Some(row) = db.get_thread(run.into()).map_err(|e| store_error(&e))? {
+                let thread = crate::threads::thread_entry(&row)?;
+                log.append_blocking(
+                    Timestamp::now(),
+                    None,
+                    ParallaxEvent::ThreadUpdated { thread },
+                );
+            }
+            Ok(())
+        })
+        .await
 }
 
 /// Renames a project or sets its icon, permission mode, autonomy level, base branch, automatic

@@ -48,17 +48,18 @@ use crate::{
     MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
     MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult, PrViewParams,
     ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult, PromptImage, ProvidersListParams, ProvidersListResult,
-    ProvidersRemoveParams, ProvidersSaveParams, PullRequest, QuestionAnswerParams,
-    QuestionAskParams, QuestionEscalateParams, QuestionListParams, QuestionListResult,
-    QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams,
-    QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult, RepoFilesParams, RepoFilesResult,
-    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams,
-    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
-    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult,
+    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -391,6 +392,10 @@ method_table! {
         /// `agent/wait`: waits until any or all of up to 50 runs are idle, or for at most 60 s,
         /// without polling (PLX-451). Gated on the `agentWait` capability.
         AgentWait = "agent/wait": AgentWaitParams => AgentWaitResult;
+        /// `project/fromThreads`: makes a Project from threads on one repo entry, each with its
+        /// own worktree, starts its coordinator, and makes each thread its child (0042).
+        /// Idempotent on its client-generated ids. Gated on the `projectFromThreads` capability.
+        ProjectFromThreads = "project/fromThreads": ProjectFromThreadsParams => ProjectFromThreadsResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -516,6 +521,7 @@ mod tests {
                 "land/approve",
                 "land/sendBack",
                 "agent/wait",
+                "project/fromThreads",
                 "$/cancelRequest",
                 "events/event",
             ]
