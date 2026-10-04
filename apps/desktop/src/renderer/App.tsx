@@ -15,7 +15,7 @@ import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
-import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
+import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
@@ -35,6 +35,7 @@ import {
   lineageOf,
   noRepo,
   rootOf,
+  threadProjects,
   titleOf,
   useThreads,
   type ThreadsView,
@@ -159,10 +160,21 @@ export function App() {
       : undefined;
   if (selection.kind === "project" && !project && known.current.has(selection.projectId))
     setSelection({ kind: "new" });
-  const agents = useProjectAgents(host.id, project?.id, connected, approvals);
+  const projectList = useProjectAgents(host.id, project?.id, connected, approvals);
+  // With the threads in the Project that its list doesn't have, as its sidebar row counts them.
+  const inProject = useMemo(() => threadProjects(threads.state), [threads.state]);
+  const agents = useMemo(
+    () =>
+      project ? withProjectThreads(projectList, threads.state, project.id, inProject) : projectList,
+    [projectList, threads.state, project, inProject],
+  );
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
   const agent = agents.runs.find((r) => r.id === agentId);
+  // Its thread's title from plxd (0041), else its prompt's.
+  const agentTitle = agentId
+    ? (threads.state.titles[agentId] ?? (agent ? titleOf(agent) : "Subagent"))
+    : undefined;
   // The run whose folder the side panel's Files view browses: the open thread or subagent.
   const filesRunId = selection.kind === "thread" ? selection.threadId : agentId;
   // The open thread's linked pull requests, on a plxd that links them (PLX-318).
@@ -257,7 +269,7 @@ export function App() {
         onClick: agentId ? () => openAgent() : undefined,
       },
     ];
-    if (agentId) crumbs.push({ label: agent ? titleOf(agent) : "Subagent", icon: <Workflow /> });
+    if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
     const repo = {
       label: group.name,
@@ -568,6 +580,7 @@ export function App() {
                 key={`${host.id}/${agentId}`}
                 hostId={host.id}
                 runId={agentId}
+                title={agentTitle}
                 prompt={agent?.prompt}
                 // A Project's subagents are kept current.
                 going={isRunning(agent?.status)}
@@ -634,6 +647,7 @@ export function App() {
               // Another Project's start box starts empty, with its own retry id.
               key={`${host.id}/${project.id}`}
               agents={agents}
+              titles={threads.state.titles}
               openId={agentId}
               onOpen={openAgent}
               disabledReason={offline}

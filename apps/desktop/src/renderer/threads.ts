@@ -244,6 +244,41 @@ export const groupOf = (state: ThreadsState, thread: Thread) =>
 export const parentOf = (state: ThreadsState, thread: Thread) =>
   thread.parent === undefined ? undefined : state.threads.find((t) => t.id === thread.parent);
 
+/**
+ * By thread id: the Project each thread is in (0042), where its own run or an ancestor's is one of
+ * a Project's, as a coordinator's child's parent is. Threads in no Project are left out. Such a
+ * thread shows only inside its Project, never in the main sidebar. A loop of parents stops where
+ * it repeats.
+ */
+export function threadProjects(state: ThreadsState): Map<string, string> {
+  const projects = new Set(state.projects.map((p) => p.id));
+  const parents = new Map(state.threads.map((t) => [t.id, t.parent]));
+  const found = new Map<string, string>();
+  for (const thread of state.threads) {
+    const seen = new Set<string>();
+    for (let id = thread.id as string | undefined; id && !seen.has(id); id = parents.get(id)) {
+      seen.add(id);
+      const project = state.runs[id]?.project;
+      if (project && projects.has(project)) {
+        found.set(thread.id, project);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Project `project`'s runs: its own, coordinators included, and those of the threads in it
+ * (`threadProjects`). Its side panel and its sidebar row count the same runs.
+ */
+export const projectRuns = (
+  state: ThreadsState,
+  project: string,
+  inProject: ReadonlyMap<string, string>,
+) =>
+  Object.values(state.runs).filter((r) => r.project === project || inProject.get(r.id) === project);
+
 /** The threads `id` launched, oldest first, so their order holds as they start. */
 export const childrenOf = (state: ThreadsState, id: string) =>
   state.threads

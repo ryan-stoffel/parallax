@@ -2,10 +2,11 @@ import { ArrowUp, GitBranch, LoaderCircle, ShieldQuestion, Workflow } from "luci
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentRun, ParallaxEvent } from "../protocol/generated/protocol";
+import { childOrder, runAttention } from "./attention";
 import { describeError } from "./errors";
 import { instanceLogo, instanceName } from "./providers";
 import { backendLogos, statusLooks } from "./Sidebar";
-import { titleOf, waitingSince } from "./threads";
+import { projectRuns, titleOf, waitingSince, type ThreadsState } from "./threads";
 import {
   accountLabel,
   statusLabel,
@@ -136,23 +137,54 @@ export function useProjectAgents(
 }
 
 /**
- * The side panel's Agents view for a Project: its subagents, newest first, without the coordinator
- * (0024), each opening its chat; then a box that starts one by hand.
+ * `agents` with Project `project`'s other runs in `state` (`projectRuns`), such as a child's own
+ * children, which `agent/list {project}` doesn't list (0042), and what each waits on. Oldest first.
+ */
+export function withProjectThreads(
+  agents: ProjectAgentsView,
+  state: ThreadsState,
+  project: string,
+  inProject: ReadonlyMap<string, string>,
+): ProjectAgentsView {
+  const listed = new Set(agents.runs.map((r) => r.id));
+  const more = projectRuns(state, project, inProject).filter((r) => !listed.has(r.id));
+  if (more.length === 0) return agents;
+  const waiting = { ...agents.waiting };
+  for (const r of more) {
+    const items = state.approvals[r.id]?.items;
+    if (items?.length) waiting[r.id] = items as Approval[];
+  }
+  const runs = [...agents.runs, ...more].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return { ...agents, runs, waiting };
+}
+
+/**
+ * The side panel's Agents view for a Project: the coordinator's children, without the coordinator
+ * (0024), ordered Needs you, Working, Done, Failed, newest first within each (0042), each opening
+ * its chat in place; then a box that starts one by hand.
  */
 export function AgentsPanel({
   agents,
+  titles = {},
   openId,
   onOpen,
   disabledReason,
 }: {
   agents: ProjectAgentsView;
+  /** By run id: a child's thread title from plxd (0041), over its prompt's. */
+  titles?: Readonly<Record<string, string>>;
   /** The subagent whose chat is open. */
   openId?: string;
   onOpen: (runId: string) => void;
   /** Why starting one is off right now. */
   disabledReason?: string;
 }) {
-  const shown = agents.runs.filter((r) => r.policy !== "noWrite").toReversed();
+  const rank = (run: AgentRun) =>
+    childOrder.indexOf(runAttention(run, agents.waiting[run.id]?.length ?? 0));
+  const shown = agents.runs
+    .filter((r) => r.policy !== "noWrite")
+    .toReversed()
+    .toSorted((a, b) => rank(a) - rank(b));
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {shown.length > 0 ? (
@@ -161,6 +193,7 @@ export function AgentsPanel({
             <AgentRow
               key={run.id}
               run={run}
+              title={titles[run.id] ?? titleOf(run)}
               asks={agents.waiting[run.id]?.length ?? 0}
               open={run.id === openId}
               onOpen={() => onOpen(run.id)}
@@ -192,11 +225,13 @@ export function AgentsPanel({
  */
 function AgentRow({
   run,
+  title,
   asks,
   open,
   onOpen,
 }: {
   run: AgentRun;
+  title: string;
   asks: number;
   open: boolean;
   onOpen: () => void;
@@ -217,7 +252,7 @@ function AgentRow({
           ) : (
             <look.Icon aria-hidden className={`size-3.5 shrink-0 ${look.color}`} />
           )}
-          <span className="min-w-0 flex-1 truncate text-[13px]">{titleOf(run)}</span>
+          <span className="min-w-0 flex-1 truncate text-[13px]">{title}</span>
           <span className="shrink-0 text-[11.5px] text-faint-foreground">
             {run.coordinatorThread ? "by coordinator" : "by you"}
           </span>

@@ -80,7 +80,13 @@ import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
 import { dragThread } from "./threadDrag";
-import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
+import {
+  asksOf,
+  projectRuns,
+  threadProjects,
+  type ProjectChange,
+  type ThreadsView,
+} from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import {
   IconButton,
@@ -272,7 +278,8 @@ type Item = (
  * Search, the Repos filter, a menu to create a Project or add a repository, and New thread, then
  * every host's Projects in a collapsible section, then their threads, each the most recently active first (0033). A thread row shows its repo, how long ago
  * it was prompted or what it asks of the user, its title, branch, and provider. A thread's children
- * (0041) nest under it, collapsed behind their count and most urgent status. Snoozed and
+ * (0041) nest under it, collapsed behind their count and most urgent status, but a Project's
+ * children show only inside it, its row showing their combined status (0042). Snoozed and
  * Archived threads sit under the list. Resting on a thread shows a card with where and how it runs.
  */
 export function ThreadList({
@@ -324,21 +331,25 @@ export function ThreadList({
   const items: Item[] = hosts.flatMap(({ host: h, view }) => {
     const { state } = view;
     const repoOf = (id: string) => state.repos.find((r) => r.id === id);
-    const threads = state.threads.map((t): Item => {
-      const run = state.runs[t.id];
-      return {
-        kind: "thread",
-        thread: t,
-        key: `${h.id}/${t.id}`,
-        host: h,
-        view,
-        repo: repoOf(t.repo),
-        attention: attentionOf(t, run, asksOf(state, t.id)),
-        at: lastPrompt(t),
-      };
-    });
+    // A Project's children show only inside it, and count toward its row's status (0042).
+    const inProject = threadProjects(state);
+    const threads = state.threads
+      .filter((t) => !inProject.get(t.id))
+      .map((t): Item => {
+        const run = state.runs[t.id];
+        return {
+          kind: "thread",
+          thread: t,
+          key: `${h.id}/${t.id}`,
+          host: h,
+          view,
+          repo: repoOf(t.repo),
+          attention: attentionOf(t, run, asksOf(state, t.id)),
+          at: lastPrompt(t),
+        };
+      });
     const projects = state.projects.map((p): Item => {
-      const runs = Object.values(state.runs).filter((r) => r.project === p.id);
+      const runs = projectRuns(state, p.id, inProject);
       return {
         kind: "project",
         project: p,
