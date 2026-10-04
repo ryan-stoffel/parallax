@@ -208,7 +208,7 @@ fn installed(cli: CliKind, path: &Path) -> DetectedCli {
 }
 
 /// A spec for probing `program` in the user's home, which is absolute on every OS, unlike `/` on
-/// Windows (RYA-144), and which only they can write to. `/` if the home folder is unknown or
+/// Windows (PLX-144), and which only they can write to. `/` if the home folder is unknown or
 /// missing.
 pub(crate) fn probe_spec(program: &str) -> ProcessSpec {
     let home = std::env::home_dir().filter(|home| home.is_absolute() && home.is_dir());
@@ -584,7 +584,7 @@ mod windows_tests {
     use crate::backend::process::{Environment, Launcher};
     use crate::paths::DataDir;
 
-    /// A probe starts on Windows, where `/` isn't absolute (RYA-144): a fake `codex.cmd` that
+    /// A probe starts on Windows, where `/` isn't absolute (PLX-144): a fake `codex.cmd` that
     /// exits 0 to `codex login status` reads as signed in.
     #[tokio::test]
     async fn a_cmd_cli_is_probed() {

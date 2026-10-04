@@ -6,7 +6,7 @@
 
 ## Context
 
-A thread is the user's own CLI in its thread mode (0034, 0035, 0036, 0040): their settings, instructions, skills, plugins, hooks, and MCP servers, in its own worktree. A Project's coordinator is Claude Code only (0024), and its children run as workers: 0013's sandbox in every mode but Bypass, a fixed tool list, `codex exec` for Codex (still refused, RYA-145), and Parallax's limits ahead of the task. So a Project runs a weaker agent than a plain thread, and every improvement to threads has to be made twice.
+A thread is the user's own CLI in its thread mode (0034, 0035, 0036, 0040): their settings, instructions, skills, plugins, hooks, and MCP servers, in its own worktree. A Project's coordinator is Claude Code only (0024), and its children run as workers: 0013's sandbox in every mode but Bypass, a fixed tool list, `codex exec` for Codex (still refused, PLX-145), and Parallax's limits ahead of the task. So a Project runs a weaker agent than a plain thread, and every improvement to threads has to be made twice.
 
 0041 already makes the coordinator an ordinary parent thread with the host-wide MCP. This record decides what a Project adds on top, and how its children keep moving with nobody watching. Ryan settled it on 2026-10-03.
 
@@ -42,7 +42,7 @@ A thread is the user's own CLI in its thread mode (0034, 0035, 0036, 0040): thei
 ### The coordinator writes no code
 
 - Its instructions say it never edits files. It plans, dispatches, reviews, curates memory, and lands work. Any change to code is a child.
-- It runs in a detached worktree of the Project's repository at the integration branch's tip, which plxd refreshes before each CLI process as 0024's RYA-171 worktree did. An edit it makes in that worktree reaches neither the user's checkout nor the integration branch. In Auto or Bypass it can still write outside its worktree, as any such run can (0027, 0034), so the rule rests on its instructions. This replaces 0027's coordinator in the user's checkout.
+- It runs in a detached worktree of the Project's repository at the integration branch's tip, which plxd refreshes before each CLI process as 0024's PLX-171 worktree did. An edit it makes in that worktree reaches neither the user's checkout nor the integration branch. In Auto or Bypass it can still write outside its worktree, as any such run can (0027, 0034), so the rule rests on its instructions. This replaces 0027's coordinator in the user's checkout.
 - 0027's "subagents inherit the coordinator's mode" is replaced by the Project's mode.
 
 ### Where children show
@@ -61,4 +61,4 @@ A thread is the user's own CLI in its thread mode (0034, 0035, 0036, 0040): thei
 - Children have the user's credentials, network, and hooks, with Auto's classifier or nothing between them and the machine. The disclaimer and the Project's mode are the only guard. A Project can't use providers that have neither mode.
 - A Project in Auto can't place a child on Cursor. The user has to choose Bypass to mix it in.
 - The coordinator can't make a quick fix itself. A one-line change is a child, which costs a run.
-- RYA-145 (Codex workers on `codex exec`) is no longer needed.
+- PLX-145 (Codex workers on `codex exec`) is no longer needed.

@@ -1,8 +1,8 @@
 //! `agent/start`, `agent/send`, `agent/cancel`, `agent/list`, and `agent/events` (#156), behind
 //! the `agents` capability; the review methods (#157) behind `agentReview`; `agent/openPr`
-//! (RYA-168) behind `openPr`; `agent/image` (RYA-191) behind `promptImages`; `agent/approve`
-//! (RYA-222) behind `approvals`; and `agent/gitStatus`, `agent/commit`, and `agent/push`
-//! (RYA-298) behind `git`. The runner itself is [`crate::agents`].
+//! (PLX-168) behind `openPr`; `agent/image` (PLX-191) behind `promptImages`; `agent/approve`
+//! (PLX-222) behind `approvals`; and `agent/gitStatus`, `agent/commit`, and `agent/push`
+//! (PLX-298) behind `git`. The runner itself is [`crate::agents`].
 
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ use crate::{agents, images};
 /// argv, and into the event log.
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 
-/// The longest message a denial tells the agent, in bytes (RYA-222).
+/// The longest message a denial tells the agent, in bytes (PLX-222).
 const MAX_DENIAL_BYTES: usize = 64 * 1024;
 
 /// The longest pull request title GitHub takes, in characters.
@@ -41,7 +41,7 @@ const MAX_EVENTS_LIMIT: u32 = 1000;
 /// leaves room for the envelope. A page holds at least one event whatever its size.
 pub(crate) const MAX_EVENTS_PAGE_BYTES: usize = 4 * 1024 * 1024;
 
-/// Checks a prompt or message: its text, which may be empty only when it has images (RYA-193),
+/// Checks a prompt or message: its text, which may be empty only when it has images (PLX-193),
 /// and its images (`images::check`).
 pub(super) fn check_message(
     name: &str,
@@ -144,7 +144,7 @@ pub(crate) async fn auto_resume(
     Ok(AgentRunResult { run })
 }
 
-/// `agent/approve` (RYA-222): an edited input and `always` go only with `allow`, a message only
+/// `agent/approve` (PLX-222): an edited input and `always` go only with `allow`, a message only
 /// with `deny`; the run's actor does the rest.
 pub(crate) async fn approve(
     context: &Context,
@@ -296,7 +296,7 @@ pub(crate) async fn open_pr(
         .await
 }
 
-/// `agent/gitStatus` (RYA-298): through the run's actor, like `agent/commit` and `agent/push`.
+/// `agent/gitStatus` (PLX-298): through the run's actor, like `agent/commit` and `agent/push`.
 pub(crate) async fn git_status(
     context: &Context,
     params: AgentGitStatusParams,

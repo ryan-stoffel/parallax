@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { defineConfig } from "@playwright/test";
 
-// `pnpm e2e`: the built app against a fake-backend plxd (RYA-16). See app.spec.ts.
+// `pnpm e2e`: the built app against a fake-backend plxd (PLX-16). See app.spec.ts.
 export default defineConfig({
   testDir: ".",
   // Outside the repo, so nothing needs ignoring.

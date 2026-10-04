@@ -1,4 +1,4 @@
-// The agent's permission requests (RYA-196, decision 0031): the card pinned over the composer while
+// The agent's permission requests (PLX-196, decision 0031): the card pinned over the composer while
 // one waits, and the line it leaves in the transcript once it's answered. The pinned card queues
 // the run's own requests and, in a Project, those of its other runs. Tool input is untrusted: it
 // renders only as text, and a plan only through the transcript's safe Markdown. Pure helpers
@@ -873,7 +873,7 @@ function ApprovalCard({
 const pinnedPlanHeight = 184;
 
 /**
- * `ExitPlanMode`'s request as RYA-220's proposed plan, with Keep planning and Approve plan in its
+ * `ExitPlanMode`'s request as PLX-220's proposed plan, with Keep planning and Approve plan in its
  * actions. A request without a plan says so, and can be answered all the same.
  */
 function PlanApprovalCard({

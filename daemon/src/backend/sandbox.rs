@@ -2,7 +2,7 @@
 //! whichever backend runs it.
 //!
 //! A worker writes its cwd (its worktree), the project's shared context folder (0005), and its
-//! own temp folder (RYA-130). Its commands can't write git metadata or read credential stores,
+//! own temp folder (PLX-130). Its commands can't write git metadata or read credential stores,
 //! plxd's data folder, or any other run's temp. They do have network access (Ryan, #137), so the
 //! read denylist is what keeps a secret from leaving the machine. Each backend turns a
 //! [`WorkerSandbox`] into its own vendor's flags; plxd adds no OS sandbox of its own, because a
@@ -144,7 +144,7 @@ pub fn unreadable_in_home() -> impl Iterator<Item = &'static str> {
 
 /// Paths outside the home folder that no worker may read on this OS (0013). On Linux that is the
 /// user's runtime folder, which can hold credentials: rootless Podman, Buildah, and Skopeo keep
-/// registry logins in its `containers/auth.json` (RYA-107).
+/// registry logins in its `containers/auth.json` (PLX-107).
 #[cfg(target_os = "linux")]
 fn unreadable_outside_home() -> Vec<PathBuf> {
     runtime_dirs(
@@ -192,7 +192,7 @@ fn worker_temp_dir(tmpdir: Option<std::ffi::OsString>) -> PathBuf {
 
 /// The unreadable path of `sandbox` that `temp` is inside, if any. Claude Code puts its network
 /// proxy's sockets in the temp folder, so a deny over it cuts a worker's commands off the network
-/// (RYA-107). Allowing the folder instead would reopen what the deny hides.
+/// (PLX-107). Allowing the folder instead would reopen what the deny hides.
 fn hiding_temp_dir<'a>(sandbox: &'a WorkerSandbox, temp: &Path) -> Option<&'a Path> {
     sandbox
         .unreadable
@@ -223,7 +223,7 @@ pub struct WorkerSandbox {
     /// readable where they fall inside one of these.
     pub unreadable: Vec<PathBuf>,
     /// The run's own temp folder, which plxd makes before the CLI starts and removes when it
-    /// exits (RYA-130). A backend points the vendor's temp setting at it (Claude Code's
+    /// exits (PLX-130). A backend points the vendor's temp setting at it (Claude Code's
     /// `CLAUDE_CODE_TMPDIR`), so its commands' `TMPDIR` is this folder or one inside it. The CLI
     /// keeps files of its own here too, so commands may use only their `TMPDIR` (for Claude Code,
     /// `<temp>/claude-<uid>`).

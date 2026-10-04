@@ -1,4 +1,4 @@
-//! Manual verification of `SecretServiceStore` against the real Secret Service (RYA-19).
+//! Manual verification of `SecretServiceStore` against the real Secret Service (PLX-19).
 //!
 //! Ignored by default, so `scripts/ci/check-rust`'s `cargo test --workspace` (and CI) never
 //! touches a real keyring. Run it on a Linux host with an unlocked Secret Service and

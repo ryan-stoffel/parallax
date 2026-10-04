@@ -120,7 +120,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
 
 /// Writes a registry login where rootless Podman keeps one, in a runtime folder under `root`,
 /// denies that folder as `WorkerSandbox::for_worktree` denies the user's runtime folders on Linux,
-/// and adds a read of the login to `probe` (RYA-107). Which folders those are is `sandbox.rs`'s
+/// and adds a read of the login to `probe` (PLX-107). Which folders those are is `sandbox.rs`'s
 /// unit tests' job; this checks that the sandbox holds a deny there.
 fn probe_registry_login(probe: &mut String, request: &mut RunRequest, root: &Path) {
     let runtime = root.join("run");
@@ -132,7 +132,7 @@ fn probe_registry_login(probe: &mut String, request: &mut RunRequest, root: &Pat
     writeln!(probe, "cat '{}'", login.display()).unwrap();
 }
 
-/// A worker's `TMPDIR` is its own run's (RYA-130): it can't read or write another run's temp
+/// A worker's `TMPDIR` is its own run's (PLX-130): it can't read or write another run's temp
 /// folder, the `/tmp/claude-<uid>` every Claude Code session shares, or its CLI's own temp files,
 /// and it can't write the paths Claude Code's sandbox would always allow.
 #[tokio::test]

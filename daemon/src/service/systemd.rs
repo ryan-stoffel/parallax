@@ -1,4 +1,4 @@
-//! The systemd user unit that keeps `serve` running on Linux (RYA-18, 0023), driven with
+//! The systemd user unit that keeps `serve` running on Linux (PLX-18, 0023), driven with
 //! `systemctl --user`. With `loginctl enable-linger`, it runs while nobody is logged in.
 //!
 //! [`render_unit`] is pure, so it is covered by a golden-file test. [`install`] runs

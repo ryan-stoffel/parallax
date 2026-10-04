@@ -1,6 +1,6 @@
-// The agent's plan (RYA-220): its checklist as lines in the transcript, a strip over the
+// The agent's plan (PLX-220): its checklist as lines in the transcript, a strip over the
 // composer with its card while the run goes, and Claude Code's proposed plan. The checklist comes
-// from plxd, as for TodoWrite, or from Claude Code's task tools (RYA-248). Pure helpers first,
+// from plxd, as for TodoWrite, or from Claude Code's task tools (PLX-248). Pure helpers first,
 // then the components.
 import { Ban, ChevronDown, ChevronUp, CircleX, ClipboardList, ListChecks } from "lucide-react";
 import {
@@ -99,7 +99,7 @@ const taskStates: Partial<Record<string, AgentTodoStatus>> = {
  * "Updated task #3 status". Claude Code answers one it couldn't apply in words, such as "Task not
  * found", without failing the call, so only that answer or no result yet counts. TaskList,
  * TaskGet, and failed calls change nothing. 2.1.283 takes `id` or `task_id` for `taskId`, and
- * `active_form` for `activeForm`, so those count too (RYA-250).
+ * `active_form` for `activeForm`, so those count too (PLX-250).
  */
 function applyTask(tasks: Map<string, Task>, item: Tool): boolean {
   if (failed(item)) return false;
@@ -142,14 +142,14 @@ function applyTask(tasks: Map<string, Task>, item: Tool): boolean {
 const checklists = new WeakMap<Item, Todo>();
 
 /**
- * The transcript with Claude Code's task tools as checklists (RYA-248). Claude Code 2.1.283 keeps
+ * The transcript with Claude Code's task tools as checklists (PLX-248). Claude Code 2.1.283 keeps
  * its plan with TaskCreate and TaskUpdate in place of TodoWrite, one step per call, in a list that
  * lasts the session, across turns and resumes. So after each call that changes it, the whole list
  * goes in as a checklist, as plxd puts one after TodoWrite, and the plan lines and strip read it
  * the same way. A list whose every step is done is put away when the next turn starts, as Claude
  * Code's own view of it is; a step a later TaskUpdate reopens comes back. The session rows go: a
  * new session, as an account fallback starts with ids from 1 again, starts a new list, and clears
- * the plan if it showed steps, while a resume keeps its session and so its list (RYA-250).
+ * the plan if it showed steps, while a resume keeps its session and so its list (PLX-250).
  */
 export function withTaskLists<R extends { kind: string; key: string }>(
   rows: readonly (Item | R)[],
@@ -619,9 +619,9 @@ const slack = 46;
 /**
  * Claude Code's proposed plan as a card: `children` is the plan, rendered. Past about 16 lines it
  * folds behind a fade, with Show full plan, and opens when focus moves into it; the transcript
- * keeps whether it's open, by `id`. `actions` go at its foot, such as approving it (RYA-196).
+ * keeps whether it's open, by `id`. `actions` go at its foot, such as approving it (PLX-196).
  * Pinned in less room than it wants, the plan gives way, never its header or actions, and in less
- * room than those need, the card scrolls (RYA-259).
+ * room than those need, the card scrolls (PLX-259).
  */
 export function ProposedPlan({
   id,

@@ -1,5 +1,5 @@
 //! Where API keys live (#117, 0023): the login Keychain on macOS, the Secret Service on Linux
-//! (RYA-19). Windows has no store yet (RYA-23).
+//! (PLX-19). Windows has no store yet (PLX-23).
 //!
 //! [`KeyStore`] is the interface. [`system_store`] is this OS's real one: `KeychainStore`, one
 //! generic password per account under a service name via the `security-framework` crate;

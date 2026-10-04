@@ -272,7 +272,7 @@ test("a Project is one row that opens its chat: its repository and branch, with 
   const main = document.querySelector("main")!;
   expect(main.querySelector("h2")?.textContent).toBe("ember");
   // In a short window it gives way to a pinned card and the composer, wrapping out of view whole
-  // rather than cut in two (RYA-259).
+  // rather than cut in two (PLX-259).
   const welcome = main.querySelector("h2")!.parentElement!.parentElement!;
   for (const name of ["min-h-0", "flex-wrap", "overflow-hidden"])
     expect(welcome.classList.contains(name)).toBe(true);
@@ -299,7 +299,7 @@ test("Create Project names it after its repository, shows plxd's error, retries 
   expect(nameBox().value).toBe("parallax");
   expect(nameBox().placeholder).toBe("New Project");
   expect(workspaceButton()).toBe("Workspace: parallax on This Mac");
-  // The coordinator's model is picked per message (RYA-46), not here.
+  // The coordinator's model is picked per message (PLX-46), not here.
   expect(dialog().querySelector('[aria-label^="Model"]')).toBeNull();
   typeInto(nameBox(), "");
   expect(inDialog("Create Project")!.disabled).toBe(true);
@@ -377,7 +377,7 @@ test("a repository on another host creates the Project there, then opens that ho
   await openNewProject();
   await openWorkspaces();
   // This computer, then each SSH host, then GitHub, each host listing its own repositories with
-  // no scratch entry. Browsing a host and cloning aren't available yet (RYA-32, RYA-33).
+  // no scratch entry. Browsing a host and cloning aren't available yet (PLX-32, PLX-33).
   expect(workspaceGroups()).toEqual([
     ["This Mac", "parallax", "Choose folder…"],
     ["Mac mini", "api", "Browse foldersNot available yet"],
@@ -1326,7 +1326,7 @@ test("another Project's Agents view starts with an empty box and never gets a la
   expect(agentRows()).toEqual([]);
 });
 
-// --- RYA-196: permission requests in a Project ---
+// --- PLX-196: permission requests in a Project ---
 
 const plan = "## Plan\n\n1. Cut the release branch\n2. Write the changelog";
 const bashAsk = (approvalId: string): AgentOutputItem => ({

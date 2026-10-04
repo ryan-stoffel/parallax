@@ -9,7 +9,7 @@ export type PlxdLookup = {
   platform: NodeJS.Platform;
   /** `app.isPackaged`. */
   packaged: boolean;
-  /** `process.resourcesPath`, where a packaged app bundles plxd (RYA-66). */
+  /** `process.resourcesPath`, where a packaged app bundles plxd (PLX-66). */
   resourcesPath: string;
   /** `app.getAppPath()`: `apps/desktop` in development. */
   appPath: string;

@@ -1,4 +1,4 @@
-//! The Codex backend: runs the user's own signed-in `codex` CLI headless (0004, RYA-38).
+//! The Codex backend: runs the user's own signed-in `codex` CLI headless (0004, PLX-38).
 //!
 //! A normal thread (`RunRequest::thread`, 0017) runs on `codex app-server` as full Codex, with the
 //! user's own configuration, follow-ups, and approval requests: see [`app_server`] and 0035.
@@ -16,7 +16,7 @@
 //!
 //! # Images
 //!
-//! The prompt's images (RYA-191) are files in a folder of their own in the data folder's `tmp/`,
+//! The prompt's images (PLX-191) are files in a folder of their own in the data folder's `tmp/`,
 //! which [`write_images`] makes and the run's driver deletes once Codex has exited, each passed as
 //! `--image=<file>`: with a space instead of `=`, `--image` would take the `-` after it as a
 //! second image, and Codex splits a value at commas, so a path with one is refused. The CLI reads
@@ -24,7 +24,7 @@
 //! the model, so the model sees plxd's temp path, never the user's file name, which plxd never
 //! gets.
 //!
-//! A coordinator doesn't run on Codex: its no-write mode is RYA-39. A worker is held
+//! A coordinator doesn't run on Codex: its no-write mode is PLX-39. A worker is held
 //! to 0013 by Codex's own sandbox (Seatbelt on macOS), configured entirely by
 //! [`worker_overrides`]:
 //!
@@ -47,15 +47,15 @@
 //! CLI. The shell snapshot that would put it back is off (above). So a worker's commands get
 //! `ZDOTDIR`, which zsh reads right after `/etc/zshenv`: [`write_zdotdir`] writes a folder into the
 //! data folder's `tmp/` whose `.zshenv` runs the user's own `~/.zshenv` and then puts the CLI's
-//! `PATH` back in front (RYA-141). The profile makes the folder readable, since the sandboxed zsh
+//! `PATH` back in front (PLX-141). The profile makes the folder readable, since the sandboxed zsh
 //! reads it, but not writable. `allow_login_shell=false` keeps `.zprofile` and `.zlogin`, which
 //! would run after it, from running. The run's driver deletes the folder once Codex has exited.
 //!
 //! As a second check, a worker whose output shows an MCP or subagent call is stopped with
 //! [`FailureKind::PolicyViolation`]. Codex older than [`WORKER_MIN_VERSION`] would ignore the
 //! profile, so the runner refuses it before starting a worker. The backend runs workers only on
-//! macOS, but it reports no `worker_sandbox` on any OS until RYA-145 keeps their commands out of
-//! the shared temp folders, so plxd refuses Codex workers (0013, RYA-153).
+//! macOS, but it reports no `worker_sandbox` on any OS until PLX-145 keeps their commands out of
+//! the shared temp folders, so plxd refuses Codex workers (0013, PLX-153).
 //!
 //! # Credentials
 //!
@@ -189,7 +189,7 @@ pub fn arguments(
 ) -> Result<Vec<OsString>, StartError> {
     let Some(sandbox) = worker_sandbox(request)? else {
         return Err(StartError::Unsupported(
-            "plxd runs only workers on Codex so far; its coordinator is RYA-39".into(),
+            "plxd runs only workers on Codex so far; its coordinator is PLX-39".into(),
         ));
     };
     if request.resume.as_ref().is_some_and(|resume| resume.fork) {
@@ -211,7 +211,7 @@ pub fn arguments(
     }
     if !matches!(request.permission, None | Some(AgentPermission::Edit)) {
         return Err(StartError::Unsupported(
-            "codex exec has no plan mode; a Codex worker only edits (RYA-97)".into(),
+            "codex exec has no plan mode; a Codex worker only edits (PLX-97)".into(),
         ));
     }
     if let Some(effort) = request.effort {
@@ -340,7 +340,7 @@ pub fn worker_overrides(
 const ZSHENV_START: &[u8] = b"unset ZDOTDIR\n[ -f \"$HOME/.zshenv\" ] && . \"$HOME/.zshenv\"\n";
 
 /// Writes a worker's `ZDOTDIR` into `dir` (plxd's data folder's `tmp/`) and returns it, which
-/// deletes it when dropped (RYA-141). Its `.zshenv` runs the user's `~/.zshenv` and then puts
+/// deletes it when dropped (PLX-141). Its `.zshenv` runs the user's `~/.zshenv` and then puts
 /// `path`, the `PATH` the CLI started with, in front of whatever `PATH` the startup files left.
 /// The folder is new, has a random name and a canonical path, as the sandbox needs, and only its
 /// owner may open it (0700, and 0600 for the file).
@@ -455,8 +455,8 @@ impl Backend for CodexBackend {
             coordinator: false,
             reports_cost: false,
             rate_limits: false,
-            // Off everywhere until RYA-145: a worker's commands still write the shared temp
-            // folders on macOS (RYA-153).
+            // Off everywhere until PLX-145: a worker's commands still write the shared temp
+            // folders on macOS (PLX-153).
             worker_sandbox: false,
             // A thread's `thread/fork` (`app_server`); `codex exec` refuses one.
             fork: true,
@@ -468,7 +468,7 @@ impl Backend for CodexBackend {
     }
 
     /// A thread's modes ([`app_server::mode`]). A worker on `codex exec` takes only `edit`, and
-    /// is refused anyway until RYA-145 (RYA-153).
+    /// is refused anyway until PLX-145 (PLX-153).
     fn full_thread(&self) -> bool {
         true
     }

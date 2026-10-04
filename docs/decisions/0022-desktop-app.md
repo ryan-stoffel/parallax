@@ -2,7 +2,7 @@
 
 - Status: accepted; how plxd listens on Linux and Windows, and which `ssh` the app runs on Windows, which this record deferred, are in [0023](0023-cross-platform.md)
 - Date: 2026-09-27
-- Issue: RYA-6
+- Issue: PLX-6
 
 ## Context
 
@@ -10,7 +10,7 @@
 
 The app follows T3 Code (github.com/pingdotgg/t3code): its stack, its layout, and its calm look. We follow its structure and principles only. This repo is public, so no T3 Code assets, icons, or branding are ever committed.
 
-RYA-9 scaffolds the app, RYA-10 generates the protocol types, RYA-12 and RYA-26 connect to plxd, and RYA-13 builds the layout. They all need the same answers first.
+PLX-9 scaffolds the app, PLX-10 generates the protocol types, PLX-12 and PLX-26 connect to plxd, and PLX-13 builds the layout. They all need the same answers first.
 
 ## Decision
 
@@ -24,7 +24,7 @@ RYA-9 scaffolds the app, RYA-10 generates the protocol types, RYA-12 and RYA-26 
   - `vp test`: Vitest.
   - Vite+ is a 1.0 release candidate, so its version is pinned exactly. Each part is a standard tool with its own config block in `vite.config.ts`, so leaving Vite+ means installing those tools directly.
 - **Dev loop:** `pnpm dev` runs `vp dev` and `vp pack --watch`, plus a short script that starts Electron on the dev server's URL and restarts it when the main bundle changes. That script is the one piece electron-vite would have given us.
-- **Styling:** Tailwind CSS v4 through its Vite plugin, with the themes as CSS variables. RYA-13 adds UI libraries as screens need them, and prefers the ones T3 Code uses.
+- **Styling:** Tailwind CSS v4 through its Vite plugin, with the themes as CSS variables. PLX-13 adds UI libraries as screens need them, and prefers the ones T3 Code uses.
 
 ### Package manager and layout
 
@@ -52,17 +52,17 @@ RYA-9 scaffolds the app, RYA-10 generates the protocol types, RYA-12 and RYA-26 
     - It loads only the app's bundled files, or the dev server in development.
     - A strict Content Security Policy applies: `default-src 'self'`, and no inline scripts or `eval`.
     - The main process blocks all navigation (`will-navigate`) and every `window.open` (`setWindowOpenHandler`). Links open in the system browser, and only for `https:` URLs.
-- **Other OSes:** how plxd listens on Windows and Linux, and which `ssh` the app runs there, is RYA-7's decision. The rule that main spawns `plxd attach` doesn't change.
+- **Other OSes:** how plxd listens on Windows and Linux, and which `ssh` the app runs there, is PLX-7's decision. The rule that main spawns `plxd attach` doesn't change.
 
 ### Protocol types
 
 - `parallax-protocol` stays the single source of truth (0007).
 - An explicit generator command, not `#[ts(export)]`, runs ts-rs 12 with `Config::with_large_int("number")`. It writes `apps/desktop/src/protocol/generated/`, which is committed.
-- A `cargo test` staleness test regenerates the types in memory and fails when they differ from the committed copy, so `check-rust` catches a forgotten regeneration. RYA-10 builds both, bringing back what 0020 removed in a new place.
+- A `cargo test` staleness test regenerates the types in memory and fails when they differ from the committed copy, so `check-rust` catches a forgotten regeneration. PLX-10 builds both, bringing back what 0020 removed in a new place.
 
 ### Layout
 
-Following T3 Code's layout, built by RYA-13:
+Following T3 Code's layout, built by PLX-13:
 
 - A minimal left sidebar lists Projects, grouped by host, and their threads.
 - The main pane is the chat, with a breadcrumb header and a centered composer.
@@ -75,7 +75,7 @@ Following T3 Code's layout, built by RYA-13:
 | Alternative | Why it lost |
 | --- | --- |
 | electron-vite, plus Biome and Vitest | Three tools where Vite+ is one, and a different toolchain from T3 Code's. Its one extra, the Electron dev loop, is a short script. |
-| Electron Forge | It ties the build to packaging, which RYA-64 decides, and it isn't what T3 Code uses. |
+| Electron Forge | It ties the build to packaging, which PLX-64 decides, and it isn't what T3 Code uses. |
 | Separate `apps/web` for the renderer, as in T3 Code | T3 Code also serves its web app from a server. Parallax has no server, so a second package only adds wiring. |
 | npm | Its hoisting hides undeclared dependencies, and it isn't what T3 Code uses. |
 | A root pnpm workspace with a `packages/protocol` package | The app is the only consumer of the types, so a workspace and a second package are wiring with no user. Add them when a second package appears. |
@@ -87,7 +87,7 @@ Following T3 Code's layout, built by RYA-13:
 
 - **Supersedes** 0020's "no UI for now". The rest of 0020 stands.
 - **Replaces two lines of 0007:** its TypeScript framing (Code - OSS's `JsonRpcProtocol`) and the generated types' location under `editor/`.
-- **CI:** RYA-11 adds a job that runs `pnpm install --frozen-lockfile`, `vp check`, `vp test`, and the build in `apps/desktop/` on macOS, Windows, and Linux.
+- **CI:** PLX-11 adds a job that runs `pnpm install --frozen-lockfile`, `vp check`, `vp test`, and the build in `apps/desktop/` on macOS, Windows, and Linux.
 - **Two toolchains:** contributors need Node 24 and pnpm (corepack) as well as Rust. A change to `parallax-protocol` also means regenerating the types.
 - **Vite+ is young.** If it stalls, its parts are replaced one for one.
-- **Out of scope:** packaging, signing, and updates are RYA-64, RYA-66, and RYA-68.
+- **Out of scope:** packaging, signing, and updates are PLX-64, PLX-66, and PLX-68.

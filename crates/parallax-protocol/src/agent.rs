@@ -36,12 +36,12 @@ uuid_v7_id! {
 }
 
 uuid_v7_id! {
-    /// A stored image's id (RYA-191, decision 0026): a version 7 UUID that plxd generates once a
+    /// A stored image's id (PLX-191, decision 0026): a version 7 UUID that plxd generates once a
     /// message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
     ImageId
 }
 
-/// An image's file type (RYA-191): the four that Claude and Codex both take.
+/// An image's file type (PLX-191): the four that Claude and Codex both take.
 ///
 /// A newer peer may send a type this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -64,7 +64,7 @@ pub enum ImageMediaType {
     Unknown,
 }
 
-/// An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
+/// An image sent with a prompt or message, behind the `promptImages` capability (PLX-191,
 /// decision 0026). The CLI gets it beside the text, never as a file name or path in it. A
 /// project's or repo's icon image has the same shape (0038).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -96,7 +96,7 @@ pub enum AgentPolicy {
     Unknown,
 }
 
-/// How hard a run's model thinks, behind the `runOptions` capability (RYA-97). Claude Code takes
+/// How hard a run's model thinks, behind the `runOptions` capability (PLX-97). Claude Code takes
 /// every level as `--effort`, and downgrades `xhigh` on models that lack it. A backend that can't
 /// honor a level refuses the run with `unsupportedOption`.
 ///
@@ -120,8 +120,8 @@ pub enum AgentEffort {
     Unknown,
 }
 
-/// A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
-/// which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
+/// A run's permission mode, behind the `runOptions` capability (PLX-97): Claude Code's modes,
+/// which each backend reports the subset of that it maps (PLX-188, 0027). A worker keeps the
 /// worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
 ///
 /// A newer peer may send a value this version does not know; treat it as unknown.
@@ -264,7 +264,7 @@ pub struct AgentRun {
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
     /// True when it forwards its permission requests to the client, as the start method that
-    /// made it asked with `approvals` (RYA-222, decision 0031). It never changes. Absent means
+    /// made it asked with `approvals` (PLX-222, decision 0031). It never changes. Absent means
     /// false: its CLI denies what would prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
@@ -319,11 +319,11 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub diff: Option<DiffSummary>,
-    /// Its model, which `agent/send` can change (RYA-163). Absent means the CLI's default.
+    /// Its model, which `agent/send` can change (PLX-163). Absent means the CLI's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub model: Option<String>,
-    /// Its effort, which `agent/send` can change (RYA-161). Absent means the CLI's default.
+    /// Its effort, which `agent/send` can change (PLX-161). Absent means the CLI's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
@@ -337,7 +337,7 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub fast: Option<bool>,
-    /// Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
+    /// Its permission, which `agent/send` can change (PLX-161). Absent means `edit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
@@ -498,7 +498,7 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         text: Option<String>,
-        /// True for a wake-up (RYA-42, decision 0025): a turn plxd sent a project's coordinator
+        /// True for a wake-up (PLX-42, decision 0025): a turn plxd sent a project's coordinator
         /// on its own, not the user, because runs it started finished. `text` lists them. Also
         /// true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
         /// 0049).
@@ -511,7 +511,7 @@ pub enum AgentOutputItem {
         #[ts(optional)]
         from: Option<RunId>,
         /// The images sent with the turn's message, the prompt's or a follow-up's, in order, for
-        /// `agent/image` (RYA-191). Absent when it had none.
+        /// `agent/image` (PLX-191). Absent when it had none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<ImageId>,
         /// The threads attached to the turn's message as context, in order (PLX-372). The agent
@@ -624,7 +624,7 @@ pub enum AgentOutputItem {
         /// A short description.
         detail: String,
     },
-    /// The agent asks to use a tool and waits for `agent/approve` (RYA-222, decision 0031), in a
+    /// The agent asks to use a tool and waits for `agent/approve` (PLX-222, decision 0031), in a
     /// run started with `approvals`. It is pending until its `approvalResolved`, or until the
     /// run's next `agent.finished`.
     ApprovalRequested {
@@ -663,7 +663,7 @@ pub enum AgentOutputItem {
         /// When plxd denies it if nobody has answered, in RFC 3339 UTC.
         expires_at: Timestamp,
     },
-    /// How a permission request ended (RYA-222, decision 0031).
+    /// How a permission request ended (PLX-222, decision 0031).
     ApprovalResolved {
         /// The request's id.
         approval_id: ApprovalId,
@@ -732,19 +732,19 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub fast: Option<bool>,
-    /// The permission mode (RYA-97, 0027). Absent means `edit`. Ignored in a project, whose
+    /// The permission mode (PLX-97, 0027). Absent means `edit`. Ignored in a project, whose
     /// runs run in the project's mode (0042).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
     /// Images for the prompt, sent only to a plxd that advertises `promptImages`. Its options
     /// give the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of `data`, past which
-    /// the request fails with `imageTooLarge`. With images, the prompt may be empty (RYA-193). A
+    /// the request fails with `imageTooLarge`. With images, the prompt may be empty (PLX-193). A
     /// retry must repeat them; plxd doesn't compare them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
     /// Forward the run's permission requests to the client as `approvalRequested` items, which
-    /// `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
+    /// `agent/approve` answers (PLX-222, decision 0031). Set it only when the client shows and
     /// answers them, and only to a plxd that advertises `approvals`. A thread with it is full
     /// Claude Code and also asks in Accept Edits (0034). Absent, a run in Manual, Auto, or Plan
     /// denies what would prompt, and a thread keeps the worker sandbox, as before. A run with a
@@ -785,7 +785,7 @@ pub struct AgentSendParams {
     pub turn_id: TurnId,
     /// The message.
     pub text: String,
-    /// A new model for the run and every later resume (RYA-163), sent only to a plxd that
+    /// A new model for the run and every later resume (PLX-163), sent only to a plxd that
     /// advertises `sendModel`. It should be one the run's backend runs, or with `account`, that
     /// account's; plxd can't check that, so another's fails the run with the CLI's own error.
     /// Absent, or the run's own, changes nothing. While the run's CLI is running, a different one
@@ -795,11 +795,11 @@ pub struct AgentSendParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub model: Option<String>,
-    /// A new effort (RYA-161), as `model`. `sendOptions` is enough for it and `permission`.
+    /// A new effort (PLX-161), as `model`. `sendOptions` is enough for it and `permission`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
-    /// A new permission (RYA-161), as `effort`. Ignored for a run in a project, which runs in the
+    /// A new permission (PLX-161), as `effort`. Ignored for a run in a project, which runs in the
     /// project's mode (0042).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -919,7 +919,7 @@ pub struct AgentEventsParams {
 }
 
 /// Params of `agent/image`: one image sent with a run's messages, by an id from its
-/// `turnStarted` (RYA-191). Its result is the [`PromptImage`] as it was sent.
+/// `turnStarted` (PLX-191). Its result is the [`PromptImage`] as it was sent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentImageParams {

@@ -104,7 +104,7 @@ const READ_CHUNK: usize = 64 * 1024;
 /// ready. What the process wrote before it exited is unread then: at most a pipe's worth (64 KiB
 /// by default on macOS and Linux, and up to Linux's default `pipe-max-size`, 1 MiB, if the
 /// process grows its pipe; Windows adds tokio's 64 KiB read-ahead) plus one read. A slow reader
-/// can take longer than the drain to get through it (RYA-140).
+/// can take longer than the drain to get through it (PLX-140).
 const READ_BEFORE_CUT: u64 = 1024 * 1024 + READ_CHUNK as u64;
 
 // Sets the working directory, which the safe posix_spawn wrappers can't, then runs the program.
@@ -1581,7 +1581,7 @@ mod tests {
     #[tokio::test]
     async fn the_drain_never_drops_what_the_process_wrote() {
         // More than one read's worth, left unread at the exit, in a pipe something else keeps
-        // open. However long the reader takes, all of it comes through (RYA-140).
+        // open. However long the reader takes, all of it comes through (PLX-140).
         let (mut writer, reader) = tokio::io::duplex(1024 * 1024);
         let written: Vec<String> = (0..20_000).map(|n| format!("line {n}")).collect();
         let text = format!("{}\n", written.join("\n"));

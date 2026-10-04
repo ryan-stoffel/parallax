@@ -50,8 +50,8 @@ export interface ParallaxBridge {
   /** Copies a picture of this window's `rect`, in CSS pixels, to the clipboard. Rejects for an empty or invalid one. */
   copyPicture(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /**
-   * Whether `update` can run: in a packaged app, which installs releases (RYA-68), or under
-   * `pnpm dev`, from a checkout (RYA-204).
+   * Whether `update` can run: in a packaged app, which installs releases (PLX-68), or under
+   * `pnpm dev`, from a checkout (PLX-204).
    */
   updatable: boolean;
   /**

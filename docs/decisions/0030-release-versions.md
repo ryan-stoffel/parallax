@@ -1,12 +1,12 @@
 # 0030: Release versions, update metadata, and macOS signing
 
-- Status: accepted; supersedes in part [0028](0028-release-channels.md) (tags) and [0029](0029-app-packaging.md) (versions, unsigned macOS builds, one installer per OS). RYA-211 moved `plxd`'s version out of the binary and notarization after publishing (below). Which commit is tagged `-nightly` is superseded by [0051](0051-promote-a-nightly.md); the version formula is unchanged.
+- Status: accepted; supersedes in part [0028](0028-release-channels.md) (tags) and [0029](0029-app-packaging.md) (versions, unsigned macOS builds, one installer per OS). PLX-211 moved `plxd`'s version out of the binary and notarization after publishing (below). Which commit is tagged `-nightly` is superseded by [0051](0051-promote-a-nightly.md); the version formula is unchanged.
 - Date: 2026-09-30
-- Issue: RYA-206 (absorbs RYA-205)
+- Issue: PLX-206 (absorbs PLX-205)
 
 ## Context
 
-The app should install new releases itself (RYA-68) through `electron-updater`. That needs three things 0028 and 0029 didn't have:
+The app should install new releases itself (PLX-68) through `electron-updater`. That needs three things 0028 and 0029 didn't have:
 
 - Semver tags. The updater compares versions as semver and reads a release's channel from its first prerelease identifier. `nightly-20260930-49ef244` isn't semver.
 - Update metadata: `latest*.yml` or `<channel>*.yml` on each release, a macOS zip, blockmaps, and `app-update.yml` inside the app. `electron-builder.yml` had `publish: null`, so none of it was built.
@@ -29,11 +29,11 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
 - Two commits in the same second get the same version. The second one's release is then skipped as already published.
 - A local build is `0.0.0-local` (0029).
 
-### `plxd`'s version (RYA-211)
+### `plxd`'s version (PLX-211)
 
 - `plxd --version`, the protocol's `initialize` and `host/version`, and the `LaunchAgent`'s probe report the app's version, as before, but `plxd` reads it at run time. `package-app` writes it to `plxd.version`, one line beside the bundled `plxd` (`Parallax.app/Contents/Resources/` on macOS, `resources/` on Windows and Linux), and `plxd::version()` reads that file beside its own executable (`current_exe`, symlinks resolved). Without the file, as in a cargo build, it reports `Cargo.toml`'s placeholder.
 - Before, `PLX_VERSION` was compiled in (`option_env!`), so every release rebuilt `plxd` even when no Rust changed. Now one `plxd` build is packaged into any app version, and `release.yml` caches it (0029).
-- `main` reads the version first thing, and it's kept for the life of the process. So a `serve` that outlives an app update still reports the version it started as, and the app's check after an update (RYA-68: the running serve's version against `<bundled plxd> --version`) still sees them differ and replaces it, as it did when the version was compiled in.
+- `main` reads the version first thing, and it's kept for the life of the process. So a `serve` that outlives an app update still reports the version it started as, and the app's check after an update (PLX-68: the running serve's version against `<bundled plxd> --version`) still sees them differ and replaces it, as it did when the version was compiled in.
 - On macOS the file is in the bundle before electron-builder signs it, so it is a sealed resource and `codesign --verify --strict` covers it.
 
 ### Channels
@@ -45,7 +45,7 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
 
 ### The interim `nightly-*` releases stay
 
-`electron-updater` 6.8.9's `GitHubProvider` skips any feed entry whose tag isn't valid semver. It also skips standard releases, `v0.1.0` and `v0.2.0` included, when looking for a nightly. So they never confuse it. A simulation against a feed of today's releases confirms this. Until the first `v…-nightly` release exists, a nightly app gets `ERR_UPDATER_NO_PUBLISHED_VERSIONS`. Until the first `v…` standard release replaces `v0.2.0` as Latest, a standard app gets `ERR_UPDATER_CHANNEL_FILE_NOT_FOUND`. The app treats both as "no update" (RYA-68). Pruning old releases is still 0028's later issue.
+`electron-updater` 6.8.9's `GitHubProvider` skips any feed entry whose tag isn't valid semver. It also skips standard releases, `v0.1.0` and `v0.2.0` included, when looking for a nightly. So they never confuse it. A simulation against a feed of today's releases confirms this. Until the first `v…-nightly` release exists, a nightly app gets `ERR_UPDATER_NO_PUBLISHED_VERSIONS`. Until the first `v…` standard release replaces `v0.2.0` as Latest, a standard app gets `ERR_UPDATER_CHANNEL_FILE_NOT_FOUND`. The app treats both as "no update" (PLX-68). Pruning old releases is still 0028's later issue.
 
 ### Update metadata
 
@@ -70,21 +70,21 @@ The app should install new releases itself (RYA-68) through `electron-updater`. 
 ### macOS signing and notarization
 
 - **Only the macOS build signs, on every run of `release.yml`:** pushes to `develop` and `main`, and `workflow_dispatch`, which proves it on a branch but never publishes.
-  - The secrets from RYA-65 go only to two steps: `CSC_LINK` (a base64 `.p12`) and `CSC_KEY_PASSWORD` to the macOS build's package step, and `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER` to the `notarize` job's notarize step.
+  - The secrets from PLX-65 go only to two steps: `CSC_LINK` (a base64 `.p12`) and `CSC_KEY_PASSWORD` to the macOS build's package step, and `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER` to the `notarize` job's notarize step.
   - The `.p8` key is written to a file in `$RUNNER_TEMP` with mode 600 and removed after use.
 - The workflow imports the certificate into a keychain of its own, in `$RUNNER_TEMP`, and names it in `CSC_KEYCHAIN`. electron-builder 26.15.3 can import `CSC_LINK` itself, but it then unlocks that keychain with the certificate's password instead of the keychain's, so the build fails.
 - electron-builder signs with the Developer ID Application certificate from that keychain. It signs every binary in the bundle with the hardened runtime and a secure timestamp. That covers `Contents/Resources/plxd`, node-pty's `pty.node` and `spawn-helper`, and node-llama-cpp's addon and dylibs, since `@electron/osx-sign` walks all of `Contents/`. It then builds the dmg and zip, and signs the dmg. It doesn't notarize: the build has no `APPLE_API_*` variables.
-- Chromium's `.pak` files in Electron Framework (223 of them) aren't signed one by one (`mac.signIgnore`, RYA-211). They aren't code, and the framework's signature seals them as resources either way; signing each separately cost a `codesign` run and a timestamp request apiece, about two minutes per build.
+- Chromium's `.pak` files in Electron Framework (223 of them) aren't signed one by one (`mac.signIgnore`, PLX-211). They aren't code, and the framework's signature seals them as resources either way; signing each separately cost a `codesign` run and a timestamp request apiece, about two minutes per build.
 - **Entitlements** (`apps/desktop/entitlements.mac.plist`, for the app and everything in it) are `com.apple.security.cs.allow-jit` only, for V8. Everything the app loads is signed with its own Team ID, so library validation passes without `disable-library-validation`. Spawning processes (node-pty's shell, `plxd`, and the agents `plxd` starts) needs no entitlement.
 - The build runs `codesign --verify --deep --strict` on the app and publishes (0029).
-- **Notarization comes after publishing (RYA-211).** Each notarization took a minute or more of the build (the dmg's took 67 s), and updates don't need it: Squirrel.Mac checks the code signature, and an installed update carries no quarantine flag, so Gatekeeper doesn't assess it. Notarizing a disk image gets tickets for the image and everything in it, the app included. So `release.yml`'s `notarize` job, after the builds, takes the published dmg (the run's artifact on `workflow_dispatch`) and:
+- **Notarization comes after publishing (PLX-211).** Each notarization took a minute or more of the build (the dmg's took 67 s), and updates don't need it: Squirrel.Mac checks the code signature, and an installed update carries no quarantine flag, so Gatekeeper doesn't assess it. Notarizing a disk image gets tickets for the image and everything in it, the app included. So `release.yml`'s `notarize` job, after the builds, takes the published dmg (the run's artifact on `workflow_dispatch`) and:
   1. notarizes it with `notarytool` and prints Apple's log if it isn't accepted
   2. runs `spctl --assess` on the dmg, then `codesign --verify --deep --strict` and `spctl --assess --type execute` on the app inside it
 
   A failure fails the job, which alerts, and leaves the release published. Until the ticket exists, a dmg downloaded by hand may get a Gatekeeper prompt on first open.
 - **Nothing is stapled.** Stapling changes the dmg's bytes, so it would mean replacing the published file, which leaves the release briefly without a dmg, and `SHA256SUMS`. Without a staple, Gatekeeper looks the ticket up online on first open.
 - **`package-app` signs only when `CSC_KEYCHAIN` or `CSC_LINK` is set.** Otherwise it still sets `CSC_IDENTITY_AUTO_DISCOVERY=false`, so a local build never signs with an identity in the login keychain. It leaves auto-discovery on when a certificate is given, because without it electron-builder finds no identity and silently skips signing. electron-builder notarizes only when the `APPLE_API_*` variables are set, which `release.yml` no longer does.
-- Windows and Linux stay unsigned (RYA-65; 0029's Smart App Control limitation stands).
+- Windows and Linux stay unsigned (PLX-65; 0029's Smart App Control limitation stands).
 
 ## Consequences
 

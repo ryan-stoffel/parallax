@@ -67,7 +67,7 @@ fn fixture(name: &str) -> &'static str {
 }
 
 /// Inherited variables that could pick Claude's credentials, provider, endpoint, or account, one
-/// of each kind, and the variable that would share a run's task list (RYA-251). None may reach the
+/// of each kind, and the variable that would share a run's task list (PLX-251). None may reach the
 /// CLI, whatever the run's account or policy.
 const INHERITED_CREDENTIALS: &[(&str, &str)] = &[
     ("ANTHROPIC_API_KEY", "parallax-test-not-a-key"),
@@ -118,7 +118,7 @@ impl Fake {
             ("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22".into()),
             ("KEPT", "yes".into()),
             // Set in plxd's own environment: a no-write run sets it anyway, and a worker must
-            // not get it (RYA-112).
+            // not get it (PLX-112).
             ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "0".into()),
         ]
         .into_iter()
@@ -380,7 +380,7 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
     );
 }
 
-/// RYA-176: a plain no-write run has hooks off (0004) and can't read Claude Code's shared temp
+/// PLX-176: a plain no-write run has hooks off (0004) and can't read Claude Code's shared temp
 /// folder, which holds every session's files, in either spelling.
 #[test]
 fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
@@ -537,21 +537,21 @@ fn assert_worker_invocation(fake: &Fake) {
         assert!(!argv.iter().any(|arg| arg == flag), "{flag}: {argv:?}");
     }
     fake.assert_no_inherited_credentials(Some("/tmp/claude-second-account"));
-    // On Linux the flag would widen the sandbox's writes (RYA-20); `credentials` stands in for it.
-    // The fake's base environment sets it, so this also checks that a worker drops it (RYA-112).
+    // On Linux the flag would widen the sandbox's writes (PLX-20); `credentials` stands in for it.
+    // The fake's base environment sets it, so this also checks that a worker drops it (PLX-112).
     let env = fake.env();
     assert!(
         !env.iter()
             .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
         "{env:?}"
     );
-    // The run's own temp folder (RYA-130).
+    // The run's own temp folder (PLX-130).
     let temp = "CLAUDE_CODE_TMPDIR=/tmp/parallax-625c7f6d/Ab12Cd".to_owned();
     assert!(env.contains(&temp), "{env:?}");
 }
 
 /// Claude Code gives commands its temp folder only while `<folder>/claude-<uid>` fits in 44
-/// bytes, and the shared one otherwise, so a longer folder refuses the worker (RYA-130).
+/// bytes, and the shared one otherwise, so a longer folder refuses the worker (PLX-130).
 #[test]
 fn a_worker_s_temp_folder_must_leave_claude_code_room() {
     let uid = rustix::process::getuid().as_raw().to_string();
@@ -577,7 +577,7 @@ fn a_worker_s_temp_folder_must_leave_claude_code_room() {
     }
 }
 
-/// A worker gets a script that keeps the CLI's `PATH` in its Bash commands (RYA-126), in the data
+/// A worker gets a script that keeps the CLI's `PATH` in its Bash commands (PLX-126), in the data
 /// folder, and it's gone once the run has ended.
 #[tokio::test]
 async fn a_worker_s_env_file_restores_its_path_and_ends_with_the_run() {
@@ -657,7 +657,7 @@ fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() 
     );
 }
 
-/// RYA-97, 0027: a worker's permission picks Claude Code's mode of the same name, and its sandbox
+/// PLX-97, 0027: a worker's permission picks Claude Code's mode of the same name, and its sandbox
 /// settings stay the same, except in bypass, where Claude Code refuses `--restricted` and the
 /// worker runs as full Claude Code. A no-write run's mode is fixed (0004), so it takes no
 /// permission.
@@ -707,7 +707,7 @@ fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
     for flag in ["--restricted", "--tools", "--strict-mcp-config"] {
         assert!(!bypass.contains(&flag.to_owned()), "{flag}: {bypass:?}");
     }
-    // None of the sandbox's settings, only its task list's (RYA-251).
+    // None of the sandbox's settings, only its task list's (PLX-251).
     assert_eq!(
         after(&bypass, "--settings"),
         r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""}}"#
@@ -727,7 +727,7 @@ fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
     ));
 }
 
-/// RYA-251: every run, whatever its policy, mode, or prompt channel, gets exactly one
+/// PLX-251: every run, whatever its policy, mode, or prompt channel, gets exactly one
 /// `--settings`, since Claude Code keeps only the last, and it sets `CLAUDE_CODE_TASK_LIST_ID`
 /// empty. That beats a value in the `env` of the global config or of the user's, the project's,
 /// or the local settings, so the run keeps its session's own task list.
@@ -975,7 +975,7 @@ async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
 }
 
 /// A worker's own init shows scrub mode, which the Linux host check runs in another process and
-/// can miss (RYA-118): plxd stops it at init, before its Bash call.
+/// can miss (PLX-118): plxd stops it at init, before its Bash call.
 #[tokio::test]
 async fn a_worker_whose_init_shows_another_permission_mode_is_stopped_before_any_tool() {
     let fake = Fake::new("scrub-mode");
@@ -1658,7 +1658,7 @@ async fn cancel_interrupts_the_cli_with_sigint() {
     // which the translator reports as a malformed line. Waiting for it here is a deterministic
     // handshake: cancel() below can never race the trap's own installation (#149), unlike waiting
     // for a wall-clock margin. The fake then blocks reading stdin, which cancel closes after the
-    // SIGINT, so a trap that bash left pending still runs at EOF (RYA-120, cancel.jsonl).
+    // SIGINT, so a trap that bash left pending still runs at EOF (PLX-120, cancel.jsonl).
     assert!(matches!(
         next(&mut events).await,
         Event::Warning {
@@ -1826,7 +1826,7 @@ fn a_worker_must_report_the_permission_mode_it_asked_for() {
         let expected = refused.then_some(FailureKind::PolicyViolation);
         assert_eq!(violation_kind(&steps), expected, "{mode}");
     }
-    // A plan worker (RYA-97) must report plan mode, and scrub mode's "default" still fails it.
+    // A plan worker (PLX-97) must report plan mode, and scrub mode's "default" still fails it.
     for (mode, refused) in [
         (r#","permissionMode":"plan""#, false),
         (r#","permissionMode":"acceptEdits""#, true),
@@ -1854,7 +1854,7 @@ fn violation_kind(steps: &[Step]) -> Option<FailureKind> {
 #[test]
 fn a_worker_run_allows_only_the_worker_tools() {
     // An older Claude Code, or `CLAUDE_CODE_ENABLE_TASKS=false`, lists `TodoWrite`; 2.1.283 lists
-    // the task tools in its place (RYA-248).
+    // the task tools in its place (PLX-248).
     for todo_tools in [
         r#""TodoWrite""#,
         r#""TaskCreate","TaskGet","TaskList","TaskUpdate""#,
@@ -1888,7 +1888,7 @@ fn a_worker_run_allows_only_the_worker_tools() {
     }
 }
 
-/// RYA-248: a worker on Claude Code 2.1.283 plans with the task tools, which its `--tools` names
+/// PLX-248: a worker on Claude Code 2.1.283 plans with the task tools, which its `--tools` names
 /// and its init lists in place of `TodoWrite`. Each call, and its result's text, which says the
 /// task's id, reach the app as they are; it builds the plan from them, so plxd makes no checklist.
 #[tokio::test]
@@ -1974,7 +1974,7 @@ async fn a_worker_plans_with_claude_code_s_task_tools() {
     );
 }
 
-/// RYA-249: a coordinator and a bypass worker have no `--tools`, so they name the todo tools in
+/// PLX-249: a coordinator and a bypass worker have no `--tools`, so they name the todo tools in
 /// `--allowedTools`, which turns them on for any model, in every mode. A coordinator's list
 /// starts with plxd's own tools. Any other worker names them in `--tools` and gets no
 /// allowlist, and a plain no-write run keeps 0004's flags.
@@ -2031,9 +2031,9 @@ fn a_coordinator_and_a_bypass_worker_allow_the_todo_tools_in_every_mode() {
     assert_eq!(allowed(&request(cwd)), Vec::<String>::new());
 }
 
-/// RYA-249: a coordinator on Claude Code 2.1.283 and a model outside its built-in list plans with
+/// PLX-249: a coordinator on Claude Code 2.1.283 and a model outside its built-in list plans with
 /// the task tools, which its `--allowedTools` turns on and its init lists. Each call and its
-/// result reach the app as they are, as a worker's do (RYA-248).
+/// result reach the app as they are, as a worker's do (PLX-248).
 #[tokio::test]
 async fn a_coordinator_plans_with_claude_code_s_task_tools_on_any_model() {
     let fake = Fake::new("coordinator-tasks");
@@ -2140,7 +2140,7 @@ fn a_no_write_run_allows_only_the_read_tools() {
     );
 }
 
-/// RYA-276, 0034: a thread is full Claude Code in every mode, as a bypass worker is: no
+/// PLX-276, 0034: a thread is full Claude Code in every mode, as a bypass worker is: no
 /// `--restricted`, `--tools`, `--strict-mcp-config`, or sandbox settings, so the user's settings,
 /// skills, and MCP servers load. It asks plxd in Accept Edits too, since nothing sandboxes its
 /// commands, and in Plan it has `ExitPlanMode` without a `--tools` list. Its init may list any
@@ -2370,7 +2370,7 @@ fn coordinator(cwd: &Path) -> RunRequest {
     }
 }
 
-/// RYA-222: Manual, Auto, and Plan ask plxd over stdio, right after the mode, for a worker and a
+/// PLX-222: Manual, Auto, and Plan ask plxd over stdio, right after the mode, for a worker and a
 /// coordinator alike, when the client answers. Without `approvals`, every mode runs as before, as
 /// do Accept Edits and Bypass Permissions, and a plain no-write run never asks.
 #[test]
@@ -2413,7 +2413,7 @@ fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
             } else {
                 assert_eq!(prompt_tool, None, "{args:?}");
             }
-            // The prompt channel, and a plan worker's `ExitPlanMode` (RYA-243), are the only
+            // The prompt channel, and a plan worker's `ExitPlanMode` (PLX-243), are the only
             // arguments `approvals` changes.
             if !approvals {
                 let mut asking: Vec<String> = super::arguments(&RunRequest {
@@ -2449,7 +2449,7 @@ fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
     );
 }
 
-/// RYA-243: a worker or a thread in Plan whose client answers gets `ExitPlanMode` in `--tools`,
+/// PLX-243: a worker or a thread in Plan whose client answers gets `ExitPlanMode` in `--tools`,
 /// so it can hand its plan over. Every other mode, and Plan without `approvals`, keeps 0013's
 /// tools exactly; a bypass worker names none, and a coordinator never has the list.
 #[test]
@@ -2518,7 +2518,7 @@ fn only_a_plan_worker_that_asks_plxd_gets_exit_plan_mode() {
     assert_eq!(tools(&plain).as_deref(), Some(NO_WRITE_ARGS[1]));
 }
 
-/// RYA-222: in Manual, Claude Code's `can_use_tool` becomes a permission request, and an allow
+/// PLX-222: in Manual, Claude Code's `can_use_tool` becomes a permission request, and an allow
 /// goes back on stdin as the Agent SDK writes it: the input it asked with, and with `always`, only
 /// its allow rules, for the session. Its other suggestions are dropped.
 #[tokio::test]
@@ -2596,7 +2596,7 @@ async fn an_allowed_permission_request_answers_the_cli_on_stdin() {
     );
 }
 
-/// RYA-222: a denial goes back with its message, and an edited input replaces the one asked with.
+/// PLX-222: a denial goes back with its message, and an edited input replaces the one asked with.
 #[tokio::test]
 async fn a_denied_or_edited_request_answers_with_what_the_user_said() {
     for (decision, expected) in [
@@ -2642,7 +2642,7 @@ async fn a_denied_or_edited_request_answers_with_what_the_user_said() {
     }
 }
 
-/// RYA-222: a `control_cancel_request` withdraws a request, whose late answer then never reaches
+/// PLX-222: a `control_cancel_request` withdraws a request, whose late answer then never reaches
 /// the CLI; a request that suppresses "always allow" offers none; and a control request plxd
 /// doesn't serve gets an error, so the CLI doesn't wait on it.
 #[tokio::test]
@@ -2702,7 +2702,7 @@ async fn a_withdrawn_request_takes_no_answer_and_other_control_requests_get_an_e
     );
 }
 
-/// RYA-222: a coordinator in Plan asks to leave plan mode with `ExitPlanMode`, a question for the
+/// PLX-222: a coordinator in Plan asks to leave plan mode with `ExitPlanMode`, a question for the
 /// user. Once it is approved, Claude Code runs in its pre-plan mode, which a later turn's init
 /// reports, and the run goes on.
 #[tokio::test]
@@ -2782,7 +2782,7 @@ fn asks(steps: &[Step]) -> Vec<(&ApprovalRequest, &Ask)> {
         .collect()
 }
 
-/// RYA-222: control requests are the driver's only when the CLI was started with the prompt
+/// PLX-222: control requests are the driver's only when the CLI was started with the prompt
 /// channel; otherwise they're skipped, as before. One before the init is refused, since the CLI
 /// may be on credentials nobody checked.
 #[test]
@@ -2838,7 +2838,7 @@ fn control_requests_are_answered_only_with_the_prompt_channel() {
     ));
 }
 
-/// RYA-222: approving `ExitPlanMode` takes Claude Code to its pre-plan mode, so later inits may
+/// PLX-222: approving `ExitPlanMode` takes Claude Code to its pre-plan mode, so later inits may
 /// report another mode than the one the run asked for; until then they may not.
 #[test]
 fn a_plan_coordinator_may_report_another_mode_only_once_it_left_plan_mode() {
@@ -2901,7 +2901,7 @@ fn worker_init(mode: &str, tools: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// RYA-243: a worker's init may list `ExitPlanMode` only when its `--tools` named it, and still
+/// PLX-243: a worker's init may list `ExitPlanMode` only when its `--tools` named it, and still
 /// nothing else beyond the worker's tools. After the plan's approval, Claude Code still lists it
 /// and reports Manual, which the check then accepts, but never a mode that asks less.
 #[test]
@@ -2958,7 +2958,7 @@ fn a_worker_s_init_may_list_exit_plan_mode_only_when_it_hands_over_plans() {
     }
 }
 
-/// A worker in Plan at `cwd` whose client answers, so it hands its plan over (RYA-243).
+/// A worker in Plan at `cwd` whose client answers, so it hands its plan over (PLX-243).
 fn plan_worker(cwd: &Path) -> RunRequest {
     RunRequest {
         policy: ToolPolicy::WorkspaceWrite,
@@ -2969,7 +2969,7 @@ fn plan_worker(cwd: &Path) -> RunRequest {
     }
 }
 
-/// RYA-243: a plan worker hands its plan over with `ExitPlanMode`, as a coordinator does (0031).
+/// PLX-243: a plan worker hands its plan over with `ExitPlanMode`, as a coordinator does (0031).
 /// The request is a question for the user that holds the plan, and plxd's answer goes back on
 /// stdin. Once allowed, a later turn's init may report Manual. Once denied, the worker still
 /// plans, so an init that reports Manual fails it.
@@ -3050,7 +3050,7 @@ async fn a_plan_worker_hands_its_plan_over_and_leaves_plan_mode_only_once_allowe
     }
 }
 
-/// RYA-243: the backend lets only a worker that hands over plans list `ExitPlanMode`. The same
+/// PLX-243: the backend lets only a worker that hands over plans list `ExitPlanMode`. The same
 /// transcript stops a Plan worker without `approvals`, and a Manual worker with them, at its
 /// first init, naming the tool, before anything asks.
 #[tokio::test]
@@ -3080,7 +3080,7 @@ async fn a_worker_that_does_not_hand_over_plans_is_stopped_when_it_lists_exit_pl
     }
 }
 
-/// RYA-222: a request offers to always allow only the rules its `approvalRequested` item shows
+/// PLX-222: a request offers to always allow only the rules its `approvalRequested` item shows
 /// whole, at most [`MAX_ALWAYS_ALLOW_RULES`], and an answer with `always` sends exactly those.
 #[test]
 fn always_allow_offers_only_the_rules_the_user_is_shown() {
@@ -3134,7 +3134,7 @@ fn always_allow_offers_only_the_rules_the_user_is_shown() {
     assert_eq!(shown, asked.always_allow, "what is sent is what is shown");
 }
 
-/// RYA-222: a request the CLI still waits on when it exits is withdrawn in the run's own events,
+/// PLX-222: a request the CLI still waits on when it exits is withdrawn in the run's own events,
 /// before its `Finished`, so it ends even when an account fallback (#119) runs another attempt in
 /// its place.
 #[tokio::test]

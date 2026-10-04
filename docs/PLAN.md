@@ -62,14 +62,14 @@ The MVP is one project on one host: a coordinator, two parallel subagents, share
 
 | Milestone | Done when |
 | --- | --- |
-| [M0: Foundations](https://linear.app/ryanstoffel/issue/RYA-74) | The repo holds the desktop app and `plxd`, CI checks both on macOS, Windows, and Linux, and the decision records for Linear and cross-platform support are in |
-| [M1: App shell](https://linear.app/ryanstoffel/issue/RYA-75) | The Electron app launches on all three OSes, talks to a local `plxd`, and runs threads |
-| [M2: Hosts](https://linear.app/ryanstoffel/issue/RYA-76) | You add a local or SSH host from the app and connect to `plxd` on it. The daemon runs on macOS, Windows, and Linux. |
-| [M3: Subscriptions](https://linear.app/ryanstoffel/issue/RYA-77) | You sign in with your own subscriptions, with API keys as a fallback. Runs route through them and usage shows per account. |
-| [M4: Projects](https://linear.app/ryanstoffel/issue/RYA-78) | You describe a project once, and the coordinator plans it and runs parallel subagents in their own worktrees on a host. On an external host it keeps working with the laptop closed. |
-| [M5: Review](https://linear.app/ryanstoffel/issue/RYA-79) | You review each task's diff in the app and turn accepted work into commits or PRs |
-| [M6: Local agent + triggers](https://linear.app/ryanstoffel/issue/RYA-80) | With an external host, the coordinator starts a subagent on the laptop. Schedules and PR watches wake the coordinator without a prompt, with notifications. |
-| [M7: Release](https://linear.app/ryanstoffel/issue/RYA-81) | Installable builds for macOS, Windows, and Linux, plus README, license, install steps, and a short demo |
+| [M0: Foundations](https://linear.app/ryanstoffel/issue/PLX-74) | The repo holds the desktop app and `plxd`, CI checks both on macOS, Windows, and Linux, and the decision records for Linear and cross-platform support are in |
+| [M1: App shell](https://linear.app/ryanstoffel/issue/PLX-75) | The Electron app launches on all three OSes, talks to a local `plxd`, and runs threads |
+| [M2: Hosts](https://linear.app/ryanstoffel/issue/PLX-76) | You add a local or SSH host from the app and connect to `plxd` on it. The daemon runs on macOS, Windows, and Linux. |
+| [M3: Subscriptions](https://linear.app/ryanstoffel/issue/PLX-77) | You sign in with your own subscriptions, with API keys as a fallback. Runs route through them and usage shows per account. |
+| [M4: Projects](https://linear.app/ryanstoffel/issue/PLX-78) | You describe a project once, and the coordinator plans it and runs parallel subagents in their own worktrees on a host. On an external host it keeps working with the laptop closed. |
+| [M5: Review](https://linear.app/ryanstoffel/issue/PLX-79) | You review each task's diff in the app and turn accepted work into commits or PRs |
+| [M6: Local agent + triggers](https://linear.app/ryanstoffel/issue/PLX-80) | With an external host, the coordinator starts a subagent on the laptop. Schedules and PR watches wake the coordinator without a prompt, with notifications. |
+| [M7: Release](https://linear.app/ryanstoffel/issue/PLX-81) | Installable builds for macOS, Windows, and Linux, plus README, license, install steps, and a short demo |
 
 Records dated before Sep 27, 2026 use the old numbering: M1 host daemon, M2 subscription manager, M3 single agent, M4 coordinator, M5 local agent, M6 triggers.
 
@@ -81,15 +81,15 @@ Answered:
 * Shared context is a folder `plxd` owns and copies, not git commits ([0005](decisions/0005-shared-context-folder.md))
 * Providers: Claude Code first, then Codex, then Cursor once Cursor confirms in writing ([0004](decisions/0004-subscription-providers.md))
 * The UI follows T3 Code's layout rather than Cursor's ([0022](decisions/0022-desktop-app.md))
-* Triggers: schedules and PR watches first; Slack is out of scope ([RYA-59](https://linear.app/ryanstoffel/issue/RYA-59))
+* Triggers: schedules and PR watches first; Slack is out of scope ([PLX-59](https://linear.app/ryanstoffel/issue/PLX-59))
 
 Open:
 
-* How a host's coordinator runs a local agent on the laptop ([RYA-55](https://linear.app/ryanstoffel/issue/RYA-55))
-* How triggers wake the coordinator ([RYA-59](https://linear.app/ryanstoffel/issue/RYA-59))
-* Whether workers may reach the host's own interface addresses ([RYA-45](https://linear.app/ryanstoffel/issue/RYA-45))
-* Versioning, packaging, and signing for three OSes ([RYA-64](https://linear.app/ryanstoffel/issue/RYA-64))
-* Name conflict checks before release: GitHub, domains, trademarks, and package names ([RYA-71](https://linear.app/ryanstoffel/issue/RYA-71))
+* How a host's coordinator runs a local agent on the laptop ([PLX-55](https://linear.app/ryanstoffel/issue/PLX-55))
+* How triggers wake the coordinator ([PLX-59](https://linear.app/ryanstoffel/issue/PLX-59))
+* Whether workers may reach the host's own interface addresses ([PLX-45](https://linear.app/ryanstoffel/issue/PLX-45))
+* Versioning, packaging, and signing for three OSes ([PLX-64](https://linear.app/ryanstoffel/issue/PLX-64))
+* Name conflict checks before release: GitHub, domains, trademarks, and package names ([PLX-71](https://linear.app/ryanstoffel/issue/PLX-71))
 
 Risks:
 

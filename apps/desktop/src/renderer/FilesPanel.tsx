@@ -23,7 +23,7 @@ async function listFolder(hostId: string, runId: string, folder: string): Promis
 }
 
 /**
- * The side panel's Files view (RYA-296): a run's folder on its host, its worktree or a Current
+ * The side panel's Files view (PLX-296): a run's folder on its host, its worktree or a Current
  * checkout thread's checkout, as a tree. A folder lists its entries from `agent/files` each time
  * it opens, so closing and opening it again shows the agent's latest files. A file opens in the
  * view, read-only, from `agent/file`'s `working` side. `unavailable` says why it can't load, such

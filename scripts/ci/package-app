@@ -21,7 +21,7 @@ set -x
 
 version=${PLX_VERSION:-0.0.0-local}
 
-# A nightly build is named "Parallax (Nightly)" and has its own icon (RYA-286). Its appId stays
+# A nightly build is named "Parallax (Nightly)" and has its own icon (PLX-286). Its appId stays
 # the standard build's, so installed nightlies still take its updates: Squirrel.Mac requires the
 # same bundle id.
 set --

@@ -1,4 +1,4 @@
-//! Git in the folder a run works in (RYA-298): the status `agent/gitStatus` reads, the commit
+//! Git in the folder a run works in (PLX-298): the status `agent/gitStatus` reads, the commit
 //! `agent/commit` makes, the push `agent/push` and `agent/openPr` make, and the files
 //! `repo/files` lists (PLX-359).
 //!

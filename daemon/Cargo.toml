@@ -12,7 +12,7 @@ publish.workspace = true
 workspace = true
 
 # `fake-backend` lets `PLXD_FAKE_BACKEND` run workers on the fake backend, for the app's end-to-end
-# tests (RYA-16). Test builds only: it refuses to compile without debug assertions.
+# tests (PLX-16). Test builds only: it refuses to compile without debug assertions.
 [features]
 fake-backend = []
 

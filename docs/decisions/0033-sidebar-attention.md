@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-01
-- Issue: RYA-270
+- Issue: PLX-270
 
 ## Context
 
@@ -19,7 +19,7 @@ Amended 2026-10-02 (PLX-340): Projects moved out of the one list into their own 
 - Every connected host's Projects sit in a pinned, collapsible **Projects** section above a **Threads** heading, then every host's threads. Each is the most recently active first. There is no Hosts section and no grouping by repo. A thread's time is `lastPromptAt`, and a Project's is its `updatedAt`. Rows move only when someone sends a message, never when an agent finishes, so the list doesn't shift under the pointer.
 - The section's heading has its own New project button, and whether it's collapsed is kept in the browser's storage, like the filter. With no Projects on any host, the section is hidden. The toolbar's New project or repository menu always offers New project and Add repository (PLX-362). A search or filter that hides every Project keeps the section, which says nothing matches.
 - A thread row shows its repo's icon and name, its status (or how long ago it was prompted), its title, then its branch, diff, and provider.
-- A Project is one row, one line: its icon and name, then its combined status (or its age). Its tooltip says how many agents it has run, and names its host when there are several. Its subagents never get rows of their own. Users can still start agents inside a Project directly (RYA-47's Agents view), and they share its context.
+- A Project is one row, one line: its icon and name, then its combined status (or its age). Its tooltip says how many agents it has run, and names its host when there are several. Its subagents never get rows of their own. Users can still start agents inside a Project directly (PLX-47's Agents view), and they share its context.
 - Search and the Repos filter apply to both sections. Mod+1 to Mod+9 count the shown Projects first, then threads, and a collapsed section's rows get no numbers.
 - The **Repos** filter is a searchable menu: All repos, No repo, then each host's repositories. The choice is kept in the browser's storage, per window. Each repo's gear opens the icon picker.
 - Snoozed and Archived threads sit in drawers under the list.
@@ -55,7 +55,7 @@ What a row asks of the user, from its run, its waiting permission requests, and 
 
 ## Consequences
 
-- Seen state lives on the host, so every client agrees on what is new. RYA-63's unread badges are this state.
+- Seen state lives on the host, so every client agrees on what is new. PLX-63's unread badges are this state.
 - A row's status needs one subscription per repo and Project on each host. That is fine for tens of them. A host-level run summary event is the fix if it isn't.
 - A snooze longer than about 24 days isn't armed until something else changes the list, since `setTimeout` caps there.
 - The sidebar no longer has Add host. It lives in Settings > Hosts.

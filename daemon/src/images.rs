@@ -1,4 +1,4 @@
-//! Images sent with a prompt or message (RYA-191, decision 0026): their caps, which `initialize`
+//! Images sent with a prompt or message (PLX-191, decision 0026): their caps, which `initialize`
 //! advertises as the `promptImages` capability's options, and the checks every method that takes
 //! `images` runs before anything is created or sent. Also an icon's image (PLX-339, decision
 //! 0038), whose cap `initialize` advertises as the `iconImages` capability's `maxBytes`.

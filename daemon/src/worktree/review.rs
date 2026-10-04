@@ -476,7 +476,7 @@ impl WorktreeManager {
     }
 
     /// Which of `paths`, relative to `work_tree`, git ignores (`git check-ignore`), for
-    /// `agent/files` (RYA-296). A tracked path is never ignored. With `git_dir`, a worker's
+    /// `agent/files` (PLX-296). A tracked path is never ignored. With `git_dir`, a worker's
     /// worktree, git runs pinned and hardened like every call there (#166); without, `work_tree`
     /// is the user's own checkout, read with their own config. The paths go in on stdin, so a
     /// long folder never meets a command-line limit.

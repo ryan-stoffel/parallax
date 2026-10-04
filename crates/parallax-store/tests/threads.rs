@@ -256,7 +256,7 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
             })
             .unwrap();
     }
-    // A run's sent turns (#190) and images (RYA-191) have no foreign key to `runs`, so
+    // A run's sent turns (#190) and images (PLX-191) have no foreign key to `runs`, so
     // `delete_thread` has to remove them itself: nothing else would.
     let image = Uuid::now_v7();
     for run in [kept, gone] {

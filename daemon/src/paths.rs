@@ -12,14 +12,14 @@
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
 //! - `tmp/`: files plxd writes for a run and deletes when it ends, such as a Claude worker's
-//!   `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141). See
+//!   `CLAUDE_ENV_FILE` (PLX-126) and a Codex worker's `ZDOTDIR` (PLX-141). See
 //!   [`DataDir::temp_dir`].
 //! - `tools/`: CLIs plxd installs itself, which is only `gh` (`tools/gh/`, PLX-423). See
 //!   [`DataDir::tools_dir`].
 //! - `logs/plxd.log`: the log.
 //!
 //! One folder is outside it: `/tmp/parallax-<hash>/`, which holds each worker run's own temp folder
-//! (RYA-130). See [`DataDir::run_temp_roots`].
+//! (PLX-130). See [`DataDir::run_temp_roots`].
 //!
 //! `--data-dir` or [`DATA_DIR_ENV`] moves the whole folder. Every subcommand that reaches the
 //! socket must resolve the folder and the socket path with [`DataDir`], so that `serve` and
@@ -160,7 +160,7 @@ impl DataDir {
     }
 
     /// `tmp/`: files plxd writes for a run and deletes when the run ends, such as a Claude
-    /// worker's `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141), and `serve`
+    /// worker's `CLAUDE_ENV_FILE` (PLX-126) and a Codex worker's `ZDOTDIR` (PLX-141), and `serve`
     /// sweeps at startup. No worker's commands can write them or read another run's, since the
     /// data folder is unreadable to every worker (0013). A Codex worker's own `ZDOTDIR` is
     /// readable to it.
@@ -169,7 +169,7 @@ impl DataDir {
         self.root.join("tmp")
     }
 
-    /// Where each worker run gets its own temp folder (RYA-130), in order: `/tmp/parallax-<hash>`,
+    /// Where each worker run gets its own temp folder (PLX-130), in order: `/tmp/parallax-<hash>`,
     /// then `parallax-<hash>` in `$TMPDIR`, for when `/tmp` can't be written, such as inside a
     /// worker's sandbox running plxd's own tests. `<hash>` is the socket fallback's, so each
     /// plxd has its own. They are outside the data folder because the path has to be short:
@@ -342,7 +342,7 @@ fn fits(path: &Path) -> bool {
 }
 
 /// `path` as Windows programs and the vendors' sandbox settings spell it, without the verbatim
-/// `\\?\` prefix that [`Path::canonicalize`] puts on every path on Windows (RYA-109): `\\?\C:\x`
+/// `\\?\` prefix that [`Path::canonicalize`] puts on every path on Windows (PLX-109): `\\?\C:\x`
 /// becomes `C:\x`, and `\\?\UNC\server\share\x` becomes `\\server\share\x`. A path without the
 /// prefix is returned as it is, and so is every path on macOS and Linux.
 ///

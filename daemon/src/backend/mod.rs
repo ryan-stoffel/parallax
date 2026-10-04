@@ -74,7 +74,7 @@ pub trait Backend: Send + Sync {
     /// started. Routing (#119) can fall back to another backend on any of these.
     fn start(&self, request: RunRequest) -> Result<Started, StartError>;
 
-    /// The [`RunRequest::effort`] levels this backend maps to its CLI (RYA-97). None by default,
+    /// The [`RunRequest::effort`] levels this backend maps to its CLI (PLX-97). None by default,
     /// so a backend that doesn't map them refuses them instead of ignoring them.
     fn efforts(&self) -> &'static [AgentEffort] {
         &[]
@@ -164,7 +164,7 @@ pub trait Run: Send + Sync {
     /// The run ends with [`Outcome::Cancelled`], unless it had already finished.
     fn cancel(&self);
 
-    /// Answers a permission request the run reported as [`Event::ApprovalRequested`] (RYA-222).
+    /// Answers a permission request the run reported as [`Event::ApprovalRequested`] (PLX-222).
     /// Returns at once. An answer to a request the CLI no longer waits for, or has already had
     /// one, is dropped.
     ///
@@ -196,7 +196,7 @@ pub struct RunRequest {
     pub cwd: PathBuf,
     /// The first message.
     pub prompt: String,
-    /// Images the CLI gets beside the first message, never named in it (RYA-191). The caller has
+    /// Images the CLI gets beside the first message, never named in it (PLX-191). The caller has
     /// checked them (`images::check`).
     pub images: Vec<PromptImage>,
     /// What the agent's tools may do.
@@ -227,7 +227,7 @@ pub struct RunRequest {
     /// for every other run, and Claude Code attaches them only to a thread that runs as full
     /// Claude Code ([`claude::unsandboxed`]), since the server runs outside any sandbox.
     pub thread_tools: Option<ThreadTools>,
-    /// The client answers permission requests (RYA-222, 0031): a CLI that can ask before a tool
+    /// The client answers permission requests (PLX-222, 0031): a CLI that can ask before a tool
     /// call asks through [`Event::ApprovalRequested`] and [`Run::answer`]. Without it, the CLI
     /// runs as it did before, denying what would prompt.
     pub approvals: bool,
@@ -339,7 +339,7 @@ pub fn check_argument(what: &str, value: &str) -> Result<(), StartError> {
 
 /// `export PATH='<path>'${PATH:+:$PATH}`: a shell line that puts `path`, the `PATH` a worker's CLI
 /// started with, back in front of whatever `PATH` the shell's startup files left, keeping their
-/// entries after it (RYA-126, RYA-141). `${PATH:+...}` avoids a trailing `:`, which would put the
+/// entries after it (PLX-126, PLX-141). `${PATH:+...}` avoids a trailing `:`, which would put the
 /// current folder on `PATH`.
 #[must_use]
 pub fn prepend_path_line(path: &OsStr) -> Vec<u8> {
@@ -437,7 +437,7 @@ pub struct FollowUp {
     pub steer: bool,
 }
 
-/// The answer to a permission request (RYA-222).
+/// The answer to a permission request (PLX-222).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Answer {
     /// The request, from its [`Event::ApprovalRequested`].
@@ -706,7 +706,7 @@ impl RunHandle {
         Held(self.hold.subscribe())
     }
 
-    /// Takes answers to permission requests (RYA-222), and returns the receiver its driver reads
+    /// Takes answers to permission requests (PLX-222), and returns the receiver its driver reads
     /// them from. The driver drops it once it can deliver no more.
     #[must_use]
     pub fn with_answers(mut self) -> (Self, mpsc::UnboundedReceiver<Answer>) {

@@ -1,4 +1,4 @@
-//! A run's Git menu (RYA-298): `agent/gitStatus`, `agent/commit`, and `agent/push`, which the
+//! A run's Git menu (PLX-298): `agent/gitStatus`, `agent/commit`, and `agent/push`, which the
 //! run's actor runs between its other commands, so none races a turn or its commit.
 //!
 //! They work in the run's folder: its worktree, or a Current checkout thread's checkout. A push

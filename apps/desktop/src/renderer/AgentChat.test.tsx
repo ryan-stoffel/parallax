@@ -498,7 +498,7 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
     // A plxd tool this app doesn't know is still plxd's.
     mcp__plxd__plan_approve: "lucide-workflow",
     TodoWrite: "lucide-list-checks",
-    // Claude Code's task tools plan as TodoWrite did (RYA-248).
+    // Claude Code's task tools plan as TodoWrite did (PLX-248).
     TaskCreate: "lucide-list-checks",
     TaskUpdate: "lucide-list-checks",
     TaskList: "lucide-list-checks",

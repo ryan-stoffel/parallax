@@ -1,11 +1,11 @@
-//! Real Claude Code for RYA-222 (0031): in Manual, a run whose client answers permission requests
+//! Real Claude Code for PLX-222 (0031): in Manual, a run whose client answers permission requests
 //! asks plxd over stdio before a tool call that would prompt, and runs it or not on plxd's
 //! answer, and a run whose client doesn't is denied as before. In Plan, a worker hands its plan
-//! over the same way (RYA-243). A worker also keeps its plan with Claude Code's task tools, which
-//! ask nothing (RYA-248), and so do a coordinator and a bypass worker, whose `--allowedTools`
-//! turns them on (RYA-249). Each keeps its session's own list, whatever the settings it reads
-//! name in `CLAUDE_CODE_TASK_LIST_ID` (RYA-251). A thread, full Claude Code, asks before a `git
-//! commit` in Accept Edits, and its commit lands once allowed (RYA-276). Each test starts the CLI
+//! over the same way (PLX-243). A worker also keeps its plan with Claude Code's task tools, which
+//! ask nothing (PLX-248), and so do a coordinator and a bypass worker, whose `--allowedTools`
+//! turns them on (PLX-249). Each keeps its session's own list, whatever the settings it reads
+//! name in `CLAUDE_CODE_TASK_LIST_ID` (PLX-251). A thread, full Claude Code, asks before a `git
+//! commit` in Accept Edits, and its commit lands once allowed (PLX-276). Each test starts the CLI
 //! through plxd's own Claude backend, so the arguments, the translator that reads the CLI's
 //! `can_use_tool` request, and the driver that writes the `control_response` are the ones a real
 //! run uses. A local fake Messages API asks for the tool calls, so no account or Anthropic
@@ -42,7 +42,7 @@ const KEY: &str = "sk-ant-parallax-test-key-never-send";
 /// What the fake API's Bash calls run: it says so, and leaves a line in `ran` for each run.
 const PROBE: &str = "echo probe-ran\necho x >> ran\n";
 
-/// The task list [`share_the_task_list`] names, which no run may use (RYA-251).
+/// The task list [`share_the_task_list`] names, which no run may use (PLX-251).
 const SHARED_LIST: &str = "parallax-shared-list";
 
 /// Where [`WRAPPER`] finds the fake API's base URL.
@@ -379,7 +379,7 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A thread in Accept Edits is full Claude Code (RYA-276, 0034): its Bash isn't sandboxed, so a
+/// A thread in Accept Edits is full Claude Code (PLX-276, 0034): its Bash isn't sandboxed, so a
 /// `git commit` asks plxd first, and once allowed it writes the repository's git folder, which a
 /// sandboxed worker's commands can't.
 #[tokio::test]
@@ -446,7 +446,7 @@ async fn a_thread_commits_in_its_worktree_once_plxd_allows_it() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A worker in Plan whose client answers hands its plan to plxd with `ExitPlanMode` (RYA-243),
+/// A worker in Plan whose client answers hands its plan to plxd with `ExitPlanMode` (PLX-243),
 /// and plxd's allow takes it out of plan mode. In plan mode, Claude Code 2.1.283 sends each
 /// command to its auto-mode classifier, which the fake API can't answer, so the worker's first
 /// Bash is denied without asking. Once the plan is allowed, the CLI runs in Manual, where the
@@ -506,11 +506,11 @@ async fn a_plan_worker_hands_its_plan_to_plxd_and_leaves_plan_mode_on_its_allow(
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A worker keeps its plan with Claude Code's task tools (RYA-248). Its `--tools` names them, so
+/// A worker keeps its plan with Claude Code's task tools (PLX-248). Its `--tools` names them, so
 /// 2.1.283 offers them even on a model it would otherwise give no todo tool, and its init passes
 /// plxd's check. The CLI writes the list itself, in its configuration folder outside the
 /// worktree, which the worker's commands still can't read. The list is the session's own, though
-/// the global config, which even `--restricted` reads, names a shared one (RYA-251).
+/// the global config, which even `--restricted` reads, names a shared one (PLX-251).
 #[tokio::test]
 async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_read_it() {
     let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
@@ -592,7 +592,7 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
 }
 
 /// A coordinator in Manual, with the prompt channel, keeps its plan with the task tools on a model
-/// outside 2.1.283's built-in list (RYA-249). It has no `--tools`, so its `--allowedTools` is what
+/// outside 2.1.283's built-in list (PLX-249). It has no `--tools`, so its `--allowedTools` is what
 /// turns them on.
 #[tokio::test]
 async fn a_coordinator_keeps_its_plan_with_the_task_tools_on_any_model() {
@@ -608,7 +608,7 @@ async fn a_coordinator_keeps_its_plan_with_the_task_tools_on_any_model() {
     plans_with_the_task_tools(&claude, &folders, request).await;
 }
 
-/// A worker in Bypass Permissions, which has no `--tools` either, does the same (RYA-249).
+/// A worker in Bypass Permissions, which has no `--tools` either, does the same (PLX-249).
 #[tokio::test]
 async fn a_bypass_worker_keeps_its_plan_with_the_task_tools_on_any_model() {
     let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
@@ -624,7 +624,7 @@ async fn a_bypass_worker_keeps_its_plan_with_the_task_tools_on_any_model() {
 /// Runs `request` against a fake API that asks for `TaskCreate`, `TaskUpdate`, and `TaskList`.
 /// Each answers as 2.1.283's task tools do, none asks plxd, and the CLI keeps the session's list
 /// in its configuration folder, `.claude` in `HOME`, though the global config and the user's, the
-/// project's, and the local settings all name a shared one (RYA-251).
+/// project's, and the local settings all name a shared one (PLX-251).
 async fn plans_with_the_task_tools(claude: &OsStr, folders: &Folders, request: RunRequest) {
     share_the_task_list(&folders.home, &[&request.cwd]);
     let task = |name, input| ToolCall { name, input };
@@ -692,7 +692,7 @@ async fn plans_with_the_task_tools(claude: &OsStr, folders: &Folders, request: R
 /// Names [`SHARED_LIST`] in `CLAUDE_CODE_TASK_LIST_ID` in the `env` of the global config and the
 /// user's settings in `home`, and of the project's and the local settings in each of `projects`.
 /// Claude Code 2.1.283 copies each of those it reads into its own process, and then a run would
-/// share one list with every session that does (RYA-251).
+/// share one list with every session that does (PLX-251).
 fn share_the_task_list(home: &Path, projects: &[&Path]) {
     let settings = json!({"env": {"CLAUDE_CODE_TASK_LIST_ID": SHARED_LIST}}).to_string();
     let mut files = vec![

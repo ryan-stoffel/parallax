@@ -1,4 +1,4 @@
-//! Permission requests, behind the `approvals` capability (RYA-222, decision 0031).
+//! Permission requests, behind the `approvals` capability (PLX-222, decision 0031).
 //!
 //! A run whose CLI would ask before a tool call (Claude Code in Manual, Auto, or Plan) asks the
 //! app instead of denying it, when the client started it with `approvals`. The request is an

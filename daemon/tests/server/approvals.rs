@@ -1,4 +1,4 @@
-//! Permission requests end to end (RYA-222, decision 0031): `agent/approve` against an in-process
+//! Permission requests end to end (PLX-222, decision 0031): `agent/approve` against an in-process
 //! plxd whose backend is the fake CLI, which asks and prints the answer it gets as JSON.
 
 use std::time::Duration;
@@ -395,7 +395,7 @@ async fn a_workers_edit_keeps_the_paths_it_asked_about() {
     );
 }
 
-/// RYA-243: a worker's edited plan may leave out `ExitPlanMode`'s `planFilePath`, as an app that
+/// PLX-243: a worker's edited plan may leave out `ExitPlanMode`'s `planFilePath`, as an app that
 /// sends back only the plan does, but may not point it at another file.
 #[tokio::test]
 async fn a_workers_edited_plan_may_drop_its_plan_file_but_not_move_it() {

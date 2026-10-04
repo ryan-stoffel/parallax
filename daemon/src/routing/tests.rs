@@ -448,8 +448,8 @@ fn coordinator_tools() -> CoordinatorTools {
 
 /// #195, 0027: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
 /// flags, `plxd mcp` joining its own MCP servers, and plxd's eight tools allowed in every mode.
-/// The allowlist also names Claude Code's todo tools, so it keeps a plan on any model (RYA-249),
-/// and its only `--settings` keeps its task list its own (RYA-251).
+/// The allowlist also names Claude Code's todo tools, so it keeps a plan on any model (PLX-249),
+/// and its only `--settings` keeps its task list its own (PLX-251).
 #[tokio::test]
 async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() {
     let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(

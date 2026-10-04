@@ -2,11 +2,11 @@
 
 - Status: accepted; extends [0034](0034-threads-are-full-claude-code.md) to Codex, and supersedes in part [0013](0013-worker-sandbox.md), [0027](0027-claude-permission-modes.md) (Codex maps `edit` only), and [0031](0031-permission-requests.md#codex) (Codex never asks) for a Codex thread; a coordinator's Codex children are threads since [0042](0042-project-children-are-threads.md)
 - Date: 2026-10-02
-- Issue: RYA-282
+- Issue: PLX-282
 
 ## Context
 
-A Codex thread ran through the worker backend: `codex exec` with `--ignore-user-config`, `--ignore-rules`, and the `parallax_worker` profile, one turn per process, approval policy `never`, and Accept Edits only (0013). plxd then refused it with every other Codex worker (RYA-153). 0034 made a Claude thread full Claude Code. Ryan wants a Codex thread to work the same way: the user's own CLI, configuration, and login, with approvals reaching the app.
+A Codex thread ran through the worker backend: `codex exec` with `--ignore-user-config`, `--ignore-rules`, and the `parallax_worker` profile, one turn per process, approval policy `never`, and Accept Edits only (0013). plxd then refused it with every other Codex worker (PLX-153). 0034 made a Claude thread full Claude Code. Ryan wants a Codex thread to work the same way: the user's own CLI, configuration, and login, with approvals reaching the app.
 
 `codex exec` can't ask its host anything during a run (0031). `codex app-server`, the interface the Codex IDE extension and T3 Code drive, can: it speaks JSON-RPC over stdio, keeps a thread live across turns, and sends approval requests as server requests. The shapes below are codex-cli 0.159.3's, from `codex app-server generate-ts` and real runs.
 
@@ -14,9 +14,9 @@ A Codex thread ran through the worker backend: `codex exec` with `--ignore-user-
 
 ### The process
 
-A run with `RunRequest.thread` on the Codex backend runs `codex app-server` in the run's cwd, with no arguments beyond `app-server`. It loads the user's `config.toml`, rules, `AGENTS.md` files, skills, hooks, plugins, and MCP servers, as `codex` in a terminal does. Workers that a coordinator spawns keep `codex exec` and 0013 unchanged, and stay refused until RYA-145.
+A run with `RunRequest.thread` on the Codex backend runs `codex app-server` in the run's cwd, with no arguments beyond `app-server`. It loads the user's `config.toml`, rules, `AGENTS.md` files, skills, hooks, plugins, and MCP servers, as `codex` in a terminal does. Workers that a coordinator spawns keep `codex exec` and 0013 unchanged, and stay refused until PLX-145.
 
-The driver sends `initialize` and `initialized`, then `thread/start`, or `thread/resume {threadId, excludeTurns: true}` for a run that resumes an earlier one's thread id. Either carries only the cwd, the mode's `approvalPolicy`, `sandbox`, and `approvalsReviewer` ([Modes](#modes)), the model, the context window as `config.model_context_window`, and fast mode as `serviceTier` `priority`, as exec takes them (RYA-281). The prompt is the first `turn/start`, as the user wrote it, with its images as `localImage` files and the effort. Each follow-up `Run::send` takes is a later `turn/start` in the same process, sent once the turn before it has completed. Once no turn and no approval request is outstanding, stdin closes and app-server exits, which ends the run, and `agent/send` resumes the thread in a new run.
+The driver sends `initialize` and `initialized`, then `thread/start`, or `thread/resume {threadId, excludeTurns: true}` for a run that resumes an earlier one's thread id. Either carries only the cwd, the mode's `approvalPolicy`, `sandbox`, and `approvalsReviewer` ([Modes](#modes)), the model, the context window as `config.model_context_window`, and fast mode as `serviceTier` `priority`, as exec takes them (PLX-281). The prompt is the first `turn/start`, as the user wrote it, with its images as `localImage` files and the effort. Each follow-up `Run::send` takes is a later `turn/start` in the same process, sent once the turn before it has completed. Once no turn and no approval request is outstanding, stdin closes and app-server exits, which ends the run, and `agent/send` resumes the thread in a new run.
 
 ### Modes
 

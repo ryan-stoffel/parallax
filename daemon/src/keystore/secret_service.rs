@@ -1,4 +1,4 @@
-//! The Linux Secret Service, through `keyring-core` and its zbus store (RYA-19, 0023).
+//! The Linux Secret Service, through `keyring-core` and its zbus store (PLX-19, 0023).
 //!
 //! It speaks D-Bus in pure Rust, so the static musl build links neither libdbus nor OpenSSL. A
 //! key crosses the bus encrypted with the session's Diffie-Hellman key, never in the clear.

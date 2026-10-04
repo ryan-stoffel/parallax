@@ -18,7 +18,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 /// A worker's request as plxd builds it (0013): a worktree at `worktree` in plxd's data folder
 /// `data`, whose repository's git folder is `git_dir`, with `context` writable, and a temp
-/// folder made as plxd makes one (RYA-130). It runs the probe that [`run_worker`]'s fake API
+/// folder made as plxd makes one (PLX-130). It runs the probe that [`run_worker`]'s fake API
 /// asks for. Keep the [`RunTemp`] until the run is over.
 pub fn worker_request(
     home: &Path,
@@ -62,7 +62,7 @@ pub fn worker_request(
 /// failure messages. `env` adds the test's own variables, such as its API key, to the worker's
 /// environment. Like plxd, it gives the CLI the run's temp folder as `CLAUDE_CODE_TMPDIR`, and
 /// leaves `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` unset for a worker: on Linux it widens the sandbox's
-/// writes (RYA-20).
+/// writes (PLX-20).
 pub async fn run_worker(
     claude: &OsStr,
     request: &RunRequest,

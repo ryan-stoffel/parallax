@@ -25,9 +25,9 @@
 //! - [`launch_agent`]: the service that `attach` starts plxd through, when it is installed. On
 //!   Windows there is none yet, so `attach` starts `serve` itself (0023).
 //! - [`service`]: installs, removes, and reports on the per-user service that keeps `serve`
-//!   running: a `LaunchAgent` on macOS (#61), a systemd user unit on Linux (RYA-18). Unix only.
+//!   running: a `LaunchAgent` on macOS (#61), a systemd user unit on Linux (PLX-18). Unix only.
 //! - [`keystore`]: where API keys live: the macOS login Keychain (#117), the Secret Service on
-//!   Linux (RYA-19), and no store yet on Windows.
+//!   Linux (PLX-19), and no store yet on Windows.
 //! - [`usage`]: turns backend usage events into `parallax-store` rows (#120).
 //! - `routing`: picks a task's backend and account, forces the coordinator's no-write policy,
 //!   and falls a failed subscription run back to a key account (#119).
@@ -36,7 +36,7 @@
 //!   its events, commits its changes, and resumes it after a restart.
 //! - `threads`: normal threads behind `thread/*` and `repo/*` (#110): runs with no coordinator
 //!   that belong to a repo entry, or to a scratch repository for a thread with no repo.
-//! - `images`: the caps and checks for images sent with a prompt or message (RYA-191).
+//! - `images`: the caps and checks for images sent with a prompt or message (PLX-191).
 //! - [`windows`]: every Win32 call plxd makes, and the only module with `unsafe` code. Windows
 //!   only.
 
@@ -83,7 +83,7 @@ pub const VERSION_FILE: &str = "plxd.version";
 /// It is the first line of [`VERSION_FILE`] next to the running executable, or the crate's own
 /// placeholder in `Cargo.toml` when there is none (a cargo build). Read once, on first use, which
 /// `main` makes the start of the process: a `serve` that outlives an app update keeps reporting the
-/// version it started as, which is how the app knows to replace it (RYA-68).
+/// version it started as, which is how the app knows to replace it (PLX-68).
 pub fn version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     VERSION.get_or_init(|| {

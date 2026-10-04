@@ -2,7 +2,7 @@
 //! table so every params and result type is the protocol's own.
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
-//! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
+//! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; PLX-227
 //! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
 //! `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
@@ -245,7 +245,7 @@ fn project_scoped(name: &str) -> bool {
     name.starts_with("project/") || name.starts_with("inbox/")
 }
 
-/// Answers a `project/*` method (RYA-227) or a Project's `inbox/*` one (PLX-401), or `None` if
+/// Answers a `project/*` method (PLX-227) or a Project's `inbox/*` one (PLX-401), or `None` if
 /// there is no such method.
 async fn project_method(
     context: &Context,
@@ -304,7 +304,7 @@ async fn providers_method(
     })
 }
 
-/// Answers an `agent/*` method (#156, #157, RYA-191, RYA-222), or `None` if there is no such
+/// Answers an `agent/*` method (#156, #157, PLX-191, PLX-222), or `None` if there is no such
 /// method.
 async fn agent_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
     Some(match request.method.as_str() {

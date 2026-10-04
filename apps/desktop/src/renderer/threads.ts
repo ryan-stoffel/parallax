@@ -374,7 +374,7 @@ export type CoordinatorOptions = Pick<
  * Project's own events for its runs and their permission requests (0033), starting over on
  * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
  * `approvals`, the threads and coordinators started here forward their permission requests
- * (RYA-196, 0031); with `lineage`, a thread's generated title goes to plxd (0041), and titles kept
+ * (PLX-196, 0031); with `lineage`, a thread's generated title goes to plxd (0041), and titles kept
  * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`, and
  * `lineage` are passed through for the sidebar and top bar.
  */

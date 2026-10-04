@@ -437,7 +437,7 @@ async fn a_resumed_thread_reports_only_what_it_adds() {
 }
 
 /// A resumed thread's images reach `codex exec resume` as `--image=` files in the data folder's
-/// `tmp/`, which are gone once it exits (RYA-191).
+/// `tmp/`, which are gone once it exits (PLX-191).
 #[tokio::test]
 async fn images_reach_codex_as_files_that_go_when_it_exits() {
     let fake = Fake::new("resume");
@@ -576,7 +576,7 @@ async fn cancel_interrupts_codex_with_sigint() {
         Event::SessionStarted { .. }
     ));
     // `@trap-armed`, printed once the fake's SIGINT trap is installed: a deterministic handshake.
-    // The fake then hangs in foreground sleeps, so a trap bash left pending still runs (RYA-120).
+    // The fake then hangs in foreground sleeps, so a trap bash left pending still runs (PLX-120).
     assert!(matches!(
         next(&mut events).await,
         Event::Warning {
@@ -664,7 +664,7 @@ fn paths_are_quoted_as_toml_strings() {
 
 /// A worker's `.zshenv`, read by a real zsh whose `~/.zshenv` sets `PATH` outright as
 /// nix-darwin's `/etc/zshenv` does, puts plxd's `PATH` back in front of it and leaves `ZDOTDIR`
-/// unset. Only its owner may open the folder, which goes when dropped (RYA-141).
+/// unset. Only its owner may open the folder, which goes when dropped (PLX-141).
 #[test]
 fn a_worker_s_zdotdir_puts_its_path_back_after_zsh_startup() {
     let dir = tempfile::tempdir().unwrap();
