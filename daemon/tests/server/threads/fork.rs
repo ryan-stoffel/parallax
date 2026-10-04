@@ -94,6 +94,7 @@ fn fork_params(run_id: RunId) -> ThreadForkParams {
         turn_id: None,
         account: None,
         model: None,
+        parent: None,
     }
 }
 
@@ -298,6 +299,41 @@ fn follow_ups(items: &[AgentOutputItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+/// PLX-465: a fork records the run that asked for it as its parent, which must exist, and a retry
+/// naming another parent is `idConflict`.
+#[tokio::test]
+async fn a_fork_records_the_run_that_asked_for_it_as_its_parent() {
+    let (host, _, _) = host();
+    let mut client = host.client().await;
+    let (parent, _) = two_turns(&mut client, start_params(None, "Write the notes")).await;
+    let asker = client
+        .call::<ThreadStart>(start_params(None, "Fork it"))
+        .await
+        .unwrap()
+        .run
+        .id;
+    let missing = ThreadForkParams {
+        parent: Some(RunId::generate()),
+        ..fork_params(parent.thread.id)
+    };
+    let refused = client.call::<ThreadFork>(missing).await.unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::RunNotFound, "{refused:?}");
+
+    let params = ThreadForkParams {
+        parent: Some(asker),
+        ..fork_params(parent.thread.id)
+    };
+    let forked = client.call::<ThreadFork>(params.clone()).await.unwrap();
+    assert_eq!(forked.thread.parent, Some(asker));
+    let other = ThreadForkParams {
+        parent: None,
+        ..params
+    };
+    let conflict = client.call::<ThreadFork>(other).await.unwrap_err();
+    assert_eq!(kind(&conflict), ErrorKind::IdConflict, "{conflict:?}");
+    host.server.stop().await;
 }
 
 /// A fork at the latest turn of a thread in a worktree: its own worktree from the parent's latest

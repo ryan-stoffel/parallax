@@ -352,10 +352,10 @@ pub struct ThreadSearchResult {
 /// parent's latest commit, for a thread with no repo.
 ///
 /// Idempotent on `newRunId`: a retry returns the fork, and a run id that is taken by anything
-/// else fails with `idConflict`. Fails with `threadNotFound` for an unknown parent, and with
-/// `invalidParams` for a turn the parent didn't record or one it is still running. A fork's
-/// copied turns aren't its own: they are part of its prompt's turn, and forking at one of their
-/// ids fails.
+/// else, a fork with another `parent` field included, fails with `idConflict`. Fails with
+/// `threadNotFound` for an unknown parent, and with `invalidParams` for a turn the parent didn't
+/// record or one it is still running. A fork's copied turns aren't its own: they are part of its
+/// prompt's turn, and forking at one of their ids fails.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadForkParams {
@@ -376,6 +376,12 @@ pub struct ThreadForkParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub model: Option<String>,
+    /// The run that asked for the fork, such as a thread's `thread_fork` tool, recorded as the
+    /// fork's `parent` (0041). It must exist, or the fork fails with `runNotFound`. Absent means
+    /// none, as for a fork the user makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<RunId>,
 }
 
 /// Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an

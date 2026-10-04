@@ -640,14 +640,16 @@ pub(crate) async fn fork(
         turn_id,
         account,
         model,
+        parent: caller,
     } = params;
     // Share creation's per-id guard so a retry checks its fork identity after any competing
     // creation finishes, and concurrent forks cannot prepare the same scratch repository.
     // Check retries before generic creation compares options, which another backend may filter.
     let starting = daemon.agents.start_guard(new_run_id).await;
-    if let Some(done) = existing_fork(&daemon, new_run_id, run_id, turn_id).await? {
+    if let Some(done) = existing_fork(&daemon, new_run_id, run_id, turn_id, caller).await? {
         return Ok(done);
     }
+    check_parent(&daemon, caller).await?;
     let parent = load_parent(&daemon, run_id).await?;
     let turn = fork_turn(&parent, run_id, turn_id)?;
     let events = agents::logged_events(&daemon, run_id).await?;
@@ -670,8 +672,8 @@ pub(crate) async fn fork(
             account.unwrap_or_else(|| agents::session_account(&parent.run.state.account_id)),
         ),
         coordinator_thread: None,
-        // A fork has no parent to wake (0050).
-        notify: false,
+        // A fork with a parent wakes it as a launched child does, once its CLIs end (0041).
+        notify: caller.is_some(),
         options: RunOptions {
             model: model.clone().or_else(|| fields.model.clone()),
             effort: fields.effort.as_deref().and_then(option_value),
@@ -685,7 +687,7 @@ pub(crate) async fn fork(
             branch_slug: None,
             checkout,
             git_ref,
-            parent: None,
+            parent: caller,
             fields: ThreadFields {
                 forked_from: Some(parallax_store::ForkedFrom {
                     run: run_id.into(),
@@ -721,12 +723,14 @@ pub(crate) async fn fork(
 }
 
 /// The fork a retried `thread/fork` already made: `None` if `new_run_id` is free, and
-/// `idConflict` if it is anything but a fork of `run_id`, at `turn_id` if that is given.
+/// `idConflict` if it is anything but a fork of `run_id`, at `turn_id` if that is given, for
+/// `caller`. An empty stored parent isn't compared, since deleting the parent cleared it (0041).
 async fn existing_fork(
     daemon: &Daemon,
     new_run_id: RunId,
     run_id: RunId,
     turn_id: Option<TurnId>,
+    caller: Option<RunId>,
 ) -> Result<Option<ThreadStartResult>, ErrorObject> {
     store(daemon, move |db| {
         let Some(run) = db.get_run(new_run_id.into()).map_err(|e| store_error(&e))? else {
@@ -739,7 +743,12 @@ async fn existing_fork(
         let thread = db
             .get_thread(new_run_id.into())
             .map_err(|e| store_error(&e))?
-            .filter(|thread| thread.fields.forked_from.is_some_and(same))
+            .filter(|thread| {
+                thread.fields.forked_from.is_some_and(same)
+                    && thread
+                        .parent
+                        .is_none_or(|parent| caller.map(Uuid::from) == Some(parent))
+            })
             .ok_or_else(|| {
                 ErrorObject::parallax(
                     ErrorKind::IdConflict,
