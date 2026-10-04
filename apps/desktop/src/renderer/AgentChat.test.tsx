@@ -3,6 +3,7 @@ import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { Globe } from "lucide-react";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
@@ -271,6 +272,33 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   // Its file: source is unsafe, so it has no href at all rather than an empty one.
   expect(links[1]!.hasAttribute("href")).toBe(false);
 });
+
+test("a streaming message renders as the whole text does, at every line", () => {
+  const reply = [
+    "Setext\n===\n\nIntro with `code` and **bold**.",
+    "- loose\n\n- list\n  continued\n\n  - nested\n\n    ```sh\n    cargo test\n\n    ```",
+    "1. one\n\n2) two\n\n10. ten",
+    "    indented code\n\n    more\n\n> quote\n> lines",
+    "| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\n- [x] done\n- [ ] not",
+    "```ts\nconst a = 1;\n\n~~~\n```\n\n~~~~\n```\n\n~~~~\n\nEnd.",
+  ].join("\n\n");
+  const html = (text: string, partial: boolean) =>
+    renderToStaticMarkup(
+      <RowView
+        row={{ kind: "assistant", key: "a", text, partial }}
+        live={false}
+        open={false}
+        onToggle={() => {}}
+      />,
+    ).replaceAll(">\n<", "><");
+  // Each length that ends a line or stops in its first characters, which decide its kind.
+  for (let n = 1; n <= reply.length; n++) {
+    const column = n - 1 - reply.lastIndexOf("\n", n - 1);
+    if (column > 4 && n < reply.length && reply[n] !== "\n") continue;
+    expect(html(reply.slice(0, n), true)).toBe(html(reply.slice(0, n), false));
+  }
+  // Hundreds of renders, a few seconds when other files run alongside.
+}, 30_000);
 
 test("a code block names its language, highlights it, and copies its text", async () => {
   const writeText = vi.fn(async () => {});
