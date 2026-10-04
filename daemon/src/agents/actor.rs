@@ -710,7 +710,15 @@ impl Actor {
         } else {
             Vec::new()
         };
-        let (paths, lines): (Vec<String>, Vec<String>) = proposals.into_iter().unzip();
+        let (paths, mut lines): (Vec<String>, Vec<String>) = proposals.into_iter().unzip();
+        // And, while its memory index is over the cap, a request to merge entries (0044).
+        if self.is_coordinator()
+            && crate::context::memory::start(&self.daemon, self.project)
+                .await
+                .is_ok_and(|start| start.over)
+        {
+            lines.push(crate::context::memory::MERGE.to_owned());
+        }
         let Some((turn_id, text)) = self.wakes.next(&lines) else {
             self.pause_wakes(true).await;
             return;
