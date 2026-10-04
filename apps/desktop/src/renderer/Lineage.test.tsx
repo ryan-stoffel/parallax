@@ -325,19 +325,15 @@ test("a Project's children never show in the main sidebar, and its row shows the
   const ember = document.querySelector('#sidebar li[data-kind="project"]');
   expect(ember?.querySelector("[data-status]")?.textContent).toBe("Working");
 
-  // `agent/list {project}` has only the coordinator, so the panel lists the threads in the Project.
+  // `agent/list {project}` has only the coordinator, so its Project tab lists the threads in it.
   await click(ember?.querySelector("button"));
-  await click(document.querySelector('button[aria-label="Show side panel"]'));
-  await click(
-    [...document.querySelectorAll("#side-panel button")].find((b) =>
-      b.textContent?.startsWith("Agents"),
-    ),
-  );
-  const rows = [...document.querySelectorAll('#side-panel [aria-label="Agents"] button')];
-  expect(rows.map((b) => b.textContent?.split("by")[0])).toEqual([
-    "Check the links",
-    "Write the docs",
-  ]);
+  const titles = (group: string) =>
+    [...document.querySelectorAll(`#side-panel section[aria-label="${group}"] li > button`)].map(
+      (b) => b.querySelector("span span")?.textContent,
+    );
+  expect(titles("Working")).toEqual(["Check the links"]);
+  await click(document.querySelector('#side-panel section[aria-label="Resolved"] h3 button'));
+  expect(titles("Resolved")).toEqual(["Write the docs"]);
 });
 
 test("without threadLineage, children aren't nested and there are no chips", async () => {
