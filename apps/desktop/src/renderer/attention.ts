@@ -15,6 +15,8 @@ export function attentionOf(thread: Thread, run: AgentRun | undefined, asks: num
   if (asks > 0) return "needsYou";
   if (!run) return "settled";
   if (isRunning(run.status)) return "working";
+  // A run waiting out a usage limit (0049) is no news yet: its row shows when it resumes.
+  if (run.status === "waiting") return "settled";
   const unseen = !thread.seenAt || Date.parse(run.updatedAt) > Date.parse(thread.seenAt);
   if (!unseen) return "settled";
   return run.status === "failed" ? "failed" : "done";

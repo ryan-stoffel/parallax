@@ -86,6 +86,7 @@ import {
 import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { QueueStrip } from "./QueueStrip";
+import { ResumeCard } from "./ResumeCard";
 import { titleOf } from "./threads";
 import {
   failureText,
@@ -443,6 +444,11 @@ export function AgentChat({
             stalled={stalled}
             onResend={resend}
             loadImage={showImage}
+            end={
+              run?.status === "waiting" && (
+                <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+              )
+            }
           />
         </ThreadLinksContext>
       ) : (
@@ -574,6 +580,7 @@ export function TranscriptView({
   stalled = false,
   onResend,
   loadImage,
+  end,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
@@ -583,6 +590,8 @@ export function TranscriptView({
   onResend?: (turnId: string, message: SentMessage) => void;
   /** Fetches a message's image by id, as a data URL. */
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
+  /** Shown after the last row, such as a waiting run's resume card. */
+  end?: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Threads' titles, to name the thread that sent a message or stopped this one (0041).
@@ -657,7 +666,7 @@ export function TranscriptView({
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
     follow();
-  }, [total, view.length, follow]);
+  }, [total, view.length, follow, !!end]);
   // As the composer grows it shrinks the list from below: keep the latest output in view.
   useEffect(() => {
     const el = scrollRef.current!;
@@ -729,6 +738,7 @@ export function TranscriptView({
             );
           })}
         </div>
+        {end && <div className="mx-auto max-w-3xl px-6 pb-6">{end}</div>}
       </div>
       {/* One prompt is no choice of where to go, so there's no rail for it. */}
       {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}

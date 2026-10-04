@@ -1,0 +1,17 @@
+[
+  { "init": { "sessionId": "e2e-limited", "model": "fake-model" } },
+  { "emit": { "kind": "text", "text": "I started on the README." } },
+  {
+    "emit": { "kind": "rateLimit", "window": "five_hour", "usedPercent": 100, "status": "rejected" }
+  },
+  {
+    "emit": {
+      "kind": "finished",
+      "outcome": {
+        "status": "failed",
+        "failure": "rateLimited",
+        "message": "You've hit your limit"
+      }
+    }
+  }
+]

@@ -119,6 +119,22 @@ test("each way a run ends is an end item, and an update clears a stale error", (
   expect(t.run).toMatchObject({ status: "cancelled", error: undefined });
 });
 
+test("an update without resumeAt or autoResume clears them, as plxd leaves them out once cleared", () => {
+  const updated = (state: Record<string, unknown>) =>
+    at({
+      kind: "agent.updated",
+      runId,
+      state: { status: "waiting", updatedAt: "", ...state },
+    } as ParallaxEvent);
+  const waiting = build(
+    ...upTo(1),
+    updated({ resumeAt: "2026-10-04T22:40:00Z", autoResume: true }),
+  );
+  expect(waiting.run).toMatchObject({ resumeAt: "2026-10-04T22:40:00Z", autoResume: true });
+  const resumed = applyEvents(waiting, [updated({ status: "running" })], runId);
+  expect(resumed.run).toMatchObject({ resumeAt: undefined, autoResume: undefined });
+});
+
 test("deltas without a message id stream into one message that the full text replaces", () => {
   const t = build(
     ...upTo(1),

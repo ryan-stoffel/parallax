@@ -698,6 +698,7 @@ function HostLoader({
     moded: !!capabilities && "projectPermission" in capabilities,
     iconImageBytes: iconImageBytes(connection),
     lineage: !!capabilities && "threadLineage" in capabilities,
+    autoResume: !!capabilities && "autoResume" in capabilities,
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;
