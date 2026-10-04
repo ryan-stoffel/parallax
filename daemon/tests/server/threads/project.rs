@@ -8,13 +8,18 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{AgentSend, ProjectList, ProjectStart, ThreadStart};
 use parallax_protocol::{
-    AgentDelivery, AgentSendParams, ProjectId, ProjectListParams, ThreadStartParams, TurnId,
+    AgentDelivery, AgentSendParams, InboxItem, InboxKind, ProjectId, ProjectListParams, RunId,
+    ThreadStartParams, TurnId,
 };
 use plxd::backend::ToolPolicy;
-use plxd::backend::fake::Step;
+use plxd::backend::fake::{AskedApproval, Step};
+use serde_json::json;
 
-use crate::agents::{Host, create, end_turn, git, init, project_params, send_params, subscribe};
+use crate::agents::{
+    Host, create, end_turn, fake, git, init, project_params, send_params, subscribe,
+};
 use crate::coordinator::{nth_launch, roles, sessions, start_params};
+use crate::inbox::added;
 use crate::support::temp_dir;
 
 fn task_params(project: ProjectId, task: &str) -> ThreadStartParams {
@@ -150,4 +155,48 @@ async fn a_task_starts_with_no_parent_before_the_project_has_a_coordinator() {
         .unwrap_err();
     assert_eq!(refused.code, INVALID_PARAMS, "{}", refused.message);
     host.server.stop().await;
+}
+
+/// A task's CLI on `steps`, started in a new Project with no coordinator: its run, and the item
+/// it adds to the Project's inbox (0043).
+async fn task_inbox_item(steps: Vec<Step>, task: &str) -> (RunId, InboxItem) {
+    let host = Host::start(temp_dir(), fake(steps));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let run = client
+        .call::<ThreadStart>(task_params(project.id, task))
+        .await
+        .unwrap()
+        .run
+        .id;
+    let item = added(&mut client, project.id).await;
+    host.server.stop().await;
+    (run, item)
+}
+
+/// A task the user started is a child: its end and its permission requests reach the inbox.
+#[tokio::test]
+async fn a_tasks_done_failed_and_permission_request_reach_the_inbox() {
+    let (run, done) = task_inbox_item(vec![init("s"), end_turn("Done.")], "Tidy up.").await;
+    assert_eq!((done.run, done.kind), (run, InboxKind::Done));
+
+    let (run, failed) = task_inbox_item(vec![init("s"), Step::Exit(3)], "Break it.").await;
+    assert_eq!((failed.run, failed.kind), (run, InboxKind::Failed));
+
+    let ask = Step::RequestApproval(AskedApproval {
+        tool_name: "Bash".to_owned(),
+        input: json!({"command": "pnpm test"}),
+        call_id: None,
+        reason: None,
+        always_allow: Vec::new(),
+        interactive: false,
+    });
+    let steps = vec![init("s"), ask, Step::AwaitApproval];
+    let (run, asked) = task_inbox_item(steps, "Run the tests.").await;
+    assert_eq!((asked.run, asked.kind), (run, InboxKind::NeedsYou));
+    assert_eq!(
+        asked.text,
+        "Run the tests.: waiting for permission to use Bash"
+    );
 }

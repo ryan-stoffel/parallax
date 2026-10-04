@@ -459,9 +459,15 @@ impl Actor {
         self.row.fields.policy == convert::NO_WRITE
     }
 
-    /// Whether a project's coordinator started this run through its tools (0019).
-    fn is_child(&self) -> bool {
-        self.row.fields.coordinator_thread.is_some() && !self.is_coordinator()
+    /// Whether this is one of a Project's children (0042): any run in a Project but its
+    /// coordinator, whether the coordinator launched it or the user started it with
+    /// `thread/start`'s `project` or `agent/start`. A store error counts as not a child.
+    async fn is_child(&self) -> bool {
+        !self.is_coordinator()
+            && matches!(
+                super::project_mode(&self.daemon, self.project).await,
+                Ok(Some(_))
+            )
     }
 
     /// Adds an item about this run to its project's inbox (PLX-401, 0043).
@@ -471,7 +477,7 @@ impl Actor {
 
     /// Adds a child's permission request for `tool` to its project's inbox as `needsYou` (0031).
     async fn inbox_approval(&self, tool: &str) {
-        if self.is_child() {
+        if self.is_child().await {
             let task = wake::task(&self.row.fields.prompt);
             let text = format!("{task}: waiting for permission to use {tool}");
             self.inbox(InboxKind::NeedsYou, text).await;
@@ -2222,7 +2228,7 @@ impl Actor {
             },
         })
         .await;
-        if self.is_child() {
+        if self.is_child().await {
             let text = failed_text(&self.row.fields.prompt, &message);
             self.inbox(InboxKind::Failed, text).await;
         }
@@ -2456,7 +2462,7 @@ impl Actor {
         let Ok(run) = self.snapshot() else {
             return;
         };
-        if self.is_child()
+        if self.is_child().await
             && let Some((kind, text)) = ended_item(&run, &outcome)
         {
             self.inbox(kind, text).await;

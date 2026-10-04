@@ -851,7 +851,15 @@ async fn agent_start_is_idempotent_on_its_run_id() {
     subscribe(&mut client, project.id, 0).await;
     let params = start_params(project.id, "Do it once");
     let first = client.call::<AgentStart>(params.clone()).await.unwrap().run;
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    // A run in a Project is a child, so its end also adds an inbox item (0043).
+    let mut completed = updated_to(AgentStatus::Completed);
+    let (mut done, mut inboxed) = (false, false);
+    until(&mut client, |event| {
+        done |= completed(event);
+        inboxed |= matches!(event.event, ParallaxEvent::InboxAdded { .. });
+        done && inboxed
+    })
+    .await;
 
     let retried = client.call::<AgentStart>(params.clone()).await.unwrap().run;
     assert_eq!(retried.id, first.id);

@@ -13,8 +13,9 @@
 //! question tools for its role ([`super::question`], PLX-402). A Project's coordinator launches
 //! its children in its Project, through `agent/start` with itself as their coordinator thread, so
 //! they show in the Project's Agents panel, run as threads that ask through the inbox, in the
-//! Project's mode, and `thread_list` lists its Project's runs, which have no thread rows.
+//! Project's mode, and `thread_list` lists its Project's runs, each once.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -503,12 +504,15 @@ struct PrArgs {
     run_id: Option<RunId>,
 }
 
-/// `thread_list`: the host's threads, newest first, after the caller's Project's runs. A Project's
-/// runs have no thread rows, so a coordinator's children are listed from its runs.
+/// `thread_list`: the host's threads, newest first, after the caller's Project's runs. A
+/// Project's runs are listed from `agent/list`, since only those `thread/start` made with
+/// `project` have thread rows (PLX-398). Those rows are left out of the host's threads, so no run
+/// is listed twice.
 async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     let caller = server.binding.run;
     let mut plxd = Plxd::open(&server.binding.socket).await?;
     let mut listed = Vec::new();
+    let mut in_project = HashSet::new();
     if let Some(project) = server.project {
         let runs = plxd
             .call::<AgentList>(AgentListParams {
@@ -516,6 +520,7 @@ async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
             })
             .await?
             .runs;
+        in_project.extend(runs.iter().map(|run| run.id));
         listed.extend(
             runs.iter()
                 .rev()
@@ -525,7 +530,9 @@ async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     }
     let mut threads = plxd.call::<ThreadList>(ThreadListParams {}).await?.threads;
     threads.reverse();
-    threads.retain(|thread| args.include_archived || !thread.archived);
+    threads.retain(|thread| {
+        (args.include_archived || !thread.archived) && !in_project.contains(&thread.id)
+    });
     listed.extend(described(&mut plxd, &threads, caller).await?);
     Ok(pretty(&json!({"threads": listed})))
 }

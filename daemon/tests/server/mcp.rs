@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parallax_protocol::methods::{AgentList, ContextList, ProjectStart, ThreadStart};
-use parallax_protocol::{AgentListParams, AgentRun, ContextListParams, Project, ProjectId};
+use parallax_protocol::{
+    AgentListParams, AgentRun, ContextListParams, Project, ProjectId, ThreadStartParams,
+};
 use plxd::backend::fake::Step;
 use plxd::mcp::question::COORDINATOR_TOOLS;
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
@@ -266,6 +268,43 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
     let finished = finished.iter().find(|run| run.id.to_string() == child);
     assert_eq!(finished.unwrap().diff.as_ref().unwrap().files, 1);
 
+    host.server.stop().await;
+}
+
+/// PLX-398: a task the user starts with `thread/start`'s `project` has a thread row as well as a
+/// Project run, and the coordinator's `thread_list` lists it once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_coordinator_lists_a_task_the_user_started_once() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host::start(
+        temp_dir(),
+        roles(
+            vec![init("worker-1"), Step::Hang],
+            vec![vec![init("coordinator-1"), Step::Hang]],
+            &seen,
+        ),
+    );
+    let mut client = host.client().await;
+    let (project, _, mut mcp) = coordinator(&host, &mut client).await;
+    let task = client
+        .call::<ThreadStart>(ThreadStartParams {
+            project: Some(project.id),
+            ..crate::threads::start_params(None, "Add a README.")
+        })
+        .await
+        .unwrap()
+        .run
+        .id
+        .to_string();
+
+    let threads = mcp.ok("thread_list", json!({})).await;
+    let listed = threads["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|thread| thread["runId"] == task.as_str())
+        .count();
+    assert_eq!(listed, 1, "{threads}");
     host.server.stop().await;
 }
 

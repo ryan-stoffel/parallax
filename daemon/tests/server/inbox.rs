@@ -56,8 +56,7 @@ async fn list(client: &mut Conn, project: ProjectId) -> Vec<InboxItem> {
         .items
 }
 
-/// A child that finishes adds `done` with its diff stats, a run the client started itself adds
-/// nothing, and `inbox/seen` marks the item once.
+/// A child that finishes adds `done` with its diff stats, and `inbox/seen` marks the item once.
 #[tokio::test]
 async fn a_child_finishing_adds_done_with_its_diff_stats_and_seen_marks_it() {
     let host = Host::start(
@@ -74,11 +73,6 @@ async fn a_child_finishing_adds_done_with_its_diff_stats_and_seen_marks_it() {
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
     subscribe(&mut client, project.id, 0).await;
-    client
-        .call::<AgentStart>(start_params(project.id, "Not a child."))
-        .await
-        .unwrap();
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
 
     let run = client
         .call::<AgentStart>(child(project.id, "Rewrite the README.\nKeep it short."))
