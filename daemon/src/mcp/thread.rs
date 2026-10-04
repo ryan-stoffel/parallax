@@ -598,7 +598,6 @@ async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     Ok(pretty(&json!({"threads": listed})))
 }
 
-#[expect(clippy::too_many_lines, reason = "one arm per tool, read side by side")]
 async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<String, String> {
     let binding = &server.binding;
     let caller = binding.run;

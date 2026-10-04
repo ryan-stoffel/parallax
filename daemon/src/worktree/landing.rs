@@ -172,9 +172,11 @@ impl WorktreeManager {
         Ok(Merged::Commit(commit))
     }
 
-    /// The lines the commits from `tip` to `theirs` add that hold a leftover conflict marker, as
-    /// `path:line`, from `git diff --check` in `project`'s integration worktree. Whitespace errors
-    /// it also reports are ignored.
+    /// The lines `theirs` adds since its merge base with `tip` that hold a leftover conflict
+    /// marker, as `path:line`, from `git diff --check` in `project`'s integration worktree, when
+    /// `theirs` has a merge commit `tip` lacks, as a child that resolved a conflict by merging an
+    /// integration tip has. Otherwise none: a marker-like line is ordinary text in a child that
+    /// never merged. Whitespace errors `git diff --check` also reports are ignored.
     ///
     /// # Errors
     ///
@@ -186,14 +188,16 @@ impl WorktreeManager {
         theirs: &str,
     ) -> Result<Vec<String>, WorktreeError> {
         let path = self.integration_path(project);
-        let args = [
-            "diff",
-            "--check",
-            "--no-ext-diff",
-            "--no-textconv",
-            tip,
-            theirs,
-        ];
+        let since = format!("{tip}..{theirs}");
+        let merges = self
+            .run_git_ok(&path, &["rev-list", "--merges", "--max-count=1", &since])
+            .await?;
+        if merges.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        // From the merge base, so what other children landed on `tip` isn't counted.
+        let range = format!("{tip}...{theirs}");
+        let args = ["diff", "--check", "--no-ext-diff", "--no-textconv", &range];
         let checked = self.run_git(&path, &args).await?;
         // A problem found exits non-zero with it on stdout; a git failure prints nothing there.
         if !checked.success() && checked.stdout.trim().is_empty() {

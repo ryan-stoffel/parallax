@@ -357,7 +357,7 @@ async fn land(daemon: &Arc<Daemon>, row: parallax_store::Landing) -> Result<(), 
             return Ok(());
         }
     };
-    let attempt = attempt(daemon, project, run_id, &child, row.conflicts).await;
+    let attempt = attempt(daemon, project, run_id, &child).await;
     let (status, conflicts, kind, text) = match attempt {
         Ok(Attempt::Landed(commit)) => {
             let how = commit.map_or_else(
@@ -449,14 +449,13 @@ async fn child(daemon: &Arc<Daemon>, run_id: RunId) -> Result<Child, ErrorObject
 
 /// Fetches the base branch and merges it alone when it moved, then squash-merges `child`'s
 /// branch, in `project`'s integration worktree. A conflict with the base adds `needsYou` and the
-/// child still lands on the tip, since the conflict isn't its own. A child that has resolved
-/// `conflicts` before is refused if its branch adds a conflict marker.
+/// child still lands on the tip, since the conflict isn't its own. A child that merged an
+/// integration tip to resolve a conflict is refused if its branch adds a conflict marker.
 async fn attempt(
     daemon: &Arc<Daemon>,
     project: ProjectId,
     run_id: RunId,
     child: &Child,
-    conflicts: u32,
 ) -> Result<Attempt, String> {
     let row = agents::integration(daemon, project)
         .await
@@ -497,14 +496,12 @@ async fn attempt(
             }
         }
     }
-    if conflicts > 0 {
-        let markers = worktrees
-            .conflict_markers(project, &tip, &child.branch)
-            .await
-            .map_err(failed)?;
-        if !markers.is_empty() {
-            return Ok(Attempt::Markers(markers));
-        }
+    let markers = worktrees
+        .conflict_markers(project, &tip, &child.branch)
+        .await
+        .map_err(failed)?;
+    if !markers.is_empty() {
+        return Ok(Attempt::Markers(markers));
     }
     let message = format!(
         "{}\n\nLanded by Parallax from run {run_id}, branch {}.",

@@ -402,5 +402,34 @@ async fn a_resolution_that_leaves_a_conflict_marker_goes_to_the_user() {
         landed,
         "nothing landed"
     );
+
+    // Queued again, it is refused again: the check follows its branch, not the landing's count.
+    let again = client
+        .call::<LandQueue>(LandQueueParams { run_id: b.id })
+        .await
+        .unwrap()
+        .landing;
+    assert_eq!(again.status, LandingStatus::Queued);
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let items = client
+            .call::<InboxList>(InboxListParams {
+                project: project.id,
+            })
+            .await
+            .unwrap()
+            .items;
+        if items
+            .iter()
+            .filter(|item| item.text == refused.text)
+            .count()
+            == 2
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never refused again: {items:#?}");
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(git(&repo, &["rev-parse", "parallax/app"]), landed);
     host.server.stop().await;
 }
