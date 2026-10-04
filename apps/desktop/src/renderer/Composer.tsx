@@ -1306,26 +1306,30 @@ const questionWords =
 
 /**
  * Where `text` goes, unless `asking` says otherwise: a question to the coordinator, and anything
- * else to a task. A message that is only a list of two or more items is a task per item.
+ * else to a task. A message that is only a list of two or more items is a task per item, even
+ * when an item is a question.
  */
 export function routeOf(text: string, asking?: boolean): Route {
   const trimmed = text.trim();
-  const question = trimmed.endsWith("?") || questionWords.test(trimmed);
-  if (asking ?? (question && trimmed !== "")) return { kind: "ask" };
-  return { kind: "task", tasks: listItems(trimmed) ?? [trimmed] };
+  const tasks = listItems(trimmed);
+  const question = !tasks && (trimmed.endsWith("?") || questionWords.test(trimmed));
+  if (asking ?? question) return { kind: "ask" };
+  return { kind: "task", tasks: tasks ?? [trimmed] };
 }
 
-/** The items of Markdown that is a list and nothing else, or undefined. */
+/** The items of Markdown that is a list and nothing else, or undefined. Empty items don't count. */
 function listItems(markdown: string): string[] | undefined {
   const items: string[] = [];
   for (const line of markdown.split("\n")) {
     const item = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
     if (item) items.push(item[1]!.trim());
-    else if (line.trim() === "") continue;
+    // A blank line, or an item left empty, such as the bare `-` Enter leaves at the end.
+    else if (/^\s*(?:[-*+]|\d+[.)])?\s*$/.test(line)) continue;
     else if (/^\s+\S/.test(line) && items.length) items[items.length - 1] += ` ${line.trim()}`;
     else return undefined;
   }
-  return items.length > 1 ? items.filter(Boolean) : undefined;
+  const kept = items.filter(Boolean);
+  return kept.length > 1 ? kept : undefined;
 }
 
 /**

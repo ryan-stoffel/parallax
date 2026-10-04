@@ -1458,9 +1458,6 @@ test("the agents bar over a Project's composer shows its first three providers, 
   ];
   capabilities = { inbox: {} };
   answers["inbox/list"] = () => ({ result: { items: [], seq: 7 } });
-  // The question raises a system notification too.
-  vi.stubGlobal("Notification", class {});
-  onTestFinished(() => void vi.unstubAllGlobals());
   await openEmberAgents(login, ...children);
   // The newest going child leads, and each going child's provider is a logo, three at most.
   expect(bar()!.querySelector("button")!.textContent).toBe(
@@ -1508,6 +1505,10 @@ test("the agents bar over a Project's composer shows its first three providers, 
   expect(bar()!.querySelector("button")!.textContent).toBe(
     "+14 agents going, 1 waiting on you: Write the docs1 need you",
   );
+  // The app keeps its notifications between tests, so close the question's.
+  const closeToast = () =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Notifications"] [aria-label="Close"]');
+  while (closeToast()) act(() => closeToast()!.click());
 
   // Another Project with nothing going has no bar.
   await click(rowButton("photon"));
@@ -1747,7 +1748,7 @@ test("a question goes to the coordinator, anything else starts a task, and the s
   expect(calls("project/start")).toHaveLength(1);
 });
 
-test("a list starts one task per item: Enter adds an item, and Cmd+Enter sends", async () => {
+test("a list starts one task per item, a question among them too: Enter adds an item, and Cmd+Enter sends without an empty last one", async () => {
   emberTakingTasks();
   await renderApp();
   await openEmber();
@@ -1761,14 +1762,18 @@ test("a list starts one task per item: Enter adds an item, and Cmd+Enter sends",
   act(() => void composer()!.editor!.commands.focus("end"));
   await enter();
   expect(calls("thread/start")).toEqual([]);
-  act(() => void composer()!.editor!.commands.insertContent("Add a blue mode"));
+  // An item that asks is still a task.
+  act(() => void composer()!.editor!.commands.insertContent("Can it be blue?"));
+  expect(route()).toBe("3 tasks");
+  // Enter on the last item leaves an empty one, which starts nothing.
+  await enter();
   expect(route()).toBe("3 tasks");
   await enter(true);
   await settle();
   expect(calls("thread/start").map((p) => p["prompt"])).toEqual([
     "Add a dark mode",
     "Add a light mode",
-    "Add a blue mode",
+    "Can it be blue?",
   ]);
   expect(new Set(calls("thread/start").map((p) => p["runId"])).size).toBe(3);
   expect(composer()!.textContent).toBe("");
