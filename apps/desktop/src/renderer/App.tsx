@@ -7,7 +7,7 @@ import { AgentChat } from "./AgentChat";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
 import { FilesPanel } from "./FilesPanel";
-import { InboxPanel, useInbox } from "./Inbox";
+import { useInbox } from "./Inbox";
 import { GitMenu } from "./GitMenu";
 import { KnowledgePanel } from "./Knowledge";
 import { LineageTrail } from "./Lineage";
@@ -16,10 +16,10 @@ import { NewThreadPicker } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
-import { instanceLogo } from "./providers";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
+import { ProjectHome } from "./ProjectHome";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
@@ -32,15 +32,7 @@ import {
   useSnoozeAlarms,
   useThreadAlarms,
 } from "./alarms";
-import {
-  backendLogos,
-  ProjectIcon,
-  RepoIcon,
-  SettingsNav,
-  settingsNames,
-  Sidebar,
-  ThreadList,
-} from "./Sidebar";
+import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
 import { useAppearanceEffects } from "./appearance";
@@ -739,24 +731,25 @@ export function App() {
         pullRequest={showPr}
         project={
           project && {
-            unread: inbox.items.filter((i) => !i.seenAt).length,
-            inbox: (
-              <InboxPanel
-                view={inbox}
+            // Children, as the home counts them: an unread question or failure, or an approval.
+            waiting: agents.runs.filter(
+              (r) =>
+                r.id !== project.coordinator &&
+                r.policy !== "noWrite" &&
+                ((agents.waiting[r.id]?.length ?? 0) > 0 ||
+                  inbox.items.some(
+                    (i) =>
+                      i.run === r.id && !i.seenAt && (i.kind === "needsYou" || i.kind === "failed"),
+                  )),
+            ).length,
+            home: (
+              <ProjectHome
+                project={project}
+                agents={agents}
+                titles={threads.state.titles}
+                inbox={inbox}
                 answerable={answerable}
-                senders={(run) => {
-                  const found = agents.runs.find((r) => r.id === run);
-                  const Logo =
-                    found && (backendLogos[found.backend] ?? instanceLogo(found.backend));
-                  return {
-                    name:
-                      run === project.coordinator
-                        ? "Coordinator"
-                        : (threads.state.titles[run] ?? (found ? titleOf(found) : "Agent")),
-                    Logo,
-                  };
-                }}
-                onOpen={(id) => openAgent(id === project.coordinator ? undefined : id)}
+                onOpen={openAgent}
               />
             ),
           }

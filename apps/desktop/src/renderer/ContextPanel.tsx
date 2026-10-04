@@ -245,7 +245,7 @@ const sectionHeading = "px-2.5 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-
  * A context file's content, read again whenever `file` changes: it's a new object for each
  * `context.changed` to it.
  */
-function useContent(hostId: string, project: string, file: ContextFile) {
+export function useContent(hostId: string, project: string, file: ContextFile) {
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();
   useEffect(() => {

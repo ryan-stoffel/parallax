@@ -1,12 +1,12 @@
-import { ArrowUp, LoaderCircle } from "lucide-react";
-import { useRef, useState } from "react";
+import { ArrowUp, Check, ChevronDown, LoaderCircle } from "lucide-react";
+import { useId, useRef, useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { changeMessage } from "./MemoryPanel";
-import { ModelMenu } from "./ModelMenu";
-import { useCatalog, type Model, type Provider } from "./models";
+import { useCatalog, type Model } from "./models";
+import { kindOf, logoOf } from "./providers";
 import { uuidv7 } from "./uuidv7";
 
 /**
@@ -35,10 +35,8 @@ export function MiniPrompt({
   const [picked, setPicked] = useState<Model>();
   const box = useRef<HTMLTextAreaElement>(null);
   // Only the coordinator's own provider: moving it to another is the chat's job.
-  const unavailable: Partial<Record<Provider, string>> = {};
-  for (const i of catalog.instances)
-    if (i.id !== coordinator?.backend)
-      unavailable[i.id] = "The coordinator changes provider from its chat.";
+  const instance = catalog.instances.find((i) => i.id === coordinator?.backend);
+  const Logo = instance ? logoOf(instance) : kindOf(coordinator?.backend ?? "claude").Logo;
   const own = catalog.models.filter((m) => m.provider === coordinator?.backend);
   const model =
     (picked && own.find((m) => m.id === picked.id)) ??
@@ -118,16 +116,71 @@ export function MiniPrompt({
       {model && (
         // Tucked under the box, as the composer's tab is.
         <div
-          className={`-mt-4 flex items-center rounded-b-2xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1 [&_button]:text-[12px]"}`}
+          className={`-mt-4 flex items-center rounded-b-2xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
         >
-          <ModelMenu
-            catalog={catalog}
-            unavailable={unavailable}
-            value={model}
-            onChange={setPicked}
-          />
+          <ModelPick models={own} value={model} onChange={setPicked} Logo={Logo} />
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * A small model picker for a small box: the model's name, opening a short list of the provider's
+ * models above it, the chosen one checked. No search or provider rail: there are a few.
+ */
+function ModelPick({
+  models,
+  value,
+  onChange,
+  Logo,
+}: {
+  models: readonly Model[];
+  value: Model;
+  onChange: (model: Model) => void;
+  Logo?: ReturnType<typeof logoOf>;
+}) {
+  const id = useId();
+  return (
+    <>
+      <button
+        type="button"
+        popoverTarget={id}
+        aria-haspopup="listbox"
+        aria-label={`Model: ${value.name}`}
+        className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3"
+      >
+        {Logo && <Logo aria-hidden />}
+        {value.name.replace(/^Claude /, "")}
+        <ChevronDown aria-hidden className="text-faint-foreground" />
+      </button>
+      <div
+        id={id}
+        popover="auto"
+        role="listbox"
+        aria-label="Model"
+        className="inset-auto m-0 mb-1.5 w-52 rounded-xl border border-border bg-surface p-1 text-foreground shadow-composer [position-area:top_span-right] [position-try-fallbacks:flip-block]"
+      >
+        {models.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            role="option"
+            aria-selected={m.id === value.id}
+            onClick={() => {
+              onChange(m);
+              document.getElementById(id)?.hidePopover();
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] hover:bg-hover"
+          >
+            <span className="min-w-0 flex-1 truncate">{m.name}</span>
+            {m.isNew && (
+              <span className="font-mono text-[10px] tracking-wide text-accent uppercase">new</span>
+            )}
+            {m.id === value.id && <Check aria-hidden className="size-3.5 text-accent" />}
+          </button>
+        ))}
+      </div>
+    </>
   );
 }

@@ -4,7 +4,7 @@ import {
   GitCompare,
   GitPullRequest,
   Globe,
-  Inbox,
+  SquareKanban,
   Maximize2,
   Minimize2,
   PanelRight,
@@ -32,7 +32,7 @@ interface Surface {
 }
 
 // A Project's own views, pinned first in its panel.
-const overview: Surface = { name: "Inbox", icon: Inbox, key: "I" };
+const overview: Surface = { name: "Project", icon: SquareKanban, key: "O" };
 
 const isBuilt = (s: Surface) => !!s.empty || s.name === "Browser";
 
@@ -126,8 +126,9 @@ export function SidePanel({
   browse?: { url: string };
   pullRequests?: { urls: readonly string[]; list: ReactNode; view: (url: string) => ReactNode };
   pullRequest?: { url?: string };
-  /** An open Project, whose inbox the panel rests on, with Knowledge beside it. */
-  project?: { inbox: ReactNode; unread: number };
+  /** An open Project, whose home the panel rests on, with Knowledge beside it, and how many
+   * things wait on the user there. */
+  project?: { home: ReactNode; waiting: number };
 }) {
   // The open views in tab order, and the one shown; with none shown, the list is.
   const [tabs, setTabs] = useState<Surface[]>([]);
@@ -184,7 +185,7 @@ export function SidePanel({
   );
   const viewOf = (s: Surface) =>
     s === overview && project ? (
-      project.inbox
+      project.home
     ) : s.name === "Browser" ? (
       <Browser page={browse} remoteHost={remoteHost} />
     ) : s.name === "Agents" && agents ? (
@@ -235,9 +236,9 @@ export function SidePanel({
               >
                 <s.icon aria-hidden className="size-3.5" />
                 {s.name}
-                {s === overview && !!project?.unread && (
-                  <span className="font-mono text-[11px] text-faint-foreground tabular-nums">
-                    {project.unread}
+                {s === overview && !!project?.waiting && (
+                  <span className="font-mono text-[11px] text-warning tabular-nums">
+                    {project.waiting}
                   </span>
                 )}
               </button>

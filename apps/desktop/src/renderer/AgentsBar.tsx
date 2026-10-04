@@ -74,23 +74,21 @@ export function AgentsBar({
         popoverTarget={id}
         aria-expanded={open}
         title={open ? "Hide the agents" : "Show the agents"}
-        className="flex w-full min-w-0 items-center gap-3 rounded-t-3xl py-2 pr-3.5 pl-3 text-left text-[13px] hover:bg-hover"
+        className="flex w-full min-w-0 items-center gap-2.5 rounded-t-3xl py-1.5 pr-3.5 pl-2 text-left text-[13px] hover:bg-hover"
       >
-        <span className="flex shrink-0 items-center">
-          {going.slice(0, 3).map((c, i) => (
-            <span
-              key={c.run.id}
-              className={`grid size-5.5 place-items-center rounded-full bg-background ring-2 ring-surface [&_svg]:size-3 ${i > 0 ? "-ml-1.5" : ""}`}
-            >
-              {c.Logo ? (
-                <c.Logo aria-hidden />
+        {/* The providers at work, as one quiet group. */}
+        <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2 [&_svg]:size-3.5">
+          {going
+            .slice(0, 3)
+            .map((c) =>
+              c.Logo ? (
+                <c.Logo key={c.run.id} aria-hidden />
               ) : (
-                <span className="size-1.5 rounded-full bg-current" />
-              )}
-            </span>
-          ))}
+                <span key={c.run.id} className="size-1.5 rounded-full bg-muted-foreground" />
+              ),
+            )}
           {extra > 0 && (
-            <span className="-ml-1.5 grid h-5.5 min-w-5.5 place-items-center rounded-full bg-selected px-1 font-mono text-[10.5px] text-muted-foreground ring-2 ring-surface tabular-nums">
+            <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
               +{extra}
             </span>
           )}
@@ -100,15 +98,20 @@ export function AgentsBar({
           {waiting > 0 && `, ${waiting} waiting on you`}:{" "}
         </span>
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          {lead.attention === "needsYou" ? (
-            <ShieldQuestion aria-hidden className="size-3.5 shrink-0 text-warning" />
-          ) : (
-            <Loader kind="matrix" variant="ripple" size={13} className="shrink-0" />
-          )}
           <span className="truncate">{lead.title}</span>
         </span>
-        <span className="shrink-0 font-mono text-[11.5px] text-faint-foreground tabular-nums">
-          {waiting > 0 ? `${waiting} need you` : `${going.length} working`}
+        <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11.5px] text-faint-foreground tabular-nums">
+          {waiting > 0 ? (
+            <>
+              <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+              {waiting} need you
+            </>
+          ) : (
+            <>
+              <Loader kind="matrix" variant="ripple" size={11} />
+              {going.length} working
+            </>
+          )}
         </span>
         <ChevronUp
           aria-hidden
