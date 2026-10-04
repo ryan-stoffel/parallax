@@ -6,13 +6,13 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{
-    AgentApprove, AgentCancel, AgentEvents, AgentStart, ProjectStart, RepoAdd,
+    AgentApprove, AgentCancel, AgentEvents, AgentStart, EventsSubscribe, ProjectStart, RepoAdd,
 };
 use parallax_protocol::{
     AccountChoice, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
     AgentApproveResult, AgentCancelParams, AgentEventsParams, AgentOutcome, AgentOutputItem,
-    AgentStartParams, AgentStatus, ApprovalId, ErrorKind, EventsEventParams, ParallaxEvent,
-    ProjectId, ProjectStartParams, RepoAddParams, RepoId, RunId,
+    AgentStartParams, AgentStatus, ApprovalId, ErrorKind, EventsEventParams, EventsSubscribeParams,
+    ParallaxEvent, ProjectId, ProjectStartParams, RepoAddParams, RepoId, RunId,
 };
 use plxd::backend::fake::{AskedApproval, Step};
 use serde_json::{Value, json};
@@ -654,4 +654,110 @@ async fn a_coordinator_asks_too() {
         printed(&events),
         [json!({"approvalId": approval_id, "decision": "allow"})]
     );
+}
+
+fn finished(run: RunId) -> impl FnMut(&EventsEventParams) -> bool {
+    move |event| matches!(event.event, ParallaxEvent::AgentFinished { run_id, .. } if run_id == run)
+}
+
+/// `project`'s events from the start through `last`'s `agent.finished`, on a new connection
+/// subscribed with `run` and `shell` (PLX-453).
+async fn replay(
+    host: &Host,
+    project: ProjectId,
+    run: Option<RunId>,
+    shell: bool,
+    last: RunId,
+) -> Vec<(u64, ParallaxEvent)> {
+    let mut client = host.client().await;
+    client
+        .call::<EventsSubscribe>(EventsSubscribeParams {
+            after: 0,
+            project: Some(project),
+            run,
+            shell,
+        })
+        .await
+        .unwrap();
+    until(&mut client, finished(last))
+        .await
+        .into_iter()
+        .map(|event| (event.seq, event.event))
+        .collect()
+}
+
+fn is_approval(item: &AgentOutputItem) -> bool {
+    matches!(
+        item,
+        AgentOutputItem::ApprovalRequested { .. } | AgentOutputItem::ApprovalResolved { .. }
+    )
+}
+
+#[tokio::test]
+async fn run_and_shell_subscriptions_get_only_their_part_of_the_scope() {
+    let host = host(asking(bash()), NEVER);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let mut runs = Vec::new();
+    for _ in 0..2 {
+        let params = AgentStartParams {
+            approvals: true,
+            ..start_params(project.id, "Run the tests")
+        };
+        let run_id = params.run_id;
+        client.call::<AgentStart>(params).await.unwrap();
+        let asked = until(&mut client, |event| !requested(event).is_empty()).await;
+        let approval_id = asked.iter().flat_map(requested).next().unwrap();
+        let allow = answer(run_id, approval_id, AgentApprovalAnswer::Allow);
+        client.call::<AgentApprove>(allow).await.unwrap();
+        until(&mut client, finished(run_id)).await;
+        runs.push(run_id);
+    }
+    let (sibling, open) = (runs[0], runs[1]);
+    let all = replay(&host, project.id, None, false, open).await;
+
+    // Every one of the open run's events, in order, and none of its sibling's.
+    let run = replay(&host, project.id, Some(open), false, open).await;
+    let of_open: Vec<_> = all
+        .iter()
+        .filter(|(_, event)| serde_json::to_value(event).unwrap()["runId"] == json!(open))
+        .cloned()
+        .collect();
+    assert_eq!(run, of_open);
+    let texts = run
+        .iter()
+        .filter(|(_, event)| {
+            matches!(event, ParallaxEvent::AgentOutput { items, .. }
+            if items.iter().any(|item| matches!(item, AgentOutputItem::Text { .. })))
+        })
+        .count();
+    assert!(texts > 0, "the open run's text is delivered");
+
+    // Every event in order, each run's output cut down to its request and its answer.
+    let shell = replay(&host, project.id, None, true, open).await;
+    let cut: Vec<_> = all
+        .into_iter()
+        .filter_map(|(seq, event)| match event {
+            ParallaxEvent::AgentOutput { run_id, items } => {
+                let items: Vec<_> = items.into_iter().filter(is_approval).collect();
+                (!items.is_empty()).then_some((seq, ParallaxEvent::AgentOutput { run_id, items }))
+            }
+            event => Some((seq, event)),
+        })
+        .collect();
+    assert_eq!(shell, cut);
+    let approvals: Vec<_> = shell
+        .iter()
+        .filter_map(|(_, event)| match event {
+            ParallaxEvent::AgentOutput { run_id, items } => Some((*run_id, items.len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        approvals.iter().map(|(_, n)| n).sum::<usize>(),
+        4,
+        "both runs' requests and answers: {approvals:?}"
+    );
+    assert!(approvals.iter().any(|(run, _)| *run == sibling));
 }

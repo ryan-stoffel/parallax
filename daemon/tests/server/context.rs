@@ -324,6 +324,8 @@ async fn a_write_emits_exactly_one_context_changed_event_and_an_agents_own_write
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: Some(project.id),
+            run: None,
+            shell: false,
         })
         .await
         .unwrap();

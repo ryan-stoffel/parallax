@@ -30,6 +30,8 @@ async fn subscribe(client: &mut Client, after: u64) -> SubscriptionId {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
             project: None,
+            run: None,
+            shell: false,
         })
         .await
         .unwrap()
@@ -181,6 +183,8 @@ async fn a_subscription_to_a_missing_project_is_refused() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: Some(ProjectId::generate()),
+            run: None,
+            shell: false,
         })
         .await
         .unwrap_err();
@@ -192,6 +196,8 @@ async fn a_subscription_to_a_missing_project_is_refused() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: Some(project.id),
+            run: None,
+            shell: false,
         })
         .await
         .unwrap();
@@ -208,6 +214,8 @@ async fn a_seq_this_log_never_reached_needs_a_resync() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 5,
             project: None,
+            run: None,
+            shell: false,
         })
         .await
         .unwrap_err();
@@ -254,6 +262,8 @@ async fn events_older_than_the_retention_need_a_resync() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: None,
+            run: None,
+            shell: false,
         })
         .await
         .unwrap_err();
@@ -275,6 +285,8 @@ async fn events_reach_a_subscriber_while_it_is_also_making_requests() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: None,
+            run: None,
+            shell: false,
         })
         .await
         .unwrap();

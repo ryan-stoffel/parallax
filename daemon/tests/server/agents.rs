@@ -195,6 +195,8 @@ pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64)
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
             project: Some(project),
+            run: None,
+            shell: false,
         })
         .await
         .unwrap();

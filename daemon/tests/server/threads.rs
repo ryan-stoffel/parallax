@@ -313,9 +313,14 @@ impl Conn {
     }
 
     async fn subscribe(&mut self, after: u64, project: Option<ProjectId>) {
-        self.call::<EventsSubscribe>(EventsSubscribeParams { after, project })
-            .await
-            .unwrap();
+        self.call::<EventsSubscribe>(EventsSubscribeParams {
+            after,
+            project,
+            run: None,
+            shell: false,
+        })
+        .await
+        .unwrap();
     }
 
     async fn until(

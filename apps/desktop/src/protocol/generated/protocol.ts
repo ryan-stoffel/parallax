@@ -919,6 +919,11 @@ export type ProjectCreateResult = {
  * plxd replays the events after `after`, then sends new ones as they happen, each as an
  * `events/event` notification. If those events are gone or too many to replay, it fails with
  * `resyncRequired`.
+ *
+ * `run` and `shell` narrow the `project` subscription, only for a plxd that advertises
+ * `eventFilters` (PLX-453); an older one ignores them and sends everything. Like a scope, a
+ * filter skips the `seq`s of the events it leaves out: `seq` only ever increases, and resuming
+ * from the last one delivered is still exact.
  */
 export type EventsSubscribeParams = {
 	/**
@@ -931,6 +936,15 @@ export type EventsSubscribeParams = {
 	 * such as `project.created`.
 	 */
 	project?: ProjectId,
+	/**
+	 * Only this run's events, for an open transcript.
+	 */
+	run?: RunId,
+	/**
+	 * Every event, but each `agent.output` cut down to its `approvalRequested` and
+	 * `approvalResolved` items, for a sidebar. A batch with neither is left out.
+	 */
+	shell?: boolean,
 };
 
 /**

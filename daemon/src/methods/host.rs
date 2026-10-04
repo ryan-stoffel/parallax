@@ -169,6 +169,8 @@ pub(crate) fn initialize(
 /// `memory` (PLX-405, 0044): `memory/list`, `memory/read`, `memory/write`, `memory/delete`, and
 /// `memory/propose`, and shared context paths in 0044's folders.
 /// `agentWait` (PLX-451): `agent/wait`.
+/// `eventFilters` (PLX-453): `events/subscribe` takes `run` and `shell`, which an older plxd
+/// would silently ignore.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -188,6 +190,7 @@ fn capabilities_advertised() -> Capabilities {
         ("composerMenus".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
+        ("eventFilters".to_owned(), serde_json::Map::new()),
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
         (
