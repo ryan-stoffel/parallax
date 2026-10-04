@@ -695,6 +695,17 @@ export type Project = {
 	 */
 	autoLand?: boolean,
 	/**
+	 * How many of its children run at once (0046), behind `projectPlacement`. Over it, a new
+	 * child waits in the Project's queue. Absent only from an older plxd.
+	 */
+	maxChildren?: number,
+	/**
+	 * Whether its children may run on an API key account (0046), behind `projectPlacement`. Off,
+	 * a child never starts on one, nor falls back to one on a usage limit. Absent only from an
+	 * older plxd.
+	 */
+	allowApiKeys?: boolean,
+	/**
 	 * When the project was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -1257,6 +1268,11 @@ export type ProviderInstance = {
 	 * Models the user added, offered beside the ones plxd finds.
 	 */
 	models: Array<ProviderModel>,
+	/**
+	 * The percent of each limit window that a Project's children leave for the user, from 0 to
+	 * 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
+	 */
+	reserve?: number,
 };
 
 /**
@@ -3808,7 +3824,8 @@ export type ProjectStartParams = {
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
  * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
  * autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
- * (0045), or automatic landing, behind `landing` (0045).
+ * (0045), automatic landing, behind `landing` (0045), or how its children are placed, behind
+ * `projectPlacement` (0046).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
  * `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
@@ -3848,6 +3865,15 @@ export type ProjectUpdateParams = {
 	 * already waiting for approval keep waiting.
 	 */
 	autoLand?: boolean,
+	/**
+	 * How many children may run at once, from 1 to 100, behind `projectPlacement`. Absent keeps
+	 * it. Children already running keep running, and a higher number starts waiting ones.
+	 */
+	maxChildren?: number,
+	/**
+	 * Whether children may run on an API key account, behind `projectPlacement`. Absent keeps it.
+	 */
+	allowApiKeys?: boolean,
 };
 
 /**

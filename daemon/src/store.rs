@@ -229,6 +229,8 @@ pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
             autonomy: params.autonomy.and_then(option_name),
             base_branch: params.base_branch,
             auto_land: params.auto_land,
+            max_children: params.max_children,
+            allow_api_keys: params.allow_api_keys,
         },
     )
 }
@@ -299,6 +301,8 @@ pub(crate) fn project(
         base_branch: row.base_branch,
         integration_branch: row.integration_branch,
         auto_land: row.auto_land,
+        max_children: Some(row.max_children),
+        allow_api_keys: Some(row.allow_api_keys),
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -502,6 +506,8 @@ mod tests {
             base_branch: None,
             integration_branch: None,
             auto_land: false,
+            allow_api_keys: false,
+            max_children: 10,
         }
     }
 
@@ -571,6 +577,8 @@ mod tests {
             autonomy: Some(ProjectAutonomy::Full),
             base_branch: None,
             auto_land: None,
+            allow_api_keys: None,
+            max_children: None,
         });
         assert_eq!(uuid, Uuid::from(id));
         assert_eq!(edit.name, None);

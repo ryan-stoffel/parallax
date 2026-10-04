@@ -671,6 +671,8 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
             autonomy: Some(ProjectAutonomy::Ask),
             base_branch: None,
             auto_land: None,
+            allow_api_keys: None,
+            max_children: None,
         })
         .await
         .unwrap()

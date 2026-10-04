@@ -126,6 +126,8 @@ async fn lands_automatically(client: &mut Conn, project: ProjectId) {
             autonomy: None,
             base_branch: None,
             auto_land: Some(true),
+            max_children: None,
+            allow_api_keys: None,
         })
         .await
         .unwrap()

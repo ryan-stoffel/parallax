@@ -61,6 +61,17 @@ pub struct Project {
     /// capability. Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_land: bool,
+    /// How many of its children run at once (0046), behind `projectPlacement`. Over it, a new
+    /// child waits in the Project's queue. Absent only from an older plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_children: Option<u32>,
+    /// Whether its children may run on an API key account (0046), behind `projectPlacement`. Off,
+    /// a child never starts on one, nor falls back to one on a usage limit. Absent only from an
+    /// older plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allow_api_keys: Option<bool>,
     /// When the project was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
@@ -204,7 +215,8 @@ pub struct ProjectCreateResult {
 /// Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
 /// capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
 /// autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
-/// (0045), or automatic landing, behind `landing` (0045).
+/// (0045), automatic landing, behind `landing` (0045), or how its children are placed, behind
+/// `projectPlacement` (0046).
 ///
 /// A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
 /// `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
@@ -243,6 +255,15 @@ pub struct ProjectUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub auto_land: Option<bool>,
+    /// How many children may run at once, from 1 to 100, behind `projectPlacement`. Absent keeps
+    /// it. Children already running keep running, and a higher number starts waiting ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_children: Option<u32>,
+    /// Whether children may run on an API key account, behind `projectPlacement`. Absent keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allow_api_keys: Option<bool>,
 }
 
 /// Result of `project/update`.

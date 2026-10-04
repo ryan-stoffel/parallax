@@ -451,6 +451,22 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX landings_project ON landings (project_id, status, queued_at);
         ALTER TABLE projects ADD COLUMN auto_land INTEGER NOT NULL DEFAULT 0;",
     },
+    // Placing a Project's children (PLX-413, decision 0046): how many may run at once, whether
+    // they may use an API key, and the children waiting to be placed, oldest first. `prompt` is
+    // a child's first message with its attached threads, and `extra` the daemon's JSON for its
+    // images, threads, and requested account. `Store::delete_project` deletes a project's rows.
+    Migration {
+        version: 34,
+        sql: "ALTER TABLE projects ADD COLUMN max_children INTEGER NOT NULL DEFAULT 10;
+        ALTER TABLE projects ADD COLUMN allow_api_keys INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE placements (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            extra TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

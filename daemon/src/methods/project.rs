@@ -2,8 +2,8 @@
 //! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
 //! icon behind the `projectEdit` capability (PLX-227, 0032), its permission mode behind
 //! `projectPermission` (0042), its autonomy level behind `projectAutonomy` (0043), or its base
-//! branch behind `integrationBranch` (0045), and
-//! `project/delete`, behind `projectDelete` (PLX-338).
+//! branch behind `integrationBranch` (0045), or how its children are placed behind
+//! `projectPlacement` (0046), and `project/delete`, behind `projectDelete` (PLX-338).
 
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -140,9 +140,10 @@ pub(crate) async fn start(
     Ok(AgentRunResult { run })
 }
 
-/// Renames a project or sets its icon, permission mode, autonomy level, or base branch, and
-/// appends `project.updated` when that changed anything. Runs pick up a new mode when they next
-/// start a CLI process (0042), and questions a new level when they are next asked (0043).
+/// Renames a project or sets its icon, permission mode, autonomy level, base branch, or placement
+/// settings, and appends `project.updated` when that changed anything. Runs pick up a new mode
+/// when they next start a CLI process (0042), questions a new level when they are next asked
+/// (0043), and waiting children new placement settings at once (0046).
 ///
 /// The event is appended in the job that writes the row, as `project/create`'s is, so a
 /// `project/list` snapshot and its `seq` always agree. `updatedAt` stays as it is (0032).
@@ -159,6 +160,14 @@ pub(crate) async fn update(
     check_permission(params.permission)?;
     check_autonomy(params.autonomy)?;
     check_base_branch(params.base_branch.as_deref())?;
+    if params
+        .max_children
+        .is_some_and(|max| !(1..=MAX_CHILDREN).contains(&max))
+    {
+        return Err(ErrorObject::invalid_params(format!(
+            "maxChildren must be from 1 to {MAX_CHILDREN}"
+        )));
+    }
     let log = Arc::clone(&context.daemon.log);
     context
         .daemon
@@ -183,7 +192,12 @@ pub(crate) async fn update(
             Ok(ProjectUpdateResult { project })
         })
         .await
+        // More room, or API keys allowed, may start a waiting child (0046).
+        .inspect(|_| context.daemon.agents.placement.notify_one())
 }
+
+/// The most children a Project may run at once (0046).
+const MAX_CHILDREN: u32 = 100;
 
 /// Deletes a project (PLX-338), detached from the request as `thread/delete` is, so a dropped
 /// connection never leaves it half deleted.

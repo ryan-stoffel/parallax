@@ -211,6 +211,8 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 autonomy: None,
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             },
         )
         .expect("a rename");
@@ -234,6 +236,8 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 autonomy: None,
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             },
         )
         .expect("an icon");
@@ -252,6 +256,8 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 autonomy: None,
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             },
         )
         .expect("an icon without a color");
@@ -301,6 +307,8 @@ fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
                 autonomy: None,
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             },
         )
         .expect("an icon without an image");
@@ -392,6 +400,56 @@ fn a_projects_autonomy_level_is_checked_on_retry_and_changed_by_update() {
     assert!(!changed, "the same level writes nothing");
 }
 
+/// A Project's placement settings (PLX-413, decision record 0046) start at 10 children and no API
+/// keys, and its waiting children are kept oldest first until taken out or the Project is deleted.
+#[test]
+fn a_projects_placement_settings_and_waiting_children_are_stored() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let created = store.create_project(id, &sample_fields()).expect("create");
+    assert_eq!((created.max_children, created.allow_api_keys), (10, false));
+    let edit = ProjectEdit {
+        max_children: Some(2),
+        allow_api_keys: Some(true),
+        ..ProjectEdit::default()
+    };
+    let (updated, changed) = store.update_project(id, &edit).expect("update");
+    assert!(changed);
+    assert_eq!((updated.max_children, updated.allow_api_keys), (2, true));
+
+    let waiting = |run_id: Uuid| parallax_store::Placement {
+        run_id,
+        project_id: id,
+        prompt: "fix the bug".to_owned(),
+        extra: "{}".to_owned(),
+    };
+    let (first, second) = (Uuid::now_v7(), Uuid::now_v7());
+    store.add_placement(&waiting(first)).expect("add");
+    store.add_placement(&waiting(second)).expect("add");
+    store
+        .add_placement(&waiting(first))
+        .expect("adding again keeps its place");
+    let ids = |store: &Store| -> Vec<Uuid> {
+        store
+            .placements()
+            .expect("list")
+            .iter()
+            .map(|p| p.run_id)
+            .collect()
+    };
+    assert_eq!(ids(&store), [first, second]);
+    assert!(store.remove_placement(first).expect("remove"));
+    assert!(!store.remove_placement(first).expect("remove again"));
+    assert_eq!(ids(&store), [second]);
+
+    store.delete_project(id).expect("delete");
+    assert!(
+        ids(&store).is_empty(),
+        "a deleted Project's children don't wait"
+    );
+}
+
 /// A project's base branch (PLX-409, decision record 0045) is checked on a retry only when
 /// given, and recording the integration branch fills in a base only when there was none.
 #[test]
@@ -468,6 +526,8 @@ fn an_update_that_changes_nothing_reports_no_change() {
             autonomy: None,
             base_branch: None,
             auto_land: None,
+            allow_api_keys: None,
+            max_children: None,
         },
     ] {
         let (project, changed) = store.update_project(id, &edit).expect("update");
@@ -492,6 +552,8 @@ fn update_of_a_missing_project_fails_with_not_found() {
                 autonomy: None,
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             },
         )
         .expect_err("update of a missing project should fail");
@@ -711,6 +773,10 @@ fn reads_timestamps_written_in_the_old_variable_width_format() {
 /// version 1, with a row in it, must open, keep the row, and lose the
 /// column.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "checks every column the migrations add"
+)]
 fn a_version_1_database_migrates_and_keeps_its_projects() {
     let (_dir, path) = temp_db_path();
     let id = Uuid::now_v7();
@@ -787,7 +853,9 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             "base_branch",
             "integration_branch",
             "autonomy",
-            "auto_land"
+            "auto_land",
+            "max_children",
+            "allow_api_keys"
         ]
     );
     let version: i64 = conn
@@ -796,12 +864,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 33,
+        version, 34,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
          #257), 13 (run options, PLX-97), 14 (wakes, PLX-178), 15 (images, PLX-191), 16 \
-         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), and 33 (landing queues, PLX-410) also apply"
+         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), 33 (landing queues, PLX-410), and 34 (placement, PLX-413) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -849,6 +917,8 @@ fn a_version_15_database_gains_project_icons_and_keeps_its_projects() {
                 autonomy: None,
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             },
         )
         .expect("set an icon after migrating");
@@ -930,12 +1000,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 33,
+        version, 34,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, PLX-97), 14 (wakes, \
          PLX-178), 15 (images, PLX-191), 16 (project icons, PLX-227), 17 (approvals, \
-         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), and 33 (landing queues, PLX-410) also apply"
+         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), 33 (landing queues, PLX-410), and 34 (placement, PLX-413) also apply"
     );
 }
 

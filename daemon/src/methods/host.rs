@@ -111,6 +111,10 @@ pub(crate) fn initialize(
 /// `baseBranch` on `project/create` and `project/update`, and `explore` on `agent/start` and
 /// `AgentRun`, which an older plxd would silently drop. A run in a Project is cut from its
 /// integration branch's tip.
+/// `projectPlacement` (PLX-413, 0046): `maxChildren` and `allowApiKeys` on `Project` and
+/// `project/update`, and `reserve` on a provider instance, which an older plxd would silently
+/// drop. A Project's child is placed on an instance with room, or waits as `waiting` until one
+/// frees up.
 /// `projectTasks` (PLX-398, 0042): `thread/start` takes `project`, to start a Project's child
 /// under its coordinator, which an older plxd would silently ignore, starting a scratch thread.
 /// `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
@@ -197,6 +201,7 @@ fn capabilities_advertised() -> Capabilities {
         ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
         ("projectPermission".to_owned(), serde_json::Map::new()),
+        ("projectPlacement".to_owned(), serde_json::Map::new()),
         ("projectTasks".to_owned(), serde_json::Map::new()),
         ("providers".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),

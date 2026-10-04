@@ -28,7 +28,8 @@
 //! starts in the checkout, and it is never committed either.
 //!
 //! A run a usage limit stopped waits for the limit to reset and resumes itself (PLX-371,
-//! [`waiting`]).
+//! [`waiting`]). A Project's child that waits to be placed starts with its first message once
+//! [`super::placement`] finds it an account ([`placed`]).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -73,6 +74,7 @@ use crate::server::Daemon;
 use crate::worktree::github_pr_urls;
 
 mod git;
+mod placed;
 mod waiting;
 pub(crate) use git::GitAction;
 
@@ -198,6 +200,12 @@ pub(super) enum Command {
         auto_resume: Option<bool>,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
+    /// Starts a Project's child that waited to be placed on `account` (PLX-413, 0046).
+    Place {
+        account: AccountChoice,
+        pending: super::placement::Pending,
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
 }
 
 impl Command {
@@ -208,7 +216,8 @@ impl Command {
             | Self::Cancel { reply, .. }
             | Self::LinkPr { reply, .. }
             | Self::ResumeNow { reply }
-            | Self::AutoResume { reply, .. } => {
+            | Self::AutoResume { reply, .. }
+            | Self::Place { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Accept { reply, .. } => {
@@ -636,6 +645,13 @@ impl Actor {
             }
             Command::AutoResume { auto_resume, reply } => {
                 let _ = reply.send(self.set_auto_resume(auto_resume).await);
+            }
+            Command::Place {
+                account,
+                pending,
+                reply,
+            } => {
+                let _ = reply.send(self.place(account, pending).await);
             }
         }
     }
@@ -2513,6 +2529,8 @@ impl Actor {
         if self.worktree.is_some() && matches!(outcome, AgentOutcome::Completed { .. }) {
             crate::methods::land::turn_ended(&self.daemon, self.id);
         }
+        // A child that ended may free a slot or an account for one waiting (0046).
+        self.daemon.agents.placement.notify_one();
     }
 
     /// Records the run's new commit and its diff, and tells clients, as `agent.diffReady`. The
