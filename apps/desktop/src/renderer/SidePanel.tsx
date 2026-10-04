@@ -267,15 +267,12 @@ export function SidePanel({
           <Plus />
         </IconButton>
         <div className="ml-auto flex items-center gap-0.5">
-          {/* A Project's own views size themselves: Knowledge has its own full screen. */}
-          {(expanded || !(current && pinned.includes(current))) && (
-            <IconButton
-              label={expanded ? "Shrink panel" : "Expand panel"}
-              onClick={() => onExpandedChange(!expanded)}
-            >
-              {expanded ? <Minimize2 /> : <Maximize2 />}
-            </IconButton>
-          )}
+          <IconButton
+            label={expanded ? "Exit full screen" : "Full screen"}
+            onClick={() => onExpandedChange(!expanded)}
+          >
+            {expanded ? <Minimize2 /> : <Maximize2 />}
+          </IconButton>
           <IconButton
             label="Hide side panel"
             command="panel"

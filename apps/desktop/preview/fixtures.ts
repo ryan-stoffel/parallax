@@ -1296,7 +1296,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       models: [],
       permissions: ["auto", "manual", "edit", "bypass"],
       efforts: true,
-      coordinator: false,
+      coordinator: true,
       login: ["codex", "login"],
     },
     {

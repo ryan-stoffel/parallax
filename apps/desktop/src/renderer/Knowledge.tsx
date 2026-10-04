@@ -1,15 +1,15 @@
-import { Circle, CircleCheck, Maximize2, Minimize2, TriangleAlert } from "lucide-react";
+import { BookOpen, ChevronLeft, Circle, FileText, TriangleAlert } from "lucide-react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useCallback, useState } from "react";
 
 import type { AgentRun, ContextFile } from "../protocol/generated/protocol";
-import { board, ContextReader, SharedNotes, useContent, useProjectContext } from "./ContextPanel";
+import { board, ContextReader, useContent, useProjectContext } from "./ContextPanel";
+import { DoneMark } from "./AttentionMark";
 import type { InboxView } from "./Inbox";
 import { Loader } from "./Loader";
-import { MemoryPanel, sectionsOf, type Memory } from "./MemoryPanel";
+import { MemoryPanel, type Memory } from "./MemoryPanel";
 import { MiniPrompt } from "./MiniPrompt";
-import { PixelField, type Pixel } from "./Pixels";
 import { age } from "./Sidebar";
 import { IconButton } from "./ui";
 
@@ -18,13 +18,12 @@ const freshMs = 24 * 60 * 60 * 1000;
 
 /**
  * The side panel's Knowledge view: what a Project's agents know, in one list. A Project's opens on
- * where it stands, the coordinator's status board as a checklist, then how much it knows, a square
- * a fact as a field that fills as agents learn, and what it learned last; then Memory's brief,
- * entries, knowledge, and proposals, then the Project's other shared notes. A note opens in place, with memory kept
- * behind it. At its foot a mini prompt changes it in plain words; `expanded`, it centers in the
- * window with a larger one. Off a Project it's the repository's memory alone. `memory` is whether
- * the host's plxd has `memory`; without it a Project shows only its context. Key it by host and
- * folder.
+ * where it stands, the coordinator's status board as a checklist, with a way to the Project's
+ * context files; then what it knows, newest learned first, and Memory's brief, entries, and
+ * proposals. A file opens in place, with memory kept behind it. At its foot a mini prompt changes
+ * it in plain words; `expanded`, it centers in the window with a larger one. Off a Project it's
+ * the repository's memory alone. `memory` is whether the host's plxd has `memory`; without it a
+ * Project shows only its context. Key it by host and folder.
  */
 export function KnowledgePanel({
   hostId,
@@ -36,7 +35,6 @@ export function KnowledgePanel({
   inbox,
   working,
   expanded,
-  onExpand,
 }: {
   hostId: string;
   project?: string;
@@ -48,54 +46,27 @@ export function KnowledgePanel({
   inbox?: InboxView;
   /** Whether any of its agents is working, so the field is live. */
   working?: boolean;
+  /** Whether the panel fills the window. */
   expanded?: boolean;
-  /** Fills the window with it, or puts it back. */
-  onExpand?: (expanded: boolean) => void;
 }) {
   const { files, error } = useProjectContext(hostId, project ?? "", connected && !!project);
   const [memories, setMemories] = useState<readonly Memory[]>([]);
   const onFiles = useCallback((f: readonly Memory[]) => setMemories(f), []);
+  const [browsing, setBrowsing] = useState(false);
   const [openPath, setOpenPath] = useState<string>();
   const open = files.find((f) => f.path === openPath);
-  const notes = project && <SharedNotes files={files} onOpen={setOpenPath} />;
   const notesFile = files.find((f) => f.path === board);
   const head = project && (
     <>
-      <div className="flex items-center gap-2 px-2.5 pt-3">
-        <h3 className="font-mono text-[11px] tracking-wide text-faint-foreground uppercase">
-          Knowledge
-        </h3>
-        {working && (
-          <span className="flex items-center gap-1.5 font-mono text-[11px] text-working">
-            <Loader kind="matrix" variant="ripple" size={11} />
-            growing
-          </span>
-        )}
-        {onExpand && (
-          <span className="ml-auto">
-            <IconButton
-              label={expanded ? "Back to the side" : "Full screen"}
-              onClick={() => onExpand(!expanded)}
-            >
-              {expanded ? <Minimize2 /> : <Maximize2 />}
-            </IconButton>
-          </span>
-        )}
-      </div>
       <ProjectState
         hostId={hostId}
         project={project}
         file={notesFile}
         error={error}
-        onOpen={() => notesFile && setOpenPath(notesFile.path)}
-      />
-      <Known
-        memories={memories}
-        files={files}
-        inbox={inbox}
         working={working}
-        expanded={expanded}
+        onFiles={files.length > 0 ? () => setBrowsing(true) : undefined}
       />
+      <Known memories={memories} files={files} inbox={inbox} expanded={expanded} />
     </>
   );
   const prompt = project && memory && (
@@ -113,7 +84,10 @@ export function KnowledgePanel({
           onBack={() => setOpenPath(undefined)}
         />
       )}
-      <div hidden={!!open} className="flex min-h-0 flex-1 flex-col">
+      {browsing && !open && (
+        <ProjectFiles files={files} onOpen={setOpenPath} onBack={() => setBrowsing(false)} />
+      )}
+      <div hidden={!!open || browsing} className="flex min-h-0 flex-1 flex-col">
         {memory ? (
           <MemoryPanel
             hostId={hostId}
@@ -121,15 +95,11 @@ export function KnowledgePanel({
             repo={repo}
             coordinator={coordinator?.id}
             start={head}
-            end={notes}
             footer={prompt || undefined}
             onFiles={onFiles}
           />
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-            {head}
-            {notes}
-          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">{head}</div>
         )}
       </div>
     </div>
@@ -165,46 +135,57 @@ export function boardSections(markdown: string): BoardSection[] {
 // A board item's Markdown as one run of text: its bold and code as they are, but no paragraphs.
 const inline: Components = {
   p: ({ children }) => <>{children}</>,
-  strong: ({ children }) => <strong className="font-medium text-foreground">{children}</strong>,
+  strong: ({ children }) => <>{children}</>,
   a: ({ children }) => <span className="underline underline-offset-2">{children}</span>,
   code: ({ children }) => (
     <code className="rounded bg-selected px-1 font-mono text-[11.5px]">{children}</code>
   ),
 };
 
+/** A board item split into its lead, "**Title**: detail", and the rest, when it has one. */
+function splitItem(text: string): { lead: string; rest?: string } {
+  const m = /^\*\*(.+?)\*\*:?\s*(.*)$/.exec(text);
+  if (!m) return { lead: text };
+  return { lead: m[1]!, rest: m[2] || undefined };
+}
+
 /**
- * Where the Project stands, from the coordinator's status board: a section a heading (Now, Next,
- * Risks), each item a line with a circle, checked once done, or a warning under Risks.
+ * Where the Project stands, from the coordinator's status board: a group a heading (Now, Next,
+ * Risks), each item its lead and a line on it. Items under Now show as working, done ones checked,
+ * and Risks with a warning. The book opens the Project's context files.
  */
 function ProjectState({
   hostId,
   project,
   file,
   error,
-  onOpen,
+  working,
+  onFiles,
 }: {
   hostId: string;
   project: string;
   file?: ContextFile;
   error?: string;
-  onOpen: () => void;
+  working?: boolean;
+  onFiles?: () => void;
 }) {
   return (
-    <section aria-label="Where it stands" className="px-2.5 pt-2">
-      <div className="flex items-baseline gap-2">
+    <section aria-label="Where it stands" className="px-2.5 pt-4">
+      <div className="flex items-center gap-2">
         <h3 className="text-[15px] font-medium">Where it stands</h3>
         {file && (
-          <button
-            type="button"
-            onClick={onOpen}
-            className="ml-auto font-mono text-[11px] text-faint-foreground hover:text-foreground"
-          >
-            {file.path} · {age(file.modifiedAt)}
-          </button>
+          <span className="text-[12px] text-faint-foreground">updated {age(file.modifiedAt)}</span>
+        )}
+        {onFiles && (
+          <span className="ml-auto">
+            <IconButton label="Project files" onClick={onFiles}>
+              <BookOpen />
+            </IconButton>
+          </span>
         )}
       </div>
       {file ? (
-        <Board hostId={hostId} project={project} file={file} />
+        <Board hostId={hostId} project={project} file={file} working={working} />
       ) : (
         <p className="pt-1.5 text-[12.5px] text-muted-foreground">
           The coordinator keeps a status board here once it starts on the work.
@@ -219,39 +200,68 @@ function ProjectState({
   );
 }
 
-function Board({ hostId, project, file }: { hostId: string; project: string; file: ContextFile }) {
+function Board({
+  hostId,
+  project,
+  file,
+  working,
+}: {
+  hostId: string;
+  project: string;
+  file: ContextFile;
+  working?: boolean;
+}) {
   const { content } = useContent(hostId, project, file);
   if (content === undefined) return null;
   const sections = boardSections(content);
   return (
-    <div className="flex flex-col gap-3 pt-2.5">
+    <div className="flex flex-col gap-4 pt-3">
       {sections.map((section) => {
         const risks = /risk|block/i.test(section.title);
+        const now = /^(now|doing|in progress)/i.test(section.title);
         const done = section.items.filter((i) => i.done).length;
         return (
           <section key={section.title} aria-label={section.title}>
-            <h4 className="pb-1 font-mono text-[11px] tracking-wide text-faint-foreground uppercase">
-              {section.title}{" "}
-              <span className="tabular-nums">
-                {done > 0 ? `${done}/${section.items.length}` : section.items.length}
+            <h4 className="flex items-baseline gap-2 pb-1.5 text-[12.5px] text-muted-foreground">
+              {section.title}
+              <span className="text-faint-foreground tabular-nums">
+                {done > 0 ? `${done} of ${section.items.length} done` : section.items.length}
               </span>
             </h4>
-            <ul className="flex flex-col">
+            <ul className="flex flex-col gap-2.5">
               {section.items.map((item, i) => {
-                const Icon = risks ? TriangleAlert : item.done ? CircleCheck : Circle;
+                const { lead, rest } = splitItem(item.text);
                 return (
-                  <li key={i} className="flex gap-2.5 py-1 text-[12.5px] leading-snug">
-                    <Icon
-                      aria-hidden
-                      className={`mt-px size-3.5 shrink-0 ${risks ? "text-warning" : item.done ? "text-added" : "text-faint-foreground"}`}
-                    />
-                    <span
-                      className={`min-w-0 ${item.done ? "text-faint-foreground" : "text-muted-foreground"}`}
-                    >
+                  <li key={i} className="flex gap-2.5">
+                    <span className="grid h-[18px] w-3.5 shrink-0 place-items-center [&_svg]:size-3.5">
+                      {risks ? (
+                        <TriangleAlert aria-hidden className="text-warning" />
+                      ) : item.done ? (
+                        <span className="text-added">
+                          <DoneMark animate={false} />
+                        </span>
+                      ) : now && working ? (
+                        <Loader kind="matrix" variant="ripple" size={11} />
+                      ) : (
+                        <Circle aria-hidden className="text-faint-foreground" />
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1">
                       <span className="sr-only">{item.done ? "Done: " : ""}</span>
-                      <Markdown remarkPlugins={[remarkGfm]} components={inline}>
-                        {item.text}
-                      </Markdown>
+                      <span
+                        className={`block text-[13px] leading-[18px] ${item.done ? "text-muted-foreground" : "text-foreground"}`}
+                      >
+                        <Markdown remarkPlugins={[remarkGfm]} components={inline}>
+                          {lead}
+                        </Markdown>
+                      </span>
+                      {rest && (
+                        <span className="mt-0.5 block text-[12.5px] leading-snug text-faint-foreground">
+                          <Markdown remarkPlugins={[remarkGfm]} components={inline}>
+                            {rest}
+                          </Markdown>
+                        </span>
+                      )}
                     </span>
                   </li>
                 );
@@ -265,98 +275,59 @@ function Board({ hostId, project, file }: { hostId: string; project: string; fil
 }
 
 /**
- * How much the Project knows: a count of each kind, what's new today, the field of squares, and
- * the latest few things learned, newest first.
+ * What the Project knows, at a glance: how much and how much is new today, then the few things its
+ * agents learned last, newest first, before Memory's own list.
  */
 function Known({
   memories,
   files,
   inbox,
-  working,
   expanded,
 }: {
   memories: readonly Memory[];
   files: readonly ContextFile[];
   inbox?: InboxView;
-  working?: boolean;
   expanded?: boolean;
 }) {
   const now = Date.now();
   const fresh = (at: string) => now - Date.parse(at) < freshMs;
-  const proposals = new Set(sectionsOf(memories).proposals);
-  const learned = inbox?.items.filter((i) => i.kind === "learned") ?? [];
-  const facts = [
-    ...memories.map((m) => ({
-      id: `m/${m.scope.kind}/${m.path}`,
-      tone: proposals.has(m) ? ("proposal" as const) : ("memory" as const),
-      title: m.title ?? m.path,
-      at: m.modifiedAt,
-    })),
-    ...files.map((f) => ({
-      id: `c/${f.path}`,
-      tone: "note" as const,
-      title: f.path,
-      at: f.modifiedAt,
-    })),
-    ...learned.map((i) => ({
-      id: `l/${i.id}`,
-      tone: "learned" as const,
-      title: i.text.replace(/^Memory: /, ""),
-      at: i.createdAt,
-    })),
-  ].toSorted((a, b) => a.at.localeCompare(b.at));
-  const pixels: Pixel[] = facts.map((f) => ({ ...f, fresh: fresh(f.at) }));
-  const today = facts.filter((f) => fresh(f.at)).length;
-  const count = (tone: Pixel["tone"]) => facts.filter((f) => f.tone === tone).length;
-  const latest = facts
-    .filter((f) => f.tone === "learned" || f.tone === "proposal")
-    .toReversed()
-    .slice(0, expanded ? 5 : 3);
-  const legend: { tone: Pixel["tone"]; label: string; n: number }[] = [
-    { tone: "memory", label: "remembered", n: count("memory") },
-    { tone: "learned", label: "learned", n: count("learned") },
-    { tone: "proposal", label: "to review", n: count("proposal") },
-    { tone: "note", label: "notes", n: count("note") },
-  ];
+  const learned = (inbox?.items.filter((i) => i.kind === "learned") ?? []).toSorted((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  );
+  const total = memories.length + files.length + learned.length;
+  const today = [
+    ...memories.map((m) => m.modifiedAt),
+    ...files.map((f) => f.modifiedAt),
+    ...learned.map((i) => i.createdAt),
+  ].filter(fresh).length;
 
   return (
-    <section aria-label="What it knows" className="px-2.5 pt-5 pb-1">
+    <section aria-label="What it knows" className="px-2.5 pt-6 pb-1">
       <div className="flex items-baseline gap-2">
         <h3 className="text-[15px] font-medium">What it knows</h3>
-        {today > 0 && (
-          <span className="ml-auto font-mono text-[11px] text-added tabular-nums">
-            +{today} today
+        {total > 0 && (
+          <span className="text-[12px] text-faint-foreground tabular-nums">
+            {total} {total === 1 ? "thing" : "things"}
+            {today > 0 && <span className="text-added">, {today} new today</span>}
           </span>
         )}
       </div>
-      <div className="mt-2.5">
-        <PixelField pixels={pixels} live={working} slots={expanded ? 96 : 48} />
-      </div>
-      <ul aria-label="Kinds" className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-        {legend
-          .filter((l) => l.n > 0)
-          .map((l) => (
+      {learned.length > 0 && (
+        <ul aria-label="Learned lately" className="mt-2 flex flex-col">
+          {learned.slice(0, expanded ? 5 : 3).map((i) => (
             <li
-              key={l.tone}
-              className="flex items-center gap-1.5 font-mono text-[11px] text-faint-foreground"
+              key={i.id}
+              className={`flex items-baseline gap-2.5 py-1 text-[13px] ${fresh(i.createdAt) ? "pixel-fade" : ""}`}
             >
-              <span aria-hidden className={`size-1.5 rounded-[1px] ${toneDot[l.tone]}`} />
-              <span className="text-muted-foreground tabular-nums">{l.n}</span> {l.label}
-            </li>
-          ))}
-      </ul>
-      {latest.length > 0 && (
-        <ul aria-label="Lately" className="mt-3 flex flex-col border-l border-border pl-3">
-          {latest.map((f) => (
-            <li
-              key={f.id}
-              className={`flex items-baseline gap-2.5 py-1 text-[12.5px] ${fresh(f.at) ? "pixel-fade" : ""}`}
-            >
-              <span className="min-w-0 flex-1 truncate text-foreground/85">{f.title}</span>
               <span
-                className={`shrink-0 font-mono text-[11px] ${f.tone === "proposal" ? "text-warning" : "text-faint-foreground"}`}
-              >
-                {f.tone === "proposal" ? "review" : age(f.at)}
+                aria-hidden
+                className="size-1.5 shrink-0 translate-y-[-2px] rounded-[1px] bg-accent"
+              />
+              <span className="min-w-0 flex-1 text-foreground/90">
+                {i.text.replace(/^Memory: /, "")}
+              </span>
+              <span className="shrink-0 text-[11.5px] text-faint-foreground tabular-nums">
+                {age(i.createdAt)}
               </span>
             </li>
           ))}
@@ -366,9 +337,52 @@ function Known({
   );
 }
 
-const toneDot: Record<Pixel["tone"], string> = {
-  memory: "bg-foreground/55",
-  note: "bg-foreground/30",
-  learned: "bg-accent",
-  proposal: "bg-warning",
-};
+/** All of the Project's context files, the status board first, each opening in place. */
+function ProjectFiles({
+  files,
+  onOpen,
+  onBack,
+}: {
+  files: readonly ContextFile[];
+  onOpen: (path: string) => void;
+  onBack: () => void;
+}) {
+  const sorted = files.toSorted((a, b) =>
+    a.path === board ? -1 : b.path === board ? 1 : a.path.localeCompare(b.path),
+  );
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <button
+        type="button"
+        onClick={onBack}
+        className="mx-2 mt-1 flex items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+      >
+        <ChevronLeft aria-hidden className="size-4" />
+        Knowledge
+      </button>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        <h3 className="px-2.5 pt-3 pb-1 text-[15px] font-medium">Project files</h3>
+        <p className="px-2.5 pb-2 text-[12.5px] text-muted-foreground">
+          Notes the coordinator and agents keep for each other.
+        </p>
+        <ul>
+          {sorted.map((f) => (
+            <li key={f.path}>
+              <button
+                type="button"
+                onClick={() => onOpen(f.path)}
+                className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
+              >
+                <FileText aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+                <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{f.path}</span>
+                <span className="shrink-0 text-[11.5px] text-faint-foreground">
+                  {age(f.modifiedAt)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}

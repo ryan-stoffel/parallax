@@ -5,7 +5,7 @@ import type { AgentRun } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { changeMessage } from "./MemoryPanel";
-import { useCatalog, type Model } from "./models";
+import { useCatalog, type Instance, type Model } from "./models";
 import { kindOf, logoOf } from "./providers";
 import { uuidv7 } from "./uuidv7";
 
@@ -13,8 +13,9 @@ import { uuidv7 } from "./uuidv7";
  * The prompt box in miniature, for changing a Project's knowledge in plain words ("we moved off
  * Jest, use Vitest"): a box and Send, with only the model tucked under it. It sends the change to
  * the coordinator, whose rewrite comes back as a proposal (0044), on the model picked, which the
- * coordinator then keeps (`sendModel`). `large` is the full-screen Knowledge view's, wider and
- * taller. Off until the Project has a coordinator.
+ * coordinator then keeps (`sendModel`); one on another provider moves it there (`sendAccount`).
+ * `large` is the full-screen Knowledge view's, wider and taller. Off until the Project has a
+ * coordinator.
  */
 export function MiniPrompt({
   hostId,
@@ -28,20 +29,25 @@ export function MiniPrompt({
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const sendModel = connected && "sendModel" in connection.capabilities;
+  // With `sendAccount`, the coordinator can move to another provider that runs one.
+  const moves = sendModel && "sendAccount" in connection.capabilities;
   const catalog = useCatalog(hostId);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ error: boolean; text: string }>();
   const [picked, setPicked] = useState<Model>();
   const box = useRef<HTMLTextAreaElement>(null);
-  // Only the coordinator's own provider: moving it to another is the chat's job.
-  const instance = catalog.instances.find((i) => i.id === coordinator?.backend);
-  const Logo = instance ? logoOf(instance) : kindOf(coordinator?.backend ?? "claude").Logo;
-  const own = catalog.models.filter((m) => m.provider === coordinator?.backend);
+  const providers = catalog.instances.filter(
+    (i) =>
+      i.enabled &&
+      (i.id === coordinator?.backend || (moves && i.coordinator)) &&
+      catalog.models.some((m) => m.provider === i.id),
+  );
+  const offered = catalog.models.filter((m) => providers.some((i) => i.id === m.provider));
   const model =
-    (picked && own.find((m) => m.id === picked.id)) ??
-    own.find((m) => m.id === coordinator?.model) ??
-    own[0];
+    (picked && offered.find((m) => m.id === picked.id && m.provider === picked.provider)) ??
+    offered.find((m) => m.provider === coordinator?.backend && m.id === coordinator?.model) ??
+    offered.find((m) => m.provider === coordinator?.backend);
   const off = !coordinator || !connected;
   const canSend = !off && !busy && text.trim() !== "";
 
@@ -54,6 +60,11 @@ export function MiniPrompt({
       turnId: uuidv7(),
       text: changeMessage(text.trim()),
       ...(sendModel && model && model.id !== coordinator.model && { model: model.id }),
+      ...(moves &&
+        model &&
+        model.provider !== coordinator.backend && {
+          account: { kind: "subscription", backend: model.provider } as const,
+        }),
     });
     setBusy(false);
     if ("error" in answer) return setNote({ error: true, text: describeError(answer.error) });
@@ -118,7 +129,7 @@ export function MiniPrompt({
         <div
           className={`-mt-4 flex items-center rounded-b-2xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
         >
-          <ModelPick models={own} value={model} onChange={setPicked} Logo={Logo} />
+          <ModelPick providers={providers} models={offered} value={model} onChange={setPicked} />
         </div>
       )}
     </div>
@@ -126,21 +137,29 @@ export function MiniPrompt({
 }
 
 /**
- * A small model picker for a small box: the model's name, opening a short list of the provider's
- * models above it, the chosen one checked. No search or provider rail: there are a few.
+ * A small model picker for a small box: the model's provider and name, opening a short card above
+ * it with the providers as a row of logos and the chosen one's models under it, the current one
+ * checked. No search: there are a few.
  */
 function ModelPick({
+  providers,
   models,
   value,
   onChange,
-  Logo,
 }: {
+  providers: readonly Instance[];
   models: readonly Model[];
   value: Model;
   onChange: (model: Model) => void;
-  Logo?: ReturnType<typeof logoOf>;
 }) {
   const id = useId();
+  const [tab, setTab] = useState(value.provider);
+  const logo = (provider: string) => {
+    const instance = providers.find((i) => i.id === provider);
+    return instance ? logoOf(instance) : kindOf(provider).Logo;
+  };
+  const Logo = logo(value.provider);
+  const list = models.filter((m) => m.provider === tab);
   return (
     <>
       <button
@@ -157,29 +176,58 @@ function ModelPick({
       <div
         id={id}
         popover="auto"
-        role="listbox"
-        aria-label="Model"
-        className="inset-auto m-0 mb-1.5 w-52 rounded-xl border border-border bg-surface p-1 text-foreground shadow-composer [position-area:top_span-right] [position-try-fallbacks:flip-block]"
+        onBeforeToggle={(e) => {
+          if (e.newState === "open") setTab(value.provider);
+        }}
+        className="inset-auto m-0 mb-1.5 w-56 rounded-xl border border-border bg-surface p-1 text-foreground shadow-composer [position-area:top_span-right] [position-try-fallbacks:flip-block]"
       >
-        {models.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            role="option"
-            aria-selected={m.id === value.id}
-            onClick={() => {
-              onChange(m);
-              document.getElementById(id)?.hidePopover();
-            }}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] hover:bg-hover"
+        {providers.length > 1 && (
+          <div
+            role="tablist"
+            aria-label="Provider"
+            className="mb-1 flex gap-0.5 border-b border-border px-0.5 pb-1"
           >
-            <span className="min-w-0 flex-1 truncate">{m.name}</span>
-            {m.isNew && (
-              <span className="font-mono text-[10px] tracking-wide text-accent uppercase">new</span>
-            )}
-            {m.id === value.id && <Check aria-hidden className="size-3.5 text-accent" />}
-          </button>
-        ))}
+            {providers.map((p) => {
+              const P = logo(p.id);
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={p.id === tab}
+                  title={p.name}
+                  onClick={() => setTab(p.id)}
+                  className={`grid size-7 place-items-center rounded-lg [&_svg]:size-3.5 ${p.id === tab ? "bg-selected" : "opacity-60 hover:bg-hover hover:opacity-100"}`}
+                >
+                  {P ? <P aria-hidden /> : p.name.slice(0, 1)}
+                  <span className="sr-only">{p.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div role="listbox" aria-label="Model">
+          {list.map((m) => {
+            const on = m.id === value.id && m.provider === value.provider;
+            return (
+              <button
+                key={`${m.provider}/${m.id}`}
+                type="button"
+                role="option"
+                aria-selected={on}
+                onClick={() => {
+                  onChange(m);
+                  document.getElementById(id)?.hidePopover();
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] hover:bg-hover"
+              >
+                <span className="min-w-0 flex-1 truncate">{m.name}</span>
+                {m.isNew && <span className="text-[11px] text-accent">New</span>}
+                {on && <Check aria-hidden className="size-3.5 text-accent" />}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </>
   );

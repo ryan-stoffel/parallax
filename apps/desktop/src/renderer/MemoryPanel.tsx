@@ -308,8 +308,8 @@ export function MemoryPanel({
   );
 }
 
-const sectionHeading = "px-2.5 pt-2 pb-1 text-[11.5px] font-medium text-faint-foreground";
-const badge = "shrink-0 rounded bg-selected px-1.5 text-[11px] text-muted-foreground";
+const sectionHeading = "px-2.5 pt-3 pb-1 text-[12.5px] text-muted-foreground";
+const badge = "shrink-0 text-[11.5px] text-faint-foreground";
 const field =
   "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
 
@@ -356,7 +356,7 @@ function BriefStart({
 
 /**
  * One memory file: its title, scope, source, and stale mark, opening to its text and actions.
- * The brief opens at once and only edits. A proposal saves or discards. Promote and Save ask
+ * The brief only edits. A proposal saves or discards. Promote and Save ask
  * before replacing a file already at their target. Entries and proposals show as plain text, so an
  * agent's link can't hide where it goes.
  */
@@ -383,7 +383,7 @@ function MemoryRow({
   const brief = file.path === "brief.md";
   const proposal = file.path.startsWith("proposals/");
   const plain = proposal || file.path.startsWith("memory/");
-  const [open, setOpen] = useState(brief);
+  const [open, setOpen] = useState(false);
   const [content, setContent] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);

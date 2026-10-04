@@ -1,10 +1,12 @@
-import { ChevronRight } from "lucide-react";
+import { ArrowUp, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
 import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";
 import { runAttention, type Attention } from "./attention";
-import { AnswerForm, questionOf, type InboxView } from "./Inbox";
+import { DoneMark } from "./AttentionMark";
+import { questionOf, type InboxView } from "./Inbox";
 import { Loader } from "./Loader";
+import { OpenHint } from "./OpenHint";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { instanceLogo } from "./providers";
 import { age, backendLogos, ProjectIcon } from "./Sidebar";
@@ -16,7 +18,7 @@ type Group = "waiting" | "working" | "ready" | "resolved";
 const groups: { key: Group; label: string; empty?: string }[] = [
   { key: "waiting", label: "Waiting on you", empty: "Questions, failures, and approvals." },
   { key: "working", label: "Working" },
-  { key: "ready", label: "Ready" },
+  { key: "ready", label: "Done" },
   { key: "resolved", label: "Resolved" },
 ];
 
@@ -200,15 +202,15 @@ function ChildRow({
   onAnswer: (text: string) => Promise<string | undefined>;
 }) {
   const Logo = backendLogos[row.run.backend] ?? instanceLogo(row.run.backend);
-  const subject = subjectOf(row);
   const unread = row.unread.length > 0;
   const asking = row.question && row.question.status !== "answered";
+  const subject = subjectOf(row);
   return (
     <li>
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-start gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
+        className="group flex w-full min-w-0 items-start gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
       >
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span
@@ -216,16 +218,18 @@ function ChildRow({
           >
             {row.title}
           </span>
-          <span className="line-clamp-2 text-[12.5px] leading-snug text-faint-foreground">
-            {row.group === "working" && !subject ? (
-              <span className="flex items-center gap-1.5 text-working">
-                <Loader kind="matrix" variant="ripple" size={11} />
-                Working
-              </span>
-            ) : (
-              (subject ?? (row.attention === "failed" ? "Failed" : "Finished"))
-            )}
-          </span>
+          {!asking && (
+            <span className="line-clamp-2 text-[12.5px] leading-snug text-faint-foreground">
+              {row.group === "working" && !subject ? (
+                <span className="flex items-center gap-1.5 text-working">
+                  <Loader kind="matrix" variant="ripple" size={11} />
+                  Working
+                </span>
+              ) : (
+                (subject ?? (row.attention === "failed" ? "Failed" : "Finished"))
+              )}
+            </span>
+          )}
         </span>
         <span className="flex shrink-0 items-center gap-2 pt-0.5">
           {row.run.diff && row.group === "waiting" && (
@@ -234,39 +238,130 @@ function ChildRow({
               <span className="text-danger">−{row.run.diff.deletions}</span>
             </span>
           )}
-          <span className="flex h-5 items-center gap-1 rounded-full border border-border px-1.5 [&_svg]:size-3">
+          <span className="flex items-center gap-1.5 [&_svg]:size-3.5">
             {Logo && <Logo aria-hidden />}
-            {row.group === "working" ? (
-              <Loader kind="matrix" variant="scan" size={10} />
-            ) : (
-              <span
-                aria-hidden
-                className={`size-1.5 rounded-full ${row.group === "waiting" ? (row.attention === "failed" ? "bg-danger" : "bg-warning") : unread ? "bg-accent" : "bg-foreground/20"}`}
-              />
-            )}
+            <Mark row={row} unread={unread} />
           </span>
-          <span className="w-7 text-right font-mono text-[11px] text-faint-foreground tabular-nums">
-            {age(row.latest?.createdAt ?? row.run.updatedAt)}
+          {/* The age gives way to an arrow on hover: the row opens that chat. */}
+          <span className="relative grid w-7 place-items-end">
+            <span className="font-mono text-[11px] text-faint-foreground tabular-nums transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0">
+              {age(row.latest?.createdAt ?? row.run.updatedAt)}
+            </span>
+            <span className="absolute inset-0 flex items-center justify-end">
+              <OpenHint />
+            </span>
           </span>
         </span>
       </button>
       {asking && row.question && (
-        <div className="px-2.5 pb-2">
-          {row.question.assumption && (
-            <p className="text-[12px] text-muted-foreground">
-              Going with <span className="text-foreground">{row.question.assumption}</span> until
-              you say otherwise.
-            </p>
-          )}
-          <AnswerForm
-            label="Answer"
-            question={row.question.question}
-            keep={row.question.assumption || undefined}
-            onAnswer={onAnswer}
-          />
-        </div>
+        <QuestionBox
+          question={row.question.question}
+          assumption={row.question.assumption || undefined}
+          onAnswer={onAnswer}
+        />
       )}
     </li>
+  );
+}
+
+/** A row's state beside its provider: working, waiting, failed, done, or done and read. */
+function Mark({ row, unread }: { row: Row; unread: boolean }) {
+  if (row.group === "working") return <Loader kind="matrix" variant="scan" size={11} />;
+  if (row.group === "waiting")
+    return row.attention === "failed" ? (
+      <CircleAlert aria-label="Failed" className="text-danger" />
+    ) : (
+      <span aria-label="Waiting on you" className="grid size-3.5 place-items-center">
+        <span className="size-1.5 rounded-full bg-warning" />
+      </span>
+    );
+  return (
+    <span aria-label="Done" className={unread ? "text-added" : "text-faint-foreground"}>
+      <DoneMark animate={false} />
+    </span>
+  );
+}
+
+/**
+ * A child's question, answered in place as an app asks one: the question, what the child went
+ * with as the first choice, and a box for any other answer. Picking the choice sends it.
+ */
+function QuestionBox({
+  question,
+  assumption,
+  onAnswer,
+}: {
+  question: string;
+  assumption?: string;
+  onAnswer: (text: string) => Promise<string | undefined>;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const send = async (answer: string) => {
+    if (!answer.trim() || busy) return;
+    setBusy(true);
+    const failed = await onAnswer(answer.trim());
+    setBusy(false);
+    setError(failed);
+    if (!failed) setText("");
+  };
+  return (
+    <div className="mx-2.5 mb-2 overflow-hidden rounded-xl border border-border bg-surface">
+      <p className="px-3.5 pt-3 pb-2.5 text-[13px] leading-snug text-foreground">{question}</p>
+      <div className="flex flex-col gap-1 px-1.5 pb-1.5">
+        {assumption && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void send(assumption)}
+            className="group/choice flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[12.5px] hover:bg-hover disabled:opacity-50"
+          >
+            <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-[10.5px] text-muted-foreground group-hover/choice:border-foreground/25 group-hover/choice:text-foreground">
+              1
+            </span>
+            <span className="min-w-0 flex-1">{assumption}</span>
+            <span className="shrink-0 text-[11.5px] text-faint-foreground">Its pick so far</span>
+          </button>
+        )}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send(text);
+          }}
+          className="flex items-center gap-2.5 rounded-lg px-2 py-1 focus-within:bg-hover"
+        >
+          <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-[10.5px] text-muted-foreground">
+            {assumption ? 2 : 1}
+          </span>
+          <input
+            aria-label={`Answer: ${question}`}
+            placeholder={assumption ? "Something else" : "Your answer"}
+            value={text}
+            disabled={busy}
+            onChange={(e) => setText(e.target.value)}
+            className="h-7 min-w-0 flex-1 bg-transparent text-[12.5px] placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            aria-label="Send answer"
+            disabled={busy || !text.trim()}
+            className="grid size-6 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25"
+          >
+            {busy ? (
+              <LoaderCircle className="size-3 animate-spin" />
+            ) : (
+              <ArrowUp className="size-3.5" />
+            )}
+          </button>
+        </form>
+      </div>
+      {error && (
+        <p role="alert" className="px-3.5 pb-2.5 text-[12px] text-danger">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -275,32 +370,51 @@ const columns = 18;
 const columnMs = 10 * 60 * 1000;
 const rows = 5;
 
+const clock = (at: number) =>
+  new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
 /**
  * The Project's pulse as a dot matrix: a column every ten minutes over the last three hours, lit
- * as high as how much its agents started and reported then. Decoration: the text says where it
- * stands.
+ * as high as how many agents started and reported then. Hovering a column says when and what.
  */
 function Activity({ runs, items }: { runs: readonly AgentRun[]; items: readonly InboxItem[] }) {
+  const [hover, setHover] = useState<number>();
   const now = Date.now();
-  const counts = Array.from({ length: columns }, () => 0);
-  const add = (at: string) => {
+  const started = Array.from({ length: columns }, () => 0);
+  const reported = Array.from({ length: columns }, () => 0);
+  const add = (counts: number[], at: string) => {
     const back = Math.floor((now - Date.parse(at)) / columnMs);
     if (back >= 0 && back < columns) counts[columns - 1 - back]! += 1;
   };
-  for (const r of runs) add(r.createdAt);
-  for (const i of items) add(i.createdAt);
-  const most = Math.max(1, ...counts);
+  for (const r of runs) add(started, r.createdAt);
+  for (const i of items) add(reported, i.createdAt);
+  const total = started.map((n, c) => n + reported[c]!);
+  const most = Math.max(1, ...total);
+  const label = (c: number) => {
+    const end = now - (columns - 1 - c) * columnMs;
+    const parts = [
+      started[c] && `${started[c]} started`,
+      reported[c] && `${reported[c]} ${reported[c] === 1 ? "update" : "updates"}`,
+    ].filter(Boolean);
+    return `${c === columns - 1 ? "Now" : clock(end - columnMs)}: ${parts.length ? parts.join(", ") : "quiet"}`;
+  };
   return (
-    <div aria-hidden className="grid shrink-0 grid-flow-col grid-rows-5 gap-[3px] pt-0.5">
-      {counts.flatMap((n, c) => {
-        const lit = n === 0 ? 0 : Math.max(1, Math.round((n / most) * rows));
-        return Array.from({ length: rows }, (_, r) => (
-          <span
-            key={`${c}/${r}`}
-            className={`size-[4px] rounded-[1px] ${rows - r <= lit ? (c === columns - 1 ? "bg-accent" : "bg-foreground/50") : "bg-foreground/10"}`}
-          />
-        ));
-      })}
-    </div>
+    <figure className="relative shrink-0 pt-0.5" onMouseLeave={() => setHover(undefined)}>
+      <div className="grid grid-flow-col grid-rows-5 gap-[3px]">
+        {total.flatMap((n, c) => {
+          const lit = n === 0 ? 0 : Math.max(1, Math.round((n / most) * rows));
+          return Array.from({ length: rows }, (_, r) => (
+            <span
+              key={`${c}/${r}`}
+              onMouseEnter={() => setHover(c)}
+              className={`size-[4px] rounded-[1px] transition-opacity ${hover !== undefined && hover !== c ? "opacity-40" : ""} ${rows - r <= lit ? (c === columns - 1 ? "bg-accent" : "bg-foreground/50") : "bg-foreground/10"}`}
+            />
+          ));
+        })}
+      </div>
+      <figcaption className="absolute top-full right-0 mt-1.5 whitespace-nowrap font-mono text-[10.5px] text-faint-foreground tabular-nums">
+        {hover === undefined ? "Last 3 hours" : label(hover)}
+      </figcaption>
+    </figure>
   );
 }

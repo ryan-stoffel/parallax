@@ -1,10 +1,12 @@
-import { ChevronUp, CircleAlert, CircleCheck, GitBranch, ShieldQuestion } from "lucide-react";
+import { ChevronUp, CircleAlert, GitBranch, ShieldQuestion } from "lucide-react";
 import { useId, useState, type ComponentType, type SVGProps } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
+import { DoneMark } from "./AttentionMark";
 import { childOrder, runAttention, type Attention } from "./attention";
 import { Loader } from "./Loader";
 import type { ProjectAgentsView } from "./ProjectAgents";
+import { OpenHint } from "./OpenHint";
 import { instanceLogo, instanceName } from "./providers";
 import { age, backendLogos } from "./Sidebar";
 import { titleOf } from "./threads";
@@ -127,7 +129,7 @@ export function AgentsBar({
         {open && (
           <>
             <CardGroup
-              label="Going"
+              label="Working"
               items={going}
               onOpen={(runId) => {
                 document.getElementById(id)?.hidePopover();
@@ -136,7 +138,7 @@ export function AgentsBar({
             />
             {finished.length > 0 && (
               <CardGroup
-                label="Finished"
+                label="Done"
                 items={finished}
                 onOpen={(runId) => {
                   document.getElementById(id)?.hidePopover();
@@ -162,8 +164,8 @@ function CardGroup({
 }) {
   return (
     <section aria-label={label}>
-      <h3 className="px-2.5 pt-1.5 pb-1 font-mono text-[11px] tracking-wide text-faint-foreground uppercase">
-        {label} <span className="tabular-nums">{items.length}</span>
+      <h3 className="px-2.5 pt-2 pb-1 text-[12px] text-muted-foreground">
+        {label} <span className="text-faint-foreground tabular-nums">{items.length}</span>
       </h3>
       <ul>
         {items.map((c) => (
@@ -171,9 +173,9 @@ function CardGroup({
             <button
               type="button"
               onClick={() => onOpen(c.run.id)}
-              className="flex w-full min-w-0 items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-hover"
+              className="group flex w-full min-w-0 items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-hover"
             >
-              <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-background [&_svg]:size-3.5">
+              <span className="grid size-5 shrink-0 place-items-center [&_svg]:size-4">
                 {c.Logo ? <c.Logo aria-hidden /> : null}
               </span>
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -198,6 +200,7 @@ function CardGroup({
                 <span className="tabular-nums">{age(c.run.updatedAt)}</span>
                 <span>{instanceName(c.run.accountId) ?? accountLabel(c.run.accountId)}</span>
               </span>
+              <OpenHint />
             </button>
           </li>
         ))}
@@ -229,9 +232,9 @@ function State({ attention }: { attention: Attention }) {
       </span>
     );
   return (
-    <span className="flex shrink-0 items-center gap-1">
-      <CircleCheck aria-hidden />
-      Ready
+    <span className="flex shrink-0 items-center gap-1 text-added">
+      <DoneMark animate={false} />
+      Done
     </span>
   );
 }

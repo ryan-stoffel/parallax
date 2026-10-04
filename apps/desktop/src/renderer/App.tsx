@@ -1,9 +1,18 @@
-import { Bot, GitFork, PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
+import {
+  ArrowLeft,
+  Bot,
+  GitFork,
+  PanelBottom,
+  PanelLeftOpen,
+  PanelRight,
+  Workflow,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InboxItem, Thread } from "../protocol/generated/protocol";
 import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
+import { ChildStrip } from "./ChildStrip";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
 import { FilesPanel } from "./FilesPanel";
@@ -468,9 +477,13 @@ export function App() {
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
       ) {
-        const next = lineageStep(command);
-        if (!next) return;
-        openThreadId(next);
+        // In a Project, Go to parent goes from a child back to the coordinator.
+        if (command === "parentThread" && agentId && !settings) openAgent();
+        else {
+          const next = lineageStep(command);
+          if (!next) return;
+          openThreadId(next);
+        }
       } else return;
       e.preventDefault();
     };
@@ -561,6 +574,15 @@ export function App() {
           <>
             <TopBar className={`@container ${topBarInset}`}>
               {showSidebar}
+              {agentId && (
+                <IconButton
+                  label="Back to the coordinator"
+                  command="parentThread"
+                  onClick={() => openAgent()}
+                >
+                  <ArrowLeft />
+                </IconButton>
+              )}
               <Breadcrumb
                 items={crumbs}
                 trail={
@@ -690,6 +712,7 @@ export function App() {
                 going={isRunning(agent?.status)}
                 others={othersAsked(agentId)}
                 projectMode={project?.permission}
+                strip={project && <ChildStrip project={project} onBack={() => openAgent()} />}
               />
             ) : (
               project && (
@@ -822,7 +845,6 @@ export function App() {
                 (r) => r.id !== project?.coordinator && isRunning(r.status),
               )}
               expanded={panelExpanded}
-              onExpand={project ? setPanelExpanded : undefined}
             />
           )
         }
