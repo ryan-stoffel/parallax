@@ -517,14 +517,23 @@ async fn an_index_over_the_cap_asks_the_coordinator_to_merge_entries() {
 }
 
 /// A thread outside a Project proposes only at its repository's scope, and the proposal waits
-/// for the user in `proposals/`. A thread with no repository has no memory tools.
+/// for the user in `proposals/`. Its sandbox has no allowed folder for the repo's context folder,
+/// so the tools are its only way to Repo memory (PLX-468). A thread with no repository has no
+/// memory tools.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_plain_threads_proposal_goes_to_the_user_at_its_repos_scope() {
-    let host = Host::start(temp_dir(), fake(vec![init("s-1"), end_turn("Done.")]));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let backends = roles(vec![init("s-1"), end_turn("Done.")], Vec::new(), &seen);
+    let host = Host::start(temp_dir(), backends);
     let mut client = host.client().await;
     let (repo, _repos) = repo(&mut client).await;
     let start = crate::open_pr::thread(Some(repo.id));
     let thread = client.call::<ThreadStart>(start).await.unwrap().run.id;
+    let launch = child_launch(&seen, "Rewrite the README").await;
+    let sandbox = launch
+        .sandbox
+        .expect("a plain thread keeps the worker sandbox");
+    assert!(sandbox.writable.is_empty(), "{:?}", sandbox.writable);
     let mut mcp = tools(&host, thread).await;
 
     let elsewhere =

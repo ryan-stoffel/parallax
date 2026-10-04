@@ -3,7 +3,7 @@
 //! `agent/start` resolves the worker's account through routing (#119), refuses a worker plxd
 //! can't sandbox (0013) or a run option its backend can't honor (PLX-97),
 //! creates the run's worktree (#154), records the run, and starts the
-//! backend in the worktree with the project's shared context folder (#155) writable. From then
+//! backend in the worktree, with no allowed folder for the shared context (#155, 0044). From then
 //! on one [`actor`] task per run owns it: it streams the backend's events into the event log as
 //! `agent.*` events, records usage (#120) against whichever account the run is on, takes
 //! `agent/send` and `agent/cancel`, and when a CLI process ends, commits the worktree through

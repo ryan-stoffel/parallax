@@ -2072,12 +2072,8 @@ impl Actor {
                 home,
                 data_dir,
                 context,
-                header,
-            } => {
-                let child = header.is_some();
-                self.worker_setup(&home, &data_dir, &context, paths, child)
-                    .await
-            }
+                ..
+            } => self.worker_setup(&home, &data_dir, &context, paths).await,
             Place::Coordinator { repo } => self.coordinator_setup(&repo).await,
         };
         let Setup {
@@ -2153,7 +2149,6 @@ impl Actor {
         data_dir: &Path,
         context: &Path,
         paths: Option<(PathBuf, PathBuf)>,
-        child: bool,
     ) -> Result<Setup, String> {
         let (cwd, git_common_dir) = match paths {
             Some(paths) => paths,
@@ -2162,12 +2157,10 @@ impl Actor {
         let (temp, temp_path) = self.run_temp().map_err(|error| error.message)?;
         let mut sandbox =
             WorkerSandbox::for_worktree(home, data_dir, &cwd, &git_common_dir, context, &temp_path);
-        // A Project's child reaches memory only through the tools, so the shared context folder
-        // isn't an allowed directory for it, and stays as unreadable as the rest of plxd's data
-        // folder in the sandbox (0044). A plain thread keeps its repo entry's.
-        if child {
-            sandbox.writable.clear();
-        }
+        // A thread, a Project's child or a plain one, reaches memory only through the tools, so
+        // the shared context folder isn't an allowed directory for it, and stays as unreadable as
+        // the rest of plxd's data folder in the sandbox (0044, PLX-468).
+        sandbox.writable.clear();
         let thread_tools = ThreadTools {
             program: plxd_program()?,
             data_dir: self.daemon.data_dir.root().to_owned(),
