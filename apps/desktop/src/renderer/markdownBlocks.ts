@@ -6,6 +6,12 @@ import { unified } from "unified";
 // without the HTML, highlighting, and React steps after it.
 const parser = unified().use(remarkParse).use(remarkGfm).freeze();
 
+/**
+ * The length from which a streaming message renders block by block. Measured in the built app,
+ * a shorter one renders whole about as fast, so it skips the split's parse.
+ */
+export const SPLIT_FROM = 1_000;
+
 // A blank line: Markdown counts only spaces and tabs as blank.
 const BLANK_LINE = /\n[ \t]*\r?\n/;
 

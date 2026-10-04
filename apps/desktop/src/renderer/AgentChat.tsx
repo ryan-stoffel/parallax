@@ -76,7 +76,7 @@ import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { GitHubLogo, LinearLogo } from "./logos";
-import { markdownBlocks } from "./markdownBlocks";
+import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
 import {
@@ -1064,7 +1064,12 @@ export const RowView = memo(function RowView({
       );
     }
     case "assistant":
-      return row.partial ? <StreamingMarkdown text={row.text} /> : <MarkdownText text={row.text} />;
+      // A long streaming message renders block by block. A short one renders whole, as when finished.
+      return row.partial && row.text.length >= SPLIT_FROM ? (
+        <StreamingMarkdown text={row.text} />
+      ) : (
+        <MarkdownText text={row.text} />
+      );
     case "reasoning":
       return (
         <Disclosure

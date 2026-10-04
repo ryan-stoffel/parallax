@@ -18,12 +18,18 @@ import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "
 import { Composer } from "./Composer";
 import { ForkContext } from "./Fork";
 import { GitHubLogo, LinearLogo } from "./logos";
+import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// The real split, watched, to see which messages take it.
+vi.mock("./markdownBlocks", async (actual) => {
+  const real = await actual<typeof import("./markdownBlocks")>();
+  return { ...real, markdownBlocks: vi.fn(real.markdownBlocks) };
+});
 // happy-dom has no popovers. Menus are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
 // happy-dom lays nothing out. Give the transcript a tall viewport and each row a
@@ -273,6 +279,8 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
 });
 
 test("a streaming message renders as the whole text does, at every line", () => {
+  // Past SPLIT_FROM, so each reply renders block by block.
+  const lead = "A long reply opens with a paragraph. ".repeat(30) + "\n\n";
   const replies = [
     [
       "Setext\n===\n\nIntro with `code` and **bold**.",
@@ -308,7 +316,7 @@ test("a streaming message renders as the whole text does, at every line", () => 
       return container.innerHTML.replaceAll(">\n<", "><");
     };
   };
-  for (const reply of replies) {
+  for (const reply of replies.map((r) => lead + r)) {
     const streaming = view();
     // Each length that ends a line or stops in its first characters, which decide its kind.
     for (let n = 1; n <= reply.length; n++) {
@@ -320,6 +328,17 @@ test("a streaming message renders as the whole text does, at every line", () => 
   }
   // Hundreds of renders, a few seconds when other files run alongside.
 }, 30_000);
+
+test("a short streaming message renders whole, without the split", () => {
+  vi.mocked(markdownBlocks).mockClear();
+  const text = "Short.\n\nStill short.";
+  row({ kind: "assistant", key: "a", text, partial: true });
+  expect(markdownBlocks).not.toHaveBeenCalled();
+  expect(document.querySelectorAll(".markdown p")).toHaveLength(2);
+  act(() => unmount());
+  row({ kind: "assistant", key: "a", text: text.padEnd(SPLIT_FROM, "!"), partial: true });
+  expect(markdownBlocks).toHaveBeenCalled();
+});
 
 test("a code block names its language, highlights it, and copies its text", async () => {
   const writeText = vi.fn(async () => {});
