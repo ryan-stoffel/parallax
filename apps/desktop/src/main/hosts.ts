@@ -115,6 +115,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "land/queue": true,
   "land/approve": true,
   "land/sendBack": true,
+  "agent/wait": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */

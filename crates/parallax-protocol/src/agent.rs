@@ -969,6 +969,46 @@ pub struct AgentListResult {
     pub seq: u64,
 }
 
+/// Params of `agent/wait` (PLX-451): waits until runs are idle, that is neither `starting` nor
+/// `running`, or until the timeout.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWaitParams {
+    /// The runs, from 1 to 50 of them.
+    pub run_ids: Vec<RunId>,
+    /// Whether any one of them or all of them have to be idle.
+    pub until: AgentWaitUntil,
+    /// How long to wait, in milliseconds: at most 60000, which keeps the request under the
+    /// connection's idle timeout.
+    pub timeout_ms: u32,
+}
+
+/// Which of `agent/wait`'s runs have to be idle.
+///
+/// A newer peer may send a value this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentWaitUntil {
+    /// Any one of them.
+    Any,
+    /// All of them.
+    All,
+    /// A value this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// Result of `agent/wait`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWaitResult {
+    /// The runs as they stand, in the order asked for.
+    pub runs: Vec<AgentRun>,
+    /// Whether the timeout passed first.
+    pub timed_out: bool,
+}
+
 /// Params of `agent/events`: one run's events from plxd's log, for rebuilding its transcript
 /// after `resyncRequired` or a restart.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -36,12 +36,12 @@ use parallax_protocol::methods::{
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentAutoResume,
     AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles,
     AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
-    AgentResumeNow, AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
-    EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet,
-    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize,
-    PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectList,
-    ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod,
-    UsageDaily, UsageGet, UsageHistory,
+    AgentResumeNow, AgentSend, AgentStart, AgentWait, ContextList, ContextRead, ContextWrite,
+    EventsSubscribe, EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart,
+    GithubStatusGet, HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList,
+    InboxSeen, Initialize, PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete,
+    ProjectList, ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave,
+    RequestMethod, UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -355,6 +355,12 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         }
         AgentAutoResume::NAME => {
             handle::<AgentAutoResume, _, _>(request, |p| agent::auto_resume(context, p)).await
+        }
+        AgentWait::NAME => {
+            handle::<AgentWait, _, _>(request, |p| {
+                crate::agents::wait::wait(&context.daemon, &context.cancel, p)
+            })
+            .await
         }
         _ => return None,
     })

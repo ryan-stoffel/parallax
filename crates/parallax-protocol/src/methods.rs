@@ -35,30 +35,30 @@ use crate::{
     AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams,
     AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
     AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
-    AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams,
-    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
-    ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, GithubInstallParams, GithubSignIn,
-    GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
-    GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
-    HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
-    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams,
-    LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult,
-    MemoryListParams, MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
-    MemoryReadResult, MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult,
-    PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
-    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
-    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
-    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
-    QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult,
-    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
-    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult,
+    AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams,
+    AgentWaitResult, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
+    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
+    GithubInstallParams, GithubSignIn, GithubSignInCancelParams, GithubSignInCancelResult,
+    GithubSignInParams, GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult,
+    HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostVersionParams,
+    HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams, InboxSeenResult,
+    InitializeParams, InitializeResult, LandApproveParams, LandQueueParams, LandResult,
+    LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
+    MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
+    MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult, PrViewParams,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
+    ProjectUpdateResult, PromptImage, ProvidersListParams, ProvidersListResult,
+    ProvidersRemoveParams, ProvidersSaveParams, PullRequest, QuestionAnswerParams,
+    QuestionAskParams, QuestionEscalateParams, QuestionListParams, QuestionListResult,
+    QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams,
+    QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult, RepoFilesParams, RepoFilesResult,
+    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams,
+    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
+    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -387,6 +387,9 @@ method_table! {
         LandApprove = "land/approve": LandApproveParams => LandResult;
         /// `land/sendBack`: sends a child waiting for approval the user's message instead.
         LandSendBack = "land/sendBack": LandSendBackParams => LandResult;
+        /// `agent/wait`: waits until any or all of up to 50 runs are idle, or for at most 60 s,
+        /// without polling (PLX-451). Gated on the `agentWait` capability.
+        AgentWait = "agent/wait": AgentWaitParams => AgentWaitResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -511,6 +514,7 @@ mod tests {
                 "land/queue",
                 "land/approve",
                 "land/sendBack",
+                "agent/wait",
                 "$/cancelRequest",
                 "events/event",
             ]

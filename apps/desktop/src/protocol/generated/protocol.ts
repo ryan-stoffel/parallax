@@ -450,6 +450,11 @@ export type ParallaxRequests = {
 	 * `land/sendBack`: sends a child waiting for approval the user's message instead.
 	 */
 	"land/sendBack": { params: LandSendBackParams, result: LandResult },
+	/**
+	 * `agent/wait`: waits until any or all of up to 50 runs are idle, or for at most 60 s,
+	 * without polling (PLX-451). Gated on the `agentWait` capability.
+	 */
+	"agent/wait": { params: AgentWaitParams, result: AgentWaitResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -5047,6 +5052,47 @@ export type LandSendBackParams = {
 	 * What the child should change, sent as the user's message.
 	 */
 	text: string,
+};
+
+/**
+ * Params of `agent/wait` (PLX-451): waits until runs are idle, that is neither `starting` nor
+ * `running`, or until the timeout.
+ */
+export type AgentWaitParams = {
+	/**
+	 * The runs, from 1 to 50 of them.
+	 */
+	runIds: Array<RunId>,
+	/**
+	 * Whether any one of them or all of them have to be idle.
+	 */
+	until: AgentWaitUntil,
+	/**
+	 * How long to wait, in milliseconds: at most 60000, which keeps the request under the
+	 * connection's idle timeout.
+	 */
+	timeoutMs: number,
+};
+
+/**
+ * Which of `agent/wait`'s runs have to be idle.
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentWaitUntil = "any" | "all";
+
+/**
+ * Result of `agent/wait`.
+ */
+export type AgentWaitResult = {
+	/**
+	 * The runs as they stand, in the order asked for.
+	 */
+	runs: Array<AgentRun>,
+	/**
+	 * Whether the timeout passed first.
+	 */
+	timedOut: boolean,
 };
 
 /**

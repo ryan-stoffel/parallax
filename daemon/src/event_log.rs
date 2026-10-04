@@ -705,6 +705,18 @@ impl EventLog {
         }
     }
 
+    /// Whether an event after `after` matches `matches`, or may have: one that was dropped from
+    /// the window can't be checked, so that counts as a match. For `agent/wait` (PLX-451).
+    pub fn any_after(&self, after: u64, matches: impl Fn(&ParallaxEvent) -> bool) -> bool {
+        let inner = self.inner();
+        start(&inner, after).map_or(true, |index| {
+            inner
+                .events
+                .range(index..)
+                .any(|entry| matches(&entry.event))
+        })
+    }
+
     fn inner(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
