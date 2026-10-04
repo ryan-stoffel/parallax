@@ -18,8 +18,8 @@ defaults:
     shell: bash
 
 jobs:
-  # plxd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (RYA-17),
-  # and Windows x86_64 and arm64 (RYA-21).
+  # plxd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (PLX-17),
+  # and Windows x86_64 and arm64 (PLX-21).
   rust:
     strategy:
       fail-fast: false
@@ -63,8 +63,8 @@ jobs:
 
       # What Claude Code's worker sandbox needs on Linux (0013): bubblewrap, socat, and the AppArmor
       # profile from Claude Code's docs that lets bwrap make user namespaces. Plus a pinned Claude
-      # Code, which the sandbox tests run against a fake API (RYA-20), and zsh, whose startup the
-      # PATH test makes reset PATH (RYA-126).
+      # Code, which the sandbox tests run against a fake API (PLX-20), and zsh, whose startup the
+      # PATH test makes reset PATH (PLX-126).
       - name: Install the Linux worker sandbox
         if: runner.os == 'Linux'
         env:
@@ -133,7 +133,7 @@ jobs:
         run: |
           scripts/ci/check-ssh-attach "$RUNNER_TEMP\\ssh-status" "$(cygpath -w "$PWD/target/debug/plxd.exe")"
 
-      # The e2e job's plxd, so it doesn't build its own (RYA-25). The feature only changes the
+      # The e2e job's plxd, so it doesn't build its own (PLX-25). The feature only changes the
       # plxd crate, so this rebuilds just that.
       - name: Build plxd with the fake backend
         run: cargo build -p plxd --locked --features fake-backend
@@ -146,7 +146,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The desktop app on every OS it ships to (0022): checked, built, then launched (RYA-84).
+  # The desktop app on every OS it ships to (0022): checked, built, then launched (PLX-84).
   app:
     strategy:
       fail-fast: false
@@ -201,8 +201,8 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/launch-app
 
-  # The app against a plxd running its fake backend, with Playwright (RYA-16), on the OSes the app
-  # job covers, with the plxd the rust job built for that OS (RYA-25).
+  # The app against a plxd running its fake backend, with Playwright (PLX-16), on the OSes the app
+  # job covers, with the plxd the rust job built for that OS (PLX-25).
   e2e:
     needs: rust
     strategy:

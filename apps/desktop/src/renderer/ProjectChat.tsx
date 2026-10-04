@@ -31,7 +31,7 @@ export function ProjectChat({
   /** The coordinator's first message, shown until its transcript loads. */
   prompt?: string;
   startCoordinator: ThreadsView["startCoordinator"];
-  /** Permission requests the Project's subagents wait on, pinned over the composer (RYA-196). */
+  /** Permission requests the Project's subagents wait on, pinned over the composer (PLX-196). */
   others?: readonly Asked[];
 }) {
   const connection = useConnection(hostId);
@@ -45,7 +45,7 @@ export function ProjectChat({
   const [notice, setNotice] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
   const [backend, setBackend] = useState<string>();
-  // Before there's a coordinator, subagents started by hand still ask here (RYA-196).
+  // Before there's a coordinator, subagents started by hand still ask here (PLX-196).
   const { answers, answer, dismiss } = useAnswers(hostId);
   const asked = useMemo(() => queueOf(others ?? [], answers), [others, answers]);
   useEffect(() => {
@@ -135,7 +135,7 @@ export function ProjectChat({
     <>
       {/* It gives way first in a short window, so a pinned card and the composer keep their room,
           and whole: once it doesn't fit, it wraps into a second column, out of view, rather than
-          show cut in two (RYA-259). */}
+          show cut in two (PLX-259). */}
       <div className="flex min-h-0 flex-1 flex-col flex-wrap content-start justify-center overflow-hidden text-center">
         {/* The first column's width, so the second starts past the edge. */}
         <span aria-hidden className="w-full" />

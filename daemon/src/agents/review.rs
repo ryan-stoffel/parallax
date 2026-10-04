@@ -3,7 +3,7 @@
 //! `agent/accept` merges, with its worktree's base, so they never need the run's actor and never
 //! touch the worktree's index or files while its agent runs.
 //!
-//! `agent/files` and `agent/file`'s `working` side (RYA-296) read the run's folder on disk
+//! `agent/files` and `agent/file`'s `working` side (PLX-296) read the run's folder on disk
 //! instead: its worktree, or a Current checkout thread's checkout. They only read, and never
 //! follow a symlink, so nothing the agent writes there can point them outside the folder.
 

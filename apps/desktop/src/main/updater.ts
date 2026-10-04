@@ -66,13 +66,13 @@ export function updateError(error: Error & { code?: string; statusCode?: number 
 }
 
 /**
- * The packaged app's updater (RYA-68, RYA-286): checks the build's channel (see `updaterSettings`)
+ * The packaged app's updater (PLX-68, PLX-286): checks the build's channel (see `updaterSettings`)
  * through the `app-update.yml` electron-builder packs. A newer release shows on the Update button
  * with its notes; `update` downloads it, publishing the progress, and once it's downloaded
  * installs it, which also happens when Parallax quits. `publish` gets what the Update button
  * shows on every change. It checks at start, every 20 s, and on `checkSoon` at most every 10 s,
  * until a download starts. The checks read github.com's releases feed and download URLs, not the
- * REST API, so they spend no API quota (RYA-211).
+ * REST API, so they spend no API quota (PLX-211).
  */
 export function startUpdater(publish: (state: UpdateState) => void) {
   // Updates replace the AppImage file; an unpacked Linux build has nothing to replace.

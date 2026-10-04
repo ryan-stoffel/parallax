@@ -20,7 +20,7 @@ use crate::routing::KeyAccounts;
 
 /// Folders appended to an agent's `PATH` when it lacks them (#96): the vendors' own install
 /// folder (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
-/// on Windows), rustup's `~/.cargo/bin` (RYA-126), Homebrew on Apple silicon (macOS only) and
+/// on Windows), rustup's `~/.cargo/bin` (PLX-126), Homebrew on Apple silicon (macOS only) and
 /// `/usr/local/bin`, and the system folders (0023). They go after whatever `PATH` plxd was
 /// started with, so the user's own order still wins; they only fill in what launchd or an SSH
 /// session left out.
@@ -231,7 +231,7 @@ pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
 const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 
 /// What to do about a backend that can't sandbox a worker here: Claude Code has no sandbox on
-/// native Windows (0023, RYA-24).
+/// native Windows (0023, PLX-24).
 #[cfg(windows)]
 const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so run plxd in \
                                WSL2 and add that as the host for workers";
@@ -242,7 +242,7 @@ pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
         return Ok(());
     }
     let why = if backend.cli() == Some(CliKind::Codex) {
-        "Codex workers are turned off until RYA-145 keeps their commands out of the shared temp \
+        "Codex workers are turned off until PLX-145 keeps their commands out of the shared temp \
          folders"
             .to_owned()
     } else {
@@ -312,7 +312,7 @@ const GLOB_CHARACTERS: &[char] = &['*', '?', '[', ']'];
 /// `path`, canonical, and refused with a plain message if it isn't UTF-8 or holds a wildcard.
 /// Seatbelt matches real paths, and `/tmp` and `/var` are symlinks on macOS (0013). On Windows it
 /// is spelled without the verbatim `\\?\` prefix canonicalizing adds, whose `?` isn't part of the
-/// path (RYA-109), and refused if only a verbatim path can name it.
+/// path (PLX-109), and refused if only a verbatim path can name it.
 pub(super) fn sandbox_path(path: &Path, what: &str) -> Result<PathBuf, ErrorObject> {
     let canonical = path.canonicalize().map_err(|error| {
         worker_unavailable(format!(
@@ -618,7 +618,7 @@ mod tests {
         assert!(sandbox_path(&dir.path().join("missing"), "x").is_err());
     }
 
-    /// Canonicalizing on Windows adds `\\?\`, whose `?` refused every path (RYA-109). The path
+    /// Canonicalizing on Windows adds `\\?\`, whose `?` refused every path (PLX-109). The path
     /// comes back plain, and a wildcard in the path itself is still refused.
     #[cfg(windows)]
     #[test]

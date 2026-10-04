@@ -67,7 +67,7 @@ impl Store {
     }
 
     /// When `run_id`'s newest recorded turn was sent, or `None` if it has none: a coordinator's
-    /// last turn, which wake-ups rebuilt after a restart count from (RYA-178).
+    /// last turn, which wake-ups rebuilt after a restart count from (PLX-178).
     ///
     /// # Errors
     ///

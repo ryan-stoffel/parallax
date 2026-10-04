@@ -1,4 +1,4 @@
-//! Real Claude Code regression for RYA-126: a worker's Bash finds a tool that only plxd's `PATH`
+//! Real Claude Code regression for PLX-126: a worker's Bash finds a tool that only plxd's `PATH`
 //! has, even when the user's zsh startup files set `PATH` outright, and its commands can't read or
 //! write the script that puts `PATH` back. A local fake Messages API asks for Bash, so no account
 //! or Anthropic connection is needed. Set `PLX_SANDBOX_CLAUDE` to the CLI under test; it needs

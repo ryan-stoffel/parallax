@@ -180,7 +180,7 @@ test("without a board, Context opens on All files and Recents, and opens a file 
   const cards = () => [...panel().querySelectorAll('[aria-label="Recents"] li')];
   expect(cards()[1]!.querySelector(".context-preview h1")?.textContent).toBe("Plan");
   expect(cards()[1]!.querySelectorAll("button")).toHaveLength(1);
-  // Subscribed after `agent/list`'s seq, taken before the list (RYA-187).
+  // Subscribed after `agent/list`'s seq, taken before the list (PLX-187).
   expect(request.mock.calls.map(([, method]) => method).slice(0, 2)).toEqual([
     "agent/list",
     "context/list",

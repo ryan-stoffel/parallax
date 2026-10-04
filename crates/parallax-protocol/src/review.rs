@@ -5,11 +5,11 @@
 //! `agent.diffReady` reported, against the commit its worktree was created from. `agent/diff`
 //! lists the files that differ, with a unified diff each. `agent/file` reads one file on either
 //! side, so a client can show it in a diff editor, for a local or a remote host alike (#67).
-//! Behind the `files` capability (RYA-296), `agent/files` lists one folder of the run's files on
+//! Behind the `files` capability (PLX-296), `agent/files` lists one folder of the run's files on
 //! disk, and `agent/file`'s `working` side reads one, so a client can browse them.
 //! `agent/accept` merges the run's commit into the project repository's current branch on the
 //! host and removes the run's worktree and branch. `agent/requestChanges` sends the run a
-//! follow-up, as `agent/send` does. `agent/openPr`, behind the `openPr` capability (RYA-168),
+//! follow-up, as `agent/send` does. `agent/openPr`, behind the `openPr` capability (PLX-168),
 //! pushes the run's branch to the repository's `origin` and opens a pull request for it instead.
 
 use serde::{Deserialize, Serialize};
@@ -125,7 +125,7 @@ pub enum AgentFileSide {
     /// The run's latest commit.
     Head,
     /// The file as it is on disk now, in the run's worktree, or for a Current checkout thread,
-    /// its repository's checkout (RYA-296). Behind the `files` capability.
+    /// its repository's checkout (PLX-296). Behind the `files` capability.
     Working,
     /// A side this version does not know yet.
     #[serde(other)]
@@ -180,7 +180,7 @@ pub struct AgentFileResult {
     pub too_large: bool,
 }
 
-/// Params of `agent/files` (RYA-296): one folder of a run's worktree, or for a Current checkout
+/// Params of `agent/files` (PLX-296): one folder of a run's worktree, or for a Current checkout
 /// thread, its repository's checkout.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -309,7 +309,7 @@ pub struct AgentRequestChangesParams {
     pub text: String,
 }
 
-/// Params of `agent/openPr` (RYA-168): plxd pushes the run's branch to the repository's `origin`
+/// Params of `agent/openPr` (PLX-168): plxd pushes the run's branch to the repository's `origin`
 /// on the host, as the user, and opens a pull request for it against the GitHub repository's
 /// default branch with `gh`.
 ///
@@ -320,7 +320,7 @@ pub struct AgentRequestChangesParams {
 pub struct AgentOpenPrParams {
     /// The run. It must have finished, have a commit, and work in a repository: a thread with no
     /// repo has no `origin`. A Current checkout thread instead pushes the branch its checkout has
-    /// out (RYA-298), and needs one: not a detached HEAD.
+    /// out (PLX-298), and needs one: not a detached HEAD.
     pub run_id: RunId,
     /// The pull request's title, such as the thread's. plxd takes its first line, cut to 256
     /// characters.

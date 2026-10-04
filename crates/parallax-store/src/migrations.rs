@@ -230,7 +230,7 @@ const MIGRATIONS: &[Migration] = &[
         version: 12,
         sql: "ALTER TABLE worktrees ADD COLUMN base_dirty INTEGER NOT NULL DEFAULT 0;",
     },
-    // The model, effort, and permission a run asked for (RYA-97), each NULL for the CLI's
+    // The model, effort, and permission a run asked for (PLX-97), each NULL for the CLI's
     // default. Part of `agent/start`'s idempotent params, and passed again when a run resumes.
     Migration {
         version: 13,
@@ -238,7 +238,7 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE runs ADD COLUMN effort TEXT;
         ALTER TABLE runs ADD COLUMN permission TEXT;",
     },
-    // A coordinator's wake-up count and pause (RYA-178, decision 0025), so a restart neither
+    // A coordinator's wake-up count and pause (PLX-178, decision 0025), so a restart neither
     // resets the cap nor lifts a pause. No row means none in a row and not paused. No foreign
     // key, like `turns`.
     Migration {
@@ -249,7 +249,7 @@ const MIGRATIONS: &[Migration] = &[
             paused INTEGER NOT NULL
         );",
     },
-    // Images sent with a run's messages (RYA-191, decision 0026), which `turnStarted` names by id
+    // Images sent with a run's messages (PLX-191, decision 0026), which `turnStarted` names by id
     // and `agent/image` serves: kept out of `events`, since one can be megabytes. `data` is the
     // base64 the client sent. No foreign key, like `turns`, so `Store::delete_thread` deletes a
     // thread's rows, and they wait on #207 otherwise, as its events do.
@@ -264,14 +264,14 @@ const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (run_id, id)
         );",
     },
-    // A project's icon (RYA-227, decision 0032), as the client sent it: a Lucide icon's name and
+    // A project's icon (PLX-227, decision 0032), as the client sent it: a Lucide icon's name and
     // an optional palette key. A NULL `icon_name` means no icon, so existing projects have none.
     Migration {
         version: 16,
         sql: "ALTER TABLE projects ADD COLUMN icon_name TEXT;
         ALTER TABLE projects ADD COLUMN icon_color TEXT;",
     },
-    // Whether a run forwards its CLI's permission requests to the client (RYA-222, decision
+    // Whether a run forwards its CLI's permission requests to the client (PLX-222, decision
     // 0031), which only a client that answers them asks for. 0 for every run before, which keeps
     // denying what would prompt. Part of the start methods' idempotent params, and passed again
     // when a run resumes.
@@ -286,7 +286,7 @@ const MIGRATIONS: &[Migration] = &[
         version: 18,
         sql: "ALTER TABLE runs ADD COLUMN checkout INTEGER NOT NULL DEFAULT 0;",
     },
-    // What the sidebar needs to show which threads need the user (RYA-270, decision 0033): when
+    // What the sidebar needs to show which threads need the user (PLX-270, decision 0033): when
     // the user last saw each thread, until when it is snoozed, and each repo entry's icon in
     // 0032's shape. Existing threads count as seen now, so an upgrade doesn't mark every old
     // thread as new.

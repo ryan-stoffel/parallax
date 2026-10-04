@@ -90,7 +90,7 @@ pub enum ParallaxEvent {
         /// The new project.
         project: Project,
     },
-    /// `project/update` renamed a project or changed its icon (RYA-227). Host-level, like
+    /// `project/update` renamed a project or changed its icon (PLX-227). Host-level, like
     /// `project.created`.
     #[serde(rename = "project.updated")]
     ProjectUpdated {
@@ -178,7 +178,7 @@ pub enum ParallaxEvent {
         /// What happened to the project's repository.
         merge: AgentMerge,
     },
-    /// plxd stopped waking a project's coordinator on its own (RYA-42, decision 0025): it took
+    /// plxd stopped waking a project's coordinator on its own (PLX-42, decision 0025): it took
     /// 10 wake-up turns in a row without a message from the user, the user stopped it with
     /// `agent/cancel`, or a wake-up couldn't start it. Runs that finish meanwhile are kept, and
     /// the user's next `agent/send` to the coordinator lets them through.

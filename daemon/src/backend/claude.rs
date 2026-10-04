@@ -8,14 +8,14 @@
 //! is [`DISABLE_1M_ENV`]:
 //!
 //! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
-//!   also keeps the file tools out of Claude Code's shared temp folder (RYA-176). As a second
+//!   also keeps the file tools out of Claude Code's shared temp folder (PLX-176). As a second
 //!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
 //!   [`FailureKind::PolicyViolation`].
 //! - **A coordinator**, a no-write run with plxd's own MCP tools attached (0019), is full Claude
 //!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `plxd mcp`
 //!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
 //!   with [`crate::mcp::ALLOWED_TOOLS`], so plxd's tools work in every mode, and [`TODO_TOOLS`],
-//!   so it keeps a plan on every model (RYA-249), then `--settings` with only [`settings_env`].
+//!   so it keeps a plan on every model (PLX-249), then `--settings` with only [`settings_env`].
 //!   Its user and project settings, hooks, skills, plugins, and subagents all load, as in a
 //!   terminal. As a second check, a coordinator whose `system/init` reports another permission
 //!   mode fails with [`FailureKind::PolicyViolation`].
@@ -51,8 +51,8 @@
 //!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
 //!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). It also
 //!   refuses a worker when Claude Code runs with [`SCRUB_ENV`] on, which managed settings can
-//!   set (RYA-112). That check runs in a separate process, so the permission mode check, which
-//!   the flag fails, backs it up from inside the worker's own (RYA-118). Elsewhere the backend
+//!   set (PLX-112). That check runs in a separate process, so the permission mode check, which
+//!   the flag fails, backs it up from inside the worker's own (PLX-118). Elsewhere the backend
 //!   reports no `worker_sandbox` and refuses a workspace-write run.
 //!
 //! # A worker's temp folder
@@ -60,7 +60,7 @@
 //! Claude Code keeps its temp files in `$CLAUDE_CODE_TMPDIR/claude-<uid>`, `/tmp/claude-<uid>` by
 //! default, which every Claude Code session of the user shares, and its sandbox lets commands
 //! write there. So a worker's CLI gets [`TEMP_ENV`] set to the run's own folder,
-//! [`WorkerSandbox::temp`] (RYA-130), and its commands get `<temp>/claude-<uid>` as their
+//! [`WorkerSandbox::temp`] (PLX-130), and its commands get `<temp>/claude-<uid>` as their
 //! `TMPDIR`. Claude Code does that only while the path fits in [`MAX_COMMAND_TEMP_BYTES`], and
 //! falls back to the shared folder otherwise, so a longer one refuses the worker
 //! ([`worker_temp`]). The rest of the run's folder stays hidden from commands, and the settings
@@ -68,14 +68,14 @@
 //!
 //! The CLI's own `TMPDIR` stays plxd's. Claude Code keeps its sandbox's Linux proxy bridges
 //! there, which commands must reach, and Node's compile cache, which they must not write. In the
-//! run's folder the first would be hidden and cut commands off the network (RYA-107).
+//! run's folder the first would be hidden and cut commands off the network (PLX-107).
 //!
 //! # A worker's `PATH`
 //!
 //! Claude Code runs each Bash command through the user's `$SHELL`, and zsh reads `/etc/zshenv`
 //! and `~/.zshenv` for every command, so startup files that set `PATH` outright replace the
 //! `PATH` plxd gave the CLI. Claude Code's shell snapshot would put it back, but the snapshot
-//! sits in the configuration folder, which a worker's commands can't read (RYA-126). So a worker
+//! sits in the configuration folder, which a worker's commands can't read (PLX-126). So a worker
 //! also gets [`ENV_FILE_ENV`]: [`write_env_file`] writes a script into the data folder's `tmp/`
 //! that puts the CLI's `PATH` back in front, which the CLI reads itself and runs before each
 //! command. The run's driver deletes it once the CLI has exited.
@@ -84,7 +84,7 @@
 //!
 //! With `--input-format stream-json`, the prompt and every follow-up are user messages on stdin,
 //! one JSON object per line, as the Agent SDK sends them, with a message's images as base64 image
-//! blocks before its text (RYA-191). The prompt never goes in argv, where
+//! blocks before its text (PLX-191). The prompt never goes in argv, where
 //! `ps` would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id,
 //! which the CLI echoes in `result.user_message_uuids`: several messages sent close together can
 //! run as one turn, and those ids say which turns a result ended. A message written mid-turn
@@ -121,7 +121,7 @@
 //! # The task list
 //!
 //! Claude Code's task tools keep a session's list under its session id, unless [`TASK_LIST_ENV`]
-//! names a list that other sessions share (RYA-251). No run inherits it ([`SCRUBBED_VARS`]), but
+//! names a list that other sessions share (PLX-251). No run inherits it ([`SCRUBBED_VARS`]), but
 //! the CLI also copies settings `env` blocks into its own process: its global config's, which
 //! even `--restricted` reads, and those of the user, project, and local settings that a
 //! coordinator and a bypass worker load. So every run's `--settings`, which the CLI applies after
@@ -132,7 +132,7 @@
 //!
 //! In Manual, Auto, and Plan, a worker's, a thread's, or a coordinator's CLI, and a thread's in
 //! Accept Edits too, gets [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its
-//! `canUseTool` (RYA-222, 0031), when its client answers permission requests
+//! `canUseTool` (PLX-222, 0031), when its client answers permission requests
 //! ([`RunRequest::approvals`]). Instead of denying a tool call nobody approved, the CLI writes a
 //! `can_use_tool` control request on stdout and waits. The driver reports it as
 //! [`Event::ApprovalRequested`] and writes the answer that [`Run::answer`] gives as a
@@ -142,7 +142,7 @@
 //! in Bypass Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`),
 //! and a run without `approvals` denies what would prompt, so their CLIs run as before. In Plan,
 //! the plan itself is a request: `ExitPlanMode`'s, which a coordinator and a thread always have
-//! with the channel and a worker gets with it (RYA-243).
+//! with the channel and a worker gets with it (PLX-243).
 //!
 //! # Cancel
 //!
@@ -216,7 +216,7 @@ pub const NO_WRITE_ARGS: &[&str] = &[
 /// The `--settings` a no-write run other than a coordinator gets: hooks off (0004), and no `Read`
 /// under Claude Code's shared temp folder, `/tmp/claude-<uid>` in both spellings
 /// ([`commands_temp`]), which holds every session's files and which Claude Code otherwise lets it
-/// read outside its cwd (RYA-176). 0013 hides the same folder from workers. A `Read` rule covers
+/// read outside its cwd (PLX-176). 0013 hides the same folder from workers. A `Read` rule covers
 /// `Glob` and `Grep` too. The folder is always in `/tmp`, because no no-write run gets
 /// [`TEMP_ENV`]: every agent CLI starts from plxd's allowlisted environment
 /// (`agents::worker::agent_environment`, 0014), which drops an inherited one, and only a worker
@@ -234,7 +234,7 @@ pub fn no_write_settings() -> Value {
     })
 }
 
-/// The `env` in every run's `--settings` (RYA-251): [`TASK_LIST_ENV`] empty, which Claude Code
+/// The `env` in every run's `--settings` (PLX-251): [`TASK_LIST_ENV`] empty, which Claude Code
 /// 2.1.283 treats as unset, so the run keeps its session's own task list. The CLI copies into its
 /// own process the `env` of its global config (`.claude.json` in the configuration folder, which
 /// even `--restricted` reads), then of the user's, the project's, and the local settings it loads,
@@ -258,7 +258,7 @@ pub const NO_WRITE_TOOLS: &[&str] = &["Read", "Glob", "Grep", "EndConversation"]
 ///
 /// The todo tools are `TodoWrite` and the four task tools that replace it in Claude Code 2.1.283,
 /// which offers one set or the other, never both: the task tools unless `CLAUDE_CODE_ENABLE_TASKS`
-/// is `false` (RYA-248). Naming either set in `--tools` also turns them on for models Claude Code
+/// is `false` (PLX-248). Naming either set in `--tools` also turns them on for models Claude Code
 /// would otherwise give none. The task tools keep the session's list in the CLI's configuration
 /// folder, which the CLI writes itself and the worker's commands can't read (0013).
 pub const WORKER_TOOLS: &[&str] = &[
@@ -280,7 +280,7 @@ pub const WORKER_TOOLS: &[&str] = &[
 
 /// The todo tools, the end of [`WORKER_TOOLS`]: `TodoWrite` and Claude Code's four task tools. A
 /// coordinator and a worker in [`AgentPermission::Bypass`] have no `--tools`, so they name these
-/// in `--allowedTools` instead, which turns them on in the same way (RYA-249). Whichever set
+/// in `--allowedTools` instead, which turns them on in the same way (PLX-249). Whichever set
 /// `CLAUDE_CODE_ENABLE_TASKS` picks is then on, so a user who turned the task tools off in their
 /// settings' `env` gets `TodoWrite` back, as in their terminal. An allow rule also pre-approves a
 /// tool, which changes nothing for these: Claude Code 2.1.283 runs them without asking in every
@@ -297,7 +297,7 @@ pub const TODO_TOOLS: &[&str] = &[
 pub const WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
      TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate";
 
-/// [`WORKER_TOOL_LIST`] and `ExitPlanMode`, for a worker that [`hands_over_plans`] (RYA-243).
+/// [`WORKER_TOOL_LIST`] and `ExitPlanMode`, for a worker that [`hands_over_plans`] (PLX-243).
 pub const PLAN_WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,\
      WebSearch,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate,ExitPlanMode";
 
@@ -311,7 +311,7 @@ pub const WORKER_DENIED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "0
 /// The permission mode a worker or a coordinator asks for by default ([`permission_mode`]). It
 /// must then report the mode it asked for in `system/init`. Claude Code forces `default` instead when
 /// [`SCRUB_ENV`] is on, so another mode there means the worker's own process runs in scrub mode,
-/// whatever `linux_sandbox::check_host` saw (RYA-118).
+/// whatever `linux_sandbox::check_host` saw (PLX-118).
 pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
 
 /// [`AgentPermission::Bypass`]'s mode. Claude Code refuses it under `--restricted`, so a worker
@@ -319,7 +319,7 @@ pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
 pub const BYPASS_PERMISSION_MODE: &str = "bypassPermissions";
 
 /// The arguments, after `--permission-mode`, that make a run's CLI ask plxd over stdio before a
-/// tool call that would prompt, instead of denying it (RYA-222, 0031). Only runs that
+/// tool call that would prompt, instead of denying it (PLX-222, 0031). Only runs that
 /// [`prompts`] get them.
 pub const PROMPT_TOOL_ARGS: &[&str] = &["--permission-prompt-tool", "stdio"];
 
@@ -337,7 +337,7 @@ pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
 ];
 
 /// [`WORKSPACE_WRITE_ARGS`] with [`PLAN_WORKER_TOOL_LIST`] as `--tools`, for a worker that
-/// [`hands_over_plans`] (RYA-243). Nothing else differs.
+/// [`hands_over_plans`] (PLX-243). Nothing else differs.
 pub const PLAN_WORKSPACE_WRITE_ARGS: &[&str] = &[
     "--restricted",
     "--tools",
@@ -377,7 +377,7 @@ const PERMISSIONS: &[AgentPermission] = &[
 /// arrived in 2.1.248, the last of them (0013). An older CLI rejects the unknown flag, and a
 /// worker whose `system/init` reports an older version fails, but #156 also checks the detected
 /// version before it starts one, for a clearer error. Linux workers need 2.1.275 or later:
-/// `linux_sandbox::check_host` reads a `sandbox status` field that arrived then (RYA-112).
+/// `linux_sandbox::check_host` reads a `sandbox status` field that arrived then (PLX-112).
 pub const WORKER_MIN_VERSION: &str = "2.1.248";
 
 /// Prefixes of inherited variables no run gets: Anthropic credentials, endpoints, profiles, and
@@ -389,7 +389,7 @@ pub const SCRUBBED_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAU
 /// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key; the
 /// configuration folder, which [`apply_credential`] sets only to the account's own;
 /// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or a coordinator must not
-/// get (RYA-112, 0027); and [`TASK_LIST_ENV`], which would share one task list (RYA-251).
+/// get (PLX-112, 0027); and [`TASK_LIST_ENV`], which would share one task list (PLX-251).
 pub const SCRUBBED_VARS: &[&str] = &[
     "AWS_BEARER_TOKEN_BEDROCK",
     CONFIG_DIR_ENV,
@@ -397,7 +397,7 @@ pub const SCRUBBED_VARS: &[&str] = &[
     TASK_LIST_ENV,
 ];
 
-/// The variable that picks Claude Code's task list (RYA-251). 2.1.283 keeps a session's list in
+/// The variable that picks Claude Code's task list (PLX-251). 2.1.283 keeps a session's list in
 /// `tasks/<session id>` in the configuration folder, unless this is set and not empty: then every
 /// session with the same value shares one list, other threads and the user's own Claude Code
 /// sessions included, and a run with the task tools could read, change, or delete their tasks.
@@ -434,12 +434,12 @@ const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1
 /// Set to `1` for a no-write run, to keep credentials out of the CLI's own subprocesses, such as
 /// plxd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
 /// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
-/// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
+/// `/run`, `/mnt`, and `/root` (PLX-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
 /// from a worker's commands instead, and [`SCRUBBED_VARS`] keeps an inherited one out. Managed
 /// settings can still set it, and their `env` beats plxd's, so on Linux
-/// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (RYA-112), and
+/// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (PLX-112), and
 /// on every OS a worker whose `system/init` shows the permission mode it forces fails
-/// (RYA-118). A coordinator doesn't get it either: it would force `default`, where headless Claude
+/// (PLX-118). A coordinator doesn't get it either: it would force `default`, where headless Claude
 /// Code denies every tool nobody approved, so a coordinator that reports another mode than it
 /// asked for fails the same way (0027). It forces a plain no-write run's mode to `default` as
 /// well, so those aren't checked.
@@ -451,7 +451,7 @@ const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 pub const WORKER_WITHHELD_VARS: &[&str] = &[API_KEY_ENV, "CLAUDE_CODE_MESSAGING_TOKEN"];
 
 /// Paths Claude Code 2.1.283's sandbox lets every command write whatever the settings say, which
-/// a worker's `denyWrite` takes back (RYA-130): `/tmp/claude` in both spellings, npm's log folder,
+/// a worker's `denyWrite` takes back (PLX-130): `/tmp/claude` in both spellings, npm's log folder,
 /// and Claude Code's debug logs. `~/` is the CLI's `HOME`. A `denyWrite` rule beats them.
 pub const WORKER_DENIED_WRITES: &[&str] = &[
     "/tmp/claude",
@@ -468,7 +468,7 @@ pub const TEMP_ENV: &str = "CLAUDE_CODE_TMPDIR";
 /// `TMPDIR`. A longer one gets the shared `/tmp/claude-<uid>` instead, which a worker can't use.
 pub const MAX_COMMAND_TEMP_BYTES: usize = 44;
 
-/// The folder a worker's CLI gets as [`TEMP_ENV`]: `temp`, the run's own (RYA-130), spelled as
+/// The folder a worker's CLI gets as [`TEMP_ENV`]: `temp`, the run's own (PLX-130), spelled as
 /// short as it can be. On macOS, `/private/tmp/...` becomes `/tmp/...`, where `/tmp`
 /// links, which saves 8 of the [`MAX_COMMAND_TEMP_BYTES`].
 ///
@@ -510,7 +510,7 @@ pub const ENV_FILE_ENV: &str = "CLAUDE_ENV_FILE";
 /// Writes a worker's [`ENV_FILE_ENV`] script into `dir`, which no worker may read or write
 /// (plxd's data folder's `tmp/`), and returns its path, which deletes the file when dropped. The
 /// script puts `path`, the `PATH` the CLI started with, in front of whatever `PATH` the shell's
-/// startup files left (RYA-126). The file is new, has a random name, and only its owner may read
+/// startup files left (PLX-126). The file is new, has a random name, and only its owner may read
 /// or write it.
 ///
 /// # Errors
@@ -719,7 +719,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     }
     if coordinator || unsandboxed {
         // Full Claude Code loads the user's and the project's settings, whose `env` could share
-        // its task list, so it gets `--settings` only for this (RYA-251).
+        // its task list, so it gets `--settings` only for this (PLX-251).
         let env = serde_json::json!({"env": settings_env()});
         args.extend(["--settings".into(), settings(env)]);
     }
@@ -747,7 +747,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
 /// matches every host. The denied hosts are `WebFetch` deny rules as well as `deniedDomains`,
 /// because the sandbox's list binds only commands, and a deny rule beats the `*` allow for the
 /// tool. Bash is an allow rule as well, not only `autoAllowBashIfSandboxed`, so it stays allowed
-/// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders,
+/// if managed settings force permission mode `default` (PLX-112). `cwd`, the writable folders,
 /// the read-only git paths, and the commands' `TMPDIR` in the run's temp folder
 /// ([`commands_temp`], which Claude Code lets them write) stay readable inside an unreadable
 /// path, such as plxd's data folder, which holds the worktree, the context folder, and a normal
@@ -833,7 +833,7 @@ pub fn full_thread(request: &RunRequest) -> bool {
     request.thread && request.approvals
 }
 
-/// Whether `request`'s CLI asks plxd before a tool call that would prompt (RYA-222, 0031): a
+/// Whether `request`'s CLI asks plxd before a tool call that would prompt (PLX-222, 0031): a
 /// worker, a thread, or a coordinator in Manual, Auto, or Plan, and a thread in Accept Edits too,
 /// whose client answers ([`RunRequest::approvals`]). A thread has no sandbox to run its commands
 /// without asking, so in Accept Edits its Bash calls prompt, as in a terminal (0034). A sandboxed
@@ -855,7 +855,7 @@ pub fn prompts(request: &RunRequest) -> bool {
             ))
 }
 
-/// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], RYA-243):
+/// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], PLX-243):
 /// a sandboxed worker in Plan whose CLI asks plxd ([`prompts`]). A thread has no `--tools`, so
 /// it has the tool as a coordinator does (0034). Headless Claude Code offers
 /// the tool only to a run that asks a host, and asking with it is how the plan reaches the user
@@ -873,7 +873,7 @@ pub fn hands_over_plans(request: &RunRequest) -> bool {
 }
 
 /// A worker's or a coordinator's `--permission-mode` for `permission`: Claude Code's own mode of
-/// the same name (RYA-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
+/// the same name (PLX-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
 ///
 /// # Errors
 ///
@@ -1002,7 +1002,7 @@ impl Backend for ClaudeBackend {
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
-        // Images alone are a message too (RYA-202), as a resumed run's may be.
+        // Images alone are a message too (PLX-202), as a resumed run's may be.
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
@@ -1128,8 +1128,8 @@ struct Message {
 
 impl Message {
     /// The message's content is `text` alone, or with images, the Messages API's base64 image
-    /// blocks and then `text` as a text block (RYA-191). A message of images alone has no text
-    /// block, since the API refuses a blank one (RYA-193).
+    /// blocks and then `text` as a text block (PLX-191). A message of images alone has no text
+    /// block, since the API refuses a blank one (PLX-193).
     fn new(turn_id: Option<TurnId>, text: &str, images: &[PromptImage], follow_up: bool) -> Self {
         let uuid = turn_id.unwrap_or_else(TurnId::generate).to_string();
         let content = if images.is_empty() {
@@ -1161,7 +1161,7 @@ impl Message {
         }
     }
 
-    /// A `control_response` to one of the CLI's control requests (RYA-222).
+    /// A `control_response` to one of the CLI's control requests (PLX-222).
     fn control(response: &Value) -> Self {
         let mut line =
             serde_json::json!({"type": "control_response", "response": response}).to_string();
@@ -1285,7 +1285,7 @@ struct Driver {
     translator: Translator,
     /// Turns the CLI has been sent but hasn't finished, oldest first: their ids and `uuid`s.
     turns: VecDeque<(Option<TurnId>, String)>,
-    /// Permission requests the CLI waits on (RYA-222).
+    /// Permission requests the CLI waits on (PLX-222).
     asks: HashMap<ApprovalId, Ask>,
     violation: Option<Failure>,
     /// A worker's [`ENV_FILE_ENV`] script, deleted once the CLI has exited.

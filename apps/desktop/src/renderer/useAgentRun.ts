@@ -9,7 +9,7 @@ export interface AgentRunView {
   transcript: Transcript;
   /** Why the transcript couldn't load, for people. */
   error?: string;
-  /** Messages this window sent, by turn id, since older logs hold only the id (RYA-92). */
+  /** Messages this window sent, by turn id, since older logs hold only the id (PLX-92). */
   sent: ReadonlyMap<string, SentMessage>;
   /**
    * Sends a message, its images, and the threads attached to it as the run's next turn, with a new

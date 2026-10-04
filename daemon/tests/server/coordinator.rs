@@ -1,4 +1,4 @@
-//! A project's coordinator chat end to end (RYA-41, decision 0024): `project/start` against an
+//! A project's coordinator chat end to end (PLX-41, decision 0024): `project/start` against an
 //! in-process plxd whose backend is the fake CLI, in a real git repository. The coordinator runs
 //! in the project's repository, in the project's permission mode (0042).
 
@@ -494,7 +494,7 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
     host.server.stop().await;
 }
 
-/// RYA-222 (0031): a coordinator whose client answers permission requests keeps `approvals` when
+/// PLX-222 (0031): a coordinator whose client answers permission requests keeps `approvals` when
 /// it resumes, and the subagents it spawns get them too. One started without them, as an older
 /// app starts it, and its subagents never ask.
 #[tokio::test]
@@ -554,7 +554,7 @@ async fn approvals_last_through_a_resume_and_reach_the_coordinators_subagents() 
     host.server.stop().await;
 }
 
-/// RYA-42: two runs the coordinator started finish during its turn; once that turn ends, and with
+/// PLX-42: two runs the coordinator started finish during its turn; once that turn ends, and with
 /// no client connected, plxd wakes it with one turn that names both.
 #[tokio::test]
 async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_connected() {
@@ -645,7 +645,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
     host.server.stop().await;
 }
 
-/// RYA-178: a run the coordinator started is running, and so is the coordinator's own turn, when
+/// PLX-178: a run the coordinator started is running, and so is the coordinator's own turn, when
 /// plxd restarts. Once it is back, one wake-up names both, and another restart wakes nothing.
 #[tokio::test]
 async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted() {
@@ -709,7 +709,7 @@ async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted
     assert_eq!(parent(coordinator.id), None);
 }
 
-/// RYA-178: the user stops the coordinator while a run it started is running, then plxd
+/// PLX-178: the user stops the coordinator while a run it started is running, then plxd
 /// restarts. Wake-ups stay paused, and what the restart interrupted waits for the user's message.
 #[tokio::test]
 async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {

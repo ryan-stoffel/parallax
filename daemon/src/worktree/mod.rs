@@ -16,8 +16,8 @@
 //! table, and a finished run is committed with [`WorktreeManager::commit_all`] and measured with
 //! [`WorktreeManager::diff_stat`]. A client reviews the commit through
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
-//! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (RYA-168).
-//! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (RYA-298).
+//! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (PLX-168).
+//! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (PLX-298).
 //!
 //! # Layout and naming
 //!
@@ -137,7 +137,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// like everything else, come through paged or capped methods (decision record 0007).
 pub const DEFAULT_MAX_DIFF_BYTES: usize = 1024 * 1024;
 
-/// The longest line a git call whose whole output is read may write (RYA-143). A `-z` output has
+/// The longest line a git call whose whole output is read may write (PLX-143). A `-z` output has
 /// no newline, so it is one line: 64 MiB holds about 800k paths. A longer line fails the call.
 // ponytail: past this, Accept and `agent/diff` fail loudly; read `-z` output split on NUL, with a
 // total cap, if a real repository gets there.
@@ -282,7 +282,7 @@ pub enum WorktreeError {
         /// The repository (or worktree) that lacks an identity.
         repo: PathBuf,
     },
-    /// A git command exited with a non-zero status, or wrote a line too long to read (RYA-143).
+    /// A git command exited with a non-zero status, or wrote a line too long to read (PLX-143).
     #[error("`git {}` in {} failed: {detail}", .args.join(" "), .cwd.display())]
     GitFailed {
         /// Where it ran.
@@ -1181,7 +1181,7 @@ fn owned_args(args: &[&str]) -> Vec<String> {
 /// by line or trims it as one block of text.
 ///
 /// A line over the process's limit fails `git args` in `cwd` with [`WorktreeError::GitFailed`]
-/// rather than being skipped (RYA-143): a `-z` output is one line, so skipping it would read as
+/// rather than being skipped (PLX-143): a `-z` output is one line, so skipping it would read as
 /// no output at all, such as a commit with no changed files.
 async fn collect(
     mut process: Process,

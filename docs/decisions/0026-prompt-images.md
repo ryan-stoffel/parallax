@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-29
-- Issue: RYA-191
+- Issue: PLX-191
 
 ## Context
 
@@ -10,7 +10,7 @@ Ryan wants to paste images into the composer the way Claude desktop does: the im
 
 ## Decision
 
-- **Protocol.** `agent/start`, `agent/send`, `thread/start`, and `project/start` take optional `images`: a `mediaType` (`image/png`, `image/jpeg`, `image/gif`, or `image/webp`) and base64 `data`. They're behind the `promptImages` capability, since an older plxd would silently drop them (0007). A message with images may have no text (RYA-193): Claude Code then gets no text block, since the Messages API refuses a blank one.
+- **Protocol.** `agent/start`, `agent/send`, `thread/start`, and `project/start` take optional `images`: a `mediaType` (`image/png`, `image/jpeg`, `image/gif`, or `image/webp`) and base64 `data`. They're behind the `promptImages` capability, since an older plxd would silently drop them (0007). A message with images may have no text (PLX-193): Claude Code then gets no text block, since the Messages API refuses a blank one.
 - **Caps.** Measured on `data`, the base64 text:
   - 5 MiB per image. That's the most every Claude platform accepts per image (Anthropic counts its limit on the base64), so an image plxd accepts, Claude accepts too.
   - 6 MiB per message and 10 images. The request has to fit in one 8 MiB frame next to up to 1 MiB of text.
@@ -18,7 +18,7 @@ Ryan wants to paste images into the composer the way Claude desktop does: the im
   - The capability's options list the caps (`maxImages`, `maxImageBytes`, `maxTotalBytes`), so the app can downscale before it sends anything. An oversized frame would otherwise close the connection.
 - **Storage.**
   - Once a CLI has taken a message, plxd writes each of its images to a new `images` table in the store (`run_id`, `id`, `media_type`, `data`) under a fresh UUIDv7.
-  - The message's `turnStarted` item lists those ids, the same way it carries a follow-up's text (RYA-92). That includes the prompt's turn, which has no `turnId`.
+  - The message's `turnStarted` item lists those ids, the same way it carries a follow-up's text (PLX-92). That includes the prompt's turn, which has no `turnId`.
   - `agent/image {runId, imageId}` returns the image as it was sent. It fails with `imageNotFound` for an unknown id.
   - `thread/delete` removes a thread's images along with its turns and events, and `project/delete` (PLX-338) removes those of every run in the Project. Otherwise, images stay as long as their run does, like its events (0016, #207).
 - **Backends.**

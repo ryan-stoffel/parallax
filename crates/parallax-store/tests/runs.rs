@@ -64,7 +64,7 @@ fn a_run_keeps_the_coordinator_thread_that_started_it() {
     assert_eq!(listed[0].fields, tagged);
 }
 
-/// RYA-222: whether a run forwards its permission requests is kept with it, for every launch.
+/// PLX-222: whether a run forwards its permission requests is kept with it, for every launch.
 #[test]
 fn a_run_keeps_whether_it_forwards_permission_requests() {
     let (_dir, store) = open();
@@ -462,8 +462,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // Roll the database back to what #119 left on develop: schema 6, no runs, events, git_dir or
     // base_dirty columns, turns table (#190's migration 10; dropping `runs` already undoes #157's
     // migration 8 columns on it, since they're columns of the table this drops wholesale), the
-    // normal threads tables (#110's migration 9), the wakes table (RYA-178's migration 14), the
-    // images table (RYA-191's migration 15), the project icon columns (RYA-227's migration 16),
+    // normal threads tables (#110's migration 9), the wakes table (PLX-178's migration 14), the
+    // images table (PLX-191's migration 15), the project icon columns (PLX-227's migration 16),
     // the host settings table (PLX-371's migration 24), the inbox table (PLX-401's migration 25),
     // the project permission column (PLX-394's migration 26), or the queued table (PLX-370's
     // migration 27).

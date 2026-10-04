@@ -180,7 +180,7 @@ test("a packaged app's release shows its notes and download in a popover, then a
   renderApp();
   const available = {
     version: "2610.10205.13230-nightly",
-    notes: "• feat: a thing (RYA-1)",
+    notes: "• feat: a thing (PLX-1)",
     url: "https://github.com/ryan-stoffel/parallax/releases/tag/v2610.10205.13230-nightly",
   };
   act(() => publish({ available }));
@@ -190,7 +190,7 @@ test("a packaged app's release shows its notes and download in a popover, then a
   expect(update).toHaveBeenCalledOnce();
   const popover = document.querySelector('#sidebar [aria-label="Update"]')!;
   expect(popover.textContent).toContain("Parallax 2610.10205.13230-nightly");
-  expect(popover.textContent).toContain("• feat: a thing (RYA-1)");
+  expect(popover.textContent).toContain("• feat: a thing (PLX-1)");
   expect(popover.querySelector("a")!.href).toBe(available.url);
 
   act(() => publish({ available, progress: 42 }));

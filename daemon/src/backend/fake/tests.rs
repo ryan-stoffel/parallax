@@ -755,7 +755,7 @@ async fn backends_work_behind_trait_objects() {
     }
 }
 
-/// A run whose client answers permission requests (RYA-222).
+/// A run whose client answers permission requests (PLX-222).
 fn answering(cwd: &Path) -> RunRequest {
     RunRequest {
         approvals: true,
@@ -772,7 +772,7 @@ async fn asked(events: &mut EventStream) -> ApprovalRequest {
     request
 }
 
-/// RYA-222: a scripted permission request reaches the run with a new id, and its first answer
+/// PLX-222: a scripted permission request reaches the run with a new id, and its first answer
 /// reaches the CLI as JSON, once; an answer to it after that is dropped.
 #[tokio::test]
 async fn a_permission_request_takes_its_first_answer() {
@@ -824,7 +824,7 @@ async fn a_permission_request_takes_its_first_answer() {
     );
 }
 
-/// RYA-222: a withdrawn request takes no answer, so the CLI's next read gets what follows it.
+/// PLX-222: a withdrawn request takes no answer, so the CLI's next read gets what follows it.
 #[tokio::test]
 async fn a_withdrawn_request_takes_no_answer() {
     let script = Script::from_json(
@@ -866,7 +866,7 @@ async fn a_withdrawn_request_takes_no_answer() {
     assert_eq!(texts(&all), ["Next."]);
 }
 
-/// RYA-222: a request before any is made can't be withdrawn, and a fake without stdin takes no
+/// PLX-222: a request before any is made can't be withdrawn, and a fake without stdin takes no
 /// answers.
 #[tokio::test]
 async fn approvals_need_a_request_and_a_stdin() {
@@ -888,7 +888,7 @@ async fn approvals_need_a_request_and_a_stdin() {
     rest(&mut events).await;
 }
 
-/// RYA-222: as the Claude driver does, a request the CLI still waits on when it exits is
+/// PLX-222: as the Claude driver does, a request the CLI still waits on when it exits is
 /// withdrawn before the run's `Finished`.
 #[tokio::test]
 async fn a_request_left_waiting_when_the_cli_exits_is_withdrawn() {
@@ -913,7 +913,7 @@ async fn a_request_left_waiting_when_the_cli_exits_is_withdrawn() {
     );
 }
 
-/// RYA-222: a run whose client doesn't answer never asks, as Claude Code without its prompt
+/// PLX-222: a run whose client doesn't answer never asks, as Claude Code without its prompt
 /// channel denies instead: the script's requests are skipped, and answers are refused.
 #[tokio::test]
 async fn a_run_without_approvals_never_asks() {

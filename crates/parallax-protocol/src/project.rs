@@ -19,7 +19,7 @@ pub struct Project {
     pub id: ProjectId,
     /// The name shown in the app.
     pub name: String,
-    /// The icon the user chose, behind the `projectEdit` capability (RYA-227, 0032). Absent means
+    /// The icon the user chose, behind the `projectEdit` capability (PLX-227, 0032). Absent means
     /// the app's default icon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -78,7 +78,7 @@ impl ProjectPermission {
     }
 }
 
-/// A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
+/// A project's icon (PLX-227, 0032): a Lucide icon and a color from the app's palette, both by
 /// name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
 /// them and never reads them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -151,7 +151,7 @@ pub struct ProjectCreateResult {
 }
 
 /// Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
-/// capability (RYA-227, 0032), or its permission mode, behind `projectPermission` (0042).
+/// capability (PLX-227, 0032), or its permission mode, behind `projectPermission` (0042).
 ///
 /// A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
 /// `project/create`'s rules, and the repository can't change. A rename, a new icon, or a new mode

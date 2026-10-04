@@ -1,4 +1,4 @@
-//! `accounts/keys/*` on a Linux host with no Secret Service (RYA-19, 0023).
+//! `accounts/keys/*` on a Linux host with no Secret Service (PLX-19, 0023).
 //!
 //! Linux only: on a Mac the same call would reach the real login Keychain.
 #![cfg(target_os = "linux")]

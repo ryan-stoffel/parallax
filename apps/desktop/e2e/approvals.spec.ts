@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { close, launch, printFailure, type Launched } from "./launch";
 
-// RYA-196: a thread whose fake agent asks before writing a long file and before a command, then
+// PLX-196: a thread whose fake agent asks before writing a long file and before a command, then
 // hands over its plan, as Claude Code does through plxd (0031). The fake prints each answer it
 // reads as the agent's text, so the transcript shows what reached it. Its own app and plxd, since
 // the fake plays one script.
@@ -45,11 +45,11 @@ test("answers a thread's permission requests from the card over the composer, an
   // The answer as the fake read it, a JSON line with keys in any order.
   const echoed = (...fields: string[]) =>
     fields.reduce((p, field) => p.filter({ hasText: field }), transcript.locator("p"));
-  // A new card ignores a pointer's clicks for 300 ms after it shows (RYA-259), so the first click
+  // A new card ignores a pointer's clicks for 300 ms after it shows (PLX-259), so the first click
   // on each card waits that out once the card is seen.
   const settle = () => page.waitForTimeout(400);
 
-  // First a long file, its preview opened in full, under a composer grown to its cap (RYA-259):
+  // First a long file, its preview opened in full, under a composer grown to its cap (PLX-259):
   // the preview gives way, so the card's Approve and the composer's controls stay in view.
   const approve = pinned.getByRole("button", { name: "Approve", exact: true });
   const showAll = pinned.getByRole("button", { name: "Show all 40 lines" });

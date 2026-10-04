@@ -24,7 +24,7 @@ type ItemBody =
    * `text` is null for a follow-up logged by a plxd from before it recorded the text. `wake` marks
    * a turn plxd sent a coordinator itself, when runs it started finished (0025). `from` is the run
    * id of the thread that sent it with its Parallax tools, not the user (0041). `images` are the
-   * ids of the images sent with it, for `agent/image` (RYA-193), and `threads` the run ids of the
+   * ids of the images sent with it, for `agent/image` (PLX-193), and `threads` the run ids of the
    * threads attached to it as context (PLX-378).
    */
   | {
@@ -69,7 +69,7 @@ type ItemBody =
       from?: string;
     }
   /**
-   * A permission request (RYA-196, 0031): what the agent asks to do, and how it ended, which is
+   * A permission request (PLX-196, 0031): what the agent asks to do, and how it ended, which is
    * absent while it waits.
    */
   | { kind: "approval"; key: string; request: ApprovalRequest; resolved?: ApprovalResolution }
@@ -77,7 +77,7 @@ type ItemBody =
   | { kind: "end"; key: string; outcome: AgentOutcome }
   /**
    * Where a CLI process started or resumed its session, by the vendor's id. Never shown:
-   * `withTaskLists` takes it out, and starts a new task list when the id changes (RYA-250).
+   * `withTaskLists` takes it out, and starts a new task list when the id changes (PLX-250).
    */
   | { kind: "session"; key: string; sessionId: string };
 

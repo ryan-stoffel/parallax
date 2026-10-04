@@ -49,10 +49,10 @@ test("a branch this checkout is ahead of is still offered, so a move backward is
 
 test("no update where Update wouldn't move the checkout", async () => {
   // Another branch is someone's work: no fetch at all.
-  const other = fakeGit(onBranch("feature/RYA-1-x"));
+  const other = fakeGit(onBranch("feature/PLX-1-x"));
   expect(await commitsBehind(other.git, "main")).toBe(0);
   expect(other.calls).toEqual(["branch --show-current"]);
-  expect(await whyNotMove(other.git)).toBe("this checkout is on feature/RYA-1-x");
+  expect(await whyNotMove(other.git)).toBe("this checkout is on feature/PLX-1-x");
   // Local commits that no remote branch has would be lost by the move.
   const unpushed = fakeGit({ "branch --remotes": { out: "" }, "rev-list": { out: "0\t3" } });
   expect(await whyNotMove(unpushed.git)).toMatch(/no remote branch/);

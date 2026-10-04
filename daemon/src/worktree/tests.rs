@@ -328,7 +328,7 @@ async fn create_refuses_a_base_that_does_not_resolve() {
     );
 }
 
-/// Many runs start in one repo at once (RYA-275): every create succeeds, on its own branch, with its
+/// Many runs start in one repo at once (PLX-275): every create succeeds, on its own branch, with its
 /// files checked out and nothing left uncommitted.
 #[tokio::test]
 async fn concurrent_creates_on_one_repo_all_succeed() {

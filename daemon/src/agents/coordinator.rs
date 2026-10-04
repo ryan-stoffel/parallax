@@ -1,4 +1,4 @@
-//! A project's coordinator chat (RYA-41, decision 0024): a no-write run with plxd's MCP tools
+//! A project's coordinator chat (PLX-41, decision 0024): a no-write run with plxd's MCP tools
 //! bound to the project and to the run's own id as its coordinator thread (0019). The Claude
 //! backend runs it as full Claude Code (0027) in the project's permission mode (0042).
 //!
@@ -129,7 +129,7 @@ pub(crate) async fn start(
 }
 
 /// Refuses a backend that can't run a coordinator (0004: Claude Code and Codex; Codex's is
-/// RYA-39).
+/// PLX-39).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().coordinator {
         return Ok(());

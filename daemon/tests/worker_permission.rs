@@ -1,4 +1,4 @@
-//! Real Claude Code regression for RYA-110 and RYA-20: a worker can run Bash, and its commands
+//! Real Claude Code regression for PLX-110 and PLX-20: a worker can run Bash, and its commands
 //! don't see the key. A local fake Messages API asks for Bash, so no account or Anthropic
 //! connection is needed. Set `PLX_SANDBOX_CLAUDE` to the CLI under test.
 #![cfg(unix)]

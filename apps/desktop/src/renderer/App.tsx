@@ -190,7 +190,7 @@ export function App() {
     setPanelExpanded(false);
   };
   // The permission requests the Project's other runs wait on, pinned in whichever of its chats is
-  // open, each named and with a way to its own chat (RYA-196).
+  // open, each named and with a way to its own chat (PLX-196).
   const othersAsked = (open: string | undefined): Asked[] =>
     agents.runs.flatMap((run) => {
       if (run.id === open || !project) return [];

@@ -44,7 +44,7 @@ import { menuItem, Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
-// What would prompt comes to the chat as approval cards (RYA-196), unless the run can't send them
+// What would prompt comes to the chat as approval cards (PLX-196), unless the run can't send them
 // (`manualDenied`).
 const accessOptions: Record<AgentPermission, PickerOption> = {
   auto: {
@@ -376,7 +376,7 @@ export interface ComposerProps {
  * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSendInBackground`, Cmd/Ctrl+Enter sends
  * through it, anywhere in the box. It grows with its text up to 40% of the window.
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
- * it (RYA-193).
+ * it (PLX-193).
  * In an empty box, Up and Down step through `history`, until the recalled prompt is edited.
  * With `menus`, `/` at the start of a word opens a menu of the composer's own commands and the
  * CLI's commands and skills, and `@` one of the thread's files, filtered as you type. Up and Down

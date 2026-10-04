@@ -11,7 +11,7 @@
 #                   installed, a deterministic handshake so a test never cancels before the trap
 #   @hang           wait forever, in foreground one-second sleeps: bash 3.2 leaves a trap pending
 #                   through `wait` if the signal lands just before it, but runs it as soon as a
-#                   foreground command ends (RYA-120)
+#                   foreground command ends (PLX-120)
 # Every other line goes to stdout as it is.
 
 dir=$FAKE_CODEX_DIR

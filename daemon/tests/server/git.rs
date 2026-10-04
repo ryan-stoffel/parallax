@@ -1,4 +1,4 @@
-//! The Git menu's methods end to end (RYA-298): `agent/gitStatus`, `agent/commit`, and
+//! The Git menu's methods end to end (PLX-298): `agent/gitStatus`, `agent/commit`, and
 //! `agent/push` in a run's worktree and in a Current checkout thread's checkout, pushing to a
 //! local bare `origin`, with `open_pr`'s fake `gh` for Create PR.
 

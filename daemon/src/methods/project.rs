@@ -1,6 +1,6 @@
 //! `project/list`, `project/create`, `project/start`, which starts a project's coordinator behind
 //! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
-//! icon behind the `projectEdit` capability (RYA-227, 0032) or its permission mode behind
+//! icon behind the `projectEdit` capability (PLX-227, 0032) or its permission mode behind
 //! `projectPermission` (0042), and `project/delete`, behind `projectDelete` (PLX-338).
 
 use std::path::{Component, Path};

@@ -8,7 +8,7 @@ use crate::{Store, Worktree, WorktreeFields, timestamp};
 
 /// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only model,
 /// effort, permission, context window, and fast mode change after the run is created, through
-/// `agent/send` (RYA-161, RYA-163), and the backend, when `agent/send` moves the run to another
+/// `agent/send` (PLX-161, PLX-163), and the backend, when `agent/send` moves the run to another
 /// backend's account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFields {
@@ -24,7 +24,7 @@ pub struct RunFields {
     /// subagents, or the parent a client named for a thread. `None` for a top-level run, and once
     /// the parent is deleted.
     pub parent: Option<Uuid>,
-    /// The model, effort, and permission the run asked for (RYA-97), each `None` for the CLI's
+    /// The model, effort, and permission the run asked for (PLX-97), each `None` for the CLI's
     /// default. Effort and permission are their protocol names, such as `high` and `plan`.
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -33,7 +33,7 @@ pub struct RunFields {
     /// default.
     pub context_window: Option<u32>,
     pub fast: Option<bool>,
-    /// Whether the run forwards its CLI's permission requests to the client (RYA-222, decision
+    /// Whether the run forwards its CLI's permission requests to the client (PLX-222, decision
     /// 0031). Fixed when the run is created.
     pub approvals: bool,
     /// Whether the run works in its repository's own checkout, on the branch the user has out,
@@ -343,7 +343,7 @@ impl Store {
     }
 
     /// Replaces run `id`'s backend, model, effort, permission, context window, and fast mode with
-    /// those of `fields` (RYA-161, RYA-163), and returns the updated row. Its other fields never
+    /// those of `fields` (PLX-161, PLX-163), and returns the updated row. Its other fields never
     /// change.
     ///
     /// # Errors

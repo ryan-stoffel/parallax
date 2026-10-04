@@ -19,7 +19,7 @@ import { uuidv7 } from "./uuidv7";
 /** A Project's runs, oldest first, kept live, and a way to start one by hand. */
 export interface ProjectAgentsView {
   runs: AgentRun[];
-  /** By run id: the permission requests each run waits on, oldest first (RYA-196). */
+  /** By run id: the permission requests each run waits on, oldest first (PLX-196). */
   waiting: Readonly<Record<string, readonly Approval[]>>;
   /** Why the list couldn't load or stopped updating, for people. */
   error?: string;
@@ -44,7 +44,7 @@ export function applyAgentEvent(runs: AgentRun[], event: ParallaxEvent): AgentRu
  * events after its `seq`, starting over on `resync`. Empty with no Project, and loads only while
  * `connected`. The permission requests its runs wait on come from the same events, after each
  * running run's log is read once for those from before. With `approvals`, the host's plxd
- * advertises them, and a subagent started here forwards its requests (RYA-196, 0031).
+ * advertises them, and a subagent started here forwards its requests (PLX-196, 0031).
  */
 export function useProjectAgents(
   hostId: string,

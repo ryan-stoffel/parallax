@@ -1,4 +1,4 @@
-//! Permission requests a run's CLI waits on (RYA-222, decision 0031): when each one expires, and
+//! Permission requests a run's CLI waits on (PLX-222, decision 0031): when each one expires, and
 //! how each one ended, so a resolution is logged once and `agent/approve` stays idempotent.
 
 use std::collections::{BTreeMap, HashMap};
@@ -28,7 +28,7 @@ pub(super) const STOPPED: &str = "The run was stopped while this permission requ
 pub(super) const PATH_FIELDS: &[&str] = &["file_path", "notebook_path", "path"];
 
 /// `ExitPlanMode`'s input field naming the plan file Claude Code writes an approved plan to
-/// (RYA-243). A worker's edited input may leave it out, as a client that sends back only the
+/// (PLX-243). A worker's edited input may leave it out, as a client that sends back only the
 /// edited `plan` does, but may not change or add it. Claude Code 2.1.283 ignores it and writes
 /// the file it chose, but that write is the CLI's own, which `--restricted` doesn't confine, so
 /// plxd doesn't rely on that (0031).
@@ -212,7 +212,7 @@ mod tests {
         }
     }
 
-    /// RYA-243: an edited plan may leave out `ExitPlanMode`'s `planFilePath`, as a client that
+    /// PLX-243: an edited plan may leave out `ExitPlanMode`'s `planFilePath`, as a client that
     /// sends back only the plan does, but may not name another file, whatever Claude Code does
     /// with it. Nor may an edit add one to a request that had none.
     #[test]

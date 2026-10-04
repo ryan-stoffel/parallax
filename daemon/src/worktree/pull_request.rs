@@ -1,4 +1,4 @@
-//! Opening a pull request from a run's branch (RYA-168).
+//! Opening a pull request from a run's branch (PLX-168).
 //!
 //! [`WorktreeManager::open_pr`] works in the user's own checkout, as the user. It pushes the run's
 //! branch to `origin` with [`WorktreeManager::push`], setting its upstream. Then `gh`, with its own

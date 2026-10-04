@@ -1,4 +1,4 @@
-# Synthetic, as approval.jsonl: the CLI exits while its request waits, as an attempt that hits a limit and falls back does (RYA-222).
+# Synthetic, as approval.jsonl: the CLI exits while its request waits, as an attempt that hits a limit and falls back does (PLX-222).
 @read
 {"type":"system","subtype":"init","cwd":"/Users/dev/repo","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68","tools":["Read","Glob","Grep","Bash","Edit","mcp__plxd__spawn_agent"],"mcp_servers":[],"model":"claude-opus-4-7","permissionMode":"default","apiKeySource":"none","claude_code_version":"2.1.286","uuid":"a0000000-0000-4000-8000-000000000060"}
 {"type":"assistant","message":{"id":"msg_01Ap1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[{"type":"tool_use","id":"toolu_01Ap1","name":"Bash","input":{"command":"pnpm test","description":"Run the tests"}}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":20,"service_tier":"standard"}},"parent_tool_use_id":null,"session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68","uuid":"a0000000-0000-4000-8000-000000000061"}

@@ -1,12 +1,12 @@
 # 0028: Nightly and standard releases
 
-- Status: accepted; channel setting superseded by RYA-286 (below); tags superseded by [0030](0030-release-versions.md); all-or-nothing publishing superseded by RYA-211 (below); the push trigger and the `develop`/`main` split are superseded by [0051](0051-promote-a-nightly.md)
+- Status: accepted; channel setting superseded by PLX-286 (below); tags superseded by [0030](0030-release-versions.md); all-or-nothing publishing superseded by PLX-211 (below); the push trigger and the `develop`/`main` split are superseded by [0051](0051-promote-a-nightly.md)
 - Date: 2026-09-29
-- Issue: RYA-203
+- Issue: PLX-203
 
 ## Context
 
-People want every `develop` build, or only released code, and Parallax published neither. [0006](0006-release-versioning-and-packaging.md) is superseded by [0020](0020-drop-the-editor-fork.md), and RYA-64 hasn't chosen versions yet.
+People want every `develop` build, or only released code, and Parallax published neither. [0006](0006-release-versioning-and-packaging.md) is superseded by [0020](0020-drop-the-editor-fork.md), and PLX-64 hasn't chosen versions yet.
 
 ## Decision
 
@@ -19,15 +19,15 @@ People want every `develop` build, or only released code, and Parallax published
 
 - The tag points at the pushed commit. The version is that commit's committer time, so a re-run finds its own release and does nothing. Until 0030 the tags were `nightly-<YYYYMMDD>-<sha7>` and `release-<YYYYMMDD>-<sha7>`; those releases stay.
 - A channel is its tag prefix and prerelease flag: nightly is `prerelease: true`, standard is `prerelease: false`. Nothing else tells them apart.
-- Until an updater reads the releases, the app follows a channel by branch: nightly is `develop`, standard is `main` (RYA-204).
-- A packaged-app updater (RYA-68) reads the releases instead: `electron-updater` takes the release marked Latest for standard, and the newest `nightly` prerelease for nightly (0030). The channel setting and its plumbing don't change, only where the updater looks.
+- Until an updater reads the releases, the app follows a channel by branch: nightly is `develop`, standard is `main` (PLX-204).
+- A packaged-app updater (PLX-68) reads the releases instead: `electron-updater` takes the release marked Latest for standard, and the newest `nightly` prerelease for nightly (0030). The channel setting and its plumbing don't change, only where the updater looks.
 - 0030 replaced the date-sha tags with semver versions. The prerelease flag stays the channel contract.
-- **The installed build is the channel (RYA-286).** The Settings choice is gone: a nightly build (its version has `-nightly`) follows nightly releases, any other build Latest. A nightly is named "Parallax (Nightly)" and has its own icon, and keeps the standard build's appId so installed nightlies keep updating. Switching channels means installing the other build. Under `pnpm dev`, Update follows `develop`.
+- **The installed build is the channel (PLX-286).** The Settings choice is gone: a nightly build (its version has `-nightly`) follows nightly releases, any other build Latest. A nightly is named "Parallax (Nightly)" and has its own icon, and keeps the standard build's appId so installed nightlies keep updating. Switching channels means installing the other build. Under `pnpm dev`, Update follows `develop`.
 
 ## Consequences
 
 - Every push to `develop` adds a release, and nothing prunes them yet. Pruning old nightlies is a later issue.
 - If pushes queue, GitHub skips the ones between the running and the newest. Their PRs still appear in the newest release's notes.
 - Each release carries the app's installers for the five targets, the update metadata the updater reads ([0030](0030-release-versions.md)), and a `SHA256SUMS` file, built by the same workflow ([0029](0029-app-packaging.md)). There are no standalone `plxd` binaries on the releases.
-- **Publishing is per OS (RYA-211).** `plan` creates the release as a draft, with its notes. Each build attaches its own files as soon as it is done and then publishes the draft, so the first one done makes the release visible and macOS no longer waits for Windows. A failed build leaves its OS out of the release, which still goes out for the others, until its job is re-run. Until then, and while a slower build is still running, apps on that OS find the newest release without their update file and report that it has no update for them; they update once it arrives. `SHA256SUMS` is added last, once every build has attached, so a release without it is incomplete.
+- **Publishing is per OS (PLX-211).** `plan` creates the release as a draft, with its notes. Each build attaches its own files as soon as it is done and then publishes the draft, so the first one done makes the release visible and macOS no longer waits for Windows. A failed build leaves its OS out of the release, which still goes out for the others, until its job is re-run. Until then, and while a slower build is still running, apps on that OS find the newest release without their update file and report that it has no update for them; they update once it arrives. `SHA256SUMS` is added last, once every build has attached, so a release without it is incomplete.
 - The existing `v0.1.0` and `v0.2.0` releases stay. A standard release becomes Latest after them.

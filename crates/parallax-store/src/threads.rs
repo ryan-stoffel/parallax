@@ -486,7 +486,7 @@ impl Store {
     }
 
     /// Deletes thread `id` with its run and every row [`Store::delete_run`] deletes (#190,
-    /// RYA-191), in one transaction. Returns whether the thread existed.
+    /// PLX-191), in one transaction. Returns whether the thread existed.
     ///
     /// # Errors
     ///

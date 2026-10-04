@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-27
-- Issue: RYA-7
+- Issue: PLX-7
 
 ## Context
 
@@ -17,7 +17,7 @@
 - **File watching:** `notify` with FSEvents (0005).
 - **Worker sandbox:** Claude Code's Seatbelt sandbox, with a list of unreadable paths that only makes sense on macOS (0013).
 
-This record gives each of these an answer per OS. RYA-17 to RYA-25, RYA-29, RYA-64, and RYA-66 build on it.
+This record gives each of these an answer per OS. PLX-17 to PLX-25, PLX-29, PLX-64, and PLX-66 build on it.
 
 ## Decision
 
@@ -84,7 +84,7 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
   - **Windows:** a scheduled task named `<label>`. It is registered from XML with `schtasks /create /xml`, and runs with `LogonType` `InteractiveToken` and `RunLevel` `LeastPrivilege`.
     - Its logon trigger names the user (`LogonTrigger/UserId`). That lets a standard user create it without admin rights, where `schtasks /sc onlogon` needs them.
     - attach starts it with `schtasks /run`. It can't run while the user isn't logged on, so attach then starts `serve` itself, as on a Mac where nobody has logged in.
-    - No console window may stay open. RYA-22 picks how to hide it.
+    - No console window may stay open. PLX-22 picks how to hide it.
 
 ### Secrets
 
@@ -106,19 +106,19 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
   - The same `worker_settings` apply, and plxd never sets `enableWeakerNestedSandbox`.
   - plxd also requires Claude Code's optional seccomp filter, which Claude Code ships itself as its `apply-seccomp` helper (0013). Without it, sandboxed commands can connect to any Unix socket. On Linux that includes the D-Bus session bus that serves the Secret Service, and `docker.sock`. On macOS, Seatbelt blocks these by default (0013).
   - A missing `bwrap`, `socat`, or filter fails `agent/start` with `workerUnavailable` naming it. So does an AppArmor policy that keeps `bwrap` from creating user namespaces (Ubuntu 24.04 and later).
-  - `failIfUnavailable` doesn't cover the filter, because Claude Code treats it as optional, so plxd has to detect it itself. RYA-20 chose a sandboxed probe through Claude Code's own built-in helper, recorded in [0013's Linux section](0013-worker-sandbox.md#claude-code-on-linux).
-  - `UNREADABLE_IN_HOME` becomes a list per OS. RYA-20 adds Linux's.
-- **Linux: Codex.** It sandboxes with bubblewrap and seccomp, and its permission profiles work on Linux. RYA-38 checked its worker profile on macOS only, so Linux Codex workers are refused until RYA-133 checks the same profile there.
+  - `failIfUnavailable` doesn't cover the filter, because Claude Code treats it as optional, so plxd has to detect it itself. PLX-20 chose a sandboxed probe through Claude Code's own built-in helper, recorded in [0013's Linux section](0013-worker-sandbox.md#claude-code-on-linux).
+  - `UNREADABLE_IN_HOME` becomes a list per OS. PLX-20 adds Linux's.
+- **Linux: Codex.** It sandboxes with bubblewrap and seccomp, and its permission profiles work on Linux. PLX-38 checked its worker profile on macOS only, so Linux Codex workers are refused until PLX-133 checks the same profile there.
 - **Windows: Claude Code.** It has no sandbox on native Windows and says to use WSL2. So the Claude backend reports `worker_sandbox: false` there. `workspace-write` runs fail with `workerUnavailable`, and the message names WSL2. No-write runs, such as the coordinator and normal threads, still run natively.
-- **Windows: Codex.** It has a native sandbox, and its permission profiles, deny rules included, are supported on native Windows. Codex workers may run natively once RYA-38 and RYA-24 confirm that 0013's contract holds there. Until then they are refused too. Only the `elevated` sandbox mode counts, and it needs a one-time admin setup. The `unelevated` mode has no separate sandbox user and weaker network isolation.
-- **Cursor** workers stay refused on every OS until RYA-40 settles 0013's open items for Cursor. Its Linux and Windows sandboxes are part of that work.
-- **WSL2 is how a Windows machine runs Claude workers.** `plxd` for Linux runs inside a WSL2 distro, with Linux's sandbox. The app reaches it as a host by running `wsl.exe --distribution <name> -- plxd attach` instead of `ssh`. That keeps 0022's rule that the main process owns every process and speaks over stdio. RYA-86 builds it.
+- **Windows: Codex.** It has a native sandbox, and its permission profiles, deny rules included, are supported on native Windows. Codex workers may run natively once PLX-38 and PLX-24 confirm that 0013's contract holds there. Until then they are refused too. Only the `elevated` sandbox mode counts, and it needs a one-time admin setup. The `unelevated` mode has no separate sandbox user and weaker network isolation.
+- **Cursor** workers stay refused on every OS until PLX-40 settles 0013's open items for Cursor. Its Linux and Windows sandboxes are part of that work.
+- **WSL2 is how a Windows machine runs Claude workers.** `plxd` for Linux runs inside a WSL2 distro, with Linux's sandbox. The app reaches it as a host by running `wsl.exe --distribution <name> -- plxd attach` instead of `ssh`. That keeps 0022's rule that the main process owns every process and speaks over stdio. PLX-86 builds it.
 
 ### The app's `ssh` on Windows
 
 - The main process runs `ssh` from `PATH` on every OS, and a setting can override the path.
 - On Windows, that is `C:\Windows\System32\OpenSSH\ssh.exe`, from the OpenSSH Client optional feature (Windows 10 1809 and later). When it is missing, the app says to install that feature.
-- 0022's command line doesn't change. RYA-26 checks that Windows' OpenSSH accepts `-o ControlPath=none`, and drops the option on Windows if it doesn't.
+- 0022's command line doesn't change. PLX-26 checks that Windows' OpenSSH accepts `-o ControlPath=none`, and drops the option on Windows if it doesn't.
 - Keys with a passphrase need the `ssh-agent` Windows service, which is disabled by default. The error for a key that needs a passphrase says so.
 
 ### OS and arch coverage
@@ -131,11 +131,11 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
 | Windows x86_64 | `x86_64-pc-windows-msvc` | `check-rust`, app; the ssh attach check once the runner's `sshd` can be set up | Yes |
 | Windows arm64 | `aarch64-pc-windows-msvc` | No | Yes |
 
-- **PR CI** tests one arch per OS, to keep it fast, except Linux, where `plxd` is checked on both arches (RYA-17). The Windows arm64 build runs on GitHub's arm64 runners, with `plxd --version` and an attach handshake as a smoke check (RYA-29).
+- **PR CI** tests one arch per OS, to keep it fast, except Linux, where `plxd` is checked on both arches (PLX-17). The Windows arm64 build runs on GitHub's arm64 runners, with `plxd --version` and an attach handshake as a smoke check (PLX-29).
 - **Linux binaries** are static musl builds, so they run on any distro with no glibc floor. The spawn above needs only `POSIX_SPAWN_SETSID`, which musl has. Nothing links a system library: SQLite is bundled, and the Secret Service store is pure Rust.
 - **macOS x86_64 isn't built.** 0006's reason still holds: macOS 27 runs only on Apple silicon. Adding it later is one more target on the macOS runner.
 - **Windows** needs Windows 10 1809 or later, or Windows 11. That's the first version with the OpenSSH Client feature and ConPTY.
-- **Releases** ship the app for these five targets. Each package bundles the local `plxd` (RYA-66). Bundling the others, for installs on remote hosts, is RYA-28's. Installer formats and signing are RYA-64's.
+- **Releases** ship the app for these five targets. Each package bundles the local `plxd` (PLX-66). Bundling the others, for installs on remote hosts, is PLX-28's. Installer formats and signing are PLX-64's.
 
 ## Alternatives
 
@@ -158,7 +158,7 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
 
 ## Consequences
 
-- **Supersedes** PLAN.md's non-goal of Windows and Linux (RYA-8 rewrites the plan). It also extends these records to three OSes:
+- **Supersedes** PLAN.md's non-goal of Windows and Linux (PLX-8 rewrites the plan). It also extends these records to three OSes:
 
   - 0004's Keychain, and 0005's FSEvents watcher.
   - 0006's arm64-only releases.
@@ -168,11 +168,11 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
   - 0022's deferral of Windows' `ssh`.
 
   On macOS, those records stand as written. The lock already uses std's `File::try_lock` (`flock` on Unix), so it doesn't change.
-- **RYA-17** (plxd on Linux) implements the Linux column. That covers the socket in the data folder by default, the `/proc/self/fd` close actions in `spawn_session` (which `backend/process.rs` also uses), and the `disallowed-methods` lint. **RYA-18** installs the systemd user unit, and **RYA-19** adds the Secret Service store. **RYA-20** adds the Linux sandbox, including the seccomp-filter requirement.
-- **RYA-21** (plxd on Windows) implements the Windows column: the pipe, the unsafe module, breakaway, clearing the inherit flag, and the lock that is never removed. It also covers `.cmd` shims: std's `Command` finds only `.exe` on `PATH`, and refuses batch-file arguments it can't escape. So the error for such a refusal suggests the vendor's native installer. RYA-21 also checks that `core.hooksPath=/dev/null` disables hooks under Git for Windows, or uses `NUL`.
-- **RYA-22** registers the scheduled task, **RYA-23** adds the Credential Manager store, and **RYA-24** makes the native refusal and its WSL2 message.
-- **RYA-86** reaches a WSL2 distro as a host from the Windows app. Until it lands, a Windows user who wants Claude workers adds the distro as an SSH host.
-- **RYA-25** runs `check-rust` on three OSes. **RYA-29** builds the five targets, and **RYA-64** and **RYA-66** package them.
+- **PLX-17** (plxd on Linux) implements the Linux column. That covers the socket in the data folder by default, the `/proc/self/fd` close actions in `spawn_session` (which `backend/process.rs` also uses), and the `disallowed-methods` lint. **PLX-18** installs the systemd user unit, and **PLX-19** adds the Secret Service store. **PLX-20** adds the Linux sandbox, including the seccomp-filter requirement.
+- **PLX-21** (plxd on Windows) implements the Windows column: the pipe, the unsafe module, breakaway, clearing the inherit flag, and the lock that is never removed. It also covers `.cmd` shims: std's `Command` finds only `.exe` on `PATH`, and refuses batch-file arguments it can't escape. So the error for such a refusal suggests the vendor's native installer. PLX-21 also checks that `core.hooksPath=/dev/null` disables hooks under Git for Windows, or uses `NUL`.
+- **PLX-22** registers the scheduled task, **PLX-23** adds the Credential Manager store, and **PLX-24** makes the native refusal and its WSL2 message.
+- **PLX-86** reaches a WSL2 distro as a host from the Windows app. Until it lands, a Windows user who wants Claude workers adds the distro as an SSH host.
+- **PLX-25** runs `check-rust` on three OSes. **PLX-29** builds the five targets, and **PLX-64** and **PLX-66** package them.
 - **New dependencies:**
   - Linux: `keyring-core` and `zbus-secret-service-keyring-store`.
   - Windows: `keyring-core`, `windows-native-keyring-store`, and `windows-sys`, which tokio already pulls in there.

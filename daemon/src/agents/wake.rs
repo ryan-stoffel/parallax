@@ -1,4 +1,4 @@
-//! Waking a project's coordinator when runs it started finish (RYA-42, decision 0025).
+//! Waking a project's coordinator when runs it started finish (PLX-42, decision 0025).
 //!
 //! When a worker with a `coordinatorThread` ends a CLI process, [`notify`] hands a summary of it
 //! to the coordinator's actor, which keeps it in [`Wakes`]. The actor sends what is waiting as one
@@ -8,7 +8,7 @@
 //! or when a wake-up can't start it, it pauses them until the user writes and reports
 //! `agent.wakeupsPaused`.
 //!
-//! A restart keeps the count and a pause in the store (RYA-178). What was waiting, and the runs
+//! A restart keeps the count and a pause in the store (PLX-178). What was waiting, and the runs
 //! the stop interrupted, [`catch_up`] rebuilds from the store when plxd starts.
 
 use std::collections::HashMap;
@@ -94,7 +94,7 @@ impl Wakes {
         !std::mem::replace(&mut self.state.paused, true)
     }
 
-    /// The count and pause, as the store keeps them across a restart (RYA-178).
+    /// The count and pause, as the store keeps them across a restart (PLX-178).
     pub fn state(&self) -> WakeState {
         self.state
     }
@@ -137,7 +137,7 @@ pub(super) fn notify(daemon: &Arc<Daemon>, thread: Uuid, summary: String) {
 }
 
 /// After a restart, hands each project's current coordinator one summary of the runs it started
-/// that ended after its last turn began (RYA-178): the runs the stop interrupted, and any whose
+/// that ended after its last turn began (PLX-178): the runs the stop interrupted, and any whose
 /// wake-up was still waiting. A run a wake-up already named ended before that wake-up's turn, so
 /// it isn't named again. If the coordinator's own turn was interrupted, the summary says so, since
 /// nothing else would pick it back up. Called once at startup, after runs the store still has

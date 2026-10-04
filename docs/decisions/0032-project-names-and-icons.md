@@ -2,11 +2,11 @@
 
 - Status: accepted
 - Date: 2026-10-01
-- Issue: RYA-227
+- Issue: PLX-227
 
 ## Context
 
-Ryan wants projects to be renamable and to have an icon he chooses, with a color, like Cursor's Projects. A project's name is fixed at `project/create`, and a project has no icon. The app (RYA-230) adds an icon picker and a Rename action, and needs a contract to build them on.
+Ryan wants projects to be renamable and to have an icon he chooses, with a color, like Cursor's Projects. A project's name is fixed at `project/create`, and a project has no icon. The app (PLX-230) adds an icon picker and a Rename action, and needs a contract to build them on.
 
 A project lives in its host's store (0009), and any number of clients can attach to one plxd (0007). The app sorts its sidebar by `Project.updatedAt`, most recent first.
 
@@ -30,7 +30,7 @@ A project lives in its host's store (0009), and any number of clients can attach
 
 ## Consequences
 
-- RYA-230 builds the picker and Rename on this contract without another protocol change.
+- PLX-230 builds the picker and Rename on this contract without another protocol change.
 - The generated TypeScript type is `ProjectIcon`. An app component with the same name has to import the type under another name.
 - A `project/create` retried after the project was renamed or given another icon fails with `idConflict`, since the stored project no longer matches its params. A client only retries a create right after a lost connection, before the user can edit it.
 - The palette and the icon set can change in the app alone. A host never holds a name it would reject later, because it never checks names against a list.

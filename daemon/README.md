@@ -17,7 +17,7 @@ The decisions behind it:
 | --- | --- |
 | `plxd serve` | Serves the protocol on this user's Unix socket, or named pipe on Windows, until SIGTERM or SIGINT (Ctrl-C or Ctrl-Break on Windows) |
 | `plxd attach` | Connects stdin and stdout to that socket or pipe, and starts plxd first if nothing is listening |
-| `plxd service install`, `uninstall`, `status` | macOS and Linux: manage the service that keeps `serve` running, a LaunchAgent (#61) or a systemd user unit (RYA-18) |
+| `plxd service install`, `uninstall`, `status` | macOS and Linux: manage the service that keeps `serve` running, a LaunchAgent (#61) or a systemd user unit (PLX-18) |
 
 Both commands take `--data-dir` (or `PLXD_DATA_DIR`) to use a data folder other than the default: `~/Library/Application Support/parallax` on macOS, `$XDG_DATA_HOME/parallax` on Linux, or `~/.local/share/parallax` when `XDG_DATA_HOME` is unset, and `%LOCALAPPDATA%\parallax` on Windows. The socket is `plxd.sock` in that folder. When that path is too long for a Unix socket, it moves to a per-user folder: the one `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. On Windows, `serve` listens on the named pipe `\\.\pipe\plxd-<hash>` instead, where `<hash>` is the first 16 hex digits of the SHA-256 of the data folder's path. Its ACL admits only your user, and each end checks that the other runs as your user. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
 
@@ -87,7 +87,7 @@ The client runs the same `ssh ... <host> plxd attach` command, and the host need
 
    To check, run `ssh <host> 'command -v plxd'`.
 2. **Quiet shell startup files and a key that logs in without prompts**, as on a Mac.
-3. **The systemd user unit, which is recommended** (RYA-18). `plxd service install` writes `~/.config/systemd/user/io.github.ryan-stoffel.parallax.plxd.service`, enables it, and starts it. `uninstall` and `status` work as on a Mac, and `attach` starts plxd with `systemctl --user start` whenever the unit is installed.
+3. **The systemd user unit, which is recommended** (PLX-18). `plxd service install` writes `~/.config/systemd/user/io.github.ryan-stoffel.parallax.plxd.service`, enables it, and starts it. `uninstall` and `status` work as on a Mac, and `attach` starts plxd with `systemctl --user start` whenever the unit is installed.
    - **Turn on linger**, once. Without it, systemd stops your user services when your last session ends and starts them again at your next login. With it, the unit starts at boot and keeps running while nobody is logged in:
 
      ```sh
@@ -119,7 +119,7 @@ The client runs the same `ssh ... <host> plxd attach` command against Windows' o
 1. **`plxd.exe` on the `PATH`** of an SSH command, which runs through `cmd.exe`. The user or system `PATH` in Settings works; to check, run `ssh <host> where plxd`.
 2. **A key that logs in without prompts.** For an administrator, Windows' sshd reads keys from `C:\ProgramData\ssh\administrators_authorized_keys`, not `~/.ssh/authorized_keys`.
 
-Windows has no service yet (a scheduled task is RYA-22), so `attach` always starts `serve` itself, with no console and broken away from the SSH session's job, which Windows' sshd kills when the session ends. If the job doesn't allow that, `attach` warns that `serve` will stop with the session. `plxd.lock` stays in the data folder after `serve` stops, and a second `serve`'s exit-3 error can't name the running one's pid, because Windows' lock keeps other processes from reading the file. A Windows host can't store API keys yet (RYA-23), and Claude Code has no sandbox on native Windows, so workers are refused with `workerUnavailable`; run `plxd` in WSL2 for those (RYA-24). Subscriptions and no-write runs work. Agent CLIs run in a job object, so cancelling one closes its stdin and, after a grace period, ends everything it started.
+Windows has no service yet (a scheduled task is PLX-22), so `attach` always starts `serve` itself, with no console and broken away from the SSH session's job, which Windows' sshd kills when the session ends. If the job doesn't allow that, `attach` warns that `serve` will stop with the session. `plxd.lock` stays in the data folder after `serve` stops, and a second `serve`'s exit-3 error can't name the running one's pid, because Windows' lock keeps other processes from reading the file. A Windows host can't store API keys yet (PLX-23), and Claude Code has no sandbox on native Windows, so workers are refused with `workerUnavailable`; run `plxd` in WSL2 for those (PLX-24). Subscriptions and no-write runs work. Agent CLIs run in a job object, so cancelling one closes its stdin and, after a grace period, ends everything it started.
 
 plxd listens only on its Unix socket or named pipe, never on a network port. SSH, with your own keys and config, is the only way in from another machine.
 

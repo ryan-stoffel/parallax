@@ -48,7 +48,7 @@ pub enum ErrorKind {
     /// versions. `project/start` fails with it too when the account's backend can't coordinate.
     WorkerUnavailable,
     /// plxd could not create the run's worktree, for example because the project's repository
-    /// has uncommitted changes, or read the git state of the run's folder (RYA-298). The message
+    /// has uncommitted changes, or read the git state of the run's folder (PLX-298). The message
     /// says what to do.
     WorktreeFailed,
     /// The run was accepted (#157): its worktree and branch are gone, so there is nothing left to
@@ -72,11 +72,11 @@ pub enum ErrorKind {
     NoDefaultAccount,
     /// The run's backend can't honor a `model`, `effort`, `permission`, `contextWindow`, or
     /// `fast` that `agent/start` or `thread/start` asked for, or the model's name can't be passed
-    /// to its CLI (RYA-97). Nothing was created. The message names the option, the value, and the
+    /// to its CLI (PLX-97). Nothing was created. The message names the option, the value, and the
     /// backend.
     UnsupportedOption,
     /// `agent/openPr` refused before pushing anything: the run is still running, it has no commit
-    /// beyond its base, or it is a thread with no repo, which has no `origin` (RYA-168).
+    /// beyond its base, or it is a thread with no repo, which has no `origin` (PLX-168).
     PrRefused,
     /// `agent/openPr` could not push the run's branch: the repository has no `origin`, or git
     /// failed. The message carries git's stderr.
@@ -89,16 +89,16 @@ pub enum ErrorKind {
     /// message carries gh's stderr. For `agent/openPr`, the branch was pushed first.
     PrFailed,
     /// An image in `images` is over the per-image cap, or a message's images are over the
-    /// per-message cap or count, which `promptImages`' options give (RYA-191). The message says
+    /// per-message cap or count, which `promptImages`' options give (PLX-191). The message says
     /// which. Nothing was sent. `project/create`, `project/update`, and `repo/update` also return
     /// it when `icon.image` is over `iconImages`' `maxBytes` (PLX-339, 0038); nothing changed.
     ImageTooLarge,
-    /// No image of the run has the given id (RYA-191).
+    /// No image of the run has the given id (PLX-191).
     ImageNotFound,
     /// The run has no permission request with the given id, as a run started without
-    /// `approvals` never has, or none this plxd has seen since it started (RYA-222).
+    /// `approvals` never has, or none this plxd has seen since it started (PLX-222).
     ApprovalNotFound,
-    /// `agent/commit` or `agent/push` refused with nothing changed (RYA-298): the run is still
+    /// `agent/commit` or `agent/push` refused with nothing changed (PLX-298): the run is still
     /// running, there is nothing to commit, or its folder has a detached HEAD, with no branch to
     /// push. The message says which.
     GitRefused,

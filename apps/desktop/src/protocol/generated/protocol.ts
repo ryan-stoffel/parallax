@@ -179,7 +179,7 @@ export type ParallaxRequests = {
 	"agent/file": { params: AgentFileParams, result: AgentFileResult },
 	/**
 	 * `agent/files`: one folder of a run's worktree, or a Current checkout thread's
-	 * checkout, without `.git` or what git ignores, for browsing (RYA-296). Gated on the
+	 * checkout, without `.git` or what git ignores, for browsing (PLX-296). Gated on the
 	 * `files` capability.
 	 */
 	"agent/files": { params: AgentFilesParams, result: AgentFilesResult },
@@ -196,12 +196,12 @@ export type ParallaxRequests = {
 	"agent/requestChanges": { params: AgentRequestChangesParams, result: AgentRunResult },
 	/**
 	 * `agent/openPr`: pushes a finished run's branch to the repository's `origin` and opens
-	 * a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
+	 * a pull request for it with `gh`, or finds the one already open (PLX-168). Gated on the
 	 * `openPr` capability.
 	 */
 	"agent/openPr": { params: AgentOpenPrParams, result: AgentOpenPrResult },
 	/**
-	 * `agent/gitStatus`: the git state of a run's folder (RYA-298). Gated on the `git`
+	 * `agent/gitStatus`: the git state of a run's folder (PLX-298). Gated on the `git`
 	 * capability, like `agent/commit` and `agent/push`.
 	 */
 	"agent/gitStatus": { params: AgentGitStatusParams, result: GitStatus },
@@ -215,7 +215,7 @@ export type ParallaxRequests = {
 	"agent/push": { params: AgentPushParams, result: GitStatus },
 	/**
 	 * `agent/approve`: answers a run's permission request, from its `approvalRequested`
-	 * item, by allowing or denying the tool call (RYA-222, decision 0031). Idempotent on the
+	 * item, by allowing or denying the tool call (PLX-222, decision 0031). Idempotent on the
 	 * request. Gated on the `approvals` capability.
 	 */
 	"agent/approve": { params: AgentApproveParams, result: AgentApproveResult },
@@ -596,7 +596,7 @@ export type Project = {
 	 */
 	name: string,
 	/**
-	 * The icon the user chose, behind the `projectEdit` capability (RYA-227, 0032). Absent means
+	 * The icon the user chose, behind the `projectEdit` capability (PLX-227, 0032). Absent means
 	 * the app's default icon.
 	 */
 	icon?: ProjectIcon,
@@ -631,7 +631,7 @@ export type Project = {
 };
 
 /**
- * A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
+ * A project's icon (PLX-227, 0032): a Lucide icon and a color from the app's palette, both by
  * name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
  * them and never reads them.
  */
@@ -655,7 +655,7 @@ export type ProjectIcon = {
 };
 
 /**
- * An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
+ * An image sent with a prompt or message, behind the `promptImages` capability (PLX-191,
  * decision 0026). The CLI gets it beside the text, never as a file name or path in it. A
  * project's or repo's icon image has the same shape (0038).
  */
@@ -671,7 +671,7 @@ export type PromptImage = {
 };
 
 /**
- * An image's file type (RYA-191): the four that Claude and Codex both take.
+ * An image's file type (PLX-191): the four that Claude and Codex both take.
  *
  * A newer peer may send a type this version does not know; treat it as unknown.
  */
@@ -1095,8 +1095,8 @@ export type ProviderInfo = {
 };
 
 /**
- * A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
- * which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
+ * A run's permission mode, behind the `runOptions` capability (PLX-97): Claude Code's modes,
+ * which each backend reports the subset of that it maps (PLX-188, 0027). A worker keeps the
  * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
  *
  * A newer peer may send a value this version does not know; treat it as unknown.
@@ -1701,20 +1701,20 @@ export type AgentStartParams = {
 	 */
 	fast?: boolean,
 	/**
-	 * The permission mode (RYA-97, 0027). Absent means `edit`. Ignored in a project, whose
+	 * The permission mode (PLX-97, 0027). Absent means `edit`. Ignored in a project, whose
 	 * runs run in the project's mode (0042).
 	 */
 	permission?: AgentPermission,
 	/**
 	 * Images for the prompt, sent only to a plxd that advertises `promptImages`. Its options
 	 * give the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of `data`, past which
-	 * the request fails with `imageTooLarge`. With images, the prompt may be empty (RYA-193). A
+	 * the request fails with `imageTooLarge`. With images, the prompt may be empty (PLX-193). A
 	 * retry must repeat them; plxd doesn't compare them.
 	 */
 	images?: Array<PromptImage>,
 	/**
 	 * Forward the run's permission requests to the client as `approvalRequested` items, which
-	 * `agent/approve` answers (RYA-222, decision 0031). Set it only when the client shows and
+	 * `agent/approve` answers (PLX-222, decision 0031). Set it only when the client shows and
 	 * answers them, and only to a plxd that advertises `approvals`. A thread with it is full
 	 * Claude Code and also asks in Accept Edits (0034). Absent, a run in Manual, Auto, or Plan
 	 * denies what would prompt, and a thread keeps the worker sandbox, as before. A run with a
@@ -1734,7 +1734,7 @@ export type AgentStartParams = {
 };
 
 /**
- * How hard a run's model thinks, behind the `runOptions` capability (RYA-97). Claude Code takes
+ * How hard a run's model thinks, behind the `runOptions` capability (PLX-97). Claude Code takes
  * every level as `--effort`, and downgrades `xhigh` on models that lack it. A backend that can't
  * honor a level refuses the run with `unsupportedOption`.
  *
@@ -1854,7 +1854,7 @@ export type AgentRun = {
 	permission?: AgentPermission,
 	/**
 	 * True when it forwards its permission requests to the client, as the start method that
-	 * made it asked with `approvals` (RYA-222, decision 0031). It never changes. Absent means
+	 * made it asked with `approvals` (PLX-222, decision 0031). It never changes. Absent means
 	 * false: its CLI denies what would prompt.
 	 */
 	approvals?: boolean,
@@ -1940,7 +1940,7 @@ export type AgentSendParams = {
 	 */
 	text: string,
 	/**
-	 * A new model for the run and every later resume (RYA-163), sent only to a plxd that
+	 * A new model for the run and every later resume (PLX-163), sent only to a plxd that
 	 * advertises `sendModel`. It should be one the run's backend runs, or with `account`, that
 	 * account's; plxd can't check that, so another's fails the run with the CLI's own error.
 	 * Absent, or the run's own, changes nothing. While the run's CLI is running, a different one
@@ -1950,11 +1950,11 @@ export type AgentSendParams = {
 	 */
 	model?: string,
 	/**
-	 * A new effort (RYA-161), as `model`. `sendOptions` is enough for it and `permission`.
+	 * A new effort (PLX-161), as `model`. `sendOptions` is enough for it and `permission`.
 	 */
 	effort?: AgentEffort,
 	/**
-	 * A new permission (RYA-161), as `effort`. Ignored for a run in a project, which runs in the
+	 * A new permission (PLX-161), as `effort`. Ignored for a run in a project, which runs in the
 	 * project's mode (0042).
 	 */
 	permission?: AgentPermission,
@@ -2317,7 +2317,7 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 */
 	text?: string,
 	/**
-	 * True for a wake-up (RYA-42, decision 0025): a turn plxd sent a project's coordinator
+	 * True for a wake-up (PLX-42, decision 0025): a turn plxd sent a project's coordinator
 	 * on its own, not the user, because runs it started finished. `text` lists them. Also
 	 * true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
 	 * 0049).
@@ -2331,7 +2331,7 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	from?: RunId,
 	/**
 	 * The images sent with the turn's message, the prompt's or a follow-up's, in order, for
-	 * `agent/image` (RYA-191). Absent when it had none.
+	 * `agent/image` (PLX-191). Absent when it had none.
 	 */
 	images?: Array<ImageId>,
 	/**
@@ -2556,7 +2556,7 @@ export type AgentToolStatus = "ok" | "error" | "denied";
 export type ApprovalId = string;
 
 /**
- * A stored image's id (RYA-191, decision 0026): a version 7 UUID that plxd generates once a
+ * A stored image's id (PLX-191, decision 0026): a version 7 UUID that plxd generates once a
  * message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
  */
 export type ImageId = string;
@@ -2592,11 +2592,11 @@ export type AgentRunState = {
 	 */
 	diff?: DiffSummary,
 	/**
-	 * Its model, which `agent/send` can change (RYA-163). Absent means the CLI's default.
+	 * Its model, which `agent/send` can change (PLX-163). Absent means the CLI's default.
 	 */
 	model?: string,
 	/**
-	 * Its effort, which `agent/send` can change (RYA-161). Absent means the CLI's default.
+	 * Its effort, which `agent/send` can change (PLX-161). Absent means the CLI's default.
 	 */
 	effort?: AgentEffort,
 	/**
@@ -2610,7 +2610,7 @@ export type AgentRunState = {
 	 */
 	fast?: boolean,
 	/**
-	 * Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
+	 * Its permission, which `agent/send` can change (PLX-161). Absent means `edit`.
 	 */
 	permission?: AgentPermission,
 	/**
@@ -2803,7 +2803,7 @@ export type ForkedFrom = {
 
 /**
  * Params of `agent/image`: one image sent with a run's messages, by an id from its
- * `turnStarted` (RYA-191). Its result is the [`PromptImage`] as it was sent.
+ * `turnStarted` (PLX-191). Its result is the [`PromptImage`] as it was sent.
  */
 export type AgentImageParams = {
 	/**
@@ -2988,7 +2988,7 @@ export type AgentFileResult = {
 };
 
 /**
- * Params of `agent/files` (RYA-296): one folder of a run's worktree, or for a Current checkout
+ * Params of `agent/files` (PLX-296): one folder of a run's worktree, or for a Current checkout
  * thread, its repository's checkout.
  */
 export type AgentFilesParams = {
@@ -3105,7 +3105,7 @@ export type AgentRequestChangesParams = {
 };
 
 /**
- * Params of `agent/openPr` (RYA-168): plxd pushes the run's branch to the repository's `origin`
+ * Params of `agent/openPr` (PLX-168): plxd pushes the run's branch to the repository's `origin`
  * on the host, as the user, and opens a pull request for it against the GitHub repository's
  * default branch with `gh`.
  *
@@ -3116,7 +3116,7 @@ export type AgentOpenPrParams = {
 	/**
 	 * The run. It must have finished, have a commit, and work in a repository: a thread with no
 	 * repo has no `origin`. A Current checkout thread instead pushes the branch its checkout has
-	 * out (RYA-298), and needs one: not a detached HEAD.
+	 * out (PLX-298), and needs one: not a detached HEAD.
 	 */
 	runId: RunId,
 	/**
@@ -3639,7 +3639,7 @@ export type ProjectStartParams = {
 
 /**
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
- * capability (RYA-227, 0032), or its permission mode, behind `projectPermission` (0042).
+ * capability (PLX-227, 0032), or its permission mode, behind `projectPermission` (0042).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
  * `project/create`'s rules, and the repository can't change. A rename, a new icon, or a new mode
