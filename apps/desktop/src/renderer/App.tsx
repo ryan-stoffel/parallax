@@ -63,22 +63,21 @@ import {
 import { isRunning } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
-import { UsagePage } from "./UsagePage";
 
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
  * thread (its id is its run's; `started` when New Thread just started it, until anything else is
  * selected; `subagent` when one of its agent's own subagents is open, by its call's id), a new
- * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's), or Usage.
+ * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's).
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
   | { kind: "thread"; threadId: string; started?: boolean; subagent?: string }
-  | { kind: "new"; groupId?: string }
-  | { kind: "usage" };
+  | { kind: "new"; groupId?: string };
 
 export type SettingsSection =
   | "account"
+  | "usage"
   | "general"
   | "appearance"
   | "keybinds"
@@ -431,7 +430,7 @@ export function App() {
 
   // Where the open thread's or New thread's terminals open (folderOf).
   const folder =
-    settings || selection.kind === "usage" || selection.kind === "project"
+    settings || selection.kind === "project"
       ? undefined
       : folderOf(
           host.id,
@@ -472,7 +471,7 @@ export function App() {
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
-      else if (command === "usage") openOnHost(host.id, { kind: "usage" });
+      else if (command === "usage") openSettings("usage");
       else if (
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
@@ -503,8 +502,8 @@ export function App() {
       <PanelLeftOpen />
     </IconButton>
   );
-  // The side panel is a chat's, so Settings and Usage have none.
-  const chat = !settings && selection.kind !== "usage";
+  // The side panel is a chat's, so Settings has none.
+  const chat = !settings;
   const sidePanelOpen = panelOpen && chat;
   const expanded = sidePanelOpen && panelExpanded;
   // The main pane's top row meets the traffic lights without the sidebar, and
@@ -568,8 +567,6 @@ export function App() {
               sourceControlHost={settingsHost}
             />
           </>
-        ) : selection.kind === "usage" ? (
-          <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
         ) : (
           <>
             <TopBar className={`@container ${topBarInset}`}>
@@ -733,7 +730,7 @@ export function App() {
             )}
           </>
         )}
-        {/* Outside the views, so the terminals live on behind Settings and Usage. */}
+        {/* Outside the views, so the terminals live on behind Settings. */}
         <TerminalDrawer
           open={drawerOpen}
           folder={folder}

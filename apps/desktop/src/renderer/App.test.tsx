@@ -81,7 +81,12 @@ test("the sidebar's title opens a new thread", () => {
   act(() =>
     document.querySelector<HTMLButtonElement>('#sidebar button[aria-label="Usage"]')!.click(),
   );
-  expect(crumbs()[0]).toBe("Usage");
+  expect(crumbs()).toEqual(["Settings", "Usage"]);
+  act(() =>
+    [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")]
+      .find((b) => b.textContent === "Back to app")!
+      .click(),
+  );
 
   const title = [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
     (b) => b.textContent === "Parallax",
@@ -90,7 +95,7 @@ test("the sidebar's title opens a new thread", () => {
   expect(crumbs().at(-1)).toBe("New thread");
 });
 
-test("Mod+S toggles the sidebar, and Mod+Alt+U opens the Usage page", () => {
+test("Mod+S toggles the sidebar, and Mod+Alt+U opens Settings > Usage", () => {
   renderApp();
   const press = (init: KeyboardEventInit) =>
     act(() => {
@@ -105,7 +110,7 @@ test("Mod+S toggles the sidebar, and Mod+Alt+U opens the Usage page", () => {
 
   press({ code: "KeyU", altKey: true });
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
 });
 
 test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not Mod+O or Mod+B", () => {
@@ -120,7 +125,7 @@ test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not M
   expect(press({ code: "KeyO", metaKey: true, altKey: true, shiftKey: true })).toBeUndefined();
 });
 
-test("the footer's Usage opens the Usage page, and Update shows when it's ready and its answer", async () => {
+test("the footer's Usage opens Settings > Usage, and Update shows when it's ready and its answer", async () => {
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   renderApp();
@@ -129,11 +134,15 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
 
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
-  // The sidebar stays on the thread list, and the side panel is a chat's.
-  expect(button("Usage")).not.toBeNull();
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
+  // Settings' nav lists it after Account, and the side panel is a chat's.
+  const nav = [...document.querySelectorAll("#sidebar button")].map((b) => b.textContent);
+  expect(nav.slice(nav.indexOf("Account"), nav.indexOf("Account") + 2)).toEqual([
+    "Account",
+    "Usage",
+  ]);
   expect(document.querySelector('main [aria-controls="side-panel"]')).toBeNull();
-  // The range stays in the top bar on Limits, but can't be changed there.
+  // The range stays in the header on Limits, but can't be changed there.
   const range = document.querySelector<HTMLFieldSetElement>('main [aria-label="Usage range"]')!;
   expect(range.disabled).toBe(false);
   act(() => document.querySelector<HTMLInputElement>('main input[value="limits"]')!.click());

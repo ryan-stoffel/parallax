@@ -67,6 +67,7 @@ import { StorageSettings } from "./settings/StorageSettings";
 import type { ThreadsView } from "./threads";
 import { IconButton, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
+import { UsagePage } from "./UsagePage";
 import { uuidv7 } from "./uuidv7";
 
 // xterm.js is large, so it loads when a sign-in first opens.
@@ -92,13 +93,16 @@ export function Settings({
   onThemeChange,
   sourceControlHost,
 }: SettingsProps) {
+  const hosts = useHosts();
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div
-        className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" ? "max-w-5xl" : "max-w-3xl"}`}
+        className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" || section === "usage" ? "max-w-5xl" : "max-w-3xl"}`}
       >
         {section === "account" ? (
           <AccountSettings listed={listed} />
+        ) : section === "usage" ? (
+          <UsagePage hosts={hosts} />
         ) : section === "general" ? (
           <GeneralSettings />
         ) : section === "appearance" ? (
