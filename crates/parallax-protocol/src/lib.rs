@@ -68,9 +68,9 @@ pub use agent::{
     AgentAutoResumeParams, AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult,
     AgentFailureKind, AgentImageParams, AgentListParams, AgentListResult, AgentOutcome,
     AgentOutputItem, AgentPermission, AgentPolicy, AgentResumeNowParams, AgentRun, AgentRunResult,
-    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus,
-    AgentToolStatus, CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent,
-    PromptImage, RunId, TurnId,
+    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentSubagentStatus,
+    AgentTodoItem, AgentTodoStatus, AgentToolStatus, CoordinatorThreadId, DiffSummary, ImageId,
+    ImageMediaType, LoggedEvent, PromptImage, RunId, TurnId,
 };
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,

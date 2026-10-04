@@ -2573,7 +2573,35 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The user's message to the agent with a denial, cut short when it is long.
 	 */
-	message?: string,
+	message?: string, } | { "kind": "subagent",
+	/**
+	 * The tool call that started the subagent, whose `toolCall` names its task.
+	 */
+	callId: string,
+	/**
+	 * The subagent's type, such as `general-purpose`, when the vendor says.
+	 */
+	agentType?: string,
+	/**
+	 * The model that wrote the item, when the vendor says.
+	 */
+	model?: string,
+	/**
+	 * The item.
+	 */
+	item: AgentOutputItem, } | { "kind": "subagentFinished",
+	/**
+	 * The tool call that started it.
+	 */
+	callId: string,
+	/**
+	 * How it ended.
+	 */
+	status: AgentSubagentStatus,
+	/**
+	 * Its final report, when the vendor includes it, cut short when it is long.
+	 */
+	summary?: string,
 };
 
 /**
@@ -2589,6 +2617,13 @@ export type AgentApprovalBy = "user" | "timeout" | "cancel" | "stop" | "agent";
  * A newer plxd may send a value this version does not know; treat it as unknown.
  */
 export type AgentApprovalDecision = "allowed" | "denied" | "expired" | "withdrawn";
+
+/**
+ * How one of an agent's own subagents ended (PLX-382).
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type AgentSubagentStatus = "completed" | "failed" | "stopped";
 
 /**
  * One item of an agent's checklist.

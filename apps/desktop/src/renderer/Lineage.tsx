@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+import { Bot, Lock } from "lucide-react";
 import { useEffect, useId, useRef, useState, type RefObject, type ToggleEvent } from "react";
 
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
@@ -6,8 +6,9 @@ import { attentionOf, type Attention } from "./attention";
 import { duration } from "./AttentionMark";
 import { models } from "./models";
 import { age, backendLogos } from "./Sidebar";
+import { modelName, type NativeSubagent } from "./Subagents";
 import { asksOf, childrenOf, type ThreadsState } from "./threads";
-import { isRunning, statusLabel } from "./transcript";
+import { isRunning, statusLabel, subagentLabels, type SubagentState } from "./transcript";
 import { menuPanel } from "./ui";
 
 // How many chips the top bar shows before the rest go behind +N, the room each takes at most (a
@@ -47,6 +48,14 @@ const attentionNames: Record<Exclude<Attention, "settled">, string> = {
   failed: "Failed",
 };
 
+/** A subagent's state as its dot shows it: done and stopped are as quiet as a settled thread. */
+const subagentDots: Record<SubagentState, Attention> = {
+  running: "working",
+  completed: "settled",
+  failed: "failed",
+  stopped: "settled",
+};
+
 /** A thread's status (0033) as a small dot: Working pulses, and settled is a quiet gray. */
 export function StatusDot({ attention }: { attention: Attention }) {
   return <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${dotColors[attention]}`} />;
@@ -66,9 +75,10 @@ function statusText(attention: Attention, run?: AgentRun) {
 
 /**
  * The top bar's chips for a thread's lineage (0041), after its title crumb: one per child, or as
- * a child, one per sibling with its own underlined. Each is a status dot, the provider's logo,
- * and the title cut short. At most four show, as many as fit, the open one among them, and `+N`
- * opens the whole tree from `root`, alone when no chip fits.
+ * a child, one per sibling with its own underlined, then one per subagent of the open thread's
+ * own agent, marked read-only (PLX-382). Each is a status dot, the provider's logo (a bot for a
+ * subagent), and the title cut short. At most four show, as many as fit, the open one among
+ * them, and `+N` opens the whole tree from `root`, alone when no chip fits.
  */
 export function LineageTrail({
   state,
@@ -77,6 +87,9 @@ export function LineageTrail({
   root,
   openId,
   onOpen,
+  subagents = [],
+  activeSubagent,
+  onOpenSubagent,
 }: {
   state: ThreadsState;
   chips: Thread[];
@@ -87,6 +100,11 @@ export function LineageTrail({
   /** The open thread, marked in the tree. */
   openId: string;
   onOpen: (threadId: string) => void;
+  /** The open thread's agent's own top-level subagents. */
+  subagents?: NativeSubagent[];
+  /** The open subagent, by its call's id. */
+  activeSubagent?: string;
+  onOpenSubagent?: (callId: string) => void;
 }) {
   const group = useRef<HTMLDivElement>(null);
   const width = useWidth(group);
@@ -94,16 +112,17 @@ export function LineageTrail({
   // none fit, since its tree lists them all.
   const fit = (room: number) =>
     room >= chipRoom ? Math.floor(room / chipRoom) : room >= minChipRoom ? 1 : 0;
-  const count = Math.min(
-    maxChips,
-    fit(width) >= chips.length ? chips.length : fit(width - moreRoom),
-  );
-  let shown = chips.slice(0, count);
-  const current = chips.find((c) => c.id === active);
+  const all: { id: string; thread?: Thread; sub?: NativeSubagent }[] = [
+    ...chips.map((thread) => ({ id: thread.id, thread })),
+    ...subagents.map((sub) => ({ id: sub.callId, sub })),
+  ];
+  const count = Math.min(maxChips, fit(width) >= all.length ? all.length : fit(width - moreRoom));
+  let shown = all.slice(0, count);
+  const current = all.find((c) => c.id === (activeSubagent ?? active));
   if (count > 0 && current && !shown.includes(current)) {
-    shown = [...chips.slice(0, count - 1), current];
+    shown = [...all.slice(0, count - 1), current];
   }
-  const more = chips.length - shown.length;
+  const more = all.length - shown.length;
   const attention = (t: Thread) => attentionOf(t, state.runs[t.id], asksOf(state, t.id));
   return (
     <div
@@ -112,7 +131,30 @@ export function LineageTrail({
       aria-label={active ? "Sibling threads" : "Child threads"}
       className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden"
     >
-      {shown.map((t) => {
+      {shown.map(({ id, thread: t, sub }) => {
+        if (sub) {
+          const on = id === activeSubagent;
+          const said = subagentLabels[sub.state];
+          return (
+            <button
+              key={id}
+              type="button"
+              aria-current={on ? "page" : undefined}
+              aria-label={`${sub.title}, read-only subagent, ${said}`}
+              title={`${sub.title} · ${said} · Read-only subagent`}
+              onClick={() => onOpenSubagent?.(id)}
+              className={`relative flex max-w-36 min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 focus-visible:-outline-offset-2 ${on ? "text-foreground after:absolute after:inset-x-1.5 after:bottom-0 after:h-[1.5px] after:rounded-full after:bg-foreground/55" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <StatusDot attention={subagentDots[sub.state]} />
+              <Bot aria-hidden className="size-3.5 shrink-0" />
+              <span data-chip-title className="truncate">
+                {sub.title}
+              </span>
+              <Lock aria-hidden className="size-3 shrink-0 text-faint-foreground" />
+            </button>
+          );
+        }
+        if (!t) return null;
         const title = state.titles[t.id] ?? "Thread";
         const a = attention(t);
         const on = t.id === active;
@@ -134,7 +176,15 @@ export function LineageTrail({
         );
       })}
       {more > 0 && (
-        <LineageTree state={state} root={root} openId={openId} more={more} onOpen={onOpen} />
+        <LineageTree
+          state={state}
+          root={root}
+          openId={openId}
+          more={more}
+          onOpen={onOpen}
+          subagents={subagents}
+          onOpenSubagent={onOpenSubagent}
+        />
       )}
     </div>
   );
@@ -154,7 +204,8 @@ function useNow(on: boolean) {
 
 /**
  * `+N`, which opens the whole tree under `root` in a native popover: each thread's status, title,
- * model, status, how long it has run, and when it was last active. A row opens its thread.
+ * model, status, how long it has run, and when it was last active, with the open thread's
+ * subagents under it. A row opens its thread or subagent.
  */
 function LineageTree({
   state,
@@ -162,12 +213,16 @@ function LineageTree({
   openId,
   more,
   onOpen,
+  subagents,
+  onOpenSubagent,
 }: {
   state: ThreadsState;
   root: Thread;
   openId: string;
   more: number;
   onOpen: (threadId: string) => void;
+  subagents: NativeSubagent[];
+  onOpenSubagent?: (callId: string) => void;
 }) {
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -184,6 +239,8 @@ function LineageTree({
     for (const child of childrenOf(state, thread.id)) walk(child, depth + 1);
   };
   walk(root, 0);
+  const at = rows.findIndex((r) => r.thread.id === openId);
+  const under = (rows[at]?.depth ?? 0) + 1;
 
   return (
     <>
@@ -207,7 +264,7 @@ function LineageTree({
         className={`${menuPanel("start")} w-84 p-1`}
       >
         <ul className="flex max-h-96 flex-col gap-px overflow-y-auto">
-          {rows.map(({ thread, depth }) => {
+          {rows.flatMap(({ thread, depth }, i) => {
             const run = state.runs[thread.id];
             const attention = attentionOf(thread, run, asksOf(state, thread.id));
             const model = run?.model && (models.find((m) => m.id === run.model)?.name ?? run.model);
@@ -215,7 +272,7 @@ function LineageTree({
             const seconds = run && end ? Math.floor((end - Date.parse(run.createdAt)) / 1000) : 0;
             const last = run && age(run.updatedAt, now);
             const current = thread.id === openId;
-            return (
+            const row = (
               <li key={thread.id}>
                 <button
                   type="button"
@@ -252,6 +309,34 @@ function LineageTree({
                 </button>
               </li>
             );
+            if (i !== at) return [row];
+            return [
+              row,
+              ...subagents.map((sub) => (
+                <li key={sub.callId}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      panel.current?.hidePopover();
+                      onOpenSubagent?.(sub.callId);
+                    }}
+                    style={{ paddingLeft: `${8 + under * 14}px` }}
+                    className="flex w-full flex-col gap-0.5 rounded-md py-1.5 pr-2 text-left hover:bg-hover"
+                  >
+                    <span className="flex w-full min-w-0 items-center gap-2 text-[13px]">
+                      <StatusDot attention={subagentDots[sub.state]} />
+                      <Bot aria-hidden className="size-3.5 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate text-foreground">{sub.title}</span>
+                    </span>
+                    <span className="block w-full truncate pl-9 text-[11.5px] text-faint-foreground">
+                      {[modelName(sub.model), subagentLabels[sub.state], "Read-only subagent"]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </button>
+                </li>
+              )),
+            ];
           })}
         </ul>
       </div>

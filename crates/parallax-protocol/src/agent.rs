@@ -687,7 +687,55 @@ pub enum AgentOutputItem {
         #[ts(optional)]
         message: Option<String>,
     },
+    /// What one of the agent's own subagents did (PLX-382, decision 0041), such as Claude Code's
+    /// Agent tool: an item from its own transcript, not the agent's. Show it with the subagent,
+    /// apart from the agent's own items. A subagent can start another, whose items name the call
+    /// it was started with in the first one's transcript.
+    Subagent {
+        /// The tool call that started the subagent, whose `toolCall` names its task.
+        call_id: String,
+        /// The subagent's type, such as `general-purpose`, when the vendor says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        agent_type: Option<String>,
+        /// The model that wrote the item, when the vendor says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        model: Option<String>,
+        /// The item.
+        item: Box<AgentOutputItem>,
+    },
+    /// One of the agent's own subagents ended (PLX-382). One started in the background ends
+    /// after its tool call's result.
+    SubagentFinished {
+        /// The tool call that started it.
+        call_id: String,
+        /// How it ended.
+        status: AgentSubagentStatus,
+        /// Its final report, when the vendor includes it, cut short when it is long.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        summary: Option<String>,
+    },
     /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// How one of an agent's own subagents ended (PLX-382).
+///
+/// A newer plxd may send a status this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentSubagentStatus {
+    /// It finished its work.
+    Completed,
+    /// It failed.
+    Failed,
+    /// It was stopped before it finished.
+    Stopped,
+    /// A status this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
     Unknown,

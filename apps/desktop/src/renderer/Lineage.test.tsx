@@ -5,7 +5,14 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { RpcResponse, ParallaxBridge } from "../preload/bridge";
-import type { AgentRun, Capabilities, Repo, Thread } from "../protocol/generated/protocol";
+import type {
+  AgentOutputItem,
+  AgentRun,
+  Capabilities,
+  LoggedEvent,
+  Repo,
+  Thread,
+} from "../protocol/generated/protocol";
 import { App } from "./App";
 
 // A thread's parent and children in the top bar and the sidebar (PLX-374, 0041).
@@ -373,4 +380,89 @@ test("titles come from plxd: a new thread sends its generated title, and a title
   ]);
   expect(Object.keys(localStorage).filter((k) => k.startsWith("parallax:title:"))).toEqual([]);
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
+});
+
+// The parent's agent's own subagents (PLX-382): two of Claude Code's Agent calls, one done.
+const agentCall = (callId: string, description: string): AgentOutputItem => ({
+  kind: "toolCall",
+  callId,
+  name: "Agent",
+  input: { description, prompt: `${description}.`, subagent_type: "Explore", model: "haiku" },
+});
+const parentLog = (): LoggedEvent[] => [
+  {
+    seq: 1,
+    time: "2026-10-01T10:00:00Z",
+    event: { kind: "agent.started", runId: "parent", run: run("parent") },
+  },
+  {
+    seq: 2,
+    time: "2026-10-01T10:00:05Z",
+    event: {
+      kind: "agent.output",
+      runId: "parent",
+      items: [
+        agentCall("toolu_a", "Read the docs"),
+        agentCall("toolu_b", "Read the tests"),
+        {
+          kind: "subagent",
+          callId: "toolu_a",
+          agentType: "Explore",
+          model: "claude-haiku-4-5-20251001",
+          item: {
+            kind: "toolCall",
+            callId: "toolu_r",
+            name: "Read",
+            input: { file_path: "README.md" },
+          },
+        },
+        {
+          kind: "subagentFinished",
+          callId: "toolu_a",
+          status: "completed",
+          summary: "The docs say pnpm.",
+        },
+      ],
+    },
+  },
+];
+
+test("an agent's own subagents are read-only chips after its children, and one opens without a composer", async () => {
+  answers["agent/events"] = (params) => ({
+    result: {
+      events: params["runId"] === "parent" && params["after"] === 0 ? parentLog() : [],
+      more: false,
+    },
+  });
+  await renderApp();
+  await click(sidebarRow("Ship lineage"));
+  expect(chips()).toEqual(["Style the chips", "Write the test", "Read the docs", "Read the tests"]);
+  const docs = chip("Read the docs")!;
+  expect(docs.getAttribute("aria-label")).toBe("Read the docs, read-only subagent, Done");
+  expect(chip("Read the tests")!.getAttribute("title")).toBe(
+    "Read the tests · Working · Read-only subagent",
+  );
+  // The parent's own transcript has the calls, not what the subagents did.
+  const log = () => document.querySelector('[role="log"]')!;
+  await click(log().querySelector("button[aria-expanded]"));
+  expect(log().textContent).not.toContain("README.md");
+  const row = log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]');
+  expect(row).not.toBeNull();
+
+  await click(docs);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Ship lineage", "Read the docs"]);
+  expect(chips()).toContain("Read the docs*");
+  expect(log().textContent).toContain("Read the docs.");
+  expect(log().textContent).toContain("The docs say pnpm.");
+  expect(document.querySelector('[role="status"][aria-label="Subagent"]')!.textContent).toBe(
+    "Explore · Claude Haiku 4.5 · DoneRead-only: Claude Code's own subagent",
+  );
+  expect(document.querySelector('[role="textbox"][aria-label="Message"]')).toBeNull();
+
+  // Its thread's crumb goes back, and the call's row opens the other one.
+  await click(crumb("Ship lineage"));
+  expect(document.querySelector('[role="textbox"][aria-label="Message"]')).not.toBeNull();
+  await click(log().querySelector("button[aria-expanded]"));
+  await click(log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]'));
+  expect(crumbs().at(-1)).toBe("Read the tests");
 });

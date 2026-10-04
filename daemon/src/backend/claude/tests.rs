@@ -11,9 +11,9 @@ use tempfile::TempDir;
 
 use super::stream::{Ask, Step, Translator};
 use super::{
-    ClaudeBackend, EXIT_PLAN_MODE, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST, PLAN_WORKSPACE_WRITE_ARGS,
-    PROMPT_TOOL_ARGS, TODO_TOOLS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS,
-    no_write_settings, write_env_file,
+    BYPASS_PERMISSION_MODE, ClaudeBackend, EXIT_PLAN_MODE, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST,
+    PLAN_WORKSPACE_WRITE_ARGS, PROMPT_TOOL_ARGS, TODO_TOOLS, WORKER_TOOL_LIST, WORKER_TOOLS,
+    WORKSPACE_WRITE_ARGS, no_write_settings, write_env_file,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
@@ -21,8 +21,8 @@ use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential,
     Decision, Event, EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow,
     ModelUsage, Outcome, PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started,
-    ThreadTools, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind,
-    WorkerSandbox,
+    SubagentStatus, ThreadTools, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage,
+    WarningKind, WorkerSandbox,
 };
 use crate::mcp;
 use crate::paths::DataDir;
@@ -3188,4 +3188,107 @@ async fn a_held_cli_waits_after_its_turn_for_the_next_message() {
         result: Some("Second answer.".into()),
     }));
     assert!(matches!(outcome(&all), Outcome::Completed { .. }));
+}
+
+/// PLX-382: a real run's two Agent subagents. Every line with a `parent_tool_use_id` is the
+/// subagent's, tagged with that call, its type, and on its own messages its model, so none of
+/// its calls or text reach the parent's flow. Each ends with its `task_notification`'s summary.
+#[test]
+fn a_subagent_s_lines_are_tagged_with_the_call_that_started_it() {
+    const APPLE: &str = "toolu_01VQi3sYAiLsdpzR4SwrsTPq";
+    const PEAR: &str = "toolu_017AYTwajJNAA67dec3ZXKC2";
+    const HAIKU: &str = "claude-haiku-4-5-20251001";
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none")
+        .with_thread(true)
+        .with_permission_mode(BYPASS_PERMISSION_MODE);
+    let events: Vec<Event> = include_str!("fixtures/subagents.jsonl")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .flat_map(|line| translator.line(line.as_bytes()))
+        .filter_map(|step| match step {
+            Step::Emit(event) => Some(event),
+            Step::Violation(failure) => panic!("{failure:?}"),
+            _ => None,
+        })
+        .collect();
+
+    let own_calls: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolCall { call_id, name, .. } => {
+                assert_eq!(name, "Agent");
+                Some(call_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(own_calls, [APPLE, PEAR]);
+    assert_eq!(
+        texts(&events).last(),
+        Some(
+            &"Both agents completed.\n\n**Agent 1** (`echo apple`): `apple`\n\n**Agent 2** (`echo pear`): `pear`"
+        )
+    );
+
+    let of = |call: &str| -> Vec<(Option<&str>, Option<&str>, &Event)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Subagent {
+                    call_id,
+                    agent_type,
+                    model,
+                    event,
+                } if call_id == call => Some((agent_type.as_deref(), model.as_deref(), &**event)),
+                _ => None,
+            })
+            .filter(|(.., event)| !matches!(event, Event::Reasoning { .. }))
+            .collect()
+    };
+    let apple = of(APPLE);
+    let general = Some("general-purpose");
+    assert!(
+        matches!(
+            apple.as_slice(),
+            [
+                (agent, Some(HAIKU), Event::ToolCall { name, input, .. }),
+                (agent2, None, Event::ToolResult { status: ToolStatus::Ok, output: Some(out), .. }),
+                (agent3, Some(HAIKU), Event::Text { text, .. }),
+            ] if *agent == general && *agent2 == general && *agent3 == general
+                && name == "Bash" && input["command"] == "echo apple" && out == "apple"
+                && text == "apple"
+        ),
+        "{apple:#?}"
+    );
+    assert_eq!(of(PEAR).len(), 3);
+
+    let finished: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event, Event::SubagentFinished { .. }))
+        .collect();
+    assert_eq!(
+        finished,
+        [
+            &Event::SubagentFinished {
+                call_id: PEAR.into(),
+                status: SubagentStatus::Completed,
+                summary: Some("Output:\n\n```\npear\n```".into()),
+            },
+            &Event::SubagentFinished {
+                call_id: APPLE.into(),
+                status: SubagentStatus::Completed,
+                summary: Some("apple".into()),
+            },
+        ]
+    );
+}
+
+/// PLX-382: a background command's `task_notification` names no subagent, so it ends none.
+#[test]
+fn only_a_subagent_s_task_notification_ends_a_subagent() {
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    let started = br#"{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_bash","description":"sleep","task_type":"local_bash"}"#;
+    let ended = br#"{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_bash","status":"completed","summary":"done"}"#;
+    assert_eq!(translator.line(started), []);
+    assert_eq!(translator.line(ended), []);
 }

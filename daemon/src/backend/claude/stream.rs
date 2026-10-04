@@ -14,8 +14,8 @@ use super::{
 };
 use crate::backend::event::{
     ApprovalRequest, Event, Failure, FailureKind, LimitStatus, LimitWindow,
-    MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES, ModelUsage, TodoItem, TodoStatus,
-    ToolStatus, Usage, WarningKind,
+    MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES, ModelUsage, SubagentStatus, TodoItem,
+    TodoStatus, ToolStatus, Usage, WarningKind,
 };
 use crate::backend::{ApprovalId, ToolPolicy};
 
@@ -150,6 +150,9 @@ pub(super) struct Translator {
     verified: bool,
     session_id: Option<String>,
     denied: HashSet<String>,
+    /// The tool calls whose `task_started` named a subagent type, so their `task_notification`
+    /// ends a subagent (PLX-382), not a background command.
+    subagents: HashSet<String>,
     turn_error: Option<FailureKind>,
     limit_rejected: bool,
     /// How many `result`s arrived.
@@ -176,6 +179,7 @@ impl Translator {
             verified: false,
             session_id: None,
             denied: HashSet::new(),
+            subagents: HashSet::new(),
             turn_error: None,
             limit_rejected: false,
             results: 0,
@@ -273,6 +277,35 @@ impl Translator {
                     self.denied.insert(id.to_owned());
                 }
                 Vec::new()
+            }
+            Some("task_started") => {
+                if let (Some(id), Some(_)) =
+                    (text(message, "tool_use_id"), text(message, "subagent_type"))
+                {
+                    self.subagents.insert(id.to_owned());
+                }
+                Vec::new()
+            }
+            Some("task_notification") => {
+                let Some(call_id) = text(message, "tool_use_id") else {
+                    return Vec::new();
+                };
+                if !self.subagents.remove(call_id) {
+                    return Vec::new();
+                }
+                let status = match text(message, "status") {
+                    Some("completed") => SubagentStatus::Completed,
+                    Some("failed") => SubagentStatus::Failed,
+                    Some("stopped") => SubagentStatus::Stopped,
+                    _ => SubagentStatus::Other,
+                };
+                vec![Step::Emit(Event::SubagentFinished {
+                    call_id: call_id.to_owned(),
+                    status,
+                    summary: text(message, "summary")
+                        .filter(|summary| !summary.is_empty())
+                        .map(str::to_owned),
+                })]
             }
             Some("api_retry") => {
                 let error = text(message, "error").unwrap_or("unknown");
@@ -457,7 +490,7 @@ impl Translator {
                 _ => {}
             }
         }
-        steps
+        in_subagent(message, text(inner, "model"), steps)
     }
 
     fn user(&mut self, message: &Map<String, Value>) -> Vec<Step> {
@@ -490,7 +523,7 @@ impl Translator {
                 output: block.get("content").and_then(tool_output),
             }));
         }
-        steps
+        in_subagent(message, None, steps)
     }
 
     fn result(&mut self, message: &Map<String, Value>) -> Vec<Step> {
@@ -679,6 +712,29 @@ impl Translator {
             resets_at: info.get("resetsAt").and_then(timestamp),
         }))]
     }
+}
+
+/// `steps`, with each event wrapped as a subagent's when `message` came from one of the agent's
+/// own subagents (PLX-382): it names the tool call that started it as `parent_tool_use_id`, and
+/// its type as `subagent_type`. `model` is the model that wrote an assistant message.
+fn in_subagent(message: &Map<String, Value>, model: Option<&str>, steps: Vec<Step>) -> Vec<Step> {
+    let Some(call_id) = text(message, "parent_tool_use_id") else {
+        return steps;
+    };
+    let agent_type = text(message, "subagent_type");
+    steps
+        .into_iter()
+        .map(|step| match step {
+            Step::Emit(event @ Event::Warning { .. }) => Step::Emit(event),
+            Step::Emit(event) => Step::Emit(Event::Subagent {
+                call_id: call_id.to_owned(),
+                agent_type: agent_type.map(str::to_owned),
+                model: model.map(str::to_owned),
+                event: Box::new(event),
+            }),
+            step => step,
+        })
+        .collect()
 }
 
 fn text<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
