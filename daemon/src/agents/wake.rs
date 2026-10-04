@@ -14,12 +14,13 @@
 //! stop interrupted, and questions still open, [`catch_up`] rebuilds from the store when plxd
 //! starts. A coordinator's wake-up also carries its children's memory proposals, which wait on
 //! disk ([`proposals`], 0044).
+//! A question counts as seen once a wake-up turn carries it to its coordinator's CLI, which
+//! the store keeps (PLX-469).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
-use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentFailureKind, AgentOutcome, AgentRun, AgentStatus, ProjectAutonomy, ProjectId, QuestionId,
@@ -33,7 +34,7 @@ use uuid::Uuid;
 use super::actor::Command;
 use super::convert::{INTERRUPTED, NO_WRITE, agent_run, option_name, truncate};
 use super::{store, store_error};
-use crate::methods::question::{OPEN, autonomy_of, level};
+use crate::methods::question::{OPEN, answers, autonomy_of, level};
 use crate::server::Daemon;
 
 /// How long wake-ups wait after the first arrives, so runs that finish together make one turn.
@@ -52,6 +53,8 @@ pub(super) const EXCERPT_BYTES: usize = 500;
 #[derive(Debug, Default)]
 pub(super) struct Wakes {
     waiting: Vec<String>,
+    /// The questions named in `waiting`, stored as delivered once it is (PLX-469).
+    questions: Vec<Uuid>,
     since: Option<Instant>,
     state: WakeState,
     /// The wake-up turn last sent, until its `turnStarted` is logged. Only one can be in flight,
@@ -60,9 +63,10 @@ pub(super) struct Wakes {
 }
 
 impl Wakes {
-    /// Adds a finished run's summary.
-    pub fn push(&mut self, summary: String, now: Instant) {
+    /// Adds a finished run's summary, and the ids of the questions it names.
+    pub fn push(&mut self, summary: String, questions: Vec<Uuid>, now: Instant) {
         self.waiting.push(summary);
+        self.questions.extend(questions);
         self.since.get_or_insert(now);
     }
 
@@ -85,11 +89,12 @@ impl Wakes {
     }
 
     /// The wake-up from [`Wakes::next`] reached the parent's CLI: it counts against the cap,
-    /// and what waited is gone.
-    pub fn delivered(&mut self) {
+    /// and what waited is gone. The questions it named, for [`deliver`].
+    pub fn delivered(&mut self) -> Vec<Uuid> {
         self.state.in_a_row += 1;
         self.waiting.clear();
         self.since = None;
+        std::mem::take(&mut self.questions)
     }
 
     /// The user wrote to the parent: the count starts over, and a pause ends. Whether that
@@ -117,6 +122,7 @@ impl Wakes {
     /// Drops what is waiting, for a coordinator a newer one replaced (0024).
     pub fn clear(&mut self) {
         self.waiting.clear();
+        self.questions.clear();
         self.since = None;
     }
 
@@ -128,6 +134,17 @@ impl Wakes {
 
 /// Hands `summary` to run `parent`'s actor, spawning one after a restart, without waiting for it.
 pub(crate) fn notify(daemon: &Arc<Daemon>, parent: Uuid, summary: String) {
+    notify_questions(daemon, parent, summary, Vec::new());
+}
+
+/// [`notify`] for a summary that names questions `questions`, so the store records when a turn
+/// delivers them (PLX-469).
+pub(crate) fn notify_questions(
+    daemon: &Arc<Daemon>,
+    parent: Uuid,
+    summary: String,
+    questions: Vec<Uuid>,
+) {
     let Ok(id) = RunId::try_from(parent) else {
         return;
     };
@@ -136,7 +153,7 @@ pub(crate) fn notify(daemon: &Arc<Daemon>, parent: Uuid, summary: String) {
         match super::actor_for(&owned, id).await {
             Ok(actor) => {
                 // A closed channel is a parent that stopped or was deleted: nothing to wake.
-                let _ = actor.send(Command::Wake(summary)).await;
+                let _ = actor.send(Command::Wake(summary, questions)).await;
             }
             Err(error) => {
                 warn!(parent = %id, error = %error.message, "could not wake a parent");
@@ -175,8 +192,11 @@ pub(super) fn started(daemon: &Arc<Daemon>, run: &AgentRun) {
 pub(super) fn hand_over(daemon: &Arc<Daemon>, project: Uuid, coordinator: RunId) {
     let owned = Arc::clone(daemon);
     daemon.agents.tracker.spawn(async move {
-        match store(&owned, move |db| open_questions(db, project, Timestamp::MIN)).await {
-            Ok(lines) if !lines.is_empty() => notify(&owned, coordinator.into(), lines.join("\n")),
+        match store(&owned, move |db| open_questions(db, project, coordinator.into())).await {
+            Ok(open) if !open.is_empty() => {
+                let (ids, lines): (Vec<_>, Vec<_>) = open.into_iter().unzip();
+                notify_questions(&owned, coordinator.into(), lines.join("\n"), ids);
+            }
             Ok(_) => {}
             Err(error) => {
                 warn!(error = %error.message, "could not hand a Project's questions to its coordinator");
@@ -185,18 +205,19 @@ pub(super) fn hand_over(daemon: &Arc<Daemon>, project: Uuid, coordinator: RunId)
     });
 }
 
-/// The [`question`] lines of `project`'s questions still open that were asked after `since`.
+/// The ids and [`question`] lines of `project`'s questions still open that no wake-up turn has
+/// carried to `coordinator`'s CLI.
 fn open_questions(
     db: &parallax_store::Store,
     project: Uuid,
-    since: Timestamp,
-) -> Result<Vec<String>, ErrorObject> {
+    coordinator: Uuid,
+) -> Result<Vec<(Uuid, String)>, ErrorObject> {
     let mut lines = Vec::new();
     let autonomy = autonomy_of(db, project)?;
     let questions = db.questions(project).map_err(|e| store_error(&e))?;
     for asked in questions
         .iter()
-        .filter(|asked| asked.status == OPEN && asked.created_at > since)
+        .filter(|asked| asked.status == OPEN && asked.delivered_to != Some(coordinator))
     {
         let (Ok(run), Ok(id)) = (
             RunId::try_from(asked.run_id),
@@ -209,14 +230,15 @@ fn open_questions(
             .map_err(|e| store_error(&e))?
             .map(|run| run.fields.prompt)
             .unwrap_or_default();
-        lines.push(question(
+        let line = question(
             run,
             &prompt,
             id,
             &asked.question,
             &asked.assumption,
             autonomy,
-        ));
+        );
+        lines.push((asked.id, line));
     }
     Ok(lines)
 }
@@ -251,13 +273,31 @@ pub(super) async fn delivered_proposals(daemon: &Daemon, project: ProjectId, pat
     }
 }
 
+/// Records that `coordinator`'s wake-up turn carried `questions` to its CLI, so a restart doesn't
+/// name them again (PLX-469).
+pub(super) async fn deliver(daemon: &Arc<Daemon>, coordinator: RunId, questions: Vec<Uuid>) {
+    if questions.is_empty() {
+        return;
+    }
+    let to = coordinator.into();
+    let stored = store(daemon, move |db| {
+        db.deliver_questions(&questions, to)
+            .map_err(|e| store_error(&e))
+    })
+    .await;
+    if let Err(error) = stored {
+        warn!(run = %coordinator, error = %error.message, "could not record the questions a wake-up delivered");
+    }
+}
+
 /// After a restart, hands each parent one summary of its notifying children that ended after its
 /// last turn began (PLX-178): the runs the stop interrupted, and any whose wake-up was still
 /// waiting. A run a wake-up already named ended before that wake-up's turn, so it isn't named
 /// again. If a Project's current coordinator's own turn was interrupted, the summary says so,
 /// since nothing else would pick it back up, and it names the Project's questions still open that
-/// were asked since (PLX-402). A replaced coordinator is skipped (0024). Called once
-/// at startup, after runs the store still has running are marked interrupted.
+/// no wake-up turn carried to it (PLX-469), unless the Project's autonomy is Ask me, which hands
+/// questions to the user instead. A replaced coordinator is skipped (0024). Called once at
+/// startup, after runs the store still has running are marked interrupted.
 // ponytail: rebuilt from run rows, so a summary lacks the run's last result, and a run that ended
 // before the user's last message to the coordinator isn't named; store the summaries if that
 // matters.
@@ -289,11 +329,15 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
                 .map_err(|e| store_error(&e))?
                 .unwrap_or(parent.created_at);
             let mut lines = Vec::new();
+            let mut questions = Vec::new();
             if current && parent.state.status == INTERRUPTED && parent.updated_at > since {
                 lines.push(OWN_TURN.to_owned());
             }
-            if current {
-                lines.extend(open_questions(db, parent.fields.project_id, since)?);
+            if current && answers(autonomy_of(db, parent.fields.project_id)?) {
+                for (id, line) in open_questions(db, parent.fields.project_id, parent.id)? {
+                    questions.push(id);
+                    lines.push(line);
+                }
             }
             for run in runs.iter().filter(|run| {
                 run.fields.parent == Some(parent.id)
@@ -309,7 +353,7 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
                 }
             }
             if !lines.is_empty() {
-                missed.push((parent.id, lines.join("\n")));
+                missed.push((parent.id, lines.join("\n"), questions));
             }
         }
         Ok(missed)
@@ -317,9 +361,9 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
     .await;
     match missed {
         Ok(missed) => {
-            for (parent, summary) in missed {
+            for (parent, summary, questions) in missed {
                 info!(parent = %parent, "waking a parent for what it missed while plxd was stopped");
-                notify(daemon, parent, summary);
+                notify_questions(daemon, parent, summary, questions);
             }
         }
         Err(error) => {
@@ -452,8 +496,8 @@ mod tests {
         let mut wakes = Wakes::default();
         assert_eq!(wakes.due(), None, "nothing waiting");
         let first = Instant::now();
-        wakes.push("- Run a".to_owned(), first);
-        wakes.push("- Run b".to_owned(), first + BATCH / 2);
+        wakes.push("- Run a".to_owned(), Vec::new(), first);
+        wakes.push("- Run b".to_owned(), Vec::new(), first + BATCH / 2);
         assert_eq!(
             wakes.due(),
             Some(first + BATCH),
@@ -474,15 +518,15 @@ mod tests {
         let mut wakes = Wakes::default();
         let now = Instant::now();
         for _ in 0..CAP {
-            wakes.push("- Run".to_owned(), now);
+            wakes.push("- Run".to_owned(), Vec::new(), now);
             assert!(wakes.next(&[]).is_some());
             wakes.delivered();
         }
-        wakes.push("- Run late".to_owned(), now);
+        wakes.push("- Run late".to_owned(), Vec::new(), now);
         assert!(wakes.next(&[]).is_none(), "one past the cap");
         assert!(wakes.pause(), "which the actor pauses on, once");
         assert!(!wakes.pause());
-        wakes.push("- Run later".to_owned(), now);
+        wakes.push("- Run later".to_owned(), Vec::new(), now);
         assert_eq!(wakes.due(), None, "paused: nothing is due");
 
         wakes.attended();

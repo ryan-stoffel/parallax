@@ -186,8 +186,9 @@ pub(super) enum Command {
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
     /// A child of this run finished, or a run started in this coordinator's Project, as
-    /// [`wake::summary`] and [`wake::started`] tell it (PLX-42, PLX-380).
-    Wake(String),
+    /// [`wake::summary`] and [`wake::started`] tell it (PLX-42, PLX-380), with the ids of the
+    /// questions it names (PLX-469).
+    Wake(String, Vec<Uuid>),
     /// `agent/resumeNow` (PLX-371).
     ResumeNow {
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
@@ -228,7 +229,7 @@ impl Command {
             Self::Delete { reply } => {
                 let _ = reply.send(Err(error));
             }
-            Self::Wake(_) => {}
+            Self::Wake(..) => {}
         }
     }
 }
@@ -621,7 +622,9 @@ impl Actor {
                 }
                 let _ = reply.send(answer);
             }
-            Command::Wake(summary) => self.wakes.push(summary, Instant::now()),
+            Command::Wake(summary, questions) => {
+                self.wakes.push(summary, questions, Instant::now());
+            }
             Command::ResumeNow { reply } => {
                 let _ = reply.send(self.resume_now().await);
             }
@@ -719,9 +722,10 @@ impl Actor {
             .await
         {
             Ok(_) if self.live.is_some() => {
-                self.wakes.delivered();
+                let questions = self.wakes.delivered();
                 self.save_wakes().await;
                 super::wake::delivered_proposals(&self.daemon, self.project, paths).await;
+                wake::deliver(&self.daemon, self.id, questions).await;
             }
             Ok(_) => self.pause_wakes(true).await,
             Err(error) => {
