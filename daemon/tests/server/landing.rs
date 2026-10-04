@@ -22,7 +22,7 @@ use crate::agents::{Conn, Host, create, end_turn, fake, git, init, project_param
 use crate::support::{PATIENCE, kind, temp_dir};
 
 /// Every child's script: it writes `notes.txt` and finishes.
-fn notes() -> BackendRegistry {
+pub(crate) fn notes() -> BackendRegistry {
     fake(vec![
         init("land-1"),
         Step::WriteFile {
@@ -44,7 +44,7 @@ async fn runs(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
 }
 
 /// Starts a run in `project` and waits until it has completed.
-async fn finished(client: &mut Conn, params: AgentStartParams) -> AgentRun {
+pub(crate) async fn finished(client: &mut Conn, params: AgentStartParams) -> AgentRun {
     let (project, id) = (params.project, params.run_id);
     client.call::<AgentStart>(params).await.unwrap();
     let deadline = Instant::now() + PATIENCE;
@@ -63,7 +63,7 @@ async fn finished(client: &mut Conn, params: AgentStartParams) -> AgentRun {
 }
 
 /// The first item of `project`'s inbox about `run` that `wanted` picks, once there is one.
-async fn item(
+pub(crate) async fn item(
     client: &mut Conn,
     project: ProjectId,
     run: RunId,
@@ -85,7 +85,7 @@ async fn item(
 }
 
 /// The text of the messages `run`'s turns started with.
-async fn messages(client: &mut Conn, run_id: RunId) -> Vec<String> {
+pub(crate) async fn messages(client: &mut Conn, run_id: RunId) -> Vec<String> {
     let events = client
         .call::<AgentEvents>(AgentEventsParams {
             run_id,
@@ -111,12 +111,12 @@ async fn messages(client: &mut Conn, run_id: RunId) -> Vec<String> {
         .collect()
 }
 
-fn worktree(run: &AgentRun) -> PathBuf {
+pub(crate) fn worktree(run: &AgentRun) -> PathBuf {
     PathBuf::from(run.worktree_path.as_deref().expect("a worktree"))
 }
 
 /// Turns on `project`'s automatic landing.
-async fn lands_automatically(client: &mut Conn, project: ProjectId) {
+pub(crate) async fn lands_automatically(client: &mut Conn, project: ProjectId) {
     let updated = client
         .call::<ProjectUpdate>(ProjectUpdateParams {
             project,
@@ -128,6 +128,8 @@ async fn lands_automatically(client: &mut Conn, project: ProjectId) {
             auto_land: Some(true),
             max_children: None,
             allow_api_keys: None,
+            checks: None,
+            proposed_checks: None,
         })
         .await
         .unwrap()

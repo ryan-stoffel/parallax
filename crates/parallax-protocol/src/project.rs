@@ -72,6 +72,17 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub allow_api_keys: Option<bool>,
+    /// The command plxd runs in the integration worktree after each landing (0045), behind the
+    /// `checks` capability: through `sh -c` (`cmd /C` on Windows), with a 30-minute limit. Absent
+    /// means none, so a clean merge is enough.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checks: Option<String>,
+    /// The checks command the coordinator proposed, behind `checks`. It never runs: the user
+    /// confirms it, or another, by setting `checks`. Absent means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub proposed_checks: Option<String>,
     /// When the project was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
@@ -215,8 +226,8 @@ pub struct ProjectCreateResult {
 /// Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
 /// capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
 /// autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
-/// (0045), automatic landing, behind `landing` (0045), or how its children are placed, behind
-/// `projectPlacement` (0046).
+/// (0045), automatic landing, behind `landing` (0045), how its children are placed, behind
+/// `projectPlacement` (0046), or its checks, behind `checks` (0045).
 ///
 /// A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
 /// `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
@@ -264,6 +275,16 @@ pub struct ProjectUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub allow_api_keys: Option<bool>,
+    /// The checks command the user confirms or edits, behind `checks` (0045): at most 4,096
+    /// bytes. Empty clears it, and setting it clears `proposedChecks`. Absent keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checks: Option<String>,
+    /// The coordinator's proposal for `checks`, behind `checks`, which adds a `needsYou` item
+    /// naming it and never runs. Empty clears it. Ignored when `checks` is set too. Absent keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub proposed_checks: Option<String>,
 }
 
 /// Result of `project/update`.

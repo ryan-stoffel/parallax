@@ -201,6 +201,8 @@ mod tests {
             auto_land: false,
             allow_api_keys: None,
             max_children: None,
+            checks: None,
+            proposed_checks: None,
         }
     }
 
@@ -377,6 +379,8 @@ mod tests {
                     auto_land: None,
                     allow_api_keys: None,
                     max_children: None,
+                    checks: None,
+                    proposed_checks: None,
                 });
             }
         }
@@ -400,6 +404,8 @@ mod tests {
                 auto_land: None,
                 allow_api_keys: None,
                 max_children: None,
+                checks: None,
+                proposed_checks: None,
             })
             .unwrap(),
             json!({"project": id}),
@@ -450,6 +456,8 @@ mod tests {
                 auto_land: None,
                 allow_api_keys: None,
                 max_children: None,
+                checks: None,
+                proposed_checks: None,
             });
         }
         assert_eq!(
@@ -494,6 +502,8 @@ mod tests {
                 auto_land: None,
                 allow_api_keys: None,
                 max_children: None,
+                checks: None,
+                proposed_checks: None,
             });
         }
         assert_eq!(

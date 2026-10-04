@@ -220,6 +220,8 @@ fn placement_update(
         auto_land: None,
         max_children,
         allow_api_keys,
+        checks: None,
+        proposed_checks: None,
     }
 }
 

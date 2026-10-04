@@ -11,6 +11,7 @@ mod agent_wait;
 mod agents;
 mod approvals;
 mod auto_resume;
+mod checks;
 mod context;
 mod coordinator;
 mod events;

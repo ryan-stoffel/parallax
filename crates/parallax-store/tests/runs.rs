@@ -516,8 +516,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // the project permission column (PLX-394's migration 26), the queued table (PLX-370's
     // migration 27), the project branch columns (PLX-409's migration 29), the questions
     // table (PLX-402's migration 30), the project autonomy column (PLX-403's migration 31), the
-    // landings table and auto-land column (PLX-410's migration 33), or the placement columns and
-    // table (PLX-413's migration 34).
+    // landings table and auto-land column (PLX-410's migration 33), the placement columns and
+    // table (PLX-413's migration 34), or the checks columns (PLX-411's migration 35).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -539,6 +539,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              ALTER TABLE projects DROP COLUMN auto_land;
              ALTER TABLE projects DROP COLUMN max_children;
              ALTER TABLE projects DROP COLUMN allow_api_keys;
+             ALTER TABLE projects DROP COLUMN checks;
+             ALTER TABLE projects DROP COLUMN proposed_checks;
              DELETE FROM schema_version WHERE version >= 7;",
         )
         .unwrap();

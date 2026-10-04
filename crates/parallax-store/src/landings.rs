@@ -15,13 +15,15 @@ pub struct Landing {
     pub status: String,
     /// How many times landing it conflicted since it last landed.
     pub conflicts: u32,
+    /// How many times it failed the Project's checks since it was queued (PLX-411).
+    pub failures: u32,
     /// When it was last queued: the queue lands the oldest first.
     pub queued_at: Timestamp,
 }
 
-const COLUMNS: &str = "run_id, project_id, status, conflicts, queued_at";
+const COLUMNS: &str = "run_id, project_id, status, conflicts, queued_at, failures";
 
-type Raw = (String, String, String, u32, String);
+type Raw = (String, String, String, u32, String, u32);
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Raw> {
     Ok((
@@ -30,15 +32,19 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Raw> {
         row.get(2)?,
         row.get(3)?,
         row.get(4)?,
+        row.get(5)?,
     ))
 }
 
-fn into_landing((run, project, status, conflicts, queued): Raw) -> Result<Landing, StoreError> {
+fn into_landing(
+    (run, project, status, conflicts, queued, failures): Raw,
+) -> Result<Landing, StoreError> {
     Ok(Landing {
         run_id: Uuid::parse_str(&run)?,
         project_id: Uuid::parse_str(&project)?,
         status,
         conflicts,
+        failures,
         queued_at: timestamp::parse(&queued)?,
     })
 }
@@ -69,9 +75,9 @@ impl Store {
     pub fn put_landing(&self, landing: &Landing) -> Result<(), StoreError> {
         self.conn.execute(
             &format!(
-                "INSERT INTO landings ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO landings ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT (run_id) DO UPDATE SET project_id = ?2, status = ?3, conflicts = ?4,
-                     queued_at = ?5"
+                     queued_at = ?5, failures = ?6"
             ),
             params![
                 landing.run_id.to_string(),
@@ -79,6 +85,7 @@ impl Store {
                 landing.status,
                 landing.conflicts,
                 timestamp::format(landing.queued_at),
+                landing.failures,
             ],
         )?;
         Ok(())
@@ -146,6 +153,7 @@ mod tests {
             project_id: project,
             status: status.to_owned(),
             conflicts: 0,
+            failures: 0,
             queued_at: at.parse::<Timestamp>().unwrap(),
         };
         let later = landing("queued", "2026-10-04T12:00:00Z");
@@ -164,6 +172,7 @@ mod tests {
         let replaced = Landing {
             status: "sentBack".to_owned(),
             conflicts: 1,
+            failures: 1,
             ..first.clone()
         };
         store.put_landing(&replaced).unwrap();

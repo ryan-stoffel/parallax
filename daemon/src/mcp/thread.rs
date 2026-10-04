@@ -106,6 +106,7 @@ pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__plxd__memory_propose",
     "mcp__plxd__memory_write",
     "mcp__plxd__land",
+    "mcp__plxd__checks_propose",
 ];
 
 /// About how much transcript one `thread_read` page carries, in bytes. A page ends at an event,
@@ -670,6 +671,14 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
         "ask" | "answer" | "escalate" => question::call(binding, name, arguments).await,
         "land" => {
             land::call(
+                binding,
+                server.project.filter(|_| server.coordinator),
+                arguments,
+            )
+            .await
+        }
+        "checks_propose" => {
+            land::propose(
                 binding,
                 server.project.filter(|_| server.coordinator),
                 arguments,
@@ -1392,7 +1401,9 @@ mod tests {
         for name in instructions.split('`').skip(1).step_by(2) {
             if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
                 assert!(
-                    PROJECT_TOOLS.contains(&name) || crate::mcp::memory::TOOLS.contains(&name),
+                    PROJECT_TOOLS.contains(&name)
+                        || crate::mcp::memory::TOOLS.contains(&name)
+                        || land::TOOLS.contains(&name),
                     "coordinator.md names `{name}`, not a tool"
                 );
             }

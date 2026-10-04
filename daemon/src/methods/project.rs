@@ -1,9 +1,10 @@
 //! `project/list`, `project/create`, `project/start`, which starts a project's coordinator behind
 //! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
 //! icon behind the `projectEdit` capability (PLX-227, 0032), its permission mode behind
-//! `projectPermission` (0042), its autonomy level behind `projectAutonomy` (0043), or its base
-//! branch behind `integrationBranch` (0045), or how its children are placed behind
-//! `projectPlacement` (0046), and `project/delete`, behind `projectDelete` (PLX-338).
+//! `projectPermission` (0042), its autonomy level behind `projectAutonomy` (0043), its base
+//! branch behind `integrationBranch` (0045), how its children are placed behind
+//! `projectPlacement` (0046), or its checks behind `checks` (PLX-411, 0045), and
+//! `project/delete`, behind `projectDelete` (PLX-338).
 
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentRunResult, ErrorKind, ParallaxEvent, ProjectAutonomy, ProjectCreateParams,
+    AgentRunResult, ErrorKind, InboxKind, ParallaxEvent, ProjectAutonomy, ProjectCreateParams,
     ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectIcon, ProjectId,
     ProjectListParams, ProjectListResult, ProjectPermission, ProjectStartParams,
     ProjectUpdateParams, ProjectUpdateResult, RunId,
@@ -140,16 +141,18 @@ pub(crate) async fn start(
     Ok(AgentRunResult { run })
 }
 
-/// Renames a project or sets its icon, permission mode, autonomy level, base branch, or placement
-/// settings, and appends `project.updated` when that changed anything. Runs pick up a new mode
-/// when they next start a CLI process (0042), questions a new level when they are next asked
-/// (0043), and waiting children new placement settings at once (0046).
+/// Renames a project or sets its icon, permission mode, autonomy level, base branch, automatic
+/// landing, placement settings, or checks, and appends `project.updated` when that changed
+/// anything. Runs pick up a new mode when they next start a CLI process (0042), questions a new
+/// level when they are next asked (0043), and waiting children new placement settings at once
+/// (0046). A new proposal for its checks adds a `needsYou` item for the user to confirm it
+/// (PLX-411).
 ///
 /// The event is appended in the job that writes the row, as `project/create`'s is, so a
 /// `project/list` snapshot and its `seq` always agree. `updatedAt` stays as it is (0032).
 pub(crate) async fn update(
     context: &Context,
-    params: ProjectUpdateParams,
+    mut params: ProjectUpdateParams,
 ) -> Result<ProjectUpdateResult, ErrorObject> {
     if let Some(name) = &params.name {
         check_name(name)?;
@@ -168,8 +171,20 @@ pub(crate) async fn update(
             "maxChildren must be from 1 to {MAX_CHILDREN}"
         )));
     }
+    for (name, checks) in [
+        ("checks", &mut params.checks),
+        ("proposedChecks", &mut params.proposed_checks),
+    ] {
+        if let Some(command) = checks {
+            *command = check_checks(name, command)?;
+        }
+    }
+    let proposal = params
+        .proposed_checks
+        .clone()
+        .filter(|command| params.checks.is_none() && !command.is_empty());
     let log = Arc::clone(&context.daemon.log);
-    context
+    let (result, proposed) = context
         .daemon
         .store
         .run(&context.cancel, move |store| {
@@ -189,15 +204,52 @@ pub(crate) async fn update(
                 );
                 info!(project = %project.id, seq, "updated a project");
             }
-            Ok(ProjectUpdateResult { project })
+            let proposed = proposal.filter(|_| changed).zip(project.coordinator);
+            Ok((ProjectUpdateResult { project }, proposed))
         })
-        .await
-        // More room, or API keys allowed, may start a waiting child (0046).
-        .inspect(|_| context.daemon.agents.placement.notify_one())
+        .await?;
+    // More room, or API keys allowed, may start a waiting child (0046).
+    context.daemon.agents.placement.notify_one();
+    if let Some((command, coordinator)) = proposed {
+        let text = format!(
+            "The coordinator proposes these checks, to run after each landing: {command}. \
+             Confirm or edit them in the Project's settings."
+        );
+        let project = result.project.id;
+        super::inbox::add(
+            &context.daemon,
+            project,
+            coordinator,
+            InboxKind::NeedsYou,
+            text,
+        )
+        .await;
+    }
+    Ok(result)
 }
 
 /// The most children a Project may run at once (0046).
 const MAX_CHILDREN: u32 = 100;
+
+/// A checks command as `project/update` stores it, trimmed: at most [`MAX_CHECKS_BYTES`], with
+/// no NUL, which no shell can run (PLX-411).
+fn check_checks(name: &str, command: &str) -> Result<String, ErrorObject> {
+    let command = command.trim();
+    if command.len() > MAX_CHECKS_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "{name} must be at most {MAX_CHECKS_BYTES} bytes"
+        )));
+    }
+    if command.contains('\0') {
+        return Err(ErrorObject::invalid_params(format!(
+            "{name} must not contain NUL"
+        )));
+    }
+    Ok(command.to_owned())
+}
+
+/// The longest checks command `project/update` takes.
+const MAX_CHECKS_BYTES: usize = 4096;
 
 /// Deletes a project (PLX-338), detached from the request as `thread/delete` is, so a dropped
 /// connection never leaves it half deleted.
