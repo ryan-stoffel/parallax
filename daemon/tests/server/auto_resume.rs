@@ -130,6 +130,8 @@ async fn status(client: &mut Conn, run: RunId) -> AgentStatus {
     runs.into_iter().find(|r| r.id == run).unwrap().status
 }
 
+/// A reset `seconds` from now. Tests use at least 3: creating a Project and starting its run cut
+/// worktrees (PLX-409), which can take over a second on a busy runner.
 fn in_seconds(seconds: i64) -> Timestamp {
     Timestamp::now() + SignedDuration::from_secs(seconds)
 }
@@ -250,7 +252,7 @@ async fn a_limited_run_resumes_at_its_reset_after_a_restart() {
 #[tokio::test]
 async fn cancelling_a_waiting_run_clears_its_timer() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let reset = in_seconds(1);
+    let reset = in_seconds(3);
     let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], &seen);
     let host = host(temp_dir(), backends, Duration::from_secs(600));
     let mut client = host.client().await;
@@ -360,7 +362,7 @@ async fn the_host_setting_turns_it_off() {
 #[tokio::test]
 async fn a_reset_that_passed_while_plxd_was_stopped_resumes_at_once() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let reset = in_seconds(1);
+    let reset = in_seconds(3);
     let (host, client, run, seq) = waiting_run(reset, &seen).await;
     drop(client);
     let Host { dir, server } = host;
@@ -391,7 +393,7 @@ async fn a_reset_that_passed_while_plxd_was_stopped_resumes_at_once() {
 #[tokio::test]
 async fn a_message_to_a_waiting_run_clears_its_timer() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let reset = in_seconds(2);
+    let reset = in_seconds(3);
     let (host, mut client, run, _) = waiting_run(reset, &seen).await;
     let sent = client
         .call::<AgentSend>(send_params(run, TurnId::generate(), "Try again."))
