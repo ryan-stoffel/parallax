@@ -76,6 +76,7 @@ import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { GitHubLogo, LinearLogo } from "./logos";
+import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
 import {
@@ -1063,7 +1064,12 @@ export const RowView = memo(function RowView({
       );
     }
     case "assistant":
-      return <MarkdownText text={row.text} />;
+      // A long streaming message renders block by block. A short one renders whole, as when finished.
+      return row.partial && row.text.length >= SPLIT_FROM ? (
+        <StreamingMarkdown text={row.text} />
+      ) : (
+        <MarkdownText text={row.text} />
+      );
     case "reasoning":
       return (
         <Disclosure
@@ -1798,7 +1804,7 @@ export function MarkdownText({ text, components }: { text: string; components?: 
   return (
     <div className="markdown">
       <Markdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={gfm}
         rehypePlugins={highlight}
         components={{ ...markdownComponents, ...components }}
       >
@@ -1807,6 +1813,35 @@ export function MarkdownText({ text, components }: { text: string; components?: 
     </div>
   );
 }
+
+const gfm = [remarkGfm];
+
+/**
+ * A streaming agent message, rendered as MarkdownText renders it, but block by block: an
+ * unchanged block keeps its string, so its memo skips rendering it again, and each update
+ * renders only the last block (PLX-448). When the message finishes, its row switches to
+ * MarkdownText, which renders it whole once and remounts its code blocks.
+ */
+function StreamingMarkdown({ text }: { text: string }) {
+  // The last update's blocks, so the split parses only the end of the message again.
+  const blocks = useRef<string[]>([]);
+  blocks.current = markdownBlocks(text, blocks.current);
+  return (
+    <div className="markdown">
+      {blocks.current.map((block, i) => (
+        <MarkdownBlock key={i} text={block} />
+      ))}
+    </div>
+  );
+}
+
+const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
+  return (
+    <Markdown remarkPlugins={gfm} rehypePlugins={highlight} components={markdownComponents}>
+      {text}
+    </Markdown>
+  );
+});
 
 /** Copies text to the clipboard. `copied` is true for a moment after, for a Copied check. */
 export function useCopy() {

@@ -103,9 +103,15 @@ importers:
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
+      remark-parse:
+        specifier: ^11.0.0
+        version: 11.0.0
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
       vite:
         specifier: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1
         version: '@voidzero-dev/vite-plus-core@1.0.0-rc.1(@types/node@24.19.0)(jiti@2.7.0)'

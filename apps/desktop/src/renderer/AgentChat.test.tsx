@@ -18,12 +18,18 @@ import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "
 import { Composer } from "./Composer";
 import { ForkContext } from "./Fork";
 import { GitHubLogo, LinearLogo } from "./logos";
+import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// The real split, watched, to see which messages take it.
+vi.mock("./markdownBlocks", async (actual) => {
+  const real = await actual<typeof import("./markdownBlocks")>();
+  return { ...real, markdownBlocks: vi.fn(real.markdownBlocks) };
+});
 // happy-dom has no popovers. Menus are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
 // happy-dom lays nothing out. Give the transcript a tall viewport and each row a
@@ -270,6 +276,68 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
   // Its file: source is unsafe, so it has no href at all rather than an empty one.
   expect(links[1]!.hasAttribute("href")).toBe(false);
+});
+
+test("a streaming message renders as the whole text does, at every line", () => {
+  // Past SPLIT_FROM, so each reply renders block by block.
+  const lead = "A long reply opens with a paragraph. ".repeat(30) + "\n\n";
+  const replies = [
+    [
+      "Setext\n===\n\nIntro with `code` and **bold**.",
+      "- loose\n\n- list\n  continued\n\n  - nested\n\n    ```sh\n    cargo test\n\n    ```",
+      "1. one\n\n2) two\n\n10. ten",
+      "    indented code\n\n    more\n\n> quote\n> lines",
+      "| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\n- [x] done\n- [ ] not",
+      "```ts\nconst a = 1;\n\n~~~\n```\n\n~~~~\n```\n\n~~~~\n\nEnd.",
+      "- tight\n- list\n\nText\n\n  ```\n  indented fence\n  ```\n\nEnd.",
+    ].join("\n\n"),
+    // A list item's fence that a column-0 fence ends, which opens a new one.
+    "1. Run:\n   ```sh\n   cargo test\n```\n\nThen check.\n\nDone.",
+    // A fence on a list marker's line.
+    "- ```\n  a\n  ```\n\nText\n\n```\ncode\n\nmore\n```",
+    // A fence inside an HTML block.
+    "<details>\n```ts\nconst a = 1;\n\nconst b = 2;\n```\n\n</details>\n\nAfter",
+    "```\r\ncode\r\n\r\nmore\r\n```\r\n\r\n- a\r\n\r\n- b\r\n-\r\n\r\nEnd",
+    // Definitions inside containers.
+    "See [x].\n\n> [x]: https://example.com",
+    "See [x].\n\nok\n\n- [x]: https://example.com",
+    "A[^1]\n\nB\n\n> [^1]: Note",
+    "a\n\u00a0\nb",
+    // A loose list whose next item, while it arrives, reads as a paragraph.
+    "1. a\n\n2. b\n\n3. c\n\nText\n\n- d\n\n- e",
+  ];
+  // A row in a root of its own, which keeps it across renders, as the transcript does.
+  const view = () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    return (text: string, partial: boolean) => {
+      const row: Item = { kind: "assistant", key: "a", text, partial };
+      act(() => root.render(<RowView row={row} live={false} open={false} onToggle={() => {}} />));
+      return container.innerHTML.replaceAll(">\n<", "><");
+    };
+  };
+  for (const reply of replies.map((r) => lead + r)) {
+    const streaming = view();
+    // Each length that ends a line or stops in its first characters, which decide its kind.
+    for (let n = 1; n <= reply.length; n++) {
+      const column = n - 1 - reply.lastIndexOf("\n", n - 1);
+      if (column > 4 && n < reply.length && reply[n] !== "\n") continue;
+      const text = reply.slice(0, n);
+      expect(streaming(text, true), JSON.stringify(text)).toBe(view()(text, false));
+    }
+  }
+  // Hundreds of renders, a few seconds when other files run alongside.
+}, 30_000);
+
+test("a short streaming message renders whole, without the split", () => {
+  vi.mocked(markdownBlocks).mockClear();
+  const text = "Short.\n\nStill short.";
+  row({ kind: "assistant", key: "a", text, partial: true });
+  expect(markdownBlocks).not.toHaveBeenCalled();
+  expect(document.querySelectorAll(".markdown p")).toHaveLength(2);
+  act(() => unmount());
+  row({ kind: "assistant", key: "a", text: text.padEnd(SPLIT_FROM, "!"), partial: true });
+  expect(markdownBlocks).toHaveBeenCalled();
 });
 
 test("a code block names its language, highlights it, and copies its text", async () => {
