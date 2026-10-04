@@ -20,7 +20,7 @@ import { age } from "./Sidebar";
 import { IconButton } from "./ui";
 
 /** The status board the coordinator keeps (coordinator.md), which the view opens on. */
-const board = "notes.md";
+export const board = "notes.md";
 
 /** Applies one of a Project's events to its context files: a changed file joins or replaces its row, by path. */
 function applyContextEvent(files: ContextFile[], event: ParallaxEvent): ContextFile[] {
@@ -33,7 +33,7 @@ function applyContextEvent(files: ContextFile[], event: ParallaxEvent): ContextF
  * A Project's shared context files (0005), by path, kept live: `context/list`, then the Project's
  * `context.changed` events, starting over on `resync`. Loads only while `connected`.
  */
-function useProjectContext(hostId: string, project: string, connected: boolean) {
+export function useProjectContext(hostId: string, project: string, connected: boolean) {
   const [files, setFiles] = useState<ContextFile[]>([]);
   const [error, setError] = useState<string>();
 
@@ -398,5 +398,115 @@ function MarkdownMark(props: SVGProps<SVGSVGElement>) {
       <path d="M15 10h178a5 5 0 0 1 5 5v98a5 5 0 0 1-5 5H15a5 5 0 0 1-5-5V15a5 5 0 0 1 5-5zm0-10A15 15 0 0 0 0 15v98a15 15 0 0 0 15 15h178a15 15 0 0 0 15-15V15A15 15 0 0 0 193 0z" />
       <path d="M30 98V30h20l20 25 20-25h20v68H90V59L70 84 50 59v39zm125 0l-30-33h20V30h20v35h20z" />
     </svg>
+  );
+}
+
+/** The Knowledge view's status board: the coordinator's `notes.md` as a card, or how it starts. */
+export function StatusBoard({
+  hostId,
+  project,
+  files,
+  error,
+  onOpen,
+}: {
+  hostId: string;
+  project: string;
+  files: ContextFile[];
+  error?: string;
+  onOpen: (path: string) => void;
+}) {
+  const notes = files.find((f) => f.path === board);
+  return (
+    <section aria-label="Status board">
+      <h3 className={`${sectionHeading} mt-1`}>Status board</h3>
+      {notes ? (
+        <ul className="px-1">
+          <RecentCard
+            hostId={hostId}
+            project={project}
+            file={notes}
+            onOpen={() => onOpen(notes.path)}
+          />
+        </ul>
+      ) : (
+        <p className="px-2.5 py-1 text-[12.5px] text-muted-foreground">{boardHint}</p>
+      )}
+      {error && (
+        <p role="alert" className="px-2.5 py-1 text-[12.5px] text-danger">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The Knowledge view's shared notes: a Project's context files besides the board, by name. */
+export function SharedNotes({
+  files,
+  onOpen,
+}: {
+  files: ContextFile[];
+  onOpen: (path: string) => void;
+}) {
+  const rest = files.filter((f) => f.path !== board);
+  if (rest.length === 0) return null;
+  return (
+    <section aria-label="Shared notes">
+      <h3 className={`${sectionHeading} mt-2`}>Shared notes</h3>
+      <ul>
+        {rest.map((f) => (
+          <li key={f.path}>
+            <button
+              type="button"
+              onClick={() => onOpen(f.path)}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-hover"
+            >
+              <FileText aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+              <span className="min-w-0 flex-1 truncate text-[13px]">{f.path}</span>
+              <span className="shrink-0 text-[11.5px] text-faint-foreground">
+                {age(f.modifiedAt)}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** A context file opened from the Knowledge view, with a way back and its links to other files. */
+export function ContextReader({
+  hostId,
+  project,
+  files,
+  file,
+  onOpen,
+  onBack,
+}: {
+  hostId: string;
+  project: string;
+  files: ContextFile[];
+  file: ContextFile;
+  onOpen: (path: string) => void;
+  onBack: () => void;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <button
+        type="button"
+        onClick={onBack}
+        className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+      >
+        <ChevronLeft aria-hidden className="size-4 shrink-0" />
+        <span className="truncate">{file.path}</span>
+      </button>
+      <ContextDoc
+        key={file.path}
+        hostId={hostId}
+        project={project}
+        file={file}
+        components={contextComponents(files, onOpen)}
+      />
+    </div>
   );
 }

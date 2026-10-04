@@ -2,7 +2,7 @@ import { ArrowUp, GitBranch, LoaderCircle, ShieldQuestion, Workflow } from "luci
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentRun, ParallaxEvent } from "../protocol/generated/protocol";
-import { childOrder, runAttention } from "./attention";
+import { childOrder, runAttention, type Attention } from "./attention";
 import { describeError } from "./errors";
 import { instanceLogo, instanceName } from "./providers";
 import { backendLogos, statusLooks } from "./Sidebar";
@@ -158,10 +158,18 @@ export function withProjectThreads(
   return { ...agents, runs, waiting };
 }
 
+const groupLabels: Record<Attention, string> = {
+  needsYou: "Needs you",
+  working: "Working",
+  done: "Done",
+  failed: "Failed",
+  settled: "Settled",
+};
+
 /**
  * The side panel's Agents view for a Project: the coordinator's children, without the coordinator
- * (0024), ordered Needs you, Working, Done, Failed, newest first within each (0042), each opening
- * its chat in place; then a box that starts one by hand.
+ * (0024), grouped under Needs you, Working, Done, and Failed, newest first within each (0042), each opening
+ * its chat in place; then, unless the composer starts tasks, a box that starts one by hand.
  */
 export function AgentsPanel({
   agents,
@@ -169,6 +177,7 @@ export function AgentsPanel({
   openId,
   onOpen,
   disabledReason,
+  startable = true,
 }: {
   agents: ProjectAgentsView;
   /** By run id: a child's thread title from plxd (0041), over its prompt's. */
@@ -178,28 +187,39 @@ export function AgentsPanel({
   onOpen: (runId: string) => void;
   /** Why starting one is off right now. */
   disabledReason?: string;
+  /** Whether it has its own start box, which a composer with New task makes a second one. */
+  startable?: boolean;
 }) {
-  const rank = (run: AgentRun) =>
-    childOrder.indexOf(runAttention(run, agents.waiting[run.id]?.length ?? 0));
-  const shown = agents.runs
-    .filter((r) => r.policy !== "noWrite")
-    .toReversed()
-    .toSorted((a, b) => rank(a) - rank(b));
+  const attention = (run: AgentRun) => runAttention(run, agents.waiting[run.id]?.length ?? 0);
+  const shown = agents.runs.filter((r) => r.policy !== "noWrite").toReversed();
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {shown.length > 0 ? (
-        <ul aria-label="Agents" className="min-h-0 flex-1 overflow-y-auto px-2">
-          {shown.map((run) => (
-            <AgentRow
-              key={run.id}
-              run={run}
-              title={titles[run.id] ?? titleOf(run)}
-              asks={agents.waiting[run.id]?.length ?? 0}
-              open={run.id === openId}
-              onOpen={() => onOpen(run.id)}
-            />
-          ))}
-        </ul>
+        <div aria-label="Agents" role="group" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+          {childOrder.map((kind) => {
+            const group = shown.filter((run) => attention(run) === kind);
+            if (group.length === 0) return null;
+            return (
+              <section key={kind} aria-label={groupLabels[kind]}>
+                <h3 className="px-2.5 pt-2.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
+                  {groupLabels[kind]} <span className="tabular-nums">{group.length}</span>
+                </h3>
+                <ul>
+                  {group.map((run) => (
+                    <AgentRow
+                      key={run.id}
+                      run={run}
+                      title={titles[run.id] ?? titleOf(run)}
+                      asks={agents.waiting[run.id]?.length ?? 0}
+                      open={run.id === openId}
+                      onOpen={() => onOpen(run.id)}
+                    />
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
           <Workflow aria-hidden className="mb-1 size-5 text-faint-foreground" />
@@ -214,7 +234,7 @@ export function AgentsPanel({
           {agents.error}
         </p>
       )}
-      <StartAgent start={agents.start} disabledReason={disabledReason} />
+      {startable && <StartAgent start={agents.start} disabledReason={disabledReason} />}
     </div>
   );
 }

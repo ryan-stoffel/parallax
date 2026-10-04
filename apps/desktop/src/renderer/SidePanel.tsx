@@ -6,7 +6,6 @@ import {
   Globe,
   Maximize2,
   Minimize2,
-  NotebookText,
   PanelRight,
   Plus,
   Terminal,
@@ -41,16 +40,13 @@ const surfaces: Surface[] = [
     empty: { title: "No changes yet", hint: "Edits from this thread show up here for review." },
   },
   {
-    name: "Context",
-    icon: NotebookText,
-    key: "C",
-    empty: { title: "No shared context", hint: "Only a Project's agents share context." },
-  },
-  {
-    name: "Memory",
+    name: "Knowledge",
     icon: Brain,
-    key: "M",
-    empty: { title: "No memory here", hint: "A Project or a thread in a repository has memory." },
+    key: "K",
+    empty: {
+      title: "Nothing known here yet",
+      hint: "A Project, or a thread in a repository, keeps what its agents learn.",
+    },
   },
   {
     name: "Agents",
@@ -86,7 +82,7 @@ const surfaces: Surface[] = [
  * a view keeps its state behind another. The top bar keeps the hide button where the main pane
  * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
  * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents`,
- * `context`, `memory`, and `files` are those views, such as a Project's, in place of their empty states.
+ * `knowledge`, and `files` are those views, such as a Project's, in place of their empty states.
  * `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal view,
  * told whether it's shown and given its empty state. Each new `browse` opens the Browser
  * view at its url. `pullRequests` are the open thread's linked pull requests (PLX-319): its URLs,
@@ -101,8 +97,7 @@ export function SidePanel({
   leading,
   topBarClassName = "",
   agents,
-  context,
-  memory,
+  knowledge,
   remoteHost,
   terminal,
   files,
@@ -117,8 +112,7 @@ export function SidePanel({
   leading?: ReactNode;
   topBarClassName?: string;
   agents?: ReactNode;
-  context?: ReactNode;
-  memory?: ReactNode;
+  knowledge?: ReactNode;
   remoteHost?: string;
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
   files?: ReactNode;
@@ -174,10 +168,8 @@ export function SidePanel({
       <Browser page={browse} remoteHost={remoteHost} />
     ) : s.name === "Agents" && agents ? (
       agents
-    ) : s.name === "Context" && context ? (
-      context
-    ) : s.name === "Memory" && memory ? (
-      memory
+    ) : s.name === "Knowledge" && knowledge ? (
+      knowledge
     ) : s.name === "Terminal" && terminal ? (
       terminal(open && s === current, emptyOf(s))
     ) : s.name === "Files" && files ? (

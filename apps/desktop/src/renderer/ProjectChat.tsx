@@ -193,14 +193,16 @@ export function ProjectChat({
       {/* It gives way first in a short window, so a pinned card and the composer keep their room,
           and whole: once it doesn't fit, it wraps into a second column, out of view, rather than
           show cut in two (PLX-259). */}
-      <div className="flex min-h-0 flex-1 flex-col flex-wrap content-start justify-center overflow-hidden text-center">
+      <div className="flex min-h-0 flex-1 flex-col flex-wrap content-start justify-end overflow-hidden">
         {/* The first column's width, so the second starts past the edge. */}
         <span aria-hidden className="w-full" />
-        <div className="flex w-full flex-col items-center px-8 pb-[8vh]">
-          <ProjectIcon icon={project.icon} className="size-10" />
-          <h2 className="mt-5 text-[18px] font-medium tracking-tight">{project.name}</h2>
-          <p className="mt-2 max-w-sm text-[14px] text-muted-foreground">
-            Agents working on {project.name} report back and coordinate here.
+        <div className="mx-auto w-full max-w-3xl px-8 pb-6">
+          <ProjectIcon icon={project.icon} className="size-7" />
+          <h2 className="mt-3 text-[20px] font-medium tracking-tight">{project.name}</h2>
+          <p className="mt-1.5 max-w-md text-[14px] text-muted-foreground">
+            {tasks
+              ? "Describe a task to start an agent on it, or ask the coordinator to plan the work. Agents report back here."
+              : `Agents working on ${project.name} report back and coordinate here.`}
           </p>
         </div>
       </div>

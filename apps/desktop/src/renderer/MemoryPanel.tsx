@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
@@ -198,13 +198,16 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
  * knowledge, from the You, Repo, and Project scopes; then the proposals waiting for the user. Each
  * opens to its text, to edit, promote, or delete it, or for a proposal to save or discard it. A
  * Project's box sends a change in plain words to its coordinator. Show it only on a plxd with
- * `memory`, and key it by host and folder.
+ * `memory`, and key it by host and folder. `afterBrief` and `end` are more sections in its list,
+ * such as the Knowledge view's status board and shared notes.
  */
 export function MemoryPanel({
   hostId,
   project,
   repo,
   coordinator,
+  afterBrief,
+  end,
 }: {
   hostId: string;
   /** The open Project, or absent for a thread outside one. */
@@ -213,6 +216,8 @@ export function MemoryPanel({
   repo?: string;
   /** The Project's coordinator run, which the box sends to. */
   coordinator?: string;
+  afterBrief?: ReactNode;
+  end?: ReactNode;
 }) {
   const { files, error, reload } = useMemory(hostId, project, repo);
   const calls = useMemo(() => memoryCalls(hostId), [hostId]);
@@ -251,6 +256,7 @@ export function MemoryPanel({
             )}
           </section>
         )}
+        {afterBrief}
         {sections?.entries.map(
           (g) =>
             g.files.length > 0 && (
@@ -277,6 +283,7 @@ export function MemoryPanel({
             No memory yet. Agents propose lasting facts as they work.
           </p>
         )}
+        {end}
         {error && (
           <p role="alert" className="px-2.5 py-2 text-[12.5px] text-danger">
             {error}

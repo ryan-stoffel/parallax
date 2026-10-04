@@ -55,7 +55,7 @@ async function render(context?: ReactNode) {
         onClose={() => {}}
         expanded={false}
         onExpandedChange={() => {}}
-        context={context}
+        knowledge={context}
       />,
     ),
   );
@@ -122,21 +122,21 @@ test("views open as tabs: + shows the list, a view's letter opens it, and pickin
 
 test("closing the shown tab shows its neighbour, and closing the last shows the list", async () => {
   await render();
-  for (const name of ["Changes", "Context", "Agents"]) {
+  for (const name of ["Changes", "Knowledge", "Agents"]) {
     await click(listButton(name));
     await click(openAView());
   }
   await click(tab("D"));
-  expect(tabs()).toEqual(["Changes*", "Context", "Agents"]);
+  expect(tabs()).toEqual(["Changes*", "Knowledge", "Agents"]);
 
   await click(panel().querySelector('button[aria-label="Close Changes"]'));
-  expect(tabs()).toEqual(["Context*", "Agents"]);
+  expect(tabs()).toEqual(["Knowledge*", "Agents"]);
   await click(panel().querySelector('button[aria-label="Close Agents"]'));
-  expect(tabs()).toEqual(["Context*"]);
-  // Off a Project, Context says so, rather than waiting for notes that won't come.
-  expect(shown()!.textContent).toContain("No shared context");
+  expect(tabs()).toEqual(["Knowledge*"]);
+  // Off a Project and a repository, Knowledge says there is nothing to show.
+  expect(shown()!.textContent).toContain("Nothing known here yet");
 
-  await click(panel().querySelector('button[aria-label="Close Context"]'));
+  await click(panel().querySelector('button[aria-label="Close Knowledge"]'));
   expect(tabs()).toEqual([]);
   expect(listShown()).toBe(true);
 });
@@ -152,14 +152,14 @@ test("closing a tab keeps focus in the panel, so the list's letters work after c
   await click(panel().querySelector('button[aria-label="Close Changes"]'));
   expect(document.activeElement).toBe(openAView());
   expect(listShown()).toBe(true);
-  press("c");
-  expect(tabs()).toEqual(["Context*"]);
+  press("k");
+  expect(tabs()).toEqual(["Knowledge*"]);
 });
 
 /** Renders ember's Context view and opens it. */
 async function openContext() {
   await render(<ContextPanel hostId="local" project="p-ember" name="ember" connected />);
-  await click(listButton("Context"));
+  await click(listButton("Knowledge"));
 }
 const rows = (list: string) =>
   [...panel().querySelectorAll(`[aria-label="${list}"] button`)].map((b) => b.textContent);

@@ -1,8 +1,17 @@
+import {
+  BookOpen,
+  CircleAlert,
+  CircleCheck,
+  CircleDot,
+  CircleQuestionMark,
+  type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { InboxItem, InboxKind, Question } from "../protocol/generated/protocol";
 import { outlineButton, quietButton } from "./Approval";
 import { describeError } from "./errors";
+import { age } from "./Sidebar";
 
 /** The inbox's groups, in 0043's order. A kind a newer plxd adds isn't shown. */
 export const inboxGroups: { kind: InboxKind; label: string }[] = [
@@ -114,11 +123,21 @@ export function useInbox(
   return { items, questions, seen, answer };
 }
 
+/** Each kind's look in the inbox: the icon beside its rows, from the agents list's statuses. */
+const kindLooks: Record<InboxKind, { Icon: LucideIcon; color: string }> = {
+  needsYou: { Icon: CircleQuestionMark, color: "text-warning" },
+  done: { Icon: CircleCheck, color: "text-emerald-500" },
+  failed: { Icon: CircleAlert, color: "text-danger" },
+  decided: { Icon: CircleDot, color: "text-muted-foreground" },
+  learned: { Icon: BookOpen, color: "text-muted-foreground" },
+};
+
 /**
  * A Project's unread inbox items, at the top of its coordinator chat, grouped as 0043 orders them.
- * Opening an item opens its child's chat and marks it seen. With `answerable`, an open question
- * in Needs you takes an answer in place, and a decided one can be changed: "went with X, change
- * it?". Shows nothing once every item is seen.
+ * Needs you items are cards; the rest are one line each. Opening an item opens its child's chat and
+ * marks it seen, and Mark all read clears the inbox. With `answerable`, an open question takes an
+ * answer in place, or keeps what the child assumed, and a decided one can be changed: "went with X,
+ * change it?". Shows nothing once every item is seen.
  */
 export function Inbox({
   view,
@@ -132,36 +151,117 @@ export function Inbox({
 }) {
   const unread = view.items.filter((i) => !i.seenAt);
   if (unread.length === 0) return null;
+  const needs = unread.filter((i) => i.kind === "needsYou").length;
   return (
     <section aria-label="Inbox" className="mx-auto w-full max-w-3xl shrink-0 px-6 pt-4">
-      <div className="max-h-[40vh] overflow-y-auto rounded-xl border border-border bg-surface px-2 py-1.5">
+      <div className="max-h-[34vh] overflow-y-auto rounded-xl border border-border bg-surface">
+        <div className="flex items-center gap-2 py-1.5 pr-1.5 pl-3.5">
+          <p className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">
+            {needs > 0 ? `${needs} waiting on you, ` : ""}
+            {unread.length} new since you last looked
+          </p>
+          <button
+            type="button"
+            onClick={() => void view.seen(unread.map((i) => i.id))}
+            className={quietButton}
+          >
+            Mark all read
+          </button>
+        </div>
         {inboxGroups.map(({ kind, label }) => {
           const group = unread.filter((i) => i.kind === kind);
           if (group.length === 0) return null;
           return (
-            <section key={kind} aria-label={label} className="py-1">
-              <h3 className="px-2 pb-0.5 text-[11.5px] font-medium text-faint-foreground">
-                {label} · {group.length}
+            <section key={kind} aria-label={label} className="border-t border-border/60 py-1.5">
+              <h3 className="px-3.5 pt-0.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
+                {label} <span className="tabular-nums">{group.length}</span>
               </h3>
-              <ul>
-                {group.map((item) => (
-                  <InboxRow
-                    key={item.id}
-                    item={item}
-                    question={answerable ? questionOf(item, view.questions) : undefined}
-                    onOpen={() => {
-                      onOpen(item.run);
-                      void view.seen([item.id]);
-                    }}
-                    onAnswer={(question, text) => view.answer(item, question, text)}
-                  />
-                ))}
+              <ul className={kind === "needsYou" ? "flex flex-col gap-1.5 px-2 pb-1" : undefined}>
+                {group.map((item) => {
+                  const open = () => {
+                    onOpen(item.run);
+                    void view.seen([item.id]);
+                  };
+                  const question = answerable ? questionOf(item, view.questions) : undefined;
+                  const onAnswer = (q: Question, text: string) => view.answer(item, q, text);
+                  return kind === "needsYou" ? (
+                    <NeedsYouCard
+                      key={item.id}
+                      item={item}
+                      question={question}
+                      onOpen={open}
+                      onAnswer={onAnswer}
+                    />
+                  ) : (
+                    <InboxRow
+                      key={item.id}
+                      item={item}
+                      question={question}
+                      onOpen={open}
+                      onAnswer={onAnswer}
+                    />
+                  );
+                })}
               </ul>
             </section>
           );
         })}
       </div>
     </section>
+  );
+}
+
+/**
+ * A Needs you item: what the child asks, what it went on assuming, and a way to answer. plxd's text
+ * reads "<title>: asks ...", so with the question shown on its own the link keeps only the title.
+ */
+function NeedsYouCard({
+  item,
+  question,
+  onOpen,
+  onAnswer,
+}: {
+  item: InboxItem;
+  question?: Question;
+  onOpen: () => void;
+  onAnswer: (question: Question, text: string) => Promise<string | undefined>;
+}) {
+  const waiting = question?.status === "open" || question?.status === "escalated";
+  const asks = item.text.indexOf(": asks ");
+  const title = question && waiting && asks > 0 ? item.text.slice(0, asks) : item.text;
+  const { Icon, color } = kindLooks.needsYou;
+  return (
+    <li className="rounded-lg border border-border bg-background px-3 py-2.5">
+      <button
+        type="button"
+        onClick={onOpen}
+        title={item.text}
+        className="flex w-full min-w-0 items-center gap-2 text-left text-[12.5px] text-muted-foreground hover:text-foreground"
+      >
+        <span className={`shrink-0 [&_svg]:size-3.5 ${color}`}>
+          <Icon aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="shrink-0 text-faint-foreground tabular-nums">{age(item.createdAt)}</span>
+      </button>
+      {question && waiting && (
+        <>
+          <p className="mt-1.5 text-[13.5px] text-foreground">{question.question}</p>
+          {question.assumption && (
+            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+              Going with <span className="text-foreground/85">{question.assumption}</span> until you
+              say otherwise.
+            </p>
+          )}
+          <AnswerForm
+            label="Answer"
+            question={question.question}
+            keep={question.assumption || undefined}
+            onAnswer={(text) => onAnswer(question, text)}
+          />
+        </>
+      )}
+    </li>
   );
 }
 
@@ -178,34 +278,43 @@ function InboxRow({
   onAnswer: (question: Question, text: string) => Promise<string | undefined>;
 }) {
   const [changing, setChanging] = useState(false);
-  const waiting = question?.status === "open" || question?.status === "escalated";
-  const asking = item.kind === "needsYou" ? waiting : changing;
+  const { Icon, color } = kindLooks[item.kind];
   return (
-    <li className="px-2 py-1">
-      <button
-        type="button"
-        onClick={onOpen}
-        title={item.text}
-        className="line-clamp-2 w-full text-left text-[13px] text-foreground/85 hover:text-foreground"
-      >
-        {item.text}
-      </button>
-      {item.kind === "decided" && question && !changing && (
+    <li className="px-1.5">
+      <div className="group flex min-w-0 items-center gap-2 rounded-md px-2 py-1 hover:bg-hover">
+        <span className={`shrink-0 [&_svg]:size-3.5 ${color}`}>
+          <Icon aria-hidden />
+        </span>
         <button
           type="button"
-          onClick={() => setChanging(true)}
-          className="mt-0.5 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          onClick={onOpen}
+          title={item.text}
+          className="min-w-0 flex-1 truncate text-left text-[13px] text-foreground/85 group-hover:text-foreground"
         >
-          Change it?
+          {item.text}
         </button>
-      )}
-      {question && asking && (
-        <AnswerForm
-          label={changing ? "Change" : "Answer"}
-          question={question.question}
-          onAnswer={(text) => onAnswer(question, text)}
-          onCancel={changing ? () => setChanging(false) : undefined}
-        />
+        {item.kind === "decided" && question && !changing && (
+          <button
+            type="button"
+            onClick={() => setChanging(true)}
+            className="shrink-0 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Change it?
+          </button>
+        )}
+        <span className="shrink-0 text-[12px] text-faint-foreground tabular-nums">
+          {age(item.createdAt)}
+        </span>
+      </div>
+      {question && changing && (
+        <div className="pr-2 pb-1 pl-7.5">
+          <AnswerForm
+            label="Change"
+            question={question.question}
+            onAnswer={(text) => onAnswer(question, text)}
+            onCancel={() => setChanging(false)}
+          />
+        </div>
       )}
     </li>
   );
@@ -218,11 +327,14 @@ function InboxRow({
 function AnswerForm({
   label,
   question,
+  keep,
   onAnswer,
   onCancel,
 }: {
   label: string;
   question: string;
+  /** What the child assumed, sent as the answer with one click. */
+  keep?: string;
   onAnswer: (text: string) => Promise<string | undefined>;
   onCancel?: () => void;
 }) {
@@ -239,12 +351,12 @@ function AnswerForm({
         setBusy(false);
         setError(failed);
       }}
-      className="mt-1"
+      className="mt-2"
     >
       <div className="flex items-center gap-2">
         <input
           aria-label={`${label}: ${question}`}
-          placeholder="Your answer"
+          placeholder={keep ? "Or answer differently" : "Your answer"}
           value={text}
           disabled={busy}
           autoFocus={!!onCancel}
@@ -256,9 +368,25 @@ function AnswerForm({
             Cancel
           </button>
         )}
-        <button type="submit" disabled={busy || !text.trim()} className={outlineButton}>
-          {label}
-        </button>
+        {keep && !text.trim() ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              const failed = await onAnswer(keep);
+              setBusy(false);
+              setError(failed);
+            }}
+            className={outlineButton}
+          >
+            Keep it
+          </button>
+        ) : (
+          <button type="submit" disabled={busy || !text.trim()} className={outlineButton}>
+            {label}
+          </button>
+        )}
       </div>
       {error && <p className="mt-1 text-[12px] text-danger">{error}</p>}
     </form>

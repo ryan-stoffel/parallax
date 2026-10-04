@@ -279,7 +279,7 @@ interface MenuEntry {
 
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
 export const tabItem =
-  "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
+  "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13px] text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0";
 
 /** A prompt for Stop to put back: its text and attached threads, then its images once they load. */
 export interface Unanswered {
@@ -989,7 +989,7 @@ export function Composer({
             setAttachError("A thread on another computer can't be attached here.");
           else addThreads([thread.runId]);
         }}
-        className={`relative z-10 rounded-3xl border bg-surface shadow-composer focus-within:border-ring ${threadOver ? "border-ring" : "border-border"}`}
+        className={`relative z-10 rounded-[1.375rem] border bg-surface shadow-composer transition-colors ${threadOver ? "border-ring" : "border-border focus-within:border-foreground/20"}`}
       >
         {menuOpen && (
           <div
@@ -1251,10 +1251,8 @@ export function Composer({
         </div>
       </form>
       {tab && (
-        // Tucked under the box, so what it shows reads as part of it.
-        <div className="mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-3xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
-          {tab}
-        </div>
+        // A quiet line under the box: where it runs, not more controls.
+        <div className="flex min-w-0 items-center justify-between gap-2 px-1.5 pt-1">{tab}</div>
       )}
       {onSteer && !disabledReason && (
         <p className="px-2 pt-1.5 text-[11.5px] text-faint-foreground">

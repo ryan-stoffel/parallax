@@ -6,11 +6,10 @@ import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
-import { ContextPanel } from "./ContextPanel";
 import { FilesPanel } from "./FilesPanel";
 import { GitMenu } from "./GitMenu";
+import { KnowledgePanel } from "./Knowledge";
 import { LineageTrail } from "./Lineage";
-import { MemoryPanel } from "./MemoryPanel";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
@@ -185,7 +184,7 @@ export function App() {
   const agentTitle = agentId
     ? (threads.state.titles[agentId] ?? (agent ? titleOf(agent) : "Subagent"))
     : undefined;
-  // Whose memory the side panel's Memory view shows, on a plxd with `memory` (0044): the open
+  // Whose memory the side panel's Knowledge view shows, on a plxd with `memory` (0044): the open
   // Project's, with its repository's, or the open thread's repository's.
   // ponytail: a repo entry's path is canonical and a Project's is as created, so a Project made
   // through a symlink finds no Repo scope; match canonical paths if that shows up.
@@ -738,6 +737,7 @@ export function App() {
               openId={agentId}
               onOpen={openAgent}
               disabledReason={offline}
+              startable={!(connected && "projectTasks" in connection.capabilities)}
             />
           )
         }
@@ -756,25 +756,16 @@ export function App() {
             />
           )
         }
-        context={
-          project && (
-            <ContextPanel
-              key={`${host.id}/${project.id}`}
-              hostId={host.id}
-              project={project.id}
-              name={project.name}
-              connected={connected}
-            />
-          )
-        }
-        memory={
-          memory && (
-            <MemoryPanel
+        knowledge={
+          (project || memory) && (
+            <KnowledgePanel
               key={`${host.id}/${project?.id ?? memoryRepo}`}
               hostId={host.id}
               project={project?.id}
               repo={memoryRepo}
               coordinator={project?.coordinator}
+              connected={connected}
+              memory={!!memory}
             />
           )
         }
