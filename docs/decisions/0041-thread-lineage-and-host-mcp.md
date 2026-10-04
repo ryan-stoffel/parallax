@@ -22,7 +22,8 @@ Agents in Parallax can't act on other threads. `plxd mcp` (0019) gives only a Pr
 ### The host-wide MCP (PLX-373)
 
 - plxd starts `plxd mcp --thread <runId> [--data-dir <dir>]` for every thread. plxd sets the caller's run id, never the model, as 0019 binds a coordinator, so a launch records the caller as the child's parent. At startup the server checks the run exists, and exits 1 if it doesn't. Framing, a connection per call, `isError` results, and caps are 0019's.
-- **Claude Code (PLX-373).** A thread that runs as full Claude Code (0034: `approvals`, or Bypass Permissions) gets `--mcp-config` with the server, with no `--strict-mcp-config`, so it joins the user's, the repository's, and plugins' servers, and `--allowedTools` names the tools before the todo tools, so they run in every mode. A thread without `approvals` keeps 0013's sandbox and gets no tools, since the server runs outside the sandbox. Routing drops the tools from every run that isn't a thread. A coordinator keeps 0019's eight tools until PLX-380 replaces them. Codex and Cursor threads get them in PLX-379.
+- **Claude Code (PLX-373).** A thread that runs as full Claude Code (0034: `approvals`, or Bypass Permissions) gets `--mcp-config` with the server, with no `--strict-mcp-config`, so it joins the user's, the repository's, and plugins' servers, and `--allowedTools` names the tools before the todo tools, so they run in every mode. A thread without `approvals` keeps 0013's sandbox and gets no tools, since the server runs outside the sandbox. Routing drops the tools from every run that isn't a thread. A coordinator keeps 0019's eight tools until PLX-380 replaces them.
+- **Codex and ACP agents (PLX-379).** Under the same condition (`approvals`, or Bypass), a Codex thread's `thread/start`, `thread/resume`, or `thread/fork` `config` carries `mcp_servers.plxd.command`, `.args`, and `.default_tools_approval_mode = "approve"`. Dotted keys merge into the user's `mcp_servers`, and only plxd's tools skip approval. A thread on an ACP agent such as Cursor gets the server in `session/new`'s and `session/load`'s `mcpServers`, next to the agent's own servers, and plxd allows a permission request without asking only when its tool call names the `plxd` provider and one of these tools. Cursor's `agent acp` doesn't exit when stdin closes while a stdio MCP server it started is connected, so plxd stops any ACP agent still running two seconds after it closes stdin, and a finished turn still counts as completed.
 - The tools. Every argument struct rejects unknown fields, and none takes the caller's id. `runId` names a target run anywhere on the host:
 
 | Tool | Arguments | plxd methods |
@@ -56,7 +57,7 @@ Claude's Task subagents show as read-only children of their thread, built from e
 - Titles move to plxd, so every client and agent sees the same one. The app still shows the prompt's first line when a thread has no title, and still keeps its own generated titles until it moves them to `thread/update`.
 - A deleted parent's children become top-level threads. Nothing records that they had a parent.
 - Host-wide write tools let any thread message or stop any other. Provenance in the transcript is the check on that, not a permission.
-- Until PLX-380, a coordinator keeps 0019's tools. Until PLX-379, Codex and Cursor threads have none.
+- Until PLX-380, a coordinator keeps 0019's tools.
 - A sender is kept only in plxd's memory until its message starts, so a message that waits across a plxd restart loses its `from`, as it loses the message today. PLX-370's durable queue is where to store it.
 
 ## Evidence

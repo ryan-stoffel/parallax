@@ -2,21 +2,22 @@
 //!
 //! # The command
 //!
-//! `codex app-server` in the run's cwd, which speaks JSON-RPC over stdio, one message per line.
-//! It loads the user's `config.toml`, rules, `AGENTS.md` files, skills, hooks, plugins, and MCP
+//! `codex app-server` in the run's cwd, which speaks JSON-RPC over stdio, one message per line. It
+//! loads the user's `config.toml`, rules, `AGENTS.md` files, skills, hooks, plugins, and MCP
 //! servers, as `codex` in a terminal does: no `--ignore-user-config`, `--ignore-rules`, or
 //! permission profile, unlike a worker's `codex exec`. The driver sends `initialize` and
 //! `initialized`, then `thread/start`, or `thread/resume` with the earlier run's thread id
 //! (`thread/fork` for a fork's first run, 0050), with the model, the context window as
-//! `model_context_window`, fast mode as the `priority` service tier, and the mode's approval
-//! policy and sandbox ([`mode`]). The prompt is the first `turn/start`, as written, with its images as `localImage` files ([`write_images`]) and the
-//! effort. Each follow-up is a later `turn/start` in the same process, sent once the turn before
-//! it has completed. A steer (PLX-370) is `turn/steer` with the running turn's id, which
+//! `model_context_window`, the thread's `plxd mcp --thread` server as dotted `mcp_servers.plxd.*`
+//! overrides that join the user's servers, its tools approved without asking (0041), fast mode as
+//! the `priority` service tier, and the mode's approval policy and sandbox ([`mode`]). The prompt
+//! is the first `turn/start`, as written, with its images as `localImage` files ([`write_images`])
+//! and the effort. Each follow-up is a later `turn/start` in the same process, sent once the turn
+//! before it has completed. A steer (PLX-370) is `turn/steer` with the running turn's id, which
 //! codex-cli 0.160.0 adds to that turn's input after its current item; if Codex refuses it, or no
-//! turn runs, it is the next turn instead. Once no turn, steer, or approval request is
-//! outstanding and plxd holds no message for it ([`Run::hold`](super::super::Run::hold)), stdin
-//! closes and app-server exits, which ends the run; `agent/send` then resumes the thread in a new
-//! run.
+//! turn runs, it is the next turn instead. Once no turn, steer, or approval request is outstanding
+//! and plxd holds no message for it ([`Run::hold`](super::super::Run::hold)), stdin closes and
+//! app-server exits, which ends the run; `agent/send` then resumes the thread in a new run.
 //!
 //! # Approval requests
 //!
@@ -216,7 +217,7 @@ pub(super) fn initialize_params() -> Value {
 
 /// `thread/start`, `thread/resume` for a run that resumes a thread, or `thread/fork` for a fork's
 /// first run, and its params: the cwd,
-/// the mode ([`mode`]), the model, the context window, and fast mode.
+/// the mode ([`mode`]), the model, the context window, the Parallax MCP server, and fast mode.
 fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartError> {
     let (mut approval_policy, sandbox, mut reviewer) = mode(request.permission)?;
     // A client that can't show a request: Codex's own sandbox holds the thread, and nothing asks,
@@ -236,13 +237,36 @@ fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartErr
     if let Some(reviewer) = reviewer {
         thread["approvalsReviewer"] = reviewer.into();
     }
+    let mut config = serde_json::Map::new();
+    if (request.approvals || request.permission == Some(AgentPermission::Bypass))
+        && let Some(tools) = &request.thread_tools
+    {
+        let server = &tools.mcp_config()?["mcpServers"][crate::mcp::SERVER];
+        // Dotted overrides merge into the user's MCP map rather than replacing it.
+        for field in ["command", "args"] {
+            config.insert(
+                format!("mcp_servers.{}.{field}", crate::mcp::SERVER),
+                server[field].clone(),
+            );
+        }
+        config.insert(
+            format!(
+                "mcp_servers.{}.default_tools_approval_mode",
+                crate::mcp::SERVER
+            ),
+            "approve".into(),
+        );
+    }
     if let Some(tokens) = request.context_window {
         if !CONTEXT_WINDOWS.contains(&tokens) {
             return Err(StartError::Unsupported(format!(
                 "Codex has no {tokens}-token context window"
             )));
         }
-        thread["config"] = json!({ "model_context_window": tokens });
+        config.insert("model_context_window".into(), tokens.into());
+    }
+    if !config.is_empty() {
+        thread["config"] = config.into();
     }
     if let Some(fast) = request.fast {
         // The catalog's tier named "Fast" is `priority`, as for exec.

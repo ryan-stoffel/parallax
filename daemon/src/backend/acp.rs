@@ -17,7 +17,10 @@
 //! sends `session/cancel`, which the agent answers by ending the turn `cancelled`, and then the
 //! steer as the next `session/prompt`. Once no turn is outstanding, no request waits, and plxd
 //! holds no message for it ([`Run::hold`]), stdin closes, the agent exits, and the run ends; a
-//! later message resumes the session in a new run.
+//! later message resumes the session in a new run. ACP doesn't promise an agent exits when stdin
+//! closes, and Cursor's doesn't while a stdio MCP server it started is connected, so an agent
+//! still running [`EXIT_GRACE`] after that has its process group stopped, and its finished turn
+//! still counts as completed.
 //!
 //! Only threads run on ACP agents (`RunRequest::thread`): none has a worker sandbox plxd can
 //! check, and 0004 keeps the coordinator on Claude Code, so anything else is
@@ -29,7 +32,8 @@
 //! and allowlist load as in a terminal. Every run drops inherited variables starting with the
 //! agent's [`AcpAgent::scrub`] prefixes, which could pick another key or endpoint, then sets the
 //! provider instance's own [`AcpAgent::env`] (0040). Only the agent's own sign-in runs, never a
-//! plxd key account.
+//! plxd key account. A thread with `approvals` or Bypass also gets its `plxd mcp --thread` server
+//! (0041) in `session/new`'s and `session/load`'s `mcpServers`, next to the agent's own servers.
 //!
 //! # Permission requests
 //!
@@ -40,6 +44,8 @@
 //! agent's [`AcpAgent::edit_mode`], and sends [`BUILD_PLAN`] as the same turn, as Claude Code goes
 //! on to build an approved plan in its turn. Denying it rejects the plan with the user's message,
 //! and Cursor keeps planning. Without `approvals`, plxd rejects every request and declines plans.
+//! A request for one of the injected server's tools is allowed without asking, as Claude Code's
+//! `--allowedTools` lets them run; other MCP tools ask as before.
 //!
 //! # Events
 //!
@@ -73,7 +79,8 @@ use self::stream::{Ask, AskKind, Step, Translator, permission_answer};
 use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, ModelUsage, Outcome, Usage, WarningKind};
 use super::process::{
-    CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, StdinMode, StdinPipe,
+    CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, Signal, StdinMode,
+    StdinPipe,
 };
 use super::{
     AgentPermission, Answer, AnswerError, ApprovalId, Backend, CancelSwitch, Capabilities,
@@ -83,6 +90,10 @@ use super::{
 
 /// The message that goes on with an approved plan in the same turn.
 pub const BUILD_PLAN: &str = "The user approved the plan. Build it.";
+
+/// How long an agent may keep running after plxd closes its stdin before plxd stops it. Cursor
+/// exits about half a second after stdin closes, unless a stdio MCP server keeps it alive.
+const EXIT_GRACE: Duration = Duration::from_secs(2);
 
 /// One ACP agent: how to start it and what its sessions take. A provider instance (0040) builds
 /// one from its preset and its user's settings.
@@ -318,6 +329,26 @@ pub fn scrubbed(base: &Environment, prefixes: &[String]) -> Vec<OsString> {
         .collect()
 }
 
+/// The thread's `plxd mcp --thread` server as `mcpServers` takes it, for a thread with `approvals`
+/// or Bypass, as Claude Code gets it (0041). The agent's own configured servers still load.
+fn thread_mcp_servers(request: &RunRequest) -> Result<Vec<Value>, StartError> {
+    let tools = request
+        .thread_tools
+        .as_ref()
+        .filter(|_| request.approvals || request.permission == Some(AgentPermission::Bypass));
+    let Some(tools) = tools else {
+        return Ok(Vec::new());
+    };
+    let config = tools.mcp_config()?;
+    let server = &config["mcpServers"][crate::mcp::SERVER];
+    Ok(vec![json!({
+        "name": crate::mcp::SERVER,
+        "command": server["command"],
+        "args": server["args"],
+        "env": [],
+    })])
+}
+
 impl Backend for AcpBackend {
     fn name(&self) -> &str {
         &self.agent.name
@@ -370,6 +401,7 @@ impl Backend for AcpBackend {
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
+        let mcp_servers = thread_mcp_servers(&request)?;
         let mut spec = self.spec(&request.cwd);
         spec.args = arguments(&self.agent, &request)?;
         let mut process = self.launcher.spawn(&spec)?;
@@ -392,6 +424,7 @@ impl Backend for AcpBackend {
             .map(|pipe| tokio::spawn(write_lines(pipe, lines)));
         let mut translator = Translator::default();
         translator.asks = request.approvals;
+        translator.thread_tools = !mcp_servers.is_empty();
         translator.label.clone_from(&self.agent.label);
         let permission = request.permission.unwrap_or(AgentPermission::Edit);
         // The model goes over ACP unless a flag already picked it.
@@ -424,6 +457,7 @@ impl Backend for AcpBackend {
             next_id: 0,
             requests: HashMap::new(),
             cwd: request.cwd.to_string_lossy().into_owned(),
+            mcp_servers,
             resume: request.resume.map(|resume| resume.session_id),
             mode,
             model,
@@ -443,6 +477,8 @@ impl Backend for AcpBackend {
             failure: None,
             results: 0,
             last_result: None,
+            exit_deadline: None,
+            stopped: false,
         };
         tokio::spawn(driver.run());
         Ok(Started {
@@ -550,6 +586,8 @@ struct Driver {
     /// plxd's requests that haven't been answered, by id.
     requests: HashMap<u64, Request>,
     cwd: String,
+    /// The injected Parallax stdio server, sent with `session/new` or `session/load`.
+    mcp_servers: Vec<Value>,
     resume: Option<String>,
     /// The session mode the permission sets once the session starts: Plan's, or Bypass's.
     mode: Option<String>,
@@ -574,6 +612,10 @@ struct Driver {
     failure: Option<Failure>,
     results: usize,
     last_result: Option<String>,
+    /// When an agent still running after plxd closed its stdin gets stopped ([`EXIT_GRACE`]).
+    exit_deadline: Option<tokio::time::Instant>,
+    /// plxd stopped the agent at [`Self::exit_deadline`], so a signal exit isn't a crash.
+    stopped: bool,
 }
 
 impl Driver {
@@ -612,6 +654,18 @@ impl Driver {
                     self.close();
                 }
                 () = self.held.changed() => {}
+                // Evaluated even when disabled, so it needs some instant.
+                () = tokio::time::sleep_until(
+                    self.exit_deadline.unwrap_or_else(tokio::time::Instant::now),
+                ), if self.exit_deadline.is_some() => {
+                    self.exit_deadline = None;
+                    self.stopped = true;
+                    self.process.signals().cancel(CancelPolicy {
+                        signal: Signal::TERM,
+                        group: true,
+                        grace: Duration::from_secs(1),
+                    });
+                }
             }
             self.next_prompt().await;
             if self.stdin.is_some()
@@ -624,6 +678,7 @@ impl Driver {
                 && !self.held.now()
             {
                 self.close();
+                self.exit_deadline = Some(tokio::time::Instant::now() + EXIT_GRACE);
             }
         };
 
@@ -757,12 +812,11 @@ impl Driver {
         };
         match request {
             Request::Initialize => {
-                let params = json!({"cwd": self.cwd, "mcpServers": []});
+                let mut params = json!({"cwd": self.cwd, "mcpServers": self.mcp_servers});
                 match self.resume.clone() {
                     Some(session) => {
                         self.translator.replaying = true;
-                        let params =
-                            json!({"sessionId": session, "cwd": self.cwd, "mcpServers": []});
+                        params["sessionId"] = session.into();
                         self.request("session/load", &params, Request::Session);
                     }
                     None => {
@@ -985,7 +1039,7 @@ impl Driver {
                 None,
             );
         };
-        if exit.info.success() && self.results > 0 {
+        if (exit.info.success() || self.stopped) && self.results > 0 {
             return Outcome::Completed {
                 result: self.last_result.take(),
             };
