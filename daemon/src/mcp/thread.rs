@@ -1318,8 +1318,9 @@ async fn resolve_repo(plxd: &mut Plxd, repos: &[Repo], repo: &str) -> Result<Rep
 
 /// `thread_wait`: waits until `run_id` is idle or `timeout` passes, in `agent/wait` calls of at
 /// most [`MAX_AGENT_WAIT`], or on a plxd without `agent/wait` by checking it every [`POLL`]. Each
-/// call is on a new connection, and one that fails is tried again after [`POLL`], so a plxd
-/// restart meanwhile doesn't end the wait.
+/// call is on a new connection. A connection that can't be opened, or an `agent/wait` whose
+/// connection fails, is tried again after [`POLL`], so a plxd restart meanwhile doesn't end the
+/// wait. Without `agent/wait`, a connection that fails during a check ends it.
 async fn wait(
     socket: &Path,
     run_id: RunId,
