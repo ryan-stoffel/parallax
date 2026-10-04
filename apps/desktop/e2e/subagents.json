@@ -1,0 +1,87 @@
+[
+  { "init": { "sessionId": "e2e-subagents", "model": "fake-model" } },
+  {
+    "emit": {
+      "kind": "toolCall",
+      "callId": "toolu_docs",
+      "name": "Agent",
+      "input": {
+        "description": "Read the build docs",
+        "prompt": "Read README.md and say how to build the app.",
+        "subagent_type": "Explore",
+        "model": "haiku"
+      }
+    }
+  },
+  {
+    "emit": {
+      "kind": "toolCall",
+      "callId": "toolu_tests",
+      "name": "Agent",
+      "input": {
+        "description": "Find the flaky test",
+        "prompt": "Find the test that fails one run in ten.",
+        "subagent_type": "general-purpose",
+        "model": "sonnet"
+      }
+    }
+  },
+  {
+    "emit": {
+      "kind": "subagent",
+      "callId": "toolu_docs",
+      "agentType": "Explore",
+      "model": "claude-haiku-4-5-20251001",
+      "event": {
+        "kind": "toolCall",
+        "callId": "toolu_read",
+        "name": "Read",
+        "input": { "file_path": "README.md" }
+      }
+    }
+  },
+  {
+    "emit": {
+      "kind": "subagent",
+      "callId": "toolu_docs",
+      "agentType": "Explore",
+      "event": {
+        "kind": "toolResult",
+        "callId": "toolu_read",
+        "status": "ok",
+        "output": "# App\n\nBuild with `pnpm build`."
+      }
+    }
+  },
+  {
+    "emit": {
+      "kind": "subagent",
+      "callId": "toolu_tests",
+      "agentType": "general-purpose",
+      "model": "claude-sonnet-5-5",
+      "event": {
+        "kind": "toolCall",
+        "callId": "toolu_grep",
+        "name": "Grep",
+        "input": { "pattern": "flaky" }
+      }
+    }
+  },
+  {
+    "emit": {
+      "kind": "subagentFinished",
+      "callId": "toolu_docs",
+      "status": "completed",
+      "summary": "The README says to build with `pnpm build`."
+    }
+  },
+  {
+    "emit": {
+      "kind": "toolResult",
+      "callId": "toolu_docs",
+      "status": "ok",
+      "output": "The README says to build with `pnpm build`."
+    }
+  },
+  "hang"
+]

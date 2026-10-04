@@ -47,7 +47,8 @@ use zeroize::Zeroize;
 pub use self::commands::CommandsProbe;
 pub use self::event::{
     ApprovalRequest, CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus,
-    LimitWindow, ModelUsage, Outcome, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
+    LimitWindow, ModelUsage, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus, Usage,
+    WarningKind,
 };
 use self::process::{CancelPolicy, Signals, SpawnError};
 pub use self::sandbox::WorkerSandbox;

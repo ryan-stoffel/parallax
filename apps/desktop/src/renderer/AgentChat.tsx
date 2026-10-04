@@ -87,16 +87,28 @@ import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { QueueStrip } from "./QueueStrip";
 import { ResumeCard } from "./ResumeCard";
+import {
+  modelName,
+  nativeSubagents,
+  SubagentCall,
+  SubagentsContext,
+  type NativeSubagent,
+} from "./Subagents";
 import { titleOf } from "./threads";
 import {
   failureText,
   groupWork,
   isRunning,
+  isSubagentTool,
+  subagentLabels,
+  subagentRows,
+  subagentState,
   waitingApprovals,
   workedFor,
   plxdTools,
   type Approval,
   type Item,
+  type Subagent,
   type Work,
 } from "./transcript";
 import { SetUpGithub } from "./ui";
@@ -160,6 +172,9 @@ export function AgentChat({
   compose,
   onComposed,
   threadLinks,
+  subagent,
+  onOpenSubagent,
+  onSubagents,
 }: {
   hostId: string;
   runId: string;
@@ -211,6 +226,12 @@ export function AgentChat({
    * transcript's attached threads open from their chips.
    */
   threadLinks?: ThreadLinks;
+  /** The agent's own subagent shown in place of the chat, by its call's id (PLX-382). */
+  subagent?: string;
+  /** Opens one of the agent's own subagents in run `runId`, as its call's row does. */
+  onOpenSubagent?: (runId: string, callId: string) => void;
+  /** Told run `runId`'s own subagents whenever they change, for the top bar's chips. */
+  onSubagents?: (runId: string, subagents: NativeSubagent[]) => void;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -395,6 +416,28 @@ export function AgentChat({
     return failed;
   };
 
+  // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
+  const stalled = error !== undefined || (connection !== undefined && !connected);
+  const live = isRunning(run?.status) && !stalled;
+  const native = useMemo(
+    () => JSON.stringify(nativeSubagents(transcript.subagents, live)),
+    [transcript.subagents, live],
+  );
+  useEffect(
+    () => onSubagents?.(runId, JSON.parse(native) as NativeSubagent[]),
+    [native, onSubagents, runId],
+  );
+  const subagents = useMemo(
+    () =>
+      onOpenSubagent && {
+        subagents: transcript.subagents ?? {},
+        live,
+        open: (callId: string) => onOpenSubagent(runId, callId),
+      },
+    [transcript.subagents, live, onOpenSubagent, runId],
+  );
+  const shown = subagent ? transcript.subagents?.[subagent] : undefined;
+
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
   else if (!connected) disabledReason = "Connecting to plxd…";
@@ -430,11 +473,32 @@ export function AgentChat({
     !isRunning(run.status) &&
     run.status !== "accepted";
 
-  // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
-  const stalled = error !== undefined || (connection !== undefined && !connected);
+  const pinned = (
+    <PinnedApprovals
+      asked={asked}
+      answers={answers}
+      onAnswer={(a, choice, message) => void answer(a, choice, message)}
+      onDismiss={dismiss}
+      disabledReason={connected ? undefined : (disabledReason ?? "Connecting to plxd…")}
+    />
+  );
+
+  if (subagent)
+    return (
+      <SubagentsContext value={subagents}>
+        {shown ? (
+          <SubagentView sub={shown} live={live} stalled={stalled} />
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-[13px] text-faint-foreground">
+            {error ?? (run ? "This subagent isn't in the transcript" : "Loading…")}
+          </div>
+        )}
+        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">{pinned}</div>
+      </SubagentsContext>
+    );
 
   return (
-    <>
+    <SubagentsContext value={subagents}>
       {rows.length > 0 ? (
         <ThreadLinksContext value={threadLinks}>
           <TranscriptView
@@ -466,13 +530,7 @@ export function AgentChat({
       {/* A column the window bounds, so a pinned card's preview gives way to a grown composer. */}
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
         {/* Requests waiting on the user, pinned so they can't scroll away. */}
-        <PinnedApprovals
-          asked={asked}
-          answers={answers}
-          onAnswer={(a, choice, message) => void answer(a, choice, message)}
-          onDismiss={dismiss}
-          disabledReason={connected ? undefined : (disabledReason ?? "Connecting to plxd…")}
-        />
+        {pinned}
         {/* A loaded transcript that stopped updating, a failed Send again, or Open PR. */}
         {(error ?? resendError ?? prError) && rows.length > 0 && (
           <p role="alert" className="flex items-center gap-2 px-2 pb-2 text-[12.5px] text-danger">
@@ -564,6 +622,39 @@ export function AgentChat({
           }
           attach={attachThreads(connection, threadLinks, runId)}
         />
+      </div>
+    </SubagentsContext>
+  );
+}
+
+const noneSent: ReadonlyMap<string, SentMessage> = new Map();
+
+/**
+ * One of the agent's own subagents, read-only (PLX-382): its prompt, what it did, and its final
+ * report, then its type, model, and where it stands, in place of a composer.
+ */
+function SubagentView({ sub, live, stalled }: { sub: Subagent; live: boolean; stalled: boolean }) {
+  const rows = useMemo(() => subagentRows(sub), [sub]);
+  const state = subagentState(sub, live);
+  return (
+    <>
+      <TranscriptView rows={rows} sent={noneSent} live={state === "running"} stalled={stalled} />
+      <div className="mx-auto w-full max-w-3xl px-6 pt-1">
+        <p
+          role="status"
+          aria-label="Subagent"
+          className="flex items-center gap-2 rounded-xl border border-border px-3.5 py-2.5 text-[12.5px] text-muted-foreground"
+        >
+          <Bot aria-hidden className="size-3.5 shrink-0" />
+          <span className="truncate">
+            {[sub.agentType, modelName(sub.model), subagentLabels[state]]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+          <span className="ml-auto shrink-0 text-faint-foreground">
+            Read-only: Claude Code's own subagent
+          </span>
+        </p>
       </div>
     </>
   );
@@ -1339,6 +1430,10 @@ function ToolCall({
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
 }) {
+  // A call that started one of the agent's own subagents opens it (PLX-382).
+  const subagents = useContext(SubagentsContext);
+  if (isSubagentTool(item.name) && subagents?.subagents[item.callId])
+    return <SubagentCall item={item} />;
   const named = plxdCall(item) ?? namedTool(item);
   const kind = toolKind(item);
   const status = item.status ?? (live ? "running" : "none");

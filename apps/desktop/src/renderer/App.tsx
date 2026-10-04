@@ -1,4 +1,4 @@
-import { PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
+import { Bot, PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InboxItem, Thread } from "../protocol/generated/protocol";
@@ -20,6 +20,7 @@ import { ProjectChat } from "./ProjectChat";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
+import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
 import { useNeedsYouAlarm, useSnoozeAlarms } from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
@@ -48,12 +49,12 @@ import { UsagePage } from "./UsagePage";
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
  * thread (its id is its run's; `started` when New Thread just started it, until anything else is
- * selected), a new thread in a sidebar group (`threads.ts`; with no group, it's the first
- * repository's), or Usage.
+ * selected; `subagent` when one of its agent's own subagents is open, by its call's id), a new
+ * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's), or Usage.
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
-  | { kind: "thread"; threadId: string; started?: boolean }
+  | { kind: "thread"; threadId: string; started?: boolean; subagent?: string }
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
 
@@ -247,6 +248,20 @@ export function App() {
 
   // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
   const lineage = threads.lineage && openThread ? lineageOf(threads.state, openThread) : undefined;
+  // The open thread's agent's own subagents, as its chat reports them (PLX-382).
+  const [native, setNative] = useState<{ threadId: string; list: NativeSubagent[] }>();
+  const reportNative = useCallback(
+    (threadId: string, list: NativeSubagent[]) => setNative({ threadId, list }),
+    [],
+  );
+  const subagents =
+    openThread && native?.threadId === openThread.id ? native.list : ([] as NativeSubagent[]);
+  const openSubagent = useCallback(
+    (threadId: string, callId?: string) =>
+      setSelection({ kind: "thread", threadId, subagent: callId }),
+    [],
+  );
+  const subagentOpen = selection.kind === "thread" ? selection.subagent : undefined;
   const openThreadId = (threadId: string) => openOnHost(host.id, { kind: "thread", threadId });
   // Where Go to parent, Next, and Previous sibling go. From a parent, Next and Previous open its
   // first and last child.
@@ -287,6 +302,7 @@ export function App() {
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
     crumbs = [{ label: host.name }, repo, { label: page }];
+
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.
     const parent = lineage?.parent;
@@ -298,6 +314,16 @@ export function App() {
       crumbs = lineage.active
         ? [crumbs[0]!, repo, back]
         : [crumbs[0]!, repo, back, { label: page }];
+    }
+    // An open subagent's crumb comes last, and its thread's, when shown, goes back to the thread.
+    if (selection.kind === "thread" && subagentOpen) {
+      const threadId = selection.threadId;
+      if (!lineage?.active)
+        crumbs[crumbs.length - 1] = { label: page, onClick: () => openSubagent(threadId) };
+      crumbs.push({
+        label: subagents.find((s) => s.callId === subagentOpen)?.title ?? "Subagent",
+        icon: <Bot />,
+      });
     }
   }
 
@@ -475,15 +501,18 @@ export function App() {
               <Breadcrumb
                 items={crumbs}
                 trail={
-                  lineage &&
-                  openThread && (
+                  openThread &&
+                  (lineage || subagents.some((s) => !s.parent)) && (
                     <LineageTrail
                       state={threads.state}
-                      chips={lineage.chips}
-                      active={lineage.active}
+                      chips={lineage?.chips ?? []}
+                      active={lineage?.active}
                       root={rootOf(threads.state, openThread)}
                       openId={openThread.id}
                       onOpen={openThreadId}
+                      subagents={subagents.filter((s) => !s.parent)}
+                      activeSubagent={subagentOpen}
+                      onOpenSubagent={(callId) => openSubagent(openThread.id, callId)}
                     />
                   )
                 }
@@ -556,6 +585,9 @@ export function App() {
                 compose={compose}
                 onComposed={composed}
                 threadLinks={threadLinks}
+                subagent={selection.subagent}
+                onOpenSubagent={openSubagent}
+                onSubagents={reportNative}
               />
             ) : selection.kind === "new" ? (
               <NewThread

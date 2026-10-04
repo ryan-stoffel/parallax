@@ -5,9 +5,9 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentApproveResult, AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome,
-    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, AgentTodoItem,
-    AgentTodoStatus, AgentToolStatus, ApprovalId, CoordinatorThreadId, DiffSummary, ProjectId,
-    RunId,
+    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, AgentSubagentStatus,
+    AgentTodoItem, AgentTodoStatus, AgentToolStatus, ApprovalId, CoordinatorThreadId, DiffSummary,
+    ProjectId, RunId,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -16,7 +16,7 @@ use tracing::error;
 
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::{
-    ApprovalRequest, Event, FailureKind, Outcome, TodoItem, TodoStatus, ToolStatus,
+    ApprovalRequest, Event, FailureKind, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus,
 };
 use crate::json::escaped_len;
 use crate::worktree::MergeHow;
@@ -269,6 +269,15 @@ fn tool_status(status: ToolStatus) -> AgentToolStatus {
     }
 }
 
+fn subagent_status(status: SubagentStatus) -> AgentSubagentStatus {
+    match status {
+        SubagentStatus::Completed => AgentSubagentStatus::Completed,
+        SubagentStatus::Failed => AgentSubagentStatus::Failed,
+        SubagentStatus::Stopped => AgentSubagentStatus::Stopped,
+        SubagentStatus::Other => AgentSubagentStatus::Unknown,
+    }
+}
+
 fn todo_status(status: TodoStatus) -> AgentTodoStatus {
     match status {
         TodoStatus::Pending => AgentTodoStatus::Pending,
@@ -413,6 +422,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         Event::Warning { detail, .. } => AgentOutputItem::Warning {
             detail: truncate(detail, MAX_TEXT_ITEM_BYTES),
         },
+        Event::Subagent { .. } | Event::SubagentFinished { .. } => return subagent_item(event),
         // The run's actor reports permission requests, with when they expire and how they end.
         Event::ApprovalRequested(_)
         | Event::ApprovalWithdrawn { .. }
@@ -420,6 +430,38 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         | Event::AccountFallback { .. }
         | Event::Finished { .. }
         | Event::Unknown => return None,
+    })
+}
+
+/// The transcript item for one of the agent's own subagents' events (PLX-382). Its own item is
+/// capped as the agent's would be, and left out where the agent's would be.
+fn subagent_item(event: &Event) -> Option<AgentOutputItem> {
+    Some(match event {
+        Event::Subagent {
+            call_id,
+            agent_type,
+            model,
+            event,
+        } => AgentOutputItem::Subagent {
+            call_id: truncate(call_id, MAX_ID_BYTES),
+            agent_type: agent_type
+                .as_deref()
+                .map(|kind| truncate(kind, MAX_ID_BYTES)),
+            model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
+            item: Box::new(output_item(event)?),
+        },
+        Event::SubagentFinished {
+            call_id,
+            status,
+            summary,
+        } => AgentOutputItem::SubagentFinished {
+            call_id: truncate(call_id, MAX_ID_BYTES),
+            status: subagent_status(*status),
+            summary: summary
+                .as_deref()
+                .map(|summary| truncate(summary, MAX_TEXT_ITEM_BYTES)),
+        },
+        _ => return None,
     })
 }
 

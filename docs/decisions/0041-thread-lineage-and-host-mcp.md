@@ -2,7 +2,7 @@
 
 - Status: accepted; the store and protocol are PLX-369's, the thread tools and Claude Code's server are PLX-373's, and PLX-380 replaced [0019](0019-coordinator-mcp-tools.md)'s eight tools with them for a coordinator, kept `read_context` and `write_context` for a thread in a Project, and made a parent wake when its children finish ([0025](0025-coordinator-wake-ups.md)); fork, which sets `forkedFrom`, is [0050](0050-fork-a-thread.md)
 - Date: 2026-10-03
-- Issue: PLX-368, PLX-369, PLX-373
+- Issue: PLX-368, PLX-369, PLX-373, PLX-382
 
 ## Context
 
@@ -51,6 +51,11 @@ Agents in Parallax can't act on other threads. `plxd mcp` (0019) gives only a Pr
 
 Claude's Task subagents show as read-only children of their thread, built from each event's `parent_tool_use_id`. They aren't threads: they have no run, no composer, and no MCP. Only `thread_launch` children are full threads.
 
+- **Wire (PLX-382).** plxd wraps every item from a Claude Code line with a `parent_tool_use_id` in `agent.output`'s `subagent {callId, agentType?, model?, item}`: `callId` is that id, the Agent (once Task) call that started it, `agentType` the line's `subagent_type`, and `model` an assistant line's `message.model`. A `system/task_notification` for a call whose `task_started` named a `subagent_type` becomes `subagentFinished {callId, status, summary?}`, `status` being `completed`, `failed`, or `stopped`. A wrapper, not a field on each item, so the handoff conversation, `thread_read`, and a run's last output skip a subagent's own items, and an older app skips both kinds as unknown. PR detection unwraps them, so a subagent's `gh pr create` links its pull request to the thread.
+- **Status.** Claude Code 2.1.288 runs a subagent in the background when the model asks, and its call's result then says only that it launched, so only `subagentFinished` with `completed` makes a subagent done. Without one it works while its run is live and is stopped once the run isn't, and a status the app doesn't know reads as stopped. Its final reply isn't streamed either; the notification's `summary` carries it.
+- **Nesting.** A subagent can start another (`spawn_depth` 2 in the evidence below). Its items name its own call, which sits in the first subagent's transcript, so the app opens it from there. The top bar's chips show only a thread's top-level subagents.
+- **App.** A subagent's items stay out of its thread's flow. The call's row shows its status and opens it, as its chip does, after the thread's `thread_launch` chips, marked read-only. Open, it shows its prompt, history, final report, type, model, and status, with no composer.
+
 ## Consequences
 
 - One parent column covers both a coordinator's subagents and launched threads, so the lineage UI (PLX-374) reads one field. `AgentRun` doesn't carry `parent` yet; `coordinatorThread` still marks a coordinator's subagents on the wire.
@@ -63,3 +68,5 @@ Claude's Task subagents show as read-only children of their thread, built from e
 ## Evidence
 
 On 2026-10-03, on macOS 27.0 with Claude Code 2.1.288 and Ryan's own subscription, `plxd serve` with a fresh data folder ran a thread started over `plxd attach` on `haiku` in Bypass Permissions, with no repo, asked to launch a child on `sonnet`, wait on it, and read it. It called `thread_launch`, `thread_wait`, and `thread_read` in turn. `thread/list` then showed the child with the parent's run id as `parent`, and the child's own session reported `claude-sonnet-5-5`. Asked to list its MCP servers by tool name, a second thread named the user's thirteen claude.ai servers and `plxd`.
+
+On 2026-10-04, on the same Mac with Claude Code 2.1.288 on `haiku` in Bypass Permissions, three headless runs started two subagents with no tools, two that each ran one `echo` (in the background), and one that started another. Every subagent line carried `parent_tool_use_id` and `subagent_type`, each subagent ended with a `task_notification` of `status: "completed"` and its reply as `summary`, and the nested one's `task_started` reported `spawn_depth: 2`. The second run, trimmed, is `daemon/src/backend/claude/fixtures/subagents.jsonl`.

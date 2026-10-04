@@ -144,6 +144,32 @@ pub enum Event {
         /// The request's id from its [`Event::ApprovalRequested`].
         approval_id: ApprovalId,
     },
+    /// What one of the agent's own subagents did (PLX-382, 0041): Claude Code's lines with a
+    /// `parent_tool_use_id`. Not part of the agent's own flow, so nothing that reads the agent's
+    /// replies, tool calls, or checklist sees it.
+    Subagent {
+        /// The tool call that started the subagent: Claude Code's `parent_tool_use_id`.
+        call_id: String,
+        /// The subagent's type, such as `general-purpose`, when the CLI says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_type: Option<String>,
+        /// The model that wrote it, when the CLI says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// What it did.
+        event: Box<Event>,
+    },
+    /// One of the agent's own subagents ended (PLX-382): Claude Code's `task_notification`. A
+    /// subagent run in the background ends long after its tool call's result.
+    SubagentFinished {
+        /// The tool call that started it.
+        call_id: String,
+        /// How it ended.
+        status: SubagentStatus,
+        /// Its final report, when the CLI includes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
     /// Something in the CLI's output that the backend skipped. It never ends a run.
     Warning {
         /// What was wrong.
@@ -253,6 +279,21 @@ pub enum ToolStatus {
     /// The tool policy or the CLI's approval rules refused it: Claude's `permission_denied`, or a
     /// Codex approval request that exec's `never` policy denied.
     Denied,
+    /// A status this version does not know.
+    #[serde(other)]
+    Other,
+}
+
+/// How an [`Event::SubagentFinished`] subagent ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubagentStatus {
+    /// It finished its work.
+    Completed,
+    /// It failed.
+    Failed,
+    /// It was stopped before it finished.
+    Stopped,
     /// A status this version does not know.
     #[serde(other)]
     Other,

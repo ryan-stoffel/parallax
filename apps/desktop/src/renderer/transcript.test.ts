@@ -6,10 +6,13 @@ import {
   applyEvents,
   emptyTranscript,
   groupWork,
+  subagentRows,
+  subagentState,
   trackApprovals,
   waitingApprovals,
   workedFor,
   type Item,
+  type Subagent,
   type Work,
 } from "./transcript";
 import { uuidv7 } from "./uuidv7";
@@ -476,4 +479,83 @@ test("a Project's waiting requests are tracked by run, once each, until resolved
   ]);
   expect(ids(runId)).toEqual([]);
   expect(ids(other)).toEqual(["b2"]);
+});
+
+// Two of Claude Code's own subagents (PLX-382), as plxd tags their items, one of them starting
+// another.
+const agentCall = (callId: string, description: string): AgentOutputItem => ({
+  kind: "toolCall",
+  callId,
+  name: "Agent",
+  input: {
+    description,
+    prompt: `${description}, then reply.`,
+    subagent_type: "Explore",
+    model: "haiku",
+  },
+});
+const inSub = (callId: string, item: AgentOutputItem, model?: string): AgentOutputItem => ({
+  kind: "subagent",
+  callId,
+  agentType: "Explore",
+  ...(model && { model }),
+  item,
+});
+
+test("a subagent's items stay out of the agent's flow, in its own transcript under its call", () => {
+  const t = build(
+    output(agentCall("a", "Read the docs"), agentCall("b", "Read the tests")),
+    output(
+      inSub(
+        "a",
+        { kind: "toolCall", callId: "a1", name: "Read", input: { file_path: "README.md" } },
+        "claude-haiku-4-5-20251001",
+      ),
+      inSub("a", { kind: "toolResult", callId: "a1", status: "ok", output: "# App" }),
+      inSub("b", agentCall("c", "Grep the tests")),
+      inSub("a", { kind: "text", messageId: "m", text: "Docs read." }, "claude-haiku-4-5-20251001"),
+      { kind: "toolResult", callId: "a", status: "ok", output: "Docs read." },
+      { kind: "subagentFinished", callId: "a", status: "completed", summary: "Docs read." },
+    ),
+  );
+  // The agent's own flow has its two calls, and nothing its subagents did.
+  expect(t.items.map((i) => (i.kind === "tool" ? i.callId : i.kind))).toEqual(["a", "b"]);
+  const { a, b, c } = t.subagents!;
+  expect(a).toMatchObject({
+    description: "Read the docs",
+    prompt: "Read the docs, then reply.",
+    agentType: "Explore",
+    model: "claude-haiku-4-5-20251001",
+    call: "ok",
+    finished: { status: "completed", summary: "Docs read." },
+  });
+  expect(a!.items.map((i) => i.kind)).toEqual(["tool", "assistant"]);
+  expect(a!.items[0]).toMatchObject({ callId: "a1", status: "ok", output: "# App" });
+  // Until it writes something, the model is the one asked for.
+  expect(b).toMatchObject({ model: "haiku", items: [{ kind: "tool", callId: "c" }] });
+  // A subagent one of them started names it as its parent.
+  expect(c).toMatchObject({ parent: "b", description: "Grep the tests" });
+  expect(a!.parent).toBeUndefined();
+
+  // Its transcript: the prompt, what it did, and no repeat of a final report it already said.
+  expect(subagentRows(a!).map((i) => i.kind)).toEqual(["user", "tool", "assistant"]);
+  const quiet = { ...b!, finished: { status: "completed" as const, summary: "No tests." } };
+  expect(subagentRows(quiet).at(-1)).toMatchObject({ kind: "assistant", text: "No tests." });
+});
+
+test("a subagent works until it says how it ended, whatever its call's result", () => {
+  const sub = { callId: "a", items: [] };
+  // A subagent in the background has its call succeed at once.
+  expect(subagentState({ ...sub, call: "ok" }, true)).toBe("running");
+  expect(subagentState({ ...sub, call: "ok", finished: { status: "completed" } }, true)).toBe(
+    "completed",
+  );
+  expect(subagentState({ ...sub, finished: { status: "failed" } }, true)).toBe("failed");
+  expect(subagentState({ ...sub, call: "error" }, true)).toBe("failed");
+  // Once the run is done without its finish, it was stopped, its call launched or not.
+  expect(subagentState({ ...sub, call: "ok" }, false)).toBe("stopped");
+  expect(subagentState(sub, false)).toBe("stopped");
+  // A finish this app doesn't know isn't Done.
+  const newer = { status: "paused" } as unknown as NonNullable<Subagent["finished"]>;
+  expect(subagentState({ ...sub, finished: newer }, true)).toBe("stopped");
 });

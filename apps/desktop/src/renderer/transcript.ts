@@ -7,6 +7,7 @@ import type {
   AgentOutputItem,
   AgentRun,
   AgentStatus,
+  AgentSubagentStatus,
   AgentTodoItem,
   AgentToolStatus,
   ImageId,
@@ -99,11 +100,81 @@ export interface Transcript {
   /** Absent until `agent.started` is in. */
   run?: AgentRun;
   items: Item[];
+  /** The agent's own subagents, by the call that started each, kept out of `items` (PLX-382). */
+  subagents?: Readonly<Record<string, Subagent>>;
   /** The last `seq` applied. Anything at or below it is a repeat. */
   seq: number;
 }
 
+/**
+ * One of the agent's own subagents (PLX-382, 0041), such as Claude Code's Agent tool: read-only,
+ * with no run of its own. Its task, type, and model come from the call that started it, and the
+ * model then from what it wrote.
+ */
+export interface Subagent {
+  callId: string;
+  /** The subagent whose transcript has the call that started this one, for a nested one. */
+  parent?: string;
+  description?: string;
+  prompt?: string;
+  agentType?: string;
+  model?: string;
+  items: Item[];
+  /** How its call ended. A subagent started in the background has its call end at once. */
+  call?: AgentToolStatus;
+  finished?: { status: AgentSubagentStatus; summary?: string };
+  /** When its call was made. */
+  at?: string;
+}
+
+/** The tools that start one of Claude Code's own subagents: `Agent`, once `Task`. */
+export const isSubagentTool = (name: string | null) => name === "Agent" || name === "Task";
+
+export type SubagentState = "running" | "completed" | "failed" | "stopped";
+
+/**
+ * Where a subagent stands. Only its finish says it's done: a status this app doesn't know reads as
+ * stopped. Without one, a call that failed failed it, and otherwise it works while its run is
+ * `live` and was stopped with the run once it isn't, since a background subagent's call succeeds
+ * as soon as it launches.
+ */
+export function subagentState(s: Subagent, live: boolean): SubagentState {
+  const status = s.finished?.status;
+  if (status === "completed" || status === "failed") return status;
+  if (status) return "stopped";
+  if (s.call === "error" || s.call === "denied") return "failed";
+  return live ? "running" : "stopped";
+}
+
+export const subagentLabels: Record<SubagentState, string> = {
+  running: "Working",
+  completed: "Done",
+  failed: "Failed",
+  stopped: "Stopped",
+};
+
+/** A subagent for people: its task, else its prompt's first line, else its type. */
+export const nativeTitle = (s: Subagent) =>
+  s.description?.trim() || s.prompt?.trim().split("\n")[0] || s.agentType || "Subagent";
+
+/**
+ * A subagent's transcript: its prompt, what it did, and its final report when its transcript
+ * doesn't end on it already, as Claude Code doesn't stream a subagent's last reply.
+ */
+export function subagentRows(s: Subagent): Item[] {
+  const rows: Item[] = [];
+  if (s.prompt) rows.push({ kind: "user", key: `${s.callId}:prompt`, text: s.prompt, at: s.at });
+  rows.push(...s.items);
+  const said = s.items.findLast((x) => x.kind === "assistant")?.text.trim();
+  const summary = s.finished?.summary?.trim();
+  if (summary && summary !== said)
+    rows.push({ kind: "assistant", key: `${s.callId}:summary`, text: summary });
+  return rows;
+}
+
 export const emptyTranscript: Transcript = { items: [], seq: 0 };
+
+const isText = (v?: JsonValue) => (typeof v === "string" ? v : undefined);
 
 /**
  * Applies events, in `seq` order, for one run. Repeats and other runs' events are
@@ -112,6 +183,7 @@ export const emptyTranscript: Transcript = { items: [], seq: 0 };
 export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
   let { run, seq } = t;
   const items = [...t.items];
+  const subagents = { ...t.subagents };
   const push = (item: Item) => items.push(item);
 
   for (const { seq: at, time, event } of events) {
@@ -151,12 +223,12 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
         });
         break;
       case "agent.output":
-        event.items.forEach((item, i) => applyOutput(items, item, key(i), time));
+        event.items.forEach((item, i) => applyOutput(items, item, key(i), time, subagents));
         break;
     }
     for (let i = before; i < items.length; i++) items[i] = { ...items[i]!, at: time };
   }
-  return { run, items, seq };
+  return { run, items, subagents, seq };
 }
 
 /** A run as `event` leaves it: `agent.started` sets it, and `agent.updated` and fallbacks change it. */
@@ -184,7 +256,18 @@ export function updateRun(run: AgentRun | undefined, event: ParallaxEvent): Agen
 
 // ponytail: copies the item list per event and scans back for matches; fine for
 // thousands of items, since plxd coalesces output every 50 ms.
-function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: string) {
+/**
+ * Applies one output item to `items`, the agent's or, under `owner`, a subagent's. A subagent's
+ * own items go to its entry in `subagents`, out of the agent's flow (PLX-382).
+ */
+function applyOutput(
+  items: Item[],
+  item: AgentOutputItem,
+  key: string,
+  time: string,
+  subagents: Record<string, Subagent>,
+  owner?: string,
+) {
   const last = items.at(-1);
   // The assistant message a text item continues: same vendor id, or the partial one just before.
   const target = (messageId?: string) => {
@@ -248,8 +331,42 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
     case "reasoning":
       items.push({ kind: "reasoning", key, text: item.text });
       break;
+    case "subagent": {
+      const sub = subagents[item.callId] ?? { callId: item.callId, items: [] };
+      const inner = [...sub.items];
+      const before = inner.length;
+      applyOutput(inner, item.item, key, time, subagents, item.callId);
+      for (let i = before; i < inner.length; i++) inner[i] = { ...inner[i]!, at: time };
+      subagents[item.callId] = {
+        ...(subagents[item.callId] ?? sub),
+        items: inner,
+        agentType: item.agentType ?? sub.agentType,
+        model: item.model ?? sub.model,
+      };
+      break;
+    }
+    case "subagentFinished": {
+      const sub = subagents[item.callId] ?? { callId: item.callId, items: [] };
+      subagents[item.callId] = { ...sub, finished: { status: item.status, summary: item.summary } };
+      break;
+    }
     case "toolCall": {
       const { callId, name, input } = item;
+      if (isSubagentTool(name) && isObject(input)) {
+        const sub = subagents[callId];
+        subagents[callId] = {
+          callId,
+          items: [],
+          ...sub,
+          ...(owner && { parent: owner }),
+          description: isText(input["description"]),
+          prompt: isText(input["prompt"]),
+          agentType: sub?.agentType ?? isText(input["subagent_type"]),
+          // The model asked for, such as `haiku`, until it writes something.
+          model: sub?.model ?? isText(input["model"]),
+          at: time,
+        };
+      }
       const runId = name?.startsWith(plxdTools)
         ? (input as { runId?: unknown } | null | undefined)?.runId
         : undefined;
@@ -258,6 +375,8 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
       break;
     }
     case "toolResult": {
+      const sub = subagents[item.callId];
+      if (sub) subagents[item.callId] = { ...sub, call: item.status };
       const i = items.findLastIndex((x) => x.kind === "tool" && x.callId === item.callId);
       const result = { status: item.status, output: item.output };
       if (i >= 0) items[i] = { ...(items[i] as Extract<Item, { kind: "tool" }>), ...result };
