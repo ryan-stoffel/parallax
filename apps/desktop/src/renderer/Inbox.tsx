@@ -1,25 +1,7 @@
-import {
-  BookOpen,
-  CircleAlert,
-  CircleCheck,
-  CircleDot,
-  CircleQuestionMark,
-  type LucideIcon,
-} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import type { InboxItem, InboxKind, Question } from "../protocol/generated/protocol";
-import { outlineButton, quietButton } from "./Approval";
+import type { InboxItem, Question } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-
-/** The inbox's groups, in 0043's order. A kind a newer plxd adds isn't shown. */
-export const inboxGroups: { kind: InboxKind; label: string }[] = [
-  { kind: "needsYou", label: "Needs you" },
-  { kind: "done", label: "Done" },
-  { kind: "failed", label: "Failed or stuck" },
-  { kind: "decided", label: "Decided for you" },
-  { kind: "learned", label: "Learned" },
-];
 
 /**
  * The question a Needs you or Decided item is about. Items carry no question id, so it's the
@@ -120,86 +102,4 @@ export function useInbox(
   );
 
   return { items, questions, seen, answer };
-}
-
-/** Each kind's look in the inbox: the icon beside its rows, from the agents list's statuses. */
-export const kindLooks: Record<InboxKind, { Icon: LucideIcon; color: string }> = {
-  needsYou: { Icon: CircleQuestionMark, color: "text-warning" },
-  done: { Icon: CircleCheck, color: "text-emerald-500" },
-  failed: { Icon: CircleAlert, color: "text-danger" },
-  decided: { Icon: CircleDot, color: "text-muted-foreground" },
-  learned: { Icon: BookOpen, color: "text-muted-foreground" },
-};
-
-/**
- * An answer box and its button, named for its question so each box is told apart. It keeps the
- * text, and shows why, when the answer fails.
- */
-export function AnswerForm({
-  label,
-  question,
-  keep,
-  onAnswer,
-  onCancel,
-}: {
-  label: string;
-  question: string;
-  /** What the child assumed, sent as the answer with one click. */
-  keep?: string;
-  onAnswer: (text: string) => Promise<string | undefined>;
-  onCancel?: () => void;
-}) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  return (
-    <form
-      onSubmit={async (e) => {
-        e.preventDefault();
-        if (!text.trim() || busy) return;
-        setBusy(true);
-        const failed = await onAnswer(text.trim());
-        setBusy(false);
-        setError(failed);
-      }}
-      className="mt-2"
-    >
-      <div className="flex items-center gap-2">
-        <input
-          aria-label={`${label}: ${question}`}
-          placeholder={keep ? "Or answer differently" : "Your answer"}
-          value={text}
-          disabled={busy}
-          autoFocus={!!onCancel}
-          onChange={(e) => setText(e.target.value)}
-          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
-        />
-        {onCancel && (
-          <button type="button" disabled={busy} onClick={onCancel} className={quietButton}>
-            Cancel
-          </button>
-        )}
-        {keep && !text.trim() ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              const failed = await onAnswer(keep);
-              setBusy(false);
-              setError(failed);
-            }}
-            className={outlineButton}
-          >
-            Keep it
-          </button>
-        ) : (
-          <button type="submit" disabled={busy || !text.trim()} className={outlineButton}>
-            {label}
-          </button>
-        )}
-      </div>
-      {error && <p className="mt-1 text-[12px] text-danger">{error}</p>}
-    </form>
-  );
 }

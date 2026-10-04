@@ -198,8 +198,8 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
  * knowledge, from the You, Repo, and Project scopes; then the proposals waiting for the user. Each
  * opens to its text, to edit, promote, or delete it, or for a proposal to save or discard it. A
  * Project's box sends a change in plain words to its coordinator. Show it only on a plxd with
- * `memory`, and key it by host and folder. `afterBrief` and `end` are more sections in its list,
- * such as the Knowledge view's status board and shared notes.
+ * `memory`, and key it by host and folder. `start` and `footer` are the Knowledge view's sections
+ * before it and its box in place of the change box.
  */
 export function MemoryPanel({
   hostId,
@@ -207,8 +207,6 @@ export function MemoryPanel({
   repo,
   coordinator,
   start,
-  afterBrief,
-  end,
   footer,
   onFiles,
 }: {
@@ -221,8 +219,6 @@ export function MemoryPanel({
   coordinator?: string;
   /** Before everything, scrolling with it. */
   start?: ReactNode;
-  afterBrief?: ReactNode;
-  end?: ReactNode;
   /** In place of the box that sends a change to the coordinator. */
   footer?: ReactNode;
   /** Told the listed files each time they load. */
@@ -269,7 +265,6 @@ export function MemoryPanel({
             )}
           </section>
         )}
-        {afterBrief}
         {sections?.entries.map(
           (g) =>
             g.files.length > 0 && (
@@ -296,7 +291,6 @@ export function MemoryPanel({
             No memory yet. Agents propose lasting facts as they work.
           </p>
         )}
-        {end}
         {error && (
           <p role="alert" className="px-2.5 py-2 text-[12.5px] text-danger">
             {error}
