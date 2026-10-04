@@ -45,6 +45,7 @@ mod host;
 mod id;
 mod inbox;
 pub mod jsonrpc;
+mod memory;
 pub mod methods;
 mod project;
 mod provider;
@@ -109,6 +110,11 @@ pub use id::InvalidId;
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult, InboxSeenParams,
     InboxSeenResult,
+};
+pub use memory::{
+    MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind, MemoryListParams,
+    MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
+    MemoryReadResult, MemoryScope, MemoryWriteParams, MemoryWriteResult,
 };
 pub use project::{
     Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,

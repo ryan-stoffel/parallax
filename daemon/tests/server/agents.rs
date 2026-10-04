@@ -1131,7 +1131,7 @@ async fn a_child_learns_its_project_and_a_fallback_moves_its_usage_to_the_new_ac
         "You are working on a task in the Parallax Project \"app\".\n\
          Your Parallax tools are on the plxd MCP server: thread_list, thread_read, thread_search, \
          thread_launch, thread_send, thread_wait, thread_interrupt, thread_update, pr_link, \
-         pr_unlink, read_context, write_context, ask.\n\
+         pr_unlink, read_context, write_context, ask, memory_read, memory_propose.\n\
          \n\
          Your task:\nTidy the build"
     );

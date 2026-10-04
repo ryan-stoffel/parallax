@@ -7,7 +7,7 @@
 //! `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
-//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`), and `host.rs` advertises the
+//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -18,6 +18,7 @@ mod defaults;
 mod events;
 mod host;
 pub(crate) mod inbox;
+mod memory;
 mod pr;
 pub(crate) mod project;
 pub(crate) mod question;
@@ -134,6 +135,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         name if name.starts_with("queue/") => queue::dispatch(&context, &request).await,
         name if name.starts_with("question/") => question::dispatch(&context, &request).await,
+        name if name.starts_with("memory/") => memory::dispatch(&context, &request).await,
         name if thread::handles(name) => thread::dispatch(&context, &request).await,
         EventsSubscribe::NAME => {
             let subscribed = match request.params() {

@@ -1217,6 +1217,7 @@ fn child_header(project: &str) -> String {
         crate::mcp::thread::TOOLS,
         crate::mcp::thread::CONTEXT_TOOLS,
         crate::mcp::question::CHILD_TOOLS,
+        crate::mcp::memory::CHILD_TOOLS,
     ]
     .concat()
     .join(", ");

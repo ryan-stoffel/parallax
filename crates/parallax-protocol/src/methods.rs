@@ -42,10 +42,12 @@ use crate::{
     GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
     GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
     HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
-    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, PrActParams,
-    PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, MemoryDeleteParams,
+    MemoryDeleteResult, MemoryListParams, MemoryListResult, MemoryProposeParams,
+    MemoryProposeResult, MemoryReadParams, MemoryReadResult, MemoryWriteParams, MemoryWriteResult,
+    PrActParams, PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult,
+    ProjectDeleteParams, ProjectDeleteResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
     ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
@@ -364,6 +366,18 @@ method_table! {
         QuestionEscalate = "question/escalate": QuestionEscalateParams => QuestionResult;
         /// `question/list`: a Project's questions, oldest first.
         QuestionList = "question/list": QuestionListParams => QuestionListResult;
+        /// `memory/list`: a scope's brief, memory entries, knowledge, and proposals, with each
+        /// entry's header (PLX-405, 0044). Gated on the `memory` capability, like every
+        /// `memory/*` method.
+        MemoryList = "memory/list": MemoryListParams => MemoryListResult;
+        /// `memory/read`: one memory file's header and body.
+        MemoryRead = "memory/read": MemoryReadParams => MemoryReadResult;
+        /// `memory/write`: writes the brief, knowledge, or an entry, as the user or a coordinator.
+        MemoryWrite = "memory/write": MemoryWriteParams => MemoryWriteResult;
+        /// `memory/delete`: deletes a memory file.
+        MemoryDelete = "memory/delete": MemoryDeleteParams => MemoryDeleteResult;
+        /// `memory/propose`: a thread proposes an entry, for its coordinator or the user.
+        MemoryPropose = "memory/propose": MemoryProposeParams => MemoryProposeResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -480,6 +494,11 @@ mod tests {
                 "question/answer",
                 "question/escalate",
                 "question/list",
+                "memory/list",
+                "memory/read",
+                "memory/write",
+                "memory/delete",
+                "memory/propose",
                 "$/cancelRequest",
                 "events/event",
             ]

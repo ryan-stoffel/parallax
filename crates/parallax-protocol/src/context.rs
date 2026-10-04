@@ -2,9 +2,11 @@
 //! plxd keeps for each project, outside its git repository, that every agent and the app read
 //! and write.
 //!
-//! A path is always relative to the project's context folder, and is exactly one file name: no
-//! `..`, no leading `/`, no hidden (dot) name, and no subdirectories. plxd only ever holds
-//! Markdown or plain text there, so a path must end in `.md`, `.markdown`, or `.txt`.
+//! A path is always relative to the project's context folder: no `..`, no leading `/`, and no
+//! hidden (dot) name. plxd only ever holds Markdown or plain text there, so a path must end in
+//! `.md`, `.markdown`, or `.txt`. `context/write` takes exactly one file name. `context/list` and
+//! `context/read` also reach memory's folders (0044, PLX-405), such as `memory/decision/x.md`,
+//! which only `memory/*` writes.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};

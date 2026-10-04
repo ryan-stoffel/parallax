@@ -204,7 +204,16 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, [TOOLS, CONTEXT_TOOLS, COORDINATOR_TOOLS].concat());
+    assert_eq!(
+        names,
+        [
+            TOOLS,
+            CONTEXT_TOOLS,
+            COORDINATOR_TOOLS,
+            &["memory_read", "memory_write"]
+        ]
+        .concat()
+    );
 
     let launched = mcp
         .ok(

@@ -414,6 +414,28 @@ export type ParallaxRequests = {
 	 * `question/list`: a Project's questions, oldest first.
 	 */
 	"question/list": { params: QuestionListParams, result: QuestionListResult },
+	/**
+	 * `memory/list`: a scope's brief, memory entries, knowledge, and proposals, with each
+	 * entry's header (PLX-405, 0044). Gated on the `memory` capability, like every
+	 * `memory/*` method.
+	 */
+	"memory/list": { params: MemoryListParams, result: MemoryListResult },
+	/**
+	 * `memory/read`: one memory file's header and body.
+	 */
+	"memory/read": { params: MemoryReadParams, result: MemoryReadResult },
+	/**
+	 * `memory/write`: writes the brief, knowledge, or an entry, as the user or a coordinator.
+	 */
+	"memory/write": { params: MemoryWriteParams, result: MemoryWriteResult },
+	/**
+	 * `memory/delete`: deletes a memory file.
+	 */
+	"memory/delete": { params: MemoryDeleteParams, result: MemoryDeleteResult },
+	/**
+	 * `memory/propose`: a thread proposes an entry, for its coordinator or the user.
+	 */
+	"memory/propose": { params: MemoryProposeParams, result: MemoryProposeResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -4646,6 +4668,230 @@ export type QuestionListResult = {
 	 */
 	questions: Array<Question>,
 };
+
+/**
+ * Params of `memory/list`.
+ */
+export type MemoryListParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+};
+
+/**
+ * Whose memory: the user's own, a repository's, or a Project's (0044).
+ */
+export type MemoryScope = { "kind": "you" } | { "kind": "repo",
+	/**
+	 * The repo entry.
+	 */
+	id: RepoId, } | { "kind": "project",
+	/**
+	 * The Project.
+	 */
+	id: ProjectId,
+};
+
+/**
+ * Result of `memory/list`.
+ */
+export type MemoryListResult = {
+	/**
+	 * The brief, entries, knowledge, and proposals, ordered by path.
+	 */
+	files: Array<MemoryFile>,
+};
+
+/**
+ * One memory file, without its body. The header fields are read from an entry's file, and are
+ * absent for one that lacks them, such as the brief or knowledge.
+ */
+export type MemoryFile = {
+	/**
+	 * The file's path in the scope's folder.
+	 */
+	path: string,
+	/**
+	 * Its size in bytes.
+	 */
+	size: number,
+	/**
+	 * When it was last modified, in RFC 3339 UTC.
+	 */
+	modifiedAt: string,
+	/**
+	 * An entry's or proposal's kind.
+	 */
+	kind?: MemoryKind,
+	/**
+	 * Its title.
+	 */
+	title?: string,
+	/**
+	 * The run or message it came from.
+	 */
+	source?: string,
+	/**
+	 * The day it was written, as its file says, such as `2026-10-04`.
+	 */
+	date?: string,
+	/**
+	 * Who wrote it: `user`, or `coordinator <run id>`, or for a proposal `thread <run id>`.
+	 */
+	writer?: string,
+};
+
+/**
+ * What an entry records (0044).
+ *
+ * A newer plxd may send a kind this version does not know; treat it as unknown.
+ */
+export type MemoryKind = "preference" | "convention" | "decision" | "gotcha";
+
+/**
+ * Params of `memory/read`. Fails with `contextNotFound` if there is no such file.
+ */
+export type MemoryReadParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `memory/read`.
+ */
+export type MemoryReadResult = {
+	/**
+	 * The file, with its header's fields.
+	 */
+	file: MemoryFile,
+	/**
+	 * Its body: an entry's or proposal's text after its header, or the whole of any other file.
+	 */
+	content: string,
+};
+
+/**
+ * Params of `memory/write`: replaces `brief.md`, `knowledge/<slug>.md`, or an entry,
+ * `memory/<kind>/<slug>.md`, in full. For an entry, plxd writes the header from `title`, which it
+ * then needs, `source`, today's UTC date, and the writer. Fails with `contextTooLarge` over the
+ * shared context caps.
+ */
+export type MemoryWriteParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+	/**
+	 * The new content: an entry's body, or the whole file.
+	 */
+	content: string,
+	/**
+	 * An entry's title, one line.
+	 */
+	title?: string,
+	/**
+	 * The run or message an entry came from. Absent: `user`, or the writing run.
+	 */
+	source?: string,
+	/**
+	 * The run writing, for a thread's Parallax tools. It must be its Project's current
+	 * coordinator, or the write fails with `invalidParams`, and the write adds a `learned` item to
+	 * that Project's inbox. Absent: the user writes.
+	 */
+	from?: RunId,
+};
+
+/**
+ * Result of `memory/write`.
+ */
+export type MemoryWriteResult = {
+	/**
+	 * The file as written.
+	 */
+	file: MemoryFile,
+};
+
+/**
+ * Params of `memory/delete`: deletes the brief, an entry, knowledge, or a proposal. Fails with
+ * `contextNotFound` if there is no such file.
+ */
+export type MemoryDeleteParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `memory/delete`.
+ */
+export type MemoryDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `memory/propose`, for a thread's Parallax tools: run `from` proposes an entry, saved
+ * as `proposals/<slug>.md`. A Project's child's is saved in the Project's folder, with a `Scope:`
+ * line naming `scope`, and its coordinator's next wake-up carries it, then removes it; it
+ * doesn't wake the coordinator. A plain thread's, only at its own repository's scope, is saved
+ * there for the user. Any other run's fails with `invalidParams`.
+ */
+export type MemoryProposeParams = {
+	/**
+	 * The run proposing.
+	 */
+	from: RunId,
+	/**
+	 * The scope the entry belongs in.
+	 */
+	scope: MemoryScope,
+	/**
+	 * Its kind.
+	 */
+	kind: MemoryKind,
+	/**
+	 * Its title, one line.
+	 */
+	title: string,
+	/**
+	 * Its body.
+	 */
+	content: string,
+};
+
+/**
+ * Result of `memory/propose`.
+ */
+export type MemoryProposeResult = {
+	/**
+	 * Who it went to.
+	 */
+	to: MemoryProposalTo,
+	/**
+	 * The proposal's file. Absent only from an older plxd.
+	 */
+	file?: MemoryFile,
+};
+
+/**
+ * Who a proposal went to.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type MemoryProposalTo = "coordinator" | "user";
 
 /**
  * Params of `$/cancelRequest`.

@@ -132,9 +132,11 @@ async fn a_childs_question_wakes_the_coordinator_whose_different_answer_reaches_
     let dir = host.dir.path();
     let mut asker = Mcp::spawn(mcp_command(dir, &["--thread", &child.to_string()])).await;
     let mut boss = Mcp::spawn(mcp_command(dir, &["--thread", &coordinator.id.to_string()])).await;
-    let child_tools = [TOOLS, CONTEXT_TOOLS, CHILD_TOOLS].concat();
+    let child_memory: &[&str] = &["memory_read", "memory_propose"];
+    let child_tools = [TOOLS, CONTEXT_TOOLS, CHILD_TOOLS, child_memory].concat();
     assert_eq!(tool_names(&mut asker).await, child_tools);
-    let coordinator_tools = [TOOLS, CONTEXT_TOOLS, COORDINATOR_TOOLS].concat();
+    let coordinator_memory: &[&str] = &["memory_read", "memory_write"];
+    let coordinator_tools = [TOOLS, CONTEXT_TOOLS, COORDINATOR_TOOLS, coordinator_memory].concat();
     assert_eq!(tool_names(&mut boss).await, coordinator_tools);
 
     let (said, is_error) = asker
