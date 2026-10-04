@@ -66,7 +66,13 @@ test("rebuilds the sample run's transcript, item by item", () => {
     { name: null, callId: "toolu_3", status: "error" },
   ]);
   expect(of(t.items, "session")).toEqual([
-    { kind: "session", key: "3:0", sessionId: "session-7f3a", at: "2026-09-25T12:00:02Z" },
+    {
+      kind: "session",
+      key: "3:0",
+      sessionId: "session-7f3a",
+      model: "claude-opus-4-5",
+      at: "2026-09-25T12:00:02Z",
+    },
   ]);
   expect(of(t.items, "notice").map((i) => i.tone)).toEqual(["info", "warning", "warning"]);
   expect(of(t.items, "end")[0]!.outcome).toEqual({
@@ -558,4 +564,38 @@ test("a subagent works until it says how it ended, whatever its call's result", 
   // A finish this app doesn't know isn't Done.
   const newer = { status: "paused" } as unknown as NonNullable<Subagent["finished"]>;
   expect(subagentState({ ...sub, finished: newer }, true)).toBe("stopped");
+});
+
+test("marks a session on another model above the message sent with it (PLX-495)", () => {
+  const timed = (time: string, ...items: AgentOutputItem[]): LoggedEvent => ({
+    ...output(...items),
+    time,
+  });
+  const turnId = uuidv7();
+  const t = build(
+    timed("1", { kind: "sessionStarted", sessionId: "s1", model: "claude-opus-5-5" }),
+    timed("2", { kind: "turnStarted", turnId, text: "Go on" }),
+    // Claude Code reports a resumed session after its turn, and a context window as `[1m]`.
+    timed("3", { kind: "sessionStarted", sessionId: "s1", model: "claude-opus-5-5[1m]" }),
+    timed("4", { kind: "turnStarted", turnId: uuidv7(), text: "Now on Codex" }),
+    timed("5", { kind: "sessionStarted", sessionId: "s2", model: "gpt-6.1-sol" }),
+  );
+  expect(t.items.map((i) => i.kind)).toEqual([
+    "session",
+    "user",
+    "session",
+    "modelSwitch",
+    "user",
+    "session",
+  ]);
+  expect(of(t.items, "modelSwitch")).toEqual([
+    {
+      kind: "modelSwitch",
+      key: expect.any(String),
+      from: "claude-opus-5-5[1m]",
+      to: "gpt-6.1-sol",
+      at: "5",
+    },
+  ]);
+  expect(of(t.items, "user").map((i) => i.at)).toEqual(["2", "4"]);
 });

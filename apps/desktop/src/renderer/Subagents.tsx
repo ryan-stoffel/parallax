@@ -33,10 +33,16 @@ export interface Subagents {
 
 export const SubagentsContext = createContext<Subagents | undefined>(undefined);
 
-/** A model for people: its name when this app knows it, dated ids included, else as reported. */
+/** The built-in catalog's entry for a reported model, dated ids and a `[1m]` suffix included. */
+export function knownModel(model: string) {
+  const id = model.replace(/\[.*\]$/, "");
+  return models.find((m) => id === m.id || id.startsWith(`${m.id}-`));
+}
+
+/** A model for people: its name when this app knows it, else as reported. */
 export function modelName(model?: string) {
   if (!model) return undefined;
-  return models.find((m) => model === m.id || model.startsWith(`${m.id}-`))?.name ?? model;
+  return knownModel(model)?.name ?? model;
 }
 
 /** The subagents of a transcript as the top bar shows them, oldest first. */

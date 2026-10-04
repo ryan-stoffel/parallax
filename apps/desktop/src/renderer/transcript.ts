@@ -77,10 +77,13 @@ type ItemBody =
   /** How one CLI process of the run ended. */
   | { kind: "end"; key: string; outcome: AgentOutcome }
   /**
-   * Where a CLI process started or resumed its session, by the vendor's id. Never shown:
-   * `withTaskLists` takes it out, and starts a new task list when the id changes (PLX-250).
+   * Where a CLI process started or resumed its session, by the vendor's id, and its model when the
+   * CLI says. Never shown: `withTaskLists` takes it out, and starts a new task list when the id
+   * changes (PLX-250).
    */
-  | { kind: "session"; key: string; sessionId: string };
+  | { kind: "session"; key: string; sessionId: string; model?: string }
+  /** A session on another model than the last one that named its own (PLX-495). */
+  | { kind: "modelSwitch"; key: string; from: string; to: string };
 
 /** A permission request as `approvalRequested` carries it. */
 export type ApprovalRequest = Omit<Extract<AgentOutputItem, { kind: "approvalRequested" }>, "kind">;
@@ -226,7 +229,9 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
         event.items.forEach((item, i) => applyOutput(items, item, key(i), time, subagents));
         break;
     }
-    for (let i = before; i < items.length; i++) items[i] = { ...items[i]!, at: time };
+    // A row moved down by one put in before it keeps its own time.
+    for (let i = before; i < items.length; i++)
+      if (items[i]!.at === undefined) items[i] = { ...items[i]!, at: time };
   }
   return { run, items, subagents, seq };
 }
@@ -280,9 +285,25 @@ function applyOutput(
   };
 
   switch (item.kind) {
-    case "sessionStarted":
-      items.push({ kind: "session", key, sessionId: item.sessionId });
+    case "sessionStarted": {
+      const from = items.findLast((x) => x.kind === "session" && x.model);
+      const to = item.model;
+      // The same model with another context window, as Claude Code's `[1m]`, isn't a switch.
+      const bare = (model: string) => model.replace(/\[.*\]$/, "");
+      if (from?.kind === "session" && from.model && to && bare(from.model) !== bare(to)) {
+        // Above the message sent with the new model, which Claude Code reports before its session.
+        const at = last?.kind === "user" && last.turnId ? items.length - 1 : items.length;
+        items.splice(at, 0, {
+          kind: "modelSwitch",
+          key: `${key}:switch`,
+          from: from.model,
+          to,
+          at: time,
+        });
+      }
+      items.push({ kind: "session", key, sessionId: item.sessionId, ...(to && { model: to }) });
       break;
+    }
     case "turnStarted": {
       const attached = {
         ...(!!item.images?.length && { images: item.images }),

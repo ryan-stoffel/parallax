@@ -1,5 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  ArrowLeftRight,
+  ArrowRight,
   Ban,
   Bot,
   Brain,
@@ -75,6 +77,7 @@ import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { useCatalog, type Provider, type RunOptions } from "./models";
+import { kinds } from "./providers";
 import {
   latestPlan,
   PlanStrip,
@@ -89,6 +92,7 @@ import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from 
 import { QueueStrip } from "./QueueStrip";
 import { ResumeCard } from "./ResumeCard";
 import {
+  knownModel,
   modelName,
   nativeSubagents,
   SubagentCall,
@@ -1131,6 +1135,19 @@ export const RowView = memo(function RowView({
           </span>
         </p>
       );
+    case "modelSwitch":
+      // Where the thread moved to another model (PLX-495), as T3 Code's context handoff.
+      return (
+        <div className="flex items-center gap-2 text-[12px] text-faint-foreground">
+          <span className="h-px flex-1 bg-border" />
+          <ArrowLeftRight aria-hidden className="size-3.5" />
+          <span>Switched model</span>
+          <ModelLabel model={row.from} />
+          <ArrowRight aria-hidden className="size-3.5" />
+          <ModelLabel model={row.to} />
+          <span className="h-px flex-1 bg-border" />
+        </div>
+      );
     case "end": {
       const { outcome } = row;
       if (outcome.status === "failed") {
@@ -1170,6 +1187,18 @@ export const RowView = memo(function RowView({
     }
   }
 });
+
+/** A model's name after its provider's logo, when this app knows the model. */
+function ModelLabel({ model }: { model: string }) {
+  const provider = knownModel(model)?.provider;
+  const Logo = provider ? kinds[provider]?.Logo : undefined;
+  return (
+    <span className="flex items-center gap-1 text-muted-foreground">
+      {Logo && <Logo aria-hidden className="size-3.5" />}
+      {modelName(model)}
+    </span>
+  );
+}
 
 /**
  * One of a user message's images, as a thumbnail: at hand, or fetched by id. The same height
