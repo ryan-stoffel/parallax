@@ -186,14 +186,21 @@ async fn write(
         _ => content,
     };
     let written_path = path.clone();
-    let file = run_blocking(move || save(&dir, &written_path, &text)).await?;
-    context::corrections::tell(
-        &context.daemon,
-        scope,
-        &path,
-        title.as_deref(),
-        Change::Updated,
-    );
+    let (file, existed) = run_blocking(move || {
+        let existed = std::fs::symlink_metadata(dir.join(&written_path)).is_ok();
+        Ok((save(&dir, &written_path, &text)?, existed))
+    })
+    .await?;
+    // A new entry corrects nothing, so only a changed one is sent to running children.
+    if existed {
+        context::corrections::tell(
+            &context.daemon,
+            scope,
+            &path,
+            title.as_deref(),
+            Change::Updated,
+        );
+    }
     if let Some((from, project)) = writer {
         let what = title.as_deref().unwrap_or(&path);
         let text = format!("Memory: {what} ({} scope)", scope_name(scope));

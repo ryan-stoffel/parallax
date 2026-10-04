@@ -1,7 +1,7 @@
 //! Stale memory entries (0044, PLX-407). [`check`] reads the paths each entry of a Project's
-//! folder and its repository's names in backticks, and marks an entry naming one its integration
-//! branch doesn't have for review: a `Stale:` line first in its header, naming the missing paths,
-//! which `memory/list` reports as `stale`. Rewriting the entry drops the line, and so does the
+//! folder and its repository's names in backticks, and marks an entry naming one its branch
+//! doesn't have for review: a `Stale:` line first in its header, naming the missing paths, which
+//! `memory/list` reports as `stale`. Rewriting the entry drops the line, and so does the
 //! next check once every path it names is back.
 
 use std::collections::HashSet;
@@ -16,10 +16,10 @@ use super::memory;
 use crate::server::Daemon;
 use crate::store::store_error;
 
-/// Checks the entries of `project`'s folder and its repository's against the Project's
-/// integration branch, marking and unmarking them. Called after each child's end, and after each
-/// landing (PLX-410). Does nothing for a Project with no integration branch yet; a failure is
-/// logged.
+/// Checks the entries of `project`'s folder against its integration branch, and its repository's
+/// folder against its base branch, which every Project of that repository shares, marking and
+/// unmarking them. Called after each landing (PLX-410). Does nothing before plxd cuts the
+/// integration branch, which records both; a failure is logged.
 pub(crate) async fn check(daemon: &Daemon, project: ProjectId) {
     let found = daemon
         .store
@@ -39,31 +39,31 @@ pub(crate) async fn check(daemon: &Daemon, project: ProjectId) {
             return;
         }
     };
-    let Some(branch) = row.integration_branch else {
+    let (Some(integration), Some(base)) = (row.integration_branch, row.base_branch) else {
         return;
     };
-    let files = daemon
-        .agents
-        .worktrees()
-        .branch_files(Path::new(&row.repo_path), &branch)
-        .await;
-    let files: HashSet<String> = match files {
-        Ok(files) => files.into_iter().collect(),
-        Err(error) => {
-            warn!(%project, %error, "could not list the integration branch's files");
-            return;
+    let data_dir = &daemon.data_dir;
+    let mut folders = vec![(data_dir.context_dir(project), integration)];
+    if let Some(dir) = memory::repo_dir(data_dir, &row.repo_path, &repos) {
+        folders.push((dir, base));
+    }
+    for (dir, branch) in folders {
+        let files = daemon
+            .agents
+            .worktrees()
+            .branch_files(Path::new(&row.repo_path), &branch)
+            .await;
+        let files: HashSet<String> = match files {
+            Ok(files) => files.into_iter().collect(),
+            Err(error) => {
+                warn!(%project, branch, %error, "could not list a branch's files");
+                continue;
+            }
+        };
+        let checked = tokio::task::spawn_blocking(move || mark_folder(&dir, &files)).await;
+        if let Err(error) = checked {
+            warn!(%project, %error, "could not check memory for stale entries");
         }
-    };
-    let data_dir = daemon.data_dir.clone();
-    let checked = tokio::task::spawn_blocking(move || {
-        mark_folder(&data_dir.context_dir(project), &files);
-        if let Some(dir) = memory::repo_dir(&data_dir, &row.repo_path, &repos) {
-            mark_folder(&dir, &files);
-        }
-    })
-    .await;
-    if let Err(error) = checked {
-        warn!(%project, %error, "could not check memory for stale entries");
     }
 }
 

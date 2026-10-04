@@ -396,6 +396,7 @@ async fn land(daemon: &Arc<Daemon>, row: parallax_store::Landing) -> Result<(), 
             );
             let text = format!("{}: landed on the integration branch, {how}", child.task);
             failures = 0;
+            crate::context::stale::check(daemon, project).await;
             (LANDED, 0, InboxKind::Done, text)
         }
         Ok(Attempt::Markers(markers)) => {
