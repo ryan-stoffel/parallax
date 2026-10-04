@@ -243,6 +243,23 @@ pub struct RunRequest {
     pub thread: bool,
 }
 
+impl RunRequest {
+    /// Whether a backend that runs only full agents, Codex and ACP agents, takes it: a thread, or
+    /// a coordinator, which runs there as a thread does (0042).
+    #[must_use]
+    pub fn full_agent(&self) -> bool {
+        self.thread || self.coordinator_tools.is_some()
+    }
+
+    /// Its Parallax tools on such a backend: a thread's, or a coordinator's (0041).
+    #[must_use]
+    pub fn full_agent_tools(&self) -> Option<&ThreadTools> {
+        self.thread_tools
+            .as_ref()
+            .or(self.coordinator_tools.as_ref())
+    }
+}
+
 /// How a thread's CLI, or a coordinator's, launches `plxd mcp --thread` (0041): the server is
 /// bound to the run's own id, which plxd sets and the model never sees or chooses, so a thread it
 /// launches records it as the parent.
@@ -534,9 +551,6 @@ pub struct Capabilities {
     pub follow_ups: bool,
     /// [`RunRequest::resume`] works.
     pub resume: bool,
-    /// It can run the coordinator: no-write mode with plxd's MCP tools (0004: Claude Code and
-    /// Codex, not Cursor).
-    pub coordinator: bool,
     /// Its usage includes a cost.
     pub reports_cost: bool,
     /// Its runs report limit windows.

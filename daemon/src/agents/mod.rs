@@ -196,7 +196,7 @@ pub(super) enum Place {
         header: Option<String>,
     },
     /// A project's coordinator, with no sandbox (0024), in a detached worktree of `repo` that the
-    /// actor refreshes before each CLI process (PLX-171).
+    /// actor moves to the integration branch's tip before each CLI process (0042).
     Coordinator { repo: PathBuf },
 }
 
@@ -408,7 +408,6 @@ async fn prepare_run(
     )
     .map_err(|error| routing_error(&error))?;
     if role == Role::Coordinator {
-        coordinator::check_backend(resolved.backend())?;
         let place = Place::Coordinator {
             repo: PathBuf::from(&repo_path),
         };

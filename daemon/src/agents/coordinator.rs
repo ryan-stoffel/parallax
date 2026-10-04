@@ -1,12 +1,13 @@
 //! A project's coordinator chat (PLX-41, decision 0024): a no-write run whose coordinator thread is
-//! its own id, with a thread's Parallax tools bound to that run (0041, PLX-380). The Claude
-//! backend runs it as full Claude Code (0027) in the project's permission mode (0042).
+//! its own id, with a thread's Parallax tools bound to that run (0041, PLX-380). Any backend whose
+//! kind has the project's permission mode runs it, as its full CLI in that mode (0042).
 //!
 //! `project/start` records it like any run, without a worktree row, and hands it to the same
 //! actor as a worker's, so `agent/send`, `agent/cancel`, `agent/events`, the `agent.*` events, and
-//! resuming after a restart work unchanged. The actor runs it in the project's repository, as
-//! Claude Code runs in the folder it was started in (0027). A project has one live coordinator: a
-//! new run replaces the last one unless that one is still starting or running.
+//! resuming after a restart work unchanged. The actor runs it in a detached worktree at the
+//! integration branch's tip, refreshed before each CLI process, so its edits reach neither the
+//! user's checkout nor the branch (0042). A project has one live coordinator: a new run replaces
+//! the last one unless that one is still starting or running, and takes over the same worktree.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,9 +22,7 @@ use uuid::Uuid;
 
 use super::actor::Actor;
 use super::convert::{NO_WRITE, RUNNING, STARTING, agent_run, option_name};
-use super::worker::worker_unavailable;
 use super::{RunOptions, existing, log_started, prepare, requested_account, store, store_error};
-use crate::backend::Backend;
 use crate::methods::question::level;
 use crate::server::Daemon;
 
@@ -135,18 +134,6 @@ pub(crate) async fn start(
     run
 }
 
-/// Refuses a backend that can't run a coordinator (0004: Claude Code and Codex; Codex's is
-/// PLX-39).
-pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
-    if backend.capabilities().coordinator {
-        return Ok(());
-    }
-    Err(worker_unavailable(format!(
-        "the {} backend can't run a project's coordinator yet; choose a Claude Code account",
-        backend.name()
-    )))
-}
-
 /// `project`'s coordinator: its newest no-write run. `project/start` with a new run id replaces it
 /// unless it is starting or running, so one whose session can't be resumed never locks the
 /// project.
@@ -180,10 +167,12 @@ fn newest(
 /// (0043), then the user's message.
 pub(super) fn first_message(message: &str, repo: &str, autonomy: ProjectAutonomy) -> String {
     format!(
-        "{INSTRUCTIONS}\nThe project's repository is {repo}, your working directory: the user's \
-         own checkout, uncommitted changes included.\n\n{} Each question Parallax wakes you \
-         with names the level as it is then, since the user can change it.\n\nThe user's \
-         message:\n{message}",
+        "{INSTRUCTIONS}\nThe project's repository is {repo}, the user's own checkout: leave it \
+         alone. Read the code in your working directory instead, a copy of the integration \
+         branch's latest commit that Parallax resets each time it starts you, so it doesn't have \
+         the user's uncommitted changes, and nothing written there is kept.\n\n{} Each question \
+         Parallax wakes you with names the level as it is then, since the user can change \
+         it.\n\nThe user's message:\n{message}",
         level(autonomy)
     )
 }

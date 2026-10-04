@@ -227,6 +227,103 @@ async fn an_integration_branch_is_cut_once_and_outlives_its_worktree() {
     assert_eq!(rev_parse(&path, "HEAD"), base, "the branch as it was");
 }
 
+/// PLX-397 (0042): a coordinator's worktree follows the integration branch's tip, detached, and
+/// each refresh discards whatever was written there. A folder that is no longer a worktree is
+/// added again, never searched above.
+#[tokio::test]
+async fn a_coordinators_worktree_follows_the_tip_and_discards_what_was_written_there() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    std::fs::write(repo.join(".gitignore"), "*.log\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "ignore logs"]);
+    git(&repo, &["branch", "parallax/app"]);
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let project = ProjectId::generate();
+
+    let path = mgr
+        .refresh_coordinator(&repo, project, "parallax/app")
+        .await
+        .unwrap();
+    assert_eq!(path, mgr.coordinator_path(project));
+    assert!(!path.starts_with(mgr.root()), "gc never sees it");
+    assert_eq!(rev_parse(&path, "HEAD"), rev_parse(&repo, "parallax/app"));
+    assert_eq!(git_output(&path, &["branch", "--show-current"]), "");
+
+    // The branch moves on; the coordinator writes a tracked, an untracked, and an ignored file.
+    let lander = tempfile::tempdir().unwrap();
+    let worktree = lander.path().join("lander");
+    let worktree_arg = worktree.to_str().unwrap();
+    git(
+        &repo,
+        &["worktree", "add", "-q", worktree_arg, "parallax/app"],
+    );
+    std::fs::write(worktree.join("README.md"), "landed\n").unwrap();
+    git(&worktree, &["commit", "-qam", "land"]);
+    std::fs::write(path.join("README.md"), "written\n").unwrap();
+    std::fs::write(path.join("new.txt"), "written\n").unwrap();
+    std::fs::write(path.join("run.log"), "written\n").unwrap();
+    mgr.refresh_coordinator(&repo, project, "parallax/app")
+        .await
+        .unwrap();
+    assert_eq!(rev_parse(&path, "HEAD"), rev_parse(&repo, "parallax/app"));
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "landed\n"
+    );
+    assert!(!path.join("new.txt").exists());
+    assert!(!path.join("run.log").exists());
+    assert_eq!(
+        std::fs::read_to_string(repo.join("README.md")).unwrap(),
+        "hello\n",
+        "the checkout is untouched"
+    );
+
+    std::fs::remove_file(path.join(".git")).unwrap();
+    mgr.refresh_coordinator(&repo, project, "parallax/app")
+        .await
+        .unwrap();
+    assert_eq!(rev_parse(&path, "HEAD"), rev_parse(&repo, "parallax/app"));
+    assert_eq!(worktree_count(&repo), 3);
+
+    mgr.remove_coordinator(&repo, project).await.unwrap();
+    assert!(!path.exists());
+    assert_eq!(worktree_count(&repo), 2);
+}
+
+/// A symlink where the coordinator's worktree goes is refused, and its target left alone.
+#[tokio::test]
+async fn a_coordinators_worktree_refuses_a_symlink() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let theirs = data_dir.path().join("theirs");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "mine",
+            theirs.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(theirs.join("draft.txt"), "unsaved\n").unwrap();
+    let project = ProjectId::generate();
+    let path = mgr.coordinator_path(project);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    symlink(&theirs, &path).unwrap();
+
+    mgr.refresh_coordinator(&repo, project, "HEAD")
+        .await
+        .unwrap_err();
+    assert_eq!(git_output(&theirs, &["branch", "--show-current"]), "mine");
+    assert!(theirs.join("draft.txt").exists());
+}
+
 /// PLX-409: a base that isn't a branch is refused, and a checkout that fails leaves no worktree
 /// for the next call to return, only the branch.
 #[tokio::test]

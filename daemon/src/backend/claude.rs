@@ -971,7 +971,6 @@ impl Backend for ClaudeBackend {
         Capabilities {
             follow_ups: true,
             resume: true,
-            coordinator: true,
             reports_cost: true,
             rate_limits: true,
             worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),

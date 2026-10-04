@@ -160,7 +160,17 @@ impl WorktreeManager {
         repo_path: &Path,
         project: ProjectId,
     ) -> Result<(), WorktreeError> {
-        let path = self.integration_path(project);
+        self.remove_linked(repo_path, &self.integration_path(project))
+            .await
+    }
+
+    /// Removes the worktree of `repo_path` at `path`, an integration or a coordinator worktree,
+    /// keeping any branch. A repository that is gone leaves only the folder to remove.
+    pub(super) async fn remove_linked(
+        &self,
+        repo_path: &Path,
+        path: &Path,
+    ) -> Result<(), WorktreeError> {
         if let Ok(repo_root) = self.repo_root(repo_path).await {
             let _guard = self.lock_repo(&repo_root).await;
             let path_arg = path.to_string_lossy().into_owned();
@@ -169,12 +179,12 @@ impl WorktreeManager {
                 .await
                 && path.exists()
             {
-                warn!(path = %path.display(), %error, "could not remove an integration worktree with git");
+                warn!(path = %path.display(), %error, "could not remove a worktree with git");
             }
-            remove_folder(&path).await?;
+            remove_folder(path).await?;
             let _ = self.run_git(&repo_root, &["worktree", "prune"]).await;
         } else {
-            remove_folder(&path).await?;
+            remove_folder(path).await?;
         }
         Ok(())
     }

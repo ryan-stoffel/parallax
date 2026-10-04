@@ -1138,7 +1138,7 @@ fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
 /// What `providers/list` says about one instance.
 fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
     let preset = preset(instance.kind);
-    let (permissions, efforts, coordinator) = match preset.as_ref().map(|p| &p.driver) {
+    let (permissions, efforts) = match preset.as_ref().map(|p| &p.driver) {
         Some(Driver::Claude) => (
             vec![
                 AgentPermission::Auto,
@@ -1147,8 +1147,6 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
                 AgentPermission::Plan,
                 AgentPermission::Bypass,
             ],
-            true,
-            // Any Claude Code instance can run a Project's coordinator (0004).
             true,
         ),
         Some(Driver::Codex) => (
@@ -1159,11 +1157,15 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
                 AgentPermission::Bypass,
             ],
             true,
-            false,
         ),
-        Some(Driver::Acp(agent)) => (agent.permissions(), false, false),
-        None => (vec![AgentPermission::Edit], false, false),
+        Some(Driver::Acp(agent)) => (agent.permissions(), false),
+        None => (vec![AgentPermission::Edit], false),
     };
+    // A kind with Auto or Bypass can run a Project's coordinator (0042). A model service's Auto
+    // isn't offered in a Project, but its Bypass is.
+    let coordinator = permissions
+        .iter()
+        .any(|p| matches!(p, AgentPermission::Auto | AgentPermission::Bypass));
     // The login runs the instance's own program where it is the kind's. An agent without a
     // preset login says how it signs in.
     let login = preset.filter(|p| !p.login.is_empty()).map(|p| {

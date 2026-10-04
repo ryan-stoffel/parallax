@@ -11,6 +11,8 @@
 //! - `plxd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
+//! - `integration/` and `coordinators/`: each Project's integration worktree (0045) and its
+//!   coordinator's detached worktree (0042).
 //! - `tmp/`: files plxd writes for a run and deletes when it ends, such as a Claude worker's
 //!   `CLAUDE_ENV_FILE` (PLX-126) and a Codex thread's prompt images (PLX-191). See
 //!   [`DataDir::temp_dir`].

@@ -19,10 +19,10 @@
 //! waits, and a steer goes into the running turn instead, through the backend, or by cancelling
 //! the CLI and resuming it with the message where the backend takes no messages while it runs.
 //!
-//! A project's coordinator (0024) differs in three places: it starts in the project's repository
-//! with a thread's Parallax tools and no sandbox (0027, PLX-380), it is never committed, and only
-//! the project's current one wakes. Any run wakes when children it launched finish (PLX-42,
-//! PLX-380, [`super::wake`]).
+//! A project's coordinator (0024) differs in three places: it starts in a detached worktree at the
+//! integration branch's tip, refreshed before each CLI process (0042), with a thread's Parallax
+//! tools and no sandbox (PLX-380), it is never committed, and only the project's current one
+//! wakes. Any run wakes when children it launched finish (PLX-42, PLX-380, [`super::wake`]).
 //!
 //! A thread in its repository's own checkout has no worktree: every launch, a resume included,
 //! starts in the checkout, and it is never committed either.
@@ -2043,7 +2043,7 @@ impl Actor {
                 context,
                 ..
             } => self.worker_setup(&home, &data_dir, &context, paths).await,
-            Place::Coordinator { repo } => self.coordinator_setup(repo),
+            Place::Coordinator { repo } => self.coordinator_setup(&repo).await,
         };
         let Setup {
             cwd,
@@ -2141,16 +2141,29 @@ impl Actor {
         })
     }
 
-    /// A coordinator runs in the project's repository (0027), with a thread's Parallax tools bound
-    /// to its own run (0041, PLX-380).
-    fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
+    /// A coordinator runs in its detached worktree, moved to the integration branch's tip first,
+    /// and cut with the branch if either is missing (0042, 0045), with a thread's Parallax tools
+    /// bound to its own run (0041, PLX-380).
+    async fn coordinator_setup(&mut self, repo: &Path) -> Result<Setup, String> {
+        let branch = super::integration(&self.daemon, self.project)
+            .await
+            .map_err(|error| error.message)?
+            .and_then(|row| row.integration_branch)
+            .ok_or_else(|| "the coordinator's Project has no integration branch".to_owned())?;
+        let cwd = self
+            .daemon
+            .agents
+            .worktrees
+            .refresh_coordinator(repo, self.project, &branch)
+            .await
+            .map_err(|error| format!("could not prepare the coordinator's worktree: {error}"))?;
         let tools = ThreadTools {
             program: plxd_program()?,
             data_dir: self.daemon.data_dir.root().to_owned(),
             run: self.id,
         };
         Ok(Setup {
-            cwd: repo,
+            cwd,
             sandbox: None,
             temp: None,
             tools: Some(tools),
