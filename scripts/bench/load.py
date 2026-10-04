@@ -34,8 +34,10 @@ from threads import Client, connect, pct, uuid7
 
 EMITS = 400
 SLEEP_MS = 100  # After every group of four emits, so a run streams for about 10 s.
-TEXT = "The fake agent is reading the code and explaining what it found, line by line. " * 3
-OUTPUT = "fn main() {\n    println!(\"hello from a file the fake agent read\");\n}\n" * 14
+# The fake backend passes its whole compiled script as one `sh -c` argument, and Linux caps one
+# argument at 128 KiB (MAX_ARG_STRLEN), so these sizes keep the script at about 85 KB.
+TEXT = "The fake agent is reading the code and explaining what it found, line by line. "
+OUTPUT = "fn main() {\n    println!(\"hello from a file the fake agent read\");\n}\n" * 5
 
 
 def script() -> list:

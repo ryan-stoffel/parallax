@@ -3,8 +3,10 @@
 
     scripts/ci/check-load load.json
 
-Each budget is a maximum for a dotted path into the result. A missing path fails, so renaming a
-subscription or metric means updating the budgets too. Any resync fails. Writes a Markdown table
+Each budget is a maximum, or under "min" a minimum, for a dotted path into the result. The minimum
+on the scope subscription's bytes catches a run whose workers failed and delivered almost nothing.
+A missing path fails, so renaming a subscription or metric means updating the budgets too. Any
+resync fails. Writes a Markdown table
 to $GITHUB_STEP_SUMMARY when set, else to stdout. p50 and p99 are shown but not gated: the latency
 tail is too noisy on a shared runner.
 """
@@ -37,13 +39,15 @@ def main() -> int:
     budgets = json.loads(BUDGETS.read_text())
     rows, failed = [], False
     if result.get("threads") != budgets["threads"]:
-        rows.append(f"| threads | {result.get('threads')} | {budgets['threads']} | fail |")
+        rows.append(f"| threads | {result.get('threads')} | = {budgets['threads']} | fail |")
         failed = True
-    for path, limit in budgets["max"].items():
+    checks = [(p, ">=", v) for p, v in budgets["min"].items()]
+    checks += [(p, "<=", v) for p, v in budgets["max"].items()]
+    for path, op, limit in checks:
         value = get(result, path)
-        ok = value is not None and value <= limit
+        ok = value is not None and (value >= limit if op == ">=" else value <= limit)
         failed |= not ok
-        rows.append(f"| {path} | {fmt(value)} | {fmt(limit)} | {'ok' if ok else 'fail'} |")
+        rows.append(f"| {path} | {fmt(value)} | {op} {fmt(limit)} | {'ok' if ok else 'fail'} |")
     resync = result.get("resync")
     failed |= resync is not None
     rows.append(f"| resync | {resync or 'none'} | none | {'ok' if resync is None else 'fail'} |")
@@ -52,7 +56,7 @@ def main() -> int:
     summary = "\n".join([
         f"### plxd load, {result.get('threads')} threads: {'over budget' if failed else 'within budget'}",
         "",
-        "| Metric | Value | Max | |",
+        "| Metric | Value | Budget | |",
         "| --- | --- | --- | --- |",
         *rows,
         "",
