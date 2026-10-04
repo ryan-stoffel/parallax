@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use parallax_protocol::jsonrpc::INVALID_PARAMS;
+use parallax_protocol::jsonrpc::{INTERNAL_ERROR, INVALID_PARAMS};
 use parallax_protocol::methods::{
     AgentCancel, AgentSend, AgentStart, QueueCancel, QueueEdit, QueueList, QueueReorder,
     QueueSteer, ThreadStart,
@@ -244,6 +244,112 @@ async fn a_message_that_cant_be_stored_is_refused() {
         "{refused:?}"
     );
     assert_eq!(queue(&mut client, run_id).await, []);
+    host.server.stop().await;
+}
+
+/// Failed edits, reorders, and cancellations leave both queues and the event log unchanged.
+#[tokio::test]
+async fn queue_mutations_that_cant_be_stored_are_refused() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let params = start_params(project.id, "Work for a while");
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    until(&mut client, working()).await;
+
+    let (a, b) = (TurnId::generate(), TurnId::generate());
+    for (turn, message) in [(a, "First"), (b, "Second")] {
+        client
+            .call::<AgentSend>(send_params(run_id, turn, message))
+            .await
+            .unwrap();
+    }
+    let original = client
+        .call::<QueueList>(QueueListParams { run_id })
+        .await
+        .unwrap();
+    let db_path = host.dir.path().join("plxd.sqlite3");
+    let stored = parallax_store::Store::open(&db_path).unwrap();
+    let original_rows = stored.queue(run_id.into()).unwrap();
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    let seq: i64 = db
+        .query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    // set_queue deletes then inserts within a transaction. Rejecting the insert also verifies
+    // that its deletion rolls back, including when cancel leaves one remaining message.
+    db.execute_batch(
+        "CREATE TRIGGER refuse_queued BEFORE INSERT ON queued
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;",
+    )
+    .unwrap();
+    for operation in ["edit", "reorder", "cancel"] {
+        let refused = match operation {
+            "edit" => {
+                client
+                    .call::<QueueEdit>(QueueEditParams {
+                        run_id,
+                        id: a,
+                        text: "Edited".to_owned(),
+                    })
+                    .await
+            }
+            "reorder" => {
+                client
+                    .call::<QueueReorder>(QueueReorderParams {
+                        run_id,
+                        ids: vec![b, a],
+                    })
+                    .await
+            }
+            "cancel" => {
+                client
+                    .call::<QueueCancel>(QueueCancelParams { run_id, id: a })
+                    .await
+            }
+            _ => unreachable!(),
+        }
+        .unwrap_err();
+        assert_eq!(refused.code, INTERNAL_ERROR, "{operation}: {refused:?}");
+        assert!(
+            refused.message.contains("refused by the test"),
+            "{refused:?}"
+        );
+        assert_eq!(
+            client
+                .call::<QueueList>(QueueListParams { run_id })
+                .await
+                .unwrap()
+                .messages,
+            original.messages,
+            "{operation} changed the actor queue"
+        );
+        assert_eq!(stored.queue(run_id.into()).unwrap(), original_rows);
+        let events: i64 = db
+            .query_row("SELECT COUNT(*) FROM events WHERE seq > ?1", [seq], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            events, 0,
+            "{operation} emitted events despite its storage failure"
+        );
+    }
+
+    db.execute_batch("DROP TRIGGER refuse_queued").unwrap();
+    client
+        .call::<QueueCancel>(QueueCancelParams { run_id, id: a })
+        .await
+        .unwrap();
+    until(
+        &mut client,
+        has_item(AgentOutputItem::FollowUpDropped { turn_id: a }),
+    )
+    .await;
+    assert_eq!(queue(&mut client, run_id).await, [b]);
     host.server.stop().await;
 }
 

@@ -1445,12 +1445,14 @@ impl Actor {
             QueueOp::List => {}
             QueueOp::Edit { id, text } => {
                 let at = self.position(id)?;
-                let queued = &mut self.queued[at];
-                if text.trim().is_empty() && queued.images.is_empty() {
+                if text.trim().is_empty() && self.queued[at].images.is_empty() {
                     return Err(ErrorObject::invalid_params("text must not be empty"));
                 }
-                queued.text = text;
-                self.save_queue().await;
+                let mut edited = self.queued.clone();
+                edited[at].text = text;
+                self.store_queue_for(&edited).await?;
+                self.queued = edited;
+                self.report_queue().await;
             }
             QueueOp::Reorder { ids } => {
                 let mut rest = self.queued.clone();
@@ -1471,17 +1473,21 @@ impl Actor {
                         rest.len()
                     )));
                 }
+                self.store_queue_for(&reordered).await?;
                 self.queued = reordered;
-                self.save_queue().await;
+                self.report_queue().await;
             }
             QueueOp::Cancel { id } => {
                 let at = self.position(id)?;
-                self.queued.remove(at);
+                let mut remaining = self.queued.clone();
+                remaining.remove(at);
+                self.store_queue_for(&remaining).await?;
+                self.queued = remaining;
                 info!(run = %self.id, turn = %id, "cancelling a waiting message");
                 self.senders.remove(&id);
                 self.push(AgentOutputItem::FollowUpDropped { turn_id: id })
                     .await;
-                self.save_queue().await;
+                self.report_queue().await;
             }
             QueueOp::Steer { id } => {
                 let at = self.position(id)?;
@@ -1563,8 +1569,13 @@ impl Actor {
 
     /// Stores the waiting messages as they are now.
     async fn store_queue(&self) -> Result<(), ErrorObject> {
+        self.store_queue_for(&self.queued).await
+    }
+
+    /// Persists a proposed queue before its mutation is applied to the actor.
+    async fn store_queue_for(&self, queued: &VecDeque<Queued>) -> Result<(), ErrorObject> {
         let id = self.row.id;
-        let rows: Vec<QueuedRow> = self.queued.iter().map(Queued::row).collect();
+        let rows: Vec<QueuedRow> = queued.iter().map(Queued::row).collect();
         store(&self.daemon, move |db| {
             db.set_queue(id, &rows).map_err(|error| store_error(&error))
         })
