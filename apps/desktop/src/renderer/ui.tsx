@@ -449,13 +449,12 @@ export function Breadcrumb({ items, trail }: { items: Crumb[]; trail?: ReactNode
               : ""
             : i === 0
               ? "max-w-48 min-w-10 shrink-[100]"
-              : trail
-                ? "max-w-48 min-w-10 shrink-[10]"
-                : "max-w-48 shrink-0";
+              : "max-w-48 min-w-10 shrink-[10]";
           return (
             // The slash is CSS content, so it stays out of the crumb's text. Crumbs before the
-            // last are cut short at 12rem, and the first, such as a computer's name, gives way
-            // first when there's no room, so it never pushes the rest under the top bar's buttons.
+            // last are cut short at 12rem, and when there's no room the first, such as a
+            // computer's name, gives way first and those between next, so none is pushed under
+            // the top bar's buttons.
             <li
               key={i}
               className={`flex min-w-0 items-center gap-2 ${room} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""}`}
