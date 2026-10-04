@@ -19,8 +19,8 @@
 //! holds no message for it ([`Run::hold`]), stdin closes, the agent exits, and the run ends; a
 //! later message resumes the session in a new run. ACP doesn't promise an agent exits when stdin
 //! closes, and Cursor's doesn't while a stdio MCP server it started is connected, so an agent
-//! still running [`EXIT_GRACE`] after that has its process group stopped, and its finished turn
-//! still counts as completed.
+//! still running [`EXIT_GRACE`] after plxd closes its stdin, idle, failed, or cancelled, has its
+//! process group stopped. A finished turn still counts as completed.
 //!
 //! Only threads run on ACP agents (`RunRequest::thread`): none has a worker sandbox plxd can
 //! check, and 0004 keeps the coordinator on Claude Code, so anything else is
@@ -678,7 +678,6 @@ impl Driver {
                 && !self.held.now()
             {
                 self.close();
-                self.exit_deadline = Some(tokio::time::Instant::now() + EXIT_GRACE);
             }
         };
 
@@ -740,9 +739,11 @@ impl Driver {
     }
 
     /// Closes stdin once what is queued is written, so the CLI exits after its turn; no more
-    /// follow-ups are taken.
+    /// follow-ups are taken. An agent still running [`EXIT_GRACE`] later is stopped.
     fn close(&mut self) {
-        self.stdin = None;
+        if self.stdin.take().is_some() {
+            self.exit_deadline = Some(tokio::time::Instant::now() + EXIT_GRACE);
+        }
         self.control.close();
     }
 

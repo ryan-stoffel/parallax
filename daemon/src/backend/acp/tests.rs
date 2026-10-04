@@ -936,3 +936,37 @@ async fn an_agent_that_outlives_its_stdin_is_stopped_after_held_messages_are_rel
     let outcome = finished.await.expect("plxd stops the agent");
     assert!(matches!(outcome, Outcome::Completed { .. }), "{outcome:?}");
 }
+
+/// A turn that fails also closes stdin, so an agent that stays up after it is stopped too, and the
+/// run keeps its failure.
+#[tokio::test]
+async fn an_agent_that_outlives_a_failed_turn_is_stopped_and_the_run_fails() {
+    let fake = Fake::new("resume");
+    let lines = [
+        "@read",
+        r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#,
+        "@read",
+        r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s"}}"#,
+        "@read",
+        r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"usage limit reached"}}"#,
+        "@linger",
+    ];
+    fs::write(fake.root().join("fixture.jsonl"), lines.join("\n") + "\n").unwrap();
+    let started = fake.backend.start(fake.request()).unwrap();
+    let mut events = started.events;
+    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Event::Finished { outcome, .. } = next(&mut events).await {
+                break outcome;
+            }
+        }
+    });
+    let outcome = finished.await.expect("plxd stops the agent");
+    let Outcome::Failed(failure) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(
+        failure.message.contains("usage limit reached"),
+        "{failure:?}"
+    );
+}
