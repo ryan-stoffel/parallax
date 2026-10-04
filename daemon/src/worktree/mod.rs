@@ -18,6 +18,7 @@
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
 //! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (PLX-168).
 //! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (PLX-298).
+//! `integration` keeps each Project's integration branch and its worktree (PLX-409, 0045).
 //!
 //! # Layout and naming
 //!
@@ -96,6 +97,7 @@
 //! tracks closing it.
 
 mod folder;
+mod integration;
 mod pull_request;
 mod refs;
 mod review;
@@ -144,6 +146,9 @@ pub const DEFAULT_MAX_DIFF_BYTES: usize = 1024 * 1024;
 const DEFAULT_MAX_GIT_LINE_BYTES: usize = 64 * 1024 * 1024;
 
 const WORKTREES_DIR: &str = "worktrees";
+
+/// The folder under the data directory holding each Project's integration worktree (0045).
+const INTEGRATION_DIR: &str = "integration";
 
 /// Environment variables scrubbed from every git invocation, on top of
 /// [`crate::backend::process::ALWAYS_SCRUBBED`]: anything that could redirect git to a different
@@ -413,6 +418,7 @@ pub struct GcReport {
 pub struct WorktreeManager {
     launcher: Launcher,
     root: PathBuf,
+    integration_root: PathBuf,
     git_safe_home: PathBuf,
     timeout: Duration,
     max_diff_bytes: usize,
@@ -429,6 +435,7 @@ impl WorktreeManager {
         Self {
             launcher,
             root: data_dir_root.join(WORKTREES_DIR),
+            integration_root: data_dir_root.join(INTEGRATION_DIR),
             git_safe_home: data_dir_root.join(GIT_SAFE_HOME_DIR),
             timeout: DEFAULT_TIMEOUT,
             max_diff_bytes: DEFAULT_MAX_DIFF_BYTES,

@@ -1,7 +1,8 @@
 //! `project/list`, `project/create`, `project/start`, which starts a project's coordinator behind
 //! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
-//! icon behind the `projectEdit` capability (PLX-227, 0032) or its permission mode behind
-//! `projectPermission` (0042), and `project/delete`, behind `projectDelete` (PLX-338).
+//! icon behind the `projectEdit` capability (PLX-227, 0032), its permission mode behind
+//! `projectPermission` (0042), or its base branch behind `integrationBranch` (0045), and
+//! `project/delete`, behind `projectDelete` (PLX-338).
 
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use tracing::{info, warn};
 
 use super::Context;
 use crate::agents::{self, coordinator};
+use crate::backend::check_argument;
 use crate::repo;
 use crate::server::Daemon;
 use crate::store::{self, store_error};
@@ -55,6 +57,10 @@ pub(crate) async fn list(
 ///
 /// Only a new project's `repoPath` has to be a repository, so a retry still returns the project
 /// after its folder is gone.
+///
+/// A new project's integration branch and its worktree are cut after the row is written, as best
+/// effort (0045): a repository with no commit yet has nothing to cut from, and the first run
+/// started in the project tries again.
 pub(crate) async fn create(
     context: &Context,
     params: ProjectCreateParams,
@@ -62,7 +68,7 @@ pub(crate) async fn create(
     check(&params)?;
     let log = Arc::clone(&context.daemon.log);
     let data_dir = context.daemon.data_dir.clone();
-    context
+    let (mut result, existed) = context
         .daemon
         .store
         .run(&context.cancel, move |store| {
@@ -96,9 +102,25 @@ pub(crate) async fn create(
                     warn!(project = %project.id, %error, "could not create the shared context folder");
                 }
             }
-            Ok(ProjectCreateResult { project })
+            Ok((ProjectCreateResult { project }, existed))
         })
-        .await
+        .await?;
+    if !existed {
+        // Detached, so a dropped connection never leaves a worktree half checked out.
+        let (daemon, id) = (Arc::clone(&context.daemon), result.project.id);
+        let cut = async move { agents::integration(&daemon, id).await };
+        match context.daemon.agents.detached(cut).await {
+            Ok(Some(row)) => {
+                result.project.base_branch = row.base_branch;
+                result.project.integration_branch = row.integration_branch;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!(project = %result.project.id, %error, "could not cut the project's integration branch");
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Starts the project's coordinator, detached from the request as `agent/start` is, so a dropped
@@ -133,6 +155,7 @@ pub(crate) async fn update(
         check_icon(icon)?;
     }
     check_permission(params.permission)?;
+    check_base_branch(params.base_branch.as_deref())?;
     let log = Arc::clone(&context.daemon.log);
     context
         .daemon
@@ -179,25 +202,27 @@ pub(crate) async fn delete(
 /// context folder. It looks again after each pass, for a run a coordinator started while it was
 /// stopping; a worker is recorded only while its scope exists, so none can start after the row
 /// is gone. A crash midway leaves the project listed, and deleting it again finishes the job.
+/// Then it removes the integration worktree and keeps its branch (0045).
+// ponytail: a crash between the row and the worktree leaves the folder under `integration/`;
+// sweep folders with no project at startup if that turns up.
 async fn remove(
     daemon: Arc<Daemon>,
     project: ProjectId,
 ) -> Result<ProjectDeleteResult, ErrorObject> {
-    loop {
+    let repo_path = loop {
         let log = Arc::clone(&daemon.log);
-        let runs = daemon
+        let (runs, repo_path) = daemon
             .store
             .run(&CancellationToken::new(), move |store| {
-                if store
+                let Some(row) = store
                     .get_project(project.into())
                     .map_err(|error| store_error(&error))?
-                    .is_none()
-                {
+                else {
                     return Err(ErrorObject::parallax(
                         ErrorKind::ProjectNotFound,
                         format!("no project has id {project}"),
                     ));
-                }
+                };
                 let mut runs = store
                     .list_runs(Some(project.into()))
                     .map_err(|error| store_error(&error))?;
@@ -214,7 +239,8 @@ async fn remove(
                 }
                 // A coordinator's thread is its own run (0024).
                 runs.sort_by_key(|run| run.fields.coordinator_thread != Some(run.id));
-                runs.into_iter()
+                let runs = runs
+                    .into_iter()
                     .map(|run| {
                         RunId::try_from(run.id).map_err(|_| {
                             ErrorObject::internal_error(format!(
@@ -223,11 +249,12 @@ async fn remove(
                             ))
                         })
                     })
-                    .collect::<Result<Vec<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((runs, row.repo_path))
             })
             .await?;
         if runs.is_empty() {
-            break;
+            break repo_path;
         }
         for run in runs {
             match agents::delete(&daemon, run).await {
@@ -240,6 +267,14 @@ async fn remove(
                 Err(error) => return Err(error),
             }
         }
+    };
+    if let Err(error) = daemon
+        .agents
+        .worktrees()
+        .remove_integration(Path::new(&repo_path), project)
+        .await
+    {
+        warn!(%project, %error, "could not remove the project's integration worktree");
     }
     crate::threads::remove_context(&daemon, project);
     Ok(ProjectDeleteResult {})
@@ -265,10 +300,12 @@ fn check(params: &ProjectCreateParams) -> Result<(), ErrorObject> {
         repo_path,
         icon,
         permission,
+        base_branch,
         ..
     } = params;
     check_name(name)?;
     check_permission(*permission)?;
+    check_base_branch(base_branch.as_deref())?;
     if let Some(icon) = icon {
         check_icon(icon)?;
     }
@@ -327,6 +364,21 @@ fn check_permission(permission: Option<ProjectPermission>) -> Result<(), ErrorOb
     Ok(())
 }
 
+/// A base branch is passed to git as an argument (0045), so it is checked as one. Whether it names
+/// a local or remote-tracking branch is checked when the integration branch is cut.
+fn check_base_branch(base: Option<&str>) -> Result<(), ErrorObject> {
+    if let Some(base) = base {
+        if base.len() > MAX_NAME_BYTES {
+            return Err(ErrorObject::invalid_params(format!(
+                "baseBranch must be at most {MAX_NAME_BYTES} bytes"
+            )));
+        }
+        check_argument("baseBranch", base)
+            .map_err(|e| ErrorObject::invalid_params(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0032). plxd never reads them, so
 /// that is all it checks. Its image is capped and checked as a prompt's are (0038).
 pub(crate) fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
@@ -368,6 +420,7 @@ mod tests {
             repo_path: repo_path.to_owned(),
             icon: None,
             permission: None,
+            base_branch: None,
         }
     }
 

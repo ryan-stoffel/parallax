@@ -620,6 +620,17 @@ export type Project = {
 	 */
 	permission?: ProjectPermission,
 	/**
+	 * The branch its integration branch is cut from and its PR targets (0045), behind the
+	 * `integrationBranch` capability. Absent until set, or until plxd cuts the integration branch
+	 * from the repository's default branch.
+	 */
+	baseBranch?: string,
+	/**
+	 * Its integration branch, `parallax/<project slug>` (0045), behind `integrationBranch`.
+	 * Absent until plxd cuts it, when the project is created or a run in it starts.
+	 */
+	integrationBranch?: string,
+	/**
 	 * When the project was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -702,8 +713,8 @@ export type RunId = string;
  * Params of `project/create`.
  *
  * It is idempotent on `id`: if a project with that id exists, plxd returns it instead of
- * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, or `permission`
- * differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
+ * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`, or
+ * a given `baseBranch` differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
  * or it fails with `notARepository`.
  */
 export type ProjectCreateParams = {
@@ -729,6 +740,12 @@ export type ProjectCreateParams = {
 	 * Absent means `auto`, the mode projects from before it have.
 	 */
 	permission?: ProjectPermission,
+	/**
+	 * The project's base branch (0045), sent only to a plxd that advertises
+	 * `integrationBranch`: a local or remote-tracking branch, such as `main` or `origin/main`.
+	 * Absent means the repository's default branch. A retry that leaves it out matches any.
+	 */
+	baseBranch?: string,
 };
 
 /**
@@ -1736,6 +1753,12 @@ export type AgentStartParams = {
 	 * them.
 	 */
 	threads?: Array<RunId>,
+	/**
+	 * Start a Project's child as an exploration, such as a spike or a comparison, which never
+	 * lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must repeat
+	 * it.
+	 */
+	explore?: boolean,
 };
 
 /**
@@ -1869,6 +1892,11 @@ export type AgentRun = {
 	 * Absent means false.
 	 */
 	checkout?: boolean,
+	/**
+	 * True for a Project's exploration child, started with `explore` (0045): it never lands.
+	 * Absent means false.
+	 */
+	explore?: boolean,
 	/**
 	 * The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
 	 * `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
@@ -3650,7 +3678,8 @@ export type ProjectStartParams = {
 
 /**
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
- * capability (PLX-227, 0032), or its permission mode, behind `projectPermission` (0042).
+ * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), or its base
+ * branch, behind `integrationBranch` (0045).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
  * `project/create`'s rules, and the repository can't change. A rename, a new icon, or a new mode
@@ -3675,6 +3704,11 @@ export type ProjectUpdateParams = {
 	 * CLI process in it, and a running CLI keeps its mode until it exits.
 	 */
 	permission?: ProjectPermission,
+	/**
+	 * The new base branch, behind `integrationBranch`. Absent keeps it. An integration branch
+	 * already cut stays where it is.
+	 */
+	baseBranch?: string,
 };
 
 /**

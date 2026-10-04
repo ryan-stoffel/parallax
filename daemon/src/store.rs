@@ -211,6 +211,7 @@ pub(crate) fn fields(params: ProjectCreateParams) -> (Uuid, ProjectFields) {
             repo_path: params.repo_path,
             icon: params.icon.map(stored_icon),
             permission: stored_permission(params.permission.unwrap_or(ProjectPermission::Auto)),
+            base_branch: params.base_branch,
         },
     )
 }
@@ -223,6 +224,7 @@ pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
             name: params.name,
             icon: params.icon.map(stored_icon),
             permission: params.permission.map(stored_permission),
+            base_branch: params.base_branch,
         },
     )
 }
@@ -283,6 +285,8 @@ pub(crate) fn project(
         branch: repo::branch(Path::new(&row.repo_path)),
         repo_path: row.repo_path,
         coordinator,
+        base_branch: row.base_branch,
+        integration_branch: row.integration_branch,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -482,6 +486,8 @@ mod tests {
             permission: "bypass".to_owned(),
             created_at: "2026-09-24T12:00:00.5Z".parse().unwrap(),
             updated_at: "2026-09-24T12:00:01Z".parse().unwrap(),
+            base_branch: None,
+            integration_branch: None,
         }
     }
 
@@ -521,6 +527,7 @@ mod tests {
             repo_path: "/r".to_owned(),
             icon: Some(icon.clone()),
             permission: None,
+            base_branch: None,
         };
         let (uuid, fields) = fields(params);
         assert_eq!(uuid, Uuid::from(id));
@@ -544,6 +551,7 @@ mod tests {
             name: None,
             icon: Some(icon),
             permission: Some(ProjectPermission::Bypass),
+            base_branch: None,
         });
         assert_eq!(uuid, Uuid::from(id));
         assert_eq!(edit.name, None);

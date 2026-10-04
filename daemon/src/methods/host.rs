@@ -104,6 +104,10 @@ pub(crate) fn initialize(
 /// `projectPermission` (PLX-394, 0042): a project's `permission`, Auto or Bypass, on `Project`,
 /// `project/create`, and `project/update`, which an older plxd would silently drop. Every run in
 /// the project, its coordinator included, runs in it.
+/// `integrationBranch` (PLX-409, 0045): `baseBranch` and `integrationBranch` on `Project`,
+/// `baseBranch` on `project/create` and `project/update`, and `explore` on `agent/start` and
+/// `AgentRun`, which an older plxd would silently drop. A run in a Project is cut from its
+/// integration branch's tip.
 /// `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
 /// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
 /// `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on `Thread`,
@@ -173,6 +177,7 @@ fn capabilities_advertised() -> Capabilities {
         ("githubSetup".to_owned(), serde_json::Map::new()),
         ("githubStatus".to_owned(), serde_json::Map::new()),
         ("inbox".to_owned(), serde_json::Map::new()),
+        ("integrationBranch".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),

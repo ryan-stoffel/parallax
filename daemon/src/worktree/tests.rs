@@ -6,7 +6,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use parallax_protocol::RunId;
+use parallax_protocol::{ProjectId, RunId};
 
 use super::{ChangeStatus, WorktreeError, WorktreeManager, short_hash, valid_branch_slug};
 use crate::backend::process::{Environment, Launcher};
@@ -166,6 +166,130 @@ fn branch_slugs_are_lowercase_words_joined_by_hyphens() {
     }
     for bad in ["", "-a", "a-", "Fix", "a b", "a/b", "a.b", &"a".repeat(41)] {
         assert!(!valid_branch_slug(bad), "{bad}");
+    }
+}
+
+/// PLX-409 (0045): a Project's integration branch is cut from its base once, its worktree is
+/// reused, another branch's name is never taken, and removing the worktree keeps the branch.
+#[tokio::test]
+async fn an_integration_branch_is_cut_once_and_outlives_its_worktree() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    assert_eq!(mgr.default_branch(&repo).await.unwrap(), "main");
+    let base = rev_parse(&repo, "HEAD");
+    git(&repo, &["branch", "release"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
+
+    let project = ProjectId::generate();
+    let branch = mgr
+        .ensure_integration(&repo, project, None, "Auth Rewrite!", "release")
+        .await
+        .unwrap();
+    assert_eq!(branch, "parallax/auth-rewrite");
+    let path = mgr.integration_path(project);
+    assert!(!path.starts_with(mgr.root()), "gc never sees it");
+    assert_eq!(git_output(&path, &["branch", "--show-current"]), branch);
+    assert_eq!(
+        rev_parse(&path, "HEAD"),
+        base,
+        "cut from the base, not HEAD"
+    );
+    assert!(path.join("README.md").is_file(), "checked out");
+
+    // A second call keeps the worktree, whatever name it is given.
+    let again = mgr
+        .ensure_integration(&repo, project, None, "renamed", "main")
+        .await
+        .unwrap();
+    assert_eq!(again, branch);
+    assert_eq!(worktree_count(&repo), 2);
+
+    // Another project with the same name gets its own branch.
+    let other = ProjectId::generate();
+    let taken = mgr
+        .ensure_integration(&repo, other, None, "auth rewrite", "main")
+        .await
+        .unwrap();
+    let short = short_hash(&other.to_string());
+    assert_eq!(taken, format!("parallax/auth-rewrite-{short}"));
+
+    // Removing the worktree keeps the branch, and the recorded branch is checked out again.
+    mgr.remove_integration(&repo, project).await.unwrap();
+    assert!(!path.exists());
+    assert_eq!(rev_parse(&repo, &branch), base);
+    let back = mgr
+        .ensure_integration(&repo, project, Some(&branch), "renamed", "main")
+        .await
+        .unwrap();
+    assert_eq!(back, branch);
+    assert_eq!(rev_parse(&path, "HEAD"), base, "the branch as it was");
+}
+
+/// PLX-409: a base that isn't a branch is refused, and a checkout that fails leaves no worktree
+/// for the next call to return, only the branch.
+#[tokio::test]
+async fn an_integration_branch_needs_a_branch_base_and_a_checkout() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let project = ProjectId::generate();
+
+    let sha = rev_parse(&repo, "HEAD");
+    git(&repo, &["tag", "v1"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
+    for base in [sha.as_str(), "v1", "HEAD~1"] {
+        let error = mgr
+            .ensure_integration(&repo, project, None, "app", base)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, WorktreeError::UnknownRevision { .. }),
+            "{base}: {error}"
+        );
+    }
+    assert!(
+        git_output(&repo, &["branch", "--list", "parallax/*"]).is_empty(),
+        "nothing was cut"
+    );
+
+    // A required smudge filter that fails makes the checkout fail after the worktree is added.
+    std::fs::write(repo.join(".gitattributes"), "* filter=broken\n").unwrap();
+    git(&repo, &["add", ".gitattributes"]);
+    git(&repo, &["commit", "-q", "-m", "filter"]);
+    git(&repo, &["config", "filter.broken.smudge", "false"]);
+    git(&repo, &["config", "filter.broken.required", "true"]);
+    mgr.ensure_integration(&repo, project, None, "app", "main")
+        .await
+        .unwrap_err();
+    assert!(
+        !mgr.integration_path(project).exists(),
+        "no broken worktree"
+    );
+    assert_eq!(worktree_count(&repo), 1);
+    assert_eq!(rev_parse(&repo, "parallax/app"), rev_parse(&repo, "main"));
+
+    git(&repo, &["config", "--unset", "filter.broken.required"]);
+    git(&repo, &["config", "filter.broken.smudge", "cat"]);
+    let branch = mgr
+        .ensure_integration(&repo, project, Some("parallax/app"), "app", "main")
+        .await
+        .unwrap();
+    assert_eq!(branch, "parallax/app");
+    assert!(mgr.integration_path(project).join("README.md").is_file());
+}
+
+#[test]
+fn project_names_become_branch_slugs() {
+    for (name, slug) in [
+        ("Auth Rewrite!", "auth-rewrite"),
+        ("  --v2 API--  ", "v2-api"),
+        ("日本", "project"),
+        (&"a".repeat(50), &"a".repeat(40)),
+    ] {
+        assert_eq!(super::integration::slug(name), slug, "{name}");
     }
 }
 

@@ -17,6 +17,10 @@ pub struct ProjectFields {
     pub icon: Option<ProjectIcon>,
     /// The permission mode, `auto` or `bypass` (decision record 0042).
     pub permission: String,
+    /// The branch its integration branch is cut from and ships into (decision record 0045).
+    /// `None` means the repository's default branch, stored once the integration branch is cut,
+    /// and a retry that leaves it out matches any.
+    pub base_branch: Option<String>,
 }
 
 /// A project's icon, stored as the client sent it and never read
@@ -69,6 +73,7 @@ pub struct ProjectEdit {
     pub name: Option<String>,
     pub icon: Option<ProjectIcon>,
     pub permission: Option<String>,
+    pub base_branch: Option<String>,
 }
 
 /// A project row.
@@ -79,6 +84,9 @@ pub struct Project {
     pub repo_path: String,
     pub icon: Option<ProjectIcon>,
     pub permission: String,
+    pub base_branch: Option<String>,
+    /// Its integration branch (decision record 0045), once plxd has cut it.
+    pub integration_branch: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -91,6 +99,8 @@ struct RawProject {
     repo_path: String,
     icon: Option<ProjectIcon>,
     permission: String,
+    base_branch: Option<String>,
+    integration_branch: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -101,8 +111,10 @@ impl RawProject {
             id: row.get(0)?,
             name: row.get(1)?,
             repo_path: row.get(2)?,
-            icon: icon_from_row(row, 6)?,
+            icon: icon_from_row(row, 8)?,
             permission: row.get(5)?,
+            base_branch: row.get(6)?,
+            integration_branch: row.get(7)?,
             created_at: row.get(3)?,
             updated_at: row.get(4)?,
         })
@@ -113,6 +125,7 @@ impl RawProject {
             && self.repo_path == fields.repo_path
             && self.icon == fields.icon
             && self.permission == fields.permission
+            && (fields.base_branch.is_none() || self.base_branch == fields.base_branch)
     }
 
     fn into_project(self) -> Result<Project, StoreError> {
@@ -122,6 +135,8 @@ impl RawProject {
             repo_path: self.repo_path,
             icon: self.icon,
             permission: self.permission,
+            base_branch: self.base_branch,
+            integration_branch: self.integration_branch,
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
         })
@@ -132,7 +147,8 @@ fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawProject>, Sto
     Ok(conn
         .query_row(
             &format!(
-                "SELECT id, name, repo_path, created_at, updated_at, permission, {ICON_COLUMNS}
+                "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
+                     integration_branch, {ICON_COLUMNS}
                  FROM projects WHERE id = ?1"
             ),
             params![id_text],
@@ -181,8 +197,8 @@ impl Store {
         tx.execute(
             &format!(
                 "INSERT INTO projects (id, name, repo_path, created_at, updated_at, permission,
-                     {ICON_COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9)
+                     base_branch, {ICON_COLUMNS})
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT (id) DO NOTHING"
             ),
             params![
@@ -191,6 +207,7 @@ impl Store {
                 fields.repo_path,
                 now,
                 fields.permission,
+                fields.base_branch,
                 icon_name,
                 icon_color,
                 image_type,
@@ -231,7 +248,8 @@ impl Store {
     /// are corrupt.
     pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT id, name, repo_path, created_at, updated_at, permission, {ICON_COLUMNS}
+            "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
+                     integration_branch, {ICON_COLUMNS}
              FROM projects
              ORDER BY created_at ASC, id ASC"
         ))?;
@@ -244,7 +262,7 @@ impl Store {
         Ok(projects)
     }
 
-    /// Renames project `id`, or sets its icon or permission mode, as `edit` says, and returns
+    /// Renames project `id`, or sets its icon, permission mode, or base branch, as `edit` says, and returns
     /// the project with whether anything changed. When nothing would
     /// change, it writes nothing.
     ///
@@ -283,12 +301,17 @@ impl Store {
             raw.permission.clone_from(permission);
             changed = true;
         }
+        if edit.base_branch.is_some() && edit.base_branch != raw.base_branch {
+            raw.base_branch.clone_from(&edit.base_branch);
+            changed = true;
+        }
 
         if changed {
             let (icon_name, icon_color, image_type, image_data) = icon_columns(raw.icon.as_ref());
             tx.execute(
                 "UPDATE projects SET name = ?2, icon_name = ?3, icon_color = ?4,
-                     icon_image_type = ?5, icon_image_data = ?6, permission = ?7
+                     icon_image_type = ?5, icon_image_data = ?6, permission = ?7,
+                     base_branch = ?8
                  WHERE id = ?1",
                 params![
                     id_text,
@@ -297,12 +320,33 @@ impl Store {
                     icon_color,
                     image_type,
                     image_data,
-                    raw.permission
+                    raw.permission,
+                    raw.base_branch
                 ],
             )?;
             tx.commit()?;
         }
         Ok((raw.into_project()?, changed))
+    }
+
+    /// Records project `id`'s integration branch once plxd has cut it from `base` (decision
+    /// record 0045), and `base` as its base branch when it had none. Returns whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error.
+    pub fn set_integration_branch(
+        &self,
+        id: Uuid,
+        branch: &str,
+        base: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE projects SET integration_branch = ?2, base_branch = COALESCE(base_branch, ?3)
+             WHERE id = ?1 AND (integration_branch IS NOT ?2 OR base_branch IS NULL)",
+            params![id.to_string(), branch, base],
+        )?;
+        Ok(changed > 0)
     }
 
     /// Deletes a project by id, if it exists, with its inbox (PLX-401).

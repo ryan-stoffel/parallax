@@ -22,6 +22,7 @@ fn sample_fields() -> ProjectFields {
         repo_path: "/Users/ryan/dev/parallax".to_string(),
         icon: None,
         permission: "auto".to_string(),
+        base_branch: None,
     }
 }
 
@@ -206,6 +207,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: Some("renamed".to_string()),
                 icon: None,
                 permission: None,
+                base_branch: None,
             },
         )
         .expect("a rename");
@@ -226,6 +228,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                base_branch: None,
             },
         )
         .expect("an icon");
@@ -241,6 +244,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: None,
                 icon: Some(icon("rocket", None)),
                 permission: None,
+                base_branch: None,
             },
         )
         .expect("an icon without a color");
@@ -287,6 +291,7 @@ fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                base_branch: None,
             },
         )
         .expect("an icon without an image");
@@ -339,6 +344,61 @@ fn a_projects_permission_mode_is_checked_on_retry_and_changed_by_update() {
     );
 }
 
+/// A project's base branch (PLX-409, decision record 0045) is checked on a retry only when
+/// given, and recording the integration branch fills in a base only when there was none.
+#[test]
+fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let created = store.create_project(id, &sample_fields()).expect("create");
+    assert_eq!(
+        (created.base_branch, created.integration_branch),
+        (None, None)
+    );
+
+    assert!(
+        store
+            .set_integration_branch(id, "parallax/app", "main")
+            .expect("record")
+    );
+    assert!(
+        !store
+            .set_integration_branch(id, "parallax/app", "other")
+            .expect("record again"),
+        "nothing changes"
+    );
+    let project = store.get_project(id).expect("get").expect("the project");
+    assert_eq!(project.base_branch.as_deref(), Some("main"));
+    assert_eq!(project.integration_branch.as_deref(), Some("parallax/app"));
+    store
+        .create_project(id, &sample_fields())
+        .expect("a retry with no base matches");
+    match store.create_project(
+        id,
+        &ProjectFields {
+            base_branch: Some("develop".to_string()),
+            ..sample_fields()
+        },
+    ) {
+        Err(StoreError::IdConflict { id: conflicted }) => assert_eq!(conflicted, id),
+        result => panic!("expected IdConflict for another base, got {result:?}"),
+    }
+
+    let (updated, changed) = store
+        .update_project(
+            id,
+            &ProjectEdit {
+                base_branch: Some("develop".to_string()),
+                ..ProjectEdit::default()
+            },
+        )
+        .expect("a new base");
+    assert!(changed);
+    assert_eq!(updated.base_branch.as_deref(), Some("develop"));
+    assert_eq!(updated.integration_branch.as_deref(), Some("parallax/app"));
+}
+
 #[test]
 fn an_update_that_changes_nothing_reports_no_change() {
     let (_dir, path) = temp_db_path();
@@ -356,6 +416,7 @@ fn an_update_that_changes_nothing_reports_no_change() {
             name: Some(fields.name.clone()),
             icon: fields.icon.clone(),
             permission: None,
+            base_branch: None,
         },
     ] {
         let (project, changed) = store.update_project(id, &edit).expect("update");
@@ -377,6 +438,7 @@ fn update_of_a_missing_project_fails_with_not_found() {
                 name: Some("renamed".to_string()),
                 icon: None,
                 permission: None,
+                base_branch: None,
             },
         )
         .expect_err("update of a missing project should fail");
@@ -643,6 +705,7 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
                 repo_path: "/r".to_string(),
                 icon: None,
                 permission: "auto".to_string(),
+                base_branch: None,
             },
         )
         .expect("an idempotent create should match the migrated row");
@@ -668,7 +731,9 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             "icon_color",
             "icon_image_type",
             "icon_image_data",
-            "permission"
+            "permission",
+            "base_branch",
+            "integration_branch"
         ]
     );
     let version: i64 = conn
@@ -677,12 +742,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 28,
+        version, 29,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
          #257), 13 (run options, PLX-97), 14 (wakes, PLX-178), 15 (images, PLX-191), 16 \
-         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), and 28 (waking a parent, PLX-380) also apply"
+         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), and 29 (integration branches, PLX-409) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -727,6 +792,7 @@ fn a_version_15_database_gains_project_icons_and_keeps_its_projects() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                base_branch: None,
             },
         )
         .expect("set an icon after migrating");
@@ -808,12 +874,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 28,
+        version, 29,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, PLX-97), 14 (wakes, \
          PLX-178), 15 (images, PLX-191), 16 (project icons, PLX-227), 17 (approvals, \
-         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), and 28 (waking a parent, PLX-380) also apply"
+         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), and 29 (integration branches, PLX-409) also apply"
     );
 }
 

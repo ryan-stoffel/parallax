@@ -41,6 +41,17 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<ProjectPermission>,
+    /// The branch its integration branch is cut from and its PR targets (0045), behind the
+    /// `integrationBranch` capability. Absent until set, or until plxd cuts the integration branch
+    /// from the repository's default branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base_branch: Option<String>,
+    /// Its integration branch, `parallax/<project slug>` (0045), behind `integrationBranch`.
+    /// Absent until plxd cuts it, when the project is created or a run in it starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub integration_branch: Option<String>,
     /// When the project was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
@@ -118,8 +129,8 @@ pub struct ProjectListResult {
 /// Params of `project/create`.
 ///
 /// It is idempotent on `id`: if a project with that id exists, plxd returns it instead of
-/// creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, or `permission`
-/// differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
+/// creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`, or
+/// a given `baseBranch` differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
 /// or it fails with `notARepository`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +151,12 @@ pub struct ProjectCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<ProjectPermission>,
+    /// The project's base branch (0045), sent only to a plxd that advertises
+    /// `integrationBranch`: a local or remote-tracking branch, such as `main` or `origin/main`.
+    /// Absent means the repository's default branch. A retry that leaves it out matches any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base_branch: Option<String>,
 }
 
 /// Result of `project/create`.
@@ -151,7 +168,8 @@ pub struct ProjectCreateResult {
 }
 
 /// Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
-/// capability (PLX-227, 0032), or its permission mode, behind `projectPermission` (0042).
+/// capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), or its base
+/// branch, behind `integrationBranch` (0045).
 ///
 /// A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
 /// `project/create`'s rules, and the repository can't change. A rename, a new icon, or a new mode
@@ -175,6 +193,11 @@ pub struct ProjectUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<ProjectPermission>,
+    /// The new base branch, behind `integrationBranch`. Absent keeps it. An integration branch
+    /// already cut stays where it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base_branch: Option<String>,
 }
 
 /// Result of `project/update`.

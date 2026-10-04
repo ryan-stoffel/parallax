@@ -397,6 +397,14 @@ const MIGRATIONS: &[Migration] = &[
         UPDATE runs SET notify_parent = 1
             WHERE parent IS NOT NULL AND coordinator_thread IS NOT NULL;",
     },
+    // A project's base branch and integration branch (PLX-409, decision 0045), NULL until set or
+    // cut, and whether a run in a project is an exploration child, which never lands.
+    Migration {
+        version: 29,
+        sql: "ALTER TABLE projects ADD COLUMN base_branch TEXT;
+        ALTER TABLE projects ADD COLUMN integration_branch TEXT;
+        ALTER TABLE runs ADD COLUMN explore INTEGER NOT NULL DEFAULT 0;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

@@ -79,7 +79,11 @@ impl WorktreeManager {
     }
 
     /// Whether `name`, a full ref name, exists in `repo_root`.
-    async fn has_ref(&self, repo_root: &Path, name: &str) -> Result<bool, WorktreeError> {
+    pub(super) async fn has_ref(
+        &self,
+        repo_root: &Path,
+        name: &str,
+    ) -> Result<bool, WorktreeError> {
         let args = ["show-ref", "--verify", "--quiet", name];
         Ok(self.run_git(repo_root, &args).await?.success())
     }

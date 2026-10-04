@@ -541,6 +541,8 @@ mod tests {
                 permission: None,
                 created_at: Timestamp::now(),
                 updated_at: Timestamp::now(),
+                base_branch: None,
+                integration_branch: None,
             };
             daemon
                 .log
@@ -689,6 +691,8 @@ mod tests {
                     permission: None,
                     created_at: Timestamp::now(),
                     updated_at: Timestamp::now(),
+                    base_branch: None,
+                    integration_branch: None,
                 },
             },
         };

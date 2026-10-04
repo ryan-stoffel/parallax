@@ -344,6 +344,7 @@ pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
         repo_path: path.to_str().expect("a UTF-8 path").to_owned(),
         icon: None,
         permission: None,
+        base_branch: None,
     }
 }
 

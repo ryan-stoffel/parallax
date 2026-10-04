@@ -36,6 +36,7 @@ fn run_fields(repo: Uuid) -> RunFields {
         fast: None,
         approvals: false,
         checkout: false,
+        explore: false,
     }
 }
 
