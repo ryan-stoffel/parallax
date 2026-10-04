@@ -7,6 +7,7 @@ import { AgentChat } from "./AgentChat";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
 import { FilesPanel } from "./FilesPanel";
+import { InboxPanel, useInbox } from "./Inbox";
 import { GitMenu } from "./GitMenu";
 import { KnowledgePanel } from "./Knowledge";
 import { LineageTrail } from "./Lineage";
@@ -15,11 +16,10 @@ import { NewThreadPicker } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
+import { instanceLogo } from "./providers";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
-import { ProjectOverview } from "./ProjectOverview";
-import { ProjectTask } from "./ProjectTask";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
@@ -32,7 +32,15 @@ import {
   useSnoozeAlarms,
   useThreadAlarms,
 } from "./alarms";
-import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
+import {
+  backendLogos,
+  ProjectIcon,
+  RepoIcon,
+  SettingsNav,
+  settingsNames,
+  Sidebar,
+  ThreadList,
+} from "./Sidebar";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
 import { useAppearanceEffects } from "./appearance";
@@ -63,7 +71,7 @@ import { UsagePage } from "./UsagePage";
  * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's), or Usage.
  */
 export type Selection =
-  | { kind: "project"; projectId: string; agentId?: string; task?: boolean }
+  | { kind: "project"; projectId: string; agentId?: string }
   | { kind: "thread"; threadId: string; started?: boolean; subagent?: string }
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
@@ -181,14 +189,24 @@ export function App() {
   );
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
-  // Entering a Project shows its overview in the side panel.
+  // Entering a Project shows its inbox in the side panel.
   const [panelProject, setPanelProject] = useState(project?.id);
   if (project?.id !== panelProject) {
     setPanelProject(project?.id);
     if (project) setPanelOpen(true);
   }
-  // Whether the Project's New task page is open, in place of its coordinator's chat.
-  const taskOpen = selection.kind === "project" && !!selection.task;
+  // The Project's inbox (0043), on a plxd with `inbox`, and the children whose questions wait in it.
+  const answerable = connected && "questions" in connection.capabilities;
+  const inbox = useInbox(
+    host.id,
+    project?.id ?? "",
+    connected && !!project && "inbox" in connection.capabilities,
+    answerable,
+  );
+  const needs = useMemo(
+    () => new Set(inbox.items.filter((i) => !i.seenAt && i.kind === "needsYou").map((i) => i.run)),
+    [inbox.items],
+  );
   const agent = agents.runs.find((r) => r.id === agentId);
   // Its thread's title from plxd (0041), else its prompt's.
   const agentTitle = agentId
@@ -229,11 +247,6 @@ export function App() {
   const openAgent = (id?: string) => {
     if (!project) return;
     setSelection({ kind: "project", projectId: project.id, agentId: id });
-    setPanelExpanded(false);
-  };
-  const openTask = () => {
-    if (!project) return;
-    setSelection({ kind: "project", projectId: project.id, task: true });
     setPanelExpanded(false);
   };
   // The permission requests the Project's other runs wait on, pinned in whichever of its chats is
@@ -327,10 +340,9 @@ export function App() {
       {
         label: project.name,
         icon: <ProjectIcon icon={project.icon} />,
-        onClick: agentId || taskOpen ? () => openAgent() : undefined,
+        onClick: agentId ? () => openAgent() : undefined,
       },
     ];
-    if (taskOpen) crumbs.push({ label: "New task" });
     if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
     const repo = {
@@ -460,10 +472,7 @@ export function App() {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
       else if (command === "usage") openOnHost(host.id, { kind: "usage" });
-      else if (command === "projectTarget" && project) {
-        if (taskOpen) openAgent();
-        else openTask();
-      } else if (
+      else if (
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
       ) {
@@ -678,17 +687,6 @@ export function App() {
                 disabledReason={offline}
                 threadLinks={threadLinks}
               />
-            ) : taskOpen && project ? (
-              <ProjectTask
-                key={`${host.id}/${project.id}`}
-                hostId={host.id}
-                project={project}
-                startTask={threads.startTask}
-                agents={agents}
-                titles={threads.state.titles}
-                onOpen={openAgent}
-                disabledReason={offline}
-              />
             ) : agentId ? (
               <AgentChat
                 key={`${host.id}/${agentId}`}
@@ -709,10 +707,12 @@ export function App() {
                   project={project}
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
                   startCoordinator={threads.startCoordinator}
+                  startTask={threads.startTask}
                   others={othersAsked(project.coordinator)}
-                  onNewTask={
-                    connected && "projectTasks" in connection.capabilities ? openTask : undefined
-                  }
+                  agents={agents}
+                  titles={threads.state.titles}
+                  needs={needs}
+                  onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
                 />
               )
             )}
@@ -739,18 +739,24 @@ export function App() {
         pullRequest={showPr}
         project={
           project && {
-            overview: (
-              <ProjectOverview
-                key={`${host.id}/${project.id}`}
-                host={host}
-                project={project}
-                agents={agents}
-                titles={threads.state.titles}
-                openId={agentId}
-                task={taskOpen}
-                tasks={connected && "projectTasks" in connection.capabilities}
-                onOpen={openAgent}
-                onNewTask={openTask}
+            unread: inbox.items.filter((i) => !i.seenAt).length,
+            inbox: (
+              <InboxPanel
+                view={inbox}
+                answerable={answerable}
+                senders={(run) => {
+                  const found = agents.runs.find((r) => r.id === run);
+                  const Logo =
+                    found && (backendLogos[found.backend] ?? instanceLogo(found.backend));
+                  return {
+                    name:
+                      run === project.coordinator
+                        ? "Coordinator"
+                        : (threads.state.titles[run] ?? (found ? titleOf(found) : "Agent")),
+                    Logo,
+                  };
+                }}
+                onOpen={(id) => openAgent(id === project.coordinator ? undefined : id)}
               />
             ),
           }
@@ -786,7 +792,6 @@ export function App() {
               openId={agentId}
               onOpen={openAgent}
               disabledReason={offline}
-              startable={!(connected && "projectTasks" in connection.capabilities)}
             />
           )
         }
@@ -812,9 +817,19 @@ export function App() {
               hostId={host.id}
               project={project?.id}
               repo={memoryRepo}
-              coordinator={project?.coordinator}
+              coordinator={
+                project?.coordinator
+                  ? agents.runs.find((r) => r.id === project.coordinator)
+                  : undefined
+              }
               connected={connected}
               memory={!!memory}
+              inbox={project ? inbox : undefined}
+              working={agents.runs.some(
+                (r) => r.id !== project?.coordinator && isRunning(r.status),
+              )}
+              expanded={panelExpanded}
+              onExpand={project ? setPanelExpanded : undefined}
             />
           )
         }

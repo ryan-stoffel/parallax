@@ -1269,3 +1269,49 @@ body {
     display: none;
   }
 }
+
+/* Pixels (Pixels.tsx): a square arrives in three steps, as a pixel would, and
+   a live field's squares brighten now and then, each on its own delay. */
+.pixel-in {
+  animation: pixel-in 0.6s steps(3, end) both;
+}
+.pixel-fade {
+  animation: pixel-fade 0.6s steps(3, end) both;
+}
+@keyframes pixel-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pixel-in {
+  from {
+    opacity: 0;
+    scale: 0.4;
+  }
+}
+.pixel-twinkle {
+  animation: pixel-twinkle 4s ease-in-out infinite;
+  animation-delay: var(--pixel-delay, 0ms);
+}
+.pixel-in.pixel-twinkle {
+  animation:
+    pixel-in 0.6s steps(3, end) both,
+    pixel-twinkle 4s ease-in-out var(--pixel-delay, 0ms) infinite;
+}
+@keyframes pixel-twinkle {
+  0%,
+  86%,
+  100% {
+    filter: none;
+  }
+  92% {
+    filter: brightness(1.8);
+  }
+}
+:root.reduce-motion {
+  .pixel-in,
+  .pixel-fade,
+  .pixel-twinkle {
+    animation: none;
+  }
+}

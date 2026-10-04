@@ -502,7 +502,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       ),
       {
         kind: "text",
-        text: "**Retry failed update downloads** is done: 4 files, +142 −37, with retries at 2s, 8s, and 30s and range resumes. Tests pass; it's ready to land when you are.\n\nI answered the palette's question myself (Mod+K waits for an open dialog, like Mod+N) and saved that as a convention.\n\nOne thing does need you: **Inbox read state** is asking whether scrolling past an item should mark it seen. It's waiting for you in the Overview.",
+        text: "**Retry failed update downloads** is done: 4 files, +142 −37, with retries at 2s, 8s, and 30s and range resumes. Tests pass; it's ready to land when you are.\n\nI answered the palette's question myself (Mod+K waits for an open dialog, like Mod+N) and saved that as a convention.\n\nOne thing does need you: **Inbox read state** is asking whether scrolling past an item should mark it seen. It's waiting for you in the inbox.",
       },
       usageItem(31_800, 1_250),
       { kind: "turnFinished" },
@@ -1006,6 +1006,20 @@ export function createFixtures(now = Date.now()): Fixtures {
       run: iconPicker.id,
       text: `Project icon picker in light mode: failed: ${iconPicker.error}`,
       createdAt: ago(52),
+    },
+    {
+      id: uuid(106),
+      kind: "learned",
+      run: ids.coordinator,
+      text: "Memory: plxd on the devbox is one protocol version behind; spill needs a version gate",
+      createdAt: ago(12),
+    },
+    {
+      id: uuid(107),
+      kind: "learned",
+      run: ids.coordinator,
+      text: "Memory: yellow project icons need a darker hue in light mode to reach 3:1",
+      createdAt: ago(6),
     },
     {
       id: uuid(105),

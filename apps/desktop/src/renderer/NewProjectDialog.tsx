@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { LockOpen, X } from "lucide-react";
 import { useId, useRef, useState, type Ref } from "react";
 
 import type {
@@ -13,7 +13,6 @@ import { describeError } from "./errors";
 import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { iconImageBytes } from "./images";
-import { ProjectPermissionChoice } from "./ProjectPermission";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
 import { IconButton } from "./ui";
@@ -26,8 +25,8 @@ import { WorkspaceMenu, type Workspace } from "./WorkspaceMenu";
  * it with `ref.current.showModal()`. Creating closes it and calls `onCreated` with the host it
  * was made on, and plxd's error stays in the dialog. The icon is a button that opens the icon
  * picker where the Workspace's host can keep one (`projectEdit`, 0032). Where that host keeps a
- * Project's permission mode (`projectPermission`, 0042), it shows the disclaimer and the choice of
- * Auto or Bypass, on Auto each time it opens.
+ * Project's permission mode (`projectPermission`, 0042), its agents get full access (Bypass), and
+ * the dialog says so.
  */
 export function NewProjectDialog({
   ref,
@@ -65,10 +64,9 @@ export function NewProjectDialog({
   let icon = iconable ? chosenIcon : undefined;
   // Nor an image where it would drop that (0038), after a Workspace on another host.
   if (icon?.image && maxImageBytes === undefined) icon = { ...icon, image: undefined };
-  const [mode, setMode] = useState<ProjectPermission>("auto");
-  const permission =
+  const permission: ProjectPermission | undefined =
     connection?.status === "connected" && "projectPermission" in connection.capabilities
-      ? mode
+      ? "bypass"
       : undefined;
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
@@ -129,7 +127,6 @@ export function NewProjectDialog({
         setChosen(undefined);
         setChosenIcon(undefined);
         setTyped(undefined);
-        setMode("auto");
         setError(undefined);
         attempt.current = undefined;
       }}
@@ -197,8 +194,14 @@ export function NewProjectDialog({
           />
         </div>
         {permission && (
-          <div className="mx-5 mb-5">
-            <ProjectPermissionChoice value={permission} onChange={setMode} />
+          <div className="mx-5 mb-5 rounded-lg bg-selected px-3 py-2.5">
+            <p className="flex items-center gap-2 text-[13px] font-medium">
+              <LockOpen aria-hidden className="size-4 text-muted-foreground" />
+              Full access
+            </p>
+            <p className="mt-0.5 pl-6 text-[12px] text-muted-foreground">
+              Agents in this Project run commands and edit files without asking.
+            </p>
           </div>
         )}
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3">

@@ -107,10 +107,10 @@ import {
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 
-export const row =
+const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
-export const current = "bg-selected text-foreground";
-export const sectionHeading =
+const current = "bg-selected text-foreground";
+const sectionHeading =
   "flex h-7 items-center gap-1 px-2 text-[12px] font-medium text-faint-foreground";
 const emptyNote = "px-2 py-1 text-[12.5px] text-faint-foreground";
 
@@ -1006,7 +1006,7 @@ function RepoFilterMenu({
  * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
  * initials (0037), Settings, Usage, and Update when `updatable` (Update.tsx).
  */
-export function Footer({
+function Footer({
   onOpenSettings,
   onOpenUsage,
 }: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {

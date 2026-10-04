@@ -206,8 +206,11 @@ export function MemoryPanel({
   project,
   repo,
   coordinator,
+  start,
   afterBrief,
   end,
+  footer,
+  onFiles,
 }: {
   hostId: string;
   /** The open Project, or absent for a thread outside one. */
@@ -216,10 +219,19 @@ export function MemoryPanel({
   repo?: string;
   /** The Project's coordinator run, which the box sends to. */
   coordinator?: string;
+  /** Before everything, scrolling with it. */
+  start?: ReactNode;
   afterBrief?: ReactNode;
   end?: ReactNode;
+  /** In place of the box that sends a change to the coordinator. */
+  footer?: ReactNode;
+  /** Told the listed files each time they load. */
+  onFiles?: (files: readonly Memory[]) => void;
 }) {
   const { files, error, reload } = useMemory(hostId, project, repo);
+  useEffect(() => {
+    if (files) onFiles?.(files);
+  }, [files, onFiles]);
   const calls = useMemo(() => memoryCalls(hostId), [hostId]);
   const sections = files && sectionsOf(files);
   const taken = ({ scope, path }: Target) =>
@@ -246,6 +258,7 @@ export function MemoryPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {start}
         {project && (
           <section aria-label="Brief">
             <h3 className={sectionHeading}>Brief</h3>
@@ -290,7 +303,7 @@ export function MemoryPanel({
           </p>
         )}
       </div>
-      {project && <ChangeBox hostId={hostId} coordinator={coordinator} />}
+      {footer ?? (project && <ChangeBox hostId={hostId} coordinator={coordinator} />)}
     </div>
   );
 }

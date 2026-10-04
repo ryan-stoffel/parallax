@@ -2,7 +2,7 @@ import { ArrowUp, GitBranch, LoaderCircle, ShieldQuestion, Workflow } from "luci
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentRun, ParallaxEvent } from "../protocol/generated/protocol";
-import { childOrder, runAttention, type Attention } from "./attention";
+import { childOrder, runAttention } from "./attention";
 import { describeError } from "./errors";
 import { instanceLogo, instanceName } from "./providers";
 import { backendLogos, statusLooks } from "./Sidebar";
@@ -158,18 +158,10 @@ export function withProjectThreads(
   return { ...agents, runs, waiting };
 }
 
-const groupLabels: Record<Attention, string> = {
-  needsYou: "Needs you",
-  working: "Working",
-  done: "Done",
-  failed: "Failed",
-  settled: "Settled",
-};
-
 /**
  * The side panel's Agents view for a Project: the coordinator's children, without the coordinator
- * (0024), grouped under Needs you, Working, Done, and Failed, newest first within each (0042), each opening
- * its chat in place; then, unless the composer starts tasks, a box that starts one by hand.
+ * (0024), ordered Needs you, Working, Done, Failed, newest first within each (0042), each opening
+ * its chat in place; then a box that starts one by hand.
  */
 export function AgentsPanel({
   agents,
@@ -177,7 +169,6 @@ export function AgentsPanel({
   openId,
   onOpen,
   disabledReason,
-  startable = true,
 }: {
   agents: ProjectAgentsView;
   /** By run id: a child's thread title from plxd (0041), over its prompt's. */
@@ -187,39 +178,28 @@ export function AgentsPanel({
   onOpen: (runId: string) => void;
   /** Why starting one is off right now. */
   disabledReason?: string;
-  /** Whether it has its own start box, which a composer with New task makes a second one. */
-  startable?: boolean;
 }) {
-  const attention = (run: AgentRun) => runAttention(run, agents.waiting[run.id]?.length ?? 0);
-  const shown = agents.runs.filter((r) => r.policy !== "noWrite").toReversed();
+  const rank = (run: AgentRun) =>
+    childOrder.indexOf(runAttention(run, agents.waiting[run.id]?.length ?? 0));
+  const shown = agents.runs
+    .filter((r) => r.policy !== "noWrite")
+    .toReversed()
+    .toSorted((a, b) => rank(a) - rank(b));
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {shown.length > 0 ? (
-        <div aria-label="Agents" role="group" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-          {childOrder.map((kind) => {
-            const group = shown.filter((run) => attention(run) === kind);
-            if (group.length === 0) return null;
-            return (
-              <section key={kind} aria-label={groupLabels[kind]}>
-                <h3 className="px-2.5 pt-2.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
-                  {groupLabels[kind]} <span className="tabular-nums">{group.length}</span>
-                </h3>
-                <ul>
-                  {group.map((run) => (
-                    <AgentRow
-                      key={run.id}
-                      run={run}
-                      title={titles[run.id] ?? titleOf(run)}
-                      asks={agents.waiting[run.id]?.length ?? 0}
-                      open={run.id === openId}
-                      onOpen={() => onOpen(run.id)}
-                    />
-                  ))}
-                </ul>
-              </section>
-            );
-          })}
-        </div>
+        <ul aria-label="Agents" className="min-h-0 flex-1 overflow-y-auto px-2">
+          {shown.map((run) => (
+            <AgentRow
+              key={run.id}
+              run={run}
+              title={titles[run.id] ?? titleOf(run)}
+              asks={agents.waiting[run.id]?.length ?? 0}
+              open={run.id === openId}
+              onOpen={() => onOpen(run.id)}
+            />
+          ))}
+        </ul>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
           <Workflow aria-hidden className="mb-1 size-5 text-faint-foreground" />
@@ -234,7 +214,7 @@ export function AgentsPanel({
           {agents.error}
         </p>
       )}
-      {startable && <StartAgent start={agents.start} disabledReason={disabledReason} />}
+      <StartAgent start={agents.start} disabledReason={disabledReason} />
     </div>
   );
 }
@@ -369,73 +349,5 @@ function StartAgent({
         </p>
       )}
     </form>
-  );
-}
-
-/**
- * A Project's agents at a glance, over its composer: a chip for each child, most urgent first,
- * opening its chat, and the rest behind a count that opens the Agents view. Shows nothing until the
- * Project has a child.
- */
-export function AgentStrip({
-  agents,
-  titles = {},
-  onOpen,
-  onShowAll,
-  max = 3,
-}: {
-  agents: ProjectAgentsView;
-  titles?: Readonly<Record<string, string>>;
-  onOpen: (runId: string) => void;
-  onShowAll: () => void;
-  max?: number;
-}) {
-  const asks = (run: AgentRun) => agents.waiting[run.id]?.length ?? 0;
-  const rank = (run: AgentRun) => childOrder.indexOf(runAttention(run, asks(run)));
-  const shown = agents.runs
-    .filter((r) => r.policy !== "noWrite")
-    .toReversed()
-    .toSorted((a, b) => rank(a) - rank(b));
-  if (shown.length === 0) return null;
-  const working = shown.filter((r) => runAttention(r, asks(r)) === "working").length;
-  const rest = shown.length - max;
-  return (
-    <nav aria-label="Project agents" className="flex min-w-0 items-center gap-1.5 px-1 pb-2">
-      <span className="shrink-0 pr-0.5 text-[12px] text-faint-foreground tabular-nums">
-        {working > 0 ? `${working} working` : `${shown.length} agents`}
-      </span>
-      <ul className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-        {shown.slice(0, max).map((run) => {
-          const look = statusLooks[run.status] ?? statusLooks.completed!;
-          const title = titles[run.id] ?? titleOf(run);
-          return (
-            <li key={run.id} className="min-w-0 shrink">
-              <button
-                type="button"
-                onClick={() => onOpen(run.id)}
-                title={title}
-                className="flex max-w-44 min-w-0 items-center gap-1.5 rounded-full border border-border bg-surface py-0.5 pr-2.5 pl-2 text-[12.5px] text-foreground/85 hover:bg-hover hover:text-foreground"
-              >
-                {asks(run) > 0 ? (
-                  <ShieldQuestion aria-hidden className="size-3.5 shrink-0 text-warning" />
-                ) : (
-                  <look.Icon aria-hidden className={`size-3.5 shrink-0 ${look.color}`} />
-                )}
-                <span className="truncate">{title}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-      {rest > 0 && (
-        <button
-          type="button"
-          onClick={onShowAll}
-          className="shrink-0 rounded-full px-2 py-0.5 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
-        >
-          +{rest} more
-        </button>
-      )}
-    </nav>
   );
 }

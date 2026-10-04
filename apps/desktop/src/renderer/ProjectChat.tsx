@@ -1,8 +1,9 @@
-import { Folder, GitBranch, SquarePen } from "lucide-react";
+import { Folder, GitBranch } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import type { Project, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat, PinnedApprovals } from "./AgentChat";
+import { AgentsBar } from "./AgentsBar";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
@@ -10,40 +11,46 @@ import { describeError } from "./errors";
 import { imageCaps } from "./images";
 import type { RunOptions } from "./models";
 import { accountOptions, defaultBackend } from "./NewThread";
+import type { ProjectAgentsView } from "./ProjectAgents";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
 import { uuidv7 } from "./uuidv7";
 
-/** How a Project works, shown before its first message on a plxd with `projectTasks`. */
-const steps = [
-  "Start tasks from New task. Each gets its own agent and worktree, side by side.",
-  "Talk to the coordinator here to plan the work, split it up, or change course.",
-  "Check the Overview on the right: what needs you, what's working, and what's done.",
-];
-
 /**
  * A Project's coordinator chat (0024). Until its first message the Project introduces itself, and
  * sending starts the coordinator. From then on it is the coordinator run's `AgentChat`, so replies,
- * Stop, and the transcript work as a thread's do. New tasks start from the Project's New task
- * page, which `onNewTask` opens, and its inbox is the Project sidebar's. Key it by host and Project.
+ * Stop, and the transcript work as a thread's do. Either way its children ride over the composer
+ * (`AgentsBar`), and its inbox is the side panel's. On a plxd with `projectTasks`, the composer
+ * starts a child for a task, or one each for a list of them, and sends a question to the
+ * coordinator (0042). Key it by host and Project.
  */
 export function ProjectChat({
   hostId,
   project,
   prompt,
   startCoordinator,
+  startTask,
   others,
-  onNewTask,
+  agents,
+  titles,
+  needs,
+  onOpenRun,
 }: {
   hostId: string;
   project: Project;
   /** The coordinator's first message, shown until its transcript loads. */
   prompt?: string;
   startCoordinator: ThreadsView["startCoordinator"];
+  startTask: ThreadsView["startTask"];
   /** Permission requests the Project's subagents wait on, pinned over the composer (PLX-196). */
   others?: readonly Asked[];
-  /** Opens the New task page, on a plxd with `projectTasks`. */
-  onNewTask?: () => void;
+  /** The Project's runs, whose children show over the composer. */
+  agents: ProjectAgentsView;
+  titles?: Readonly<Record<string, string>>;
+  /** The children whose questions wait in the inbox. */
+  needs?: ReadonlySet<string>;
+  /** Opens a child's chat. */
+  onOpenRun: (runId: string) => void;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -56,6 +63,11 @@ export function ProjectChat({
   const [notice, setNotice] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
   const [backend, setBackend] = useState<string>();
+  const tasks = connected && "projectTasks" in connection.capabilities;
+  // The worker default's backend, a New task's, as New Thread's.
+  const [taskBackend, setTaskBackend] = useState<string>();
+  // Where the user pointed the composer, over what its text suggests, until it sends.
+  const [asking, setAsking] = useState<boolean>();
   // Before there's a coordinator, subagents started by hand still ask here (PLX-196).
   const { answers, answer, dismiss } = useAnswers(hostId);
   const asked = useMemo(() => queueOf(others ?? [], answers), [others, answers]);
@@ -63,10 +75,11 @@ export function ProjectChat({
     if (!connected) return;
     let live = true;
     void defaultBackend(hostId, "coordinator").then((b) => live && setBackend(b));
+    if (tasks) void defaultBackend(hostId, "worker").then((b) => live && setTaskBackend(b));
     return () => {
       live = false;
     };
-  }, [hostId, connected]);
+  }, [hostId, connected, tasks]);
 
   // The Project's repository and branch, which the coordinator runs in (0027).
   const tab = (
@@ -112,6 +125,34 @@ export function ProjectChat({
     return error && describeError(error);
   };
 
+  const bar = (
+    <AgentsBar
+      agents={agents}
+      titles={titles}
+      coordinator={project.coordinator}
+      needs={needs}
+      onOpen={onOpenRun}
+    />
+  );
+
+  // A New task never waits on the coordinator, so the box is free for the next one at once.
+  const newTask = tasks
+    ? {
+        backend: taskBackend,
+        asking,
+        onAsking: setAsking,
+        onSend: async (
+          text: string,
+          options: RunOptions,
+          images: PromptImage[],
+          threads: string[],
+        ) => {
+          const error = await startTask(project.id, uuidv7(), text, images, options, threads);
+          return error && describeError(error);
+        },
+      }
+    : undefined;
+
   if (project.coordinator)
     return (
       <>
@@ -123,10 +164,12 @@ export function ProjectChat({
           going={started === project.coordinator}
           notice={notice}
           tab={tab}
+          strip={bar}
           // A new coordinator replaces one that can't take messages (0024).
           startOver={(text, options, images) => start(uuidv7(), text, options, images)}
           others={others}
           projectMode={project.permission}
+          newTask={newTask}
         />
       </>
     );
@@ -150,38 +193,17 @@ export function ProjectChat({
       {/* It gives way first in a short window, so a pinned card and the composer keep their room,
           and whole: once it doesn't fit, it wraps into a second column, out of view, rather than
           show cut in two (PLX-259). */}
-      <div className="flex min-h-0 flex-1 flex-col flex-wrap content-start justify-end overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col flex-wrap content-start justify-center overflow-hidden text-center">
         {/* The first column's width, so the second starts past the edge. */}
         <span aria-hidden className="w-full" />
-        <div className="mx-auto w-full max-w-3xl px-8 pb-6">
-          <ProjectIcon icon={project.icon} className="size-7" />
-          <h2 className="mt-3 text-[20px] font-medium tracking-tight">{project.name}</h2>
-          {onNewTask ? (
-            <>
-              <ol className="mt-4 flex max-w-lg flex-col gap-2 text-[13.5px] text-muted-foreground">
-                {steps.map((step, i) => (
-                  <li key={i} className="flex gap-3">
-                    <span className="grid size-5 shrink-0 place-items-center rounded-full bg-selected text-[11px] text-foreground tabular-nums">
-                      {i + 1}
-                    </span>
-                    {step}
-                  </li>
-                ))}
-              </ol>
-              <button
-                type="button"
-                onClick={onNewTask}
-                className="mt-5 flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[13px] hover:bg-hover [&_svg]:size-4"
-              >
-                <SquarePen aria-hidden className="text-muted-foreground" />
-                New task
-              </button>
-            </>
-          ) : (
-            <p className="mt-1.5 max-w-md text-[14px] text-muted-foreground">
-              Agents working on {project.name} report back and coordinate here.
-            </p>
-          )}
+        <div className="flex w-full flex-col items-center px-8 pb-[8vh]">
+          <ProjectIcon icon={project.icon} className="size-10" />
+          <h2 className="mt-5 text-[18px] font-medium tracking-tight">{project.name}</h2>
+          <p className="mt-2 max-w-sm text-[14px] text-muted-foreground">
+            {tasks
+              ? "Describe a task and an agent starts on it, or list a few to start them together. Ask a question and the coordinator answers."
+              : `Agents working on ${project.name} report back and coordinate here.`}
+          </p>
         </div>
       </div>
       {/* As in AgentChat: bounded, so a pinned card's preview gives way to a grown composer. */}
@@ -193,6 +215,7 @@ export function ProjectChat({
           onDismiss={dismiss}
           disabledReason={connected ? undefined : "Connecting to plxd…"}
         />
+        {bar}
         <Composer
           newThread
           onSend={send}
@@ -205,7 +228,7 @@ export function ProjectChat({
           // The coordinator asks only through a plxd that sends its requests.
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
           projectMode={project.permission}
-          hint="Ask the coordinator to plan the work, split it up, or answer a question"
+          newTask={newTask}
         />
       </div>
     </>

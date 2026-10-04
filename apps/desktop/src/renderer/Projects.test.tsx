@@ -707,7 +707,7 @@ test("another client's project.updated renames a row and changes its icon, in th
   expect(crumbs()).toEqual(["This Mac", "ember app"]);
   const crumbIcon = document.querySelector('[aria-label="Breadcrumb"] li:last-child svg');
   expect(looks(crumbIcon)).toEqual(["rocket", "text-project-green"]);
-  expect(looks(document.querySelector("main svg.size-7"))).toEqual([
+  expect(looks(document.querySelector("main svg.size-10"))).toEqual([
     "rocket",
     "text-project-green",
   ]);
@@ -772,7 +772,7 @@ test("with iconImages, Change icon uploads an image, and a Project's and its rep
   ]);
   await click(rowButton("ember"));
   expect(drawn(document.querySelector('[aria-label="Breadcrumb"]'))).toEqual([projectUrl]);
-  expect(drawn(document.querySelector("main svg.size-7")?.parentElement)).toEqual([projectUrl]);
+  expect(drawn(document.querySelector("main svg.size-10")?.parentElement)).toEqual([projectUrl]);
 });
 
 test("an icon name or color this app doesn't know draws FolderKanban or the accent in its place", async () => {
@@ -799,7 +799,7 @@ test("an icon name or color this app doesn't know draws FolderKanban or the acce
   await click(rowButton("ember"));
   const crumbIcon = document.querySelector('[aria-label="Breadcrumb"] li:last-child svg');
   expect(looks(crumbIcon)).toEqual(["folder-kanban", "text-project-red"]);
-  expect(looks(document.querySelector("main svg.size-7"))).toEqual([
+  expect(looks(document.querySelector("main svg.size-10"))).toEqual([
     "folder-kanban",
     "text-project-red",
   ]);
@@ -1086,7 +1086,7 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   expect(button("Model: Claude Opus 5.5")).not.toBeNull();
   expect(button("Access: Accept Edits")).not.toBeNull();
   // Without projectTasks every message goes to the coordinator, with no New task.
-  expect(target()).toBeNull();
+  expect(document.querySelector('main fieldset[aria-label="Send as"]')).toBeNull();
 
   type("Add a dark mode");
   await click(button("Send"));
@@ -1582,9 +1582,9 @@ const startsTask = (p: Record<string, unknown>) => {
   });
   return { result: { run, thread: { id: run.id, repo: "p-ember", createdAt: run.createdAt } } };
 };
-// The Project composer's Send to picker (0042), New task or Coordinator, and which is on.
-const target = () => document.querySelector('main button[aria-label^="Send to: "]');
-const targetOn = () => target()?.getAttribute("aria-label")?.slice("Send to: ".length);
+// The Project composer's New task / Ask toggle (0042), and which is on.
+const target = () => document.querySelector('main fieldset[aria-label="Send as"]');
+const targetOn = () => target()?.querySelector("input:checked")?.parentElement?.textContent;
 // The default Switch New task and Ask, Cmd+. on macOS.
 const flipTarget = () =>
   act(() => {
@@ -1604,9 +1604,8 @@ test("with projectTasks, New task is the default: Enter starts a child through t
   await renderApp();
   await openEmber();
   expect(targetOn()).toBe("New task");
-  // The other choice names the shortcut that switches to it.
-  expect(document.querySelector('main [role="menu"][aria-label="Send to"]')!.textContent).toContain(
-    "⌘.",
+  expect(target()!.parentElement!.title).toBe(
+    "New task starts a thread in the Project. Ask sends to its coordinator. (⌘.)",
   );
 
   type("Add a dark mode");
@@ -1614,7 +1613,7 @@ test("with projectTasks, New task is the default: Enter starts a child through t
   // Still in flight, and the box already takes the next one.
   expect(composer()!.textContent).toBe("");
   expect(composer()!.getAttribute("aria-placeholder")).toBe(
-    "Describe a task and an agent starts on it",
+    "Describe a change, paste an error, or drop in a plan",
   );
   type("Add a light mode");
   expect(button("Send")!.disabled).toBe(false);
@@ -1658,7 +1657,7 @@ test("the shortcut flips the Project composer to Ask, which starts and then mess
   await renderApp();
   await openEmber();
   flipTarget();
-  expect(targetOn()).toBe("Coordinator");
+  expect(targetOn()).toBe("Ask");
   type("How should we split this?");
   await click(button("Send"));
   expect(calls("project/start")).toEqual([
@@ -1667,7 +1666,7 @@ test("the shortcut flips the Project composer to Ask, which starts and then mess
   expect(transcript()).toContain("I'll plan it.");
 
   // The coordinator's chat keeps Ask, so a follow-up goes to it.
-  expect(targetOn()).toBe("Coordinator");
+  expect(targetOn()).toBe("Ask");
   type("Which is riskier?");
   await click(button("Send"));
   expect(calls("agent/send")).toEqual([

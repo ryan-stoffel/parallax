@@ -72,7 +72,11 @@ export function openFromHash() {
       ),
     );
   const agent = params.get("agent");
-  if (agent) steps.push(...openPanelView("Overview"), () => byText(panel(), "button", agent));
+  if (agent)
+    steps.push(
+      () => document.querySelector<HTMLElement>(`section[aria-label="Agents"] > button`),
+      () => byText(document, "[popover] button", agent),
+    );
   const view = params.get("panel");
   if (view) steps.push(...openPanelView(view));
   void run(steps);

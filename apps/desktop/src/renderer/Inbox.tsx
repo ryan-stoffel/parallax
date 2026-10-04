@@ -3,15 +3,15 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDot,
-  ChevronRight,
   CircleQuestionMark,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentType, type SVGProps } from "react";
 
 import type { InboxItem, InboxKind, Question } from "../protocol/generated/protocol";
 import { outlineButton, quietButton } from "./Approval";
 import { describeError } from "./errors";
+import { PixelStack } from "./Pixels";
 import { age } from "./Sidebar";
 
 /** The inbox's groups, in 0043's order. A kind a newer plxd adds isn't shown. */
@@ -133,218 +133,251 @@ export const kindLooks: Record<InboxKind, { Icon: LucideIcon; color: string }> =
   learned: { Icon: BookOpen, color: "text-muted-foreground" },
 };
 
+/** A row's sender: the child (or coordinator) it came from, and its provider's logo. */
+export interface Sender {
+  name: string;
+  Logo?: ComponentType<SVGProps<SVGSVGElement>>;
+}
+
+const kindNames: Record<InboxKind, string> = {
+  needsYou: "Needs you",
+  done: "Done",
+  failed: "Failed",
+  decided: "Decided",
+  learned: "Learned",
+};
+
+// What interrupts: the rest is news, read when the user likes.
+const urgent = (item: InboxItem) => item.kind === "needsYou" || item.kind === "failed";
+
 /**
- * A Project's unread inbox items, at the top of its coordinator chat, grouped as 0043 orders them.
- * Needs you items are cards, always shown; the rest fold into one line of counts that opens to a
- * line each. Opening an item opens its child's chat and marks it seen, and Mark all read clears it. With `answerable`, an open question takes an
- * answer in place, or keeps what the child assumed, and a decided one can be changed: "went with X,
- * change it?". Shows nothing once every item is seen.
+ * A Project's inbox (0043) as a mail list, newest first: each row its sender, what it's about, and
+ * when, bold until read. Needs you, the default while anything waits, holds the unread questions
+ * and failures; All holds everything. A row opens in place: a question takes an answer, or keeps
+ * what the child assumed, a decided one can be changed, and Open chat goes to its child. Opening
+ * marks news read; a question stays unread until it's answered. J and K move, Enter opens, and E
+ * marks read, as in a mail app. `senders` names each run.
  */
-export function Inbox({
+export function InboxPanel({
   view,
   answerable,
+  senders,
   onOpen,
 }: {
   view: InboxView;
   answerable: boolean;
+  senders: (runId: string) => Sender;
   /** Opens a run's chat: a child's, or the coordinator's for its paused wake-ups. */
   onOpen: (runId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const unread = view.items.filter((i) => !i.seenAt);
-  if (unread.length === 0) return null;
-  const groups = inboxGroups
-    .map((g) => ({ ...g, items: unread.filter((i) => i.kind === g.kind) }))
-    .filter((g) => g.items.length > 0);
-  const needs = groups.find((g) => g.kind === "needsYou");
-  const updates = groups.filter((g) => g.kind !== "needsYou");
-  const count = updates.reduce((n, g) => n + g.items.length, 0);
-  const rowsOf = (items: InboxItem[]) =>
-    items.map((item) => {
-      const open = () => {
-        onOpen(item.run);
-        void view.seen([item.id]);
-      };
-      const question = answerable ? questionOf(item, view.questions) : undefined;
-      const onAnswer = (q: Question, text: string) => view.answer(item, q, text);
-      const Row = item.kind === "needsYou" ? NeedsYouCard : InboxRow;
-      return (
-        <Row key={item.id} item={item} question={question} onOpen={open} onAnswer={onAnswer} />
-      );
-    });
+  // Read here since the panel opened, which stay where they were rather than vanish once opened.
+  const [kept, setKept] = useState<ReadonlySet<string>>(new Set());
+  const waiting = view.items.filter((i) => urgent(i) && (!i.seenAt || kept.has(i.id)));
+  const [picked, setPicked] = useState<"needs" | "all">();
+  const filter = picked ?? (waiting.length > 0 ? "needs" : "all");
+  const shown = (filter === "needs" ? waiting : view.items).toReversed();
+  const [openId, setOpenId] = useState<string>();
+  const rows = useRef<(HTMLButtonElement | null)[]>([]);
+
+  const toggle = (item: InboxItem) => {
+    const opening = openId !== item.id;
+    setOpenId(opening ? item.id : undefined);
+    if (opening) setKept((k) => new Set(k).add(item.id));
+    if (opening && !item.seenAt && item.kind !== "needsYou") void view.seen([item.id]);
+  };
+  const onKeyDown = (e: React.KeyboardEvent, i: number) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.target !== e.currentTarget) return;
+    const step = { j: 1, ArrowDown: 1, k: -1, ArrowUp: -1 }[e.key];
+    if (step) {
+      e.preventDefault();
+      rows.current[Math.max(0, Math.min(shown.length - 1, i + step))]?.focus();
+    } else if (e.key === "e" && !shown[i]!.seenAt) {
+      e.preventDefault();
+      void view.seen([shown[i]!.id]);
+    }
+  };
+
   return (
-    <section aria-label="Inbox" className="mx-auto w-full max-w-3xl shrink-0 px-6 pt-4">
-      <div className="max-h-[40vh] overflow-y-auto rounded-xl border border-border bg-surface">
-        {needs && (
-          <section aria-label={needs.label} className="px-2 pt-2 pb-1">
-            <h3 className="px-1.5 pb-1.5 text-[11.5px] font-medium text-faint-foreground">
-              {needs.label} <span className="tabular-nums">{needs.items.length}</span>
-            </h3>
-            <ul className="flex flex-col gap-1.5">{rowsOf(needs.items)}</ul>
-          </section>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-1 px-3 pt-2.5 pb-2">
+        {(
+          [
+            ["needs", "Needs you", waiting.filter((i) => !i.seenAt).length],
+            ["all", "All", unread.length],
+          ] as const
+        ).map(([value, label, count]) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={filter === value}
+            onClick={() => setPicked(value)}
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] text-muted-foreground hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground"
+          >
+            {label}
+            {count > 0 && (
+              <span
+                className={`font-mono text-[11px] tabular-nums ${value === "needs" ? "text-warning" : "text-faint-foreground"}`}
+              >
+                {count}
+              </span>
+            )}
+          </button>
+        ))}
+        {unread.length > 0 && (
+          <button
+            type="button"
+            onClick={() =>
+              void view.seen(unread.filter((i) => i.kind !== "needsYou").map((i) => i.id))
+            }
+            className="ml-auto rounded-md px-2 py-1 font-mono text-[11px] text-faint-foreground hover:bg-hover hover:text-foreground"
+          >
+            Mark read
+          </button>
         )}
-        {/* Everything else is news, folded into one line until it's opened. */}
-        <div
-          className={`flex items-center gap-2 py-1 pr-1.5 pl-2 ${needs ? "border-t border-border/60" : ""}`}
-        >
-          <button
-            type="button"
-            aria-expanded={expanded}
-            disabled={count === 0}
-            onClick={() => setExpanded(!expanded)}
-            className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-1.5 py-1 text-left text-[12.5px] text-muted-foreground enabled:hover:text-foreground"
-          >
-            <span className="flex items-center gap-1.5">
-              {count > 0 && (
-                <ChevronRight
-                  aria-hidden
-                  className={`size-3.5 transition-transform ${expanded ? "rotate-90" : ""}`}
-                />
-              )}
-              {count === 0 ? "Nothing else new" : `${count} ${count === 1 ? "update" : "updates"}`}
-            </span>
-            {updates.map((g) => {
-              const { Icon, color } = kindLooks[g.kind];
-              return (
-                <span
-                  key={g.kind}
-                  title={g.label}
-                  className="flex items-center gap-1 tabular-nums [&_svg]:size-3.5"
-                >
-                  <span className={color}>
-                    <Icon aria-hidden />
-                  </span>
-                  {g.items.length}
-                </span>
-              );
-            })}
-          </button>
-          <button
-            type="button"
-            onClick={() => void view.seen(unread.map((i) => i.id))}
-            className={quietButton}
-          >
-            Mark all read
-          </button>
-        </div>
-        <div hidden={!expanded}>
-          {updates.map((g) => (
-            <section key={g.kind} aria-label={g.label} className="border-t border-border/60 py-1.5">
-              <h3 className="px-3.5 pt-0.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
-                {g.label} <span className="tabular-nums">{g.items.length}</span>
-              </h3>
-              <ul>{rowsOf(g.items)}</ul>
-            </section>
-          ))}
-        </div>
       </div>
-    </section>
-  );
-}
-
-/**
- * A Needs you item: what the child asks, what it went on assuming, and a way to answer. plxd's text
- * reads "<title>: asks ...", so with the question shown on its own the link keeps only the title.
- */
-function NeedsYouCard({
-  item,
-  question,
-  onOpen,
-  onAnswer,
-}: {
-  item: InboxItem;
-  question?: Question;
-  onOpen: () => void;
-  onAnswer: (question: Question, text: string) => Promise<string | undefined>;
-}) {
-  const waiting = question?.status === "open" || question?.status === "escalated";
-  const asks = item.text.indexOf(": asks ");
-  const title = question && waiting && asks > 0 ? item.text.slice(0, asks) : item.text;
-  const { Icon, color } = kindLooks.needsYou;
-  return (
-    <li className="rounded-lg border border-border bg-background px-3 py-2.5">
-      <button
-        type="button"
-        onClick={onOpen}
-        title={item.text}
-        className="flex w-full min-w-0 items-center gap-2 text-left text-[12.5px] text-muted-foreground hover:text-foreground"
-      >
-        <span className={`shrink-0 [&_svg]:size-3.5 ${color}`}>
-          <Icon aria-hidden />
-        </span>
-        <span className="min-w-0 flex-1 truncate">{title}</span>
-        <span className="shrink-0 text-faint-foreground tabular-nums">{age(item.createdAt)}</span>
-      </button>
-      {question && waiting && (
-        <>
-          <p className="mt-1.5 text-[13.5px] text-foreground">{question.question}</p>
-          {question.assumption && (
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-              Going with <span className="text-foreground/85">{question.assumption}</span> until you
-              say otherwise.
-            </p>
-          )}
-          <AnswerForm
-            label="Answer"
-            question={question.question}
-            keep={question.assumption || undefined}
-            onAnswer={(text) => onAnswer(question, text)}
-          />
-        </>
+      {shown.length > 0 ? (
+        <ul aria-label="Inbox" className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+          {shown.map((item, i) => (
+            <MailRow
+              key={item.id}
+              item={item}
+              sender={senders(item.run)}
+              open={item.id === openId}
+              question={answerable ? questionOf(item, view.questions) : undefined}
+              rowRef={(el) => {
+                rows.current[i] = el;
+              }}
+              onToggle={() => toggle(item)}
+              onKeyDown={(e) => onKeyDown(e, i)}
+              onOpenChat={() => {
+                onOpen(item.run);
+                if (!item.seenAt && item.kind !== "needsYou") void view.seen([item.id]);
+              }}
+              onAnswer={(q, text) => view.answer(item, q, text)}
+            />
+          ))}
+        </ul>
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 pb-16 text-center">
+          <PixelStack count={9} />
+          <p className="text-[13px] font-medium">
+            {filter === "needs" ? "Nothing needs you" : "No mail yet"}
+          </p>
+          <p className="max-w-60 text-[12.5px] text-muted-foreground">
+            {filter === "needs"
+              ? "Questions and failures land here. Everything else is under All."
+              : "Agents report here as they finish, decide, and learn."}
+          </p>
+        </div>
       )}
-    </li>
+    </div>
   );
 }
 
-function InboxRow({
+function MailRow({
   item,
+  sender,
+  open,
   question,
-  onOpen,
+  rowRef,
+  onToggle,
+  onKeyDown,
+  onOpenChat,
   onAnswer,
 }: {
   item: InboxItem;
-  /** The question it's about, where the user can answer it. */
+  sender: Sender;
+  open: boolean;
   question?: Question;
-  onOpen: () => void;
+  rowRef: (el: HTMLButtonElement | null) => void;
+  onToggle: () => void;
+  onKeyDown: (e: React.KeyboardEvent) => void;
+  onOpenChat: () => void;
   onAnswer: (question: Question, text: string) => Promise<string | undefined>;
 }) {
   const [changing, setChanging] = useState(false);
-  const { Icon, color } = kindLooks[item.kind];
+  const unread = !item.seenAt;
+  // plxd's text reads "<title>: <what happened>", and the title is already the sender.
+  const subject = item.text.startsWith(`${sender.name}: `)
+    ? item.text.slice(sender.name.length + 2)
+    : item.text;
+  const waiting = question?.status === "open" || question?.status === "escalated";
+  const { color } = kindLooks[item.kind];
   return (
-    <li className="px-1.5">
-      <div className="group flex min-w-0 items-center gap-2 rounded-md px-2 py-1 hover:bg-hover">
-        <span className={`shrink-0 [&_svg]:size-3.5 ${color}`}>
-          <Icon aria-hidden />
+    <li className={`rounded-xl ${open ? "bg-selected" : ""}`}>
+      <button
+        ref={rowRef}
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        onKeyDown={onKeyDown}
+        className={`group flex w-full min-w-0 gap-3 rounded-xl py-2.5 pr-2.5 pl-2 text-left focus-visible:outline-2 focus-visible:outline-ring ${open ? "" : "hover:bg-hover"}`}
+      >
+        <span className="flex w-1.5 shrink-0 justify-center pt-2">
+          {unread && <span className="size-1.5 rounded-full bg-accent" />}
+          {unread && <span className="sr-only">Unread: </span>}
         </span>
-        <button
-          type="button"
-          onClick={onOpen}
-          title={item.text}
-          className="min-w-0 flex-1 truncate text-left text-[13px] text-foreground/85 group-hover:text-foreground"
-        >
-          {item.text}
-        </button>
-        {item.kind === "decided" && question && !changing && (
-          <button
-            type="button"
-            onClick={() => setChanging(true)}
-            className="shrink-0 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-background [&_svg]:size-3.5">
+          {sender.Logo && <sender.Logo aria-hidden />}
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span
+              className={`min-w-0 flex-1 truncate text-[13px] ${unread ? "font-semibold text-foreground" : "text-muted-foreground"}`}
+            >
+              {sender.name}
+            </span>
+            <span className="shrink-0 font-mono text-[11px] text-faint-foreground tabular-nums">
+              {age(item.createdAt)}
+            </span>
+          </span>
+          <span
+            className={`text-[12.5px] leading-snug ${open ? "" : "line-clamp-2"} ${unread ? "text-foreground/80" : "text-faint-foreground"}`}
           >
-            Change it?
-          </button>
-        )}
-        <span className="shrink-0 text-[12px] text-faint-foreground tabular-nums">
-          {age(item.createdAt)}
+            <span className={`mr-1.5 font-mono text-[10.5px] tracking-wide uppercase ${color}`}>
+              {kindNames[item.kind]}
+            </span>
+            {question && waiting ? question.question : subject}
+          </span>
         </span>
-      </div>
-      {question && changing && (
-        <div className="pr-2 pb-1 pl-7.5">
-          <AnswerForm
-            label="Change"
-            question={question.question}
-            onAnswer={(text) => onAnswer(question, text)}
-            onCancel={() => setChanging(false)}
-          />
+      </button>
+      {open && (
+        <div className="pr-3 pb-3 pl-[3.75rem]">
+          {question && waiting && (
+            <>
+              {question.assumption && (
+                <p className="text-[12.5px] text-muted-foreground">
+                  Going with <span className="text-foreground">{question.assumption}</span> until
+                  you say otherwise.
+                </p>
+              )}
+              <AnswerForm
+                label="Answer"
+                question={question.question}
+                keep={question.assumption || undefined}
+                onAnswer={(text) => onAnswer(question, text)}
+              />
+            </>
+          )}
+          {item.kind === "decided" && question && changing && (
+            <AnswerForm
+              label="Change"
+              question={question.question}
+              onAnswer={(text) => onAnswer(question, text)}
+              onCancel={() => setChanging(false)}
+            />
+          )}
+          <div className="mt-2 flex items-center gap-1.5">
+            <button type="button" onClick={onOpenChat} className={outlineButton}>
+              Open chat
+            </button>
+            {item.kind === "decided" && question && !changing && (
+              <button type="button" onClick={() => setChanging(true)} className={quietButton}>
+                Change it
+              </button>
+            )}
+          </div>
         </div>
       )}
     </li>
