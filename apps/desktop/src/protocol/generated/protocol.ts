@@ -2812,7 +2812,8 @@ export type Thread = {
 	 */
 	id: RunId,
 	/**
-	 * Its repo entry: the scratch entry for a thread with no repo.
+	 * Its repo entry: the scratch entry for a thread with no repo. A Project's child started with
+	 * `thread/start`'s `project` has the Project's id here instead (0042).
 	 */
 	repo: RepoId,
 	/**
@@ -3407,6 +3408,15 @@ export type ThreadStartParams = {
 	 * of its own.
 	 */
 	repo?: RepoId,
+	/**
+	 * Starts a child of this Project instead (0042), behind `projectTasks`: it runs in the
+	 * Project's mode with `approvals`, in a new worktree cut from the Project's integration branch,
+	 * and its first message is the child's header, then `prompt`. Its parent is the Project's
+	 * current coordinator, which a batched wake-up tells of the start; with no coordinator yet it
+	 * has none. Not with `repo`, `parent`, `checkout`, `base`, or `checkoutRef`, which the Project
+	 * decides.
+	 */
+	project?: ProjectId,
 	/**
 	 * The run that launches it, recorded as its parent (0041). It must exist, or the start fails
 	 * with `runNotFound`. Behind `threadLineage`.

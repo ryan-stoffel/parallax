@@ -50,6 +50,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("projectDelete".to_owned(), serde_json::Map::new()),
             ("projectEdit".to_owned(), serde_json::Map::new()),
             ("projectPermission".to_owned(), serde_json::Map::new()),
+            ("projectTasks".to_owned(), serde_json::Map::new()),
             ("providers".to_owned(), serde_json::Map::new()),
             (
                 "promptImages".to_owned(),

@@ -48,6 +48,7 @@ async fn caller(client: &mut Conn, repos: &TempDir) -> (RunId, RepoId) {
         .call::<ThreadStart>(ThreadStartParams {
             run_id: RunId::generate(),
             repo: Some(repo.id),
+            project: None,
             parent: None,
             notify: None,
             title: None,

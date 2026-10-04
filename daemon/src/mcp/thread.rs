@@ -950,6 +950,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
         .call::<ThreadStart>(ThreadStartParams {
             run_id: RunId::generate(),
             repo,
+            project: None,
             parent: Some(binding.run),
             notify,
             title,
