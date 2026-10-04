@@ -17,7 +17,7 @@
 //! `thread_list` lists its Project's runs, each once.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use parallax_protocol::methods::{
@@ -138,10 +138,10 @@ const POLL: Duration = Duration::from_millis(500);
 const MAX_AGENT_WAIT: Duration = Duration::from_mins(1);
 
 /// What one server is bound to.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Binding {
-    /// plxd's socket.
-    pub socket: PathBuf,
+    /// The client of plxd every tool call shares.
+    pub plxd: Plxd,
     /// The calling thread's run.
     pub run: RunId,
 }
@@ -168,16 +168,15 @@ pub async fn run(
     input: impl AsyncRead + Unpin,
     output: impl AsyncWrite + Unpin,
 ) -> Result<(), String> {
-    let mut plxd = Plxd::open(&binding.socket).await?;
-    let caller = find_run(&mut plxd, binding.run).await?;
+    let plxd = &binding.plxd;
+    let caller = find_run(plxd, binding.run).await?;
     let projects = plxd.call::<ProjectList>(ProjectListParams {}).await?;
     let in_project = projects
         .projects
         .iter()
         .find(|project| project.id == caller.project);
     let coordinator = in_project.is_some() && caller.policy == AgentPolicy::NoWrite;
-    let memory = super::memory::Memory::of(&mut plxd, &caller, in_project, coordinator).await?;
-    drop(plxd);
+    let memory = super::memory::Memory::of(plxd, &caller, in_project, coordinator).await?;
     let server = Server {
         binding: binding.clone(),
         project: in_project.map(|project| project.id),
@@ -577,7 +576,7 @@ struct PrArgs {
 /// is listed twice.
 async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     let caller = server.binding.run;
-    let mut plxd = Plxd::open(&server.binding.socket).await?;
+    let plxd = &server.binding.plxd;
     let mut listed = Vec::new();
     let mut in_project = HashSet::new();
     if let Some(project) = server.project {
@@ -600,7 +599,7 @@ async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     threads.retain(|thread| {
         (args.include_archived || !thread.archived) && !in_project.contains(&thread.id)
     });
-    listed.extend(described(&mut plxd, &threads, caller).await?);
+    listed.extend(described(plxd, &threads, caller).await?);
     Ok(pretty(&json!({"threads": listed})))
 }
 
@@ -611,17 +610,17 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
         "thread_list" => list(server, parse(arguments)?).await,
         "thread_read" => {
             let ReadArgs { run_id, after } = parse(arguments)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            find_run(&mut plxd, run_id).await?;
-            read(&mut plxd, run_id, after).await
+            let plxd = &binding.plxd;
+            find_run(plxd, run_id).await?;
+            read(plxd, run_id, after).await
         }
         "thread_search" => {
             let SearchArgs { query, limit } = parse(arguments)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
+            let plxd = &binding.plxd;
             let found = plxd
                 .call::<ThreadSearch>(ThreadSearchParams { query, limit })
                 .await?;
-            let threads = described(&mut plxd, &found.threads, caller).await?;
+            let threads = described(plxd, &found.threads, caller).await?;
             Ok(pretty(&json!({"threads": threads})))
         }
         "thread_launch" if server.coordinator => launch_child(server, parse(arguments)?).await,
@@ -635,12 +634,12 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
             } = parse(arguments)?;
             not_yourself(caller, run_id, "wait on")?;
             let timeout = timeout_seconds.map_or(DEFAULT_WAIT, Duration::from_secs);
-            wait(&binding.socket, run_id, timeout.min(MAX_WAIT), caller).await
+            wait(&binding.plxd, run_id, timeout.min(MAX_WAIT), caller).await
         }
         "thread_interrupt" => {
             let TargetArgs { run_id } = parse(arguments)?;
             not_yourself(caller, run_id, "interrupt")?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
+            let plxd = &binding.plxd;
             let run = plxd
                 .call::<AgentCancel>(AgentCancelParams {
                     run_id,
@@ -657,7 +656,7 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
                 run_id: run_id.unwrap_or(caller),
                 url,
             };
-            let mut plxd = Plxd::open(&binding.socket).await?;
+            let plxd = &binding.plxd;
             let run = if name == "pr_link" {
                 plxd.call::<PrLink>(params).await?.run
             } else {
@@ -699,7 +698,7 @@ async fn memory_tool(server: &Server, name: &str, arguments: Value) -> Result<St
     let memory = server.memory.as_ref().ok_or("your thread has no memory")?;
     let binding = &server.binding;
     memory
-        .call(&binding.socket, binding.run, name, arguments)
+        .call(&binding.plxd, binding.run, name, arguments)
         .await
 }
 
@@ -710,7 +709,7 @@ async fn context_tool(
     name: &str,
     arguments: Value,
 ) -> Result<String, String> {
-    let mut plxd = Plxd::open(&server.binding.socket).await?;
+    let plxd = &server.binding.plxd;
     if name == "read_context" {
         let ReadContextArgs { path } = parse(arguments)?;
         let Some(path) = path else {
@@ -750,11 +749,7 @@ async fn context_tool(
 }
 
 /// Each of `threads` with its run, in their order.
-async fn described(
-    plxd: &mut Plxd,
-    threads: &[Thread],
-    caller: RunId,
-) -> Result<Vec<Value>, String> {
+async fn described(plxd: &Plxd, threads: &[Thread], caller: RunId) -> Result<Vec<Value>, String> {
     let (listed, runs) = host(plxd).await?;
     Ok(threads
         .iter()
@@ -780,7 +775,7 @@ fn running(run: &AgentRun) -> bool {
 }
 
 /// Every thread and repo entry, and every run on the host.
-async fn host(plxd: &mut Plxd) -> Result<(ThreadListResult, Vec<AgentRun>), String> {
+async fn host(plxd: &Plxd) -> Result<(ThreadListResult, Vec<AgentRun>), String> {
     let listed = plxd.call::<ThreadList>(ThreadListParams {}).await?;
     let runs = plxd
         .call::<AgentList>(AgentListParams { project: None })
@@ -791,8 +786,8 @@ async fn host(plxd: &mut Plxd) -> Result<(ThreadListResult, Vec<AgentRun>), Stri
 
 /// The run `run_id`, a thread's or any other on the host: read alone by an `agent/wait` that
 /// doesn't wait, or found in every run on a plxd without `agent/wait`.
-async fn find_run(plxd: &mut Plxd, run_id: RunId) -> Result<AgentRun, String> {
-    if plxd.agent_wait {
+async fn find_run(plxd: &Plxd, run_id: RunId) -> Result<AgentRun, String> {
+    if plxd.agent_wait().await? {
         return agent_wait(plxd, run_id, Duration::ZERO).await?;
     }
     plxd.call::<AgentList>(AgentListParams { project: None })
@@ -806,7 +801,7 @@ async fn find_run(plxd: &mut Plxd, run_id: RunId) -> Result<AgentRun, String> {
 /// `run_id` once it is idle, or as it stands after `timeout`, from `agent/wait`. The outer `Err`
 /// is the connection failing first, the inner one plxd's error.
 async fn agent_wait(
-    plxd: &mut Plxd,
+    plxd: &Plxd,
     run_id: RunId,
     timeout: Duration,
 ) -> Result<Result<AgentRun, String>, String> {
@@ -873,7 +868,7 @@ fn describe(run: &AgentRun, thread: Option<&Thread>, repos: &[Repo], caller: Run
 }
 
 /// One page of `run_id`'s transcript after event `after`, rendered for the model.
-async fn read(plxd: &mut Plxd, run_id: RunId, after: u64) -> Result<String, String> {
+async fn read(plxd: &Plxd, run_id: RunId, after: u64) -> Result<String, String> {
     let mut page = String::new();
     let mut render = Render::default();
     let mut cursor = after;
@@ -1017,8 +1012,8 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
     } = args;
     check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
     let account = account_choice(backend, account)?;
-    let mut plxd = Plxd::open(&binding.socket).await?;
-    let (listed, runs) = host(&mut plxd).await?;
+    let plxd = &binding.plxd;
+    let (listed, runs) = host(plxd).await?;
     let caller = runs
         .iter()
         .find(|run| run.id == binding.run)
@@ -1032,7 +1027,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
         .filter(|repo| !repo.scratch)
         .map(|repo| repo.id);
     let repo = match repo {
-        Some(repo) => Some(resolve_repo(&mut plxd, &listed.repos, &repo).await?),
+        Some(repo) => Some(resolve_repo(plxd, &listed.repos, &repo).await?),
         None => own_repo,
     };
     let workspace = workspace.unwrap_or(if repo.is_some() {
@@ -1090,7 +1085,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
             checkout_ref: branch,
         })
         .await?;
-    let (listed, _) = host(&mut plxd).await?;
+    let (listed, _) = host(plxd).await?;
     Ok(pretty(&describe(
         &started.run,
         Some(&started.thread),
@@ -1111,11 +1106,11 @@ async fn send(binding: &Binding, args: SendArgs) -> Result<String, String> {
     } = args;
     not_yourself(caller, run_id, "send a message to")?;
     check_text("text", &text, MAX_TEXT_BYTES)?;
-    let mut plxd = Plxd::open(&binding.socket).await?;
+    let plxd = &binding.plxd;
     // plxd resumes an idle run with a steer, as with any message, so refuse it here.
     // ponytail: the target can still end between this check and the send, and then resumes with
     // the message as an ordinary one.
-    if steer && !running(&find_run(&mut plxd, run_id).await?) {
+    if steer && !running(&find_run(plxd, run_id).await?) {
         return Err(format!(
             "thread {run_id} isn't running a turn, so there is nothing to steer; send without \
              steer to start its next turn"
@@ -1154,8 +1149,8 @@ async fn fork(binding: &Binding, args: ForkArgs) -> Result<String, String> {
         model,
     } = args;
     let account = account_choice(backend, account)?;
-    let mut plxd = Plxd::open(&binding.socket).await?;
-    let (_, runs) = host(&mut plxd).await?;
+    let plxd = &binding.plxd;
+    let (_, runs) = host(plxd).await?;
     let find = |id: RunId| runs.iter().find(|run| run.id == id);
     let caller = find(binding.run).ok_or("your thread is no longer on this host")?;
     let original = find(run_id).ok_or_else(|| format!("no thread has run id {run_id}"))?;
@@ -1170,7 +1165,7 @@ async fn fork(binding: &Binding, args: ForkArgs) -> Result<String, String> {
             parent: Some(binding.run),
         })
         .await?;
-    let (listed, _) = host(&mut plxd).await?;
+    let (listed, _) = host(plxd).await?;
     Ok(pretty(&describe(
         &forked.run,
         Some(&forked.thread),
@@ -1234,7 +1229,7 @@ async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, Strin
     let project = server.project.ok_or("your thread isn't in a Project")?;
     let thread = CoordinatorThreadId::try_from(Uuid::from(caller))
         .map_err(|_| format!("run {caller} can't be a coordinator thread"))?;
-    let mut plxd = Plxd::open(&server.binding.socket).await?;
+    let plxd = &server.binding.plxd;
     let run = plxd
         .call::<AgentStart>(AgentStartParams {
             run_id: RunId::generate(),
@@ -1296,7 +1291,7 @@ fn reach(mode: AgentPermission) -> Option<u8> {
 
 /// The repo entry `repo` names, by id or by path, registering a repository on the host that has
 /// none yet, as adding it in the app does.
-async fn resolve_repo(plxd: &mut Plxd, repos: &[Repo], repo: &str) -> Result<RepoId, String> {
+async fn resolve_repo(plxd: &Plxd, repos: &[Repo], repo: &str) -> Result<RepoId, String> {
     if let Some(found) = repos
         .iter()
         .find(|entry| !entry.scratch && entry.id.to_string() == repo)
@@ -1326,43 +1321,40 @@ async fn resolve_repo(plxd: &mut Plxd, repos: &[Repo], repo: &str) -> Result<Rep
 }
 
 /// `thread_wait`: waits until `run_id` is idle or `timeout` passes, in `agent/wait` calls of at
-/// most [`MAX_AGENT_WAIT`], or on a plxd without `agent/wait` by checking it every [`POLL`]. Each
-/// call is on a new connection. A connection that can't be opened, or an `agent/wait` whose
-/// connection fails, is tried again after [`POLL`], so a plxd restart meanwhile doesn't end the
-/// wait. Without `agent/wait`, a connection that fails during a check ends it.
+/// most [`MAX_AGENT_WAIT`], or on a plxd without `agent/wait` by checking it every [`POLL`]. A
+/// connection that can't be opened, or an `agent/wait` whose connection fails, is tried again
+/// after [`POLL`] on a new connection, so a plxd restart meanwhile doesn't end the wait. Without
+/// `agent/wait`, a connection that fails during a check ends it.
 async fn wait(
-    socket: &Path,
+    plxd: &Plxd,
     run_id: RunId,
     timeout: Duration,
     caller: RunId,
 ) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     loop {
-        let failed = match Plxd::open(socket).await {
-            Ok(mut plxd) => {
-                let checked = if plxd.agent_wait {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    agent_wait(&mut plxd, run_id, left.min(MAX_AGENT_WAIT)).await
-                } else {
-                    Ok(find_run(&mut plxd, run_id).await)
-                };
-                match checked {
-                    Ok(run) => {
-                        let run = run?;
-                        let idle = !running(&run);
-                        if idle || Instant::now() >= deadline {
-                            let output = last_output(&mut plxd, run_id).await?;
-                            return Ok(pretty(&json!({
-                                "idle": idle,
-                                "timedOut": !idle,
-                                "thread": describe(&run, None, &[], caller),
-                                "lastOutput": output.map(|text| tail(&text, LAST_OUTPUT_BYTES)),
-                            })));
-                        }
-                        None
-                    }
-                    Err(error) => Some(error),
+        let checked = match plxd.agent_wait().await {
+            Ok(true) => {
+                let left = deadline.saturating_duration_since(Instant::now());
+                agent_wait(plxd, run_id, left.min(MAX_AGENT_WAIT)).await
+            }
+            Ok(false) => Ok(find_run(plxd, run_id).await),
+            Err(error) => Err(error),
+        };
+        let failed = match checked {
+            Ok(run) => {
+                let run = run?;
+                let idle = !running(&run);
+                if idle || Instant::now() >= deadline {
+                    let output = last_output(plxd, run_id).await?;
+                    return Ok(pretty(&json!({
+                        "idle": idle,
+                        "timedOut": !idle,
+                        "thread": describe(&run, None, &[], caller),
+                        "lastOutput": output.map(|text| tail(&text, LAST_OUTPUT_BYTES)),
+                    })));
                 }
+                None
             }
             Err(error) => Some(error),
         };
@@ -1388,7 +1380,7 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
         return Err("give a title, settled, or archived".to_owned());
     }
     let run_id = run_id.unwrap_or(binding.run);
-    let mut plxd = Plxd::open(&binding.socket).await?;
+    let plxd = &binding.plxd;
     let mut thread = None;
     if title.is_some() || settled.is_some() {
         let updated = plxd

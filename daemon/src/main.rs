@@ -189,7 +189,7 @@ fn mcp(args: &McpArgs) -> ! {
     };
     let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
     let binding = plxd::mcp::thread::Binding {
-        socket,
+        plxd: plxd::mcp::Plxd::new(socket),
         run: args.thread,
     };
     let served = runtime.block_on(plxd::mcp::thread::run(&binding, stdin, stdout));

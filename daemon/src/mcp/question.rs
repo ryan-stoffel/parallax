@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::thread::Binding;
-use super::{Plxd, parse, pretty};
+use super::{parse, pretty};
 
 /// What a Project's child gets.
 pub const CHILD_TOOLS: &[&str] = &["ask"];
@@ -104,7 +104,7 @@ struct EscalateArgs {
 /// model sees.
 pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<String, String> {
     let caller: RunId = binding.run;
-    let mut plxd = Plxd::open(&binding.socket).await?;
+    let plxd = &binding.plxd;
     match name {
         "ask" => {
             let AskArgs {
