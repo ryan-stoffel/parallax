@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
+import type { InboxItem } from "../protocol/generated/protocol";
 import { attentionOf } from "./attention";
 import type { HostThreads } from "./Sidebar";
 import { asksOf } from "./threads";
@@ -35,11 +36,7 @@ export function useSnoozeAlarms(
         const title = view.state.titles[t.id] ?? "Thread";
         const ring = (body: string) => {
           notified.current.add(key);
-          const note = new Notification(title, { body });
-          note.onclick = () => {
-            window.focus();
-            open.current(host.id, t.id);
-          };
+          notify(title, body, () => open.current(host.id, t.id));
         };
         const asks = asksOf(view.state, t.id);
         if (attentionOf(t, view.state.runs[t.id], asks) === "needsYou")
@@ -48,4 +45,36 @@ export function useSnoozeAlarms(
       }
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [hosts]);
+}
+
+/**
+ * A system notification for a Project's new Needs you inbox item (0043), as a snooze's (0033).
+ * Clicking it opens the Project, whose coordinator chat shows the item. Returns what each host's
+ * thread list calls with the item (`useThreads`'s `onNeedsYou`).
+ */
+export function useNeedsYouAlarm(
+  hosts: HostThreads[],
+  onOpen: (hostId: string, projectId: string) => void,
+) {
+  const latest = useRef({ hosts, onOpen });
+  useEffect(() => {
+    latest.current = { hosts, onOpen };
+  });
+  return useCallback((hostId: string, projectId: string, item: InboxItem) => {
+    const project = latest.current.hosts
+      .find((h) => h.host.id === hostId)
+      ?.view.state.projects.find((p) => p.id === projectId);
+    notify(project?.name ?? "Project", `Needs you: ${item.text}`, () =>
+      latest.current.onOpen(hostId, projectId),
+    );
+  }, []);
+}
+
+/** Shows a system notification. Clicking it brings the window forward and calls `onClick`. */
+function notify(title: string, body: string, onClick: () => void) {
+  const note = new Notification(title, { body });
+  note.onclick = () => {
+    window.focus();
+    onClick();
+  };
 }

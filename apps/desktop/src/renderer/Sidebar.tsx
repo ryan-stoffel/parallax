@@ -42,6 +42,7 @@ import {
   useState,
   type ComponentType,
   type ReactNode,
+  type RefObject,
   type SVGProps,
   type ToggleEvent,
 } from "react";
@@ -69,7 +70,12 @@ import {
   type Attention,
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
-import { ProjectPermissionChoice } from "./ProjectPermission";
+import {
+  AutonomyChoice,
+  autonomyOf,
+  ProjectPermissionChoice,
+  type Autonomy,
+} from "./ProjectPermission";
 import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
@@ -488,6 +494,7 @@ export function ThreadList({
           badge={badge}
           editable={item.view.editable}
           moded={item.view.moded}
+          autonomous={item.view.autonomous}
           iconImageBytes={item.view.iconImageBytes}
           onOpen={() => openItem(item)}
           onUpdate={async (change) =>
@@ -1020,7 +1027,8 @@ function Footer({
  * are several. Where its host's plxd can edit or delete Projects, hovering or focusing it swaps the
  * status for its actions, which also open by right-clicking the row: Rename, which edits the name
  * in place, Change icon, which opens the icon picker under the row's icon, Permissions…, which
- * changes its permission mode with Create Project's disclaimer (0042), and Delete….
+ * changes its permission mode with Create Project's disclaimer (0042), Autonomy…, which sets who
+ * answers its children's questions (0043), and Delete….
  */
 function ProjectRow({
   project,
@@ -1031,6 +1039,7 @@ function ProjectRow({
   badge,
   editable,
   moded,
+  autonomous,
   iconImageBytes,
   onOpen,
   onUpdate,
@@ -1047,6 +1056,8 @@ function ProjectRow({
   editable: boolean;
   /** Whether its host's plxd keeps its permission mode (`projectPermission`). */
   moded: boolean;
+  /** Whether its host's plxd keeps its autonomy (`autonomy`, 0043). */
+  autonomous: boolean;
   /** Its host's cap on an icon image, where its plxd keeps them. */
   iconImageBytes?: number;
   onOpen: () => void;
@@ -1063,8 +1074,11 @@ function ProjectRow({
   const iconSpot = useRef<HTMLSpanElement>(null);
   const picker = useRef<HTMLDivElement>(null);
   const permissions = useRef<HTMLDialogElement>(null);
+  const autonomyDialog = useRef<HTMLDialogElement>(null);
   // The mode picked in Permissions…, which opens on the Project's own.
   const [mode, setMode] = useState<ProjectPermission>("auto");
+  // The level picked in Autonomy…, which opens on the Project's own.
+  const [autonomy, setAutonomy] = useState<Autonomy>("routine");
   // The name the field opened with, while Rename is open.
   const [renaming, setRenaming] = useState<string>();
   // The new name, shown until plxd answers.
@@ -1102,7 +1116,7 @@ function ProjectRow({
   };
 
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
-  const actionable = editable || moded || !!onDelete;
+  const actionable = editable || moded || autonomous || !!onDelete;
   const tooltip =
     [runs.length > 0 && `${runs.length} ${runs.length === 1 ? "agent" : "agents"}`, host?.name]
       .filter(Boolean)
@@ -1228,6 +1242,19 @@ function ProjectRow({
                 Permissions…
               </button>
             )}
+            {autonomous && (
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(() => {
+                  setAutonomy(autonomyOf(project));
+                  autonomyDialog.current?.showModal();
+                })}
+              >
+                Autonomy…
+              </button>
+            )}
             {onDelete && (
               <button
                 type="button"
@@ -1252,40 +1279,72 @@ function ProjectRow({
         />
       )}
       {moded && (
-        <dialog
+        <SettingDialog
           ref={permissions}
-          aria-label={`${project.name} permissions`}
-          className="m-auto w-[26rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+          label={`${project.name} permissions`}
+          onSave={() => void onUpdate({ permission: mode })}
         >
-          {/* Save is the submit button, so Enter on a radio saves. */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              permissions.current?.close();
-              void onUpdate({ permission: mode });
-            }}
-            className="px-5 pt-4 pb-4"
-          >
-            <ProjectPermissionChoice value={mode} onChange={setMode} />
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => permissions.current?.close()}
-                className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
-              >
-                Save
-              </button>
-            </div>
-          </form>
-        </dialog>
+          <ProjectPermissionChoice value={mode} onChange={setMode} />
+        </SettingDialog>
+      )}
+      {autonomous && (
+        <SettingDialog
+          ref={autonomyDialog}
+          label={`${project.name} autonomy`}
+          onSave={() => void onUpdate({ autonomy })}
+        >
+          <AutonomyChoice value={autonomy} onChange={setAutonomy} />
+        </SettingDialog>
       )}
     </li>
+  );
+}
+
+/** A Project setting's dialog: its choice, then Cancel and Save, which closes it and saves. */
+function SettingDialog({
+  ref,
+  label,
+  onSave,
+  children,
+}: {
+  ref: RefObject<HTMLDialogElement | null>;
+  label: string;
+  onSave: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <dialog
+      ref={ref}
+      aria-label={label}
+      className="m-auto w-[26rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+    >
+      {/* Save is the submit button, so Enter on a radio saves. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          ref.current?.close();
+          onSave();
+        }}
+        className="px-5 pt-4 pb-4"
+      >
+        {children}
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => ref.current?.close()}
+            className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
+          >
+            Save
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 

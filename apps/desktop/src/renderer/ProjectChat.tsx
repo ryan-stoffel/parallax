@@ -8,6 +8,7 @@ import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { imageCaps } from "./images";
+import { Inbox, useInbox } from "./Inbox";
 import type { RunOptions } from "./models";
 import { accountOptions, defaultBackend } from "./NewThread";
 import { ProjectIcon } from "./Sidebar";
@@ -17,7 +18,8 @@ import { uuidv7 } from "./uuidv7";
 /**
  * A Project's coordinator chat (0024). Until its first message the Project introduces itself, and
  * sending starts the coordinator. From then on it is the coordinator run's `AgentChat`, so replies,
- * Stop, and the transcript work as a thread's do. Key it by host and Project.
+ * Stop, and the transcript work as a thread's do. Either way the Project's unread inbox (0043) sits
+ * at the top, on a plxd with `inbox`. Key it by host and Project.
  */
 export function ProjectChat({
   hostId,
@@ -25,6 +27,7 @@ export function ProjectChat({
   prompt,
   startCoordinator,
   others,
+  onOpenRun,
 }: {
   hostId: string;
   project: Project;
@@ -33,9 +36,19 @@ export function ProjectChat({
   startCoordinator: ThreadsView["startCoordinator"];
   /** Permission requests the Project's subagents wait on, pinned over the composer (PLX-196). */
   others?: readonly Asked[];
+  /** Opens a run's chat, as an inbox item links to its child. */
+  onOpenRun: (runId: string) => void;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
+  const answerable = connected && "questions" in connection.capabilities;
+  const inboxView = useInbox(
+    hostId,
+    project.id,
+    connected && "inbox" in connection.capabilities,
+    answerable,
+  );
+  const inbox = <Inbox view={inboxView} answerable={answerable} onOpen={onOpenRun} />;
   // The first message's run id, reused when it's sent again after failing (0007).
   const [runId] = useState(uuidv7);
   const [starting, setStarting] = useState(false);
@@ -103,19 +116,22 @@ export function ProjectChat({
 
   if (project.coordinator)
     return (
-      <AgentChat
-        key={project.coordinator}
-        hostId={hostId}
-        runId={project.coordinator}
-        prompt={prompt}
-        going={started === project.coordinator}
-        notice={notice}
-        tab={tab}
-        // A new coordinator replaces one that can't take messages (0024).
-        startOver={(text, options, images) => start(uuidv7(), text, options, images)}
-        others={others}
-        projectMode={project.permission}
-      />
+      <>
+        {inbox}
+        <AgentChat
+          key={project.coordinator}
+          hostId={hostId}
+          runId={project.coordinator}
+          prompt={prompt}
+          going={started === project.coordinator}
+          notice={notice}
+          tab={tab}
+          // A new coordinator replaces one that can't take messages (0024).
+          startOver={(text, options, images) => start(uuidv7(), text, options, images)}
+          others={others}
+          projectMode={project.permission}
+        />
+      </>
     );
 
   const send = async (text: string, options: RunOptions, images: PromptImage[]) => {
@@ -134,6 +150,7 @@ export function ProjectChat({
 
   return (
     <>
+      {inbox}
       {/* It gives way first in a short window, so a pinned card and the composer keep their room,
           and whole: once it doesn't fit, it wraps into a second column, out of view, rather than
           show cut in two (PLX-259). */}
