@@ -97,6 +97,9 @@ pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__plxd__ask",
     "mcp__plxd__answer",
     "mcp__plxd__escalate",
+    "mcp__plxd__memory_read",
+    "mcp__plxd__memory_propose",
+    "mcp__plxd__memory_write",
 ];
 
 /// About how much transcript one `thread_read` page carries, in bytes. A page ends at an event,
@@ -138,6 +141,8 @@ struct Server {
     project: Option<ProjectId>,
     /// The caller is its Project's coordinator (0024), whose children start in the Project.
     coordinator: bool,
+    /// The memory the caller reaches, if any (0044).
+    memory: Option<super::memory::Memory>,
 }
 
 /// Checks that the bound run exists, then serves MCP on `input` and `output` until `input` ends.
@@ -154,40 +159,53 @@ pub async fn run(
     let mut plxd = Plxd::open(&binding.socket).await?;
     let caller = find_run(&mut plxd, binding.run).await?;
     let projects = plxd.call::<ProjectList>(ProjectListParams {}).await?;
-    drop(plxd);
-    let project = projects
+    let in_project = projects
         .projects
         .iter()
-        .any(|project| project.id == caller.project)
-        .then_some(caller.project);
+        .find(|project| project.id == caller.project);
+    let coordinator = in_project.is_some() && caller.policy == AgentPolicy::NoWrite;
+    let memory = super::memory::Memory::of(&mut plxd, &caller, in_project, coordinator).await?;
+    drop(plxd);
     let server = Server {
         binding: binding.clone(),
-        project,
-        coordinator: project.is_some() && caller.policy == AgentPolicy::NoWrite,
+        project: in_project.map(|project| project.id),
+        coordinator,
+        memory,
     };
     super::serve(&server, input, output).await
 }
 
 impl Tools for Server {
     fn names(&self) -> Vec<&'static str> {
-        if self.project.is_some() {
+        let tools = if self.project.is_some() {
             [PROJECT_TOOLS, question::tools(self.coordinator)].concat()
         } else {
             TOOLS.to_vec()
-        }
+        };
+        let memory = self
+            .memory
+            .as_ref()
+            .map_or(&[][..], |memory| memory.names());
+        [&tools[..], memory].concat()
     }
 
     fn definitions(&self) -> Value {
         let mut tools = definitions(self.project.is_some());
-        if self.project.is_some()
-            && let Some(list) = tools.as_array_mut()
-        {
-            list.extend(question::definitions(self.coordinator));
+        if let Some(list) = tools.as_array_mut() {
+            if self.project.is_some() {
+                list.extend(question::definitions(self.coordinator));
+            }
+            if let Some(memory) = &self.memory {
+                list.extend(memory.definitions());
+            }
         }
         tools
     }
 
     async fn call(&self, name: &str, arguments: Value) -> Result<String, String> {
+        if name.starts_with("memory_") {
+            return memory_tool(self, name, arguments).await;
+        }
         call_tool(self, name, arguments).await
     }
 }
@@ -629,6 +647,15 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
         "ask" | "answer" | "escalate" => question::call(binding, name, arguments).await,
         other => Err(format!("no tool is named {other:?}")),
     }
+}
+
+/// A memory tool, which only a caller with memory is offered (0044).
+async fn memory_tool(server: &Server, name: &str, arguments: Value) -> Result<String, String> {
+    let memory = server.memory.as_ref().ok_or("your thread has no memory")?;
+    let binding = &server.binding;
+    memory
+        .call(&binding.socket, binding.run, name, arguments)
+        .await
 }
 
 /// `read_context` and `write_context`, on the caller's Project's shared context.
@@ -1201,6 +1228,7 @@ mod tests {
             PROJECT_TOOLS,
             question::CHILD_TOOLS,
             question::COORDINATOR_TOOLS,
+            crate::mcp::memory::TOOLS,
         ]
         .concat()
         .iter()
@@ -1234,7 +1262,7 @@ mod tests {
         for name in instructions.split('`').skip(1).step_by(2) {
             if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
                 assert!(
-                    PROJECT_TOOLS.contains(&name),
+                    PROJECT_TOOLS.contains(&name) || crate::mcp::memory::TOOLS.contains(&name),
                     "coordinator.md names `{name}`, not a tool"
                 );
             }

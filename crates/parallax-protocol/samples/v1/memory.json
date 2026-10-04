@@ -1,0 +1,128 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "memory/write",
+    "params": {
+      "scope": { "kind": "project", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" },
+      "path": "memory/decision/use-vitest.md",
+      "content": "We moved off Jest.\n",
+      "title": "Use Vitest, not Jest"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "file": {
+        "path": "memory/decision/use-vitest.md",
+        "size": 116,
+        "modifiedAt": "2026-10-04T12:00:00Z",
+        "kind": "decision",
+        "title": "Use Vitest, not Jest",
+        "source": "user",
+        "date": "2026-10-04",
+        "writer": "user"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "memory/list",
+    "params": { "scope": { "kind": "you" } }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "files": [
+        { "path": "brief.md", "size": 40, "modifiedAt": "2026-10-04T12:00:00Z" },
+        {
+          "path": "memory/preference/tabs.md",
+          "size": 90,
+          "modifiedAt": "2026-10-04T12:01:00Z",
+          "kind": "preference",
+          "title": "Indent with tabs",
+          "source": "user",
+          "date": "2026-10-04",
+          "writer": "user"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "memory/read",
+    "params": {
+      "scope": { "kind": "repo", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e2" },
+      "path": "knowledge/auth.md"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "file": { "path": "knowledge/auth.md", "size": 16, "modifiedAt": "2026-10-04T12:00:00Z" },
+      "content": "How auth works.\n"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "memory/delete",
+    "params": {
+      "scope": { "kind": "repo", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e2" },
+      "path": "proposals/node-22.md"
+    }
+  },
+  { "jsonrpc": "2.0", "id": 4, "result": {} },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "memory/propose",
+    "params": {
+      "from": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+      "scope": { "kind": "repo", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e2" },
+      "kind": "gotcha",
+      "title": "The dev server needs Node 22",
+      "content": "Older Node fails at startup."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "to": "user",
+      "file": {
+        "path": "proposals/the-dev-server-needs-node-22.md",
+        "size": 180,
+        "modifiedAt": "2026-10-04T12:00:00Z",
+        "kind": "gotcha",
+        "title": "The dev server needs Node 22",
+        "source": "thread 01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+        "date": "2026-10-04",
+        "writer": "thread 01a0f755-f200-74dd-8cfc-06d0b225c5e1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "memory/write",
+    "params": {
+      "scope": { "kind": "project", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" },
+      "path": "brief.md",
+      "content": "# Goal\n",
+      "from": "01a0f755-f200-74dd-8cfc-06d0b225c5e3"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {
+      "file": { "path": "brief.md", "size": 7, "modifiedAt": "2026-10-04T12:00:00Z" }
+    }
+  }
+]

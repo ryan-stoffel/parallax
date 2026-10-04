@@ -156,6 +156,8 @@ pub(crate) fn initialize(
 /// would silently ignore, queueing a steer.
 /// `questions` (PLX-402, 0043): `question/ask`, `question/answer`, `question/escalate`, and
 /// `question/list`.
+/// `memory` (PLX-405, 0044): `memory/list`, `memory/read`, `memory/write`, `memory/delete`, and
+/// `memory/propose`, and shared context paths in 0044's folders.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -183,6 +185,7 @@ fn capabilities_advertised() -> Capabilities {
         ("githubStatus".to_owned(), serde_json::Map::new()),
         ("inbox".to_owned(), serde_json::Map::new()),
         ("integrationBranch".to_owned(), serde_json::Map::new()),
+        ("memory".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectAutonomy".to_owned(), serde_json::Map::new()),

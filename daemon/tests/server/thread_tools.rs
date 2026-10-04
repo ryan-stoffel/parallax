@@ -118,7 +118,7 @@ async fn a_thread_launches_waits_on_reads_searches_and_messages_a_child() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, TOOLS);
+    assert_eq!(names, [TOOLS, &["memory_read", "memory_propose"]].concat());
 
     let child = mcp
         .ok(

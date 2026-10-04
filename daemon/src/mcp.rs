@@ -1,6 +1,6 @@
 //! `plxd mcp --thread <runId>`: a thread's Parallax tools, as an MCP server on stdio (decisions
-//! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads; this
-//! module is the server they share.
+//! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads and
+//! [`memory`]'s by the caller's role (0044); this module is the server they share.
 //!
 //! A Project's coordinator gets the same server as any thread (PLX-380): its 0019 tools, bound to
 //! one project, are gone.
@@ -31,6 +31,7 @@ use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 
 use crate::transport::{self, Stream};
 
+pub mod memory;
 pub mod question;
 pub mod thread;
 

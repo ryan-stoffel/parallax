@@ -55,9 +55,9 @@ fn handle(daemon: &Daemon, context_root: &Path, event: &Event) {
     }
 }
 
-/// The project and file name a changed path names, if it is exactly one file directly inside one
-/// project's context folder. Anything else (the project folder itself, something nested deeper,
-/// or a folder name that isn't a project id) is not a shared context file and is ignored.
+/// The project and path, joined with `/`, that a changed path names inside one project's context
+/// folder. Anything else (the project folder itself, or a folder name that isn't a project id,
+/// such as `you`) is ignored here; [`observe`] then checks the path as plxd's own calls do.
 fn relative_file(context_root: &Path, path: &Path) -> Option<(ProjectId, String)> {
     let relative = path.strip_prefix(context_root).ok()?;
     let mut components = relative.components();
@@ -65,13 +65,14 @@ fn relative_file(context_root: &Path, path: &Path) -> Option<(ProjectId, String)
         return None;
     };
     let project: ProjectId = project_name.to_str()?.parse().ok()?;
-    let Component::Normal(file_name) = components.next()? else {
-        return None;
-    };
-    if components.next().is_some() {
-        return None;
+    let mut parts = Vec::new();
+    for component in components {
+        let Component::Normal(part) = component else {
+            return None;
+        };
+        parts.push(part.to_str()?);
     }
-    Some((project, file_name.to_str()?.to_owned()))
+    (!parts.is_empty()).then(|| (project, parts.join("/")))
 }
 
 fn observe(daemon: &Daemon, context_root: &Path, path: &Path) {

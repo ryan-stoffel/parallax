@@ -12,7 +12,8 @@
 //!
 //! A restart keeps the count and a pause in the store (PLX-178). What was waiting, the runs the
 //! stop interrupted, and questions still open, [`catch_up`] rebuilds from the store when plxd
-//! starts.
+//! starts. A coordinator's wake-up also carries its children's memory proposals, which wait on
+//! disk ([`proposals`], 0044).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -21,8 +22,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentFailureKind, AgentOutcome, AgentRun, AgentStatus, ProjectAutonomy, QuestionId, RunId,
-    TurnId,
+    AgentFailureKind, AgentOutcome, AgentRun, AgentStatus, ProjectAutonomy, ProjectId, QuestionId,
+    RunId, TurnId,
 };
 use parallax_store::WakeState;
 use tokio::time::Instant;
@@ -72,15 +73,15 @@ impl Wakes {
             .map(|since| since + BATCH)
     }
 
-    /// The next wake-up turn's id and message, or `None` once the cap is reached. What is
-    /// waiting stays until [`Wakes::delivered`].
-    pub fn next(&mut self) -> Option<(TurnId, String)> {
+    /// The next wake-up turn's id and message, with `proposals` after what is waiting, or `None`
+    /// once the cap is reached. What is waiting stays until [`Wakes::delivered`].
+    pub fn next(&mut self, proposals: &[String]) -> Option<(TurnId, String)> {
         if self.state.in_a_row >= CAP {
             return None;
         }
         let turn = TurnId::generate();
         self.sent = Some(turn);
-        Some((turn, message(&self.waiting)))
+        Some((turn, message(&[&self.waiting[..], proposals].concat())))
     }
 
     /// The wake-up from [`Wakes::next`] reached the parent's CLI: it counts against the cap,
@@ -218,6 +219,36 @@ fn open_questions(
         ));
     }
     Ok(lines)
+}
+
+/// The memory proposals `project`'s children made since its coordinator's last wake-up (0044):
+/// each file's path and the lines the next wake-up shows for it. They wait on disk, in the
+/// Project's `proposals/`, so a restart or a new coordinator loses none, and they never bring a
+/// wake-up about themselves.
+pub(super) async fn proposals(daemon: &Daemon, project: ProjectId) -> Vec<(String, String)> {
+    let dir = daemon.data_dir.context_dir(project);
+    tokio::task::spawn_blocking(move || crate::context::memory::pending(&dir))
+        .await
+        .unwrap_or_default()
+}
+
+/// Removes the proposals at `paths` in `project`'s folder, once a wake-up delivered them.
+pub(super) async fn delivered_proposals(daemon: &Daemon, project: ProjectId, paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+    let dir = daemon.data_dir.context_dir(project);
+    let removed = tokio::task::spawn_blocking(move || {
+        for path in paths {
+            if let Err(error) = crate::context::delete_file(&dir, &path) {
+                warn!(%project, path, %error, "could not remove a delivered memory proposal");
+            }
+        }
+    })
+    .await;
+    if let Err(error) = removed {
+        warn!(%project, %error, "could not remove delivered memory proposals");
+    }
 }
 
 /// After a restart, hands each parent one summary of its notifying children that ended after its
@@ -403,7 +434,7 @@ pub(crate) fn one_line(text: &str, max: usize) -> String {
 /// A wake-up turn's message: the summaries, and what to do with them.
 fn message(summaries: &[String]) -> String {
     format!(
-        "Parallax, not the user: these threads ended, started, or asked.\n\n{}\n\nReview \
+        "Parallax, not the user: these threads ended, started, asked, or proposed memory.\n\n{}\n\nReview \
          them with thread_read, message them with thread_send or launch more if needed, and tell \
          the user where things stand.",
         summaries.join("\n")
@@ -429,7 +460,7 @@ mod tests {
             "the first one sets the time"
         );
 
-        let (turn, message) = wakes.next().unwrap();
+        let (turn, message) = wakes.next(&[]).unwrap();
         assert!(message.contains("- Run a\n- Run b"), "{message}");
         assert_eq!(wakes.due(), Some(first + BATCH), "kept until delivered");
         wakes.delivered();
@@ -444,11 +475,11 @@ mod tests {
         let now = Instant::now();
         for _ in 0..CAP {
             wakes.push("- Run".to_owned(), now);
-            assert!(wakes.next().is_some());
+            assert!(wakes.next(&[]).is_some());
             wakes.delivered();
         }
         wakes.push("- Run late".to_owned(), now);
-        assert!(wakes.next().is_none(), "one past the cap");
+        assert!(wakes.next(&[]).is_none(), "one past the cap");
         assert!(wakes.pause(), "which the actor pauses on, once");
         assert!(!wakes.pause());
         wakes.push("- Run later".to_owned(), now);
@@ -456,7 +487,7 @@ mod tests {
 
         wakes.attended();
         assert_eq!(wakes.due(), Some(now + BATCH), "what waited is due again");
-        let (_, message) = wakes.next().unwrap();
+        let (_, message) = wakes.next(&[]).unwrap();
         assert!(message.contains("late\n- Run later"), "{message}");
     }
 }

@@ -19,6 +19,7 @@ mod inbox;
 mod keys;
 mod lifecycle;
 mod mcp;
+mod memory;
 mod open_pr;
 mod projects;
 mod pull_requests;
