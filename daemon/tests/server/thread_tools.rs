@@ -2,6 +2,8 @@
 //! speaking MCP on stdio, against an in-process plxd whose threads run on the fake backend in a
 //! real git repository.
 
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parallax_protocol::methods::{AgentEvents, RepoAdd, ThreadList, ThreadStart};
@@ -11,8 +13,11 @@ use parallax_protocol::{
 };
 use plxd::backend::fake::Step;
 use plxd::mcp::thread::TOOLS;
+use plxd::paths::DataDir;
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::time::{Instant, sleep};
 
 use crate::agents::{Conn, Host, end_turn, fake, init, real_repo, text};
@@ -673,4 +678,85 @@ async fn wakes(client: &mut Conn, run: RunId) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// PLX-456: `thread_wait` waits in one `agent/wait` rather than polling plxd's every run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_wait_waits_in_agent_wait_without_listing_every_run() {
+    let host = Host::start(temp_dir(), fake(hang()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let proxy = temp_dir();
+    let methods = record_requests(proxy.path(), host.server.socket.clone());
+    let me = me.to_string();
+    let mut mcp = Mcp::spawn(mcp_command(proxy.path(), &["--thread", &me])).await;
+    let launch = json!({"prompt": "Wait here.", "backend": "fake", "workspace": "none"});
+    let child = id(&mcp.ok("thread_launch", launch).await);
+
+    methods.lock().unwrap().clear();
+    let waited = mcp
+        .ok("thread_wait", json!({"runId": child, "timeoutSeconds": 2}))
+        .await;
+    assert_eq!(waited["timedOut"], true, "{waited}");
+    assert_eq!(waited["thread"]["status"], "running");
+    assert_eq!(
+        *methods.lock().unwrap(),
+        ["initialize", "agent/wait", "agent/events"]
+    );
+    host.server.stop().await;
+}
+
+/// PLX-456: a plxd restart in the middle of `thread_wait`'s `agent/wait` doesn't end the wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_wait_outlasts_a_plxd_restart() {
+    let host = Host::start(temp_dir(), fake(hang()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch = json!({"prompt": "Wait here.", "backend": "fake", "workspace": "none"});
+    let child = id(&mcp.ok("thread_launch", launch).await);
+    let waiting = tokio::spawn(async move {
+        mcp.ok("thread_wait", json!({"runId": child, "timeoutSeconds": 8}))
+            .await
+    });
+    sleep(Duration::from_secs(1)).await;
+    drop(client);
+    let host = host.restart(fake(hang())).await;
+    let waited = waiting.await.unwrap();
+    assert_eq!(waited["idle"], true, "{waited}");
+    host.server.stop().await;
+}
+
+/// Serves a socket for the data folder `dir` that forwards each connection to `socket`, and
+/// returns the method of every request sent through it, in order.
+fn record_requests(dir: &Path, socket: PathBuf) -> Arc<Mutex<Vec<String>>> {
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let path = DataDir::new(dir).unwrap().socket_path().unwrap().path;
+    let listener = UnixListener::bind(path).unwrap();
+    let recorded = Arc::clone(&methods);
+    tokio::spawn(async move {
+        while let Ok((inbound, _)) = listener.accept().await {
+            let outbound = UnixStream::connect(&socket).await.unwrap();
+            let (from_client, mut to_client) = inbound.into_split();
+            let (mut from_plxd, mut to_plxd) = outbound.into_split();
+            tokio::spawn(async move { tokio::io::copy(&mut from_plxd, &mut to_client).await });
+            let recorded = Arc::clone(&recorded);
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(from_client).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    if let Some(method) = request["method"].as_str() {
+                        recorded.lock().unwrap().push(method.to_owned());
+                    }
+                    let line = format!("{line}\n");
+                    if to_plxd.write_all(line.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    methods
 }

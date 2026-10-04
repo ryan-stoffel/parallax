@@ -254,6 +254,8 @@ async fn last_output(plxd: &mut Plxd, run_id: RunId) -> Result<Option<String>, S
 struct Plxd {
     framed: Framed<Stream, FrameCodec>,
     next_id: i64,
+    /// plxd has `agent/wait` (`agentWait`, PLX-451).
+    agent_wait: bool,
 }
 
 /// Errors from plxd are its message: the model reads them, and nothing matches on them.
@@ -265,21 +267,34 @@ impl Plxd {
         let mut plxd = Self {
             framed: Framed::new(stream, FrameCodec::new()),
             next_id: 0,
+            agent_wait: false,
         };
-        plxd.call::<Initialize>(InitializeParams {
-            protocol: ProtocolRange::SUPPORTED,
-            client: ClientInfo {
-                name: "plxd mcp".to_owned(),
-                version: crate::version().to_owned(),
-                machine_id: None,
-            },
-            capabilities: Capabilities::default(),
-        })
-        .await?;
+        let initialized = plxd
+            .call::<Initialize>(InitializeParams {
+                protocol: ProtocolRange::SUPPORTED,
+                client: ClientInfo {
+                    name: "plxd mcp".to_owned(),
+                    version: crate::version().to_owned(),
+                    machine_id: None,
+                },
+                capabilities: Capabilities::default(),
+            })
+            .await?;
+        plxd.agent_wait = initialized.capabilities.0.contains_key("agentWait");
         Ok(plxd)
     }
 
     async fn call<M: RequestMethod>(&mut self, params: M::Params) -> Result<M::Result, String> {
+        self.request::<M>(params)
+            .await?
+            .map_err(|error| error.message)
+    }
+
+    /// Sends one request: plxd's answer, or `Err` when the connection fails first.
+    async fn request<M: RequestMethod>(
+        &mut self,
+        params: M::Params,
+    ) -> Result<Result<M::Result, ErrorObject>, String> {
         self.next_id += 1;
         let id = RequestId::Number(self.next_id);
         let lost =
@@ -297,7 +312,7 @@ impl Plxd {
                 .map_err(|error| lost(&error))?;
             match Message::from_frame(&frame) {
                 Ok(Message::Response(response)) if response.id.as_ref() == Some(&id) => {
-                    return response.into_result().map_err(|error| error.message);
+                    return Ok(response.into_result());
                 }
                 Ok(_) => {}
                 Err(error) => return Err(lost(&error)),

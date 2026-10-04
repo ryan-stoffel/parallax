@@ -21,18 +21,19 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, ContextList, ContextRead,
-    ContextWrite, PrLink, PrUnlink, ProjectList, RepoAdd, ThreadArchive, ThreadFork, ThreadList,
-    ThreadSearch, ThreadStart, ThreadUpdate,
+    AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, AgentWait, ContextList,
+    ContextRead, ContextWrite, PrLink, PrUnlink, ProjectList, RepoAdd, ThreadArchive, ThreadFork,
+    ThreadList, ThreadSearch, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AgentCancelParams, AgentDelivery, AgentEffort, AgentEventsParams,
     AgentListParams, AgentOutcome, AgentOutputItem, AgentPermission, AgentPolicy, AgentRun,
-    AgentSendParams, AgentStartParams, AgentStatus, AgentToolStatus, ContextListParams,
-    ContextReadParams, ContextWriteId, ContextWriteParams, CoordinatorThreadId, ParallaxEvent,
-    PrViewParams, ProjectId, ProjectListParams, Repo, RepoAddParams, RepoId, RunId, Thread,
-    ThreadArchiveParams, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
-    ThreadStartParams, ThreadUpdateParams, TurnId,
+    AgentSendParams, AgentStartParams, AgentStatus, AgentToolStatus, AgentWaitParams,
+    AgentWaitUntil, ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams,
+    CoordinatorThreadId, ErrorKind, ParallaxEvent, PrViewParams, ProjectId, ProjectListParams,
+    Repo, RepoAddParams, RepoId, RunId, Thread, ThreadArchiveParams, ThreadForkParams,
+    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadStartParams, ThreadUpdateParams,
+    TurnId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -128,8 +129,12 @@ const LAST_OUTPUT_BYTES: usize = 8 * 1024;
 const DEFAULT_WAIT: Duration = Duration::from_mins(5);
 const MAX_WAIT: Duration = Duration::from_mins(30);
 
-/// How often `thread_wait` checks the thread.
+/// How often `thread_wait` checks the thread on a plxd without `agent/wait`, and how long it
+/// pauses between connections.
 const POLL: Duration = Duration::from_millis(500);
+
+/// The longest one `agent/wait` waits: plxd's cap, under its connection idle timeout.
+const MAX_AGENT_WAIT: Duration = Duration::from_mins(1);
 
 /// What one server is bound to.
 #[derive(Clone, Debug)]
@@ -775,14 +780,53 @@ async fn host(plxd: &mut Plxd) -> Result<(ThreadListResult, Vec<AgentRun>), Stri
     Ok((listed, runs))
 }
 
-/// The run `run_id`, a thread's or any other on the host.
+/// The run `run_id`, a thread's or any other on the host: read alone by an `agent/wait` that
+/// doesn't wait, or found in every run on a plxd without `agent/wait`.
 async fn find_run(plxd: &mut Plxd, run_id: RunId) -> Result<AgentRun, String> {
+    if plxd.agent_wait {
+        return agent_wait(plxd, run_id, Duration::ZERO).await?;
+    }
     plxd.call::<AgentList>(AgentListParams { project: None })
         .await?
         .runs
         .into_iter()
         .find(|run| run.id == run_id)
-        .ok_or_else(|| format!("no thread has run id {run_id}"))
+        .ok_or_else(|| missing(run_id))
+}
+
+/// `run_id` once it is idle, or as it stands after `timeout`, from `agent/wait`. The outer `Err`
+/// is the connection failing first, the inner one plxd's error.
+async fn agent_wait(
+    plxd: &mut Plxd,
+    run_id: RunId,
+    timeout: Duration,
+) -> Result<Result<AgentRun, String>, String> {
+    let waited = plxd
+        .request::<AgentWait>(AgentWaitParams {
+            run_ids: vec![run_id],
+            until: AgentWaitUntil::Any,
+            timeout_ms: u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX),
+        })
+        .await?;
+    Ok(match waited {
+        Ok(waited) => waited
+            .runs
+            .into_iter()
+            .next()
+            .ok_or_else(|| missing(run_id)),
+        Err(error)
+            if error
+                .parallax_data()
+                .is_some_and(|data| data.kind == ErrorKind::RunNotFound) =>
+        {
+            Err(missing(run_id))
+        }
+        Err(error) => Err(error.message),
+    })
+}
+
+fn missing(run_id: RunId) -> String {
+    format!("no thread has run id {run_id}")
 }
 
 /// What the model sees of a run, and of its thread when it is one.
@@ -1272,8 +1316,10 @@ async fn resolve_repo(plxd: &mut Plxd, repos: &[Repo], repo: &str) -> Result<Rep
     Ok(added.repo.id)
 }
 
-/// `thread_wait`: checks `run_id` every [`POLL`] until it is idle or `timeout` passes, each time
-/// on a new connection, so a plxd restart meanwhile doesn't end the wait.
+/// `thread_wait`: waits until `run_id` is idle or `timeout` passes, in `agent/wait` calls of at
+/// most [`MAX_AGENT_WAIT`], or on a plxd without `agent/wait` by checking it every [`POLL`]. Each
+/// call is on a new connection, and one that fails is tried again after [`POLL`], so a plxd
+/// restart meanwhile doesn't end the wait.
 async fn wait(
     socket: &Path,
     run_id: RunId,
@@ -1282,24 +1328,40 @@ async fn wait(
 ) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     loop {
-        match Plxd::open(socket).await {
+        let failed = match Plxd::open(socket).await {
             Ok(mut plxd) => {
-                let run = find_run(&mut plxd, run_id).await?;
-                let idle = !running(&run);
-                if idle || Instant::now() >= deadline {
-                    let output = last_output(&mut plxd, run_id).await?;
-                    return Ok(pretty(&json!({
-                        "idle": idle,
-                        "timedOut": !idle,
-                        "thread": describe(&run, None, &[], caller),
-                        "lastOutput": output.map(|text| tail(&text, LAST_OUTPUT_BYTES)),
-                    })));
+                let checked = if plxd.agent_wait {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    agent_wait(&mut plxd, run_id, left.min(MAX_AGENT_WAIT)).await
+                } else {
+                    Ok(find_run(&mut plxd, run_id).await)
+                };
+                match checked {
+                    Ok(run) => {
+                        let run = run?;
+                        let idle = !running(&run);
+                        if idle || Instant::now() >= deadline {
+                            let output = last_output(&mut plxd, run_id).await?;
+                            return Ok(pretty(&json!({
+                                "idle": idle,
+                                "timedOut": !idle,
+                                "thread": describe(&run, None, &[], caller),
+                                "lastOutput": output.map(|text| tail(&text, LAST_OUTPUT_BYTES)),
+                            })));
+                        }
+                        None
+                    }
+                    Err(error) => Some(error),
                 }
             }
-            Err(error) if Instant::now() >= deadline => return Err(error),
-            // plxd may be restarting: try again until the deadline.
-            Err(_) => {}
+            Err(error) => Some(error),
+        };
+        if let Some(error) = failed
+            && Instant::now() >= deadline
+        {
+            return Err(error);
         }
+        // plxd may be restarting: try again until the deadline.
         sleep(POLL).await;
     }
 }
