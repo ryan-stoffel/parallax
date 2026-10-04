@@ -4,8 +4,7 @@
 //!
 //! `codex app-server` in the run's cwd, which speaks JSON-RPC over stdio, one message per line. It
 //! loads the user's `config.toml`, rules, `AGENTS.md` files, skills, hooks, plugins, and MCP
-//! servers, as `codex` in a terminal does: no `--ignore-user-config`, `--ignore-rules`, or
-//! permission profile, unlike a worker's `codex exec`. The driver sends `initialize` and
+//! servers, as `codex` in a terminal does. The driver sends `initialize` and
 //! `initialized`, then `thread/start`, or `thread/resume` with the earlier run's thread id
 //! (`thread/fork` for a fork's first run, 0050), with the model, the context window as
 //! `model_context_window`, the thread's `plxd mcp --thread` server as dotted `mcp_servers.plxd.*`
@@ -34,7 +33,7 @@
 //!
 //! # Credentials
 //!
-//! As for exec, the run drops every inherited [`SCRUBBED_PREFIXES`] variable, and a subscription
+//! The run drops every inherited [`SCRUBBED_PREFIXES`] variable, and a subscription
 //! gets only its account's `CODEX_HOME`, if it has one. app-server reads no API key from the
 //! environment (checked with 0.159.3: `account/read` finds no account with `CODEX_API_KEY` or
 //! `OPENAI_API_KEY` set), so a thread on an API key account is refused rather than billed to the
@@ -269,7 +268,7 @@ fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartErr
         thread["config"] = config.into();
     }
     if let Some(fast) = request.fast {
-        // The catalog's tier named "Fast" is `priority`, as for exec.
+        // The catalog's tier named "Fast" is `priority`.
         thread["serviceTier"] = if fast { "priority" } else { "default" }.into();
     }
     let thread_method = match &request.resume {
@@ -553,7 +552,7 @@ impl Driver {
             }
             // The turn never ran.
             (Request::Turn, Err(message)) => {
-                self.failure = Some(failure(super::stream::classify(&message), message));
+                self.failure = Some(failure(super::classify(&message), message));
                 self.finish_running(None).await;
                 self.next_turn().await;
             }
@@ -599,7 +598,7 @@ impl Driver {
 
     /// The thread couldn't start, so no turn runs: the run fails and app-server exits.
     fn fail_to_start(&mut self, message: String) {
-        self.failure = Some(failure(super::stream::classify(&message), message));
+        self.failure = Some(failure(super::classify(&message), message));
         self.stdin.close();
         self.control.close();
     }
@@ -758,7 +757,7 @@ impl Driver {
                 result: self.last_result.take(),
             };
         }
-        let failure = if super::stream::classify(&exit.stderr_tail) == FailureKind::NotSignedIn {
+        let failure = if super::classify(&exit.stderr_tail) == FailureKind::NotSignedIn {
             failure(FailureKind::NotSignedIn, "Codex is not signed in".into())
         } else if exit.info.success() {
             failure(

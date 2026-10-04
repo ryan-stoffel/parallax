@@ -1,5 +1,0 @@
-# A real `codex exec resume --json` of worker.jsonl's thread: codex-cli 0.157.1, 2026-09-28.
-{"type":"thread.started","thread_id":"01a0eaf8-7c27-7762-a05e-9eae0197d57c"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello.txt"}}
-{"type":"turn.completed","usage":{"input_tokens":73838,"cached_input_tokens":54656,"cache_write_input_tokens":0,"output_tokens":190,"reasoning_output_tokens":31}}

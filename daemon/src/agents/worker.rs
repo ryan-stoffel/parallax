@@ -1,6 +1,5 @@
-//! What a worker needs before it starts (0013, decision 0014): the environment agents run in,
-//! the checks that refuse a worker plxd can't sandbox, the key accounts routing reads, and the
-//! prompt that tells the agent its limits.
+//! What a run needs before it starts (0013, decision 0014): the environment agents run in, the
+//! checks that refuse a run plxd can't sandbox, and the key accounts routing reads.
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -236,15 +235,17 @@ const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so run plxd in \
                                WSL2 and add that as the host for workers";
 
-/// Refuses a worker on a backend that doesn't enforce the worker sandbox (0013).
+/// Refuses a run that isn't a thread, or a thread without `approvals` on Claude Code, on a backend
+/// that doesn't enforce the worker sandbox (0013).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().worker_sandbox {
         return Ok(());
     }
-    let why = if backend.cli() == Some(CliKind::Codex) {
-        "Codex workers are turned off until PLX-145 keeps their commands out of the shared temp \
-         folders"
-            .to_owned()
+    let why = if backend.full_thread() {
+        format!(
+            "the {} backend runs only threads (decisions 0035 and 0036)",
+            backend.name()
+        )
     } else {
         format!(
             "the {} backend can't run a sandboxed worker yet (decision 0013)",
@@ -353,23 +354,6 @@ impl KeyAccounts for StoredKeyAccounts {
             .map(|(id, _)| *id)
             .min()
     }
-}
-
-/// The first message of a new worker: its limits (0013), then the task.
-pub(super) fn worker_prompt(task: &str, worktree: &Path, context: &Path) -> String {
-    format!(
-        "You are a Parallax worker agent in a git worktree at {worktree}.\n\
-         - You may write files only in that worktree and in the project's shared context folder \
-         at {context}. Put notes there that the user or other agents should see.\n\
-         - Your commands have network access, but this Mac's own services (localhost) are \
-         unreachable.\n\
-         - Don't commit or change git history: Parallax commits your changes when you finish.\n\
-         - The project's dependencies may not be installed.\n\
-         \n\
-         Your task:\n{task}",
-        worktree = worktree.display(),
-        context = context.display(),
-    )
 }
 
 /// The home folder, for the sandbox's list of unreadable paths.

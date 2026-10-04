@@ -61,7 +61,7 @@ use super::convert::{
 };
 use super::resume::Resumes;
 use super::wake::{self, Wakes};
-use super::worker::{sandbox_path, worker_prompt, worker_unavailable};
+use super::worker::{sandbox_path, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
     AccountRef, Answer, AnswerError, Backend, Credential, Decision, Event, EventStream, FollowUp,
@@ -1680,9 +1680,7 @@ impl Actor {
             .store_options(prepared.resolved.backend(), changes)
             .await?;
         let message = text;
-        let opening = self
-            .opening(session_id, from, sent, &prepared, paths.as_ref())
-            .await;
+        let opening = self.opening(session_id, from, sent, &prepared).await;
         let (prompt, resume, from) = match opening {
             Ok(opening) => opening,
             Err(error) => {
@@ -1819,7 +1817,6 @@ impl Actor {
         mut from: String,
         text: String,
         prepared: &Prepared,
-        paths: Option<&(PathBuf, PathBuf)>,
     ) -> Result<(String, Option<Resume>, String), ErrorObject> {
         if let Some(session_id) = session_id {
             info!(run = %self.id, "resuming an agent run's session");
@@ -1838,9 +1835,7 @@ impl Actor {
         }
         let to = prepared.resolved.backend().name();
         info!(run = %self.id, from, to, "starting a new session for an agent run");
-        let prompt = self
-            .handoff_prompt(&from, &text, &prepared.place, paths)
-            .await?;
+        let prompt = self.handoff_prompt(&from, &text, &prepared.place).await?;
         Ok((prompt, None, from))
     }
 
@@ -1935,7 +1930,6 @@ impl Actor {
         from: &str,
         text: &str,
         place: &Place,
-        paths: Option<&(PathBuf, PathBuf)>,
     ) -> Result<String, ErrorObject> {
         // What the agent said last is logged before the conversation is read.
         self.flush().await;
@@ -1946,15 +1940,7 @@ impl Actor {
                 &message,
                 &repo.to_string_lossy(),
             )),
-            // A thread's first message is the user's own (0034).
-            Place::Worker { thread: true, .. } => Ok(message),
-            Place::Worker { context, .. } => {
-                let cwd = match paths {
-                    Some((cwd, _)) => cwd.clone(),
-                    None => self.worker_paths().await?.0,
-                };
-                Ok(worker_prompt(&message, &cwd, context))
-            }
+            Place::Worker { .. } => super::first_prompt(&message, place),
         }
     }
 
@@ -2047,11 +2033,8 @@ impl Actor {
                 home,
                 data_dir,
                 context,
-                thread,
-            } => {
-                self.worker_setup(&home, &data_dir, &context, paths, thread)
-                    .await
-            }
+                ..
+            } => self.worker_setup(&home, &data_dir, &context, paths).await,
             Place::Coordinator { repo } => self.coordinator_setup(repo),
         };
         let Setup {
@@ -2118,14 +2101,15 @@ impl Actor {
         }
     }
 
-    /// A worker's worktree and sandbox, with a new temp folder for its CLI.
+    /// A thread's worktree, its own host-wide tools, bound to its run (0041), and a new temp
+    /// folder for its CLI, with the worker sandbox Claude Code keeps for a thread without
+    /// `approvals` (0013).
     async fn worker_setup(
         &self,
         home: &Path,
         data_dir: &Path,
         context: &Path,
         paths: Option<(PathBuf, PathBuf)>,
-        thread: bool,
     ) -> Result<Setup, String> {
         let (cwd, git_common_dir) = match paths {
             Some(paths) => paths,
@@ -2134,23 +2118,18 @@ impl Actor {
         let (temp, temp_path) = self.run_temp().map_err(|error| error.message)?;
         let sandbox =
             WorkerSandbox::for_worktree(home, data_dir, &cwd, &git_common_dir, context, &temp_path);
-        // A thread's own host-wide tools, bound to its run (0041).
-        let thread_tools = if thread {
-            Some(ThreadTools {
-                program: plxd_program()?,
-                data_dir: self.daemon.data_dir.root().to_owned(),
-                run: self.id,
-            })
-        } else {
-            None
+        let thread_tools = ThreadTools {
+            program: plxd_program()?,
+            data_dir: self.daemon.data_dir.root().to_owned(),
+            run: self.id,
         };
         Ok(Setup {
             cwd,
             sandbox: Some(sandbox),
             temp: Some(temp),
             tools: None,
-            thread_tools,
-            thread,
+            thread_tools: Some(thread_tools),
+            thread: true,
         })
     }
 
