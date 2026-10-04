@@ -70,6 +70,7 @@ import {
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
 import { ProjectPermissionChoice } from "./ProjectPermission";
+import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
 import { localId, type Host } from "./hosts";
@@ -498,12 +499,20 @@ export function ThreadList({
         badge={badge}
         nested={nested}
         snoozable={view.attention}
+        autoResumable={view.autoResume}
         onOpen={() => openItem(item)}
         onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
         onSnooze={async (until) =>
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
         }
         onDelete={() => askDelete(item)}
+        onAutoResume={async (autoResume) => {
+          const answer = await window.parallax.request(item.host.id, "agent/autoResume", {
+            runId: t.id,
+            ...(autoResume !== undefined && { autoResume }),
+          });
+          setActionError("error" in answer ? answer.error.message : undefined);
+        }}
         onRest={(el) => showCard(item, el)}
         onLeave={hideCard}
       />
@@ -1313,10 +1322,12 @@ function ThreadRow({
   badge,
   nested,
   snoozable,
+  autoResumable,
   onOpen,
   onArchive,
   onSnooze,
   onDelete,
+  onAutoResume,
   onRest,
   onLeave,
 }: {
@@ -1334,10 +1345,14 @@ function ThreadRow({
   nested?: boolean;
   /** Whether its plxd keeps seen and snooze state (`threadAttention`). */
   snoozable: boolean;
+  /** Whether its plxd resumes runs after usage limits (`autoResume`, 0049). */
+  autoResumable: boolean;
   onOpen: () => void;
   onArchive: () => void;
   onSnooze: (until: Date) => void;
   onDelete: () => void;
+  /** Sets its run's auto-resume override, or clears it with undefined. */
+  onAutoResume: (autoResume?: boolean) => void;
   onRest: (row: HTMLElement) => void;
   onLeave: () => void;
 }) {
@@ -1347,6 +1362,9 @@ function ThreadRow({
   const snoozeMenu = useRef<HTMLDivElement>(null);
   const actions = useRef<HTMLButtonElement>(null);
   const [custom, setCustom] = useState("");
+  // The host's auto-resume setting, read as the menu opens, for the run's own toggle.
+  const [hostResumes, setHostResumes] = useState<boolean>();
+  const resumes = run?.autoResume ?? hostResumes ?? true;
   const choose = (action: () => void) => () => {
     menu.current?.hidePopover();
     snoozeMenu.current?.hidePopover();
@@ -1364,7 +1382,12 @@ function ThreadRow({
   );
   const status =
     badge ??
-    (attention === "settled" ? (
+    (run?.status === "waiting" && attention === "settled" ? (
+      <span className="flex items-center gap-1 text-[11.5px] font-medium text-warning [&_svg]:size-3.5">
+        <AlarmClock aria-hidden />
+        {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
+      </span>
+    ) : attention === "settled" ? (
       age(lastPrompt(thread))
     ) : (
       <AttentionBadge attention={attention} since={lastPrompt(thread)} />
@@ -1531,8 +1554,12 @@ function ThreadRow({
         role="menu"
         aria-label="Thread actions"
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open")
-            e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+          if (e.newState !== "open") return;
+          e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+          if (autoResumable && run)
+            void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
+              if ("result" in answer) setHostResumes(answer.result.autoResume);
+            });
         }}
         onKeyDown={moveFocus}
         className={`${menuPanel("end")} min-w-36 p-1`}
@@ -1540,6 +1567,19 @@ function ThreadRow({
         <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
           {thread.archived ? "Unarchive" : "Archive"}
         </button>
+        {autoResumable && run && (
+          // Choosing the host's setting clears the override, so the thread follows the host again.
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={resumes}
+            className={menuItem}
+            onClick={choose(() => onAutoResume(!resumes === hostResumes ? undefined : !resumes))}
+          >
+            Resume after usage limits
+            {resumes && <Check aria-hidden className="ml-auto size-3.5" />}
+          </button>
+        )}
         <button
           type="button"
           role="menuitem"
@@ -1566,6 +1606,7 @@ export const statusLooks: Partial<Record<AgentStatus, { Icon: LucideIcon; color:
   failed: { Icon: CircleAlert, color: "text-danger" },
   cancelled: { Icon: CircleSlash, color: "text-muted-foreground" },
   interrupted: { Icon: CirclePause, color: "text-amber-500" },
+  waiting: { Icon: AlarmClock, color: "text-warning" },
   accepted: { Icon: GitMerge, color: "text-violet-500" },
 };
 
@@ -1644,6 +1685,9 @@ function ThreadCard({
             <span className="line-clamp-2">
               {runStatusLabel(run.status)}
               {run.status === "failed" && run.error && `: ${run.error}`}
+              {run.status === "waiting" &&
+                run.resumeAt &&
+                `: resumes at ${resumeTime(run.resumeAt)}`}
             </span>
           </li>
         )}

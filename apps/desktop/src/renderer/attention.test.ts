@@ -17,6 +17,7 @@ test("a thread's attention follows its run, its requests, and when it was seen",
   expect(attentionOf(thread(), run({ status: "running" }), 1)).toBe("needsYou");
   expect(attentionOf(thread(), run(), 0)).toBe("done");
   expect(attentionOf(thread(), run({ status: "failed" }), 0)).toBe("failed");
+  expect(attentionOf(thread(), run({ status: "waiting" }), 0)).toBe("settled");
   expect(attentionOf(thread({ seenAt: "2026-10-01T12:00:00Z" }), run(), 0)).toBe("settled");
   // It stopped again after the user looked.
   expect(attentionOf(thread({ seenAt: "2026-10-01T10:30:00Z" }), run(), 0)).toBe("done");

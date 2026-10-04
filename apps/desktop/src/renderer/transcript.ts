@@ -165,8 +165,16 @@ export function updateRun(run: AgentRun | undefined, event: ParallaxEvent): Agen
     case "agent.started":
       return event.run;
     case "agent.updated":
-      // `error` is absent once the run goes again; the rest only ever arrives.
-      return run && { ...run, ...event.state, error: event.state.error };
+      // `error`, `resumeAt`, and `autoResume` are absent once cleared; the rest only ever arrives.
+      return (
+        run && {
+          ...run,
+          ...event.state,
+          error: event.state.error,
+          resumeAt: event.state.resumeAt,
+          autoResume: event.state.autoResume,
+        }
+      );
     case "agent.accountFallback":
       return run && { ...run, accountId: event.toAccount };
     default:

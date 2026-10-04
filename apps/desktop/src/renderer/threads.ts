@@ -352,6 +352,8 @@ export interface ThreadsView {
   iconImageBytes?: number;
   /** Whether the host's plxd keeps threads' parents and titles (`threadLineage`, 0041). */
   lineage: boolean;
+  /** Whether the host's plxd resumes runs after usage limits (`autoResume`, 0049). */
+  autoResume: boolean;
   /**
    * Marks a thread seen, or snoozes it until a time (a past one ends the snooze). Resolves to an
    * error message, or undefined.
@@ -381,7 +383,7 @@ export type CoordinatorOptions = Pick<
  * `approvals`, the threads and coordinators started here forward their permission requests
  * (PLX-196, 0031); with `lineage`, a thread's generated title goes to plxd (0041), and titles kept
  * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`, and
- * `lineage` are passed through for the sidebar and top bar.
+ * `lineage`, and `autoResume` are passed through for the sidebar and top bar.
  */
 export function useThreads(
   hostId: string,
@@ -394,10 +396,11 @@ export function useThreads(
     moded = false,
     iconImageBytes,
     lineage = false,
+    autoResume = false,
   }: Partial<
     Pick<
       ThreadsView,
-      "attention" | "editable" | "deletable" | "moded" | "iconImageBytes" | "lineage"
+      "attention" | "editable" | "deletable" | "moded" | "iconImageBytes" | "lineage" | "autoResume"
     >
   > & {
     approvals?: boolean;
@@ -697,6 +700,7 @@ export function useThreads(
       moded,
       iconImageBytes,
       lineage,
+      autoResume,
       update,
       updateRepo,
       addRepo,
@@ -717,6 +721,7 @@ export function useThreads(
       moded,
       iconImageBytes,
       lineage,
+      autoResume,
       update,
       updateRepo,
       addRepo,
@@ -763,6 +768,7 @@ export const idleThreads: ThreadsView = {
   deletable: false,
   moded: false,
   lineage: false,
+  autoResume: false,
   addRepo: async () => notConnected,
   start: async () => ({ code: -32000, message: notConnected }),
   archive: async () => notConnected,
