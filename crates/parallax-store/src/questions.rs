@@ -21,9 +21,12 @@ pub struct Question {
     /// The coordinator's or the user's answer, once there is one.
     pub answer: Option<String>,
     pub created_at: Timestamp,
+    /// The coordinator run whose wake-up turn carried the question to its CLI (PLX-469).
+    pub delivered_to: Option<Uuid>,
 }
 
-const COLUMNS: &str = "id, project_id, run_id, question, assumption, status, answer, created_at";
+const COLUMNS: &str =
+    "id, project_id, run_id, question, assumption, status, answer, created_at, delivered_to";
 
 /// A row as SQLite stored it, before the fallible conversion to [`Question`].
 type Raw = (
@@ -35,6 +38,7 @@ type Raw = (
     String,
     Option<String>,
     String,
+    Option<String>,
 );
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Raw> {
@@ -47,11 +51,12 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Raw> {
         row.get(5)?,
         row.get(6)?,
         row.get(7)?,
+        row.get(8)?,
     ))
 }
 
 fn into_question(
-    (id, project, run, question, assumption, status, answer, created): Raw,
+    (id, project, run, question, assumption, status, answer, created, delivered): Raw,
 ) -> Result<Question, StoreError> {
     Ok(Question {
         id: Uuid::parse_str(&id)?,
@@ -62,6 +67,7 @@ fn into_question(
         status,
         answer,
         created_at: timestamp::parse(&created)?,
+        delivered_to: delivered.as_deref().map(Uuid::parse_str).transpose()?,
     })
 }
 
@@ -73,7 +79,9 @@ impl Store {
     /// A database error, including a constraint error if its id is taken.
     pub fn add_question(&self, question: &Question) -> Result<(), StoreError> {
         self.conn.execute(
-            &format!("INSERT INTO questions ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"),
+            &format!(
+                "INSERT INTO questions ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+            ),
             params![
                 question.id.to_string(),
                 question.project_id.to_string(),
@@ -83,6 +91,7 @@ impl Store {
                 question.status,
                 question.answer,
                 timestamp::format(question.created_at),
+                question.delivered_to.map(|run| run.to_string()),
             ],
         )?;
         Ok(())
@@ -137,6 +146,22 @@ impl Store {
         )?;
         Ok(changed > 0)
     }
+
+    /// Records that coordinator run `to`'s wake-up turn carried questions `ids` to its CLI
+    /// (PLX-469).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn deliver_questions(&self, ids: &[Uuid], to: Uuid) -> Result<(), StoreError> {
+        for id in ids {
+            self.conn.execute(
+                "UPDATE questions SET delivered_to = ?2 WHERE id = ?1",
+                params![id.to_string(), to.to_string()],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -161,6 +186,7 @@ mod tests {
             status: "open".to_owned(),
             answer: None,
             created_at: Timestamp::now(),
+            delivered_to: None,
         };
         let (first, other) = (question(ours), question(theirs));
         store.add_question(&first).unwrap();
@@ -178,6 +204,10 @@ mod tests {
             ("decided", Some("9090"))
         );
         assert!(!store.set_question(Uuid::now_v7(), "decided", None).unwrap());
+        let coordinator = Uuid::now_v7();
+        store.deliver_questions(&[first.id], coordinator).unwrap();
+        let stored = store.get_question(first.id).unwrap().unwrap();
+        assert_eq!(stored.delivered_to, Some(coordinator));
 
         store.delete_project(ours).unwrap();
         assert!(store.questions(ours).unwrap().is_empty());

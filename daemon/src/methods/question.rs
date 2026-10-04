@@ -100,6 +100,7 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
                 .to_owned(),
                 answer: None,
                 created_at: Timestamp::now(),
+                delivered_to: None,
             };
             db.add_question(&row).map_err(|e| store_error(&e))?;
             Ok((row, asker.fields.prompt, coordinator, autonomy))
@@ -108,7 +109,7 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
     let asked = to_wire(row.clone())?;
     info!(question = %asked.id, %run, "a child asked a question");
     match coordinator {
-        Some(coordinator) => wake::notify(
+        Some(coordinator) => wake::notify_questions(
             &context.daemon,
             coordinator.into(),
             wake::question(
@@ -119,6 +120,7 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
                 &asked.assumption,
                 autonomy,
             ),
+            vec![row.id],
         ),
         None => needs_you(&context.daemon, &row, &prompt).await,
     }

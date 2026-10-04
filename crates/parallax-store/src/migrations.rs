@@ -429,6 +429,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 31,
         sql: "ALTER TABLE projects ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'routine';",
     },
+    // The coordinator whose wake-up turn carried a question to its CLI (PLX-469), NULL until one
+    // did, so a restart's catch-up names only questions that coordinator hasn't seen.
+    Migration {
+        version: 32,
+        sql: "ALTER TABLE questions ADD COLUMN delivered_to TEXT;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
