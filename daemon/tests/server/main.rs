@@ -7,6 +7,7 @@
 //! CLIs. `tests/windows.rs` covers `serve` on Windows.
 #![cfg(unix)]
 
+mod agent_wait;
 mod agents;
 mod approvals;
 mod auto_resume;

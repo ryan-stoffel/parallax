@@ -162,6 +162,7 @@ pub(crate) fn initialize(
 /// `question/list`.
 /// `memory` (PLX-405, 0044): `memory/list`, `memory/read`, `memory/write`, `memory/delete`, and
 /// `memory/propose`, and shared context paths in 0044's folders.
+/// `agentWait` (PLX-451): `agent/wait`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -172,6 +173,7 @@ fn capabilities_advertised() -> Capabilities {
         ("accounts".to_owned(), serde_json::Map::new()),
         ("agentClis".to_owned(), serde_json::Map::new()),
         ("agentReview".to_owned(), serde_json::Map::new()),
+        ("agentWait".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
         ("approvals".to_owned(), serde_json::Map::new()),
         ("autoResume".to_owned(), serde_json::Map::new()),

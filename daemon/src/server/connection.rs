@@ -65,6 +65,7 @@ pub(crate) async fn serve<S>(
         session: None,
         in_flight: InFlight::default(),
         handlers: JoinSet::new(),
+        stopped_reading: stop_reading.child_token(),
         stop_reading: stop_reading.clone(),
         closing: closing.clone(),
     };
@@ -108,12 +109,17 @@ struct Reader<S> {
     handlers: JoinSet<()>,
     permits: Arc<Semaphore>,
     stop_reading: CancellationToken,
+    /// Cancelled once this connection stops reading, for any reason, so a request that waits
+    /// on something else ends instead of holding the drain open ([`Context::stopped_reading`]).
+    stopped_reading: CancellationToken,
     closing: CancellationToken,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
     async fn run(mut self) -> Option<Session> {
-        match self.read().await {
+        let end = self.read().await;
+        self.stopped_reading.cancel();
+        match end {
             End::Drain => self.drain().await,
             End::Close => self.closing.cancel(),
         }
@@ -231,6 +237,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         let context = Context {
             daemon: Arc::clone(&self.daemon),
             cancel,
+            stopped_reading: self.stopped_reading.clone(),
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
