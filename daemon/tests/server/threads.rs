@@ -35,6 +35,7 @@ use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 mod context;
 mod files;
 mod fork;
+mod project;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -207,6 +208,7 @@ pub(crate) fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartPar
     ThreadStartParams {
         run_id: RunId::generate(),
         repo,
+        project: None,
         parent: None,
         notify: None,
         title: None,

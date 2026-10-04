@@ -20,6 +20,11 @@
 //! transcript up to that turn, and its first message either forks the parent's vendor session
 //! (the actor's `fork_source`) or hands that transcript to a new session, as 0014's move does.
 //!
+//! `thread/start` with `project` starts a Project's child (0042) through the same
+//! [`agents::create`] as a Project's other runs, so it runs in the Project's mode with its header,
+//! cut from the integration branch, and wakes the coordinator. Its scope and thread row's repo are
+//! the Project, and its parent the Project's current coordinator, or none before it has one.
+//!
 //! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,
 //! on the branch the user has out or the one `checkoutRef` switches it to, and plxd leaves its
 //! changes there uncommitted. A thread with no repo has no checkout, so it can't ask for one.
@@ -425,9 +430,11 @@ pub(crate) async fn start(
     daemon: Arc<Daemon>,
     params: ThreadStartParams,
 ) -> Result<ThreadStartResult, ErrorObject> {
+    check_start(&params)?;
     let ThreadStartParams {
         run_id,
         repo,
+        project,
         parent,
         title,
         prompt,
@@ -446,36 +453,29 @@ pub(crate) async fn start(
         threads,
         notify,
     } = params;
-    if let Some(slug) = &branch_slug
-        && !valid_branch_slug(slug)
-    {
-        return Err(ErrorObject::invalid_params(
-            "branchSlug must be 1 to 40 lowercase letters, digits, and hyphens, \
-             with no leading or trailing hyphen",
-        ));
-    }
     let git_ref = git_ref(checkout, base, checkout_ref)?;
     let title = title.as_deref().map(check_title).transpose()?.flatten();
-    let entry = start_entry(&daemon, repo).await?;
-    if checkout && entry.fields.scratch {
-        return Err(ErrorObject::invalid_params(
-            "checkout needs a repo: a thread with no repo has no checkout to work in",
-        ));
-    }
-    let scope = ProjectId::try_from(entry.id).map_err(|_| corrupt("repo entry", entry.id))?;
     // A retry, or a run id that is taken, needs no new scratch repository: `agents::create`
     // answers it from the existing run.
-    let taken = store(&daemon, move |db| {
+    let stored = store(&daemon, move |db| {
         db.get_run(run_id.into())
-            .map(|row| row.is_some())
+            .map(|row| row.map(|row| row.fields.parent))
             .map_err(|e| store_error(&e))
     })
     .await?;
-    // A retry is answered from its run, whatever became of its parent since.
-    if !taken {
-        check_parent(&daemon, parent).await?;
-    }
-    let scratch = scratch_dir(&daemon, &entry, run_id, taken).await?;
+    let taken = stored.is_some();
+    let (scope, scratch) = workspace(&daemon, project, repo, checkout, run_id, taken).await?;
+    // A retry is answered from its run, whatever became of its parent since, and a Project's
+    // child keeps the coordinator it started under.
+    let parent = match (project, stored) {
+        (Some(_), Some(stored)) => stored.and_then(|id| RunId::try_from(id).ok()),
+        (Some(project), None) => coordinator(&daemon, project).await?,
+        (None, Some(_)) => parent,
+        (None, None) => {
+            check_parent(&daemon, parent).await?;
+            parent
+        }
+    };
     let new = NewRun {
         run_id,
         scope,
@@ -526,6 +526,78 @@ pub(crate) async fn start(
         thread: thread_entry(thread)?,
         run: created.run,
     })
+}
+
+/// Refuses an invalid `branchSlug`, and, with `project`, what the Project decides for its child
+/// (0042).
+fn check_start(params: &ThreadStartParams) -> Result<(), ErrorObject> {
+    if let Some(slug) = &params.branch_slug
+        && !valid_branch_slug(slug)
+    {
+        return Err(ErrorObject::invalid_params(
+            "branchSlug must be 1 to 40 lowercase letters, digits, and hyphens, \
+             with no leading or trailing hyphen",
+        ));
+    }
+    if params.project.is_none() {
+        return Ok(());
+    }
+    let decided = [
+        ("repo", params.repo.is_some()),
+        ("parent", params.parent.is_some()),
+        ("checkout", params.checkout),
+        ("base", params.base.is_some()),
+        ("checkoutRef", params.checkout_ref.is_some()),
+    ];
+    match decided.iter().find(|(_, given)| *given) {
+        Some((name, _)) => Err(ErrorObject::invalid_params(format!(
+            "a Project's child runs in a new worktree of the Project's repository, with its \
+             coordinator as parent; leave out {name}"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// A new thread's scope, and the scratch repository it runs in, if any: `project`, or else the
+/// repo entry `repo` names, the scratch entry when it names none.
+async fn workspace(
+    daemon: &Arc<Daemon>,
+    project: Option<ProjectId>,
+    repo: Option<RepoId>,
+    checkout: bool,
+    run_id: RunId,
+    taken: bool,
+) -> Result<(ProjectId, Option<PathBuf>), ErrorObject> {
+    if let Some(project) = project {
+        return Ok((project, None));
+    }
+    let entry = start_entry(daemon, repo).await?;
+    if checkout && entry.fields.scratch {
+        return Err(ErrorObject::invalid_params(
+            "checkout needs a repo: a thread with no repo has no checkout to work in",
+        ));
+    }
+    let scope = ProjectId::try_from(entry.id).map_err(|_| corrupt("repo entry", entry.id))?;
+    Ok((scope, scratch_dir(daemon, &entry, run_id, taken).await?))
+}
+
+/// A new child's parent (0042): `project`'s current coordinator, or `None` before it has one.
+/// Fails with `projectNotFound` unless `project` is a Project.
+async fn coordinator(daemon: &Daemon, project: ProjectId) -> Result<Option<RunId>, ErrorObject> {
+    store(daemon, move |db| {
+        if db
+            .get_project(project.into())
+            .map_err(|e| store_error(&e))?
+            .is_none()
+        {
+            return Err(ErrorObject::parallax(
+                ErrorKind::ProjectNotFound,
+                format!("no project has id {project}"),
+            ));
+        }
+        agents::coordinator::coordinator_of(db, project.into())
+    })
+    .await
 }
 
 /// Fails with `runNotFound` unless `parent`, when set, is a run that exists (0041).

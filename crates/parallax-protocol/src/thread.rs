@@ -12,6 +12,9 @@
 //!
 //! Since 0041, behind `threadLineage`, a thread also has a parent (the run that launched it), a
 //! fork origin, a title, and a settled flag.
+//!
+//! Since 0042, behind `projectTasks`, `thread/start` with `project` starts a Project's child: a
+//! thread whose run, and `repo`, is the Project's id, whose parent is its coordinator.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -19,7 +22,8 @@ use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, PromptImage, RunId, TurnId,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, ProjectId, PromptImage,
+    RunId, TurnId,
 };
 
 /// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
@@ -60,7 +64,8 @@ pub struct Repo {
 pub struct Thread {
     /// The thread's run id.
     pub id: RunId,
-    /// Its repo entry: the scratch entry for a thread with no repo.
+    /// Its repo entry: the scratch entry for a thread with no repo. A Project's child started with
+    /// `thread/start`'s `project` has the Project's id here instead (0042).
     pub repo: RepoId,
     /// Whether the user archived it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -224,6 +229,15 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub repo: Option<RepoId>,
+    /// Starts a child of this Project instead (0042), behind `projectTasks`: it runs in the
+    /// Project's mode with `approvals`, in a new worktree cut from the Project's integration branch,
+    /// and its first message is the child's header, then `prompt`. Its parent is the Project's
+    /// current coordinator, which a batched wake-up tells of the start; with no coordinator yet it
+    /// has none. Not with `repo`, `parent`, `checkout`, `base`, or `checkoutRef`, which the Project
+    /// decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<ProjectId>,
     /// The run that launches it, recorded as its parent (0041). It must exist, or the start fails
     /// with `runNotFound`. Behind `threadLineage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
