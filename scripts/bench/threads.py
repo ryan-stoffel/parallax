@@ -60,10 +60,10 @@ class Client:
         return message["result"]
 
 
-async def connect(socket):
+async def connect(socket, client_class=Client):
     for _ in range(200):
         try:
-            client = Client(*await asyncio.open_unix_connection(socket, limit=64 << 20))
+            client = client_class(*await asyncio.open_unix_connection(socket, limit=64 << 20))
             await client.call(
                 "initialize",
                 {
@@ -157,4 +157,5 @@ async def main():
         shutil.rmtree(repo, ignore_errors=True)
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
