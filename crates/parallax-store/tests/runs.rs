@@ -469,13 +469,15 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // the host settings table (PLX-371's migration 24), the inbox table (PLX-401's migration 25),
     // the project permission column (PLX-394's migration 26), the queued table (PLX-370's
     // migration 27), the project branch columns (PLX-409's migration 29), the questions
-    // table (PLX-402's migration 30), or the project autonomy column (PLX-403's migration 31).
+    // table (PLX-402's migration 30), the project autonomy column (PLX-403's migration 31), or
+    // the landings table and auto-land column (PLX-410's migration 33).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
              DROP TABLE threads; DROP TABLE repos; DROP TABLE wakes; DROP TABLE images;
              DROP TABLE host_settings; DROP TABLE inbox; DROP TABLE queued; DROP TABLE questions;
+             DROP TABLE landings;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;
@@ -486,6 +488,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              ALTER TABLE projects DROP COLUMN base_branch;
              ALTER TABLE projects DROP COLUMN integration_branch;
              ALTER TABLE projects DROP COLUMN autonomy;
+             ALTER TABLE projects DROP COLUMN auto_land;
              DELETE FROM schema_version WHERE version >= 7;",
         )
         .unwrap();

@@ -45,6 +45,7 @@ fn update(
         permission: None,
         autonomy: None,
         base_branch: None,
+        auto_land: None,
     }
 }
 

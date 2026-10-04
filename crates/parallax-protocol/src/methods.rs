@@ -42,12 +42,13 @@ use crate::{
     GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
     GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
     HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
-    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, MemoryDeleteParams,
-    MemoryDeleteResult, MemoryListParams, MemoryListResult, MemoryProposeParams,
-    MemoryProposeResult, MemoryReadParams, MemoryReadResult, MemoryWriteParams, MemoryWriteResult,
-    PrActParams, PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult,
-    ProjectDeleteParams, ProjectDeleteResult, ProjectListParams, ProjectListResult,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams,
+    LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult,
+    MemoryListParams, MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
+    MemoryReadResult, MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult,
+    PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
     ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
@@ -378,6 +379,14 @@ method_table! {
         MemoryDelete = "memory/delete": MemoryDeleteParams => MemoryDeleteResult;
         /// `memory/propose`: a thread proposes an entry, for its coordinator or the user.
         MemoryPropose = "memory/propose": MemoryProposeParams => MemoryProposeResult;
+        /// `land/queue`: queues a Project's finished child to land on its integration branch, as
+        /// the coordinator's `land` tool does (PLX-410, 0045). Gated on the `landing` capability,
+        /// like every `land/*` method.
+        LandQueue = "land/queue": LandQueueParams => LandResult;
+        /// `land/approve`: lands a child waiting for the user's approval, in its turn.
+        LandApprove = "land/approve": LandApproveParams => LandResult;
+        /// `land/sendBack`: sends a child waiting for approval the user's message instead.
+        LandSendBack = "land/sendBack": LandSendBackParams => LandResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -499,6 +508,9 @@ mod tests {
                 "memory/write",
                 "memory/delete",
                 "memory/propose",
+                "land/queue",
+                "land/approve",
+                "land/sendBack",
                 "$/cancelRequest",
                 "events/event",
             ]

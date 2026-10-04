@@ -17,6 +17,7 @@ mod git;
 mod handshake;
 mod inbox;
 mod keys;
+mod landing;
 mod lifecycle;
 mod mcp;
 mod memory;

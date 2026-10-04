@@ -17,6 +17,7 @@ use parallax_protocol::{
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
+use plxd::mcp::land;
 use plxd::mcp::question::{CHILD_TOOLS, COORDINATOR_TOOLS};
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
 use plxd::paths::DataDir;
@@ -135,9 +136,9 @@ async fn a_childs_question_wakes_the_coordinator_whose_different_answer_reaches_
     let child_memory: &[&str] = &["memory_read", "memory_propose"];
     let child_tools = [TOOLS, CONTEXT_TOOLS, CHILD_TOOLS, child_memory].concat();
     assert_eq!(tool_names(&mut asker).await, child_tools);
-    let coordinator_memory: &[&str] = &["memory_read", "memory_write"];
-    let coordinator_tools = [TOOLS, CONTEXT_TOOLS, COORDINATOR_TOOLS, coordinator_memory].concat();
-    assert_eq!(tool_names(&mut boss).await, coordinator_tools);
+    let memory: &[&str] = &["memory_read", "memory_write"];
+    let tools = [TOOLS, CONTEXT_TOOLS, COORDINATOR_TOOLS, land::TOOLS, memory].concat();
+    assert_eq!(tool_names(&mut boss).await, tools);
 
     let (said, is_error) = asker
         .tool(
@@ -669,6 +670,7 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
             permission: None,
             autonomy: Some(ProjectAutonomy::Ask),
             base_branch: None,
+            auto_land: None,
         })
         .await
         .unwrap()

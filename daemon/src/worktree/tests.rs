@@ -8,7 +8,7 @@ use std::process::Command;
 
 use parallax_protocol::{ProjectId, RunId};
 
-use super::{ChangeStatus, WorktreeError, WorktreeManager, short_hash, valid_branch_slug};
+use super::{ChangeStatus, Merged, WorktreeError, WorktreeManager, short_hash, valid_branch_slug};
 use crate::backend::process::{Environment, Launcher};
 use crate::paths::DataDir;
 
@@ -376,6 +376,173 @@ async fn an_integration_branch_needs_a_branch_base_and_a_checkout() {
         .unwrap();
     assert_eq!(branch, "parallax/app");
     assert!(mgr.integration_path(project).join("README.md").is_file());
+}
+
+/// PLX-410 (0045): two children change the same file. The first squash-merges as one commit; the
+/// second conflicts and changes nothing, until plxd starts the merge in its worktree, it
+/// resolves the markers, and the commit its turn ends with concludes the merge, which then lands.
+#[tokio::test]
+async fn two_children_touching_one_file_land_one_at_a_time_through_a_conflict() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let project = ProjectId::generate();
+    mgr.ensure_integration(&repo, project, None, "app", "main")
+        .await
+        .unwrap();
+    let path = mgr.integration_path(project);
+    let tip = mgr.integration_tip(project).await.unwrap();
+    let mut children = Vec::new();
+    for text in ["from a\n", "from b\n"] {
+        let child = mgr
+            .create(&repo, RunId::generate(), Some(&tip))
+            .await
+            .unwrap();
+        std::fs::write(child.path.join("README.md"), text).unwrap();
+        mgr.commit_all(&child.path, &child.git_dir, &repo, "work")
+            .await
+            .unwrap();
+        children.push(child);
+    }
+    let (a, b) = (&children[0], &children[1]);
+
+    let Merged::Commit(landed) = mgr
+        .merge_into_integration(
+            project,
+            &tip,
+            &a.branch,
+            "Do a\n\nLanded by Parallax.",
+            true,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a merges cleanly");
+    };
+    assert_eq!(rev_parse(&path, "HEAD"), landed);
+    assert_eq!(
+        rev_parse(&path, "HEAD^"),
+        tip,
+        "one commit, with one parent"
+    );
+    assert_eq!(git_output(&path, &["log", "-1", "--format=%s"]), "Do a");
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "from a\n"
+    );
+
+    let conflict = mgr
+        .merge_into_integration(project, &landed, &b.branch, "Do b", true)
+        .await
+        .unwrap();
+    assert_eq!(conflict, Merged::Conflict(vec!["README.md".to_owned()]));
+    assert_eq!(rev_parse(&path, "HEAD"), landed, "the branch is untouched");
+    assert_eq!(git_output(&path, &["status", "--porcelain"]), "");
+
+    let readme = || std::fs::read_to_string(b.path.join("README.md")).unwrap();
+    mgr.start_merge(&b.path, &b.git_dir, &landed).await.unwrap();
+    assert!(readme().contains("<<<<<<<"), "{}", readme());
+    mgr.abort_merge(&b.path, &b.git_dir).await.unwrap();
+    assert_eq!(readme(), "from b\n", "aborted");
+    mgr.start_merge(&b.path, &b.git_dir, &landed).await.unwrap();
+
+    // A resolution that keeps a marker is found; one with only a whitespace error isn't.
+    mgr.commit_all(&b.path, &b.git_dir, &repo, "resolve")
+        .await
+        .unwrap();
+    assert_eq!(rev_parse(&b.path, "HEAD^2"), landed, "a merge commit");
+    assert_eq!(
+        mgr.conflict_markers(project, &landed, &b.branch)
+            .await
+            .unwrap(),
+        ["README.md:1", "README.md:3", "README.md:5"]
+    );
+    std::fs::write(b.path.join("README.md"), "from a and b \n").unwrap();
+    mgr.commit_all(&b.path, &b.git_dir, &repo, "resolve")
+        .await
+        .unwrap();
+    assert!(
+        mgr.conflict_markers(project, &landed, &b.branch)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let Merged::Commit(second) = mgr
+        .merge_into_integration(project, &landed, &b.branch, "Do b", true)
+        .await
+        .unwrap()
+    else {
+        panic!("b lands once it has merged the tip");
+    };
+    assert_eq!(rev_parse(&path, "HEAD^"), landed);
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "from a and b \n"
+    );
+    assert_eq!(
+        mgr.merge_into_integration(project, &second, &b.branch, "Do b", true)
+            .await
+            .unwrap(),
+        Merged::Unchanged,
+        "landing it again changes nothing"
+    );
+}
+
+/// PLX-410: a remote-tracking base is fetched first, and a base that moved is merged alone, as a
+/// merge commit, or reported as a conflict with nothing changed.
+#[tokio::test]
+async fn a_moved_base_is_fetched_and_merged_alone() {
+    let origin_dir = tempfile::tempdir().unwrap();
+    let origin = init_repo(origin_dir.path()).canonicalize().unwrap();
+    let clone_dir = tempfile::tempdir().unwrap();
+    let clone = clone_dir.path().join("clone");
+    git(
+        clone_dir.path(),
+        &["clone", "-q", origin.to_str().unwrap(), "clone"],
+    );
+    let clone = clone.canonicalize().unwrap();
+    git(&clone, &["config", "user.name", "Test User"]);
+    git(&clone, &["config", "user.email", "test@example.com"]);
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let project = ProjectId::generate();
+    mgr.ensure_integration(&clone, project, None, "app", "origin/main")
+        .await
+        .unwrap();
+    let path = mgr.integration_path(project);
+    let tip = mgr.integration_tip(project).await.unwrap();
+
+    std::fs::write(origin.join("base.txt"), "base\n").unwrap();
+    git(&origin, &["add", "-A"]);
+    git(&origin, &["commit", "-q", "-m", "base moved"]);
+    let moved = mgr.fetch_base(&clone, "origin/main").await.unwrap();
+    assert_eq!(moved, rev_parse(&origin, "HEAD"), "fetched");
+    assert!(!mgr.integration_has(project, &tip, &moved).await.unwrap());
+    let Merged::Commit(merge) = mgr
+        .merge_into_integration(project, &tip, &moved, "Merge origin/main", false)
+        .await
+        .unwrap()
+    else {
+        panic!("the base merges cleanly");
+    };
+    assert_eq!(rev_parse(&path, "HEAD^2"), moved, "a merge commit");
+    assert!(mgr.integration_has(project, &merge, &moved).await.unwrap());
+
+    std::fs::write(path.join("README.md"), "ours\n").unwrap();
+    git(&path, &["commit", "-qam", "landed"]);
+    let landed = rev_parse(&path, "HEAD");
+    std::fs::write(origin.join("README.md"), "theirs\n").unwrap();
+    git(&origin, &["commit", "-qam", "base again"]);
+    let moved = mgr.fetch_base(&clone, "origin/main").await.unwrap();
+    assert_eq!(
+        mgr.merge_into_integration(project, &landed, &moved, "Merge origin/main", false)
+            .await
+            .unwrap(),
+        Merged::Conflict(vec!["README.md".to_owned()])
+    );
+    assert_eq!(rev_parse(&path, "HEAD"), landed);
 }
 
 #[test]

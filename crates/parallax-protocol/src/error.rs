@@ -111,6 +111,10 @@ pub enum ErrorKind {
     /// The run's queue has no waiting message with the given id: it was sent, cancelled, or never
     /// queued (PLX-370).
     QueuedMessageNotFound,
+    /// `land/queue` refused a run that isn't a Project's completed child with a branch, such as a
+    /// coordinator or a run started with `explore`, or `land/approve` or `land/sendBack` one that
+    /// isn't waiting for approval (PLX-410). The message says which. Nothing changed.
+    LandRefused,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

@@ -57,6 +57,10 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub integration_branch: Option<String>,
+    /// Its children land without waiting for the user's approval (0045), behind the `landing`
+    /// capability. Absent means false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_land: bool,
     /// When the project was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
@@ -199,8 +203,8 @@ pub struct ProjectCreateResult {
 
 /// Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
 /// capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
-/// autonomy level, behind `projectAutonomy` (0043), or its base branch, behind `integrationBranch`
-/// (0045).
+/// autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
+/// (0045), or automatic landing, behind `landing` (0045).
 ///
 /// A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
 /// `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
@@ -234,6 +238,11 @@ pub struct ProjectUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub base_branch: Option<String>,
+    /// Turns automatic landing on or off, behind `landing` (0045). Absent keeps it. Children
+    /// already waiting for approval keep waiting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_land: Option<bool>,
 }
 
 /// Result of `project/update`.
