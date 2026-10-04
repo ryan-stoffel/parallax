@@ -79,6 +79,7 @@ fn proposal(from: RunId, scope: MemoryScope, title: &str) -> MemoryProposeParams
         kind: Some(MemoryKind::Gotcha),
         title: title.to_owned(),
         content: "Details.".to_owned(),
+        replaces: None,
     }
 }
 
@@ -552,7 +553,9 @@ async fn a_coordinators_proposal_waits_for_the_user() {
         )
         .await;
     assert!(!is_error && said.contains("user"), "{said}");
-    let brief = json!({"kind": "brief", "title": "Ship v2 first", "content": "# Goal\n"});
+    // A brief is a whole file, so the 4 KiB entry cap doesn't hold it.
+    let goal = format!("# Goal\n\n{}\n", "Ship v2. ".repeat(1000));
+    let brief = json!({"kind": "brief", "title": "Ship v2 first", "content": goal});
     let (said, is_error) = curator.tool("memory_propose", brief).await;
     assert!(!is_error, "{said}");
     let elsewhere = json!({"scope": "you", "kind": "brief", "title": "B", "content": "B"});
@@ -573,7 +576,7 @@ async fn a_coordinators_proposal_waits_for_the_user() {
     assert_eq!((brief.kind, &brief.writer), (None, &writer));
     assert_eq!(brief.for_scope, Some(MemoryScopeKind::Project));
     let read = read(&mut client, scope, &brief.path).await.unwrap();
-    assert_eq!(read.content, "# Goal\n");
+    assert_eq!(read.content, goal);
 
     // A wake-up carries the child's proposal, and leaves the coordinator's for the user.
     let child = spawn(&mut client, &coordinator, "Fix the build.").await;
@@ -596,6 +599,51 @@ async fn a_coordinators_proposal_waits_for_the_user() {
         waiting(&mut client, project.id).await,
         ["proposals/ship-v2-first.md", "proposals/use-vitest.md"]
     );
+    host.server.stop().await;
+}
+
+/// A coordinator's rewrite names the entry it replaces, so saving it doesn't add a second entry
+/// when the new title's slug differs from the entry's file name. plxd checks the entry exists at
+/// that scope with the proposal's kind, and only a coordinator names one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_coordinators_rewrite_names_the_entry_it_replaces() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, mut client, project, coordinator) = project_with_coordinator(&seen).await;
+    let scope = MemoryScope::Project { id: project.id };
+    let entry = "memory/decision/vitest.md";
+    let first = write(scope, entry, "Not Jest.", Some("Use Vitest"));
+    client.call::<MemoryWrite>(first).await.unwrap();
+    let mut curator = tools(&host, coordinator.id).await;
+
+    let rewrite = json!({"kind": "decision", "path": entry, "title": "Use Vitest, not Jest", "content": "Jest was slow."});
+    let (said, is_error) = curator.tool("memory_propose", rewrite).await;
+    assert!(!is_error, "{said}");
+    let proposed = files(&mut client, scope).await;
+    let proposed = proposed
+        .iter()
+        .find(|file| file.path.starts_with("proposals/"))
+        .unwrap();
+    assert_eq!(proposed.path, "proposals/use-vitest-not-jest.md");
+    assert_eq!(proposed.replaces.as_deref(), Some(entry));
+    assert_eq!(proposed.for_scope, Some(MemoryScopeKind::Project));
+
+    for (path, kind) in [
+        ("memory/decision/missing.md", "decision"),
+        (entry, "gotcha"),
+        ("brief.md", "brief"),
+    ] {
+        let args = json!({"kind": kind, "path": path, "title": "T", "content": "C"});
+        let refused = curator.refused("memory_propose", args).await;
+        assert!(refused.contains(path), "{refused}");
+    }
+    let child = spawn(&mut client, &coordinator, "Fix the build.").await;
+    let childs = MemoryProposeParams {
+        kind: Some(MemoryKind::Decision),
+        replaces: Some(entry.to_owned()),
+        ..proposal(child, scope, "Theirs")
+    };
+    let refused = client.call::<MemoryPropose>(childs).await.unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS, "a coordinator's alone");
     host.server.stop().await;
 }
 

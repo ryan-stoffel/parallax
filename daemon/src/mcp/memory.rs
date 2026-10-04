@@ -161,11 +161,20 @@ impl Memory {
             Role::Coordinator => &["preference", "convention", "decision", "gotcha", "brief"],
             Role::Thread | Role::Child => &["preference", "convention", "decision", "gotcha"],
         };
+        let mut properties = json!({
+            "scope": scope,
+            "kind": {"type": "string", "enum": kinds},
+            "title": title,
+            "content": {"type": "string", "description": "The entry, at most 4 KiB: the fact, and for a decision why. For a brief, the whole brief, at most 1 MiB."},
+        });
+        if self.role == Role::Coordinator {
+            properties["path"] = json!({"type": "string", "description": "The entry this rewrites, memory/<kind>/<name>.md at scope, as memory_read lists it. Saving the proposal replaces it. Omit it for a new entry or a brief."});
+        }
         let propose = tool(
             "memory_propose",
             match self.role {
                 Role::Coordinator => {
-                    "Propose a memory change for the user to save or discard: a rewrite the Memory tab asked for, or a new brief (kind brief, project scope; only the user writes the brief). An entry is saved as memory/<kind>/<slug of its title>.md, so keep an existing entry's title to replace it."
+                    "Propose a memory change for the user to save or discard: a rewrite the Memory tab asked for, or a new brief (kind brief, project scope; only the user writes the brief). To rewrite an existing entry, name it in path."
                 }
                 Role::Child => {
                     "Propose a memory entry: a lasting fact a later thread should start with, not what you did today. Your coordinator reviews it at its next wake-up and saves it or drops it."
@@ -174,15 +183,7 @@ impl Memory {
                     "Propose a memory entry for your repository: a lasting fact a later thread should start with, not what you did today. The user reviews it and saves it or drops it."
                 }
             },
-            object(
-                json!({
-                    "scope": scope,
-                    "kind": {"type": "string", "enum": kinds},
-                    "title": title,
-                    "content": {"type": "string", "description": "The entry, at most 4 KiB: the fact, and for a decision why. For a brief, the whole brief."},
-                }),
-                &["kind", "title", "content"],
-            ),
+            object(properties, &["kind", "title", "content"]),
             false,
         );
         if self.role != Role::Coordinator {
@@ -257,10 +258,19 @@ impl Memory {
                     kind,
                     title,
                     content,
+                    path,
                 } = parse(arguments)?;
                 let scope = self.scope(scope.as_deref())?;
                 check_text("title", &title, MAX_TITLE_BYTES)?;
-                check_text("content", &content, MAX_PROPOSAL_BYTES)?;
+                let cap = if kind == "brief" {
+                    MAX_CONTEXT_BYTES
+                } else {
+                    MAX_PROPOSAL_BYTES
+                };
+                check_text("content", &content, cap)?;
+                if let Some(path) = &path {
+                    check_text("path", path, MAX_PATH_BYTES)?;
+                }
                 // `brief` is the coordinator's rewrite of the brief, which has no kind. plxd
                 // refuses it from anyone else, and any kind it doesn't know.
                 let kind = match kind.as_str() {
@@ -275,6 +285,7 @@ impl Memory {
                         kind,
                         title,
                         content,
+                        replaces: path,
                     })
                     .await?;
                 Ok(match proposed.to {
@@ -332,6 +343,8 @@ struct ProposeArgs {
     kind: String,
     title: String,
     content: String,
+    #[serde(default)]
+    path: Option<String>,
 }
 
 #[derive(Deserialize)]

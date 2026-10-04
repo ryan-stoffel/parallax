@@ -4821,6 +4821,11 @@ export type MemoryFile = {
 	 * coordinator curates, or a coordinator's, which the user saves there.
 	 */
 	forScope?: MemoryScopeKind,
+	/**
+	 * For a coordinator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
+	 * `for_scope`, which saving it replaces.
+	 */
+	replaces?: string,
 };
 
 /**
@@ -4960,6 +4965,11 @@ export type MemoryProposeParams = {
 	 * Its body.
 	 */
 	content: string,
+	/**
+	 * The entry it rewrites, `memory/<kind>/<name>.md` of the same kind at `scope`, which must
+	 * exist. Only a coordinator names one; its proposal records it as `replaces`.
+	 */
+	replaces?: string,
 };
 
 /**

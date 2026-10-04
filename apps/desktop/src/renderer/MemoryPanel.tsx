@@ -76,9 +76,9 @@ interface Target {
 }
 
 /**
- * Where a proposal saves: an entry, `memory/<kind>/<slug>.md`, at the scope it names (`forScope`,
- * with `repo` the Repo scope's entry) or else the folder it waits in; or, for a coordinator's with
- * no kind, the Project's brief. Undefined for anything else.
+ * Where a proposal saves: an entry, the one it `replaces` or else `memory/<kind>/<slug>.md`, at the
+ * scope it names (`forScope`, with `repo` the Repo scope's entry) or else the folder it waits in;
+ * or, for a coordinator's with no kind, the Project's brief. Undefined for anything else.
  */
 export function savedAs(file: Memory, repo?: string): Target | undefined {
   if (!file.kind) {
@@ -91,7 +91,7 @@ export function savedAs(file: Memory, repo?: string): Target | undefined {
       : file.forScope === "repo" && repo
         ? { kind: "repo", id: repo }
         : file.scope;
-  return { scope, path: `memory/${file.kind}/${fileName(file.path)}.md` };
+  return { scope, path: file.replaces ?? `memory/${file.kind}/${fileName(file.path)}.md` };
 }
 
 const sameScope = (a: MemoryScope, b: MemoryScope) =>

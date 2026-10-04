@@ -7,8 +7,8 @@
 //! writes, though not the brief, and its write adds a `learned` item to the Project's inbox (0043).
 //! A proposal is saved as `proposals/<slug>.md`: a Project's child's in the Project's folder,
 //! naming the scope it is for, until its coordinator's next wake-up carries it; a coordinator's
-//! the same way, for the user, such as a rewrite the Memory tab asked for or the brief's; and a
-//! plain thread's in its repository's folder, for the user.
+//! the same way, for the user, such as a rewrite the Memory tab asked for, naming the entry it
+//! replaces, or the brief's; and a plain thread's in its repository's folder, for the user.
 
 use std::path::{Path, PathBuf};
 
@@ -180,7 +180,7 @@ async fn write(
                 None => ("user".to_owned(), "user".to_owned()),
             };
             let source = source.unwrap_or(default_source);
-            memory::render(kind, title, &source, &today(), &who, None, &content)
+            memory::render(kind, title, &source, &today(), &who, &[], &content)
         }
         _ => content,
     };
@@ -223,14 +223,21 @@ async fn propose(
         kind,
         title,
         content,
+        replaces,
     } = params;
     let title = check_title(&title)?;
     if kind.is_some_and(|kind| memory::kind_name(kind).is_none()) {
         return Err(ErrorObject::invalid_params("unknown memory kind"));
     }
-    if content.trim().is_empty() || content.len() > MAX_PROPOSAL_BYTES {
+    // An entry is short (0044); a brief is a whole file.
+    let cap = if kind.is_some() {
+        MAX_PROPOSAL_BYTES as u64
+    } else {
+        context::MAX_FILE_BYTES
+    };
+    if content.trim().is_empty() || content.len() as u64 > cap {
         return Err(ErrorObject::invalid_params(format!(
-            "a proposal needs content of at most {MAX_PROPOSAL_BYTES} bytes"
+            "a proposal needs content of at most {cap} bytes"
         )));
     }
     // A child's proposal waits in its Project's folder, naming the scope it is for, until the
@@ -269,15 +276,22 @@ async fn propose(
             (scope, None, MemoryProposalTo::User, "thread")
         }
     };
+    if let Some(replaces) = &replaces {
+        check_replaces(context, own_project.is_some(), scope, kind, replaces).await?;
+    }
     let dir = scope_dir(context, folder).await?;
     let writer = format!("{who} {from}");
+    let extra: Vec<(&str, &str)> = [("Scope", for_scope), ("Replaces", replaces.as_deref())]
+        .into_iter()
+        .filter_map(|(field, value)| Some((field, value?)))
+        .collect();
     let text = memory::render(
         kind.unwrap_or(MemoryKind::Unknown),
         &title,
         &writer,
         &today(),
         &writer,
-        for_scope,
+        &extra,
         &content,
     );
     let slug = memory::slug(&title);
@@ -290,6 +304,36 @@ async fn propose(
         to,
         file: Some(file),
     })
+}
+
+/// Checks the entry a proposal `replaces`: only a coordinator names one, and it is an existing
+/// entry of the proposal's `kind` at `scope`.
+async fn check_replaces(
+    context: &Context,
+    coordinator: bool,
+    scope: MemoryScope,
+    kind: Option<MemoryKind>,
+    replaces: &str,
+) -> Result<(), ErrorObject> {
+    if !coordinator {
+        return Err(ErrorObject::invalid_params(
+            "only a Project's coordinator names the entry a proposal replaces",
+        ));
+    }
+    let path = context::validate_relative_path(replaces)?.to_owned();
+    if kind.is_none() || memory::entry_kind(&path) != kind {
+        return Err(ErrorObject::invalid_params(format!(
+            "{path} isn't an entry of the proposal's kind, memory/<kind>/<name>.md"
+        )));
+    }
+    let dir = scope_dir(context, scope).await?;
+    if !run_blocking(move || Ok(dir.join(&path).is_file())).await? {
+        return Err(ErrorObject::invalid_params(format!(
+            "{replaces} isn't an entry at the {} scope",
+            scope_name(scope)
+        )));
+    }
+    Ok(())
 }
 
 /// Who proposes, by its run.
@@ -491,6 +535,7 @@ fn memory_file(path: &str, metadata: &std::fs::Metadata, header: memory::Header)
             "project" => Some(MemoryScopeKind::Project),
             _ => None,
         }),
+        replaces: header.replaces,
     }
 }
 

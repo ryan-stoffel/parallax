@@ -4,8 +4,8 @@
 //!
 //! A proposal, `proposals/<slug>.md`, has the same form. A Project child's also names the scope
 //! it is for (`Scope:`), and waits in the Project's folder until its coordinator's next wake-up
-//! carries it ([`pending`]). A coordinator's names its scope too, and waits there for the user. A
-//! coordinator's rewrite of the brief has no `Kind:` line.
+//! carries it ([`pending`]). A coordinator's names its scope too, and the entry it rewrites, if any (`Replaces:`), and waits
+//! there for the user. A coordinator's rewrite of the brief has no `Kind:` line.
 //!
 //! A Project's child starts with the brief and an [`index`] of the entries' titles ([`start`]).
 
@@ -32,6 +32,8 @@ pub(crate) struct Header {
     pub writer: Option<String>,
     /// The scope a child's proposal is for: `you`, `repo`, or `project`.
     pub scope: Option<String>,
+    /// The entry a coordinator's proposal rewrites, `memory/<kind>/<name>.md`.
+    pub replaces: Option<String>,
 }
 
 /// The folder name of `kind`, or `None` for one this plxd doesn't know.
@@ -67,23 +69,27 @@ fn parse_kind(name: &str) -> Option<MemoryKind> {
     .find(|kind| kind_name(*kind) == Some(name))
 }
 
-/// An entry's file: the header, a blank line, then `body`, with a `Scope:` line last in the
-/// header when `scope` is given, and no `Kind:` line for a kind with no name. Each value is one
-/// line: a line break in one becomes a space.
+/// An entry's file: the header, a blank line, then `body`, with `extra` lines, such as a
+/// proposal's `Scope:`, last in the header, and no `Kind:` line for a kind with no name. Each value
+/// is one line: a line break in one becomes a space.
 pub(crate) fn render(
     kind: MemoryKind,
     title: &str,
     source: &str,
     date: &str,
     writer: &str,
-    scope: Option<&str>,
+    extra: &[(&str, &str)],
     body: &str,
 ) -> String {
     let kind = kind_name(kind).unwrap_or_default();
     let values = [kind, title, source, date, writer];
     let mut text = String::new();
-    let scope = scope.map(|scope| ("Scope", scope));
-    for (field, value) in FIELDS.iter().copied().zip(values).chain(scope) {
+    for (field, value) in FIELDS
+        .iter()
+        .copied()
+        .zip(values)
+        .chain(extra.iter().copied())
+    {
         if field == "Kind" && value.is_empty() {
             continue;
         }
@@ -119,6 +125,7 @@ pub(crate) fn parse(content: &str) -> (Header, &str) {
             "Date" => header.date = value,
             "Writer" => header.writer = value,
             "Scope" => header.scope = value,
+            "Replaces" => header.replaces = value,
             _ => break,
         }
         rest = after;
@@ -348,7 +355,7 @@ mod tests {
     fn entry(dir: &Path, path: &str, title: &str) {
         let file = dir.join(path);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let text = render(MemoryKind::Decision, title, "s", "d", "w", None, "Body.");
+        let text = render(MemoryKind::Decision, title, "s", "d", "w", &[], "Body.");
         std::fs::write(file, text).unwrap();
     }
 
@@ -459,13 +466,13 @@ mod tests {
             "run 1",
             "2026-10-04",
             "user",
-            Some("repo"),
+            &[("Scope", "repo"), ("Replaces", "memory/decision/vitest.md")],
             "We moved off Jest.\n",
         );
         assert_eq!(
             text,
             "Kind: decision\nTitle: Use Vitest, not Jest\nSource: run 1\nDate: 2026-10-04\n\
-             Writer: user\nScope: repo\n\nWe moved off Jest.\n"
+             Writer: user\nScope: repo\nReplaces: memory/decision/vitest.md\n\nWe moved off Jest.\n"
         );
         let (header, body) = parse(&text);
         assert_eq!(
@@ -477,6 +484,7 @@ mod tests {
                 date: Some("2026-10-04".to_owned()),
                 writer: Some("user".to_owned()),
                 scope: Some("repo".to_owned()),
+                replaces: Some("memory/decision/vitest.md".to_owned()),
             }
         );
         assert_eq!(body, "We moved off Jest.\n");

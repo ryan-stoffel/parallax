@@ -179,11 +179,13 @@ test("a coordinator's proposal saves at the scope it names", async () => {
   expect(calls("memory/delete")).toEqual([{ scope: project, path: "proposals/use-vitest.md" }]);
 });
 
-test("savedAs: You, the folder without a repo entry, and a coordinator's brief", () => {
+test("savedAs: You, the folder without a repo entry, the entry it replaces, and a coordinator's brief", () => {
   const proposal = (more: Partial<Memory>) =>
     memory(project, "proposals/x.md", { writer: "coordinator k-1", ...more });
   expect(savedAs(proposal({ kind: "gotcha", forScope: "you" }), "r-1")?.scope).toEqual(you);
   expect(savedAs(proposal({ kind: "gotcha", forScope: "repo" }))?.scope).toEqual(project);
+  const rewrite = proposal({ kind: "decision", replaces: "memory/decision/vitest.md" });
+  expect(savedAs(rewrite)).toEqual({ scope: project, path: "memory/decision/vitest.md" });
   expect(savedAs(proposal({}))).toEqual({ scope: project, path: "brief.md" });
   expect(savedAs(proposal({ writer: "thread t-1" }))).toBeUndefined();
 });

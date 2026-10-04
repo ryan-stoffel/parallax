@@ -113,6 +113,11 @@ pub struct MemoryFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub for_scope: Option<MemoryScopeKind>,
+    /// For a coordinator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
+    /// `for_scope`, which saving it replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replaces: Option<String>,
 }
 
 /// Params of `memory/list`.
@@ -226,6 +231,11 @@ pub struct MemoryProposeParams {
     pub title: String,
     /// Its body.
     pub content: String,
+    /// The entry it rewrites, `memory/<kind>/<name>.md` of the same kind at `scope`, which must
+    /// exist. Only a coordinator names one; its proposal records it as `replaces`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replaces: Option<String>,
 }
 
 /// Who a proposal went to.
