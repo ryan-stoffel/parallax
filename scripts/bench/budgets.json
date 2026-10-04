@@ -1,0 +1,16 @@
+{
+  "threads": 30,
+  "max": {
+    "connection.events": 9700,
+    "connection.bytes": 18500000,
+    "subscriptions.host.events": 45,
+    "subscriptions.host.bytes": 17000,
+    "subscriptions.scope.events": 4800,
+    "subscriptions.scope.bytes": 9200000,
+    "subscriptions.open.events": 4800,
+    "subscriptions.open.bytes": 9200000,
+    "plxd.rssPeakMiB": 100,
+    "plxd.cpuS": 12,
+    "latencyMs.p95": 25
+  }
+}

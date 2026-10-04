@@ -268,6 +268,40 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/e2e-app
 
+  # 30 fake-backend threads streaming through the rust job's Linux plxd, failed when a daemon number
+  # exceeds scripts/bench/budgets.json (PLX-452). App frame times under xvfb are too noisy to gate.
+  load:
+    needs: rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: plxd-ubuntu-24.04
+          path: ${{ runner.temp }}/plxd
+
+      # Artifacts drop the executable bit.
+      - name: Run the load harness
+        run: |
+          chmod +x "$RUNNER_TEMP/plxd/plxd"
+          python3 scripts/bench/load.py "$RUNNER_TEMP/plxd/plxd" --threads 30 --out load.json
+
+      - name: Check the budgets
+        if: ${{ !cancelled() && hashFiles('load.json') != '' }}
+        run: scripts/ci/check-load load.json
+
+      - name: Upload the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: load
+          path: load.json
+          retention-days: 7
+
   actionlint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -305,7 +339,7 @@ jobs:
   # Branch protection requires this job's name, ci, as the only check (#6). Renaming it blocks every merge.
   ci:
     if: always()
-    needs: [actionlint, app, e2e, rust]
+    needs: [actionlint, app, e2e, load, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

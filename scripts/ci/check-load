@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Fails when a load harness result (scripts/bench/load.py) exceeds scripts/bench/budgets.json.
+
+    scripts/ci/check-load load.json
+
+Each budget is a maximum for a dotted path into the result. A missing path fails, so renaming a
+subscription or metric means updating the budgets too. Any resync fails. Writes a Markdown table
+to $GITHUB_STEP_SUMMARY when set, else to stdout. p50 and p99 are shown but not gated: the latency
+tail is too noisy on a shared runner.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+BUDGETS = Path(__file__).resolve().parents[1] / "bench" / "budgets.json"
+SHOWN = ("latencyMs.p50", "latencyMs.p99", "wallS")
+
+
+def get(result: dict, path: str):
+    for key in path.split("."):
+        if not isinstance(result, dict) or key not in result:
+            return None
+        result = result[key]
+    return result
+
+
+def fmt(value) -> str:
+    if value is None:
+        return "missing"
+    return f"{value:,}" if isinstance(value, int) else f"{value:,.2f}"
+
+
+def main() -> int:
+    result = json.loads(Path(sys.argv[1]).read_text())
+    budgets = json.loads(BUDGETS.read_text())
+    rows, failed = [], False
+    if result.get("threads") != budgets["threads"]:
+        rows.append(f"| threads | {result.get('threads')} | {budgets['threads']} | fail |")
+        failed = True
+    for path, limit in budgets["max"].items():
+        value = get(result, path)
+        ok = value is not None and value <= limit
+        failed |= not ok
+        rows.append(f"| {path} | {fmt(value)} | {fmt(limit)} | {'ok' if ok else 'fail'} |")
+    resync = result.get("resync")
+    failed |= resync is not None
+    rows.append(f"| resync | {resync or 'none'} | none | {'ok' if resync is None else 'fail'} |")
+    rows += [f"| {path} | {fmt(get(result, path))} | | not gated |" for path in SHOWN]
+
+    summary = "\n".join([
+        f"### plxd load, {result.get('threads')} threads: {'over budget' if failed else 'within budget'}",
+        "",
+        "| Metric | Value | Max | |",
+        "| --- | --- | --- | --- |",
+        *rows,
+        "",
+    ])
+    if out := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(out, "a") as f:
+            f.write(summary)
+    print(summary)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
