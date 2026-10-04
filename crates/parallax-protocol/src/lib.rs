@@ -118,7 +118,7 @@ pub use land::{
 pub use memory::{
     MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind, MemoryListParams,
     MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
-    MemoryReadResult, MemoryScope, MemoryWriteParams, MemoryWriteResult,
+    MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams, MemoryWriteResult,
 };
 pub use project::{
     Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,

@@ -76,12 +76,23 @@ interface Target {
 }
 
 /**
- * The entry a proposal saves as, `memory/<kind>/<slug>.md`, in the folder it waits in, or
- * undefined for a kind this version doesn't know.
- * ponytail: `MemoryFile` doesn't carry a proposal's `Scope:` line; PLX-476 adds it.
+ * Where a proposal saves: an entry, `memory/<kind>/<slug>.md`, at the scope it names (`forScope`,
+ * with `repo` the Repo scope's entry) or else the folder it waits in; or, for a coordinator's with
+ * no kind, the Project's brief. Undefined for anything else.
  */
-export const savedAs = (file: Memory): Target | undefined =>
-  file.kind && { scope: file.scope, path: `memory/${file.kind}/${fileName(file.path)}.md` };
+export function savedAs(file: Memory, repo?: string): Target | undefined {
+  if (!file.kind) {
+    const brief = file.scope.kind === "project" && file.writer?.startsWith("coordinator ");
+    return brief ? { scope: file.scope, path: "brief.md" } : undefined;
+  }
+  const scope: MemoryScope =
+    file.forScope === "you"
+      ? { kind: "you" }
+      : file.forScope === "repo" && repo
+        ? { kind: "repo", id: repo }
+        : file.scope;
+  return { scope, path: `memory/${file.kind}/${fileName(file.path)}.md` };
+}
 
 const sameScope = (a: MemoryScope, b: MemoryScope) =>
   a.kind === b.kind && (a.kind === "you" || (b.kind !== "you" && a.id === b.id));
@@ -215,6 +226,7 @@ export function MemoryPanel({
       title={title}
       calls={calls}
       next={file.path === "brief.md" ? undefined : nextScope(file.scope, repo)}
+      repo={repo}
       taken={taken}
       onChanged={reload}
     />
@@ -333,6 +345,7 @@ function MemoryRow({
   title = file.title ?? fileName(file.path),
   calls,
   next,
+  repo,
   taken,
   onChanged,
 }: {
@@ -341,6 +354,8 @@ function MemoryRow({
   calls: ReturnType<typeof memoryCalls>;
   /** Where Promote moves it, or absent for none. */
   next?: MemoryScope;
+  /** The repo entry whose memory is the Repo scope, where a proposal for it saves. */
+  repo?: string;
   /** Whether a listed file is already at a target. */
   taken: (target: Target) => boolean;
   onChanged: () => void;
@@ -379,7 +394,7 @@ function MemoryRow({
     onChanged();
   };
   const move = (to: Target | undefined, done: string) => {
-    if (!to) return setError("This proposal has no kind this version knows.");
+    if (!to) return setError("This proposal has no kind.");
     if (taken(to)) return setReplacing({ to, done });
     void act(() => calls.move(file, to, done));
   };
@@ -465,7 +480,7 @@ function MemoryRow({
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() => move(savedAs(file), "Saved")}
+                        onClick={() => move(savedAs(file, repo), "Saved")}
                         className={outlineButton}
                       >
                         Save

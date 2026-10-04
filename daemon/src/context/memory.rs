@@ -4,7 +4,8 @@
 //!
 //! A proposal, `proposals/<slug>.md`, has the same form. A Project child's also names the scope
 //! it is for (`Scope:`), and waits in the Project's folder until its coordinator's next wake-up
-//! carries it ([`pending`]).
+//! carries it ([`pending`]). A coordinator's names its scope too, and waits there for the user. A
+//! coordinator's rewrite of the brief has no `Kind:` line.
 //!
 //! A Project's child starts with the brief and an [`index`] of the entries' titles ([`start`]).
 
@@ -67,7 +68,8 @@ fn parse_kind(name: &str) -> Option<MemoryKind> {
 }
 
 /// An entry's file: the header, a blank line, then `body`, with a `Scope:` line last in the
-/// header when `scope` is given. Each value is one line: a line break in one becomes a space.
+/// header when `scope` is given, and no `Kind:` line for a kind with no name. Each value is one
+/// line: a line break in one becomes a space.
 pub(crate) fn render(
     kind: MemoryKind,
     title: &str,
@@ -82,6 +84,9 @@ pub(crate) fn render(
     let mut text = String::new();
     let scope = scope.map(|scope| ("Scope", scope));
     for (field, value) in FIELDS.iter().copied().zip(values).chain(scope) {
+        if field == "Kind" && value.is_empty() {
+            continue;
+        }
         let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
         let _ = writeln!(text, "{field}: {value}");
     }
@@ -126,7 +131,7 @@ pub(crate) fn parse(content: &str) -> (Header, &str) {
 
 /// The child proposals waiting in Project folder `dir`, each with its path and the lines a
 /// coordinator's wake-up shows for it, oldest path first. A file that can't be read is skipped,
-/// and stays for the next wake-up.
+/// and stays for the next wake-up. A coordinator's own proposal is the user's, so it stays too.
 pub(crate) fn pending(dir: &Path) -> Vec<(String, String)> {
     let Ok(files) = super::list_files(dir) else {
         return Vec::new();
@@ -143,6 +148,13 @@ pub(crate) fn pending(dir: &Path) -> Vec<(String, String)> {
             continue;
         };
         let (header, body) = parse(&text);
+        if header
+            .writer
+            .as_deref()
+            .is_some_and(|writer| writer.starts_with("coordinator "))
+        {
+            continue;
+        }
         let quoted: Vec<String> = body
             .trim()
             .lines()

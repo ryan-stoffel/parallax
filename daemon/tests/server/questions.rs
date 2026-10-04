@@ -136,7 +136,7 @@ async fn a_childs_question_wakes_the_coordinator_whose_different_answer_reaches_
     let child_memory: &[&str] = &["memory_read", "memory_propose"];
     let child_tools = [TOOLS, CONTEXT_TOOLS, CHILD_TOOLS, child_memory].concat();
     assert_eq!(tool_names(&mut asker).await, child_tools);
-    let memory: &[&str] = &["memory_read", "memory_write"];
+    let memory: &[&str] = &["memory_read", "memory_propose", "memory_write"];
     let tools = [TOOLS, CONTEXT_TOOLS, COORDINATOR_TOOLS, land::TOOLS, memory].concat();
     assert_eq!(tool_names(&mut boss).await, tools);
 
