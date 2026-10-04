@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
-use crate::worktree::insert_worktree;
+use crate::worktree::{RawWorktree, insert_worktree};
 use crate::{Store, Worktree, WorktreeFields, timestamp};
 
 /// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only model,
@@ -349,6 +349,43 @@ impl Store {
         let mut runs = Vec::new();
         for row in rows {
             runs.push(row?.into_run()?);
+        }
+        Ok(runs)
+    }
+
+    /// [`Store::list_runs`] with each run's worktree, `None` for a run without one, in one query
+    /// for `agent/list` (PLX-450).
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn list_runs_with_worktrees(
+        &self,
+        project: Option<Uuid>,
+    ) -> Result<Vec<(Run, Option<Worktree>)>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT r.*, w.id, w.repo_path, w.path, w.branch, w.base, w.git_dir, w.base_dirty,
+                    w.created_at
+             FROM (SELECT {COLUMNS} FROM runs WHERE ?1 IS NULL OR project_id = ?1) AS r
+             LEFT JOIN worktrees AS w ON w.id = r.id
+             ORDER BY r.created_at ASC, r.id ASC"
+        ))?;
+        // The worktree's columns follow the run's.
+        let start = COLUMNS.split(',').count();
+        let rows = stmt.query_map(params![project.map(|id| id.to_string())], |row| {
+            let worktree = match row.get::<_, Option<String>>(start)? {
+                Some(_) => Some(RawWorktree::at(row, start)?),
+                None => None,
+            };
+            Ok((RawRun::from_row(row)?, worktree))
+        })?;
+        let mut runs = Vec::new();
+        for row in rows {
+            let (run, worktree) = row?;
+            runs.push((
+                run.into_run()?,
+                worktree.map(RawWorktree::into_worktree).transpose()?,
+            ));
         }
         Ok(runs)
     }
