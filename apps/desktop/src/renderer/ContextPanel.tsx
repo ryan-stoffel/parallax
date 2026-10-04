@@ -1,23 +1,11 @@
-import {
-  BookOpen,
-  ChevronLeft,
-  Circle,
-  CircleCheck,
-  FileText,
-  GitMerge,
-  NotebookText,
-  Search,
-  X,
-} from "lucide-react";
-import { useEffect, useState, type ReactNode, type SVGProps } from "react";
+import { ChevronLeft, Circle, CircleCheck, GitMerge } from "lucide-react";
+import { useEffect, useState, type SVGProps } from "react";
 import type { Components } from "react-markdown";
 
 import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { describeError } from "./errors";
 import { GitHubLogo } from "./logos";
-import { age } from "./Sidebar";
-import { IconButton } from "./ui";
 
 /** The status board the coordinator keeps (coordinator.md), which the view opens on. */
 export const board = "notes.md";
@@ -73,175 +61,6 @@ export function useProjectContext(hostId: string, project: string, connected: bo
 }
 
 /**
- * The side panel's Context view for a Project. It opens on the coordinator's status board,
- * `notes.md`; the book button, or a board not written yet, shows All files and Recents instead,
- * and search filters the files by name. Any file opens in the view as Markdown, and everything
- * follows the agents' writes.
- */
-export function ContextPanel({
-  hostId,
-  project,
-  name,
-  connected,
-}: {
-  hostId: string;
-  project: string;
-  /** The Project's name, for the header. */
-  name: string;
-  connected: boolean;
-}) {
-  const { files, error } = useProjectContext(hostId, project, connected);
-  const [openPath, setOpenPath] = useState<string>();
-  const [allFiles, setAllFiles] = useState(false);
-  // What search filters the files by, or undefined while it's closed.
-  const [query, setQuery] = useState<string>();
-  const notes = files.find((f) => f.path === board);
-  const open = files.find((f) => f.path === openPath);
-  const showFiles = allFiles || !notes || query !== undefined;
-  const components = contextComponents(files, setOpenPath);
-  const doc = (file: ContextFile) => (
-    <ContextDoc
-      key={file.path}
-      hostId={hostId}
-      project={project}
-      file={file}
-      components={components}
-    />
-  );
-
-  let body: ReactNode;
-  if (open)
-    body = (
-      <>
-        <button
-          type="button"
-          onClick={() => setOpenPath(undefined)}
-          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
-        >
-          <ChevronLeft aria-hidden className="size-4 shrink-0" />
-          <span className="truncate">{open.path}</span>
-        </button>
-        {doc(open)}
-      </>
-    );
-  else if (!showFiles) body = doc(notes);
-  else if (files.length === 0)
-    body = (
-      <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
-        <NotebookText aria-hidden className="mb-1 size-5 text-faint-foreground" />
-        <p className="text-[13px] font-medium text-foreground">No context yet</p>
-        <p className="text-[12.5px] text-muted-foreground">{boardHint}</p>
-      </div>
-    );
-  else {
-    const q = query?.toLowerCase() ?? "";
-    const shown = files.filter((f) => f.path.toLowerCase().includes(q));
-    const recent = files
-      .toSorted((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt))
-      .slice(0, 3);
-    body = (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-        {!notes && query === undefined && (
-          <p className="px-2.5 pb-2 text-[12.5px] text-muted-foreground">{boardHint}</p>
-        )}
-        <h3 className={sectionHeading}>All files</h3>
-        {shown.length === 0 && (
-          <p className="px-2.5 py-2 text-[13px] text-faint-foreground">No files match.</p>
-        )}
-        <ul aria-label="All files">
-          {shown.map((f) => (
-            <li key={f.path}>
-              <button
-                type="button"
-                onClick={() => setOpenPath(f.path)}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
-              >
-                <FileText aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
-                <span className="min-w-0 flex-1 truncate text-[13px]">{f.path}</span>
-                <span className="shrink-0 text-[11.5px] text-faint-foreground">
-                  {age(f.modifiedAt)}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-        {query === undefined && (
-          <>
-            <h3 className={`${sectionHeading} mt-3`}>Recents</h3>
-            <ul aria-label="Recents" className="flex flex-col gap-2 px-1">
-              {recent.map((f) => (
-                <RecentCard
-                  key={f.path}
-                  hostId={hostId}
-                  project={project}
-                  file={f}
-                  onOpen={() => setOpenPath(f.path)}
-                />
-              ))}
-            </ul>
-          </>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1 pr-2 pb-1 pl-4">
-        {query === undefined ? (
-          <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium">{name}</h2>
-        ) : (
-          <input
-            autoFocus
-            aria-label="Search files"
-            placeholder="Search files"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== "Escape") return;
-              setQuery(undefined);
-              document.getElementById("context-search")?.focus();
-            }}
-            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
-          />
-        )}
-        <IconButton
-          id="context-search"
-          label={query === undefined ? "Search files" : "Close search"}
-          onClick={() => {
-            setOpenPath(undefined);
-            setQuery(query === undefined ? "" : undefined);
-          }}
-        >
-          {query === undefined ? <Search /> : <X />}
-        </IconButton>
-        <IconButton
-          label="All files"
-          aria-pressed={showFiles}
-          disabled={!notes}
-          onClick={() => {
-            setOpenPath(undefined);
-            setQuery(undefined);
-            setAllFiles(!showFiles);
-          }}
-        >
-          <BookOpen />
-        </IconButton>
-      </div>
-      {body}
-      {error && (
-        <p role="alert" className="px-4 pb-2 text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-const boardHint = "The coordinator writes a status board to notes.md as work starts.";
-const sectionHeading = "px-2.5 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-foreground";
-
-/**
  * A context file's content, read again whenever `file` changes: it's a new object for each
  * `context.changed` to it.
  */
@@ -294,45 +113,6 @@ function ContextDoc({
   );
 }
 
-/**
- * A recently changed file: its name and age, then the top of it rendered small, with nothing in it
- * to click. The name's button stretches over the whole card.
- */
-function RecentCard({
-  hostId,
-  project,
-  file,
-  onOpen,
-}: {
-  hostId: string;
-  project: string;
-  file: ContextFile;
-  onOpen: () => void;
-}) {
-  const { content } = useContent(hostId, project, file);
-  return (
-    <li className="relative rounded-lg border border-border hover:bg-hover">
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex w-full items-center gap-2 px-3 pt-2 text-left after:absolute after:inset-0"
-      >
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{file.path}</span>
-        <span className="shrink-0 text-[11.5px] text-faint-foreground">{age(file.modifiedAt)}</span>
-      </button>
-      <div
-        aria-hidden
-        className="context-preview max-h-24 overflow-hidden mask-b-from-60% px-3 pb-2"
-      >
-        {/* More than a card shows, without rendering all of a large file. */}
-        {content !== undefined && (
-          <MarkdownText text={content.slice(0, 2000)} components={previewComponents} />
-        )}
-      </div>
-    </li>
-  );
-}
-
 const pullRequest = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/;
 const issue = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+/;
 // Another file in the flat context folder, such as `archived.md` or `./archived.md`.
@@ -381,15 +161,6 @@ const taskIcon: Components["input"] = ({ type, checked }) =>
   ) : (
     <Circle aria-label="Open" className={inlineIcon} />
   );
-
-// A Recents card's preview has nothing to click: links and images are text, and code has no copy
-// button.
-const previewComponents: Components = {
-  input: taskIcon,
-  a: ({ children }) => <span>{children}</span>,
-  img: ({ alt }) => <span>{alt || "Image"}</span>,
-  pre: ({ children }) => <pre>{children}</pre>,
-};
 
 /** The Markdown mark (dcurtis/markdown-mark, CC0), sized like a lucide icon. */
 function MarkdownMark(props: SVGProps<SVGSVGElement>) {

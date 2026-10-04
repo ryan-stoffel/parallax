@@ -93,7 +93,6 @@ export function KnowledgePanel({
             hostId={hostId}
             project={project}
             repo={repo}
-            coordinator={coordinator?.id}
             start={head}
             footer={prompt || undefined}
             onFiles={onFiles}
