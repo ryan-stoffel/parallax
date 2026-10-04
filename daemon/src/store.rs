@@ -18,9 +18,9 @@ use std::thread::{self, JoinHandle};
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AccountId, ErrorKind, ImageMediaType, KeyAccount, Project, ProjectCreateParams,
-    ProjectIcon, ProjectId, ProjectPermission, ProjectUpdateParams, PromptImage, Provider, Role,
-    RunId, StoreState,
+    AccountChoice, AccountId, ErrorKind, ImageMediaType, KeyAccount, Project, ProjectAutonomy,
+    ProjectCreateParams, ProjectIcon, ProjectId, ProjectPermission, ProjectUpdateParams,
+    PromptImage, Provider, Role, RunId, StoreState,
 };
 use parallax_store::{
     AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError, StoredImage,
@@ -211,6 +211,8 @@ pub(crate) fn fields(params: ProjectCreateParams) -> (Uuid, ProjectFields) {
             repo_path: params.repo_path,
             icon: params.icon.map(stored_icon),
             permission: stored_permission(params.permission.unwrap_or(ProjectPermission::Auto)),
+            autonomy: option_name(params.autonomy.unwrap_or(ProjectAutonomy::Routine))
+                .unwrap_or_default(),
             base_branch: params.base_branch,
         },
     )
@@ -224,6 +226,7 @@ pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
             name: params.name,
             icon: params.icon.map(stored_icon),
             permission: params.permission.map(stored_permission),
+            autonomy: params.autonomy.and_then(option_name),
             base_branch: params.base_branch,
         },
     )
@@ -238,6 +241,12 @@ fn stored_permission(permission: ProjectPermission) -> String {
 /// doesn't know.
 pub(crate) fn project_permission(stored: &str) -> ProjectPermission {
     option_value(stored).unwrap_or(ProjectPermission::Unknown)
+}
+
+/// A stored autonomy level as the protocol's, [`ProjectAutonomy::Unknown`] for one this build
+/// doesn't know (0043).
+pub(crate) fn project_autonomy(stored: &str) -> ProjectAutonomy {
+    option_value(stored).unwrap_or(ProjectAutonomy::Unknown)
 }
 
 /// A protocol icon as the store keeps it, a project's or a repo entry's alike.
@@ -282,6 +291,7 @@ pub(crate) fn project(
         name: row.name,
         icon: row.icon.map(protocol_icon),
         permission: Some(project_permission(&row.permission)),
+        autonomy: Some(project_autonomy(&row.autonomy)),
         branch: repo::branch(Path::new(&row.repo_path)),
         repo_path: row.repo_path,
         coordinator,
@@ -458,8 +468,8 @@ mod tests {
 
     use parallax_protocol::jsonrpc::{INTERNAL_ERROR, PLX_ERROR, REQUEST_CANCELLED};
     use parallax_protocol::{
-        AccountId, ErrorKind, ImageMediaType, ProjectCreateParams, ProjectIcon, ProjectId,
-        ProjectPermission, ProjectUpdateParams, PromptImage, Provider, StoreState,
+        AccountId, ErrorKind, ImageMediaType, ProjectAutonomy, ProjectCreateParams, ProjectIcon,
+        ProjectId, ProjectPermission, ProjectUpdateParams, PromptImage, Provider, StoreState,
     };
     use parallax_store::StoreError;
     use tokio_util::sync::CancellationToken;
@@ -484,6 +494,7 @@ mod tests {
                 }),
             }),
             permission: "bypass".to_owned(),
+            autonomy: "ask".to_owned(),
             created_at: "2026-09-24T12:00:00.5Z".parse().unwrap(),
             updated_at: "2026-09-24T12:00:01Z".parse().unwrap(),
             base_branch: None,
@@ -510,6 +521,7 @@ mod tests {
             })
         );
         assert_eq!(mapped.permission, Some(ProjectPermission::Bypass));
+        assert_eq!(mapped.autonomy, Some(ProjectAutonomy::Ask));
         assert_eq!(mapped.created_at, row(id.into()).created_at);
         assert_eq!(mapped.updated_at, row(id.into()).updated_at);
 
@@ -527,6 +539,7 @@ mod tests {
             repo_path: "/r".to_owned(),
             icon: Some(icon.clone()),
             permission: None,
+            autonomy: None,
             base_branch: None,
         };
         let (uuid, fields) = fields(params);
@@ -545,18 +558,21 @@ mod tests {
         };
         assert_eq!(fields.icon.as_ref(), Some(&stored));
         assert_eq!(fields.permission, "auto", "an absent mode is Auto");
+        assert_eq!(fields.autonomy, "routine", "an absent level is Routine");
 
         let (uuid, edit) = edit(ProjectUpdateParams {
             project: id,
             name: None,
             icon: Some(icon),
             permission: Some(ProjectPermission::Bypass),
+            autonomy: Some(ProjectAutonomy::Full),
             base_branch: None,
         });
         assert_eq!(uuid, Uuid::from(id));
         assert_eq!(edit.name, None);
         assert_eq!(edit.icon, Some(stored));
         assert_eq!(edit.permission.as_deref(), Some("bypass"));
+        assert_eq!(edit.autonomy.as_deref(), Some("full"));
     }
 
     #[test]

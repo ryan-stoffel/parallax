@@ -1936,10 +1936,18 @@ impl Actor {
         let events = logged_events(&self.daemon, self.id).await?;
         let message = handoff_message(from, &conversation(&events, HISTORY_BYTES), text);
         match place {
-            Place::Coordinator { repo } => Ok(super::coordinator::first_message(
-                &message,
-                &repo.to_string_lossy(),
-            )),
+            Place::Coordinator { repo } => {
+                let project = self.project.into();
+                let autonomy = store(&self.daemon, move |db| {
+                    crate::methods::question::autonomy_of(db, project)
+                })
+                .await?;
+                Ok(super::coordinator::first_message(
+                    &message,
+                    &repo.to_string_lossy(),
+                    autonomy,
+                ))
+            }
             Place::Worker { .. } => super::first_prompt(&message, place),
         }
     }

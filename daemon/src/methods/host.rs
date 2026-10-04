@@ -104,6 +104,9 @@ pub(crate) fn initialize(
 /// `projectPermission` (PLX-394, 0042): a project's `permission`, Auto or Bypass, on `Project`,
 /// `project/create`, and `project/update`, which an older plxd would silently drop. Every run in
 /// the project, its coordinator included, runs in it.
+/// `projectAutonomy` (PLX-403, 0043): a project's `autonomy`, Ask me, Routine, or Full, on
+/// `Project`, `project/create`, and `project/update`, which an older plxd would silently drop. In
+/// Ask me plxd refuses the coordinator's `answer` and sends every question to Needs you.
 /// `integrationBranch` (PLX-409, 0045): `baseBranch` and `integrationBranch` on `Project`,
 /// `baseBranch` on `project/create` and `project/update`, and `explore` on `agent/start` and
 /// `AgentRun`, which an older plxd would silently drop. A run in a Project is cut from its
@@ -182,6 +185,7 @@ fn capabilities_advertised() -> Capabilities {
         ("integrationBranch".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
+        ("projectAutonomy".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
         ("projectPermission".to_owned(), serde_json::Map::new()),

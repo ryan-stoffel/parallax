@@ -111,9 +111,9 @@ pub use inbox::{
     InboxSeenResult,
 };
 pub use project::{
-    Project, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectPermission,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
+    Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, ProjectIcon, ProjectId, ProjectListParams, ProjectListResult,
+    ProjectPermission, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use provider::{
     ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
@@ -182,6 +182,7 @@ mod tests {
             branch: Some("main".to_owned()),
             coordinator: None,
             permission: None,
+            autonomy: None,
             created_at: "2026-09-24T12:00:00Z".parse().unwrap(),
             updated_at: "2026-09-24T12:05:00.125Z".parse().unwrap(),
             base_branch: None,
@@ -336,6 +337,7 @@ mod tests {
                 repo_path: "/".to_owned(),
                 icon: icon.clone(),
                 permission: None,
+                autonomy: None,
                 base_branch: None,
             });
             round_trip(&ProjectUpdateResult {
@@ -354,6 +356,7 @@ mod tests {
                     name,
                     icon: icon.clone(),
                     permission: None,
+                    autonomy: None,
                     base_branch: None,
                 });
             }
@@ -373,6 +376,7 @@ mod tests {
                 name: None,
                 icon: None,
                 permission: None,
+                autonomy: None,
                 base_branch: None,
             })
             .unwrap(),
@@ -411,6 +415,7 @@ mod tests {
                 repo_path: "/".to_owned(),
                 icon: None,
                 permission: Some(permission),
+                autonomy: None,
                 base_branch: None,
             });
             round_trip(&ProjectUpdateParams {
@@ -418,6 +423,7 @@ mod tests {
                 name: None,
                 icon: None,
                 permission: Some(permission),
+                autonomy: None,
                 base_branch: None,
             });
         }
@@ -428,6 +434,47 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<ProjectPermission>(json!("manual")).unwrap(),
             ProjectPermission::Unknown
+        );
+    }
+
+    /// PLX-403 (0043): a project's autonomy level round trips on each type that carries it, and a
+    /// level from a newer peer reads as unknown.
+    #[test]
+    fn project_autonomy_round_trips_and_an_unknown_level_reads_as_unknown() {
+        for autonomy in [
+            ProjectAutonomy::Ask,
+            ProjectAutonomy::Routine,
+            ProjectAutonomy::Full,
+        ] {
+            round_trip(&Project {
+                autonomy: Some(autonomy),
+                ..project()
+            });
+            round_trip(&ProjectCreateParams {
+                id: ProjectId::generate(),
+                name: "parallax".to_owned(),
+                repo_path: "/".to_owned(),
+                icon: None,
+                permission: None,
+                autonomy: Some(autonomy),
+                base_branch: None,
+            });
+            round_trip(&ProjectUpdateParams {
+                project: ProjectId::generate(),
+                name: None,
+                icon: None,
+                permission: None,
+                autonomy: Some(autonomy),
+                base_branch: None,
+            });
+        }
+        assert_eq!(
+            serde_json::to_value(ProjectAutonomy::Ask).unwrap(),
+            json!("ask")
+        );
+        assert_eq!(
+            serde_json::from_value::<ProjectAutonomy>(json!("never")).unwrap(),
+            ProjectAutonomy::Unknown
         );
     }
 

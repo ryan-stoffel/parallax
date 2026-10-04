@@ -22,6 +22,7 @@ fn sample_fields() -> ProjectFields {
         repo_path: "/Users/ryan/dev/parallax".to_string(),
         icon: None,
         permission: "auto".to_string(),
+        autonomy: "routine".to_string(),
         base_branch: None,
     }
 }
@@ -207,6 +208,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: Some("renamed".to_string()),
                 icon: None,
                 permission: None,
+                autonomy: None,
                 base_branch: None,
             },
         )
@@ -228,6 +230,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                autonomy: None,
                 base_branch: None,
             },
         )
@@ -244,6 +247,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: None,
                 icon: Some(icon("rocket", None)),
                 permission: None,
+                autonomy: None,
                 base_branch: None,
             },
         )
@@ -291,6 +295,7 @@ fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                autonomy: None,
                 base_branch: None,
             },
         )
@@ -342,6 +347,45 @@ fn a_projects_permission_mode_is_checked_on_retry_and_changed_by_update() {
         store.get_project(id).expect("get").expect("the project"),
         updated
     );
+}
+
+/// A project's autonomy level (PLX-403, decision record 0043) is part of the retry check, and an
+/// update changes it alone.
+#[test]
+fn a_projects_autonomy_level_is_checked_on_retry_and_changed_by_update() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let fields = ProjectFields {
+        autonomy: "ask".to_string(),
+        ..sample_fields()
+    };
+    let created = store.create_project(id, &fields).expect("create");
+    assert_eq!(created.autonomy, "ask");
+    match store.create_project(id, &sample_fields()) {
+        Err(StoreError::IdConflict { id: conflicted }) => assert_eq!(conflicted, id),
+        result => panic!("expected IdConflict for another level, got {result:?}"),
+    }
+
+    let edit = ProjectEdit {
+        autonomy: Some("full".to_string()),
+        ..ProjectEdit::default()
+    };
+    let (updated, changed) = store.update_project(id, &edit).expect("a new level");
+    assert!(changed);
+    assert_eq!(
+        updated,
+        parallax_store::Project {
+            autonomy: "full".to_string(),
+            ..created
+        }
+    );
+    assert_eq!(
+        store.get_project(id).expect("get").expect("the project"),
+        updated
+    );
+    let (_, changed) = store.update_project(id, &edit).expect("the same level");
+    assert!(!changed, "the same level writes nothing");
 }
 
 /// A project's base branch (PLX-409, decision record 0045) is checked on a retry only when
@@ -416,6 +460,7 @@ fn an_update_that_changes_nothing_reports_no_change() {
             name: Some(fields.name.clone()),
             icon: fields.icon.clone(),
             permission: None,
+            autonomy: None,
             base_branch: None,
         },
     ] {
@@ -438,6 +483,7 @@ fn update_of_a_missing_project_fails_with_not_found() {
                 name: Some("renamed".to_string()),
                 icon: None,
                 permission: None,
+                autonomy: None,
                 base_branch: None,
             },
         )
@@ -703,9 +749,8 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             &ProjectFields {
                 name: "parallax".to_string(),
                 repo_path: "/r".to_string(),
-                icon: None,
-                permission: "auto".to_string(),
-                base_branch: None,
+                // No icon, Auto, and Routine: what migrations 16, 26, and 31 give an old row.
+                ..sample_fields()
             },
         )
         .expect("an idempotent create should match the migrated row");
@@ -733,7 +778,8 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             "icon_image_data",
             "permission",
             "base_branch",
-            "integration_branch"
+            "integration_branch",
+            "autonomy"
         ]
     );
     let version: i64 = conn
@@ -742,12 +788,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 30,
+        version, 31,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
          #257), 13 (run options, PLX-97), 14 (wakes, PLX-178), 15 (images, PLX-191), 16 \
-         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), and 30 (questions, PLX-402) also apply"
+         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), and 31 (project autonomy, PLX-403) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -792,6 +838,7 @@ fn a_version_15_database_gains_project_icons_and_keeps_its_projects() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                autonomy: None,
                 base_branch: None,
             },
         )
@@ -874,12 +921,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 30,
+        version, 31,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, PLX-97), 14 (wakes, \
          PLX-178), 15 (images, PLX-191), 16 (project icons, PLX-227), 17 (approvals, \
-         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), and 30 (questions, PLX-402) also apply"
+         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), and 31 (project autonomy, PLX-403) also apply"
     );
 }
 

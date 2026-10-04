@@ -1,7 +1,8 @@
 //! `project/list`, `project/create`, `project/start`, which starts a project's coordinator behind
 //! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
 //! icon behind the `projectEdit` capability (PLX-227, 0032), its permission mode behind
-//! `projectPermission` (0042), or its base branch behind `integrationBranch` (0045), and
+//! `projectPermission` (0042), its autonomy level behind `projectAutonomy` (0043), or its base
+//! branch behind `integrationBranch` (0045), and
 //! `project/delete`, behind `projectDelete` (PLX-338).
 
 use std::path::{Component, Path};
@@ -10,10 +11,10 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentRunResult, ErrorKind, ParallaxEvent, ProjectCreateParams, ProjectCreateResult,
-    ProjectDeleteParams, ProjectDeleteResult, ProjectIcon, ProjectId, ProjectListParams,
-    ProjectListResult, ProjectPermission, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult, RunId,
+    AgentRunResult, ErrorKind, ParallaxEvent, ProjectAutonomy, ProjectCreateParams,
+    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectIcon, ProjectId,
+    ProjectListParams, ProjectListResult, ProjectPermission, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult, RunId,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -139,8 +140,9 @@ pub(crate) async fn start(
     Ok(AgentRunResult { run })
 }
 
-/// Renames a project or sets its icon or permission mode, and appends `project.updated` when that
-/// changed anything. Runs pick up a new mode when they next start a CLI process (0042).
+/// Renames a project or sets its icon, permission mode, autonomy level, or base branch, and
+/// appends `project.updated` when that changed anything. Runs pick up a new mode when they next
+/// start a CLI process (0042), and questions a new level when they are next asked (0043).
 ///
 /// The event is appended in the job that writes the row, as `project/create`'s is, so a
 /// `project/list` snapshot and its `seq` always agree. `updatedAt` stays as it is (0032).
@@ -155,6 +157,7 @@ pub(crate) async fn update(
         check_icon(icon)?;
     }
     check_permission(params.permission)?;
+    check_autonomy(params.autonomy)?;
     check_base_branch(params.base_branch.as_deref())?;
     let log = Arc::clone(&context.daemon.log);
     context
@@ -300,11 +303,13 @@ fn check(params: &ProjectCreateParams) -> Result<(), ErrorObject> {
         repo_path,
         icon,
         permission,
+        autonomy,
         base_branch,
         ..
     } = params;
     check_name(name)?;
     check_permission(*permission)?;
+    check_autonomy(*autonomy)?;
     check_base_branch(base_branch.as_deref())?;
     if let Some(icon) = icon {
         check_icon(icon)?;
@@ -359,6 +364,16 @@ fn check_permission(permission: Option<ProjectPermission>) -> Result<(), ErrorOb
     if permission == Some(ProjectPermission::Unknown) {
         return Err(ErrorObject::invalid_params(
             "permission must be auto or bypass",
+        ));
+    }
+    Ok(())
+}
+
+/// A level this plxd doesn't know would leave nobody sure who answers (0043), so it is refused.
+fn check_autonomy(autonomy: Option<ProjectAutonomy>) -> Result<(), ErrorObject> {
+    if autonomy == Some(ProjectAutonomy::Unknown) {
+        return Err(ErrorObject::invalid_params(
+            "autonomy must be ask, routine, or full",
         ));
     }
     Ok(())
@@ -420,6 +435,7 @@ mod tests {
             repo_path: repo_path.to_owned(),
             icon: None,
             permission: None,
+            autonomy: None,
             base_branch: None,
         }
     }

@@ -423,6 +423,12 @@ const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX questions_project ON questions (project_id, created_at);",
     },
+    // A project's autonomy level (PLX-403, decision 0043), `ask`, `routine`, or `full`: who
+    // answers its children's questions. Existing projects get `routine`.
+    Migration {
+        version: 31,
+        sql: "ALTER TABLE projects ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'routine';",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

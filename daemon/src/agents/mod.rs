@@ -1845,6 +1845,7 @@ mod tests {
             repo_path: "/src/app".to_owned(),
             icon: None,
             permission: "auto".to_owned(),
+            autonomy: "routine".to_owned(),
             base_branch: None,
         };
         // The start's `prepare_run` saw the project; the delete then removed it.

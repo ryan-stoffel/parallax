@@ -3,15 +3,17 @@
 //! changes an answer from the app.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use parallax_protocol::methods::{
-    AgentCancel, AgentStart, ProjectStart, QuestionAnswer, QuestionAsk, QuestionEscalate,
-    QuestionList, QueueList, ThreadStart,
+    AgentCancel, AgentStart, ProjectStart, ProjectUpdate, QuestionAnswer, QuestionAsk,
+    QuestionEscalate, QuestionList, QueueList, ThreadStart,
 };
 use parallax_protocol::{
-    AgentCancelParams, AgentStatus, ErrorKind, InboxKind, ParallaxEvent, ProjectId, Question,
-    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
-    QuestionStatus, QueueListParams, QueuedMessage, RunId,
+    AgentCancelParams, AgentStatus, ErrorKind, InboxKind, ParallaxEvent, ProjectAutonomy,
+    ProjectId, ProjectUpdateParams, Question, QuestionAnswerParams, QuestionAskParams,
+    QuestionEscalateParams, QuestionListParams, QuestionStatus, QueueListParams, QueuedMessage,
+    RunId,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
@@ -24,7 +26,9 @@ use serde_json::json;
 use crate::agents::{
     Conn, Host, create, end_turn, init, project_params, subscribe, until, updated_to,
 };
-use crate::coordinator::{nth_launch, roles, sessions, spawn, start_params as coordinator_params};
+use crate::coordinator::{
+    coordinator_launches, nth_launch, roles, sessions, spawn, start_params as coordinator_params,
+};
 use crate::inbox::added;
 use crate::mcp::{Mcp, mcp_command};
 use crate::support::{PATIENCE, kind, temp_dir};
@@ -584,6 +588,90 @@ async fn a_new_coordinator_gets_the_projects_open_questions() {
     assert!(
         stale.message.contains("only the Project's coordinator"),
         "{stale:?}"
+    );
+    host.server.stop().await;
+}
+
+/// PLX-403 (0043): the coordinator is told the Project's autonomy level. In Ask me a question
+/// goes straight to Needs you without waking it, and plxd refuses its answer, even to a question
+/// asked before the change. The user still answers.
+#[tokio::test]
+async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
+    let backends = roles(hang(), vec![turn("Planned."), turn("Heard.")], &seen);
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    assert_eq!(
+        project.autonomy,
+        Some(ProjectAutonomy::Routine),
+        "the default"
+    );
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    let first = nth_launch(&seen, 0).await;
+    assert!(
+        first.prompt.contains("The project's autonomy is Routine:"),
+        "{}",
+        first.prompt
+    );
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let child = spawn(&mut client, &coordinator, "Upgrade Node.").await;
+    running(&mut client, child).await;
+    let before = ask(&mut client, child, "Keep Node 18?", "Keep it")
+        .await
+        .unwrap();
+    assert_eq!(before.status, QuestionStatus::Open);
+    let wake = nth_launch(&seen, 1).await;
+    assert!(
+        wake.prompt.contains("The project's autonomy is Routine:"),
+        "{}",
+        wake.prompt
+    );
+
+    let updated = client
+        .call::<ProjectUpdate>(ProjectUpdateParams {
+            project: project.id,
+            name: None,
+            icon: None,
+            permission: None,
+            autonomy: Some(ProjectAutonomy::Ask),
+            base_branch: None,
+        })
+        .await
+        .unwrap()
+        .project;
+    assert_eq!(updated.autonomy, Some(ProjectAutonomy::Ask));
+    let after = ask(&mut client, child, "Which port?", "8080")
+        .await
+        .unwrap();
+    assert_eq!(after.status, QuestionStatus::Escalated);
+    let item = added(&mut client, project.id).await;
+    assert_eq!((item.kind, item.run), (InboxKind::NeedsYou, child));
+    assert!(item.text.contains("Which port?"), "{}", item.text);
+
+    let refused = client
+        .call::<QuestionAnswer>(QuestionAnswerParams {
+            question: before.id,
+            text: "Drop it".to_owned(),
+            from: Some(coordinator.id),
+        })
+        .await
+        .unwrap_err();
+    assert!(refused.message.contains("Ask me"), "{refused:?}");
+    let users = answer(&mut client, &after, "9090", None).await;
+    assert_eq!(users.status, QuestionStatus::Answered);
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        coordinator_launches(&seen).len(),
+        2,
+        "only the question asked in Routine woke it"
     );
     host.server.stop().await;
 }
