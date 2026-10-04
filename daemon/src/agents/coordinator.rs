@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{AgentRun, ErrorKind, ProjectPermission, ProjectStartParams, Role, RunId};
+use parallax_protocol::{
+    AgentRun, ErrorKind, ProjectAutonomy, ProjectPermission, ProjectStartParams, Role, RunId,
+};
 use parallax_store::{RunFields, RunState};
 use tracing::info;
 use uuid::Uuid;
@@ -22,6 +24,7 @@ use super::convert::{NO_WRITE, RUNNING, STARTING, agent_run, option_name};
 use super::worker::worker_unavailable;
 use super::{RunOptions, existing, log_started, prepare, requested_account, store, store_error};
 use crate::backend::Backend;
+use crate::methods::question::level;
 use crate::server::Daemon;
 
 /// The coordinator's instructions, sent ahead of the user's first message.
@@ -89,17 +92,16 @@ pub(crate) async fn start(
         ..RunState::default()
     };
     // One store job, so two starts with different run ids can't both find no live coordinator.
-    let row = store(&daemon, move |db| {
-        if db
+    let (row, autonomy) = store(&daemon, move |db| {
+        let Some(project_row) = db
             .get_project(project.into())
             .map_err(|e| store_error(&e))?
-            .is_none()
-        {
+        else {
             return Err(ErrorObject::parallax(
                 ErrorKind::ProjectNotFound,
                 format!("no project has id {project}"),
             ));
-        }
+        };
         if let Some(current) = newest(db, project.into())?
             && (current.state.status == STARTING || current.state.status == RUNNING)
         {
@@ -112,15 +114,17 @@ pub(crate) async fn start(
                 ),
             ));
         }
-        db.create_run(run_id.into(), &fields, &state)
-            .map_err(|e| store_error(&e))
+        let row = db
+            .create_run(run_id.into(), &fields, &state)
+            .map_err(|e| store_error(&e))?;
+        Ok((row, crate::store::project_autonomy(&project_row.autonomy)))
     })
     .await?;
     log_started(&daemon, project, agent_run(&row, None)?).await;
     info!(run = %run_id, project = %project, backend = %row.fields.backend, "created a project's coordinator");
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());
-    let message = first_message(&prompt, &repo_path);
+    let message = first_message(&prompt, &repo_path, autonomy);
     actor
         .launch(prepared, message, images, None, None, None)
         .await;
@@ -172,10 +176,14 @@ fn newest(
         .find(|run| run.fields.policy == NO_WRITE))
 }
 
-/// The coordinator's first message: its instructions, where it is, then the user's message.
-pub(super) fn first_message(message: &str, repo: &str) -> String {
+/// The coordinator's first message: its instructions, where it is, the Project's autonomy level
+/// (0043), then the user's message.
+pub(super) fn first_message(message: &str, repo: &str, autonomy: ProjectAutonomy) -> String {
     format!(
         "{INSTRUCTIONS}\nThe project's repository is {repo}, your working directory: the user's \
-         own checkout, uncommitted changes included.\n\nThe user's message:\n{message}"
+         own checkout, uncommitted changes included.\n\n{} Each question Parallax wakes you \
+         with names the level as it is then, since the user can change it.\n\nThe user's \
+         message:\n{message}",
+        level(autonomy)
     )
 }

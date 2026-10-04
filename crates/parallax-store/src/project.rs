@@ -17,6 +17,8 @@ pub struct ProjectFields {
     pub icon: Option<ProjectIcon>,
     /// The permission mode, `auto` or `bypass` (decision record 0042).
     pub permission: String,
+    /// Who answers its children's questions, `ask`, `routine`, or `full` (decision record 0043).
+    pub autonomy: String,
     /// The branch its integration branch is cut from and ships into (decision record 0045).
     /// `None` means the repository's default branch, stored once the integration branch is cut,
     /// and a retry that leaves it out matches any.
@@ -73,6 +75,7 @@ pub struct ProjectEdit {
     pub name: Option<String>,
     pub icon: Option<ProjectIcon>,
     pub permission: Option<String>,
+    pub autonomy: Option<String>,
     pub base_branch: Option<String>,
 }
 
@@ -84,6 +87,7 @@ pub struct Project {
     pub repo_path: String,
     pub icon: Option<ProjectIcon>,
     pub permission: String,
+    pub autonomy: String,
     pub base_branch: Option<String>,
     /// Its integration branch (decision record 0045), once plxd has cut it.
     pub integration_branch: Option<String>,
@@ -99,6 +103,7 @@ struct RawProject {
     repo_path: String,
     icon: Option<ProjectIcon>,
     permission: String,
+    autonomy: String,
     base_branch: Option<String>,
     integration_branch: Option<String>,
     created_at: String,
@@ -111,8 +116,9 @@ impl RawProject {
             id: row.get(0)?,
             name: row.get(1)?,
             repo_path: row.get(2)?,
-            icon: icon_from_row(row, 8)?,
+            icon: icon_from_row(row, 9)?,
             permission: row.get(5)?,
+            autonomy: row.get(8)?,
             base_branch: row.get(6)?,
             integration_branch: row.get(7)?,
             created_at: row.get(3)?,
@@ -125,6 +131,7 @@ impl RawProject {
             && self.repo_path == fields.repo_path
             && self.icon == fields.icon
             && self.permission == fields.permission
+            && self.autonomy == fields.autonomy
             && (fields.base_branch.is_none() || self.base_branch == fields.base_branch)
     }
 
@@ -135,6 +142,7 @@ impl RawProject {
             repo_path: self.repo_path,
             icon: self.icon,
             permission: self.permission,
+            autonomy: self.autonomy,
             base_branch: self.base_branch,
             integration_branch: self.integration_branch,
             created_at: timestamp::parse(&self.created_at)?,
@@ -148,7 +156,7 @@ fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawProject>, Sto
         .query_row(
             &format!(
                 "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
-                     integration_branch, {ICON_COLUMNS}
+                     integration_branch, autonomy, {ICON_COLUMNS}
                  FROM projects WHERE id = ?1"
             ),
             params![id_text],
@@ -197,8 +205,8 @@ impl Store {
         tx.execute(
             &format!(
                 "INSERT INTO projects (id, name, repo_path, created_at, updated_at, permission,
-                     base_branch, {ICON_COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                     base_branch, autonomy, {ICON_COLUMNS})
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT (id) DO NOTHING"
             ),
             params![
@@ -208,6 +216,7 @@ impl Store {
                 now,
                 fields.permission,
                 fields.base_branch,
+                fields.autonomy,
                 icon_name,
                 icon_color,
                 image_type,
@@ -249,7 +258,7 @@ impl Store {
     pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
-                     integration_branch, {ICON_COLUMNS}
+                     integration_branch, autonomy, {ICON_COLUMNS}
              FROM projects
              ORDER BY created_at ASC, id ASC"
         ))?;
@@ -262,12 +271,12 @@ impl Store {
         Ok(projects)
     }
 
-    /// Renames project `id`, or sets its icon, permission mode, or base branch, as `edit` says, and returns
-    /// the project with whether anything changed. When nothing would
+    /// Renames project `id`, or sets its icon, permission mode, autonomy level, or base branch, as
+    /// `edit` says, and returns the project with whether anything changed. When nothing would
     /// change, it writes nothing.
     ///
     /// `repo_path` never changes, and `updated_at` stays as it is: a rename,
-    /// a new icon, or a new mode is not activity (decision record 0032).
+    /// a new icon, a new mode, or a new level is not activity (decision record 0032).
     ///
     /// # Errors
     ///
@@ -301,6 +310,12 @@ impl Store {
             raw.permission.clone_from(permission);
             changed = true;
         }
+        if let Some(autonomy) = &edit.autonomy
+            && *autonomy != raw.autonomy
+        {
+            raw.autonomy.clone_from(autonomy);
+            changed = true;
+        }
         if edit.base_branch.is_some() && edit.base_branch != raw.base_branch {
             raw.base_branch.clone_from(&edit.base_branch);
             changed = true;
@@ -311,7 +326,7 @@ impl Store {
             tx.execute(
                 "UPDATE projects SET name = ?2, icon_name = ?3, icon_color = ?4,
                      icon_image_type = ?5, icon_image_data = ?6, permission = ?7,
-                     base_branch = ?8
+                     base_branch = ?8, autonomy = ?9
                  WHERE id = ?1",
                 params![
                     id_text,
@@ -321,7 +336,8 @@ impl Store {
                     image_type,
                     image_data,
                     raw.permission,
-                    raw.base_branch
+                    raw.base_branch,
+                    raw.autonomy
                 ],
             )?;
             tx.commit()?;

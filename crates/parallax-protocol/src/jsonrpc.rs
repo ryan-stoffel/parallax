@@ -730,6 +730,7 @@ mod tests {
             repo_path: "/Users/ryan/parallax".to_owned(),
             icon: None,
             permission: None,
+            autonomy: None,
             base_branch: None,
         };
         let frame =

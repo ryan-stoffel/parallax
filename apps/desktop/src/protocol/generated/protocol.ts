@@ -638,6 +638,11 @@ export type Project = {
 	 */
 	permission?: ProjectPermission,
 	/**
+	 * Who answers its children's questions (0043), behind the `projectAutonomy` capability.
+	 * Absent only from an older plxd.
+	 */
+	autonomy?: ProjectAutonomy,
+	/**
 	 * The branch its integration branch is cut from and its PR targets (0045), behind the
 	 * `integrationBranch` capability. Absent until set, or until plxd cuts the integration branch
 	 * from the repository's default branch.
@@ -658,6 +663,14 @@ export type Project = {
 	 */
 	updatedAt: string,
 };
+
+/**
+ * A project's autonomy level (0043): who answers its children's questions. Separate from its
+ * permission mode, which decides what they may run.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type ProjectAutonomy = "ask" | "routine" | "full";
 
 /**
  * A project's icon (PLX-227, 0032): a Lucide icon and a color from the app's palette, both by
@@ -731,8 +744,8 @@ export type RunId = string;
  * Params of `project/create`.
  *
  * It is idempotent on `id`: if a project with that id exists, plxd returns it instead of
- * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`, or
- * a given `baseBranch` differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
+ * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`,
+ * `autonomy`, or a given `baseBranch` differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
  * or it fails with `notARepository`.
  */
 export type ProjectCreateParams = {
@@ -758,6 +771,11 @@ export type ProjectCreateParams = {
 	 * Absent means `auto`, the mode projects from before it have.
 	 */
 	permission?: ProjectPermission,
+	/**
+	 * The project's autonomy level, sent only to a plxd that advertises `projectAutonomy`.
+	 * Absent means `routine`, the level projects from before it have.
+	 */
+	autonomy?: ProjectAutonomy,
 	/**
 	 * The project's base branch (0045), sent only to a plxd that advertises
 	 * `integrationBranch`: a local or remote-tracking branch, such as `main` or `origin/main`.
@@ -3696,12 +3714,13 @@ export type ProjectStartParams = {
 
 /**
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
- * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), or its base
- * branch, behind `integrationBranch` (0045).
+ * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
+ * autonomy level, behind `projectAutonomy` (0043), or its base branch, behind `integrationBranch`
+ * (0045).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
- * `project/create`'s rules, and the repository can't change. A rename, a new icon, or a new mode
- * is not activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
+ * `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
+ * or a new level is not activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
  * A change appends `project.updated`; an update that changes nothing appends no event.
  */
 export type ProjectUpdateParams = {
@@ -3722,6 +3741,11 @@ export type ProjectUpdateParams = {
 	 * CLI process in it, and a running CLI keeps its mode until it exits.
 	 */
 	permission?: ProjectPermission,
+	/**
+	 * The new autonomy level. Absent keeps it. It applies to the next question: one already
+	 * waiting for the coordinator stays with it, though in `ask` plxd refuses its answer.
+	 */
+	autonomy?: ProjectAutonomy,
 	/**
 	 * The new base branch, behind `integrationBranch`. Absent keeps it. An integration branch
 	 * already cut stays where it is.

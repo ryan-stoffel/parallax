@@ -181,6 +181,7 @@ pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
         repo_path: real_repo(dir).to_str().unwrap().to_owned(),
         icon: None,
         permission: None,
+        autonomy: None,
         base_branch: None,
     }
 }

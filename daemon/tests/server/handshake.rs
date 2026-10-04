@@ -46,6 +46,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("inbox".to_owned(), serde_json::Map::new()),
             ("integrationBranch".to_owned(), serde_json::Map::new()),
             ("openPr".to_owned(), serde_json::Map::new()),
+            ("projectAutonomy".to_owned(), serde_json::Map::new()),
             ("projectDelete".to_owned(), serde_json::Map::new()),
             ("projectEdit".to_owned(), serde_json::Map::new()),
             ("projectPermission".to_owned(), serde_json::Map::new()),

@@ -43,6 +43,7 @@ fn update(
         name: name.map(str::to_owned),
         icon,
         permission: None,
+        autonomy: None,
         base_branch: None,
     }
 }

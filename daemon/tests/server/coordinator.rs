@@ -313,7 +313,7 @@ fn roles_mapping(
 }
 
 /// Every coordinator launch `seen` so far.
-fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
+pub(crate) fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
     seen.lock()
         .unwrap()
         .iter()
@@ -414,6 +414,7 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
             name: None,
             icon: None,
             permission: Some(ProjectPermission::Auto),
+            autonomy: None,
             base_branch: None,
         })
         .await
@@ -483,6 +484,7 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
             name: None,
             icon: None,
             permission: Some(ProjectPermission::Bypass),
+            autonomy: None,
             base_branch: None,
         })
         .await

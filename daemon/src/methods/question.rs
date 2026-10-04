@@ -3,12 +3,11 @@
 //!
 //! A child's `ask` records its question and returns at once; the child goes on with its
 //! assumption. The question wakes the Project's current coordinator through 0025's wake-ups, so
-//! it batches with them and counts toward their cap, or, with no coordinator, goes straight to
-//! Needs you. Only the coordinator answers or escalates with `from`, and only the user answers
-//! without it: a thread's MCP server passes its own run, never the model. An answer reaches the
-//! child as a queued message only when it differs from what the child was last told.
-// ponytail: always wakes the coordinator; Ask me sending questions straight to Needs you is
-// PLX-403's autonomy levels.
+//! it batches with them and counts toward their cap, or, with no coordinator or in Ask me
+//! (PLX-403), goes straight to Needs you. Only the coordinator answers or escalates with `from`,
+//! and only the user answers without it: a thread's MCP server passes its own run, never the
+//! model. In Ask me plxd refuses the coordinator's answer. An answer reaches the child as a
+//! queued message only when it differs from what the child was last told.
 
 use std::sync::Arc;
 
@@ -18,19 +17,20 @@ use parallax_protocol::methods::{
     QuestionAnswer, QuestionAsk, QuestionEscalate, QuestionList, RequestMethod,
 };
 use parallax_protocol::{
-    AgentSendParams, ErrorKind, InboxKind, ProjectId, Question, QuestionAnswerParams,
-    QuestionAskParams, QuestionEscalateParams, QuestionId, QuestionListParams, QuestionListResult,
-    QuestionResult, QuestionStatus, RunId, TurnId,
+    AgentSendParams, ErrorKind, InboxKind, ProjectAutonomy, ProjectId, Question,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionId,
+    QuestionListParams, QuestionListResult, QuestionResult, QuestionStatus, RunId, TurnId,
 };
 use parallax_store::Store;
 use serde_json::Value;
 use tracing::info;
+use uuid::Uuid;
 
 use super::{Context, handle, inbox};
 use crate::agents::convert::NO_WRITE;
 use crate::agents::coordinator::coordinator_of;
 use crate::agents::{self, run_not_found, wake};
-use crate::store::store_error;
+use crate::store::{project_autonomy, store_error};
 
 /// The longest question, assumption, or answer, in bytes. A wake-up quotes them whole.
 const MAX_BYTES: usize = 4 * 1024;
@@ -64,7 +64,7 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
     } = params;
     check("question", &question)?;
     check("assumption", &assumption)?;
-    let (row, prompt, coordinator) = context
+    let (row, prompt, coordinator, autonomy) = context
         .daemon
         .store
         .run(&context.cancel, move |db| {
@@ -73,21 +73,19 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
                 .map_err(|e| store_error(&e))?
                 .ok_or_else(|| run_not_found(run))?;
             let project = asker.fields.project_id;
-            if db
-                .get_project(project)
-                .map_err(|e| store_error(&e))?
-                .is_none()
-            {
+            let Some(project_row) = db.get_project(project).map_err(|e| store_error(&e))? else {
                 return Err(ErrorObject::invalid_params(format!(
                     "run {run} isn't in a Project, so it has no coordinator to ask"
                 )));
-            }
+            };
+            let autonomy = project_autonomy(&project_row.autonomy);
             if asker.fields.policy == NO_WRITE {
                 return Err(ErrorObject::invalid_params(
                     "a Project's coordinator answers questions; it doesn't ask them",
                 ));
             }
-            let coordinator = coordinator_of(db, project)?;
+            // In Ask me nothing wakes the coordinator: the question is the user's from the start.
+            let coordinator = coordinator_of(db, project)?.filter(|_| answers(autonomy));
             let row = parallax_store::Question {
                 id: QuestionId::generate().into(),
                 project_id: project,
@@ -104,7 +102,7 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
                 created_at: Timestamp::now(),
             };
             db.add_question(&row).map_err(|e| store_error(&e))?;
-            Ok((row, asker.fields.prompt, coordinator))
+            Ok((row, asker.fields.prompt, coordinator, autonomy))
         })
         .await?;
     let asked = to_wire(row.clone())?;
@@ -113,7 +111,14 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
         Some(coordinator) => wake::notify(
             &context.daemon,
             coordinator.into(),
-            wake::question(run, &prompt, asked.id, &asked.question, &asked.assumption),
+            wake::question(
+                run,
+                &prompt,
+                asked.id,
+                &asked.question,
+                &asked.assumption,
+                autonomy,
+            ),
         ),
         None => needs_you(&context.daemon, &row, &prompt).await,
     }
@@ -139,6 +144,12 @@ async fn answer(
             let status = match from {
                 Some(from) => {
                     open_for(db, &row, from, "answer")?;
+                    if !answers(autonomy_of(db, row.project_id)?) {
+                        return Err(ErrorObject::invalid_params(
+                            "the Project's autonomy is Ask me, so only the user answers its \
+                             children's questions; pass this one to them with escalate",
+                        ));
+                    }
                     DECIDED
                 }
                 None => ANSWERED,
@@ -322,6 +333,39 @@ fn find(db: &Store, id: QuestionId) -> Result<(parallax_store::Question, String)
     Ok((row, child.fields.prompt))
 }
 
+/// Project `project`'s autonomy level (0043), Routine, the default, for one that is gone.
+pub(crate) fn autonomy_of(db: &Store, project: Uuid) -> Result<ProjectAutonomy, ErrorObject> {
+    Ok(db
+        .get_project(project)
+        .map_err(|e| store_error(&e))?
+        .map_or(ProjectAutonomy::Routine, |row| {
+            project_autonomy(&row.autonomy)
+        }))
+}
+
+/// Whether the coordinator answers questions at `autonomy`: not in Ask me, nor at a level this
+/// plxd doesn't know.
+pub(crate) fn answers(autonomy: ProjectAutonomy) -> bool {
+    matches!(autonomy, ProjectAutonomy::Routine | ProjectAutonomy::Full)
+}
+
+/// What the coordinator is told about `autonomy`, in its first message and with each question.
+pub(crate) fn level(autonomy: ProjectAutonomy) -> &'static str {
+    match autonomy {
+        ProjectAutonomy::Routine => {
+            "The project's autonomy is Routine: answer only what your shared context or the code \
+             clearly answers, and escalate the rest."
+        }
+        ProjectAutonomy::Full => {
+            "The project's autonomy is Full: answer everything you can justify, and escalate only \
+             what you can't."
+        }
+        ProjectAutonomy::Ask | ProjectAutonomy::Unknown => {
+            "The project's autonomy is Ask me: Parallax refuses answer, so escalate every question."
+        }
+    }
+}
+
 /// Refuses unless `from` is `row`'s Project's current coordinator and `row` is still open.
 fn open_for(
     db: &Store,
@@ -383,11 +427,24 @@ fn to_wire(row: parallax_store::Question) -> Result<Question, ErrorObject> {
 
 #[cfg(test)]
 mod tests {
-    use super::same;
+    use parallax_protocol::ProjectAutonomy;
+
+    use super::{answers, same};
 
     #[test]
     fn answers_that_differ_only_in_case_or_spacing_are_the_same() {
         assert!(same(" Per  user\n", "per user"));
         assert!(!same("per user", "per IP"));
+    }
+
+    #[test]
+    fn only_routine_and_full_let_the_coordinator_answer() {
+        assert!(answers(ProjectAutonomy::Routine));
+        assert!(answers(ProjectAutonomy::Full));
+        assert!(!answers(ProjectAutonomy::Ask));
+        assert!(
+            !answers(ProjectAutonomy::Unknown),
+            "a level from a newer plxd"
+        );
     }
 }
