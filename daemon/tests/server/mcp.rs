@@ -436,12 +436,16 @@ async fn tool_inputs_are_size_limited() {
         assert_eq!(unknown["error"]["code"], -32602, "{unknown}");
     }
 
-    let huge = format!(
+    let mut huge = format!(
         r#"{{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{{"name":"thread_list","arguments":{{"pad":"{}"}}}}}}"#,
         "x".repeat(MAX_MESSAGE_BYTES)
     );
-    mcp.stdin.write_all(huge.as_bytes()).await.unwrap();
-    mcp.stdin.write_all(b"\n").await.unwrap();
+    huge.push('\n');
+    // The server stops reading once the line passes the limit and exits (0019), so the rest of
+    // the write can hit a closed pipe.
+    if let Err(error) = mcp.stdin.write_all(huge.as_bytes()).await {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
     let answer = mcp.read().await.expect("an error for the oversized line");
     assert_eq!(answer["error"]["code"], -32600, "{answer}");
     assert!(answer["id"].is_null());
