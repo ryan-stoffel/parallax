@@ -302,6 +302,8 @@ export interface ComposerProps {
   ) => Promise<string | undefined>;
   /** Sends as `onSend` does, for Cmd/Ctrl+Enter anywhere in the box: a new thread's background start. */
   onSendInBackground?: ComposerProps["onSend"];
+  /** Cmd/Ctrl+Enter sends into the active turn instead of its queue. */
+  onSteer?: ComposerProps["onSend"];
   /**
    * While set, an empty box shows Stop instead of Send. Resolves to an error message.
    * Stop stays pending until the caller drops `onStop`, when the run stops. Esc in the box stops
@@ -373,7 +375,8 @@ export interface ComposerProps {
 /**
  * The prompt box, the same on every screen. It formats Markdown as you type and sends it as
  * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
- * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSendInBackground`, Cmd/Ctrl+Enter sends
+ * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSteer`, that press steers the active
+ * turn. With `onSendInBackground`, Cmd/Ctrl+Enter sends
  * through it, anywhere in the box. It grows with its text up to 40% of the window.
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
  * it (PLX-193).
@@ -389,6 +392,7 @@ export function Composer({
   newThread,
   onSend,
   onSendInBackground,
+  onSteer,
   onStop,
   unanswered,
   disabledReason,
@@ -708,7 +712,7 @@ export function Composer({
     setImages((all) => [...all, ...ok].slice(0, maxImages));
   };
 
-  const submit = async (background = false) => {
+  const submit = async (background = false, steer = false) => {
     if (!canSend) return;
     const sent = editor.getJSON();
     const sentImages = images;
@@ -718,7 +722,7 @@ export function Composer({
     setThreads([]);
     setError(undefined);
     setAttachError(undefined);
-    const failed = await (background ? onSendInBackground! : onSend)(
+    const failed = await (steer ? onSteer! : background ? onSendInBackground! : onSend)(
       text,
       options,
       sentImages,
@@ -841,7 +845,7 @@ export function Composer({
         const inCode = editor.isActive("codeBlock");
         const mod = event.metaKey || event.ctrlKey;
         if (inCode ? mod : !event.shiftKey) {
-          void submit(!!onSendInBackground && mod);
+          void submit(!!onSendInBackground && mod, !!onSteer && mod);
           return true;
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of
@@ -1190,6 +1194,12 @@ export function Composer({
         <div className="mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-3xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
           {tab}
         </div>
+      )}
+      {onSteer && !disabledReason && (
+        <p className="px-2 pt-1.5 text-[11.5px] text-faint-foreground">
+          Enter queues · {window.parallax.platform === "darwin" ? "⌘ Enter" : "Ctrl+Enter"} steers
+          now
+        </p>
       )}
       {error && (
         <p role="alert" className="px-2 pt-2 text-[13px] text-danger">

@@ -658,6 +658,7 @@ function fakeBridge(
   let listener: (m: SubscriptionMessage) => void = () => {};
   const connections = new Set<(hostId: string, state: ConnectionState) => void>();
   const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
+    if (method === "queue/list") return { result: { messages: [] }, logId: "log-1" };
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
       return { error: { code: -32000, message: cancelError } };
@@ -1702,4 +1703,124 @@ test("a web link gets its site's logo, or a globe, and other links none (PLX-330
   expect(linkIcon("mailto:a@b.c")).toBeUndefined();
   expect(linkIcon("archived.md")).toBeUndefined();
   expect(linkIcon(undefined)).toBeUndefined();
+});
+
+test("queued messages track host updates, Enter queues, and Cmd+Enter steers (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  expect(request).toHaveBeenCalledWith("local", "queue/list", { runId });
+  type("Do this next");
+  await act(async () =>
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  const queued = request.mock.calls.find(([, method]) => method === "agent/send")![2] as {
+    turnId: string;
+  };
+  expect(queued).toMatchObject({ delivery: "queue", text: "Do this next" });
+  const update = (
+    messages: { id: string; text: string; images: number; threads: string[] }[],
+    seq: number,
+  ) =>
+    emit({
+      type: "event",
+      event: {
+        subscription: "s",
+        seq,
+        time: "",
+        event: { kind: "queue.updated", runId, messages },
+      },
+    });
+  update([{ id: queued.turnId, text: "Do this next", images: 0, threads: [] }], 50);
+  expect(document.querySelector('[aria-label="Queued messages"]')?.textContent).toContain(
+    "Do this next",
+  );
+  expect(transcriptText()).not.toContain("Do this next");
+  update(
+    [{ id: queued.turnId, text: "Edited on another device", images: 1, threads: [runId] }],
+    51,
+  );
+  expect(document.querySelector('[aria-label="Queued messages"]')?.textContent).toContain(
+    "Edited on another device",
+  );
+  type("Change direction now");
+  await act(async () =>
+    composer().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+    ),
+  );
+  expect(
+    request.mock.calls.filter(([, method]) => method === "agent/send").at(-1)![2],
+  ).toMatchObject({ delivery: "steer", text: "Change direction now" });
+  update([], 52);
+  expect(document.querySelector('[aria-label="Queued messages"]')).toBeNull();
+  expect(transcriptText()).not.toContain("Do this next");
+});
+
+test("with queueing, Stop puts the last queued message back and offers the rest again (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  const sends = () => request.mock.calls.filter(([, method]) => method === "agent/send");
+  for (const text of ["First", "Second"]) {
+    type(text);
+    await act(async () =>
+      composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+  }
+  const [first, second] = sends().map(([, , params]) => (params as { turnId: string }).turnId);
+  const event = (seq: number, e: object) =>
+    emit({ type: "event", event: { subscription: "s", seq, time: "", event: e as never } });
+  event(50, {
+    kind: "queue.updated",
+    runId,
+    messages: [
+      { id: first, text: "First, edited", images: 0, threads: [] },
+      { id: second, text: "Second", images: 0, threads: [] },
+    ],
+  });
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  expect(composer().textContent).toBe("Second");
+  event(51, {
+    kind: "agent.output",
+    runId,
+    items: [
+      { kind: "followUpDropped", turnId: first },
+      { kind: "followUpDropped", turnId: second },
+    ],
+  });
+  event(52, { kind: "queue.updated", runId, messages: [] });
+  const sendAgain = () =>
+    [...document.querySelectorAll("button")].filter((b) => b.textContent === "Send again");
+  expect(sendAgain()).toHaveLength(1);
+  await act(async () => sendAgain()[0]!.click());
+  expect(sends().at(-1)![2]).toMatchObject({ text: "First, edited" });
+});
+
+test("a queued message cancelled from here leaves no notice or Send again (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  type("Never mind");
+  await act(async () =>
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  const { turnId } = request.mock.calls.find(([, method]) => method === "agent/send")![2] as {
+    turnId: string;
+  };
+  const event = (seq: number, e: object) =>
+    emit({ type: "event", event: { subscription: "s", seq, time: "", event: e as never } });
+  event(50, {
+    kind: "queue.updated",
+    runId,
+    messages: [{ id: turnId, text: "Never mind", images: 0, threads: [] }],
+  });
+  const before = transcriptText();
+  await act(async () =>
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Cancel queued message 1"]')!
+      .click(),
+  );
+  event(51, { kind: "agent.output", runId, items: [{ kind: "followUpDropped", turnId }] });
+  event(52, { kind: "queue.updated", runId, messages: [] });
+  expect(transcriptText()).toBe(before);
 });
