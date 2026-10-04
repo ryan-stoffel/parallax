@@ -9,10 +9,10 @@
 //! `agent/send` and `agent/cancel`, and when a CLI process ends, commits the worktree through
 //! #166's hardened `commit_all` and reports `agent.diffReady`.
 //!
-//! A run whose client started it with `approvals`, and every run in a Project but its coordinator,
-//! lets its CLI ask before a tool call (PLX-222, decisions 0031 and 0042). It logs the request, takes
-//! `agent/approve`'s answer, and denies it itself when nobody answers in time ([`approvals`]).
-//! Every launch of the run, a resume included, keeps the flag.
+//! A run whose client started it with `approvals`, and every run in a Project, its coordinator
+//! included, lets its CLI ask before a tool call (PLX-222, decisions 0031 and 0042). It logs the
+//! request, takes `agent/approve`'s answer, and denies it itself when nobody answers in time
+//! ([`approvals`]). Every launch of the run, a resume included, keeps the flag.
 //!
 //! A run outlives its CLI processes: `agent/send` to a run whose CLI has ended resumes the
 //! vendor session in the same worktree. When plxd stops, running CLIs are cancelled and their

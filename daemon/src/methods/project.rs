@@ -205,9 +205,10 @@ pub(crate) async fn delete(
 /// context folder. It looks again after each pass, for a run a coordinator started while it was
 /// stopping; a worker is recorded only while its scope exists, so none can start after the row
 /// is gone. A crash midway leaves the project listed, and deleting it again finishes the job.
-/// Then it removes the integration worktree and keeps its branch (0045).
-// ponytail: a crash between the row and the worktree leaves the folder under `integration/`;
-// sweep folders with no project at startup if that turns up.
+/// Then it removes the integration worktree, keeping its branch (0045), and the coordinator's
+/// worktree (0042).
+// ponytail: a crash between the row and the worktrees leaves their folders under `integration/`
+// and `coordinators/`; sweep folders with no project at startup if that turns up.
 async fn remove(
     daemon: Arc<Daemon>,
     project: ProjectId,
