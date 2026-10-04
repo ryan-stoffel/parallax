@@ -79,7 +79,13 @@ import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
 import { dragThread } from "./threadDrag";
-import { asksOf, projectOf, type ProjectChange, type ThreadsView } from "./threads";
+import {
+  asksOf,
+  projectRuns,
+  threadProjects,
+  type ProjectChange,
+  type ThreadsView,
+} from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import {
   IconButton,
@@ -325,7 +331,7 @@ export function ThreadList({
     const { state } = view;
     const repoOf = (id: string) => state.repos.find((r) => r.id === id);
     // A Project's children show only inside it, and count toward its row's status (0042).
-    const inProject = new Map(state.threads.map((t) => [t.id, projectOf(state, t)]));
+    const inProject = threadProjects(state);
     const threads = state.threads
       .filter((t) => !inProject.get(t.id))
       .map((t): Item => {
@@ -342,9 +348,7 @@ export function ThreadList({
         };
       });
     const projects = state.projects.map((p): Item => {
-      const runs = Object.values(state.runs).filter(
-        (r) => r.project === p.id || inProject.get(r.id) === p.id,
-      );
+      const runs = projectRuns(state, p.id, inProject);
       return {
         kind: "project",
         project: p,

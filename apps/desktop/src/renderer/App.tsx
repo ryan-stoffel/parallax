@@ -15,7 +15,7 @@ import { NewThreadPicker } from "./NewThreadPicker";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
-import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
+import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
@@ -35,6 +35,7 @@ import {
   lineageOf,
   noRepo,
   rootOf,
+  threadProjects,
   titleOf,
   useThreads,
   type ThreadsView,
@@ -159,7 +160,14 @@ export function App() {
       : undefined;
   if (selection.kind === "project" && !project && known.current.has(selection.projectId))
     setSelection({ kind: "new" });
-  const agents = useProjectAgents(host.id, project?.id, connected, approvals);
+  const projectList = useProjectAgents(host.id, project?.id, connected, approvals);
+  // With the threads in the Project that its list doesn't have, as its sidebar row counts them.
+  const inProject = useMemo(() => threadProjects(threads.state), [threads.state]);
+  const agents = useMemo(
+    () =>
+      project ? withProjectThreads(projectList, threads.state, project.id, inProject) : projectList,
+    [projectList, threads.state, project, inProject],
+  );
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
   const agent = agents.runs.find((r) => r.id === agentId);

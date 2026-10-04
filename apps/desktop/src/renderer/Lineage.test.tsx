@@ -73,7 +73,12 @@ beforeEach(() => {
   runs = [run("parent"), run("a"), run("b", "failed", "codex"), run("solo", "completed")];
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads, seq: 7 } }),
-    "agent/list": () => ({ result: { runs, seq: 7 } }),
+    "agent/list": (p) => ({
+      result: {
+        runs: p["project"] ? runs.filter((r) => r.project === p["project"]) : runs,
+        seq: 7,
+      },
+    }),
     "project/list": () => ({ result: { projects: [], seq: 7 } }),
   };
   window.parallax = {
@@ -275,13 +280,18 @@ test("the sidebar nests children under their parent, collapsed, with a count and
 });
 
 test("a Project's children never show in the main sidebar, and its row shows their status (0042)", async () => {
-  const coordinator = { ...run("coord", "completed"), project: "p-ember" };
+  const coordinator = {
+    ...run("coord", "completed"),
+    project: "p-ember",
+    policy: "noWrite" as const,
+  };
   threads = [
     ...threads,
     thread("kid", 4, { parent: "coord", title: "Write the docs" }),
     thread("grandkid", 5, { parent: "kid", title: "Check the links" }),
   ];
-  runs = [...runs, coordinator, run("kid", "completed"), run("grandkid")];
+  const child = (id: string, status?: string) => ({ ...run(id, status), accountId: "claude" });
+  runs = [...runs, coordinator, child("kid", "completed"), child("grandkid")];
   answers["project/list"] = () => ({
     result: {
       projects: [
@@ -307,6 +317,20 @@ test("a Project's children never show in the main sidebar, and its row shows the
   ]);
   const ember = document.querySelector('#sidebar li[data-kind="project"]');
   expect(ember?.querySelector("[data-status]")?.textContent).toBe("Working");
+
+  // `agent/list {project}` has only the coordinator, so the panel lists the threads in the Project.
+  await click(ember?.querySelector("button"));
+  await click(document.querySelector('button[aria-label="Show side panel"]'));
+  await click(
+    [...document.querySelectorAll("#side-panel button")].find((b) =>
+      b.textContent?.startsWith("Agents"),
+    ),
+  );
+  const rows = [...document.querySelectorAll('#side-panel [aria-label="Agents"] button')];
+  expect(rows.map((b) => b.textContent?.split("by")[0])).toEqual([
+    "Check the links",
+    "Write the docs",
+  ]);
 });
 
 test("without threadLineage, children aren't nested and there are no chips", async () => {

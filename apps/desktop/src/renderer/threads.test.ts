@@ -12,7 +12,8 @@ import {
   emptyThreads,
   groupThreads,
   noRepo,
-  projectOf,
+  projectRuns,
+  threadProjects,
   threadsReducer,
   type ThreadsState,
 } from "./threads";
@@ -219,14 +220,33 @@ test("a thread is in a Project when its run or an ancestor's is one of the Proje
   const state: ThreadsState = {
     ...emptyThreads,
     projects: [{ id: "p", name: "p", repoPath: "/p", createdAt: "", updatedAt: "" }],
-    runs: { coord: run("coord", "p"), plain: run("plain", "r"), own: run("own", "p") },
-    threads: [thread("child", "coord"), thread("grandchild", "child"), thread("loop", "loop")],
+    runs: {
+      coord: run("coord", "p"),
+      child: run("child", "r"),
+      grandchild: run("grandchild", "r"),
+      plain: run("plain", "r"),
+      own: run("own", "p"),
+    },
+    threads: [
+      thread("child", "coord"),
+      thread("grandchild", "child"),
+      // Its own run is the Project's, as a child plxd starts in it may be.
+      thread("own"),
+      thread("plain"),
+      thread("orphan", "gone"),
+      thread("loop", "loop"),
+    ],
   };
-  expect(projectOf(state, thread("child", "coord"))).toBe("p");
-  expect(projectOf(state, thread("grandchild", "child"))).toBe("p");
-  // Its own run is the Project's, as a child plxd starts in it may be.
-  expect(projectOf(state, thread("own"))).toBe("p");
-  expect(projectOf(state, thread("plain"))).toBeUndefined();
-  expect(projectOf(state, thread("orphan", "gone"))).toBeUndefined();
-  expect(projectOf(state, thread("loop", "loop"))).toBeUndefined();
+  const inProject = threadProjects(state);
+  expect([...inProject]).toEqual([
+    ["child", "p"],
+    ["grandchild", "p"],
+    ["own", "p"],
+  ]);
+  expect(projectRuns(state, "p", inProject).map((r) => r.id)).toEqual([
+    "coord",
+    "child",
+    "grandchild",
+    "own",
+  ]);
 });

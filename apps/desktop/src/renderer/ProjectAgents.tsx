@@ -6,7 +6,7 @@ import { childOrder, runAttention } from "./attention";
 import { describeError } from "./errors";
 import { instanceLogo, instanceName } from "./providers";
 import { backendLogos, statusLooks } from "./Sidebar";
-import { titleOf, waitingSince } from "./threads";
+import { projectRuns, titleOf, waitingSince, type ThreadsState } from "./threads";
 import {
   accountLabel,
   statusLabel,
@@ -134,6 +134,28 @@ export function useProjectAgents(
   );
 
   return { runs, waiting, error, start };
+}
+
+/**
+ * `agents` with Project `project`'s other runs in `state` (`projectRuns`), such as a child's own
+ * children, which `agent/list {project}` doesn't list (0042), and what each waits on. Oldest first.
+ */
+export function withProjectThreads(
+  agents: ProjectAgentsView,
+  state: ThreadsState,
+  project: string,
+  inProject: ReadonlyMap<string, string>,
+): ProjectAgentsView {
+  const listed = new Set(agents.runs.map((r) => r.id));
+  const more = projectRuns(state, project, inProject).filter((r) => !listed.has(r.id));
+  if (more.length === 0) return agents;
+  const waiting = { ...agents.waiting };
+  for (const r of more) {
+    const items = state.approvals[r.id]?.items;
+    if (items?.length) waiting[r.id] = items as Approval[];
+  }
+  const runs = [...agents.runs, ...more].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return { ...agents, runs, waiting };
 }
 
 /**
