@@ -104,8 +104,8 @@ pub use handshake::{
     Capabilities, ClientInfo, InitializeParams, InitializeProtocol, InitializeResult, ProtocolRange,
 };
 pub use host::{
-    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
-    HostVersionParams, HostVersionResult, StoreState,
+    HostHealthParams, HostHealthResult, HostQueues, HostSettings, HostSettingsGetParams,
+    HostSettingsSetParams, HostVersionParams, HostVersionResult, QueueStats, StoreState,
 };
 pub use id::InvalidId;
 pub use inbox::{
@@ -243,6 +243,7 @@ mod tests {
                 uptime_seconds: 1,
                 store,
                 running_agents: 0,
+                queues: None,
             });
         }
         round_trip(&HostVersionParams {});

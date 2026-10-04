@@ -581,6 +581,55 @@ export type HostHealthResult = {
 	 * Agents running on this host. Always 0 before M3.
 	 */
 	runningAgents: number,
+	/**
+	 * How busy the store's and the event log's job queues are (PLX-445). An older plxd leaves it
+	 * out.
+	 */
+	queues?: HostQueues,
+};
+
+/**
+ * The job queues of plxd's two database threads, each running its jobs one at a time.
+ */
+export type HostQueues = {
+	/**
+	 * The project store's thread.
+	 */
+	store: QueueStats,
+	/**
+	 * The event log's writer thread, which appends events.
+	 */
+	events: QueueStats,
+};
+
+/**
+ * Counts and times for one job queue since plxd started. Divide a total by `jobs` for the average.
+ */
+export type QueueStats = {
+	/**
+	 * Jobs sent and not yet started.
+	 */
+	queued: number,
+	/**
+	 * Jobs started.
+	 */
+	jobs: number,
+	/**
+	 * The longest a job sat in the queue before its thread took it, in microseconds.
+	 */
+	maxWaitMicros: number,
+	/**
+	 * Every started job's wait, added up, in microseconds.
+	 */
+	totalWaitMicros: number,
+	/**
+	 * The longest a job took to run, in microseconds.
+	 */
+	maxRunMicros: number,
+	/**
+	 * Every finished job's run time, added up, in microseconds. It leaves out the one running.
+	 */
+	totalRunMicros: number,
 };
 
 /**
