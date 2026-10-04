@@ -424,3 +424,43 @@ async fn a_steer_joins_the_running_turn_and_a_held_thread_stays_open() {
                "text": "Change of plan: reply BANANA instead.", "text_elements": []}]})
     );
 }
+
+/// Session overrides add only plxd's keys, so app-server retains the user's servers.
+#[test]
+fn thread_mcp_joins_user_config_on_start_resume_and_fork() {
+    for (resume, expected) in [
+        (None, "thread/start"),
+        (Some(false), "thread/resume"),
+        (Some(true), "thread/fork"),
+    ] {
+        let mut request = request(AgentPermission::Edit);
+        request.resume = resume.map(|fork| Resume {
+            fork,
+            ..Resume::new("t-parent")
+        });
+        request.context_window = Some(872_000);
+        request.thread_tools = Some(crate::backend::ThreadTools {
+            program: "/bin/plxd".into(),
+            data_dir: "/tmp/parallax data".into(),
+            run: request.run_id,
+        });
+        let (method, params) = super::thread_params(&request).unwrap();
+        assert_eq!(method, expected);
+        assert_eq!(
+            params["config"],
+            json!({
+                "model_context_window": 872_000,
+                "mcp_servers.plxd.command": "/bin/plxd",
+                "mcp_servers.plxd.args":
+                    ["mcp", "--data-dir", "/tmp/parallax data", "--thread", request.run_id.to_string()],
+                "mcp_servers.plxd.default_tools_approval_mode": "approve",
+            })
+        );
+        request.approvals = false;
+        let (_, params) = super::thread_params(&request).unwrap();
+        assert_eq!(params["config"], json!({"model_context_window": 872_000}));
+        request.permission = Some(AgentPermission::Bypass);
+        let (_, params) = super::thread_params(&request).unwrap();
+        assert_eq!(params["config"]["mcp_servers.plxd.command"], "/bin/plxd");
+    }
+}

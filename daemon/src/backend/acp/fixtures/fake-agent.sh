@@ -5,6 +5,7 @@
 # Fixture lines starting with # are comments and blank lines are skipped. These directives act:
 #   @read   read one line of stdin, or exit 0 if stdin has ended
 #   @eof    read stdin until it ends
+#   @linger stay running for a minute, as Cursor does while a stdio MCP server is connected
 # Every other line goes to stdout as it is.
 
 dir=$FAKE_AGENT_DIR
@@ -16,6 +17,7 @@ while IFS= read -r line <&3; do
   case $line in
     '#'* | '') ;;
     '@read') IFS= read -r input || exit 0; printf '%s\n' "$input" >> "$dir/stdin" ;;
+    '@linger') sleep 60 ;;
     '@eof') while IFS= read -r input; do printf '%s\n' "$input" >> "$dir/stdin"; done ;;
     *) printf '%s\n' "$line" ;;
   esac
