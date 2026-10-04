@@ -1344,11 +1344,15 @@ const agentRow = (title: string) =>
     b.textContent?.startsWith(title),
   );
 
-test("a Project's Agents view lists its subagents newest first, without its coordinator, and keeps them live", async () => {
-  await openEmberAgents(login, docs);
+test("a Project's Agents view lists its children Needs you, Working, Done, Failed, newest first within each, without its coordinator, and keeps them live", async () => {
+  const release = subagent("01a0d391-0000-7000-8000-000000000004", "Cut the release", {
+    status: "failed",
+  });
+  await openEmberAgents(login, docs, release);
   expect(agentRows()).toEqual([
     "Write the docsby youWorkingparallax/docsAPI key",
     "Fix the login bugby coordinatorDoneparallax/login+12 −3Claude subscription",
+    "Cut the releaseby coordinatorFailedClaude subscription",
   ]);
 
   const event = (seq: number, e: ParallaxEvent) =>
@@ -1371,7 +1375,14 @@ test("a Project's Agents view lists its subagents newest first, without its coor
     "Add the testsby coordinatorWorkingClaude subscription",
     "Write the docsby youDoneparallax/docs+4 −0API key",
     "Fix the login bugby coordinatorDoneparallax/login+12 −3Claude subscription",
+    "Cut the releaseby coordinatorFailedClaude subscription",
   ]);
+
+  // A finished child that asks again goes to the top.
+  await event(10, { kind: "agent.output", runId: login.id, items: [bashAsk("s1")] });
+  expect(agentRows()[0]).toBe(
+    "Fix the login bugby coordinatorNeeds approvalparallax/login+12 −3Claude subscription",
+  );
 });
 
 test("opening a subagent shows its chat, with Open PR, and the Project crumb goes back to the coordinator", async () => {

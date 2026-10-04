@@ -12,6 +12,7 @@ import {
   emptyThreads,
   groupThreads,
   noRepo,
+  projectOf,
   threadsReducer,
   type ThreadsState,
 } from "./threads";
@@ -210,4 +211,22 @@ test("an older log read for its requests never undoes a run's newer status", () 
   };
   state = threadsReducer(state, { type: "approvals", events: [old as never] });
   expect(state.runs["r-1"]).toEqual(done);
+});
+
+test("a thread is in a Project when its run or an ancestor's is one of the Project's", () => {
+  const run = (id: string, project: string) => ({ id, project }) as AgentRun;
+  const thread = (id: string, parent?: string) => ({ id, repo: "r", createdAt: "", parent });
+  const state: ThreadsState = {
+    ...emptyThreads,
+    projects: [{ id: "p", name: "p", repoPath: "/p", createdAt: "", updatedAt: "" }],
+    runs: { coord: run("coord", "p"), plain: run("plain", "r"), own: run("own", "p") },
+    threads: [thread("child", "coord"), thread("grandchild", "child"), thread("loop", "loop")],
+  };
+  expect(projectOf(state, thread("child", "coord"))).toBe("p");
+  expect(projectOf(state, thread("grandchild", "child"))).toBe("p");
+  // Its own run is the Project's, as a child plxd starts in it may be.
+  expect(projectOf(state, thread("own"))).toBe("p");
+  expect(projectOf(state, thread("plain"))).toBeUndefined();
+  expect(projectOf(state, thread("orphan", "gone"))).toBeUndefined();
+  expect(projectOf(state, thread("loop", "loop"))).toBeUndefined();
 });

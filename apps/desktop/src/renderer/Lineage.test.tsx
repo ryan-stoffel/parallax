@@ -274,6 +274,41 @@ test("the sidebar nests children under their parent, collapsed, with a count and
   expect(sidebarRow("Style the chips")!.getAttribute("aria-current")).toBe("page");
 });
 
+test("a Project's children never show in the main sidebar, and its row shows their status (0042)", async () => {
+  const coordinator = { ...run("coord", "completed"), project: "p-ember" };
+  threads = [
+    ...threads,
+    thread("kid", 4, { parent: "coord", title: "Write the docs" }),
+    thread("grandkid", 5, { parent: "kid", title: "Check the links" }),
+  ];
+  runs = [...runs, coordinator, run("kid", "completed"), run("grandkid")];
+  answers["project/list"] = () => ({
+    result: {
+      projects: [
+        {
+          id: "p-ember",
+          name: "ember",
+          repoPath: parallax.path,
+          coordinator: "coord",
+          createdAt: "2026-10-01T09:00:00Z",
+          updatedAt: "2026-10-01T09:00:00Z",
+        },
+      ],
+      seq: 7,
+    },
+  });
+  await renderApp();
+  await click(toggle("2 threads"));
+  expect(sidebarTitles()).toEqual([
+    "Fix the README",
+    "Ship lineage",
+    "Style the chips",
+    "Write the test",
+  ]);
+  const ember = document.querySelector('#sidebar li[data-kind="project"]');
+  expect(ember?.querySelector("[data-status]")?.textContent).toBe("Working");
+});
+
 test("without threadLineage, children aren't nested and there are no chips", async () => {
   capabilities = {};
   await renderApp();

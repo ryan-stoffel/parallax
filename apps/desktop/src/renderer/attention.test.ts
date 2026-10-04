@@ -1,7 +1,15 @@
 import { expect, test } from "vite-plus/test";
 
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
-import { attentionOf, initials, projectAttention, snoozeChoices, snoozed } from "./attention";
+import {
+  attentionOf,
+  childOrder,
+  initials,
+  projectAttention,
+  runAttention,
+  snoozeChoices,
+  snoozed,
+} from "./attention";
 
 const thread = (over: Partial<Thread> = {}): Thread => ({
   id: "t",
@@ -28,6 +36,25 @@ test("a Project needs the user when any run does, and works while any run does",
   expect(projectAttention(runs, () => 0)).toBe("working");
   expect(projectAttention(runs, (id) => (id === "a" ? 1 : 0))).toBe("needsYou");
   expect(projectAttention([run()], () => 0)).toBe("settled");
+});
+
+test("a Project's children sort Needs you, Working, Done, then Failed", () => {
+  const order = (r: AgentRun, asks = 0) => childOrder.indexOf(runAttention(r, asks));
+  const runs = [
+    run({ id: "failed", status: "failed" }),
+    run({ id: "done" }),
+    run({ id: "cancelled", status: "cancelled" }),
+    run({ id: "working", status: "running" }),
+    run({ id: "asks", status: "running" }),
+  ];
+  const asks = (r: AgentRun) => (r.id === "asks" ? 1 : 0);
+  expect(runs.toSorted((a, b) => order(a, asks(a)) - order(b, asks(b))).map((r) => r.id)).toEqual([
+    "asks",
+    "working",
+    "done",
+    "cancelled",
+    "failed",
+  ]);
 });
 
 test("a snoozed thread hides until its time, or until it needs the user", () => {

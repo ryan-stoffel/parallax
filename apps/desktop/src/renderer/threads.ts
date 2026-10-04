@@ -244,6 +244,22 @@ export const groupOf = (state: ThreadsState, thread: Thread) =>
 export const parentOf = (state: ThreadsState, thread: Thread) =>
   thread.parent === undefined ? undefined : state.threads.find((t) => t.id === thread.parent);
 
+/**
+ * The Project a thread is in (0042): its own run or an ancestor's is one of a Project's, as a
+ * coordinator's child's parent is. Such a thread shows only inside its Project, never in the main
+ * sidebar. A loop of parents stops where it repeats.
+ */
+export function projectOf(state: ThreadsState, thread: Thread): string | undefined {
+  const seen = new Set<string>();
+  for (let id = thread.id as string | undefined; id && !seen.has(id);) {
+    seen.add(id);
+    const project = state.runs[id]?.project;
+    if (project && state.projects.some((p) => p.id === project)) return project;
+    id = id === thread.id ? thread.parent : state.threads.find((t) => t.id === id)?.parent;
+  }
+  return undefined;
+}
+
 /** The threads `id` launched, oldest first, so their order holds as they start. */
 export const childrenOf = (state: ThreadsState, id: string) =>
   state.threads
