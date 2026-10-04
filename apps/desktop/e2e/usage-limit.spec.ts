@@ -28,10 +28,14 @@ test("a limited thread waits with Resume now and Cancel, and both switches chang
   await box.fill("Add a README that explains how to build the app");
   await box.press("Enter");
 
+  // A resume time on the next day, in a run started in the last 15 minutes before midnight, comes
+  // with its date: "Oct 5, 12:09 AM".
   const card = page.getByRole("region", { name: "Usage limit" });
-  await expect(card).toContainText(/Usage limit reached\. Resumes at \d{1,2}:\d{2}/);
+  await expect(card).toContainText(
+    /Usage limit reached\. Resumes at (\w+ \d{1,2}, )?\d{1,2}:\d{2}/,
+  );
   const row = page.locator('li[data-kind="thread"]');
-  await expect(row.locator("[data-status]")).toContainText(/Resumes \d{1,2}:\d{2}/);
+  await expect(row.locator("[data-status]")).toContainText(/Resumes (\w+ \d{1,2}, )?\d{1,2}:\d{2}/);
   await expect(row).not.toContainText("Failed");
   await page.mouse.move(0, 0);
   await page.screenshot({ path: test.info().outputPath("usage-limit-thread.png") });
