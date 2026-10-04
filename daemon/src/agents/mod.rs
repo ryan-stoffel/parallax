@@ -807,8 +807,9 @@ pub(super) async fn project_mode(
     .await
 }
 
-/// The Project's `mode` as a run on `backend` takes it, or `unsupportedOption` saying why it
-/// can't: a run in a Project is never moved to another mode (0042).
+/// The Project's `mode` as a run on `backend` takes it, from its [`Backend::project_permissions`],
+/// or `unsupportedOption` saying why it can't: a run in a Project is never moved to another mode
+/// (0042).
 pub(super) fn in_mode(
     backend: &dyn Backend,
     mode: ProjectPermission,
@@ -816,7 +817,7 @@ pub(super) fn in_mode(
     let name = actor::backend_name(backend.name());
     let maps = |mode: ProjectPermission| {
         mode.agent()
-            .filter(|permission| backend.permissions().contains(permission))
+            .filter(|permission| backend.project_permissions().contains(permission))
     };
     let (label, other) = match mode {
         ProjectPermission::Auto => ("Auto", ProjectPermission::Bypass),
@@ -837,7 +838,16 @@ pub(super) fn in_mode(
         } else {
             "Auto"
         };
-        format!("{name} has no {label}. Set the Project to {other} to use it.")
+        // A model service has Auto in its threads but not in a Project.
+        let scope = if mode
+            .agent()
+            .is_some_and(|permission| backend.permissions().contains(&permission))
+        {
+            " in a Project"
+        } else {
+            ""
+        };
+        format!("{name} has no {label}{scope}. Set the Project to {other} to use it.")
     } else {
         format!("{name} has neither Auto nor Bypass Permissions, so it can't run in a Project.")
     };
@@ -1665,6 +1675,73 @@ mod tests {
             refused.message,
             "Cursor has no Auto. Set the Project to Bypass to use it."
         );
+    }
+
+    /// PLX-433 (0042): a model service runs Claude Code, which has Auto, but runs a Project's
+    /// agents only in Bypass. Its threads keep Auto. One instance keeps its key as a secret and
+    /// two don't, so both of plxd's backends for an instance are covered.
+    #[tokio::test]
+    async fn a_model_service_runs_a_project_only_in_bypass() {
+        use parallax_protocol::{
+            AgentPermission, ProjectPermission, ProviderEnvVar, ProviderInstance, ProviderKind,
+        };
+
+        use crate::backend::process::{Environment, Launcher};
+        use crate::keystore::MemoryKeyStore;
+        use crate::paths::DataDir;
+        use crate::providers::Providers;
+        use crate::routing::BackendRegistry;
+
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = Launcher::new(
+            DataDir::new(dir.path().join("data")).unwrap(),
+            Environment::empty(),
+        );
+        let registry = BackendRegistry::new();
+        let providers = Providers::load(
+            dir.path(),
+            Arc::new(MemoryKeyStore::new()),
+            &launcher,
+            &registry,
+        );
+        let kinds = [
+            ("ollama-cloud", ProviderKind::OllamaCloud, true),
+            ("openrouter", ProviderKind::OpenRouter, true),
+            ("local-model", ProviderKind::LocalModel, false),
+        ];
+        for (id, kind, secret) in kinds {
+            let instance = ProviderInstance {
+                id: id.into(),
+                kind,
+                name: id.into(),
+                enabled: true,
+                program: None,
+                home: None,
+                args: Vec::new(),
+                env: vec![ProviderEnvVar {
+                    name: "ANTHROPIC_AUTH_TOKEN".into(),
+                    value: Some("key".into()),
+                    secret,
+                }],
+                models: Vec::new(),
+            };
+            providers.save(instance).await.unwrap();
+            let (_, backend) = registry.by_backend_name(id).unwrap();
+            assert!(backend.permissions().contains(&AgentPermission::Auto));
+            assert_eq!(
+                in_mode(backend.as_ref(), ProjectPermission::Bypass).unwrap(),
+                AgentPermission::Bypass
+            );
+            let refused = in_mode(backend.as_ref(), ProjectPermission::Auto).unwrap_err();
+            assert_eq!(
+                refused.parallax_data().unwrap().kind,
+                ErrorKind::UnsupportedOption
+            );
+            assert_eq!(
+                refused.message,
+                format!("{id} has no Auto in a Project. Set the Project to Bypass to use it.")
+            );
+        }
     }
 
     /// PLX-338: a worker start that read its Project before `project/delete` removed it records

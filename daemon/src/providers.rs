@@ -724,7 +724,13 @@ fn build(
             if overrides.program.is_none() && preset.program != "claude" {
                 overrides.program = Some(preset.program.into());
             }
-            Arc::new(ClaudeBackend::new(launcher).with_overrides(overrides))
+            let backend = ClaudeBackend::new(launcher).with_overrides(overrides);
+            // A model service runs a Project's agents only in Bypass (0042).
+            if preset.models_url.is_some() {
+                Arc::new(backend.bypass_only_in_projects())
+            } else {
+                Arc::new(backend)
+            }
         }
         Driver::Codex => Arc::new(CodexBackend::new(launcher).with_overrides(overrides)),
         Driver::Acp(agent) => Arc::new(AcpBackend::new(
@@ -782,6 +788,10 @@ impl Backend for WithSecrets {
 
     fn permissions(&self) -> &[AgentPermission] {
         self.plain.permissions()
+    }
+
+    fn project_permissions(&self) -> &[AgentPermission] {
+        self.plain.project_permissions()
     }
 
     fn full_thread(&self) -> bool {
