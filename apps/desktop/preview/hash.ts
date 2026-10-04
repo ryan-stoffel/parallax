@@ -3,7 +3,7 @@
 //
 //   #project=parallax                     a Project, by its sidebar name
 //   #project=parallax&panel=Agents        and a side panel view, by its name
-//   #project=parallax&agent=Scheduler     and a child's chat, by the start of its title
+//   #project=parallax&agent=Scheduler     and a child's chat, by the start of its sidebar row
 //   #thread=Rework the updater            a plain thread, by its title
 //   #settings                             Settings; #usage, the Usage page
 
@@ -52,7 +52,10 @@ export function openFromHash() {
   const hash = decodeURIComponent(location.hash.slice(1));
   if (!hash) return;
   const params = new URLSearchParams(hash);
-  const steps: Step[] = [];
+  // Inside a Project the sidebar is the Project's, so step back out to the thread list first.
+  const steps: Step[] = [
+    () => byText(document.getElementById("sidebar"), "button", "All threads") ?? true,
+  ];
   if (params.has("settings")) steps.push(() => byLabel("Settings"));
   if (params.has("usage")) steps.push(() => byLabel("Usage"));
   const project = params.get("project");
@@ -72,7 +75,7 @@ export function openFromHash() {
       ),
     );
   const agent = params.get("agent");
-  if (agent) steps.push(...openPanelView("Agents"), () => byText(panel(), "button", agent));
+  if (agent) steps.push(() => byText(document.getElementById("sidebar"), "button", agent));
   const view = params.get("panel");
   if (view) steps.push(...openPanelView(view));
   void run(steps);

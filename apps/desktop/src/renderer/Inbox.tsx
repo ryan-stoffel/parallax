@@ -125,7 +125,7 @@ export function useInbox(
 }
 
 /** Each kind's look in the inbox: the icon beside its rows, from the agents list's statuses. */
-const kindLooks: Record<InboxKind, { Icon: LucideIcon; color: string }> = {
+export const kindLooks: Record<InboxKind, { Icon: LucideIcon; color: string }> = {
   needsYou: { Icon: CircleQuestionMark, color: "text-warning" },
   done: { Icon: CircleCheck, color: "text-emerald-500" },
   failed: { Icon: CircleAlert, color: "text-danger" },
@@ -355,7 +355,7 @@ function InboxRow({
  * An answer box and its button, named for its question so each box is told apart. It keeps the
  * text, and shows why, when the answer fails.
  */
-function AnswerForm({
+export function AnswerForm({
   label,
   question,
   keep,

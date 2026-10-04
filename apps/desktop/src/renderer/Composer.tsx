@@ -372,6 +372,8 @@ export interface ComposerProps {
     asking: boolean;
     onAsking: (asking: boolean) => void;
   };
+  /** The empty box's placeholder, in place of the one for a new thread or a reply. */
+  hint?: string;
   /**
    * Text to add at the end of the box, which takes focus, such as a pull request's URL. Each new
    * value is added once.
@@ -429,6 +431,7 @@ export function Composer({
   manualDenied,
   projectMode,
   newTask,
+  hint,
   insert,
   history = [],
   menus,
@@ -801,6 +804,7 @@ export function Composer({
 
   const placeholder =
     disabledReason ??
+    hint ??
     (task
       ? "Describe a task and an agent starts on it"
       : newTask

@@ -18,6 +18,8 @@ import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
+import { ProjectNav } from "./ProjectNav";
+import { ProjectTask } from "./ProjectTask";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
@@ -61,7 +63,7 @@ import { UsagePage } from "./UsagePage";
  * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's), or Usage.
  */
 export type Selection =
-  | { kind: "project"; projectId: string; agentId?: string }
+  | { kind: "project"; projectId: string; agentId?: string; task?: boolean }
   | { kind: "thread"; threadId: string; started?: boolean; subagent?: string }
   | { kind: "new"; groupId?: string }
   | { kind: "usage" };
@@ -179,6 +181,8 @@ export function App() {
   );
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
+  // Whether the Project's New task page is open, in place of its coordinator's chat.
+  const taskOpen = selection.kind === "project" && !!selection.task;
   const agent = agents.runs.find((r) => r.id === agentId);
   // Its thread's title from plxd (0041), else its prompt's.
   const agentTitle = agentId
@@ -221,6 +225,11 @@ export function App() {
   const openAgent = (id?: string) => {
     if (!project) return;
     setSelection({ kind: "project", projectId: project.id, agentId: id });
+    setPanelExpanded(false);
+  };
+  const openTask = () => {
+    if (!project) return;
+    setSelection({ kind: "project", projectId: project.id, task: true });
     setPanelExpanded(false);
   };
   // The permission requests the Project's other runs wait on, pinned in whichever of its chats is
@@ -314,9 +323,10 @@ export function App() {
       {
         label: project.name,
         icon: <ProjectIcon icon={project.icon} />,
-        onClick: agentId ? () => openAgent() : undefined,
+        onClick: agentId || taskOpen ? () => openAgent() : undefined,
       },
     ];
+    if (taskOpen) crumbs.push({ label: "New task" });
     if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
     const repo = {
@@ -446,7 +456,10 @@ export function App() {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
       else if (command === "usage") openOnHost(host.id, { kind: "usage" });
-      else if (
+      else if (command === "projectTarget" && project) {
+        if (taskOpen) openAgent();
+        else openTask();
+      } else if (
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
       ) {
@@ -506,6 +519,26 @@ export function App() {
             section={settings}
             onSection={(section) => openSettings(section)}
             onBack={() => setSettings(null)}
+          />
+        ) : project ? (
+          <ProjectNav
+            key={`${host.id}/${project.id}`}
+            host={host}
+            project={project}
+            agents={agents}
+            titles={threads.state.titles}
+            openId={agentId}
+            task={taskOpen}
+            tasks={connected && "projectTasks" in connection.capabilities}
+            onBack={() => newThread()}
+            onOpen={openAgent}
+            onNewTask={openTask}
+            onOpenKnowledge={() => {
+              setPanelOpen(true);
+              setShowView({ name: "Knowledge" });
+            }}
+            onOpenSettings={openSettings}
+            onOpenUsage={() => openOnHost(host.id, { kind: "usage" })}
           />
         ) : (
           <ThreadList
@@ -661,6 +694,17 @@ export function App() {
                 disabledReason={offline}
                 threadLinks={threadLinks}
               />
+            ) : taskOpen && project ? (
+              <ProjectTask
+                key={`${host.id}/${project.id}`}
+                hostId={host.id}
+                project={project}
+                startTask={threads.startTask}
+                agents={agents}
+                titles={threads.state.titles}
+                onOpen={openAgent}
+                disabledReason={offline}
+              />
             ) : agentId ? (
               <AgentChat
                 key={`${host.id}/${agentId}`}
@@ -681,15 +725,10 @@ export function App() {
                   project={project}
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
                   startCoordinator={threads.startCoordinator}
-                  startTask={threads.startTask}
                   others={othersAsked(project.coordinator)}
-                  onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
-                  agents={agents}
-                  titles={threads.state.titles}
-                  onShowAgents={() => {
-                    setPanelOpen(true);
-                    setShowView({ name: "Agents" });
-                  }}
+                  onNewTask={
+                    connected && "projectTasks" in connection.capabilities ? openTask : undefined
+                  }
                 />
               )
             )}
